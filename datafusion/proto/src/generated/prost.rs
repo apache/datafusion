@@ -5,7 +5,7 @@
 pub struct LogicalPlanNode {
     #[prost(
         oneof = "logical_plan_node::LogicalPlanType",
-        tags = "1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33"
+        tags = "1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34"
     )]
     pub logical_plan_type: ::core::option::Option<logical_plan_node::LogicalPlanType>,
 }
@@ -77,6 +77,8 @@ pub mod logical_plan_node {
         CteWorkTableScan(super::CteWorkTableScanNode),
         #[prost(message, tag = "33")]
         Dml(::prost::alloc::boxed::Box<super::DmlNode>),
+        #[prost(message, tag = "34")]
+        Sample(::prost::alloc::boxed::Box<super::SampleNode>),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1048,7 +1050,7 @@ pub mod table_reference {
 pub struct PhysicalPlanNode {
     #[prost(
         oneof = "physical_plan_node::PhysicalPlanType",
-        tags = "1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32"
+        tags = "1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33"
     )]
     pub physical_plan_type: ::core::option::Option<physical_plan_node::PhysicalPlanType>,
 }
@@ -1120,6 +1122,8 @@ pub mod physical_plan_node {
         JsonScan(super::JsonScanExecNode),
         #[prost(message, tag = "32")]
         YieldStream(::prost::alloc::boxed::Box<super::YieldStreamExecNode>),
+        #[prost(message, tag = "33")]
+        Sample(::prost::alloc::boxed::Box<super::SampleExecNode>),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1942,6 +1946,32 @@ pub struct CteWorkTableScanNode {
     pub name: ::prost::alloc::string::String,
     #[prost(message, optional, tag = "2")]
     pub schema: ::core::option::Option<super::datafusion_common::Schema>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SampleNode {
+    #[prost(message, optional, boxed, tag = "1")]
+    pub input: ::core::option::Option<::prost::alloc::boxed::Box<LogicalPlanNode>>,
+    #[prost(double, tag = "2")]
+    pub lower_bound: f64,
+    #[prost(double, tag = "3")]
+    pub upper_bound: f64,
+    #[prost(bool, tag = "4")]
+    pub with_replacement: bool,
+    #[prost(uint64, tag = "5")]
+    pub seed: u64,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SampleExecNode {
+    #[prost(message, optional, boxed, tag = "1")]
+    pub input: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
+    #[prost(double, tag = "2")]
+    pub lower_bound: f64,
+    #[prost(double, tag = "3")]
+    pub upper_bound: f64,
+    #[prost(bool, tag = "4")]
+    pub with_replacement: bool,
+    #[prost(uint64, tag = "5")]
+    pub seed: u64,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]

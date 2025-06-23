@@ -11062,6 +11062,9 @@ impl serde::Serialize for LogicalPlanNode {
                 logical_plan_node::LogicalPlanType::Dml(v) => {
                     struct_ser.serialize_field("dml", v)?;
                 }
+                logical_plan_node::LogicalPlanType::Sample(v) => {
+                    struct_ser.serialize_field("sample", v)?;
+                }
             }
         }
         struct_ser.end()
@@ -11121,6 +11124,7 @@ impl<'de> serde::Deserialize<'de> for LogicalPlanNode {
             "cte_work_table_scan",
             "cteWorkTableScan",
             "dml",
+            "sample",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -11157,6 +11161,7 @@ impl<'de> serde::Deserialize<'de> for LogicalPlanNode {
             RecursiveQuery,
             CteWorkTableScan,
             Dml,
+            Sample,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -11210,6 +11215,7 @@ impl<'de> serde::Deserialize<'de> for LogicalPlanNode {
                             "recursiveQuery" | "recursive_query" => Ok(GeneratedField::RecursiveQuery),
                             "cteWorkTableScan" | "cte_work_table_scan" => Ok(GeneratedField::CteWorkTableScan),
                             "dml" => Ok(GeneratedField::Dml),
+                            "sample" => Ok(GeneratedField::Sample),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -11454,6 +11460,13 @@ impl<'de> serde::Deserialize<'de> for LogicalPlanNode {
                                 return Err(serde::de::Error::duplicate_field("dml"));
                             }
                             logical_plan_type__ = map_.next_value::<::std::option::Option<_>>()?.map(logical_plan_node::LogicalPlanType::Dml)
+;
+                        }
+                        GeneratedField::Sample => {
+                            if logical_plan_type__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("sample"));
+                            }
+                            logical_plan_type__ = map_.next_value::<::std::option::Option<_>>()?.map(logical_plan_node::LogicalPlanType::Sample)
 ;
                         }
                     }
@@ -15803,6 +15816,9 @@ impl serde::Serialize for PhysicalPlanNode {
                 physical_plan_node::PhysicalPlanType::YieldStream(v) => {
                     struct_ser.serialize_field("yieldStream", v)?;
                 }
+                physical_plan_node::PhysicalPlanType::Sample(v) => {
+                    struct_ser.serialize_field("sample", v)?;
+                }
             }
         }
         struct_ser.end()
@@ -15863,6 +15879,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalPlanNode {
             "jsonScan",
             "yield_stream",
             "yieldStream",
+            "sample",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -15898,6 +15915,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalPlanNode {
             Unnest,
             JsonScan,
             YieldStream,
+            Sample,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -15950,6 +15968,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalPlanNode {
                             "unnest" => Ok(GeneratedField::Unnest),
                             "jsonScan" | "json_scan" => Ok(GeneratedField::JsonScan),
                             "yieldStream" | "yield_stream" => Ok(GeneratedField::YieldStream),
+                            "sample" => Ok(GeneratedField::Sample),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -16187,6 +16206,13 @@ impl<'de> serde::Deserialize<'de> for PhysicalPlanNode {
                                 return Err(serde::de::Error::duplicate_field("yieldStream"));
                             }
                             physical_plan_type__ = map_.next_value::<::std::option::Option<_>>()?.map(physical_plan_node::PhysicalPlanType::YieldStream)
+;
+                        }
+                        GeneratedField::Sample => {
+                            if physical_plan_type__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("sample"));
+                            }
+                            physical_plan_type__ = map_.next_value::<::std::option::Option<_>>()?.map(physical_plan_node::PhysicalPlanType::Sample)
 ;
                         }
                     }
@@ -18543,6 +18569,346 @@ impl<'de> serde::Deserialize<'de> for RollupNode {
             }
         }
         deserializer.deserialize_struct("datafusion.RollupNode", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for SampleExecNode {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.input.is_some() {
+            len += 1;
+        }
+        if self.lower_bound != 0. {
+            len += 1;
+        }
+        if self.upper_bound != 0. {
+            len += 1;
+        }
+        if self.with_replacement {
+            len += 1;
+        }
+        if self.seed != 0 {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion.SampleExecNode", len)?;
+        if let Some(v) = self.input.as_ref() {
+            struct_ser.serialize_field("input", v)?;
+        }
+        if self.lower_bound != 0. {
+            struct_ser.serialize_field("lowerBound", &self.lower_bound)?;
+        }
+        if self.upper_bound != 0. {
+            struct_ser.serialize_field("upperBound", &self.upper_bound)?;
+        }
+        if self.with_replacement {
+            struct_ser.serialize_field("withReplacement", &self.with_replacement)?;
+        }
+        if self.seed != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("seed", ToString::to_string(&self.seed).as_str())?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for SampleExecNode {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "input",
+            "lower_bound",
+            "lowerBound",
+            "upper_bound",
+            "upperBound",
+            "with_replacement",
+            "withReplacement",
+            "seed",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Input,
+            LowerBound,
+            UpperBound,
+            WithReplacement,
+            Seed,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "input" => Ok(GeneratedField::Input),
+                            "lowerBound" | "lower_bound" => Ok(GeneratedField::LowerBound),
+                            "upperBound" | "upper_bound" => Ok(GeneratedField::UpperBound),
+                            "withReplacement" | "with_replacement" => Ok(GeneratedField::WithReplacement),
+                            "seed" => Ok(GeneratedField::Seed),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = SampleExecNode;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion.SampleExecNode")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<SampleExecNode, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut input__ = None;
+                let mut lower_bound__ = None;
+                let mut upper_bound__ = None;
+                let mut with_replacement__ = None;
+                let mut seed__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Input => {
+                            if input__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("input"));
+                            }
+                            input__ = map_.next_value()?;
+                        }
+                        GeneratedField::LowerBound => {
+                            if lower_bound__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("lowerBound"));
+                            }
+                            lower_bound__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::UpperBound => {
+                            if upper_bound__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("upperBound"));
+                            }
+                            upper_bound__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::WithReplacement => {
+                            if with_replacement__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("withReplacement"));
+                            }
+                            with_replacement__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Seed => {
+                            if seed__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("seed"));
+                            }
+                            seed__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                    }
+                }
+                Ok(SampleExecNode {
+                    input: input__,
+                    lower_bound: lower_bound__.unwrap_or_default(),
+                    upper_bound: upper_bound__.unwrap_or_default(),
+                    with_replacement: with_replacement__.unwrap_or_default(),
+                    seed: seed__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion.SampleExecNode", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for SampleNode {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.input.is_some() {
+            len += 1;
+        }
+        if self.lower_bound != 0. {
+            len += 1;
+        }
+        if self.upper_bound != 0. {
+            len += 1;
+        }
+        if self.with_replacement {
+            len += 1;
+        }
+        if self.seed != 0 {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion.SampleNode", len)?;
+        if let Some(v) = self.input.as_ref() {
+            struct_ser.serialize_field("input", v)?;
+        }
+        if self.lower_bound != 0. {
+            struct_ser.serialize_field("lowerBound", &self.lower_bound)?;
+        }
+        if self.upper_bound != 0. {
+            struct_ser.serialize_field("upperBound", &self.upper_bound)?;
+        }
+        if self.with_replacement {
+            struct_ser.serialize_field("withReplacement", &self.with_replacement)?;
+        }
+        if self.seed != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("seed", ToString::to_string(&self.seed).as_str())?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for SampleNode {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "input",
+            "lower_bound",
+            "lowerBound",
+            "upper_bound",
+            "upperBound",
+            "with_replacement",
+            "withReplacement",
+            "seed",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Input,
+            LowerBound,
+            UpperBound,
+            WithReplacement,
+            Seed,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "input" => Ok(GeneratedField::Input),
+                            "lowerBound" | "lower_bound" => Ok(GeneratedField::LowerBound),
+                            "upperBound" | "upper_bound" => Ok(GeneratedField::UpperBound),
+                            "withReplacement" | "with_replacement" => Ok(GeneratedField::WithReplacement),
+                            "seed" => Ok(GeneratedField::Seed),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = SampleNode;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion.SampleNode")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<SampleNode, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut input__ = None;
+                let mut lower_bound__ = None;
+                let mut upper_bound__ = None;
+                let mut with_replacement__ = None;
+                let mut seed__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Input => {
+                            if input__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("input"));
+                            }
+                            input__ = map_.next_value()?;
+                        }
+                        GeneratedField::LowerBound => {
+                            if lower_bound__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("lowerBound"));
+                            }
+                            lower_bound__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::UpperBound => {
+                            if upper_bound__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("upperBound"));
+                            }
+                            upper_bound__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::WithReplacement => {
+                            if with_replacement__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("withReplacement"));
+                            }
+                            with_replacement__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Seed => {
+                            if seed__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("seed"));
+                            }
+                            seed__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                    }
+                }
+                Ok(SampleNode {
+                    input: input__,
+                    lower_bound: lower_bound__.unwrap_or_default(),
+                    upper_bound: upper_bound__.unwrap_or_default(),
+                    with_replacement: with_replacement__.unwrap_or_default(),
+                    seed: seed__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion.SampleNode", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for ScalarUdfExprNode {

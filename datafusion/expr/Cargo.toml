@@ -51,6 +51,7 @@ datafusion-functions-window-common = { workspace = true }
 datafusion-physical-expr-common = { workspace = true }
 indexmap = { workspace = true }
 paste = "^1.0"
+rand = { workspace = true }
 recursive = { workspace = true, optional = true }
 serde_json = { workspace = true }
 sqlparser = { workspace = true }

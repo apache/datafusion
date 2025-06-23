@@ -163,6 +163,7 @@ pbjson-types = "0.7"
 insta = { version = "1.43.1", features = ["glob", "filters"] }
 prost = "0.13.1"
 rand = "0.9"
+rand_distr = "0.5"
 recursive = "0.1.1"
 regex = "1.8"
 rstest = "0.25.0"

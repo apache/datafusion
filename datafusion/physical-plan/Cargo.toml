@@ -62,6 +62,8 @@ itertools = { workspace = true, features = ["use_std"] }
 log = { workspace = true }
 parking_lot = { workspace = true }
 pin-project-lite = "^0.2.7"
+rand = { workspace = true }
+rand_distr = { workspace = true }
 tokio = { workspace = true }
 
 [dev-dependencies]
@@ -69,7 +71,6 @@ criterion = { workspace = true, features = ["async_futures"] }
 datafusion-functions-aggregate = { workspace = true }
 datafusion-functions-window = { workspace = true }
 insta = { workspace = true }
-rand = { workspace = true }
 rstest = { workspace = true }
 rstest_reuse = "0.7.0"
 tempfile = "3.19.1"

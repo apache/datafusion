@@ -84,7 +84,7 @@ use datafusion::physical_plan::unnest::{ListUnnest, UnnestExec};
 use datafusion::physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
 use datafusion::physical_plan::yield_stream::YieldStreamExec;
 use datafusion::physical_plan::{
-    ExecutionPlan, InputOrderMode, PhysicalExpr, WindowExpr,
+    ExecutionPlan, InputOrderMode, PhysicalExpr, SampleExec, WindowExpr
 };
 use datafusion_common::config::TableParquetOptions;
 use datafusion_common::{internal_err, not_impl_err, DataFusionError, Result};
@@ -331,6 +331,12 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                     runtime,
                     extension_codec,
                 ),
+            PhysicalPlanType::Sample(sample) => self.try_into_sample_physical_plan(
+                sample,
+                registry,
+                runtime,
+                extension_codec,
+            ),
         }
     }
 
@@ -527,6 +533,13 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
             );
         }
 
+        if let Some(exec) = plan.downcast_ref::<SampleExec>() {
+            return protobuf::PhysicalPlanNode::try_from_sample_exec(
+                exec,
+                extension_codec,
+            );
+        }
+
         let mut buf: Vec<u8> = vec![];
         match extension_codec.try_encode(Arc::clone(&plan_clone), &mut buf) {
             Ok(_) => {
@@ -556,6 +569,17 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
 }
 
 impl protobuf::PhysicalPlanNode {
+    fn try_into_sample_physical_plan(
+        &self,
+        sample: &protobuf::SampleExecNode,
+        registry: &dyn FunctionRegistry,
+        runtime: &RuntimeEnv,
+        extension_codec: &dyn PhysicalExtensionCodec,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let input = into_physical_plan(&sample.input, registry, runtime, extension_codec)?;
+        Ok(Arc::new(SampleExec::try_new(input, sample.lower_bound, sample.upper_bound, sample.with_replacement, sample.seed)?))
+    }
+
     fn try_into_explain_physical_plan(
         &self,
         explain: &protobuf::ExplainExecNode,
@@ -2807,6 +2831,25 @@ impl protobuf::PhysicalPlanNode {
                     frequency: exec.yield_period() as _,
                 },
             ))),
+        })
+    }
+
+    fn try_from_sample_exec(
+        exec: &SampleExec,
+        extension_codec: &dyn PhysicalExtensionCodec,
+    ) -> Result<Self> {
+        let input = protobuf::PhysicalPlanNode::try_from_physical_plan(
+            exec.input().to_owned(),
+            extension_codec,
+        )?;
+        Ok(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(PhysicalPlanType::Sample(Box::new(protobuf::SampleExecNode {
+                input: Some(Box::new(input)),
+                lower_bound: exec.lower_bound(),
+                upper_bound: exec.upper_bound(),
+                with_replacement: exec.with_replacement(),
+                seed: exec.seed(),
+            }))),
         })
     }
 }

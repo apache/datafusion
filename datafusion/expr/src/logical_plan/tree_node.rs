@@ -37,6 +37,7 @@
 //! * [`LogicalPlan::with_new_exprs`]: Create a new plan with different expressions
 //! * [`LogicalPlan::expressions`]: Return a copy of the plan's expressions
 
+use crate::logical_plan::plan::Sample;
 use crate::{
     dml::CopyTo, Aggregate, Analyze, CreateMemoryTable, CreateView, DdlStatement,
     Distinct, DistinctOn, DmlStatement, Execute, Explain, Expr, Extension, Filter, Join,
@@ -148,6 +149,9 @@ impl TreeNode for LogicalPlan {
             LogicalPlan::Limit(Limit { skip, fetch, input }) => input
                 .map_elements(f)?
                 .update_data(|input| LogicalPlan::Limit(Limit { skip, fetch, input })),
+            LogicalPlan::Sample(Sample { input, lower_bound, upper_bound, with_replacement, seed }) => input
+                .map_elements(f)?
+                .update_data(|input| LogicalPlan::Sample(Sample { input, lower_bound, upper_bound, with_replacement, seed })),
             LogicalPlan::Subquery(Subquery {
                 subquery,
                 outer_ref_columns,
@@ -471,6 +475,7 @@ impl LogicalPlan {
             | LogicalPlan::Dml(_)
             | LogicalPlan::Ddl(_)
             | LogicalPlan::Copy(_)
+            | LogicalPlan::Sample(_)
             | LogicalPlan::DescribeTable(_) => Ok(TreeNodeRecursion::Continue),
         }
     }
@@ -651,6 +656,7 @@ impl LogicalPlan {
             | LogicalPlan::Dml(_)
             | LogicalPlan::Ddl(_)
             | LogicalPlan::Copy(_)
+            | LogicalPlan::Sample(_)
             | LogicalPlan::DescribeTable(_) => Transformed::no(self),
         })
     }

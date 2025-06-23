@@ -20,6 +20,7 @@
 use std::collections::HashMap;
 use std::fmt;
 
+use crate::logical_plan::plan::Sample;
 use crate::{
     expr_vec_fmt, Aggregate, DescribeTable, Distinct, DistinctOn, DmlStatement, Expr,
     Filter, Join, Limit, LogicalPlan, Partitioning, Projection, RecursiveQuery,
@@ -648,6 +649,21 @@ impl<'a, 'b> PgJsonVisitor<'a, 'b> {
                     "Node Type": "Unnest",
                     "ListColumn": expr_vec_fmt!(list_type_columns),
                     "StructColumn": expr_vec_fmt!(struct_type_columns),
+                })
+            }
+            LogicalPlan::Sample(Sample {
+                input: _,
+                lower_bound,
+                upper_bound,
+                with_replacement,
+                seed,
+            }) => {
+                json!({
+                    "Node Type": "Sample",
+                    "Lower Bound": lower_bound,
+                    "Upper Bound": upper_bound,
+                    "With Replacement": with_replacement,
+                    "Seed": seed,
                 })
             }
         }

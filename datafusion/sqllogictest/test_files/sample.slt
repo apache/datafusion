@@ -1,0 +1,226 @@
+# SAMPLE function tests with REPEATABLE seed for stability
+
+# Test basic SAMPLE with REPEATABLE seed
+statement ok
+CREATE TABLE sample_test (id INT, name VARCHAR, value DOUBLE)
+
+statement ok
+INSERT INTO sample_test VALUES 
+    (1, 'Alice', 10.5),
+    (2, 'Bob', 20.3),
+    (3, 'Charlie', 15.7),
+    (4, 'David', 25.1),
+    (5, 'Eve', 30.2),
+    (6, 'Frank', 12.8),
+    (7, 'Grace', 18.9),
+    (8, 'Henry', 22.4),
+    (9, 'Ivy', 28.6),
+    (10, 'Jack', 35.0)
+
+# Test SAMPLE with 50% ratio and REPEATABLE seed
+query TT
+SELECT COUNT(*) as count FROM sample_test SAMPLE (50 PERCENT) REPEATABLE (42)
+----
+5
+
+# Test SAMPLE with 30% ratio and REPEATABLE seed
+query TT
+SELECT COUNT(*) as count FROM sample_test SAMPLE (30 PERCENT) REPEATABLE (42)
+----
+3
+
+# Test SAMPLE with 70% ratio and REPEATABLE seed
+query TT
+SELECT COUNT(*) as count FROM sample_test SAMPLE (70 PERCENT) REPEATABLE (42)
+----
+7
+
+# Test SAMPLE with 100% ratio and REPEATABLE seed (should return all rows)
+query TT
+SELECT COUNT(*) as count FROM sample_test SAMPLE (100 PERCENT) REPEATABLE (42)
+----
+10
+
+# Test SAMPLE with 0% ratio and REPEATABLE seed (should return no rows)
+query TT
+SELECT COUNT(*) as count FROM sample_test SAMPLE (0 PERCENT) REPEATABLE (42)
+----
+0
+
+# Test SAMPLE with specific columns and REPEATABLE seed
+query TT
+SELECT id, name FROM sample_test SAMPLE (50 PERCENT) REPEATABLE (42) ORDER BY id
+----
+1 Alice
+3 Charlie
+5 Eve
+7 Grace
+9 Ivy
+
+# Test SAMPLE with WHERE clause and REPEATABLE seed
+query TT
+SELECT COUNT(*) as count FROM sample_test SAMPLE (50 PERCENT) REPEATABLE (42) WHERE value > 20
+----
+2
+
+# Test SAMPLE with ORDER BY and REPEATABLE seed
+query TT
+SELECT id, value FROM sample_test SAMPLE (40 PERCENT) REPEATABLE (42) ORDER BY value DESC
+----
+5 30.2
+9 28.6
+4 25.1
+8 22.4
+
+# Test SAMPLE with GROUP BY and REPEATABLE seed
+query TT
+SELECT COUNT(*) as count, AVG(value) as avg_value FROM sample_test SAMPLE (60 PERCENT) REPEATABLE (42)
+----
+6 21.2
+
+# Test SAMPLE with different seed values (should give different results)
+query TT
+SELECT COUNT(*) as count FROM sample_test SAMPLE (50 PERCENT) REPEATABLE (123)
+----
+4
+
+# Test SAMPLE with same seed value (should give same results)
+query TT
+SELECT COUNT(*) as count FROM sample_test SAMPLE (50 PERCENT) REPEATABLE (42)
+----
+5
+
+# Test SAMPLE with LIMIT and REPEATABLE seed
+query TT
+SELECT id, name FROM sample_test SAMPLE (80 PERCENT) REPEATABLE (42) ORDER BY id LIMIT 3
+----
+1 Alice
+2 Bob
+3 Charlie
+
+# Test SAMPLE with subquery and REPEATABLE seed
+query TT
+SELECT COUNT(*) as count FROM (
+    SELECT * FROM sample_test SAMPLE (50 PERCENT) REPEATABLE (42)
+) t
+----
+5
+
+# Test SAMPLE with JOIN and REPEATABLE seed
+statement ok
+CREATE TABLE sample_test2 (id INT, category VARCHAR)
+
+statement ok
+INSERT INTO sample_test2 VALUES 
+    (1, 'A'),
+    (2, 'B'),
+    (3, 'A'),
+    (4, 'B'),
+    (5, 'A')
+
+query TT
+SELECT COUNT(*) as count FROM sample_test s1 
+JOIN sample_test2 s2 ON s1.id = s2.id 
+SAMPLE (50 PERCENT) REPEATABLE (42)
+----
+3
+
+# Test SAMPLE with UNION and REPEATABLE seed
+query TT
+SELECT COUNT(*) as count FROM (
+    SELECT id FROM sample_test SAMPLE (50 PERCENT) REPEATABLE (42)
+    UNION
+    SELECT id FROM sample_test SAMPLE (30 PERCENT) REPEATABLE (42)
+) t
+----
+7
+
+# Test SAMPLE with CTE and REPEATABLE seed
+query TT
+WITH sampled_data AS (
+    SELECT * FROM sample_test SAMPLE (50 PERCENT) REPEATABLE (42)
+)
+SELECT COUNT(*) as count FROM sampled_data
+----
+5
+
+# Test SAMPLE with window function (should work correctly)
+query TT
+SELECT id, name, value, 
+       ROW_NUMBER() OVER (ORDER BY value) as rn 
+FROM sample_test SAMPLE (50 PERCENT) REPEATABLE (42) 
+ORDER BY id
+----
+1 Alice 10.5 1
+3 Charlie 15.7 2
+5 Eve 30.2 3
+7 Grace 18.9 4
+9 Ivy 28.6 5
+
+# Test SAMPLE with aggregation and REPEATABLE seed
+query TT
+SELECT MIN(value) as min_val, MAX(value) as max_val, AVG(value) as avg_val 
+FROM sample_test SAMPLE (60 PERCENT) REPEATABLE (42)
+----
+10.5 30.2 20.7
+
+# Test SAMPLE with different percentage values
+query TT
+SELECT COUNT(*) as count FROM sample_test SAMPLE (25 PERCENT) REPEATABLE (42)
+----
+3
+
+query TT
+SELECT COUNT(*) as count FROM sample_test SAMPLE (75 PERCENT) REPEATABLE (42)
+----
+8
+
+# Test SAMPLE with decimal percentage
+query TT
+SELECT COUNT(*) as count FROM sample_test SAMPLE (33.33 PERCENT) REPEATABLE (42)
+----
+3
+
+# Test SAMPLE with large percentage
+query TT
+SELECT COUNT(*) as count FROM sample_test SAMPLE (90 PERCENT) REPEATABLE (42)
+----
+9
+
+# Test SAMPLE with small percentage
+query TT
+SELECT COUNT(*) as count FROM sample_test SAMPLE (10 PERCENT) REPEATABLE (42)
+----
+1
+
+# Test SAMPLE with REPEATABLE seed in different contexts
+query TT
+SELECT COUNT(*) as count FROM sample_test SAMPLE (50 PERCENT) REPEATABLE (999)
+----
+5
+
+query TT
+SELECT COUNT(*) as count FROM sample_test SAMPLE (50 PERCENT) REPEATABLE (1)
+----
+4
+
+# Test SAMPLE with REPEATABLE seed and complex WHERE conditions
+query TT
+SELECT COUNT(*) as count FROM sample_test SAMPLE (50 PERCENT) REPEATABLE (42) 
+WHERE value BETWEEN 15 AND 25 AND name LIKE '%e%'
+----
+1
+
+# Test SAMPLE with REPEATABLE seed and multiple conditions
+query TT
+SELECT COUNT(*) as count FROM sample_test SAMPLE (60 PERCENT) REPEATABLE (42) 
+WHERE id % 2 = 0 OR value > 20
+----
+4
+
+# Clean up
+statement ok
+DROP TABLE sample_test
+
+statement ok
+DROP TABLE sample_test2

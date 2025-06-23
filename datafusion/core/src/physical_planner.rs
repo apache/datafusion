@@ -79,7 +79,7 @@ use datafusion_expr::expr_rewriter::unnormalize_cols;
 use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessary;
 use datafusion_expr::{
     Analyze, DescribeTable, DmlStatement, Explain, ExplainFormat, Extension, FetchType,
-    Filter, JoinType, RecursiveQuery, SkipType, StringifiedPlan, WindowFrame,
+    Filter, JoinType, RecursiveQuery, Sample, SkipType, StringifiedPlan, WindowFrame,
     WindowFrameBound, WriteOp,
 };
 use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
@@ -93,6 +93,7 @@ use datafusion_physical_plan::execution_plan::InvariantLevel;
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_physical_plan::recursive_query::RecursiveQueryExec;
 use datafusion_physical_plan::unnest::ListUnnest;
+use datafusion_physical_plan::SampleExec;
 use sqlparser::ast::NullTreatment;
 
 use async_trait::async_trait;
@@ -868,6 +869,17 @@ impl DefaultPhysicalPlanner {
                 };
 
                 Arc::new(GlobalLimitExec::new(input, skip, fetch))
+            }
+            LogicalPlan::Sample(Sample {
+                lower_bound,
+                upper_bound,
+                seed,
+                with_replacement,
+                ..
+            }) => {
+                let input = children.one()?;
+                let sample = SampleExec::try_new(input, *lower_bound, *upper_bound, *with_replacement, *seed)?;
+                Arc::new(sample)
             }
             LogicalPlan::Unnest(Unnest {
                 list_type_columns,

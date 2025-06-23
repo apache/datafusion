@@ -62,6 +62,7 @@ message LogicalPlanNode {
     RecursiveQueryNode recursive_query = 31;
     CteWorkTableScanNode cte_work_table_scan = 32;
     DmlNode dml = 33;
+    SampleNode sample = 34;
   }
 }
 
@@ -727,6 +728,7 @@ message PhysicalPlanNode {
     UnnestExecNode unnest = 30;
     JsonScanExecNode json_scan = 31;
     YieldStreamExecNode  yield_stream = 32;
+    SampleExecNode sample = 33;
   }
 }
 
@@ -1291,4 +1293,20 @@ message RecursiveQueryNode {
 message CteWorkTableScanNode {
     string name = 1;
     datafusion_common.Schema schema = 2;
+}
+
+message SampleNode {
+  LogicalPlanNode input = 1;
+  double lower_bound = 2;
+  double upper_bound = 3;
+  bool with_replacement = 4;
+  uint64 seed = 5;
+}
+
+message SampleExecNode {
+  PhysicalPlanNode input = 1;
+  double lower_bound = 2;
+  double upper_bound = 3;
+  bool with_replacement = 4;
+  uint64 seed = 5;
 }

@@ -304,6 +304,16 @@ fn optimize_projections(
                 .map(|input| indices.clone().with_plan_exprs(&plan, input.schema()))
                 .collect::<Result<_>>()?
         }
+        LogicalPlan::Sample(_) => {
+            // Pass index requirements from the parent as well as column indices
+            // that appear in this plan's expressions to its child. These operators
+            // do not benefit from "small" inputs, so the projection_beneficial
+            // flag is `false`.
+            plan.inputs()
+                .into_iter()
+                .map(|input| indices.clone().with_plan_exprs(&plan, input.schema()))
+                .collect::<Result<_>>()?
+        }
         LogicalPlan::Copy(_)
         | LogicalPlan::Ddl(_)
         | LogicalPlan::Dml(_)

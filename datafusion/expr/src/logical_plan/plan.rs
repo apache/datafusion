@@ -287,6 +287,8 @@ pub enum LogicalPlan {
     Unnest(Unnest),
     /// A variadic query (e.g. "Recursive CTEs")
     RecursiveQuery(RecursiveQuery),
+    /// Sample the input table. This is used to implement SQL `SAMPLE`
+    Sample(Sample),
 }
 
 impl Default for LogicalPlan {
@@ -347,6 +349,7 @@ impl LogicalPlan {
             LogicalPlan::Copy(CopyTo { input, .. }) => input.schema(),
             LogicalPlan::Ddl(ddl) => ddl.schema(),
             LogicalPlan::Unnest(Unnest { schema, .. }) => schema,
+            LogicalPlan::Sample(Sample { input, .. }) => input.schema(),
             LogicalPlan::RecursiveQuery(RecursiveQuery { static_term, .. }) => {
                 // we take the schema of the static term as the schema of the entire recursive query
                 static_term.schema()
@@ -474,6 +477,7 @@ impl LogicalPlan {
                 ..
             }) => vec![static_term, recursive_term],
             LogicalPlan::Statement(stmt) => stmt.inputs(),
+            LogicalPlan::Sample(Sample { input, .. }) => vec![input],
             // plans without inputs
             LogicalPlan::TableScan { .. }
             | LogicalPlan::EmptyRelation { .. }
@@ -539,7 +543,8 @@ impl LogicalPlan {
             | LogicalPlan::Sort(Sort { input, .. })
             | LogicalPlan::Limit(Limit { input, .. })
             | LogicalPlan::Repartition(Repartition { input, .. })
-            | LogicalPlan::Window(Window { input, .. }) => input.head_output_expr(),
+            | LogicalPlan::Window(Window { input, .. })
+            | LogicalPlan::Sample(Sample { input, .. }) => input.head_output_expr(),
             LogicalPlan::Join(Join {
                 left,
                 right,
@@ -739,6 +744,7 @@ impl LogicalPlan {
             LogicalPlan::EmptyRelation(_) => Ok(self),
             LogicalPlan::Statement(_) => Ok(self),
             LogicalPlan::DescribeTable(_) => Ok(self),
+            LogicalPlan::Sample(Sample {..}) => Ok(self),
             LogicalPlan::Unnest(Unnest {
                 input,
                 exec_columns,
@@ -890,6 +896,18 @@ impl LogicalPlan {
                         .collect(),
                     input: Arc::new(input),
                     fetch: *fetch,
+                }))
+            }
+            LogicalPlan::Sample(Sample { with_replacement, seed, lower_bound, upper_bound, .. }) => {
+                self.assert_no_expressions(expr)?;
+                let input = self.only_input(inputs)?;
+
+                Ok(LogicalPlan::Sample(Sample {
+                    input: Arc::new(input),
+                    lower_bound: *lower_bound,
+                    upper_bound: *upper_bound,
+                    with_replacement: *with_replacement,
+                    seed: *seed,
                 }))
             }
             LogicalPlan::Join(Join {
@@ -1362,6 +1380,7 @@ impl LogicalPlan {
                 Ok(FetchType::Literal(s)) => s,
                 _ => None,
             },
+            LogicalPlan::Sample(Sample { input, .. }) => input.max_rows(),
             LogicalPlan::Distinct(
                 Distinct::All(input) | Distinct::On(DistinctOn { input, .. }),
             ) => input.max_rows(),
@@ -1952,6 +1971,9 @@ impl LogicalPlan {
                             )
                         }
                     },
+                    LogicalPlan::Sample(Sample { lower_bound, upper_bound, with_replacement, seed, .. }) => {
+                        write!(f, "Sample: lower_bound={lower_bound}, upper_bound={upper_bound}, with_replacement={with_replacement}, seed={seed}")
+                    }
                     LogicalPlan::Limit(limit) => {
                         // Attempt to display `skip` and `fetch` as literals if possible, otherwise as expressions.
                         let skip_str = match limit.get_skip_type() {
@@ -3994,6 +4016,40 @@ impl PartialOrd for Unnest {
         comparable_self.partial_cmp(&comparable_other)
     }
 }
+
+/// Sample the input table. This is used to implement SQL `SAMPLE`
+#[derive(Debug, Clone, PartialOrd)]
+pub struct Sample {
+    /// The input table
+    pub input: Arc<LogicalPlan>,
+    pub lower_bound: f64,
+    pub upper_bound: f64,
+    pub with_replacement: bool,
+    pub seed: u64,
+}
+
+impl PartialEq for Sample {
+    fn eq(&self, other: &Self) -> bool {
+        self.input == other.input
+            && self.lower_bound.to_bits() == other.lower_bound.to_bits()
+            && self.upper_bound.to_bits() == other.upper_bound.to_bits()
+            && self.with_replacement == other.with_replacement
+            && self.seed == other.seed
+    }
+}
+
+impl Eq for Sample {}
+
+impl Hash for Sample {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.input.hash(state);
+        self.lower_bound.to_bits().hash(state);
+        self.upper_bound.to_bits().hash(state);
+        self.with_replacement.hash(state);
+        self.seed.hash(state);
+    }
+}
+
 
 #[cfg(test)]
 mod tests {
