@@ -16,14 +16,21 @@
 // under the License.
 
 use arrow::array::{
-    Date32Builder, Decimal128Builder, Int32Builder, RecordBatch, StringBuilder,
+    Date32Builder, Decimal128Builder, Int32Builder, Int64Builder, RecordBatch,
+    StringBuilder,
 };
 use arrow::datatypes::{DataType, Field, Schema};
-use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion};
+use criterion::measurement::WallTime;
+use criterion::{
+    criterion_group, criterion_main, BatchSize, BenchmarkGroup, BenchmarkId, Criterion,
+};
+use datafusion_common::config::SpillCompression;
+use datafusion_execution::memory_pool::human_readable_size;
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_physical_plan::common::collect;
 use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, SpillMetrics};
 use datafusion_physical_plan::SpillManager;
+use rand::{Rng, SeedableRng};
 use std::sync::Arc;
 use tokio::runtime::Runtime;
 
@@ -119,5 +126,297 @@ fn bench_spill_io(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_spill_io);
+// Generate 50 RecordBatches mimicking TPC-H Q2's partial aggregate result:
+// GROUP BY ps_partkey -> MIN(ps_supplycost)
+fn create_q2_like_batches() -> (Arc<Schema>, Vec<RecordBatch>) {
+    // use fixed seed
+    let seed = 2;
+    let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+    let mut batches = Vec::with_capacity(50);
+
+    let mut current_key = 400000_i64;
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("ps_partkey", DataType::Int64, false),
+        Field::new("min_ps_supplycost", DataType::Decimal128(15, 2), true),
+    ]));
+
+    for _ in 0..50 {
+        let mut partkey_builder = Int64Builder::new();
+        let mut cost_builder = Decimal128Builder::new()
+            .with_precision_and_scale(15, 2)
+            .unwrap();
+
+        for _ in 0..8192 {
+            // Occasionally skip a few partkey values to simulate sparsity
+            let jump = if rng.random_bool(0.05) {
+                rng.random_range(2..10)
+            } else {
+                1
+            };
+            current_key += jump;
+
+            let supply_cost = rng.random_range(10_00..100_000) as i128;
+
+            partkey_builder.append_value(current_key);
+            cost_builder.append_value(supply_cost);
+        }
+
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(partkey_builder.finish()),
+                Arc::new(cost_builder.finish()),
+            ],
+        )
+        .unwrap();
+
+        batches.push(batch);
+    }
+
+    (schema, batches)
+}
+
+/// Generate 50 RecordBatches mimicking TPC-H Q16's partial aggregate result:
+/// GROUP BY (p_brand, p_type, p_size) -> COUNT(DISTINCT ps_suppkey)
+pub fn create_q16_like_batches() -> (Arc<Schema>, Vec<RecordBatch>) {
+    let seed = 16;
+    let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+    let mut batches = Vec::with_capacity(50);
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("p_brand", DataType::Utf8, false),
+        Field::new("p_type", DataType::Utf8, false),
+        Field::new("p_size", DataType::Int32, false),
+        Field::new("alias1", DataType::Int64, false), // COUNT(DISTINCT ps_suppkey)
+    ]));
+
+    // Representative string pools
+    let brands = ["Brand#32", "Brand#33", "Brand#41", "Brand#42", "Brand#55"];
+    let types = [
+        "PROMO ANODIZED NICKEL",
+        "STANDARD BRUSHED NICKEL",
+        "PROMO POLISHED COPPER",
+        "ECONOMY ANODIZED BRASS",
+        "LARGE BURNISHED COPPER",
+        "STANDARD POLISHED TIN",
+        "SMALL PLATED STEEL",
+        "MEDIUM POLISHED COPPER",
+    ];
+    let sizes = [3, 9, 14, 19, 23, 36, 45, 49];
+
+    for _ in 0..50 {
+        let mut brand_builder = StringBuilder::new();
+        let mut type_builder = StringBuilder::new();
+        let mut size_builder = Int32Builder::new();
+        let mut count_builder = Int64Builder::new();
+
+        for _ in 0..8192 {
+            let brand = brands[rng.random_range(0..brands.len())];
+            let ptype = types[rng.random_range(0..types.len())];
+            let size = sizes[rng.random_range(0..sizes.len())];
+            let count = rng.random_range(1000..100_000);
+
+            brand_builder.append_value(brand);
+            type_builder.append_value(ptype);
+            size_builder.append_value(size);
+            count_builder.append_value(count);
+        }
+
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(brand_builder.finish()),
+                Arc::new(type_builder.finish()),
+                Arc::new(size_builder.finish()),
+                Arc::new(count_builder.finish()),
+            ],
+        )
+        .unwrap();
+
+        batches.push(batch);
+    }
+
+    (schema, batches)
+}
+
+// Generate 50 RecordBatches mimicking TPC-H Q20's partial aggregate result:
+// GROUP BY (l_partkey, l_suppkey) -> SUM(l_quantity)
+fn create_q20_like_batches() -> (Arc<Schema>, Vec<RecordBatch>) {
+    let seed = 20;
+    let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+    let mut batches = Vec::with_capacity(50);
+
+    let mut current_partkey = 400000_i64;
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("l_partkey", DataType::Int64, false),
+        Field::new("l_suppkey", DataType::Int64, false),
+        Field::new("sum_l_quantity", DataType::Decimal128(25, 2), true),
+    ]));
+
+    for _ in 0..50 {
+        let mut partkey_builder = Int64Builder::new();
+        let mut suppkey_builder = Int64Builder::new();
+        let mut quantity_builder = Decimal128Builder::new()
+            .with_precision_and_scale(25, 2)
+            .unwrap();
+
+        for _ in 0..8192 {
+            // Occasionally skip a few partkey values to simulate sparsity
+            let partkey_jump = if rng.random_bool(0.03) {
+                rng.random_range(2..6)
+            } else {
+                1
+            };
+            current_partkey += partkey_jump;
+
+            let suppkey = rng.random_range(10_000..99_999);
+            let quantity = rng.random_range(500..20_000) as i128;
+
+            partkey_builder.append_value(current_partkey);
+            suppkey_builder.append_value(suppkey);
+            quantity_builder.append_value(quantity);
+        }
+
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(partkey_builder.finish()),
+                Arc::new(suppkey_builder.finish()),
+                Arc::new(quantity_builder.finish()),
+            ],
+        )
+        .unwrap();
+
+        batches.push(batch);
+    }
+
+    (schema, batches)
+}
+
+// Benchmarks spill write + read performance across multiple compression codecs
+// using realistic input data inspired by TPC-H aggregate spill scenarios.
+//
+// This function prepares synthetic RecordBatches that mimic the schema and distribution
+// of intermediate aggregate results from representative TPC-H queries (Q2, Q16, Q20).
+// For each dataset:
+// - It evaluates spill performance under different compression codecs (e.g., Uncompressed, Zstd, LZ4).
+// - It measures end-to-end spill write + read performance using Criterion.
+// - It prints the observed memory-to-disk compression ratio for each codec.
+//
+// This helps evaluate the tradeoffs between compression ratio and runtime overhead for various codecs.
+fn bench_spill_compression(c: &mut Criterion) {
+    let env = Arc::new(RuntimeEnv::default());
+    let mut group = c.benchmark_group("spill_compression");
+    let rt = Runtime::new().unwrap();
+    let compressions = vec![
+        SpillCompression::Uncompressed,
+        SpillCompression::Zstd,
+        SpillCompression::Lz4Frame,
+    ];
+
+    // Q2
+    let (schema, batches) = create_q2_like_batches();
+    benchmark_spill_batches_for_all_codec(
+        &mut group,
+        "q2",
+        batches,
+        &compressions,
+        &rt,
+        env.clone(),
+        schema,
+    );
+    // Q16
+    let (schema, batches) = create_q16_like_batches();
+    benchmark_spill_batches_for_all_codec(
+        &mut group,
+        "q16",
+        batches,
+        &compressions,
+        &rt,
+        env.clone(),
+        schema,
+    );
+    // Q20
+    let (schema, batches) = create_q20_like_batches();
+    benchmark_spill_batches_for_all_codec(
+        &mut group,
+        "q20",
+        batches,
+        &compressions,
+        &rt,
+        env,
+        schema,
+    );
+
+    group.finish();
+}
+
+fn benchmark_spill_batches_for_all_codec(
+    group: &mut BenchmarkGroup<'_, WallTime>,
+    batch_label: &str,
+    batches: Vec<RecordBatch>,
+    compressions: &[SpillCompression],
+    rt: &Runtime,
+    env: Arc<RuntimeEnv>,
+    schema: Arc<Schema>,
+) {
+    let mem_bytes: usize = batches.iter().map(|b| b.get_array_memory_size()).sum();
+
+    for &compression in compressions {
+        let metrics = SpillMetrics::new(&ExecutionPlanMetricsSet::new(), 0);
+        let spill_manager =
+            SpillManager::new(Arc::clone(&env), metrics.clone(), Arc::clone(&schema))
+                .with_compression_type(compression);
+
+        let bench_id = BenchmarkId::new(batch_label, compression.to_string());
+        group.bench_with_input(bench_id, &spill_manager, |b, spill_manager| {
+            b.iter_batched(
+                || batches.clone(),
+                |batches| {
+                    rt.block_on(async {
+                        let spill_file = spill_manager
+                            .spill_record_batch_and_finish(
+                                &batches,
+                                &format!("{batch_label}_{compression}"),
+                            )
+                            .unwrap()
+                            .unwrap();
+                        let stream =
+                            spill_manager.read_spill_as_stream(spill_file).unwrap();
+                        let _ = collect(stream).await.unwrap();
+                    })
+                },
+                BatchSize::LargeInput,
+            )
+        });
+
+        // Run Spilling Read & Write once more to read file size
+        let spill_file = spill_manager
+            .spill_record_batch_and_finish(
+                &batches,
+                &format!("{batch_label}_{compression}"),
+            )
+            .unwrap()
+            .unwrap();
+
+        let disk_bytes = std::fs::metadata(spill_file.path())
+            .expect("metadata read fail")
+            .len() as usize;
+
+        let ratio = mem_bytes as f64 / disk_bytes.max(1) as f64;
+
+        println!(
+            "[{} | {:?}] mem: {}| disk: {}| compression ratio: {:.3}x",
+            batch_label,
+            compression,
+            human_readable_size(mem_bytes),
+            human_readable_size(disk_bytes),
+            ratio
+        );
+    }
+}
+
+criterion_group!(benches, bench_spill_io, bench_spill_compression);
 criterion_main!(benches);
