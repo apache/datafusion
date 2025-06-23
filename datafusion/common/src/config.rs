@@ -796,15 +796,6 @@ config_namespace! {
         /// then the output will be coerced to a non-view.
         /// Coerces `Utf8View` to `LargeUtf8`, and `BinaryView` to `LargeBinary`.
         pub expand_views_at_output: bool, default = false
-
-        /// When DataFusion detects that a plan might not be promply cancellable
-        /// due to the presence of tight-looping operators, it will attempt to
-        /// mitigate this by inserting explicit yielding (in as few places as
-        /// possible to avoid performance degradation). This value represents the
-        /// yielding period (in batches) at such explicit yielding points. The
-        /// default value is 64. If set to 0, no DataFusion will not perform
-        /// any explicit yielding.
-        pub yield_period: usize, default = 64
     }
 }
 
@@ -1257,7 +1248,10 @@ impl<F: ConfigField + Default> ConfigField for Option<F> {
     }
 }
 
-fn default_transform<T>(input: &str) -> Result<T>
+/// Default transformation to parse a [`ConfigField`] for a string.
+///
+/// This uses [`FromStr`] to parse the data.
+pub fn default_config_transform<T>(input: &str) -> Result<T>
 where
     T: FromStr,
     <T as FromStr>::Err: Sync + Send + Error + 'static,
@@ -1274,19 +1268,45 @@ where
     })
 }
 
+/// Macro that generates [`ConfigField`] for a given type.
+///
+/// # Usage
+/// This always requires [`Display`] to be implemented for the given type.
+///
+/// There are two ways to invoke this macro. The first one uses
+/// [`default_config_transform`]/[`FromStr`] to parse the data:
+///
+/// ```ignore
+/// config_field(MyType);
+/// ```
+///
+/// Note that the parsing error MUST implement [`std::error::Error`]!
+///
+/// Or you can specify how you want to parse an [`str`] into the type:
+///
+/// ```ignore
+/// fn parse_it(s: &str) -> Result<MyType> {
+///     ...
+/// }
+///
+/// config_field(
+///     MyType,
+///     value => parse_it(value)
+/// );
+/// ```
 #[macro_export]
 macro_rules! config_field {
     ($t:ty) => {
-        config_field!($t, value => default_transform(value)?);
+        config_field!($t, value => $crate::config::default_config_transform(value)?);
     };
 
     ($t:ty, $arg:ident => $transform:expr) => {
-        impl ConfigField for $t {
-            fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
+        impl $crate::config::ConfigField for $t {
+            fn visit<V: $crate::config::Visit>(&self, v: &mut V, key: &str, description: &'static str) {
                 v.some(key, self, description)
             }
 
-            fn set(&mut self, _: &str, $arg: &str) -> Result<()> {
+            fn set(&mut self, _: &str, $arg: &str) -> $crate::error::Result<()> {
                 *self = $transform;
                 Ok(())
             }
@@ -1295,7 +1315,7 @@ macro_rules! config_field {
 }
 
 config_field!(String);
-config_field!(bool, value => default_transform(value.to_lowercase().as_str())?);
+config_field!(bool, value => default_config_transform(value.to_lowercase().as_str())?);
 config_field!(usize);
 config_field!(f64);
 config_field!(u64);

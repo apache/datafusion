@@ -65,3 +65,40 @@ mod config_namespace {
         }
     }
 }
+
+mod config_field {
+    // NO other imports!
+    use datafusion_common::config_field;
+
+    #[test]
+    fn test_macro() {
+        #[derive(Debug)]
+        struct E;
+
+        impl std::fmt::Display for E {
+            fn fmt(&self, _f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                unimplemented!()
+            }
+        }
+
+        impl std::error::Error for E {}
+
+        struct S;
+
+        impl std::str::FromStr for S {
+            type Err = E;
+
+            fn from_str(_s: &str) -> Result<Self, Self::Err> {
+                unimplemented!()
+            }
+        }
+
+        impl std::fmt::Display for S {
+            fn fmt(&self, _f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                unimplemented!()
+            }
+        }
+
+        config_field!(S);
+    }
+}
