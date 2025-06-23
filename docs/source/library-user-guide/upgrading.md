@@ -21,6 +21,23 @@
 
 ## DataFusion `49.0.0`
 
+### `datafusion.execution.collect_statistics` now defaults to `true`
+
+The default value of the `datafusion.execution.collect_statistics` configuration
+setting is now true. This change impacts users that use that value directly and relied
+on its default value being `false`.
+
+This change also restores the default behavior of `ListingTable` to its previous. If you use it directly
+you can maintain the current behavior by overriding the default value in your code.
+
+```rust
+# /* comment to avoid running
+ListingOptions::new(Arc::new(ParquetFormat::default()))
+    .with_collect_stat(false)
+    // other options
+# */
+```
+
 ### Metadata is now represented by `FieldMetadata`
 
 Metadata from the Arrow `Field` is now stored using the `FieldMetadata`
@@ -47,6 +64,37 @@ let updated_field = metadata.add_to_field(field);
 See [#16317] for details.
 
 [#16317]: https://github.com/apache/datafusion/pull/16317
+
+### New `datafusion.execution.spill_compression` configuration option
+
+DataFusion 49.0.0 adds support for compressing spill files when data is written to disk during spilling query execution. A new configuration option `datafusion.execution.spill_compression` controls the compression codec used.
+
+**Configuration:**
+
+- **Key**: `datafusion.execution.spill_compression`
+- **Default**: `uncompressed`
+- **Valid values**: `uncompressed`, `lz4_frame`, `zstd`
+
+**Usage:**
+
+```rust
+# /* comment to avoid running
+use datafusion::prelude::*;
+use datafusion_common::config::SpillCompression;
+
+let config = SessionConfig::default()
+    .with_spill_compression(SpillCompression::Zstd);
+let ctx = SessionContext::new_with_config(config);
+# */
+```
+
+Or via SQL:
+
+```sql
+SET datafusion.execution.spill_compression = 'zstd';
+```
+
+For more details about this configuration option, including performance trade-offs between different compression codecs, see the [Configuration Settings](../user-guide/configs.md) documentation.
 
 ## DataFusion `48.0.0`
 
@@ -139,7 +187,7 @@ match expr {
 
 [details on #16207]: https://github.com/apache/datafusion/pull/16207#issuecomment-2922659103
 
-### The `VARCHAR` SQL type is now represented as `Utf8View` in Arrow.
+### The `VARCHAR` SQL type is now represented as `Utf8View` in Arrow
 
 The mapping of the SQL `VARCHAR` type has been changed from `Utf8` to `Utf8View`
 which improves performance for many string operations. You can read more about
@@ -291,7 +339,6 @@ Additionally `ObjectStore::list` and `ObjectStore::list_with_offset` have been c
 
 [#6619]: https://github.com/apache/arrow-rs/pull/6619
 [#7371]: https://github.com/apache/arrow-rs/pull/7371
-[#7328]: https://github.com/apache/arrow-rs/pull/6961
 
 This requires converting from `usize` to `u64` occasionally as well as changes to `ObjectStore` implementations such as
 

@@ -26,7 +26,7 @@ use crate::tree_node::ExprContext;
 use crate::PhysicalExpr;
 use crate::PhysicalSortExpr;
 
-use arrow::datatypes::SchemaRef;
+use arrow::datatypes::Schema;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
@@ -242,7 +242,7 @@ pub fn collect_columns(expr: &Arc<dyn PhysicalExpr>) -> HashSet<Column> {
 /// This may be helpful when dealing with projections.
 pub fn reassign_predicate_columns(
     pred: Arc<dyn PhysicalExpr>,
-    schema: &SchemaRef,
+    schema: &Schema,
     ignore_not_found: bool,
 ) -> Result<Arc<dyn PhysicalExpr>> {
     pred.transform_down(|expr| {

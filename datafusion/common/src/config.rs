@@ -17,6 +17,8 @@
 
 //! Runtime configuration, via [`ConfigOptions`]
 
+use arrow_ipc::CompressionType;
+
 use crate::error::_config_err;
 use crate::parsers::CompressionTypeVariant;
 use crate::utils::get_available_parallelism;
@@ -274,6 +276,61 @@ config_namespace! {
     }
 }
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum SpillCompression {
+    Zstd,
+    Lz4Frame,
+    #[default]
+    Uncompressed,
+}
+
+impl FromStr for SpillCompression {
+    type Err = DataFusionError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_ascii_lowercase().as_str() {
+            "zstd" => Ok(Self::Zstd),
+            "lz4_frame" => Ok(Self::Lz4Frame),
+            "uncompressed" | "" => Ok(Self::Uncompressed),
+            other => Err(DataFusionError::Configuration(format!(
+                "Invalid Spill file compression type: {other}. Expected one of: zstd, lz4_frame, uncompressed"
+            ))),
+        }
+    }
+}
+
+impl ConfigField for SpillCompression {
+    fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
+        v.some(key, self, description)
+    }
+
+    fn set(&mut self, _: &str, value: &str) -> Result<()> {
+        *self = SpillCompression::from_str(value)?;
+        Ok(())
+    }
+}
+
+impl Display for SpillCompression {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let str = match self {
+            Self::Zstd => "zstd",
+            Self::Lz4Frame => "lz4_frame",
+            Self::Uncompressed => "uncompressed",
+        };
+        write!(f, "{str}")
+    }
+}
+
+impl From<SpillCompression> for Option<CompressionType> {
+    fn from(c: SpillCompression) -> Self {
+        match c {
+            SpillCompression::Zstd => Some(CompressionType::ZSTD),
+            SpillCompression::Lz4Frame => Some(CompressionType::LZ4_FRAME),
+            SpillCompression::Uncompressed => None,
+        }
+    }
+}
+
 config_namespace! {
     /// Options related to query execution
     ///
@@ -294,8 +351,8 @@ config_namespace! {
 
         /// Should DataFusion collect statistics when first creating a table.
         /// Has no effect after the table is created. Applies to the default
-        /// `ListingTableProvider` in DataFusion. Defaults to false.
-        pub collect_statistics: bool, default = false
+        /// `ListingTableProvider` in DataFusion. Defaults to true.
+        pub collect_statistics: bool, default = true
 
         /// Number of partitions for query execution. Increasing partitions can increase
         /// concurrency.
@@ -329,6 +386,16 @@ config_namespace! {
         /// This is used to workaround bugs in the planner that are now caught by
         /// the new schema verification step.
         pub skip_physical_aggregate_schema_check: bool, default = false
+
+        /// Sets the compression codec used when spilling data to disk.
+        ///
+        /// Since datafusion writes spill files using the Arrow IPC Stream format,
+        /// only codecs supported by the Arrow IPC Stream Writer are allowed.
+        /// Valid values are: uncompressed, lz4_frame, zstd.
+        /// Note: lz4_frame offers faster (de)compression, but typically results in
+        /// larger spill files. In contrast, zstd achieves
+        /// higher compression ratios at the cost of slower (de)compression speed.
+        pub spill_compression: SpillCompression, default = SpillCompression::Uncompressed
 
         /// Specifies the reserved memory for each spillable sort operation to
         /// facilitate an in-memory merge.
@@ -729,15 +796,6 @@ config_namespace! {
         /// then the output will be coerced to a non-view.
         /// Coerces `Utf8View` to `LargeUtf8`, and `BinaryView` to `LargeBinary`.
         pub expand_views_at_output: bool, default = false
-
-        /// When DataFusion detects that a plan might not be promply cancellable
-        /// due to the presence of tight-looping operators, it will attempt to
-        /// mitigate this by inserting explicit yielding (in as few places as
-        /// possible to avoid performance degradation). This value represents the
-        /// yielding period (in batches) at such explicit yielding points. The
-        /// default value is 64. If set to 0, no DataFusion will not perform
-        /// any explicit yielding.
-        pub yield_period: usize, default = 64
     }
 }
 

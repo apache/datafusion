@@ -98,6 +98,7 @@ arrow-flight = { version = "55.1.0", features = [
 ] }
 arrow-ipc = { version = "55.0.0", default-features = false, features = [
     "lz4",
+    "zstd",
 ] }
 arrow-ord = { version = "55.0.0", default-features = false }
 arrow-schema = { version = "55.0.0", default-features = false }
@@ -217,5 +218,9 @@ unnecessary_lazy_evaluations = "warn"
 uninlined_format_args = "warn"
 
 [workspace.lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ["cfg(tarpaulin)", "cfg(tarpaulin_include)"] }
+unexpected_cfgs = { level = "warn", check-cfg = [
+    'cfg(datafusion_coop, values("tokio", "tokio_fallback", "per_stream"))',
+    "cfg(tarpaulin)",
+    "cfg(tarpaulin_include)",
+] }
 unused_qualifications = "deny"

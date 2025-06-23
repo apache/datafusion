@@ -34,13 +34,12 @@ impl SessionContext {
     ///
     /// # Note: Statistics
     ///
-    /// NOTE: by default, statistics are not collected when reading the Parquet
-    /// files as this can slow down the initial DataFrame creation. However,
-    /// collecting statistics can greatly accelerate queries with certain
-    /// filters.
+    /// NOTE: by default, statistics are collected when reading the Parquet
+    /// files This can slow down the initial DataFrame creation while
+    /// greatly accelerating queries with certain filters.
     ///
-    /// To enable collect statistics, set the [config option]
-    /// `datafusion.execution.collect_statistics` to `true`. See
+    /// To disable statistics collection, set the [config option]
+    /// `datafusion.execution.collect_statistics` to `false`. See
     /// [`ConfigOptions`] and [`ExecutionOptions::collect_statistics`] for more
     /// details.
     ///
@@ -171,12 +170,20 @@ mod tests {
 
     #[tokio::test]
     async fn register_parquet_respects_collect_statistics_config() -> Result<()> {
-        // The default is false
+        // The default is true
         let mut config = SessionConfig::new();
         config.options_mut().explain.physical_plan_only = true;
         config.options_mut().explain.show_statistics = true;
         let content = explain_query_all_with_config(config).await?;
-        assert_contains!(content, "statistics=[Rows=Absent,");
+        assert_contains!(content, "statistics=[Rows=Exact(");
+
+        // Explicitly set to true
+        let mut config = SessionConfig::new();
+        config.options_mut().explain.physical_plan_only = true;
+        config.options_mut().explain.show_statistics = true;
+        config.options_mut().execution.collect_statistics = true;
+        let content = explain_query_all_with_config(config).await?;
+        assert_contains!(content, "statistics=[Rows=Exact(");
 
         // Explicitly set to false
         let mut config = SessionConfig::new();
@@ -185,14 +192,6 @@ mod tests {
         config.options_mut().execution.collect_statistics = false;
         let content = explain_query_all_with_config(config).await?;
         assert_contains!(content, "statistics=[Rows=Absent,");
-
-        // Explicitly set to true
-        let mut config = SessionConfig::new();
-        config.options_mut().explain.physical_plan_only = true;
-        config.options_mut().explain.show_statistics = true;
-        config.options_mut().execution.collect_statistics = true;
-        let content = explain_query_all_with_config(config).await?;
-        assert_contains!(content, "statistics=[Rows=Exact(10),");
 
         Ok(())
     }

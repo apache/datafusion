@@ -20,10 +20,10 @@
 use std::any::Any;
 use std::sync::{Arc, Mutex};
 
-use crate::execution_plan::{Boundedness, EmissionType};
+use crate::coop::cooperative;
+use crate::execution_plan::{Boundedness, EmissionType, SchedulingType};
 use crate::memory::MemoryStream;
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
-use crate::yield_stream::wrap_yield_stream;
 use crate::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
     SendableRecordBatchStream, Statistics,
@@ -107,8 +107,6 @@ pub struct WorkTableExec {
     metrics: ExecutionPlanMetricsSet,
     /// Cache holding plan properties like equivalences, output partitioning etc.
     cache: PlanProperties,
-    /// Indicates whether to enable cooperative yielding mode.
-    cooperative: bool,
 }
 
 impl WorkTableExec {
@@ -121,7 +119,6 @@ impl WorkTableExec {
             metrics: ExecutionPlanMetricsSet::new(),
             work_table: Arc::new(WorkTable::new()),
             cache,
-            cooperative: true,
         }
     }
 
@@ -142,7 +139,6 @@ impl WorkTableExec {
             metrics: ExecutionPlanMetricsSet::new(),
             work_table,
             cache: self.cache.clone(),
-            cooperative: self.cooperative,
         }
     }
 
@@ -154,6 +150,7 @@ impl WorkTableExec {
             EmissionType::Incremental,
             Boundedness::Bounded,
         )
+        .with_scheduling_type(SchedulingType::Cooperative)
     }
 }
 
@@ -210,7 +207,7 @@ impl ExecutionPlan for WorkTableExec {
     fn execute(
         &self,
         partition: usize,
-        context: Arc<TaskContext>,
+        _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         // WorkTable streams must be the plan base.
         if partition != 0 {
@@ -220,12 +217,10 @@ impl ExecutionPlan for WorkTableExec {
         }
         let batch = self.work_table.take()?;
 
-        let stream = Box::pin(
+        let stream =
             MemoryStream::try_new(batch.batches, Arc::clone(&self.schema), None)?
-                .with_reservation(batch.reservation),
-        );
-        // Cooperatively yield if asked to do so:
-        Ok(wrap_yield_stream(stream, &context, self.cooperative))
+                .with_reservation(batch.reservation);
+        Ok(Box::pin(cooperative(stream)))
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
@@ -238,10 +233,6 @@ impl ExecutionPlan for WorkTableExec {
 
     fn partition_statistics(&self, _partition: Option<usize>) -> Result<Statistics> {
         Ok(Statistics::new_unknown(&self.schema()))
-    }
-
-    fn with_cooperative_yields(self: Arc<Self>) -> Option<Arc<dyn ExecutionPlan>> {
-        self.cooperative.then_some(self)
     }
 }
 
