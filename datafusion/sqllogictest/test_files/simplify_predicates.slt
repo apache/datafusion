@@ -70,13 +70,35 @@ logical_plan
 01)Filter: test_data.float_col < Float32(8) AND test_data.int_col > Int32(6)
 02)--TableScan: test_data projection=[int_col, float_col, str_col, date_col, bool_col]
 
+# x = 7 AND x = 7 should simplify to x = 7
+query TT
+EXPLAIN SELECT * FROM test_data WHERE int_col = 7 AND int_col = 7;
+----
+logical_plan
+01)Filter: test_data.int_col = Int32(7)
+02)--TableScan: test_data projection=[int_col, float_col, str_col, date_col, bool_col]
 
-# x = 7 AND x > 5 should simplify to x = 7
+# x = 7 AND x = 6 should simplify to false
+query TT
+EXPLAIN SELECT * FROM test_data WHERE int_col = 7 AND int_col = 6;
+----
+logical_plan EmptyRelation
+
+# TODO: x = 7 AND x < 2 should simplify to false
+query TT
+EXPLAIN SELECT * FROM test_data WHERE int_col = 7 AND int_col < 2;
+----
+logical_plan
+01)Filter: test_data.int_col = Int32(7) AND test_data.int_col < Int32(2)
+02)--TableScan: test_data projection=[int_col, float_col, str_col, date_col, bool_col]
+
+
+# TODO: x = 7 AND x > 5 should simplify to x = 7
 query TT
 EXPLAIN SELECT * FROM test_data WHERE int_col = 7 AND int_col > 5;
 ----
 logical_plan
-01)Filter: test_data.int_col = Int32(7)
+01)Filter: test_data.int_col = Int32(7) AND test_data.int_col > Int32(5)
 02)--TableScan: test_data projection=[int_col, float_col, str_col, date_col, bool_col]
 
 # str_col > 'apple' AND str_col > 'banana' should simplify to str_col > 'banana'
@@ -148,7 +170,7 @@ logical_plan
 07)------Filter: test_data2.value < Int32(50) AND test_data2.id > Int32(10)
 08)--------TableScan: test_data2 projection=[id, value]
 
-# Case 13: Handling negated predicates
+# Handling negated predicates
 # NOT (x < 10) AND NOT (x < 5) should simplify to NOT (x < 10)
 query TT
 EXPLAIN SELECT * FROM test_data WHERE NOT (int_col < 10) AND NOT (int_col < 5);
@@ -198,7 +220,7 @@ logical_plan
 01)Filter: (test_data.int_col > Int32(5) OR test_data.float_col < Float32(10)) AND (test_data.int_col > Int32(6) OR test_data.float_col < Float32(8))
 02)--TableScan: test_data projection=[int_col, float_col, str_col, date_col, bool_col]
 
-# Case 20: Combination of AND and OR with simplifiable predicates
+# Combination of AND and OR with simplifiable predicates
 query TT
 EXPLAIN SELECT * FROM test_data
 WHERE (int_col > 5 AND int_col > 6)

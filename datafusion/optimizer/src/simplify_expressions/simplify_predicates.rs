@@ -41,7 +41,7 @@ use std::collections::BTreeMap;
 ///
 /// # Returns
 /// A `Result` containing a vector of simplified `Expr` predicates.
-pub(crate) fn simplify_predicates(predicates: Vec<Expr>) -> Result<Vec<Expr>> {
+pub fn simplify_predicates(predicates: Vec<Expr>) -> Result<Vec<Expr>> {
     // Early return for simple cases
     if predicates.len() <= 1 {
         return Ok(predicates);
@@ -132,34 +132,38 @@ fn simplify_column_predicates(predicates: Vec<Expr>) -> Result<Vec<Expr>> {
 
     let mut result = Vec::new();
 
-    // If we have equality predicates, they're the most restrictive
     if !eq_predicates.is_empty() {
-        if eq_predicates.len() > 1 {
-            result.push(Expr::Literal(ScalarValue::Boolean(Some(false)), None));
+        // If there are many equality predicates, we can only keep one if they are all the same
+        // If they are not the same, add false to the result
+        if eq_predicates.len() == 1
+            || eq_predicates.iter().all(|e| e == &eq_predicates[0])
+        {
+            result.push(eq_predicates.pop().unwrap());
         } else {
-            result.push(eq_predicates[0].clone());
+            // If they are not the same, add a false predicate
+            result.push(Expr::Literal(ScalarValue::Boolean(Some(false)), None));
         }
-    } else {
-        // Handle all greater-than-style predicates (keep the most restrictive - highest value)
-        if !greater_predicates.is_empty() {
-            if let Some(most_restrictive) =
-                find_most_restrictive_predicate(&greater_predicates, true)?
-            {
-                result.push(most_restrictive);
-            } else {
-                result.extend(greater_predicates);
-            }
-        }
+    }
 
-        // Handle all less-than-style predicates (keep the most restrictive - lowest value)
-        if !less_predicates.is_empty() {
-            if let Some(most_restrictive) =
-                find_most_restrictive_predicate(&less_predicates, false)?
-            {
-                result.push(most_restrictive);
-            } else {
-                result.extend(less_predicates);
-            }
+    // Handle all greater-than-style predicates (keep the most restrictive - highest value)
+    if !greater_predicates.is_empty() {
+        if let Some(most_restrictive) =
+            find_most_restrictive_predicate(&greater_predicates, true)?
+        {
+            result.push(most_restrictive);
+        } else {
+            result.extend(greater_predicates);
+        }
+    }
+
+    // Handle all less-than-style predicates (keep the most restrictive - lowest value)
+    if !less_predicates.is_empty() {
+        if let Some(most_restrictive) =
+            find_most_restrictive_predicate(&less_predicates, false)?
+        {
+            result.push(most_restrictive);
+        } else {
+            result.extend(less_predicates);
         }
     }
 
