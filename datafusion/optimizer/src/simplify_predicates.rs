@@ -15,10 +15,32 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Simplifies predicates by reducing redundant or overlapping conditions.
+//!
+//! This module provides functionality to optimize logical predicates used in query planning
+//! by eliminating redundant conditions, thus reducing the number of predicates to evaluate.
+//! Unlike the simplifier in `simplify_expressions/simplify_exprs.rs`, which focuses on
+//! general expression simplification (e.g., constant folding and algebraic simplifications),
+//! this module specifically targets predicate optimization by handling containment relationships.
+//! For example, it can simplify `x > 5 AND x > 6` to just `x > 6`, as the latter condition
+//! encompasses the former, resulting in fewer checks during query execution.
+
 use datafusion_common::{Column, Result, ScalarValue};
 use datafusion_expr::{BinaryExpr, Cast, Expr, Operator};
 use std::collections::BTreeMap;
 
+/// Simplifies a list of predicates by removing redundancies.
+///
+/// This function takes a vector of predicate expressions and groups them by the column they reference.
+/// Predicates that reference a single column and are comparison operations (e.g., >, >=, <, <=, =)
+/// are analyzed to remove redundant conditions. For instance, `x > 5 AND x > 6` is simplified to
+/// `x > 6`. Other predicates that do not fit this pattern are retained as-is.
+///
+/// # Arguments
+/// * `predicates` - A vector of `Expr` representing the predicates to simplify.
+///
+/// # Returns
+/// A `Result` containing a vector of simplified `Expr` predicates.
 pub(crate) fn simplify_predicates(predicates: Vec<Expr>) -> Result<Vec<Expr>> {
     // Early return for simple cases
     if predicates.len() <= 1 {
@@ -67,6 +89,19 @@ pub(crate) fn simplify_predicates(predicates: Vec<Expr>) -> Result<Vec<Expr>> {
     Ok(result)
 }
 
+/// Simplifies predicates related to a single column.
+///
+/// This function processes a list of predicates that all reference the same column and
+/// simplifies them based on their operators. It groups predicates into greater-than (>, >=),
+/// less-than (<, <=), and equality (=) categories, then selects the most restrictive condition
+/// in each category to reduce redundancy. For example, among `x > 5` and `x > 6`, only `x > 6`
+/// is retained as it is more restrictive.
+///
+/// # Arguments
+/// * `predicates` - A vector of `Expr` representing predicates for a single column.
+///
+/// # Returns
+/// A `Result` containing a vector of simplified `Expr` predicates for the column.
 fn simplify_column_predicates(predicates: Vec<Expr>) -> Result<Vec<Expr>> {
     if predicates.len() <= 1 {
         return Ok(predicates);
@@ -134,6 +169,19 @@ fn simplify_column_predicates(predicates: Vec<Expr>) -> Result<Vec<Expr>> {
     Ok(result)
 }
 
+/// Finds the most restrictive predicate from a list based on literal values.
+///
+/// This function iterates through a list of predicates to identify the most restrictive one
+/// by comparing their literal values. For greater-than predicates, the highest value is most
+/// restrictive, while for less-than predicates, the lowest value is most restrictive.
+///
+/// # Arguments
+/// * `predicates` - A slice of `Expr` representing predicates to compare.
+/// * `find_greater` - A boolean indicating whether to find the highest value (true for >, >=)
+///   or the lowest value (false for <, <=).
+///
+/// # Returns
+/// A `Result` containing an `Option<Expr>` with the most restrictive predicate, if any.
 fn find_most_restrictive_predicate(
     predicates: &[Expr],
     find_greater: bool,
@@ -184,6 +232,16 @@ fn find_most_restrictive_predicate(
     Ok(Some(most_restrictive))
 }
 
+/// Extracts a column reference from an expression, if present.
+///
+/// This function checks if the given expression is a column reference or contains one,
+/// such as within a cast operation. It returns the `Column` if found.
+///
+/// # Arguments
+/// * `expr` - A reference to an `Expr` to inspect for a column reference.
+///
+/// # Returns
+/// An `Option<Column>` containing the column reference if found, otherwise `None`.
 fn extract_column_from_expr(expr: &Expr) -> Option<Column> {
     match expr {
         Expr::Column(col) => Some(col.clone()),
