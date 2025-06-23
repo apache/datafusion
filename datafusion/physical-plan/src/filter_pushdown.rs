@@ -30,6 +30,9 @@ pub enum FilterPushdownPhase {
     /// different [`ExecutionPlan`] from [`ExecutionPlan::handle_child_pushdown_result`].
     ///
     /// Pushdown of [`FilterExec`] into `DataSourceExec` is an example of a pre-pushdown.
+    /// Unlike filter pushdown in the logical phase, which operates on the logical plan to push filters into the logical table scan,
+    /// the `Pre` phase in the physical plan targets the actual physical scan, pushing filters down to specific data source implementations.
+    /// For example, Parquet supports filter pushdown to reduce data read during scanning, while CSV typically does not.
     ///
     /// [`ExecutionPlan`]: crate::ExecutionPlan
     /// [`FilterExec`]: crate::filter::FilterExec
