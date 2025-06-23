@@ -253,8 +253,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         }
 
         let seed = sample.seed.map(|seed| {
-            let Ok(seed) = seed.to_string().parse::<u64>() else {
-                return plan_err!("seed must be a number");
+            let Ok(seed) = seed.value.to_string().parse::<u64>() else {
+                return plan_err!("seed must be a number: {}", seed.value);
             };
             Ok(seed)
         }).transpose()?;

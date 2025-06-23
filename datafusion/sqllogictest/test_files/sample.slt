@@ -2,20 +2,17 @@
 
 # Test basic SAMPLE with REPEATABLE seed
 statement ok
-CREATE TABLE sample_test (id INT, name VARCHAR, value DOUBLE)
+CREATE TABLE sample_test (id INT) AS SELECT * FROM generate_series(1, 40);
 
-statement ok
-INSERT INTO sample_test VALUES 
-    (1, 'Alice', 10.5),
-    (2, 'Bob', 20.3),
-    (3, 'Charlie', 15.7),
-    (4, 'David', 25.1),
-    (5, 'Eve', 30.2),
-    (6, 'Frank', 12.8),
-    (7, 'Grace', 18.9),
-    (8, 'Henry', 22.4),
-    (9, 'Ivy', 28.6),
-    (10, 'Jack', 35.0)
+query TT
+EXPLAIN SELECT * FROM sample_test SAMPLE (50 PERCENT) REPEATABLE (42);
+----
+logical_plan
+01)Sample: lower_bound=0, upper_bound=0.5, with_replacement=false, seed=42
+02)--TableScan: sample_test projection=[id]
+physical_plan
+01)SampleExec: lower_bound=0, upper_bound=0.5, with_replacement=false, seed=42
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 # Test SAMPLE with 50% ratio and REPEATABLE seed
 query TT
@@ -221,6 +218,3 @@ WHERE id % 2 = 0 OR value > 20
 # Clean up
 statement ok
 DROP TABLE sample_test
-
-statement ok
-DROP TABLE sample_test2
