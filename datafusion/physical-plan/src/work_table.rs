@@ -225,13 +225,20 @@ impl ExecutionPlan for WorkTableExec {
         Ok(Statistics::new_unknown(&self.schema()))
     }
 
-    /// Creates a new `WorkTableExec` with the provided work table for recursive query execution.
-    /// During query planning, `WorkTableExec` nodes are created as placeholders; this method
-    /// "wires up" the actual work table that coordinates data between recursive iterations.
-    fn with_work_table(
+    /// Injects run-time state into this `WorkTableExec`.
+    ///
+    /// The only state this node currently understands is an [`Arc<WorkTable>`].
+    /// If `state` can be down-cast to that type, a new `WorkTableExec` backed
+    /// by the provided work table is returned.  Otherwise `None` is returned
+    /// so that callers can attempt to propagate the state further down the
+    /// execution plan tree.
+    fn with_new_state(
         &self,
-        work_table: Arc<WorkTable>,
+        state: Arc<dyn Any + Send + Sync>,
     ) -> Option<Arc<dyn ExecutionPlan>> {
+        // Down-cast to the expected state type; propagate `None` on failure
+        let work_table = state.downcast::<WorkTable>().ok()?;
+
         Some(Arc::new(Self {
             name: self.name.clone(),
             schema: Arc::clone(&self.schema),

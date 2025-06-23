@@ -351,7 +351,9 @@ fn assign_work_table(
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let mut work_table_refs = 0;
     plan.transform_down(|plan| {
-        if let Some(new_plan) = plan.with_work_table(Arc::clone(&work_table)) {
+        if let Some(new_plan) =
+            plan.with_new_state(Arc::clone(&work_table) as Arc<dyn Any + Send + Sync>)
+        {
             if work_table_refs > 0 {
                 not_impl_err!(
                     "Multiple recursive references to the same CTE are not supported"

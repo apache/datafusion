@@ -23,7 +23,6 @@ use crate::filter_pushdown::{
 pub use crate::metrics::Metric;
 pub use crate::ordering::InputOrderMode;
 pub use crate::stream::EmptyRecordBatchStream;
-pub use crate::work_table::WorkTable;
 
 pub use datafusion_common::hash_utils;
 pub use datafusion_common::utils::project_schema;
@@ -572,20 +571,25 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
         ))
     }
 
-    /// Returns a new execution plan that uses the provided work table, if supported.
-    /// This enables recursive query execution by allowing work table injection.
+    /// Injects arbitrary run-time state into this execution plan, returning a new plan
+    /// instance that incorporates that state *if* it is relevant to the concrete
+    /// node implementation.
     ///
-    /// Primarily implemented by [`WorkTableExec`], but custom execution nodes that wrap
-    /// or contain `WorkTableExec` instances should also implement this to propagate
-    /// work table injection to their inner components.
+    /// This is a generic entry point: the `state` can be any type wrapped in
+    /// `Arc<dyn Any + Send + Sync>`.  A node that cares about the state should
+    /// down-cast it to the concrete type it expects and, if successful, return a
+    /// modified copy of itself that captures the provided value.  If the state is
+    /// not applicable, the default behaviour is to return `None` so that parent
+    /// nodes can continue propagating the attempt further down the plan tree.
     ///
-    /// See [`WorkTableExec::with_work_table`] for the reference implementation.
-    ///
-    /// [`WorkTableExec`]: crate::work_table::WorkTableExec
-    /// [`WorkTableExec::with_work_table`]: crate::work_table::WorkTableExec::with_work_table
-    fn with_work_table(
+    /// For example, [`WorkTableExec`](crate::work_table::WorkTableExec)
+    /// down-casts the supplied state to an `Arc<WorkTable>`
+    /// in order to wire up the working table used during recursive-CTE execution.
+    /// Similar patterns can be followed by custom nodes that need late-bound
+    /// dependencies or shared state.
+    fn with_new_state(
         &self,
-        _work_table: Arc<WorkTable>,
+        _state: Arc<dyn Any + Send + Sync>,
     ) -> Option<Arc<dyn ExecutionPlan>> {
         None
     }
