@@ -326,6 +326,7 @@ Displays the schema of a table, showing column names, data types, and nullable s
 </pre>
 
 The output contains three columns:
+
 - `column_name`: The name of the column
 - `data_type`: The data type of the column (e.g., Int32, Utf8, Boolean)
 - `is_nullable`: Whether the column can contain null values (YES/NO)
@@ -341,6 +342,7 @@ DESCRIBE users;
 ```
 
 Output:
+
 ```
 +--------------+-----------+-------------+
 | column_name  | data_type | is_nullable |
@@ -371,6 +373,7 @@ DESCRIBE taxi;
 ```
 
 Output might show:
+
 ```
 +--------------------+-----------------------------+-------------+
 | column_name        | data_type                   | is_nullable |
@@ -384,8 +387,9 @@ Output might show:
 
 :::{note}
 The `DESCRIBE` command works with all table types in DataFusion, including:
+
 - Regular tables created with `CREATE TABLE`
-- External tables created with `CREATE EXTERNAL TABLE`  
+- External tables created with `CREATE EXTERNAL TABLE`
 - Views created with `CREATE VIEW`
 - Tables in different schemas using qualified names (e.g., `DESCRIBE schema_name.table_name`)
-:::
+  :::
