@@ -1219,6 +1219,14 @@ pub fn string_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataT
         (LargeUtf8, Utf8 | LargeUtf8) | (Utf8, LargeUtf8) => Some(LargeUtf8),
         // Utf8 coerces to Utf8
         (Utf8, Utf8) => Some(Utf8),
+        // Coerece enum type to string
+        (Struct(f), Utf8) | (Utf8, Struct(f)) => {
+            return if f.len() == 3 && f[0].name() == "enum" {
+                Some(Utf8)
+            } else {
+                None
+            }
+        }
         _ => None,
     }
 }
