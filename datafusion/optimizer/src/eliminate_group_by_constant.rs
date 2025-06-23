@@ -95,6 +95,7 @@ impl OptimizerRule for EliminateGroupByConstant {
 ///
 /// Intended to be used only within this rule, helper function, which heavily
 /// relies on `SimplifyExpressions` result.
+#[cfg_attr(feature = "recursive_protection", recursive::recursive)]
 fn is_constant_expression(expr: &Expr) -> bool {
     match expr {
         Expr::Alias(e) => is_constant_expression(&e.expr),

@@ -74,6 +74,7 @@ impl OptimizerRule for ScalarSubqueryToJoin {
         true
     }
 
+    #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
     fn rewrite(
         &self,
         plan: LogicalPlan,

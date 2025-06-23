@@ -2278,6 +2278,7 @@ impl Filter {
         Self::try_new_internal(predicate, input)
     }
 
+    #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
     fn is_allowed_filter_type(data_type: &DataType) -> bool {
         match data_type {
             // Interpret NULL as a missing boolean value.

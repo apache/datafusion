@@ -71,6 +71,7 @@ pub fn assert_executable_invariants(plan: &LogicalPlan) -> Result<()> {
 ///
 /// Refer to [`UserDefinedLogicalNode::check_invariants`](super::UserDefinedLogicalNode)
 /// for more details of user-provided extension node invariants.
+#[cfg_attr(feature = "recursive_protection", recursive::recursive)]
 fn assert_valid_extension_nodes(plan: &LogicalPlan, check: InvariantLevel) -> Result<()> {
     plan.apply_with_subqueries(|plan: &LogicalPlan| {
         if let LogicalPlan::Extension(Extension { node }) = plan {
@@ -372,6 +373,7 @@ fn check_aggregation_in_scalar_subquery(
     Ok(())
 }
 
+#[cfg_attr(feature = "recursive_protection", recursive::recursive)]
 fn strip_inner_query(inner_plan: &LogicalPlan) -> &LogicalPlan {
     match inner_plan {
         LogicalPlan::Projection(projection) => {

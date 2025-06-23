@@ -343,6 +343,7 @@ impl PhysicalExpr for BinaryExpr {
         self
     }
 
+    #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
     fn data_type(&self, input_schema: &Schema) -> Result<DataType> {
         BinaryTypeCoercer::new(
             &self.left.data_type(input_schema)?,
@@ -356,6 +357,7 @@ impl PhysicalExpr for BinaryExpr {
         Ok(self.left.nullable(input_schema)? || self.right.nullable(input_schema)?)
     }
 
+    #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
         use arrow::compute::kernels::numeric::*;
 
@@ -648,6 +650,7 @@ impl PhysicalExpr for BinaryExpr {
         }
     }
 
+    #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
     fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         fn write_child(
             f: &mut std::fmt::Formatter,

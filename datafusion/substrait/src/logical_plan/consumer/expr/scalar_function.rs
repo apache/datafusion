@@ -128,6 +128,7 @@ fn arg_list_to_binary_op_tree(op: Operator, mut args: Vec<Expr>) -> Result<Expr>
 ///
 /// `take_len` represents the number of elements to take from `args` before returning.
 /// We use `take_len` to avoid recursively building a `Take<Take<Take<...>>>` type.
+#[cfg_attr(feature = "recursive_protection", recursive::recursive)]
 fn arg_list_to_binary_op_tree_inner(
     op: Operator,
     args: &mut Drain<Expr>,

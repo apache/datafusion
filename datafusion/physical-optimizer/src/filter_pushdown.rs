@@ -428,6 +428,7 @@ enum ParentPredicateStates {
     Supported,
 }
 
+#[cfg_attr(feature = "recursive_protection", recursive::recursive)]
 fn push_down_filters(
     node: Arc<dyn ExecutionPlan>,
     parent_predicates: Vec<Arc<dyn PhysicalExpr>>,

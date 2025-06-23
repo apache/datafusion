@@ -262,6 +262,7 @@ pub fn pushdown_limit_helper(
 }
 
 /// Pushes down the limit through the plan.
+#[cfg_attr(feature = "recursive_protection", recursive::recursive)]
 pub(crate) fn pushdown_limits(
     pushdown_plan: Arc<dyn ExecutionPlan>,
     global_state: GlobalRequirements,

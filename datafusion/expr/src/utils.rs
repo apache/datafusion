@@ -934,6 +934,7 @@ pub fn split_conjunction(expr: &Expr) -> Vec<&Expr> {
     split_conjunction_impl(expr, vec![])
 }
 
+#[cfg_attr(feature = "recursive_protection", recursive::recursive)]
 fn split_conjunction_impl<'a>(expr: &'a Expr, mut exprs: Vec<&'a Expr>) -> Vec<&'a Expr> {
     match expr {
         Expr::BinaryExpr(BinaryExpr {
@@ -1051,6 +1052,7 @@ pub fn split_binary_owned(expr: Expr, op: Operator) -> Vec<Expr> {
     split_binary_owned_impl(expr, op, vec![])
 }
 
+#[cfg_attr(feature = "recursive_protection", recursive::recursive)]
 fn split_binary_owned_impl(
     expr: Expr,
     operator: Operator,
@@ -1078,6 +1080,7 @@ pub fn split_binary(expr: &Expr, op: Operator) -> Vec<&Expr> {
     split_binary_impl(expr, op, vec![])
 }
 
+#[cfg_attr(feature = "recursive_protection", recursive::recursive)]
 fn split_binary_impl<'a>(
     expr: &'a Expr,
     operator: Operator,

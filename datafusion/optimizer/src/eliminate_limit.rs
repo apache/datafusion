@@ -53,6 +53,7 @@ impl OptimizerRule for EliminateLimit {
         true
     }
 
+    #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
     fn rewrite(
         &self,
         plan: LogicalPlan,

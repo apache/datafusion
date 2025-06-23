@@ -228,6 +228,7 @@ fn rewrite_children(
 /// Assumes can_flatten_join_inputs has returned true and thus the plan can be
 /// flattened. Adds all leaf inputs to `all_inputs` and join_keys to
 /// possible_join_keys
+#[cfg_attr(feature = "recursive_protection", recursive::recursive)]
 fn flatten_join_inputs(
     plan: LogicalPlan,
     possible_join_keys: &mut JoinKeySet,
@@ -264,6 +265,7 @@ fn flatten_join_inputs(
 /// `flatten_join_inputs`
 ///
 /// Must stay in sync with `flatten_join_inputs`
+#[cfg_attr(feature = "recursive_protection", recursive::recursive)]
 fn can_flatten_join_inputs(plan: &LogicalPlan) -> bool {
     // can only flatten inner / cross joins
     match plan {
@@ -368,6 +370,7 @@ fn find_inner_join(
 }
 
 /// Extract join keys from a WHERE clause
+#[cfg_attr(feature = "recursive_protection", recursive::recursive)]
 fn extract_possible_join_keys(expr: &Expr, join_keys: &mut JoinKeySet) {
     if let Expr::BinaryExpr(BinaryExpr { left, op, right }) = expr {
         match op {
@@ -399,6 +402,7 @@ fn extract_possible_join_keys(expr: &Expr, join_keys: &mut JoinKeySet) {
 /// # Returns
 /// * `Some()` when there are few remaining predicates in filter_expr
 /// * `None` otherwise
+#[cfg_attr(feature = "recursive_protection", recursive::recursive)]
 fn remove_join_expressions(expr: Expr, join_keys: &JoinKeySet) -> Option<Expr> {
     match expr {
         Expr::BinaryExpr(BinaryExpr {

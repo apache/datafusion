@@ -172,6 +172,7 @@ pub fn eliminate_outer(
 /// For IS NOT NULL/NOT expr, always returns false for NULL input.
 ///     extracts columns from these exprs.
 /// For all other exprs, fall through
+#[cfg_attr(feature = "recursive_protection", recursive::recursive)]
 fn extract_non_nullable_columns(
     expr: &Expr,
     non_nullable_cols: &mut Vec<Column>,
