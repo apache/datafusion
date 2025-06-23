@@ -20,13 +20,14 @@
 use std::any::Any;
 use std::sync::{Arc, Mutex};
 
-use crate::execution_plan::{Boundedness, EmissionType};
+use crate::coop::cooperative;
+use crate::execution_plan::{Boundedness, EmissionType, SchedulingType};
 use crate::memory::MemoryStream;
+use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::{
-    metrics::{ExecutionPlanMetricsSet, MetricsSet},
+    DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
     SendableRecordBatchStream, Statistics,
 };
-use crate::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
@@ -149,6 +150,7 @@ impl WorkTableExec {
             EmissionType::Incremental,
             Boundedness::Bounded,
         )
+        .with_scheduling_type(SchedulingType::Cooperative)
     }
 }
 
@@ -214,10 +216,11 @@ impl ExecutionPlan for WorkTableExec {
             );
         }
         let batch = self.work_table.take()?;
-        Ok(Box::pin(
+
+        let stream =
             MemoryStream::try_new(batch.batches, Arc::clone(&self.schema), None)?
-                .with_reservation(batch.reservation),
-        ))
+                .with_reservation(batch.reservation);
+        Ok(Box::pin(cooperative(stream)))
     }
 
     fn metrics(&self) -> Option<MetricsSet> {

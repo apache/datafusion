@@ -1327,7 +1327,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 filter,
                 join_type,
                 join_constraint,
-                null_equals_null,
+                null_equality,
                 ..
             }) => {
                 let left: LogicalPlanNode = LogicalPlanNode::try_from_logical_plan(
@@ -1352,6 +1352,8 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let join_type: protobuf::JoinType = join_type.to_owned().into();
                 let join_constraint: protobuf::JoinConstraint =
                     join_constraint.to_owned().into();
+                let null_equality: protobuf::NullEquality =
+                    null_equality.to_owned().into();
                 let filter = filter
                     .as_ref()
                     .map(|e| serialize_expr(e, extension_codec))
@@ -1365,7 +1367,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                             join_constraint: join_constraint.into(),
                             left_join_key,
                             right_join_key,
-                            null_equals_null: *null_equals_null,
+                            null_equality: null_equality.into(),
                             filter,
                         },
                     ))),

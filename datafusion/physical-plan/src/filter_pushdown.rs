@@ -20,6 +20,45 @@ use std::vec::IntoIter;
 
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 
+#[derive(Debug, Clone, Copy)]
+pub enum FilterPushdownPhase {
+    /// Pushdown that happens before most other optimizations.
+    /// This pushdown allows static filters that do not reference any [`ExecutionPlan`]s to be pushed down.
+    /// Filters that reference an [`ExecutionPlan`] cannot be pushed down at this stage since the whole plan tree may be rewritten
+    /// by other optimizations.
+    /// Implementers are however allowed to modify the execution plan themselves during this phase, for example by returning a completely
+    /// different [`ExecutionPlan`] from [`ExecutionPlan::handle_child_pushdown_result`].
+    ///
+    /// Pushdown of [`FilterExec`] into `DataSourceExec` is an example of a pre-pushdown.
+    ///
+    /// [`ExecutionPlan`]: crate::ExecutionPlan
+    /// [`FilterExec`]: crate::filter::FilterExec
+    /// [`ExecutionPlan::handle_child_pushdown_result`]: crate::ExecutionPlan::handle_child_pushdown_result
+    Pre,
+    /// Pushdown that happens after most other optimizations.
+    /// This stage of filter pushdown allows filters that reference an [`ExecutionPlan`] to be pushed down.
+    /// Since subsequent optimizations should not change the structure of the plan tree except for calling [`ExecutionPlan::with_new_children`]
+    /// (which generally preserves internal references) it is safe for references between [`ExecutionPlan`]s to be established at this stage.
+    ///
+    /// This phase is used to link a [`SortExec`] (with a TopK operator) or a [`HashJoinExec`] to a `DataSourceExec`.
+    ///
+    /// [`ExecutionPlan`]: crate::ExecutionPlan
+    /// [`ExecutionPlan::with_new_children`]: crate::ExecutionPlan::with_new_children
+    /// [`SortExec`]: crate::sorts::sort::SortExec
+    /// [`HashJoinExec`]: crate::joins::HashJoinExec
+    /// [`ExecutionPlan::handle_child_pushdown_result`]: crate::ExecutionPlan::handle_child_pushdown_result
+    Post,
+}
+
+impl std::fmt::Display for FilterPushdownPhase {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            FilterPushdownPhase::Pre => write!(f, "Pre"),
+            FilterPushdownPhase::Post => write!(f, "Post"),
+        }
+    }
+}
+
 /// The result of a plan for pushing down a filter into a child node.
 /// This contains references to filters so that nodes can mutate a filter
 /// before pushing it down to a child node (e.g. to adjust a projection)
@@ -29,6 +68,16 @@ use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 pub enum PredicateSupport {
     Supported(Arc<dyn PhysicalExpr>),
     Unsupported(Arc<dyn PhysicalExpr>),
+}
+
+impl PredicateSupport {
+    pub fn into_inner(self) -> Arc<dyn PhysicalExpr> {
+        match self {
+            PredicateSupport::Supported(expr) | PredicateSupport::Unsupported(expr) => {
+                expr
+            }
+        }
+    }
 }
 
 /// A thin wrapper around [`PredicateSupport`]s that allows for easy collection of
@@ -56,6 +105,25 @@ impl PredicateSupports {
         let pushdowns = filters
             .into_iter()
             .map(PredicateSupport::Unsupported)
+            .collect();
+        Self::new(pushdowns)
+    }
+
+    /// Create a new [`PredicateSupport`] with filterrs marked as supported if
+    /// `f` returns true and unsupported otherwise.
+    pub fn new_with_supported_check(
+        filters: Vec<Arc<dyn PhysicalExpr>>,
+        check: impl Fn(&Arc<dyn PhysicalExpr>) -> bool,
+    ) -> Self {
+        let pushdowns = filters
+            .into_iter()
+            .map(|f| {
+                if check(&f) {
+                    PredicateSupport::Supported(f)
+                } else {
+                    PredicateSupport::Unsupported(f)
+                }
+            })
             .collect();
         Self::new(pushdowns)
     }
@@ -102,6 +170,18 @@ impl PredicateSupports {
             .collect()
     }
 
+    /// Collect supported filters into a Vec, without removing them from the original
+    /// [`PredicateSupport`].
+    pub fn collect_supported(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+        self.0
+            .iter()
+            .filter_map(|f| match f {
+                PredicateSupport::Supported(expr) => Some(Arc::clone(expr)),
+                PredicateSupport::Unsupported(_) => None,
+            })
+            .collect()
+    }
+
     /// Collect all filters into a Vec, without removing them from the original
     /// FilterPushdowns.
     pub fn collect_all(self) -> Vec<Arc<dyn PhysicalExpr>> {
@@ -131,6 +211,20 @@ impl PredicateSupports {
     /// Check if the inner `Vec<FilterPushdown>` is empty.
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
+    }
+
+    /// Check if all filters are supported.
+    pub fn is_all_supported(&self) -> bool {
+        self.0
+            .iter()
+            .all(|f| matches!(f, PredicateSupport::Supported(_)))
+    }
+
+    /// Check if all filters are unsupported.
+    pub fn is_all_unsupported(&self) -> bool {
+        self.0
+            .iter()
+            .all(|f| matches!(f, PredicateSupport::Unsupported(_)))
     }
 }
 

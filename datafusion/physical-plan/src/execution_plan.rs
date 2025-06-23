@@ -17,7 +17,8 @@
 
 pub use crate::display::{DefaultDisplay, DisplayAs, DisplayFormatType, VerboseDisplay};
 use crate::filter_pushdown::{
-    ChildPushdownResult, FilterDescription, FilterPushdownPropagation,
+    ChildPushdownResult, FilterDescription, FilterPushdownPhase,
+    FilterPushdownPropagation,
 };
 pub use crate::metrics::Metric;
 pub use crate::ordering::InputOrderMode;
@@ -41,8 +42,6 @@ use crate::coalesce_partitions::CoalescePartitionsExec;
 use crate::display::DisplayableExecutionPlan;
 use crate::metrics::MetricsSet;
 use crate::projection::ProjectionExec;
-use crate::repartition::RepartitionExec;
-use crate::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use crate::stream::RecordBatchStreamAdapter;
 
 use arrow::array::{Array, RecordBatch};
@@ -51,8 +50,8 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::{exec_err, Constraints, Result};
 use datafusion_common_runtime::JoinSet;
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
-use datafusion_physical_expr_common::sort_expr::LexRequirement;
+use datafusion_physical_expr::EquivalenceProperties;
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, OrderingRequirements};
 
 use futures::stream::{StreamExt, TryStreamExt};
 
@@ -139,7 +138,7 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// NOTE that checking `!is_empty()` does **not** check for a
     /// required input ordering. Instead, the correct check is that at
     /// least one entry must be `Some`
-    fn required_input_ordering(&self) -> Vec<Option<LexRequirement>> {
+    fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
         vec![None; self.children().len()]
     }
 
@@ -270,11 +269,13 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// batch is superlinear. See this [general guideline][async-guideline] for more context
     /// on this point, which explains why one should avoid spending a long time without
     /// reaching an `await`/yield point in asynchronous runtimes.
-    /// This can be achieved by manually returning [`Poll::Pending`] and setting up wakers
-    /// appropriately, or the use of [`tokio::task::yield_now()`] when appropriate.
+    /// This can be achieved by using the utilities from the [`coop`](crate::coop) module, by
+    /// manually returning [`Poll::Pending`] and setting up wakers appropriately, or by calling
+    /// [`tokio::task::yield_now()`] when appropriate.
     /// In special cases that warrant manual yielding, determination for "regularly" may be
-    /// made using a timer (being careful with the overhead-heavy system call needed to
-    /// take the time), or by counting rows or batches.
+    /// made using the [Tokio task budget](https://docs.rs/tokio/latest/tokio/task/coop/index.html),
+    /// a timer (being careful with the overhead-heavy system call needed to take the time), or by
+    /// counting rows or batches.
     ///
     /// The [cancellation benchmark] tracks some cases of how quickly queries can
     /// be cancelled.
@@ -509,8 +510,13 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     ///
     /// The default implementation bars all parent filters from being pushed down and adds no new filters.
     /// This is the safest option, making filter pushdown opt-in on a per-node pasis.
+    ///
+    /// There are two different phases in filter pushdown, which some operators may handle the same and some differently.
+    /// Depending on the phase the operator may or may not be allowed to modify the plan.
+    /// See [`FilterPushdownPhase`] for more details.
     fn gather_filters_for_pushdown(
         &self,
+        _phase: FilterPushdownPhase,
         parent_filters: Vec<Arc<dyn PhysicalExpr>>,
         _config: &ConfigOptions,
     ) -> Result<FilterDescription> {
@@ -536,9 +542,27 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     ///
     /// The default implementation is a no-op that passes the result of pushdown from the children to its parent.
     ///
+    /// When returning filters via [`FilterPushdownPropagation`] the order of the filters need not match
+    /// the order they were passed in via `child_pushdown_result`, but preserving the order may be beneficial
+    /// for debugging and reasoning about the resulting plans so it is recommended to preserve the order.
+    ///
+    /// There are various helper methods to make implementing this method easier, see:
+    /// - [`FilterPushdownPropagation::unsupported`]: to indicate that the node does not support filter pushdown at all.
+    /// - [`FilterPushdownPropagation::transparent`]: to indicate that the node supports filter pushdown but does not involve itself in it,
+    ///   instead if simply transmits the result of pushdown into its children back up to its parent.
+    /// - [`PredicateSupports::new_with_supported_check`]: takes a callback that returns true / false for each filter to indicate pushdown support.
+    ///   This can be used alongside [`FilterPushdownPropagation::with_filters`] and [`FilterPushdownPropagation::with_updated_node`]
+    ///   to dynamically build a result with a mix of supported and unsupported filters.
+    ///
+    /// There are two different phases in filter pushdown, which some operators may handle the same and some differently.
+    /// Depending on the phase the operator may or may not be allowed to modify the plan.
+    /// See [`FilterPushdownPhase`] for more details.
+    ///
     /// [`PredicateSupport::Supported`]: crate::filter_pushdown::PredicateSupport::Supported
+    /// [`PredicateSupports::new_with_supported_check`]: crate::filter_pushdown::PredicateSupports::new_with_supported_check
     fn handle_child_pushdown_result(
         &self,
+        _phase: FilterPushdownPhase,
         child_pushdown_result: ChildPushdownResult,
         _config: &ConfigOptions,
     ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
@@ -720,6 +744,49 @@ pub enum EmissionType {
     Both,
 }
 
+/// Represents whether an operator's `Stream` has been implemented to actively cooperate with the
+/// Tokio scheduler or not. Please refer to the [`coop`](crate::coop) module for more details.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SchedulingType {
+    /// The stream generated by [`execute`](ExecutionPlan::execute) does not actively participate in
+    /// cooperative scheduling. This means the implementation of the `Stream` returned by
+    /// [`ExecutionPlan::execute`] does not contain explicit task budget consumption such as
+    /// [`tokio::task::coop::consume_budget`].
+    ///
+    /// `NonCooperative` is the default value and is acceptable for most operators. Please refer to
+    /// the [`coop`](crate::coop) module for details on when it may be useful to use
+    /// `Cooperative` instead.
+    NonCooperative,
+    /// The stream generated by [`execute`](ExecutionPlan::execute) actively participates in
+    /// cooperative scheduling by consuming task budget when it was able to produce a
+    /// [`RecordBatch`].
+    Cooperative,
+}
+
+/// Represents how an operator's `Stream` implementation generates `RecordBatch`es.
+///
+/// Most operators in DataFusion generate `RecordBatch`es when asked to do so by a call to
+/// `Stream::poll_next`. This is known as demand-driven or lazy evaluation.
+///
+/// Some operators like `Repartition` need to drive `RecordBatch` generation themselves though. This
+/// is known as data-driven or eager evaluation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EvaluationType {
+    /// The stream generated by [`execute`](ExecutionPlan::execute) only generates `RecordBatch`
+    /// instances when it is demanded by invoking `Stream::poll_next`.
+    /// Filter, projection, and join are examples of such lazy operators.
+    ///
+    /// Lazy operators are also known as demand-driven operators.
+    Lazy,
+    /// The stream generated by [`execute`](ExecutionPlan::execute) eagerly generates `RecordBatch`
+    /// in one or more spawned Tokio tasks. Eager evaluation is only started the first time
+    /// `Stream::poll_next` is called.
+    /// Examples of eager operators are repartition, coalesce partitions, and sort preserving merge.
+    ///
+    /// Eager operators are also known as a data-driven operators.
+    Eager,
+}
+
 /// Utility to determine an operator's boundedness based on its children's boundedness.
 ///
 /// Assumes boundedness can be inferred from child operators:
@@ -808,6 +875,8 @@ pub struct PlanProperties {
     pub emission_type: EmissionType,
     /// See [ExecutionPlanProperties::boundedness]
     pub boundedness: Boundedness,
+    pub evaluation_type: EvaluationType,
+    pub scheduling_type: SchedulingType,
     /// See [ExecutionPlanProperties::output_ordering]
     output_ordering: Option<LexOrdering>,
 }
@@ -827,6 +896,8 @@ impl PlanProperties {
             partitioning,
             emission_type,
             boundedness,
+            evaluation_type: EvaluationType::Lazy,
+            scheduling_type: SchedulingType::NonCooperative,
             output_ordering,
         }
     }
@@ -858,6 +929,22 @@ impl PlanProperties {
         self
     }
 
+    /// Set the [`SchedulingType`].
+    ///
+    /// Defaults to [`SchedulingType::NonCooperative`]
+    pub fn with_scheduling_type(mut self, scheduling_type: SchedulingType) -> Self {
+        self.scheduling_type = scheduling_type;
+        self
+    }
+
+    /// Set the [`EvaluationType`].
+    ///
+    /// Defaults to [`EvaluationType::Lazy`]
+    pub fn with_evaluation_type(mut self, drive_type: EvaluationType) -> Self {
+        self.evaluation_type = drive_type;
+        self
+    }
+
     /// Overwrite constraints with its new value.
     pub fn with_constraints(mut self, constraints: Constraints) -> Self {
         self.eq_properties = self.eq_properties.with_constraints(constraints);
@@ -884,30 +971,12 @@ impl PlanProperties {
 
 /// Indicate whether a data exchange is needed for the input of `plan`, which will be very helpful
 /// especially for the distributed engine to judge whether need to deal with shuffling.
-/// Currently there are 3 kinds of execution plan which needs data exchange
+/// Currently, there are 3 kinds of execution plan which needs data exchange
 ///     1. RepartitionExec for changing the partition number between two `ExecutionPlan`s
 ///     2. CoalescePartitionsExec for collapsing all of the partitions into one without ordering guarantee
 ///     3. SortPreservingMergeExec for collapsing all of the sorted partitions into one with ordering guarantee
 pub fn need_data_exchange(plan: Arc<dyn ExecutionPlan>) -> bool {
-    if let Some(repartition) = plan.as_any().downcast_ref::<RepartitionExec>() {
-        !matches!(
-            repartition.properties().output_partitioning(),
-            Partitioning::RoundRobinBatch(_)
-        )
-    } else if let Some(coalesce) = plan.as_any().downcast_ref::<CoalescePartitionsExec>()
-    {
-        coalesce.input().output_partitioning().partition_count() > 1
-    } else if let Some(sort_preserving_merge) =
-        plan.as_any().downcast_ref::<SortPreservingMergeExec>()
-    {
-        sort_preserving_merge
-            .input()
-            .output_partitioning()
-            .partition_count()
-            > 1
-    } else {
-        false
-    }
+    plan.properties().evaluation_type == EvaluationType::Eager
 }
 
 /// Returns a copy of this plan if we change any child according to the pointer comparison.
@@ -1153,16 +1222,16 @@ pub enum CardinalityEffect {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use arrow::array::{DictionaryArray, Int32Array, NullArray, RunArray};
-    use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use std::any::Any;
     use std::sync::Arc;
 
+    use super::*;
+    use crate::{DisplayAs, DisplayFormatType, ExecutionPlan};
+
+    use arrow::array::{DictionaryArray, Int32Array, NullArray, RunArray};
+    use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use datafusion_common::{Result, Statistics};
     use datafusion_execution::{SendableRecordBatchStream, TaskContext};
-
-    use crate::{DisplayAs, DisplayFormatType, ExecutionPlan};
 
     #[derive(Debug)]
     pub struct EmptyExec;

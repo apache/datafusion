@@ -20,7 +20,7 @@ use std::fmt::Debug;
 use std::ops::Range;
 use std::sync::Arc;
 
-use crate::{LexOrdering, PhysicalExpr};
+use crate::PhysicalExpr;
 
 use arrow::array::{new_empty_array, Array, ArrayRef};
 use arrow::compute::kernels::sort::SortColumn;
@@ -33,6 +33,7 @@ use datafusion_expr::window_state::{
     PartitionBatchState, WindowAggState, WindowFrameContext, WindowFrameStateGroups,
 };
 use datafusion_expr::{Accumulator, PartitionEvaluator, WindowFrame, WindowFrameBound};
+use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 
 use indexmap::IndexMap;
 
@@ -109,14 +110,14 @@ pub trait WindowExpr: Send + Sync + Debug {
     fn partition_by(&self) -> &[Arc<dyn PhysicalExpr>];
 
     /// Expressions that's from the window function's order by clause, empty if absent
-    fn order_by(&self) -> &LexOrdering;
+    fn order_by(&self) -> &[PhysicalSortExpr];
 
     /// Get order by columns, empty if absent
     fn order_by_columns(&self, batch: &RecordBatch) -> Result<Vec<SortColumn>> {
         self.order_by()
             .iter()
             .map(|e| e.evaluate_to_sort_column(batch))
-            .collect::<Result<Vec<SortColumn>>>()
+            .collect()
     }
 
     /// Get the window frame of this [WindowExpr].
@@ -138,7 +139,7 @@ pub trait WindowExpr: Send + Sync + Debug {
             .order_by()
             .iter()
             .map(|sort_expr| Arc::clone(&sort_expr.expr))
-            .collect::<Vec<_>>();
+            .collect();
         WindowPhysicalExpressions {
             args,
             partition_by_exprs,
@@ -186,12 +187,15 @@ pub trait AggregateWindowExpr: WindowExpr {
         accumulator: &mut Box<dyn Accumulator>,
     ) -> Result<ScalarValue>;
 
+    /// Indicates whether this window function always produces the same result
+    /// for all rows in the partition.
+    fn is_constant_in_partition(&self) -> bool;
+
     /// Evaluates the window function against the batch.
     fn aggregate_evaluate(&self, batch: &RecordBatch) -> Result<ArrayRef> {
         let mut accumulator = self.get_accumulator()?;
         let mut last_range = Range { start: 0, end: 0 };
-        let sort_options: Vec<SortOptions> =
-            self.order_by().iter().map(|o| o.options).collect();
+        let sort_options = self.order_by().iter().map(|o| o.options).collect();
         let mut window_frame_ctx =
             WindowFrameContext::new(Arc::clone(self.get_window_frame()), sort_options);
         self.get_result_column(
@@ -239,8 +243,7 @@ pub trait AggregateWindowExpr: WindowExpr {
 
             // If there is no window state context, initialize it.
             let window_frame_ctx = state.window_frame_ctx.get_or_insert_with(|| {
-                let sort_options: Vec<SortOptions> =
-                    self.order_by().iter().map(|o| o.options).collect();
+                let sort_options = self.order_by().iter().map(|o| o.options).collect();
                 WindowFrameContext::new(Arc::clone(self.get_window_frame()), sort_options)
             });
             let out_col = self.get_result_column(
@@ -272,8 +275,18 @@ pub trait AggregateWindowExpr: WindowExpr {
         not_end: bool,
     ) -> Result<ArrayRef> {
         let values = self.evaluate_args(record_batch)?;
-        let order_bys = get_orderby_values(self.order_by_columns(record_batch)?);
 
+        if self.is_constant_in_partition() {
+            if not_end {
+                let field = self.field()?;
+                let out_type = field.data_type();
+                return Ok(new_empty_array(out_type));
+            }
+            accumulator.update_batch(&values)?;
+            let value = accumulator.evaluate()?;
+            return value.to_array_of_size(record_batch.num_rows());
+        }
+        let order_bys = get_orderby_values(self.order_by_columns(record_batch)?);
         let most_recent_row_order_bys = most_recent_row
             .map(|batch| self.order_by_columns(batch))
             .transpose()?
@@ -344,13 +357,13 @@ pub(crate) fn is_end_bound_safe(
     window_frame_ctx: &WindowFrameContext,
     order_bys: &[ArrayRef],
     most_recent_order_bys: Option<&[ArrayRef]>,
-    sort_exprs: &LexOrdering,
+    sort_exprs: &[PhysicalSortExpr],
     idx: usize,
 ) -> Result<bool> {
     if sort_exprs.is_empty() {
         // Early return if no sort expressions are present:
         return Ok(false);
-    }
+    };
 
     match window_frame_ctx {
         WindowFrameContext::Rows(window_frame) => {

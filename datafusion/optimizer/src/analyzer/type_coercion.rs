@@ -579,7 +579,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
             Expr::Alias(_)
             | Expr::Column(_)
             | Expr::ScalarVariable(_, _)
-            | Expr::Literal(_)
+            | Expr::Literal(_, _)
             | Expr::SimilarTo(_)
             | Expr::IsNotNull(_)
             | Expr::IsNull(_)

@@ -215,7 +215,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             }
             SQLExpr::Extract { field, expr, .. } => {
                 let mut extract_args = vec![
-                    Expr::Literal(ScalarValue::from(format!("{field}"))),
+                    Expr::Literal(ScalarValue::from(format!("{field}")), None),
                     self.sql_expr_to_logical_expr(*expr, schema, planner_context)?,
                 ];
 
@@ -644,7 +644,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         values: Vec<SQLExpr>,
     ) -> Result<Expr> {
         match values.first() {
-            Some(SQLExpr::Identifier(_)) | Some(SQLExpr::Value(_)) => {
+            Some(SQLExpr::Identifier(_))
+            | Some(SQLExpr::Value(_))
+            | Some(SQLExpr::CompoundIdentifier(_)) => {
                 self.parse_struct(schema, planner_context, values, vec![])
             }
             None => not_impl_err!("Empty tuple not supported yet"),

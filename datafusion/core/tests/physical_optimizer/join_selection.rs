@@ -25,8 +25,8 @@ use std::{
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::JoinSide;
 use datafusion_common::{stats::Precision, ColumnStatistics, JoinType, ScalarValue};
+use datafusion_common::{JoinSide, NullEquality};
 use datafusion_common::{Result, Statistics};
 use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream, TaskContext};
 use datafusion_expr::Operator;
@@ -222,7 +222,7 @@ async fn test_join_with_swap() {
             &JoinType::Left,
             None,
             PartitionMode::CollectLeft,
-            false,
+            NullEquality::NullEqualsNothing,
         )
         .unwrap(),
     );
@@ -284,7 +284,7 @@ async fn test_left_join_no_swap() {
             &JoinType::Left,
             None,
             PartitionMode::CollectLeft,
-            false,
+            NullEquality::NullEqualsNothing,
         )
         .unwrap(),
     );
@@ -333,7 +333,7 @@ async fn test_join_with_swap_semi() {
             &join_type,
             None,
             PartitionMode::Partitioned,
-            false,
+            NullEquality::NullEqualsNothing,
         )
         .unwrap();
 
@@ -408,7 +408,7 @@ async fn test_nested_join_swap() {
         &JoinType::Inner,
         None,
         PartitionMode::CollectLeft,
-        false,
+        NullEquality::NullEqualsNothing,
     )
     .unwrap();
     let child_schema = child_join.schema();
@@ -425,7 +425,7 @@ async fn test_nested_join_swap() {
         &JoinType::Left,
         None,
         PartitionMode::CollectLeft,
-        false,
+        NullEquality::NullEqualsNothing,
     )
     .unwrap();
 
@@ -464,7 +464,7 @@ async fn test_join_no_swap() {
             &JoinType::Inner,
             None,
             PartitionMode::CollectLeft,
-            false,
+            NullEquality::NullEqualsNothing,
         )
         .unwrap(),
     );
@@ -690,7 +690,7 @@ async fn test_hash_join_swap_on_joins_with_projections(
         &join_type,
         Some(projection),
         PartitionMode::Partitioned,
-        false,
+        NullEquality::NullEqualsNothing,
     )?);
 
     let swapped = join
@@ -851,7 +851,7 @@ fn check_join_partition_mode(
             &JoinType::Inner,
             None,
             PartitionMode::Auto,
-            false,
+            NullEquality::NullEqualsNothing,
         )
         .unwrap(),
     );
@@ -1498,7 +1498,7 @@ async fn test_join_with_maybe_swap_unbounded_case(t: TestCase) -> Result<()> {
         &t.initial_join_type,
         None,
         t.initial_mode,
-        false,
+        NullEquality::NullEqualsNothing,
     )?) as _;
 
     let optimized_join_plan = hash_join_swap_subrule(join, &ConfigOptions::new())?;

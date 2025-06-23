@@ -32,8 +32,7 @@ use datafusion_datasource::file_meta::FileMeta;
 use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
 use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
 use datafusion_datasource::{
-    as_file_source, calculate_range, impl_schema_adapter_methods, ListingTableUrl,
-    RangeCalculation,
+    as_file_source, calculate_range, ListingTableUrl, PartitionedFile, RangeCalculation,
 };
 use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
@@ -151,7 +150,20 @@ impl FileSource for JsonSource {
     fn file_type(&self) -> &str {
         "json"
     }
-    impl_schema_adapter_methods!();
+
+    fn with_schema_adapter_factory(
+        &self,
+        schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
+    ) -> Result<Arc<dyn FileSource>> {
+        Ok(Arc::new(Self {
+            schema_adapter_factory: Some(schema_adapter_factory),
+            ..self.clone()
+        }))
+    }
+
+    fn schema_adapter_factory(&self) -> Option<Arc<dyn SchemaAdapterFactory>> {
+        self.schema_adapter_factory.clone()
+    }
 }
 
 impl FileOpener for JsonOpener {
@@ -164,7 +176,11 @@ impl FileOpener for JsonOpener {
     /// are applied to determine which lines to read:
     /// 1. The first line of the partition is the line in which the index of the first character >= `start`.
     /// 2. The last line of the partition is the line in which the byte at position `end - 1` resides.
-    fn open(&self, file_meta: FileMeta) -> Result<FileOpenFuture> {
+    fn open(
+        &self,
+        file_meta: FileMeta,
+        _file: PartitionedFile,
+    ) -> Result<FileOpenFuture> {
         let store = Arc::clone(&self.object_store);
         let schema = Arc::clone(&self.projected_schema);
         let batch_size = self.batch_size;
