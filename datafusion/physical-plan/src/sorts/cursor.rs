@@ -293,6 +293,7 @@ impl CursorValues for StringViewArray {
         self.views().len()
     }
 
+    #[inline(always)]
     fn eq(l: &Self, l_idx: usize, r: &Self, r_idx: usize) -> bool {
         // SAFETY: Both l_idx and r_idx are guaranteed to be within bounds,
         // and any null-checks are handled in the outer layers.
@@ -313,6 +314,7 @@ impl CursorValues for StringViewArray {
         unsafe { GenericByteViewArray::compare_unchecked(l, l_idx, r, r_idx).is_eq() }
     }
 
+    #[inline(always)]
     fn eq_to_previous(cursor: &Self, idx: usize) -> bool {
         // SAFETY: The caller guarantees that idx > 0 and the indices are valid.
         // Already checked it in is_eq_to_prev_one function
@@ -335,6 +337,7 @@ impl CursorValues for StringViewArray {
         }
     }
 
+    #[inline(always)]
     fn compare(l: &Self, l_idx: usize, r: &Self, r_idx: usize) -> Ordering {
         // SAFETY: Prior assertions guarantee that l_idx and r_idx are valid indices.
         // Null-checks are assumed to have been handled in the wrapper (e.g., ArrayValues).
@@ -342,7 +345,11 @@ impl CursorValues for StringViewArray {
         if l.data_buffers().is_empty() && r.data_buffers().is_empty() {
             let l_view = unsafe { l.views().get_unchecked(l_idx) };
             let r_view = unsafe { r.views().get_unchecked(r_idx) };
-            return l_view.cmp(r_view);
+            let l_len = *l_view as u32;
+            let r_len = *r_view as u32;
+            let l_data = unsafe { StringViewArray::inline_value(l_view, l_len as usize) };
+            let r_data = unsafe { StringViewArray::inline_value(r_view, r_len as usize) };
+            return l_data.cmp(r_data);
         }
 
         unsafe { GenericByteViewArray::compare_unchecked(l, l_idx, r, r_idx) }
