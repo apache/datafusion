@@ -149,9 +149,21 @@ impl TreeNode for LogicalPlan {
             LogicalPlan::Limit(Limit { skip, fetch, input }) => input
                 .map_elements(f)?
                 .update_data(|input| LogicalPlan::Limit(Limit { skip, fetch, input })),
-            LogicalPlan::Sample(Sample { input, lower_bound, upper_bound, with_replacement, seed }) => input
-                .map_elements(f)?
-                .update_data(|input| LogicalPlan::Sample(Sample { input, lower_bound, upper_bound, with_replacement, seed })),
+            LogicalPlan::Sample(Sample {
+                input,
+                lower_bound,
+                upper_bound,
+                with_replacement,
+                seed,
+            }) => input.map_elements(f)?.update_data(|input| {
+                LogicalPlan::Sample(Sample {
+                    input,
+                    lower_bound,
+                    upper_bound,
+                    with_replacement,
+                    seed,
+                })
+            }),
             LogicalPlan::Subquery(Subquery {
                 subquery,
                 outer_ref_columns,

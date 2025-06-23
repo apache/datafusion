@@ -71,7 +71,8 @@ use datafusion_expr::{
     Statement, WindowUDF,
 };
 use datafusion_expr::{
-    AggregateUDF, ColumnUnnestList, DmlStatement, FetchType, RecursiveQuery, Sample, SkipType, TableSource, Unnest
+    AggregateUDF, ColumnUnnestList, DmlStatement, FetchType, RecursiveQuery, Sample,
+    SkipType, TableSource, Unnest,
 };
 
 use self::to_proto::{serialize_expr, serialize_exprs};
@@ -1821,7 +1822,8 @@ impl AsLogicalPlan for LogicalPlanNode {
                     extension_codec,
                 )?;
                 Ok(LogicalPlanNode {
-                    logical_plan_type: Some(LogicalPlanType::Sample(Box::new(protobuf::SampleNode {
+                    logical_plan_type: Some(LogicalPlanType::Sample(Box::new(
+                        protobuf::SampleNode {
                             input: Some(Box::new(input)),
                             lower_bound: sample.lower_bound,
                             upper_bound: sample.upper_bound,

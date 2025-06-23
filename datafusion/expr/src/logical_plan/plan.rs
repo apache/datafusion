@@ -744,7 +744,7 @@ impl LogicalPlan {
             LogicalPlan::EmptyRelation(_) => Ok(self),
             LogicalPlan::Statement(_) => Ok(self),
             LogicalPlan::DescribeTable(_) => Ok(self),
-            LogicalPlan::Sample(Sample {..}) => Ok(self),
+            LogicalPlan::Sample(Sample { .. }) => Ok(self),
             LogicalPlan::Unnest(Unnest {
                 input,
                 exec_columns,
@@ -898,7 +898,13 @@ impl LogicalPlan {
                     fetch: *fetch,
                 }))
             }
-            LogicalPlan::Sample(Sample { with_replacement, seed, lower_bound, upper_bound, .. }) => {
+            LogicalPlan::Sample(Sample {
+                with_replacement,
+                seed,
+                lower_bound,
+                upper_bound,
+                ..
+            }) => {
                 self.assert_no_expressions(expr)?;
                 let input = self.only_input(inputs)?;
 
@@ -4049,7 +4055,6 @@ impl Hash for Sample {
         self.seed.hash(state);
     }
 }
-
 
 #[cfg(test)]
 mod tests {

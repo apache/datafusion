@@ -17,11 +17,11 @@
 
 //! Defines the SAMPLE operator
 
+use rand_distr::{Distribution, Poisson};
 use std::any::Any;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use rand_distr::{Distribution, Poisson};
 
 use super::{
     DisplayAs, ExecutionPlanProperties, PlanProperties, RecordBatchStream,
@@ -33,16 +33,16 @@ use crate::{
 };
 
 use arrow::array::UInt32Array;
+use arrow::compute;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use arrow::compute;
 use datafusion_common::{internal_err, plan_datafusion_err, Result};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::EquivalenceProperties;
 
 use futures::stream::{Stream, StreamExt};
-use rand::{Rng, SeedableRng};
 use rand::rngs::StdRng;
+use rand::{Rng, SeedableRng};
 
 trait Sampler: Send + Sync {
     fn sample(&mut self, batch: &RecordBatch) -> Result<RecordBatch>;
@@ -56,13 +56,16 @@ struct BernoulliSampler {
 
 impl BernoulliSampler {
     fn new(lower_bound: f64, upper_bound: f64, seed: u64) -> Self {
-        Self { lower_bound, upper_bound, rng: StdRng::seed_from_u64(seed) }
+        Self {
+            lower_bound,
+            upper_bound,
+            rng: StdRng::seed_from_u64(seed),
+        }
     }
 }
 
 impl Sampler for BernoulliSampler {
     fn sample(&mut self, batch: &RecordBatch) -> Result<RecordBatch> {
-    
         if self.upper_bound <= self.lower_bound {
             return Ok(RecordBatch::new_empty(batch.schema()));
         }
@@ -94,7 +97,11 @@ struct PoissonSampler {
 impl PoissonSampler {
     fn try_new(ratio: f64, seed: u64) -> Result<Self> {
         let poisson = Poisson::new(ratio).map_err(|e| plan_datafusion_err!("{}", e))?;
-        Ok(Self { ratio, poisson, rng: StdRng::seed_from_u64(seed) })
+        Ok(Self {
+            ratio,
+            poisson,
+            rng: StdRng::seed_from_u64(seed),
+        })
     }
 }
 
@@ -103,9 +110,9 @@ impl Sampler for PoissonSampler {
         if self.ratio <= 0.0 {
             return Ok(RecordBatch::new_empty(batch.schema()));
         }
-        
+
         let mut indices = Vec::new();
-    
+
         for i in 0..batch.num_rows() {
             let k = self.poisson.sample(&mut self.rng) as i32;
             for _ in 0..k {
@@ -173,9 +180,16 @@ impl SampleExec {
 
     fn create_sampler(&self, partition: usize) -> Result<Box<dyn Sampler>> {
         if self.with_replacement {
-            Ok(Box::new(PoissonSampler::try_new(self.upper_bound - self.lower_bound, self.seed + partition as u64)?))
+            Ok(Box::new(PoissonSampler::try_new(
+                self.upper_bound - self.lower_bound,
+                self.seed + partition as u64,
+            )?))
         } else {
-            Ok(Box::new(BernoulliSampler::new(self.lower_bound, self.upper_bound, self.seed + partition as u64)))
+            Ok(Box::new(BernoulliSampler::new(
+                self.lower_bound,
+                self.upper_bound,
+                self.seed + partition as u64,
+            )))
         }
     }
 
@@ -267,7 +281,7 @@ impl ExecutionPlan for SampleExec {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // Get the ratio from the current method
         Ok(Arc::new(SampleExec::try_new(
-            children[0].clone(),
+            Arc::clone(&children[0]),
             self.lower_bound,
             self.upper_bound,
             self.with_replacement,
@@ -296,14 +310,20 @@ impl ExecutionPlan for SampleExec {
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
         let input_stats = self.input.partition_statistics(partition)?;
-        
+
         // Apply sampling ratio to statistics
         let mut stats = input_stats;
         let ratio = self.upper_bound - self.lower_bound;
-        
-        stats.num_rows = stats.num_rows.map(|nr| (nr as f64 * ratio) as usize).to_inexact();
-        stats.total_byte_size = stats.total_byte_size.map(|tb| (tb as f64 * ratio) as usize).to_inexact();
-        
+
+        stats.num_rows = stats
+            .num_rows
+            .map(|nr| (nr as f64 * ratio) as usize)
+            .to_inexact();
+        stats.total_byte_size = stats
+            .total_byte_size
+            .map(|tb| (tb as f64 * ratio) as usize)
+            .to_inexact();
+
         Ok(stats)
     }
 }
@@ -379,25 +399,27 @@ mod tests {
         )?);
 
         let sample_exec = SampleExec::try_new(input, 0.6, 1.0, false, 42)?;
-        
+
         let context = Arc::new(TaskContext::default());
         let stream = sample_exec.execute(0, context)?;
-        
+
         let batches = stream.try_collect::<Vec<_>>().await?;
         assert!(!batches.is_empty());
-        
+
         let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
         // With 60% sampling ratio and 5 input rows, we expect around 3 rows
         assert!(total_rows >= 2 && total_rows <= 4);
-        
+
         Ok(())
     }
 
     #[tokio::test]
     async fn test_sample_exec_poisson() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("id", arrow::datatypes::DataType::Int32, false),
-        ]));
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "id",
+            arrow::datatypes::DataType::Int32,
+            false,
+        )]));
 
         let batch = RecordBatch::try_new(
             schema.clone(),
@@ -411,24 +433,29 @@ mod tests {
         )?);
 
         let sample_exec = SampleExec::try_new(input, 0.0, 0.5, true, 42)?;
-        
+
         let context = Arc::new(TaskContext::default());
         let stream = sample_exec.execute(0, context)?;
-        
+
         let batches = stream.try_collect::<Vec<_>>().await?;
         assert!(!batches.is_empty());
-        
+
         Ok(())
     }
-    
+
     #[test]
     fn test_sampler_trait() {
         let mut bernoulli_sampler = BernoulliSampler::new(0.0, 0.5, 42);
         let batch = RecordBatch::try_new(
-            Arc::new(Schema::new(vec![Field::new("id", arrow::datatypes::DataType::Int32, false)])),
+            Arc::new(Schema::new(vec![Field::new(
+                "id",
+                arrow::datatypes::DataType::Int32,
+                false,
+            )])),
             vec![Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5]))],
-        ).unwrap();
-        
+        )
+        .unwrap();
+
         let result = bernoulli_sampler.sample(&batch);
         assert!(result.is_ok());
 

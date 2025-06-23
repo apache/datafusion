@@ -22,14 +22,13 @@ use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{
-    not_impl_err, plan_err, DFSchema, Diagnostic, Result, Span, Spans, TableReference
+    not_impl_err, plan_err, DFSchema, Diagnostic, Result, Span, Spans, TableReference,
 };
 use datafusion_expr::builder::subquery_alias;
 use datafusion_expr::{expr::Unnest, Expr, LogicalPlan, LogicalPlanBuilder};
 use datafusion_expr::{Subquery, SubqueryAlias};
 use sqlparser::ast::{
-    FunctionArg, FunctionArgExpr, Spanned, TableFactor, TableSampleKind,
-    TableSampleUnit,
+    FunctionArg, FunctionArgExpr, Spanned, TableFactor, TableSampleKind, TableSampleUnit,
 };
 
 mod join;
@@ -44,7 +43,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let relation_span = relation.span();
         let (plan, alias) = match relation {
             TableFactor::Table {
-                name, alias, args, sample, ..
+                name,
+                alias,
+                args,
+                sample,
+                ..
             } => {
                 if let Some(func_args) = args {
                     let tbl_func_name =
@@ -90,12 +93,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         self.context_provider.get_table_source(table_ref.clone()),
                     ) {
                         (Some(cte_plan), _) => Ok(cte_plan.clone()),
-                        (_, Ok(provider)) => LogicalPlanBuilder::scan(
-                            table_ref.clone(),
-                            provider,
-                            None,
-                        )?
-                        .build(),
+                        (_, Ok(provider)) => {
+                            LogicalPlanBuilder::scan(table_ref.clone(), provider, None)?
+                                .build()
+                        }
                         (None, Err(e)) => {
                             let e = e.with_diagnostic(Diagnostic::new_error(
                                 format!("table '{table_ref}' not found"),
@@ -252,19 +253,22 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             return not_impl_err!("Offset sample is not supported yet");
         }
 
-        let seed = sample.seed.map(|seed| {
-            let Ok(seed) = seed.value.to_string().parse::<u64>() else {
-                return plan_err!("seed must be a number: {}", seed.value);
-            };
-            Ok(seed)
-        }).transpose()?;
+        let seed = sample
+            .seed
+            .map(|seed| {
+                let Ok(seed) = seed.value.to_string().parse::<u64>() else {
+                    return plan_err!("seed must be a number: {}", seed.value);
+                };
+                Ok(seed)
+            })
+            .transpose()?;
 
         if let Some(bucket) = sample.bucket {
             if bucket.on.is_some() {
                 // Hive-style sample, only used when the Hive table is defined with CLUSTERED BY
                 return not_impl_err!("Bucket sample with ON is not supported yet");
             }
-            
+
             let Ok(bucket_num) = bucket.bucket.to_string().parse::<u64>() else {
                 return plan_err!("bucket must be a number");
             };
@@ -272,7 +276,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             let Ok(total_num) = bucket.total.to_string().parse::<u64>() else {
                 return plan_err!("total must be a number");
             };
-            let logical_plan = LogicalPlanBuilder::from(input).sample(bucket_num as f64 / total_num as f64, None, seed)?.build()?;
+            let logical_plan = LogicalPlanBuilder::from(input)
+                .sample(bucket_num as f64 / total_num as f64, None, seed)?
+                .build()?;
             return Ok(logical_plan);
         }
         if let Some(quantity) = sample.quantity {
@@ -280,42 +286,64 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 Some(TableSampleUnit::Rows) => {
                     let value = evaluate_number::<i64>(&quantity.value);
                     if value.is_none() {
-                        return plan_err!("quantity must be a non-negative number: {:?}", quantity.value);
+                        return plan_err!(
+                            "quantity must be a non-negative number: {:?}",
+                            quantity.value
+                        );
                     }
                     let value = value.unwrap();
                     if value < 0 {
-                        return plan_err!("quantity must be a non-negative number: {:?}", quantity.value);
+                        return plan_err!(
+                            "quantity must be a non-negative number: {:?}",
+                            quantity.value
+                        );
                     }
-                    let logical_plan = LogicalPlanBuilder::from(input).limit(0, Some(value as usize))?.build()?;
+                    let logical_plan = LogicalPlanBuilder::from(input)
+                        .limit(0, Some(value as usize))?
+                        .build()?;
                     return Ok(logical_plan);
                 }
                 Some(TableSampleUnit::Percent) => {
                     let value = evaluate_number::<f64>(&quantity.value);
                     if value.is_none() {
-                        return plan_err!("quantity must be a number: {:?}", quantity.value);
+                        return plan_err!(
+                            "quantity must be a number: {:?}",
+                            quantity.value
+                        );
                     }
                     let value = value.unwrap() / 100.0;
-                    let logical_plan = LogicalPlanBuilder::from(input).sample(value, None, seed)?.build()?;
+                    let logical_plan = LogicalPlanBuilder::from(input)
+                        .sample(value, None, seed)?
+                        .build()?;
                     return Ok(logical_plan);
                 }
                 None => {
                     // Clickhouse-style sample
                     let value = evaluate_number::<f64>(&quantity.value);
                     if value.is_none() {
-                        return plan_err!("quantity must be a non-negative number: {:?}", quantity.value);
+                        return plan_err!(
+                            "quantity must be a non-negative number: {:?}",
+                            quantity.value
+                        );
                     }
                     let value = value.unwrap();
                     if value < 0.0 {
-                        return plan_err!("quantity must be a non-negative number: {:?}", quantity.value);
+                        return plan_err!(
+                            "quantity must be a non-negative number: {:?}",
+                            quantity.value
+                        );
                     }
                     if value >= 1.0 {
-                        let logical_plan = LogicalPlanBuilder::from(input).limit(0, Some(value as usize))?.build()?;
+                        let logical_plan = LogicalPlanBuilder::from(input)
+                            .limit(0, Some(value as usize))?
+                            .build()?;
                         return Ok(logical_plan);
                     } else {
-                        let logical_plan = LogicalPlanBuilder::from(input).sample(value, None, seed)?.build()?;
+                        let logical_plan = LogicalPlanBuilder::from(input)
+                            .sample(value, None, seed)?
+                            .build()?;
                         return Ok(logical_plan);
                     }
-                    
                 }
             }
         }
@@ -350,37 +378,40 @@ fn optimize_subquery_sort(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>>
     new_plan
 }
 
-
-fn evaluate_number<T: FromStr + std::ops::Add<Output = T> + std::ops::Sub<Output = T> + std::ops::Mul<Output = T> + std::ops::Div<Output = T>>(expr: &sqlparser::ast::Expr) -> Option<T> {
+fn evaluate_number<
+    T: FromStr
+        + std::ops::Add<Output = T>
+        + std::ops::Sub<Output = T>
+        + std::ops::Mul<Output = T>
+        + std::ops::Div<Output = T>,
+>(
+    expr: &sqlparser::ast::Expr,
+) -> Option<T> {
     match expr {
         sqlparser::ast::Expr::BinaryOp { left, op, right } => {
-            let left = evaluate_number::<T>(&left);
-            let right = evaluate_number::<T>(&right);
+            let left = evaluate_number::<T>(left);
+            let right = evaluate_number::<T>(right);
             match (left, right) {
-                (Some(left), Some(right)) => {
-                    match op {
-                        sqlparser::ast::BinaryOperator::Plus => Some(left + right),
-                        sqlparser::ast::BinaryOperator::Minus => Some(left - right),
-                        sqlparser::ast::BinaryOperator::Multiply => Some(left * right),
-                        sqlparser::ast::BinaryOperator::Divide => Some(left / right),
-                        _ => None,
-                    }
-                }
+                (Some(left), Some(right)) => match op {
+                    sqlparser::ast::BinaryOperator::Plus => Some(left + right),
+                    sqlparser::ast::BinaryOperator::Minus => Some(left - right),
+                    sqlparser::ast::BinaryOperator::Multiply => Some(left * right),
+                    sqlparser::ast::BinaryOperator::Divide => Some(left / right),
+                    _ => None,
+                },
                 _ => None,
             }
         }
-        sqlparser::ast::Expr::Value(value) => {
-            match &value.value {
-                sqlparser::ast::Value::Number(value, _) => {
-                    let value = format!("{value}");
-                    let Ok(value) = value.parse::<T>() else {
-                        return None;
-                    };
-                    Some(value)
-                }
-                _ => None,
+        sqlparser::ast::Expr::Value(value) => match &value.value {
+            sqlparser::ast::Value::Number(value, _) => {
+                let value = value.to_string();
+                let Ok(value) = value.parse::<T>() else {
+                    return None;
+                };
+                Some(value)
             }
-        }
+            _ => None,
+        },
         _ => None,
     }
 }

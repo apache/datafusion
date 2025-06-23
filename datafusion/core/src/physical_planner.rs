@@ -878,7 +878,13 @@ impl DefaultPhysicalPlanner {
                 ..
             }) => {
                 let input = children.one()?;
-                let sample = SampleExec::try_new(input, *lower_bound, *upper_bound, *with_replacement, *seed)?;
+                let sample = SampleExec::try_new(
+                    input,
+                    *lower_bound,
+                    *upper_bound,
+                    *with_replacement,
+                    *seed,
+                )?;
                 Arc::new(sample)
             }
             LogicalPlan::Unnest(Unnest {

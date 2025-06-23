@@ -44,7 +44,8 @@ use crate::utils::{
     group_window_expr_by_sort_keys,
 };
 use crate::{
-    and, binary_expr, lit, DmlStatement, Expr, ExprSchemable, Operator, RecursiveQuery, Statement, TableProviderFilterPushDown, TableSource, WriteOp
+    and, binary_expr, lit, DmlStatement, Expr, ExprSchemable, Operator, RecursiveQuery,
+    Statement, TableProviderFilterPushDown, TableSource, WriteOp,
 };
 
 use super::dml::InsertOp;
@@ -1475,13 +1476,18 @@ impl LogicalPlanBuilder {
             .map(Self::new)
     }
 
-    pub fn sample(self, fraction: f64, with_replacement: Option<bool>, seed: Option<u64>) -> Result<Self> {
+    pub fn sample(
+        self,
+        fraction: f64,
+        with_replacement: Option<bool>,
+        seed: Option<u64>,
+    ) -> Result<Self> {
         Ok(Self::new(LogicalPlan::Sample(Sample {
             input: self.plan,
             lower_bound: 0.0,
             upper_bound: fraction,
             with_replacement: with_replacement.unwrap_or(false),
-            seed: seed.unwrap_or_else(|| rand::random()),
+            seed: seed.unwrap_or_else(rand::random),
         })))
     }
 }

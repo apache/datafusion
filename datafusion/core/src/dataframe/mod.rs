@@ -2284,9 +2284,16 @@ impl DataFrame {
     /// df.show().await?;
     /// # Ok(())
     /// ```
-    /// 
-    pub fn sample(self, fraction: f64, with_replacement: Option<bool>, seed: Option<u64>) -> Result<Self> {
-        let plan = LogicalPlanBuilder::from(self.plan).sample(fraction, with_replacement, seed)?.build()?;
+    ///
+    pub fn sample(
+        self,
+        fraction: f64,
+        with_replacement: Option<bool>,
+        seed: Option<u64>,
+    ) -> Result<Self> {
+        let plan = LogicalPlanBuilder::from(self.plan)
+            .sample(fraction, with_replacement, seed)?
+            .build()?;
         Ok(DataFrame {
             session_state: self.session_state,
             plan,
