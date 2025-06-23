@@ -297,10 +297,14 @@ impl CursorValues for StringViewArray {
         // SAFETY: Both l_idx and r_idx are guaranteed to be within bounds,
         // and any null-checks are handled in the outer layers.
         // Fast path: Compare the lengths before full byte comparison.
-
         let l_view = unsafe { l.views().get_unchecked(l_idx) };
-        let l_len = *l_view as u32;
         let r_view = unsafe { r.views().get_unchecked(r_idx) };
+
+        if l.data_buffers().is_empty() && r.data_buffers().is_empty() {
+            return l_view.eq(r_view);
+        }
+
+        let l_len = *l_view as u32;
         let r_len = *r_view as u32;
         if l_len != r_len {
             return false;
@@ -314,8 +318,13 @@ impl CursorValues for StringViewArray {
         // Already checked it in is_eq_to_prev_one function
         // Fast path: Compare the lengths of the current and previous views.
         let l_view = unsafe { cursor.views().get_unchecked(idx) };
-        let l_len = *l_view as u32;
         let r_view = unsafe { cursor.views().get_unchecked(idx - 1) };
+        if cursor.data_buffers().is_empty() {
+            return l_view.eq(r_view);
+        }
+
+        let l_len = *l_view as u32;
+
         let r_len = *r_view as u32;
         if l_len != r_len {
             return false;
@@ -330,6 +339,12 @@ impl CursorValues for StringViewArray {
         // SAFETY: Prior assertions guarantee that l_idx and r_idx are valid indices.
         // Null-checks are assumed to have been handled in the wrapper (e.g., ArrayValues).
         // And the bound is checked in is_finished, it is safe to call get_unchecked
+        if l.data_buffers().is_empty() && r.data_buffers().is_empty() {
+            let l_view = unsafe { l.views().get_unchecked(l_idx) };
+            let r_view = unsafe { r.views().get_unchecked(r_idx) };
+            return l_view.cmp(r_view);
+        }
+
         unsafe { GenericByteViewArray::compare_unchecked(l, l_idx, r, r_idx) }
     }
 }
