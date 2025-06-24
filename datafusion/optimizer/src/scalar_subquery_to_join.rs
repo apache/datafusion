@@ -108,7 +108,7 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                                     // replace column references with entry in map, if it exists
                                     if let Some(map_expr) = expr
                                         .try_as_col()
-                                        .and_then(|col| expr_check_map.get(&col.name))
+                                        .and_then(|col| expr_check_map.get(&col))
                                     {
                                         Ok(Transformed::yes(map_expr.clone()))
                                     } else {
@@ -141,8 +141,9 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                 for expr in projection.expr.iter() {
                     let (subqueries, rewrite_exprs) =
                         self.extract_subquery_exprs(expr, config.alias_generator())?;
-                    for (subquery, _) in &subqueries {
-                        subquery_to_expr_map.insert(subquery.clone(), expr.clone());
+                    for subquery_and_alias in &subqueries {
+                        subquery_to_expr_map
+                            .insert(subquery_and_alias.clone(), expr.clone());
                     }
                     all_subqueries.extend(subqueries);
                     expr_to_rewrite_expr_map.insert(expr, rewrite_exprs);
@@ -158,7 +159,9 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                     {
                         cur_input = optimized_subquery;
                         if !expr_check_map.is_empty() {
-                            if let Some(expr) = subquery_to_expr_map.get(&subquery) {
+                            if let Some(expr) =
+                                subquery_to_expr_map.get(&(subquery, alias))
+                            {
                                 if let Some(rewrite_expr) =
                                     expr_to_rewrite_expr_map.get(expr)
                                 {
@@ -166,10 +169,9 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                                         .clone()
                                         .transform_up(|expr| {
                                             // replace column references with entry in map, if it exists
-                                            if let Some(map_expr) =
-                                                expr.try_as_col().and_then(|col| {
-                                                    expr_check_map.get(&col.name)
-                                                })
+                                            if let Some(map_expr) = expr
+                                                .try_as_col()
+                                                .and_then(|col| expr_check_map.get(&col))
                                             {
                                                 Ok(Transformed::yes(map_expr.clone()))
                                             } else {
@@ -296,7 +298,7 @@ fn build_join(
     subquery: &Subquery,
     filter_input: &LogicalPlan,
     subquery_alias: &str,
-) -> Result<Option<(LogicalPlan, HashMap<String, Expr>)>> {
+) -> Result<Option<(LogicalPlan, HashMap<Column, Expr>)>> {
     let subquery_plan = subquery.subquery.as_ref();
     let mut pull_up = PullUpCorrelatedExpr::new().with_need_handle_count_bug(true);
     let new_plan = subquery_plan.clone().rewrite(&mut pull_up).data()?;
@@ -353,14 +355,16 @@ fn build_join(
                 // If expr always returns null when column is null, skip processing
                 continue;
             }
+            let column = Column::new(Some(subquery_alias.to_string()), name.clone());
             let computer_expr = if let Some(filter) = &pull_up.pull_up_having_expr {
                 Expr::Case(expr::Case {
                     expr: None,
                     when_then_expr: vec![
                         (
-                            Box::new(Expr::IsNull(Box::new(Expr::Column(
-                                Column::new_unqualified(UN_MATCHED_ROW_INDICATOR),
-                            )))),
+                            Box::new(Expr::IsNull(Box::new(Expr::Column(Column::new(
+                                Some(subquery_alias.to_string()),
+                                UN_MATCHED_ROW_INDICATOR,
+                            ))))),
                             Box::new(result),
                         ),
                         (
@@ -368,29 +372,26 @@ fn build_join(
                             Box::new(Expr::Literal(ScalarValue::Null)),
                         ),
                     ],
-                    else_expr: Some(Box::new(Expr::Column(Column::new_unqualified(
-                        name.clone(),
-                    )))),
+                    else_expr: Some(Box::new(Expr::Column(column.clone()))),
                 })
             } else {
                 Expr::Case(expr::Case {
                     expr: None,
                     when_then_expr: vec![(
-                        Box::new(Expr::IsNull(Box::new(Expr::Column(
-                            Column::new_unqualified(UN_MATCHED_ROW_INDICATOR),
-                        )))),
+                        Box::new(Expr::IsNull(Box::new(Expr::Column(Column::new(
+                            Some(subquery_alias.to_string()),
+                            UN_MATCHED_ROW_INDICATOR,
+                        ))))),
                         Box::new(result),
                     )],
-                    else_expr: Some(Box::new(Expr::Column(Column::new_unqualified(
-                        name.clone(),
-                    )))),
+                    else_expr: Some(Box::new(Expr::Column(column.clone()))),
                 })
             };
             let mut expr_rewrite = TypeCoercionRewriter {
                 schema: new_plan.schema(),
             };
             computation_project_expr
-                .insert(name, computer_expr.rewrite(&mut expr_rewrite).data()?);
+                .insert(column, computer_expr.rewrite(&mut expr_rewrite).data()?);
         }
     }
 
