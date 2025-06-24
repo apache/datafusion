@@ -903,12 +903,6 @@ doc_comment::doctest!(
 
 #[cfg(doctest)]
 doc_comment::doctest!(
-    "../../../docs/source/user-guide/runtime_configs.md",
-    user_guide_runtime_configs
-);
-
-#[cfg(doctest)]
-doc_comment::doctest!(
     "../../../docs/source/user-guide/crate-configuration.md",
     user_guide_crate_configuration
 );
