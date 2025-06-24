@@ -238,7 +238,7 @@ impl ExecutionPlan for WorkTableExec {
         new_plan.cache = new_props;
         Ok(Some(Arc::new(new_plan)))
     }
-    
+
     fn partition_statistics(&self, _partition: Option<usize>) -> Result<Statistics> {
         Ok(Statistics::new_unknown(&self.schema()))
     }

@@ -103,7 +103,7 @@ fn simplify_column_predicates(predicates: Vec<Expr>) -> Result<Vec<Expr>> {
     // If we have equality predicates, they're the most restrictive
     if !eq_predicates.is_empty() {
         if eq_predicates.len() > 1 {
-            result.push(Expr::Literal(ScalarValue::Boolean(Some(false))));
+            result.push(Expr::Literal(ScalarValue::Boolean(Some(false)), None));
         } else {
             result.push(eq_predicates[0].clone());
         }
@@ -150,11 +150,11 @@ fn find_most_restrictive_predicate(
             // Extract the literal value based on which side has it
             let mut scalar_value = None;
             if right.is_literal() {
-                if let Expr::Literal(scalar) = right.as_ref() {
+                if let Expr::Literal(scalar, _) = right.as_ref() {
                     scalar_value = Some(scalar.clone());
                 }
             } else if left.is_literal() {
-                if let Expr::Literal(scalar) = left.as_ref() {
+                if let Expr::Literal(scalar, _) = left.as_ref() {
                     scalar_value = Some(scalar.clone());
                 }
             }

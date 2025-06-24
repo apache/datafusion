@@ -36,7 +36,7 @@ use datafusion_physical_plan::execution_plan::EmissionType;
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::tree_node::PlanContext;
-use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
+use datafusion_physical_plan::ExecutionPlanProperties;
 
 use itertools::izip;
 

@@ -1412,13 +1412,13 @@ fn infer_predicates_from_equalities(predicates: Vec<Expr>) -> Result<Vec<Expr>> 
         {
             if let Expr::Column(col) = left.as_ref() {
                 // Only add to map if right side is a literal
-                if matches!(right.as_ref(), Expr::Literal(_)) {
+                if matches!(right.as_ref(), Expr::Literal(_, _)) {
                     equality_map.insert(col.clone(), *right.clone());
                     final_predicates.push(predicate.clone());
                 }
             } else if let Expr::Column(col) = right.as_ref() {
                 // Only add to map if left side is a literal
-                if matches!(left.as_ref(), Expr::Literal(_)) {
+                if matches!(left.as_ref(), Expr::Literal(_, _)) {
                     equality_map.insert(col.clone(), *right.clone());
                     final_predicates.push(predicate.clone());
                 }
@@ -2308,7 +2308,7 @@ mod tests {
             plan,
             @r"
         Projection: test.a, test1.d
-          Cross Join: 
+          Cross Join:
             Projection: test.a, test.b, test.c
               TableScan: test, full_filters=[test.a = Int32(1)]
             Projection: test1.d, test1.e, test1.f
@@ -2338,7 +2338,7 @@ mod tests {
             plan,
             @r"
         Projection: test.a, test1.a
-          Cross Join: 
+          Cross Join:
             Projection: test.a, test.b, test.c
               TableScan: test, full_filters=[test.a = Int32(1)]
             Projection: test1.a, test1.b, test1.c

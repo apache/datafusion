@@ -306,11 +306,12 @@ impl ExecutionPlan for DataSourceExec {
     fn with_node_id(
         self: Arc<Self>,
         _node_id: usize,
-    ) -> datafusion_common::Result<Option<Arc<dyn ExecutionPlan>>> {
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         let mut new_plan = DataSourceExec::new(self.data_source.clone());
         let new_props = new_plan.cache.clone().with_node_id(_node_id);
         new_plan.cache = new_props;
-        Ok(Some(Arc::new(new_plan))) }
+        Ok(Some(Arc::new(new_plan)))
+    }
     fn handle_child_pushdown_result(
         &self,
         child_pushdown_result: ChildPushdownResult,

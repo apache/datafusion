@@ -42,6 +42,7 @@ use datafusion_physical_expr::utils::map_columns_before_projection;
 use datafusion_physical_expr::{
     physical_exprs_equal, EquivalenceProperties, PhysicalExpr, PhysicalExprRef,
 };
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
 };
@@ -1033,7 +1034,7 @@ fn remove_dist_changing_operators(
 /// "    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2",
 /// "      DataSourceExec: file_groups={2 groups: \[\[x], \[y]]}, projection=\[a, b, c, d, e], output_ordering=\[a@0 ASC], file_type=parquet",
 /// ```
-pub fn replace_order_preserving_variants(
+fn replace_order_preserving_variants(
     mut context: DistributionContext,
     ordering_satisfied: bool,
 ) -> Result<(DistributionContext, Option<usize>)> {
@@ -1056,9 +1057,8 @@ pub fn replace_order_preserving_variants(
         let child_plan = Arc::clone(&context.children[0].plan);
         if !ordering_satisfied {
             // It's safe to unwrap because `CoalescePartitionsExec` supports `fetch`.
-            context.plan = CoalescePartitionsExec::new(child_plan)
-                .with_fetch(fetch)
-                .unwrap();
+            context.plan =
+                Arc::new(CoalescePartitionsExec::new(child_plan).with_fetch(fetch));
             return Ok((context, None));
         }
         context.plan = Arc::new(CoalescePartitionsExec::new(child_plan));

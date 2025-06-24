@@ -1886,7 +1886,7 @@ impl Expr {
     /// Check if the Expr is literal
     pub fn is_literal(&self) -> bool {
         match self {
-            Expr::Literal(_) => true,
+            Expr::Literal(_, _) => true,
             _ => false,
         }
     }
