@@ -374,13 +374,12 @@ mod tests {
             .contains("Non-nullable column 'b' is missing"));
     }
 
-    /// Stolen from ProjectionExec
+    /// Roughly stolen from ProjectionExec
     fn batch_project(
         expr: Vec<Arc<dyn PhysicalExpr>>,
         batch: &RecordBatch,
         schema: SchemaRef,
     ) -> Result<RecordBatch> {
-        // Records time on drop
         let arrays = expr
             .iter()
             .map(|expr| {
