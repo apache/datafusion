@@ -28,7 +28,8 @@ use datafusion_expr::builder::subquery_alias;
 use datafusion_expr::{expr::Unnest, Expr, LogicalPlan, LogicalPlanBuilder};
 use datafusion_expr::{Subquery, SubqueryAlias};
 use sqlparser::ast::{
-    FunctionArg, FunctionArgExpr, Spanned, TableFactor, TableSampleKind, TableSampleUnit,
+    FunctionArg, FunctionArgExpr, Spanned, TableFactor, TableSampleKind,
+    TableSampleMethod, TableSampleUnit,
 };
 
 mod join;
@@ -244,9 +245,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             TableSampleKind::BeforeTableAlias(sample) => sample,
             TableSampleKind::AfterTableAlias(sample) => sample,
         };
-        if sample.name.is_some() {
-            // Postgres-style sample. Not supported because DataFusion does not have a concept of pages like PostgreSQL.
-            return not_impl_err!("{} is not supported yet", sample.name.unwrap());
+        if let Some(name) = &sample.name {
+            if *name != TableSampleMethod::Bernoulli && *name != TableSampleMethod::Row {
+                // Postgres-style sample. Not supported because DataFusion does not have a concept of pages like PostgreSQL.
+                return not_impl_err!("{} is not supported yet", name);
+            }
         }
         if sample.offset.is_some() {
             // Clickhouse-style sample. Not supported because it requires knowing the total data size.
