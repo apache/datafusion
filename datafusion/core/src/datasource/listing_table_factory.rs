@@ -108,10 +108,10 @@ impl TableProviderFactory for ListingTableFactory {
             (Some(schema), table_partition_cols)
         };
 
-        let table_path = ListingTableUrl::parse(&cmd.location)?;
+        let mut table_path = ListingTableUrl::parse(&cmd.location)?;
 
         let options = ListingOptions::new(file_format)
-            .with_file_extension(file_extension)
+            .with_file_extension(&file_extension)
             .with_session_config_options(session_state.config())
             .with_table_partition_cols(table_partition_cols);
 
@@ -125,6 +125,13 @@ impl TableProviderFactory for ListingTableFactory {
             // specifically for parquet file format.
             // See: https://github.com/apache/datafusion/issues/7317
             None => {
+                // if the folder then rewrite a file path as 'path/*.parquet'
+                // to only read the files the reader can understand
+                if table_path.is_folder() && table_path.get_glob().is_none() {
+                    table_path = table_path.with_glob(
+                        format!("*.{}", cmd.file_type.to_lowercase()).as_ref(),
+                    )?;
+                }
                 let schema = options.infer_schema(session_state, &table_path).await?;
                 let df_schema = Arc::clone(&schema).to_dfschema()?;
                 let column_refs: HashSet<_> = cmd
