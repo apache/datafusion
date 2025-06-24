@@ -207,7 +207,7 @@ impl WindowFrameContext {
             }
             // ERRONEOUS FRAMES
             WindowFrameBound::Preceding(_) | WindowFrameBound::Following(_) => {
-                return internal_err!("Rows should be Uint")
+                return internal_err!("Rows should be UInt64")
             }
         };
         let end = match window_frame.end_bound {
@@ -232,7 +232,7 @@ impl WindowFrameContext {
             }
             // ERRONEOUS FRAMES
             WindowFrameBound::Preceding(_) | WindowFrameBound::Following(_) => {
-                return internal_err!("Rows should be Uint")
+                return internal_err!("Rows should be UInt64")
             }
         };
         Ok(Range { start, end })
@@ -694,6 +694,136 @@ mod tests {
             assert_eq!(range, expected_range);
             assert_eq!(window_frame_groups.current_group_idx, expected_group_idx);
         }
+        Ok(())
+    }
+
+    fn assert_frame_ranges(
+        window_frame: &Arc<WindowFrame>,
+        expected_results: Vec<Range<usize>>,
+    ) -> Result<()> {
+        let mut window_frame_context =
+            WindowFrameContext::new(Arc::clone(window_frame), vec![]);
+        let (range_columns, _) = get_test_data();
+        let n_row = range_columns[0].len();
+        let mut last_range = Range { start: 0, end: 0 };
+        for (idx, expected_range) in expected_results.into_iter().enumerate() {
+            let range = window_frame_context.calculate_range(
+                &range_columns,
+                &last_range,
+                n_row,
+                idx,
+            )?;
+            assert_eq!(range, expected_range);
+            last_range = range;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_default_window_frame_group_boundaries() -> Result<()> {
+        let window_frame = Arc::new(WindowFrame::new(None));
+        assert_group_ranges(
+            &window_frame,
+            vec![
+                (Range { start: 0, end: 9 }, 0),
+                (Range { start: 0, end: 9 }, 0),
+                (Range { start: 0, end: 9 }, 0),
+                (Range { start: 0, end: 9 }, 0),
+                (Range { start: 0, end: 9 }, 0),
+                (Range { start: 0, end: 9 }, 0),
+                (Range { start: 0, end: 9 }, 0),
+                (Range { start: 0, end: 9 }, 0),
+                (Range { start: 0, end: 9 }, 0),
+            ],
+        )?;
+
+        assert_frame_ranges(
+            &window_frame,
+            vec![
+                Range { start: 0, end: 9 },
+                Range { start: 0, end: 9 },
+                Range { start: 0, end: 9 },
+                Range { start: 0, end: 9 },
+                Range { start: 0, end: 9 },
+                Range { start: 0, end: 9 },
+                Range { start: 0, end: 9 },
+                Range { start: 0, end: 9 },
+                Range { start: 0, end: 9 },
+            ],
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_unordered_window_frame_group_boundaries() -> Result<()> {
+        let window_frame = Arc::new(WindowFrame::new(Some(false)));
+        assert_group_ranges(
+            &window_frame,
+            vec![
+                (Range { start: 0, end: 1 }, 0),
+                (Range { start: 0, end: 2 }, 1),
+                (Range { start: 0, end: 4 }, 2),
+                (Range { start: 0, end: 4 }, 2),
+                (Range { start: 0, end: 5 }, 3),
+                (Range { start: 0, end: 8 }, 4),
+                (Range { start: 0, end: 8 }, 4),
+                (Range { start: 0, end: 8 }, 4),
+                (Range { start: 0, end: 9 }, 5),
+            ],
+        )?;
+
+        assert_frame_ranges(
+            &window_frame,
+            vec![
+                Range { start: 0, end: 9 },
+                Range { start: 0, end: 9 },
+                Range { start: 0, end: 9 },
+                Range { start: 0, end: 9 },
+                Range { start: 0, end: 9 },
+                Range { start: 0, end: 9 },
+                Range { start: 0, end: 9 },
+                Range { start: 0, end: 9 },
+                Range { start: 0, end: 9 },
+            ],
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_ordered_window_frame_group_boundaries() -> Result<()> {
+        let window_frame = Arc::new(WindowFrame::new(Some(true)));
+        assert_group_ranges(
+            &window_frame,
+            vec![
+                (Range { start: 0, end: 1 }, 0),
+                (Range { start: 0, end: 2 }, 1),
+                (Range { start: 0, end: 4 }, 2),
+                (Range { start: 0, end: 4 }, 2),
+                (Range { start: 0, end: 5 }, 3),
+                (Range { start: 0, end: 8 }, 4),
+                (Range { start: 0, end: 8 }, 4),
+                (Range { start: 0, end: 8 }, 4),
+                (Range { start: 0, end: 9 }, 5),
+            ],
+        )?;
+
+        assert_frame_ranges(
+            &window_frame,
+            vec![
+                Range { start: 0, end: 1 },
+                Range { start: 0, end: 2 },
+                Range { start: 0, end: 3 },
+                Range { start: 0, end: 4 },
+                Range { start: 0, end: 5 },
+                Range { start: 0, end: 6 },
+                Range { start: 0, end: 7 },
+                Range { start: 0, end: 8 },
+                Range { start: 0, end: 9 },
+            ],
+        )?;
+
         Ok(())
     }
 
