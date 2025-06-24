@@ -616,6 +616,29 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
             child_pushdown_result,
         ))
     }
+
+    /// Injects arbitrary run-time state into this execution plan, returning a new plan
+    /// instance that incorporates that state *if* it is relevant to the concrete
+    /// node implementation.
+    ///
+    /// This is a generic entry point: the `state` can be any type wrapped in
+    /// `Arc<dyn Any + Send + Sync>`.  A node that cares about the state should
+    /// down-cast it to the concrete type it expects and, if successful, return a
+    /// modified copy of itself that captures the provided value.  If the state is
+    /// not applicable, the default behaviour is to return `None` so that parent
+    /// nodes can continue propagating the attempt further down the plan tree.
+    ///
+    /// For example, [`WorkTableExec`](crate::work_table::WorkTableExec)
+    /// down-casts the supplied state to an `Arc<WorkTable>`
+    /// in order to wire up the working table used during recursive-CTE execution.
+    /// Similar patterns can be followed by custom nodes that need late-bound
+    /// dependencies or shared state.
+    fn with_new_state(
+        &self,
+        _state: Arc<dyn Any + Send + Sync>,
+    ) -> Option<Arc<dyn ExecutionPlan>> {
+        None
+    }
 }
 
 /// [`ExecutionPlan`] Invariant Level
