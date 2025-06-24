@@ -343,7 +343,7 @@ DESCRIBE users;
 
 Output:
 
-```
+```sql
 +--------------+-----------+-------------+
 | column_name  | data_type | is_nullable |
 +--------------+-----------+-------------+
@@ -374,7 +374,7 @@ DESCRIBE taxi;
 
 Output might show:
 
-```
+```sql
 +--------------------+-----------------------------+-------------+
 | column_name        | data_type                   | is_nullable |
 +--------------------+-----------------------------+-------------+
@@ -385,11 +385,10 @@ Output might show:
 +--------------------+-----------------------------+-------------+
 ```
 
-:::{note}
 The `DESCRIBE` command works with all table types in DataFusion, including:
 
 - Regular tables created with `CREATE TABLE`
 - External tables created with `CREATE EXTERNAL TABLE`
 - Views created with `CREATE VIEW`
 - Tables in different schemas using qualified names (e.g., `DESCRIBE schema_name.table_name`)
-  :::
+
