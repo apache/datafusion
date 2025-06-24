@@ -34,7 +34,9 @@ use super::{
 };
 use super::{JoinOn, JoinOnRef};
 use crate::execution_plan::{boundedness_from_children, EmissionType};
-use crate::filter_pushdown::{FilterDescription, FilterPushdownPhase};
+use crate::filter_pushdown::{
+    FilterDescription, FilterPushdownPhase, PredicateSupport, PredicateSupports,
+};
 use crate::projection::{
     try_embed_projection, try_pushdown_through_join, EmbeddedProjection, JoinData,
     ProjectionExec,
@@ -71,7 +73,7 @@ use arrow::util::bit_util;
 use datafusion_common::utils::memory::estimate_memory_size;
 use datafusion_common::{
     internal_datafusion_err, internal_err, plan_err, project_schema, DataFusionError,
-    JoinSide, JoinType, NullEquality, Result, ScalarValue,
+    HashSet, JoinSide, JoinType, NullEquality, Result, ScalarValue,
 };
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
@@ -80,6 +82,7 @@ use datafusion_physical_expr::equivalence::{
     join_equivalence_properties, ProjectionMapping,
 };
 use datafusion_physical_expr::expressions::{lit, BinaryExpr, DynamicFilterPhysicalExpr};
+use datafusion_physical_expr::utils::{collect_columns, reassign_predicate_columns};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalExprRef};
 use datafusion_physical_expr_common::datum::compare_op_for_nested;
 
@@ -985,26 +988,79 @@ impl ExecutionPlan for HashJoinExec {
         parent_filters: Vec<Arc<dyn PhysicalExpr>>,
         config: &datafusion_common::config::ConfigOptions,
     ) -> Result<FilterDescription> {
-        // Don't allow parent filters to be pushed down for now
-        // Only add our dynamic filter during the Post phase
-        if !matches!(phase, FilterPushdownPhase::Post) {
-            return Ok(FilterDescription::new_with_child_count(2)
-                .all_parent_filters_unsupported(parent_filters));
+        // Analyze parent filters to see which can be pushed down to which side
+        let left_schema = self.left.schema();
+        let left_column_names = left_schema
+            .fields()
+            .iter()
+            .map(|f| f.name().as_str())
+            .collect::<HashSet<_>>();
+        let right_schema = self.right.schema();
+        let right_column_names = right_schema
+            .fields()
+            .iter()
+            .map(|f| f.name().as_str())
+            .collect::<HashSet<_>>();
+
+        let mut left_filters = Vec::new();
+        let mut right_filters = Vec::new();
+
+        for filter in &parent_filters {
+            // Check which columns the filter references
+            let referenced_columns = collect_columns(filter);
+
+            // Categorize columns in the filter by which side they belong to
+            let references_left_columns = referenced_columns
+                .iter()
+                .any(|col| left_column_names.contains(col.name()));
+            let references_right_columns = referenced_columns
+                .iter()
+                .any(|col| right_column_names.contains(col.name()));
+
+            if references_left_columns && references_right_columns {
+                // Filter references both sides - cannot push down, skip it
+                left_filters.push(PredicateSupport::Unsupported(Arc::clone(filter)));
+                right_filters.push(PredicateSupport::Unsupported(Arc::clone(filter)));
+                continue;
+            } else if references_left_columns {
+                // Filter only references left side - push to left
+                left_filters.push(PredicateSupport::Supported(
+                    reassign_predicate_columns(Arc::clone(filter), &left_schema, false)?,
+                ));
+                right_filters.push(PredicateSupport::Unsupported(Arc::clone(filter)));
+            } else if references_right_columns {
+                // Filter only references right side - push to right
+                // Need to adjust column indices for right side
+                left_filters.push(PredicateSupport::Unsupported(Arc::clone(filter)));
+                right_filters.push(PredicateSupport::Supported(
+                    reassign_predicate_columns(Arc::clone(filter), &right_schema, false)?,
+                ));
+            } else {
+                // Filter doesn't reference any columns from either side (e.g., constant)
+                // Push to both sides as it's still valid
+                left_filters.push(PredicateSupport::Supported(Arc::clone(filter)));
+                right_filters.push(PredicateSupport::Supported(Arc::clone(filter)));
+            }
         }
 
-        // Only push down dynamic filters if enabled
-        if config.optimizer.enable_dynamic_filter_pushdown {
-            let filter = Arc::clone(&self.dynamic_filter) as Arc<dyn PhysicalExpr>;
+        let mut right_self_filters = Vec::new();
+        if matches!(phase, FilterPushdownPhase::Post)
+            && config.optimizer.enable_dynamic_filter_pushdown
+        {
+            let dynamic_filter =
+                Arc::clone(&self.dynamic_filter) as Arc<dyn PhysicalExpr>;
             // Push the dynamic filter to the right side (probe side) only
-            // Left side (build side) gets empty vec, right side gets the filter
-            let filters_for_children = vec![vec![], vec![filter]];
-            return Ok(FilterDescription::new_with_child_count(2)
-                .all_parent_filters_unsupported(parent_filters)
-                .with_self_filters_for_children(filters_for_children));
+            right_self_filters.push(dynamic_filter);
         }
 
-        Ok(FilterDescription::new_with_child_count(2)
-            .all_parent_filters_unsupported(parent_filters))
+        let res = FilterDescription::new_with_child_count(0)
+            .with_child_pushdown(PredicateSupports::new(left_filters), vec![])
+            .with_child_pushdown(
+                PredicateSupports::new(right_filters),
+                right_self_filters,
+            );
+
+        Ok(res)
     }
 }
 
