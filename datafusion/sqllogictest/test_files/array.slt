@@ -5750,23 +5750,29 @@ false
 false
 false
 
+# array_has([1, 3, 5], 1) -> true (array contains element)
+# array_has([], 1) -> false (empty array, not null)
+# array_has(null, 1) -> null (null array)
 query B
 select array_has(column1, column2)
 from array_has_table_empty;
 ----
-true    # array_has([1, 3, 5], 1) -> true (array contains element)
-false   # array_has([], 1) -> false (empty array, not null)
-NULL    # array_has(null, 1) -> null (null array)
+true
+false
+NULL
 
 # Test for issue: array_has should return false for empty arrays, not null
 # This test demonstrates the correct behavior with COALESCE to show the distinction
+# array_has([1, 3, 5], 1) -> 'true'
+# array_has([], 1) -> 'false' (empty array should return false)
+# array_has(null, 1) -> 'null' (null array should return null)
 query ?T
 SELECT column1, COALESCE(CAST(array_has(column1, column2) AS VARCHAR), 'null') 
 from array_has_table_empty;
 ----
-[1, 3, 5] true   # array_has([1, 3, 5], 1) -> 'true'
-[] false          # array_has([], 1) -> 'false' (empty array should return false)
-NULL null         # array_has(null, 1) -> 'null' (null array should return null)
+[1, 3, 5] true
+[] false
+NULL null
 
 query B
 select array_has(column1, column2)
@@ -6002,6 +6008,13 @@ NULL NULL false false
 false false NULL false
 false false false NULL
 
+# Row 1: [[NULL,2],[3,NULL]], [1.1,2.2,3.3], ['L','o','r','e','m']
+# Row 2: [[3,4],[5,6]], [NULL,5.5,6.6], ['i','p',NULL,'u','m'] 
+# Row 3: [[5,6],[7,8]], [7.7,8.8,9.9], ['d',NULL,'l','o','r']
+# Row 4: [[7,NULL],[9,10]], [10.1,NULL,12.2], ['s','i','t','a','b']
+# Row 5: NULL, [13.3,14.4,15.5], ['a','m','e','t','x']
+# Row 6: [[11,12],[13,14]], NULL, [',','a','b','c','d']
+# Row 7: [[15,16],[NULL,18]], [16.6,17.7,18.8], NULL
 query BBBB
 select array_has(column1, make_array(5, 6)),
        array_has(column1, make_array(7, NULL)),
