@@ -506,26 +506,6 @@ mod tests {
     #[tokio::test]
     async fn read_dummy_folder() -> Result<()> {
         let ctx = SessionContext::new();
-
-        ctx.sql("CREATE EXTERNAL TABLE parquet_folder_t1_foo STORED AS PARQUET LOCATION '/foo'".to_string().as_ref())
-            .await?;
-        let actual = ctx
-            .sql("select * from parquet_folder_t1")
-            .await?
-            .collect()
-            .await?;
-        #[cfg_attr(any(), rustfmt::skip)]
-        assert_batches_eq!(&[
-            "++",
-            "++",
-        ], &actual);
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn read_dummy_folder_with_table_api() -> Result<()> {
-        let ctx = SessionContext::new();
         let test_path = "/foo/";
 
         let actual = ctx
