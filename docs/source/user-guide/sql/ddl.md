@@ -391,4 +391,3 @@ The `DESCRIBE` command works with all table types in DataFusion, including:
 - External tables created with `CREATE EXTERNAL TABLE`
 - Views created with `CREATE VIEW`
 - Tables in different schemas using qualified names (e.g., `DESCRIBE schema_name.table_name`)
-
