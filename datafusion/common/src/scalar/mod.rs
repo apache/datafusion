@@ -3069,7 +3069,7 @@ impl ScalarValue {
                 ScalarValue::Decimal128(Some(decimal_value), _, scale),
                 DataType::Timestamp(time_unit, None),
             ) => {
-                let scale_factor = 10_i128.pow(*scale as u32);
+                let scale_factor = 10_i128.pow(*scale as u32 + 3);
                 let seconds = decimal_value / scale_factor;
                 let fraction = decimal_value % scale_factor;
 
