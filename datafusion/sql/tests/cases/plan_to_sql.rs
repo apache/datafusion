@@ -926,10 +926,10 @@ fn roundtrip_statement_with_dialect_45() -> Result<(), DataFusionError> {
 #[test]
 fn roundtrip_statement_with_dialect_special_char_alias() -> Result<(), DataFusionError> {
     roundtrip_statement_with_dialect_helper!(
-        sql: "select min(*) as \"min(*)\" from (select 1 as a)",
+        sql: "select min(a) as \"min(a)\" from (select 1 as a)",
         parser_dialect: GenericDialect {},
         unparser_dialect: BigQueryDialect {},
-        expected: @r#"SELECT min(*) AS `min_40_42_41` FROM (SELECT 1 AS `a`)"#,
+        expected: @r#"SELECT min(`a`) AS `min_40a_41` FROM (SELECT 1 AS `a`)"#,
     );
     roundtrip_statement_with_dialect_helper!(
         sql: "select a as \"a*\", b as \"b@\" from (select 1 as a , 2 as b)",
