@@ -21,8 +21,8 @@ use super::SubstraitConsumer;
 use crate::variation_const::{
     DATE_32_TYPE_VARIATION_REF, DATE_64_TYPE_VARIATION_REF,
     DECIMAL_128_TYPE_VARIATION_REF, DECIMAL_256_TYPE_VARIATION_REF,
-    DEFAULT_CONTAINER_TYPE_VARIATION_REF, DEFAULT_INTERVAL_DAY_TYPE_VARIATION,
-    DEFAULT_TYPE_VARIATION_REF, DURATION_INTERVAL_DAY_TYPE_VARIATION,
+    DEFAULT_CONTAINER_TYPE_VARIATION_REF, DEFAULT_INTERVAL_DAY_TYPE_VARIATION_REF,
+    DEFAULT_TYPE_VARIATION_REF, DURATION_INTERVAL_DAY_TYPE_VARIATION_REF,
     INTERVAL_DAY_TIME_TYPE_REF, INTERVAL_MONTH_DAY_NANO_TYPE_NAME,
     INTERVAL_MONTH_DAY_NANO_TYPE_REF, INTERVAL_YEAR_MONTH_TYPE_REF,
     LARGE_CONTAINER_TYPE_VARIATION_REF, TIMESTAMP_MICRO_TYPE_VARIATION_REF,
@@ -215,10 +215,10 @@ pub fn from_substrait_type(
                 Ok(DataType::Interval(IntervalUnit::YearMonth))
             }
             r#type::Kind::IntervalDay(i) => match i.type_variation_reference {
-                DEFAULT_INTERVAL_DAY_TYPE_VARIATION => {
+                DEFAULT_INTERVAL_DAY_TYPE_VARIATION_REF => {
                     Ok(DataType::Interval(IntervalUnit::DayTime))
                 }
-                DURATION_INTERVAL_DAY_TYPE_VARIATION => {
+                DURATION_INTERVAL_DAY_TYPE_VARIATION_REF => {
                     let duration_unit = match i.precision {
                         Some(0) => Ok(TimeUnit::Second),
                         Some(3) => Ok(TimeUnit::Millisecond),

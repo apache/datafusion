@@ -19,8 +19,8 @@ use crate::logical_plan::producer::utils::flatten_names;
 use crate::variation_const::{
     DATE_32_TYPE_VARIATION_REF, DATE_64_TYPE_VARIATION_REF,
     DECIMAL_128_TYPE_VARIATION_REF, DECIMAL_256_TYPE_VARIATION_REF,
-    DEFAULT_CONTAINER_TYPE_VARIATION_REF, DEFAULT_INTERVAL_DAY_TYPE_VARIATION,
-    DEFAULT_TYPE_VARIATION_REF, DURATION_INTERVAL_DAY_TYPE_VARIATION,
+    DEFAULT_CONTAINER_TYPE_VARIATION_REF, DEFAULT_INTERVAL_DAY_TYPE_VARIATION_REF,
+    DEFAULT_TYPE_VARIATION_REF, DURATION_INTERVAL_DAY_TYPE_VARIATION_REF,
     LARGE_CONTAINER_TYPE_VARIATION_REF, UNSIGNED_INTEGER_TYPE_VARIATION_REF,
     VIEW_CONTAINER_TYPE_VARIATION_REF,
 };
@@ -154,7 +154,7 @@ pub(crate) fn to_substrait_type(
                 }),
                 IntervalUnit::DayTime => Ok(substrait::proto::Type {
                     kind: Some(r#type::Kind::IntervalDay(r#type::IntervalDay {
-                        type_variation_reference: DEFAULT_INTERVAL_DAY_TYPE_VARIATION,
+                        type_variation_reference: DEFAULT_INTERVAL_DAY_TYPE_VARIATION_REF,
                         nullability,
                         precision: Some(3), // DayTime precision is always milliseconds
                     })),
@@ -181,7 +181,7 @@ pub(crate) fn to_substrait_type(
             };
             Ok(substrait::proto::Type {
                 kind: Some(r#type::Kind::IntervalDay(r#type::IntervalDay {
-                    type_variation_reference: DURATION_INTERVAL_DAY_TYPE_VARIATION,
+                    type_variation_reference: DURATION_INTERVAL_DAY_TYPE_VARIATION_REF,
                     nullability,
                     precision: Some(precision),
                 })),
