@@ -995,13 +995,13 @@ DROP VIEW [ IF EXISTS ] <b><i>view_name</i></b>;
 </pre></div>
 </div>
 <p>Output:</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">+--------------+-----------+-------------+</span>
-<span class="o">|</span> <span class="n">column_name</span>  <span class="o">|</span> <span class="n">data_type</span> <span class="o">|</span> <span class="n">is_nullable</span> <span class="o">|</span>
-<span class="o">+--------------+-----------+-------------+</span>
-<span class="o">|</span> <span class="n">column1</span>      <span class="o">|</span> <span class="n">Int64</span>     <span class="o">|</span> <span class="n">YES</span>         <span class="o">|</span>
-<span class="o">|</span> <span class="n">column2</span>      <span class="o">|</span> <span class="n">Utf8</span>      <span class="o">|</span> <span class="n">YES</span>         <span class="o">|</span>
-<span class="o">|</span> <span class="n">column3</span>      <span class="o">|</span> <span class="n">Boolean</span>   <span class="o">|</span> <span class="n">YES</span>         <span class="o">|</span>
-<span class="o">+--------------+-----------+-------------+</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">+</span><span class="c1">--------------+-----------+-------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="k">column_name</span><span class="w">  </span><span class="o">|</span><span class="w"> </span><span class="n">data_type</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">is_nullable</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">--------------+-----------+-------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">column1</span><span class="w">      </span><span class="o">|</span><span class="w"> </span><span class="n">Int64</span><span class="w">     </span><span class="o">|</span><span class="w"> </span><span class="n">YES</span><span class="w">         </span><span class="o">|</span>
+<span class="o">|</span><span class="w"> </span><span class="n">column2</span><span class="w">      </span><span class="o">|</span><span class="w"> </span><span class="n">Utf8</span><span class="w">      </span><span class="o">|</span><span class="w"> </span><span class="n">YES</span><span class="w">         </span><span class="o">|</span>
+<span class="o">|</span><span class="w"> </span><span class="n">column3</span><span class="w">      </span><span class="o">|</span><span class="w"> </span><span class="nb">Boolean</span><span class="w">   </span><span class="o">|</span><span class="w"> </span><span class="n">YES</span><span class="w">         </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">--------------+-----------+-------------+</span>
 </pre></div>
 </div>
 </section>
@@ -1024,18 +1024,16 @@ DROP VIEW [ IF EXISTS ] <b><i>view_name</i></b>;
 </pre></div>
 </div>
 <p>Output might show:</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">+--------------------+-----------------------------+-------------+</span>
-<span class="o">|</span> <span class="n">column_name</span>        <span class="o">|</span> <span class="n">data_type</span>                   <span class="o">|</span> <span class="n">is_nullable</span> <span class="o">|</span>
-<span class="o">+--------------------+-----------------------------+-------------+</span>
-<span class="o">|</span> <span class="n">vendor_id</span>          <span class="o">|</span> <span class="n">Int32</span>                       <span class="o">|</span> <span class="n">YES</span>         <span class="o">|</span>
-<span class="o">|</span> <span class="n">pickup_datetime</span>    <span class="o">|</span> <span class="n">Timestamp</span><span class="p">(</span><span class="n">Nanosecond</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span> <span class="o">|</span> <span class="n">NO</span>          <span class="o">|</span>
-<span class="o">|</span> <span class="n">passenger_count</span>    <span class="o">|</span> <span class="n">Int32</span>                       <span class="o">|</span> <span class="n">YES</span>         <span class="o">|</span>
-<span class="o">|</span> <span class="n">trip_distance</span>      <span class="o">|</span> <span class="n">Float64</span>                     <span class="o">|</span> <span class="n">YES</span>         <span class="o">|</span>
-<span class="o">+--------------------+-----------------------------+-------------+</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">+</span><span class="c1">--------------------+-----------------------------+-------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="k">column_name</span><span class="w">        </span><span class="o">|</span><span class="w"> </span><span class="n">data_type</span><span class="w">                   </span><span class="o">|</span><span class="w"> </span><span class="n">is_nullable</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">--------------------+-----------------------------+-------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">vendor_id</span><span class="w">          </span><span class="o">|</span><span class="w"> </span><span class="n">Int32</span><span class="w">                       </span><span class="o">|</span><span class="w"> </span><span class="n">YES</span><span class="w">         </span><span class="o">|</span>
+<span class="o">|</span><span class="w"> </span><span class="n">pickup_datetime</span><span class="w">    </span><span class="o">|</span><span class="w"> </span><span class="k">Timestamp</span><span class="p">(</span><span class="n">Nanosecond</span><span class="p">,</span><span class="w"> </span><span class="k">None</span><span class="p">)</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="k">NO</span><span class="w">          </span><span class="o">|</span>
+<span class="o">|</span><span class="w"> </span><span class="n">passenger_count</span><span class="w">    </span><span class="o">|</span><span class="w"> </span><span class="n">Int32</span><span class="w">                       </span><span class="o">|</span><span class="w"> </span><span class="n">YES</span><span class="w">         </span><span class="o">|</span>
+<span class="o">|</span><span class="w"> </span><span class="n">trip_distance</span><span class="w">      </span><span class="o">|</span><span class="w"> </span><span class="n">Float64</span><span class="w">                     </span><span class="o">|</span><span class="w"> </span><span class="n">YES</span><span class="w">         </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">--------------------+-----------------------------+-------------+</span>
 </pre></div>
 </div>
-<div class="admonition note">
-<p class="admonition-title">Note</p>
 <p>The <code class="docutils literal notranslate"><span class="pre">DESCRIBE</span></code> command works with all table types in DataFusion, including:</p>
 <ul class="simple">
 <li><p>Regular tables created with <code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">TABLE</span></code></p></li>
@@ -1043,7 +1041,6 @@ DROP VIEW [ IF EXISTS ] <b><i>view_name</i></b>;
 <li><p>Views created with <code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">VIEW</span></code></p></li>
 <li><p>Tables in different schemas using qualified names (e.g., <code class="docutils literal notranslate"><span class="pre">DESCRIBE</span> <span class="pre">schema_name.table_name</span></code>)</p></li>
 </ul>
-</div>
 </section>
 </section>
 </section>
