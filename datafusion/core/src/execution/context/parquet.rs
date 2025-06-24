@@ -419,6 +419,12 @@ mod tests {
             .write_parquet(&test_path, DataFrameWriteOptions::default(), None)
             .await?;
 
+        // Adding CSV to check it is not read with Parquet reader
+        ctx.sql("SELECT 3 a")
+            .await?
+            .write_csv(&test_path, DataFrameWriteOptions::default(), None)
+            .await?;
+
         let actual = ctx
             .read_parquet(&test_path, ParquetReadOptions::default())
             .await?
@@ -436,10 +442,7 @@ mod tests {
         ], &actual);
 
         let actual = ctx
-            .read_parquet(
-                format!("{test_path}/*.parquet"),
-                ParquetReadOptions::default(),
-            )
+            .read_parquet(test_path, ParquetReadOptions::default())
             .await?
             .collect()
             .await?;
@@ -471,6 +474,12 @@ mod tests {
         ctx.sql("SELECT 2 a")
             .await?
             .write_parquet(&test_path, DataFrameWriteOptions::default(), None)
+            .await?;
+
+        // Adding CSV to check it is not read with Parquet reader
+        ctx.sql("SELECT 3 a")
+            .await?
+            .write_csv(&test_path, DataFrameWriteOptions::default(), None)
             .await?;
 
         ctx.sql(format!("CREATE EXTERNAL TABLE parquet_folder_t1 STORED AS PARQUET LOCATION '{test_path}'").as_ref())
