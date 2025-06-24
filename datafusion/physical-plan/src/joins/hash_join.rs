@@ -1017,14 +1017,14 @@ impl ExecutionPlan for HashJoinExec {
                 .iter()
                 .any(|col| right_column_names.contains(col.name()));
             // Some join types produce extra columns, e.g. `mark` columns in RightMark joins or LeftMark joins.
-            let references_non_child_columns = referenced_columns
-                .iter()
-                .any(|col| {
-                    !left_column_names.contains(col.name())
-                        && !right_column_names.contains(col.name())
-                });
+            let references_non_child_columns = referenced_columns.iter().any(|col| {
+                !left_column_names.contains(col.name())
+                    && !right_column_names.contains(col.name())
+            });
 
-            if references_non_child_columns || (references_left_columns && references_right_columns) {
+            if references_non_child_columns
+                || (references_left_columns && references_right_columns)
+            {
                 // Filter references both sides - cannot push down, skip it
                 left_filters.push(PredicateSupport::Unsupported(Arc::clone(filter)));
                 right_filters.push(PredicateSupport::Unsupported(Arc::clone(filter)));
