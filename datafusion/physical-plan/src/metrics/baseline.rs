@@ -151,7 +151,7 @@ pub struct SpillMetrics {
     /// count of spills during the execution of the operator
     pub spill_file_count: Count,
 
-    /// total spilled bytes during the execution of the operator
+    /// total bytes actually written to disk during the execution of the operator
     pub spilled_bytes: Count,
 
     /// total spilled rows during the execution of the operator

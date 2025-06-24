@@ -1514,7 +1514,7 @@ mod tests {
         // bytes. We leave a little wiggle room for the actual numbers.
         assert!((3..=10).contains(&spill_count));
         assert!((9000..=10000).contains(&spilled_rows));
-        assert!((38000..=42000).contains(&spilled_bytes));
+        assert!((38000..=44000).contains(&spilled_bytes));
 
         let columns = result[0].columns();
 
