@@ -84,7 +84,7 @@ impl TreeNodeRewriter for GuaranteeRewriter<'_> {
                 low,
                 high,
             }) => {
-                if let (Some(interval), Expr::Literal(low), Expr::Literal(high)) = (
+                if let (Some(interval), Expr::Literal(low, _), Expr::Literal(high, _)) = (
                     self.guarantees.get(inner.as_ref()),
                     low.as_ref(),
                     high.as_ref(),
@@ -115,7 +115,7 @@ impl TreeNodeRewriter for GuaranteeRewriter<'_> {
                     .get(left.as_ref())
                     .map(|interval| Cow::Borrowed(*interval))
                     .or_else(|| {
-                        if let Expr::Literal(value) = left.as_ref() {
+                        if let Expr::Literal(value, _) = left.as_ref() {
                             Some(Cow::Owned(value.clone().into()))
                         } else {
                             None
@@ -126,7 +126,7 @@ impl TreeNodeRewriter for GuaranteeRewriter<'_> {
                     .get(right.as_ref())
                     .map(|interval| Cow::Borrowed(*interval))
                     .or_else(|| {
-                        if let Expr::Literal(value) = right.as_ref() {
+                        if let Expr::Literal(value, _) = right.as_ref() {
                             Some(Cow::Owned(value.clone().into()))
                         } else {
                             None
@@ -168,7 +168,7 @@ impl TreeNodeRewriter for GuaranteeRewriter<'_> {
                     let new_list: Vec<Expr> = list
                         .iter()
                         .filter_map(|expr| {
-                            if let Expr::Literal(item) = expr {
+                            if let Expr::Literal(item, _) = expr {
                                 match interval
                                     .contains(NullableInterval::from(item.clone()))
                                 {
@@ -244,8 +244,7 @@ mod tests {
             let expected = lit(ScalarValue::from(expected_value.clone()));
             assert_eq!(
                 output, expected,
-                "{} simplified to {}, but expected {}",
-                expr, output, expected
+                "{expr} simplified to {output}, but expected {expected}"
             );
         }
     }
@@ -255,8 +254,7 @@ mod tests {
             let output = expr.clone().rewrite(rewriter).data().unwrap();
             assert_eq!(
                 &output, expr,
-                "{} was simplified to {}, but expected it to be unchanged",
-                expr, output
+                "{expr} was simplified to {output}, but expected it to be unchanged"
             );
         }
     }
@@ -417,7 +415,7 @@ mod tests {
             let mut rewriter = GuaranteeRewriter::new(guarantees.iter());
 
             let output = col("x").rewrite(&mut rewriter).data().unwrap();
-            assert_eq!(output, Expr::Literal(scalar.clone()));
+            assert_eq!(output, Expr::Literal(scalar.clone(), None));
         }
     }
 

@@ -61,7 +61,7 @@ pub fn expr_applicable_for_cols(col_names: &[&str], expr: &Expr) -> bool {
                 Ok(TreeNodeRecursion::Stop)
             }
         }
-        Expr::Literal(_)
+        Expr::Literal(_, _)
         | Expr::Alias(_)
         | Expr::OuterReferenceColumn(_, _)
         | Expr::ScalarVariable(_, _)
@@ -346,8 +346,8 @@ fn populate_partition_values<'a>(
     {
         match op {
             Operator::Eq => match (left.as_ref(), right.as_ref()) {
-                (Expr::Column(Column { ref name, .. }), Expr::Literal(val))
-                | (Expr::Literal(val), Expr::Column(Column { ref name, .. })) => {
+                (Expr::Column(Column { ref name, .. }), Expr::Literal(val, _))
+                | (Expr::Literal(val, _), Expr::Column(Column { ref name, .. })) => {
                     if partition_values
                         .insert(name, PartitionValue::Single(val.to_string()))
                         .is_some()
@@ -507,11 +507,7 @@ where
             Some((name, val)) if name == pn => part_values.push(val),
             _ => {
                 debug!(
-                    "Ignoring file: file_path='{}', table_path='{}', part='{}', partition_col='{}'",
-                    file_path,
-                    table_path,
-                    part,
-                    pn,
+                    "Ignoring file: file_path='{file_path}', table_path='{table_path}', part='{part}', partition_col='{pn}'",
                 );
                 return None;
             }
@@ -988,7 +984,7 @@ mod tests {
         assert_eq!(
             evaluate_partition_prefix(
                 partitions,
-                &[col("a").eq(Expr::Literal(ScalarValue::Date32(Some(3))))],
+                &[col("a").eq(Expr::Literal(ScalarValue::Date32(Some(3)), None))],
             ),
             Some(Path::from("a=1970-01-04")),
         );
@@ -997,9 +993,10 @@ mod tests {
         assert_eq!(
             evaluate_partition_prefix(
                 partitions,
-                &[col("a").eq(Expr::Literal(ScalarValue::Date64(Some(
-                    4 * 24 * 60 * 60 * 1000
-                )))),],
+                &[col("a").eq(Expr::Literal(
+                    ScalarValue::Date64(Some(4 * 24 * 60 * 60 * 1000)),
+                    None
+                )),],
             ),
             Some(Path::from("a=1970-01-05")),
         );

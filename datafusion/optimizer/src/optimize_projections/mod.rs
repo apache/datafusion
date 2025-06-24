@@ -533,7 +533,7 @@ fn merge_consecutive_projections(proj: Projection) -> Result<Transformed<Project
 
 // Check whether `expr` is trivial; i.e. it doesn't imply any computation.
 fn is_expr_trivial(expr: &Expr) -> bool {
-    matches!(expr, Expr::Column(_) | Expr::Literal(_))
+    matches!(expr, Expr::Column(_) | Expr::Literal(_, _))
 }
 
 /// Rewrites a projection expression using the projection before it (i.e. its input)
@@ -583,8 +583,18 @@ fn is_expr_trivial(expr: &Expr) -> bool {
 fn rewrite_expr(expr: Expr, input: &Projection) -> Result<Transformed<Expr>> {
     expr.transform_up(|expr| {
         match expr {
-            //  remove any intermediate aliases
-            Expr::Alias(alias) => Ok(Transformed::yes(*alias.expr)),
+            //  remove any intermediate aliases if they do not carry metadata
+            Expr::Alias(alias) => {
+                match alias
+                    .metadata
+                    .as_ref()
+                    .map(|h| h.is_empty())
+                    .unwrap_or(true)
+                {
+                    true => Ok(Transformed::yes(*alias.expr)),
+                    false => Ok(Transformed::no(Expr::Alias(alias))),
+                }
+            }
             Expr::Column(col) => {
                 // Find index of column:
                 let idx = input.schema.index_of_column(&col)?;
@@ -816,8 +826,8 @@ mod tests {
     use crate::optimize_projections::OptimizeProjections;
     use crate::optimizer::Optimizer;
     use crate::test::{
-        assert_fields_eq, assert_optimized_plan_eq, scan_empty, test_table_scan,
-        test_table_scan_fields, test_table_scan_with_name,
+        assert_fields_eq, scan_empty, test_table_scan, test_table_scan_fields,
+        test_table_scan_with_name,
     };
     use crate::{OptimizerContext, OptimizerRule};
     use arrow::datatypes::{DataType, Field, Schema};
@@ -835,13 +845,27 @@ mod tests {
         not, try_cast, when, BinaryExpr, Expr, Extension, Like, LogicalPlan, Operator,
         Projection, UserDefinedLogicalNodeCore, WindowFunctionDefinition,
     };
+    use insta::assert_snapshot;
 
+    use crate::assert_optimized_plan_eq_snapshot;
     use datafusion_functions_aggregate::count::count_udaf;
     use datafusion_functions_aggregate::expr_fn::{count, max, min};
     use datafusion_functions_aggregate::min_max::max_udaf;
 
-    fn assert_optimized_plan_equal(plan: LogicalPlan, expected: &str) -> Result<()> {
-        assert_optimized_plan_eq(Arc::new(OptimizeProjections::new()), plan, expected)
+    macro_rules! assert_optimized_plan_equal {
+        (
+            $plan:expr,
+            @ $expected:literal $(,)?
+        ) => {{
+            let optimizer_ctx = OptimizerContext::new().with_max_passes(1);
+            let rules: Vec<Arc<dyn crate::OptimizerRule + Send + Sync>> = vec![Arc::new(OptimizeProjections::new())];
+            assert_optimized_plan_eq_snapshot!(
+                optimizer_ctx,
+                rules,
+                $plan,
+                @ $expected,
+            )
+        }};
     }
 
     #[derive(Debug, Hash, PartialEq, Eq)]
@@ -1030,9 +1054,13 @@ mod tests {
             .project(vec![binary_expr(lit(1), Operator::Plus, col("a"))])?
             .build()?;
 
-        let expected = "Projection: Int32(1) + test.a\
-        \n  TableScan: test projection=[a]";
-        assert_optimized_plan_equal(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: Int32(1) + test.a
+          TableScan: test projection=[a]
+        "
+        )
     }
 
     #[test]
@@ -1044,9 +1072,13 @@ mod tests {
             .project(vec![binary_expr(lit(1), Operator::Plus, col("a"))])?
             .build()?;
 
-        let expected = "Projection: Int32(1) + test.a\
-        \n  TableScan: test projection=[a]";
-        assert_optimized_plan_equal(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: Int32(1) + test.a
+          TableScan: test projection=[a]
+        "
+        )
     }
 
     #[test]
@@ -1057,9 +1089,13 @@ mod tests {
             .project(vec![col("a").alias("alias")])?
             .build()?;
 
-        let expected = "Projection: test.a AS alias\
-        \n  TableScan: test projection=[a]";
-        assert_optimized_plan_equal(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: test.a AS alias
+          TableScan: test projection=[a]
+        "
+        )
     }
 
     #[test]
@@ -1070,9 +1106,13 @@ mod tests {
             .project(vec![col("alias2").alias("alias")])?
             .build()?;
 
-        let expected = "Projection: test.a AS alias\
-        \n  TableScan: test projection=[a]";
-        assert_optimized_plan_equal(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: test.a AS alias
+          TableScan: test projection=[a]
+        "
+        )
     }
 
     #[test]
@@ -1090,11 +1130,15 @@ mod tests {
             .build()
             .unwrap();
 
-        let expected = "Aggregate: groupBy=[[]], aggr=[[count(Int32(1))]]\
-        \n  Projection: \
-        \n    Aggregate: groupBy=[[]], aggr=[[count(Int32(1))]]\
-        \n      TableScan: ?table? projection=[]";
-        assert_optimized_plan_equal(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Aggregate: groupBy=[[]], aggr=[[count(Int32(1))]]
+          Projection:
+            Aggregate: groupBy=[[]], aggr=[[count(Int32(1))]]
+              TableScan: ?table? projection=[]
+        "
+        )
     }
 
     #[test]
@@ -1104,9 +1148,13 @@ mod tests {
             .project(vec![-col("a")])?
             .build()?;
 
-        let expected = "Projection: (- test.a)\
-        \n  TableScan: test projection=[a]";
-        assert_optimized_plan_equal(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: (- test.a)
+          TableScan: test projection=[a]
+        "
+        )
     }
 
     #[test]
@@ -1116,9 +1164,13 @@ mod tests {
             .project(vec![col("a").is_null()])?
             .build()?;
 
-        let expected = "Projection: test.a IS NULL\
-        \n  TableScan: test projection=[a]";
-        assert_optimized_plan_equal(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: test.a IS NULL
+          TableScan: test projection=[a]
+        "
+        )
     }
 
     #[test]
@@ -1128,9 +1180,13 @@ mod tests {
             .project(vec![col("a").is_not_null()])?
             .build()?;
 
-        let expected = "Projection: test.a IS NOT NULL\
-        \n  TableScan: test projection=[a]";
-        assert_optimized_plan_equal(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: test.a IS NOT NULL
+          TableScan: test projection=[a]
+        "
+        )
     }
 
     #[test]
@@ -1140,9 +1196,13 @@ mod tests {
             .project(vec![col("a").is_true()])?
             .build()?;
 
-        let expected = "Projection: test.a IS TRUE\
-        \n  TableScan: test projection=[a]";
-        assert_optimized_plan_equal(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: test.a IS TRUE
+          TableScan: test projection=[a]
+        "
+        )
     }
 
     #[test]
@@ -1152,9 +1212,13 @@ mod tests {
             .project(vec![col("a").is_not_true()])?
             .build()?;
 
-        let expected = "Projection: test.a IS NOT TRUE\
-        \n  TableScan: test projection=[a]";
-        assert_optimized_plan_equal(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: test.a IS NOT TRUE
+          TableScan: test projection=[a]
+        "
+        )
     }
 
     #[test]
@@ -1164,9 +1228,13 @@ mod tests {
             .project(vec![col("a").is_false()])?
             .build()?;
 
-        let expected = "Projection: test.a IS FALSE\
-        \n  TableScan: test projection=[a]";
-        assert_optimized_plan_equal(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: test.a IS FALSE
+          TableScan: test projection=[a]
+        "
+        )
     }
 
     #[test]
@@ -1176,9 +1244,13 @@ mod tests {
             .project(vec![col("a").is_not_false()])?
             .build()?;
 
-        let expected = "Projection: test.a IS NOT FALSE\
-        \n  TableScan: test projection=[a]";
-        assert_optimized_plan_equal(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: test.a IS NOT FALSE
+          TableScan: test projection=[a]
+        "
+        )
     }
 
     #[test]
@@ -1188,9 +1260,13 @@ mod tests {
             .project(vec![col("a").is_unknown()])?
             .build()?;
 
-        let expected = "Projection: test.a IS UNKNOWN\
-        \n  TableScan: test projection=[a]";
-        assert_optimized_plan_equal(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: test.a IS UNKNOWN
+          TableScan: test projection=[a]
+        "
+        )
     }
 
     #[test]
@@ -1200,9 +1276,13 @@ mod tests {
             .project(vec![col("a").is_not_unknown()])?
             .build()?;
 
-        let expected = "Projection: test.a IS NOT UNKNOWN\
-        \n  TableScan: test projection=[a]";
-        assert_optimized_plan_equal(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: test.a IS NOT UNKNOWN
+          TableScan: test projection=[a]
+        "
+        )
     }
 
     #[test]
@@ -1212,9 +1292,13 @@ mod tests {
             .project(vec![not(col("a"))])?
             .build()?;
 
-        let expected = "Projection: NOT test.a\
-        \n  TableScan: test projection=[a]";
-        assert_optimized_plan_equal(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: NOT test.a
+          TableScan: test projection=[a]
+        "
+        )
     }
 
     #[test]
@@ -1224,9 +1308,13 @@ mod tests {
             .project(vec![try_cast(col("a"), DataType::Float64)])?
             .build()?;
 
-        let expected = "Projection: TRY_CAST(test.a AS Float64)\
-        \n  TableScan: test projection=[a]";
-        assert_optimized_plan_equal(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: TRY_CAST(test.a AS Float64)
+          TableScan: test projection=[a]
+        "
+        )
     }
 
     #[test]
@@ -1240,9 +1328,13 @@ mod tests {
             .project(vec![similar_to_expr])?
             .build()?;
 
-        let expected = "Projection: test.a SIMILAR TO Utf8(\"[0-9]\")\
-        \n  TableScan: test projection=[a]";
-        assert_optimized_plan_equal(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r#"
+        Projection: test.a SIMILAR TO Utf8("[0-9]")
+          TableScan: test projection=[a]
+        "#
+        )
     }
 
     #[test]
@@ -1252,9 +1344,13 @@ mod tests {
             .project(vec![col("a").between(lit(1), lit(3))])?
             .build()?;
 
-        let expected = "Projection: test.a BETWEEN Int32(1) AND Int32(3)\
-        \n  TableScan: test projection=[a]";
-        assert_optimized_plan_equal(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: test.a BETWEEN Int32(1) AND Int32(3)
+          TableScan: test projection=[a]
+        "
+        )
     }
 
     // Test Case expression
@@ -1271,9 +1367,13 @@ mod tests {
             ])?
             .build()?;
 
-        let expected = "Projection: test.a, CASE WHEN test.a = Int32(1) THEN Int32(10) ELSE Int32(0) END AS d\
-        \n  TableScan: test projection=[a]";
-        assert_optimized_plan_equal(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: test.a, CASE WHEN test.a = Int32(1) THEN Int32(10) ELSE Int32(0) END AS d
+          TableScan: test projection=[a]
+        "
+        )
     }
 
     // Test outer projection isn't discarded despite the same schema as inner
@@ -1291,11 +1391,14 @@ mod tests {
             ])?
             .build()?;
 
-        let expected =
-            "Projection: a, CASE WHEN a = Int32(1) THEN Int32(10) ELSE d END AS d\
-        \n  Projection: test.a + Int32(1) AS a, Int32(0) AS d\
-        \n    TableScan: test projection=[a]";
-        assert_optimized_plan_equal(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: a, CASE WHEN a = Int32(1) THEN Int32(10) ELSE d END AS d
+          Projection: test.a + Int32(1) AS a, Int32(0) AS d
+            TableScan: test projection=[a]
+        "
+        )
     }
 
     // Since only column `a` is referred at the output. Scan should only contain projection=[a].
@@ -1313,10 +1416,14 @@ mod tests {
             .project(vec![col("a"), lit(0).alias("d")])?
             .build()?;
 
-        let expected = "Projection: test.a, Int32(0) AS d\
-        \n  NoOpUserDefined\
-        \n    TableScan: test projection=[a]";
-        assert_optimized_plan_equal(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: test.a, Int32(0) AS d
+          NoOpUserDefined
+            TableScan: test projection=[a]
+        "
+        )
     }
 
     // Only column `a` is referred at the output. However, User defined node itself uses column `b`
@@ -1340,10 +1447,14 @@ mod tests {
             .project(vec![col("a"), lit(0).alias("d")])?
             .build()?;
 
-        let expected = "Projection: test.a, Int32(0) AS d\
-        \n  NoOpUserDefined\
-        \n    TableScan: test projection=[a, b]";
-        assert_optimized_plan_equal(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: test.a, Int32(0) AS d
+          NoOpUserDefined
+            TableScan: test projection=[a, b]
+        "
+        )
     }
 
     // Only column `a` is referred at the output. However, User defined node itself uses expression `b+c`
@@ -1375,10 +1486,14 @@ mod tests {
             .project(vec![col("a"), lit(0).alias("d")])?
             .build()?;
 
-        let expected = "Projection: test.a, Int32(0) AS d\
-        \n  NoOpUserDefined\
-        \n    TableScan: test projection=[a, b, c]";
-        assert_optimized_plan_equal(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: test.a, Int32(0) AS d
+          NoOpUserDefined
+            TableScan: test projection=[a, b, c]
+        "
+        )
     }
 
     // Columns `l.a`, `l.c`, `r.a` is referred at the output.
@@ -1399,11 +1514,15 @@ mod tests {
             .project(vec![col("l.a"), col("l.c"), col("r.a"), lit(0).alias("d")])?
             .build()?;
 
-        let expected = "Projection: l.a, l.c, r.a, Int32(0) AS d\
-        \n  UserDefinedCrossJoin\
-        \n    TableScan: l projection=[a, c]\
-        \n    TableScan: r projection=[a]";
-        assert_optimized_plan_equal(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: l.a, l.c, r.a, Int32(0) AS d
+          UserDefinedCrossJoin
+            TableScan: l projection=[a, c]
+            TableScan: r projection=[a]
+        "
+        )
     }
 
     #[test]
@@ -1414,10 +1533,13 @@ mod tests {
             .aggregate(Vec::<Expr>::new(), vec![max(col("b"))])?
             .build()?;
 
-        let expected = "Aggregate: groupBy=[[]], aggr=[[max(test.b)]]\
-        \n  TableScan: test projection=[b]";
-
-        assert_optimized_plan_equal(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Aggregate: groupBy=[[]], aggr=[[max(test.b)]]
+          TableScan: test projection=[b]
+        "
+        )
     }
 
     #[test]
@@ -1428,10 +1550,13 @@ mod tests {
             .aggregate(vec![col("c")], vec![max(col("b"))])?
             .build()?;
 
-        let expected = "Aggregate: groupBy=[[test.c]], aggr=[[max(test.b)]]\
-        \n  TableScan: test projection=[b, c]";
-
-        assert_optimized_plan_equal(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Aggregate: groupBy=[[test.c]], aggr=[[max(test.b)]]
+          TableScan: test projection=[b, c]
+        "
+        )
     }
 
     #[test]
@@ -1443,11 +1568,14 @@ mod tests {
             .aggregate(vec![col("c")], vec![max(col("b"))])?
             .build()?;
 
-        let expected = "Aggregate: groupBy=[[a.c]], aggr=[[max(a.b)]]\
-        \n  SubqueryAlias: a\
-        \n    TableScan: test projection=[b, c]";
-
-        assert_optimized_plan_equal(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Aggregate: groupBy=[[a.c]], aggr=[[max(a.b)]]
+          SubqueryAlias: a
+            TableScan: test projection=[b, c]
+        "
+        )
     }
 
     #[test]
@@ -1459,12 +1587,15 @@ mod tests {
             .aggregate(Vec::<Expr>::new(), vec![max(col("b"))])?
             .build()?;
 
-        let expected = "Aggregate: groupBy=[[]], aggr=[[max(test.b)]]\
-        \n  Projection: test.b\
-        \n    Filter: test.c > Int32(1)\
-        \n      TableScan: test projection=[b, c]";
-
-        assert_optimized_plan_equal(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Aggregate: groupBy=[[]], aggr=[[max(test.b)]]
+          Projection: test.b
+            Filter: test.c > Int32(1)
+              TableScan: test projection=[b, c]
+        "
+        )
     }
 
     #[test]
@@ -1485,11 +1616,13 @@ mod tests {
             .project([col(Column::new_unqualified("tag.one"))])?
             .build()?;
 
-        let expected = "\
-        Aggregate: groupBy=[[]], aggr=[[max(m4.tag.one) AS tag.one]]\
-        \n  TableScan: m4 projection=[tag.one]";
-
-        assert_optimized_plan_equal(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Aggregate: groupBy=[[]], aggr=[[max(m4.tag.one) AS tag.one]]
+          TableScan: m4 projection=[tag.one]
+        "
+        )
     }
 
     #[test]
@@ -1500,10 +1633,13 @@ mod tests {
             .project(vec![col("a"), col("b"), col("c")])?
             .project(vec![col("a"), col("c"), col("b")])?
             .build()?;
-        let expected = "Projection: test.a, test.c, test.b\
-        \n  TableScan: test projection=[a, b, c]";
-
-        assert_optimized_plan_equal(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: test.a, test.c, test.b
+          TableScan: test projection=[a, b, c]
+        "
+        )
     }
 
     #[test]
@@ -1511,9 +1647,10 @@ mod tests {
         let schema = Schema::new(test_table_scan_fields());
 
         let plan = table_scan(Some("test"), &schema, Some(vec![1, 0, 2]))?.build()?;
-        let expected = "TableScan: test projection=[b, a, c]";
-
-        assert_optimized_plan_equal(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @"TableScan: test projection=[b, a, c]"
+        )
     }
 
     #[test]
@@ -1523,10 +1660,13 @@ mod tests {
         let plan = table_scan(Some("test"), &schema, Some(vec![1, 0, 2]))?
             .project(vec![col("a"), col("b")])?
             .build()?;
-        let expected = "Projection: test.a, test.b\
-        \n  TableScan: test projection=[b, a]";
-
-        assert_optimized_plan_equal(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: test.a, test.b
+          TableScan: test projection=[b, a]
+        "
+        )
     }
 
     #[test]
@@ -1536,10 +1676,13 @@ mod tests {
         let plan = LogicalPlanBuilder::from(table_scan)
             .project(vec![col("c"), col("b"), col("a")])?
             .build()?;
-        let expected = "Projection: test.c, test.b, test.a\
-        \n  TableScan: test projection=[a, b, c]";
-
-        assert_optimized_plan_equal(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: test.c, test.b, test.a
+          TableScan: test projection=[a, b, c]
+        "
+        )
     }
 
     #[test]
@@ -1554,14 +1697,18 @@ mod tests {
             .filter(col("a").gt(lit(1)))?
             .project(vec![col("a"), col("c"), col("b")])?
             .build()?;
-        let expected = "Projection: test.a, test.c, test.b\
-        \n  Filter: test.a > Int32(1)\
-        \n    Filter: test.b > Int32(1)\
-        \n      Projection: test.c, test.a, test.b\
-        \n        Filter: test.c > Int32(1)\
-        \n          Projection: test.c, test.b, test.a\
-        \n            TableScan: test projection=[a, b, c]";
-        assert_optimized_plan_equal(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: test.a, test.c, test.b
+          Filter: test.a > Int32(1)
+            Filter: test.b > Int32(1)
+              Projection: test.c, test.a, test.b
+                Filter: test.c > Int32(1)
+                  Projection: test.c, test.b, test.a
+                    TableScan: test projection=[a, b, c]
+        "
+        )
     }
 
     #[test]
@@ -1576,14 +1723,17 @@ mod tests {
             .project(vec![col("a"), col("b"), col("c1")])?
             .build()?;
 
-        // make sure projections are pushed down to both table scans
-        let expected = "Left Join: test.a = test2.c1\
-        \n  TableScan: test projection=[a, b]\
-        \n  TableScan: test2 projection=[c1]";
-
         let optimized_plan = optimize(plan)?;
-        let formatted_plan = format!("{optimized_plan}");
-        assert_eq!(formatted_plan, expected);
+
+        // make sure projections are pushed down to both table scans
+        assert_snapshot!(
+            optimized_plan.clone(),
+            @r"
+        Left Join: test.a = test2.c1
+          TableScan: test projection=[a, b]
+          TableScan: test2 projection=[c1]
+        "
+        );
 
         // make sure schema for join node include both join columns
         let optimized_join = optimized_plan;
@@ -1627,15 +1777,18 @@ mod tests {
             .project(vec![col("a"), col("b")])?
             .build()?;
 
-        // make sure projections are pushed down to both table scans
-        let expected = "Projection: test.a, test.b\
-        \n  Left Join: test.a = test2.c1\
-        \n    TableScan: test projection=[a, b]\
-        \n    TableScan: test2 projection=[c1]";
-
         let optimized_plan = optimize(plan)?;
-        let formatted_plan = format!("{optimized_plan}");
-        assert_eq!(formatted_plan, expected);
+
+        // make sure projections are pushed down to both table scans
+        assert_snapshot!(
+            optimized_plan.clone(),
+            @r"
+        Projection: test.a, test.b
+          Left Join: test.a = test2.c1
+            TableScan: test projection=[a, b]
+            TableScan: test2 projection=[c1]
+        "
+        );
 
         // make sure schema for join node include both join columns
         let optimized_join = optimized_plan.inputs()[0];
@@ -1677,15 +1830,18 @@ mod tests {
             .project(vec![col("a"), col("b")])?
             .build()?;
 
-        // make sure projections are pushed down to table scan
-        let expected = "Projection: test.a, test.b\
-        \n  Left Join: Using test.a = test2.a\
-        \n    TableScan: test projection=[a, b]\
-        \n    TableScan: test2 projection=[a]";
-
         let optimized_plan = optimize(plan)?;
-        let formatted_plan = format!("{optimized_plan}");
-        assert_eq!(formatted_plan, expected);
+
+        // make sure projections are pushed down to table scan
+        assert_snapshot!(
+            optimized_plan.clone(),
+            @r"
+        Projection: test.a, test.b
+          Left Join: Using test.a = test2.a
+            TableScan: test projection=[a, b]
+            TableScan: test2 projection=[a]
+        "
+        );
 
         // make sure schema for join node include both join columns
         let optimized_join = optimized_plan.inputs()[0];
@@ -1717,17 +1873,20 @@ mod tests {
     fn cast() -> Result<()> {
         let table_scan = test_table_scan()?;
 
-        let projection = LogicalPlanBuilder::from(table_scan)
+        let plan = LogicalPlanBuilder::from(table_scan)
             .project(vec![Expr::Cast(Cast::new(
                 Box::new(col("c")),
                 DataType::Float64,
             ))])?
             .build()?;
 
-        let expected = "Projection: CAST(test.c AS Float64)\
-        \n  TableScan: test projection=[c]";
-
-        assert_optimized_plan_equal(projection, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: CAST(test.c AS Float64)
+          TableScan: test projection=[c]
+        "
+        )
     }
 
     #[test]
@@ -1741,9 +1900,10 @@ mod tests {
         assert_fields_eq(&table_scan, vec!["a", "b", "c"]);
         assert_fields_eq(&plan, vec!["a", "b"]);
 
-        let expected = "TableScan: test projection=[a, b]";
-
-        assert_optimized_plan_equal(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @"TableScan: test projection=[a, b]"
+        )
     }
 
     #[test]
@@ -1762,9 +1922,10 @@ mod tests {
 
         assert_fields_eq(&plan, vec!["a", "b"]);
 
-        let expected = "TableScan: test projection=[a, b]";
-
-        assert_optimized_plan_equal(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @"TableScan: test projection=[a, b]"
+        )
     }
 
     #[test]
@@ -1780,11 +1941,14 @@ mod tests {
 
         assert_fields_eq(&plan, vec!["c", "a"]);
 
-        let expected = "Limit: skip=0, fetch=5\
-        \n  Projection: test.c, test.a\
-        \n    TableScan: test projection=[a, c]";
-
-        assert_optimized_plan_equal(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Limit: skip=0, fetch=5
+          Projection: test.c, test.a
+            TableScan: test projection=[a, c]
+        "
+        )
     }
 
     #[test]
@@ -1792,8 +1956,10 @@ mod tests {
         let table_scan = test_table_scan()?;
         let plan = LogicalPlanBuilder::from(table_scan).build()?;
         // should expand projection to all columns without projection
-        let expected = "TableScan: test projection=[a, b, c]";
-        assert_optimized_plan_equal(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @"TableScan: test projection=[a, b, c]"
+        )
     }
 
     #[test]
@@ -1802,9 +1968,13 @@ mod tests {
         let plan = LogicalPlanBuilder::from(table_scan)
             .project(vec![lit(1_i64), lit(2_i64)])?
             .build()?;
-        let expected = "Projection: Int64(1), Int64(2)\
-                      \n  TableScan: test projection=[]";
-        assert_optimized_plan_equal(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: Int64(1), Int64(2)
+          TableScan: test projection=[]
+        "
+        )
     }
 
     /// tests that it removes unused columns in projections
@@ -1824,13 +1994,15 @@ mod tests {
         assert_fields_eq(&plan, vec!["c", "max(test.a)"]);
 
         let plan = optimize(plan).expect("failed to optimize plan");
-        let expected = "\
-        Aggregate: groupBy=[[test.c]], aggr=[[max(test.a)]]\
-        \n  Filter: test.c > Int32(1)\
-        \n    Projection: test.c, test.a\
-        \n      TableScan: test projection=[a, c]";
-
-        assert_optimized_plan_equal(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Aggregate: groupBy=[[test.c]], aggr=[[max(test.a)]]
+          Filter: test.c > Int32(1)
+            Projection: test.c, test.a
+              TableScan: test projection=[a, c]
+        "
+        )
     }
 
     /// tests that it removes un-needed projections
@@ -1848,11 +2020,13 @@ mod tests {
 
         assert_fields_eq(&plan, vec!["a"]);
 
-        let expected = "\
-        Projection: Int32(1) AS a\
-        \n  TableScan: test projection=[]";
-
-        assert_optimized_plan_equal(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: Int32(1) AS a
+          TableScan: test projection=[]
+        "
+        )
     }
 
     #[test]
@@ -1877,11 +2051,13 @@ mod tests {
 
         assert_fields_eq(&plan, vec!["a"]);
 
-        let expected = "\
-        Projection: Int32(1) AS a\
-        \n  TableScan: test projection=[], full_filters=[b = Int32(1)]";
-
-        assert_optimized_plan_equal(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: Int32(1) AS a
+          TableScan: test projection=[], full_filters=[b = Int32(1)]
+        "
+        )
     }
 
     /// tests that optimizing twice yields same plan
@@ -1920,12 +2096,15 @@ mod tests {
 
         assert_fields_eq(&plan, vec!["c", "a", "max(test.b)"]);
 
-        let expected = "Projection: test.c, test.a, max(test.b)\
-        \n  Filter: test.c > Int32(1)\
-        \n    Aggregate: groupBy=[[test.a, test.c]], aggr=[[max(test.b)]]\
-        \n      TableScan: test projection=[a, b, c]";
-
-        assert_optimized_plan_equal(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: test.c, test.a, max(test.b)
+          Filter: test.c > Int32(1)
+            Aggregate: groupBy=[[test.a, test.c]], aggr=[[max(test.b)]]
+              TableScan: test projection=[a, b, c]
+        "
+        )
     }
 
     #[test]
@@ -1942,10 +2121,13 @@ mod tests {
             )?
             .build()?;
 
-        let expected = "Aggregate: groupBy=[[test.a]], aggr=[[count(test.b), count(test.b) FILTER (WHERE test.c > Int32(42)) AS count2]]\
-        \n  TableScan: test projection=[a, b, c]";
-
-        assert_optimized_plan_equal(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Aggregate: groupBy=[[test.a]], aggr=[[count(test.b), count(test.b) FILTER (WHERE test.c > Int32(42)) AS count2]]
+          TableScan: test projection=[a, b, c]
+        "
+        )
     }
 
     #[test]
@@ -1958,18 +2140,21 @@ mod tests {
             .project(vec![col("a")])?
             .build()?;
 
-        let expected = "Projection: test.a\
-        \n  Distinct:\
-        \n    TableScan: test projection=[a, b]";
-
-        assert_optimized_plan_equal(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: test.a
+          Distinct:
+            TableScan: test projection=[a, b]
+        "
+        )
     }
 
     #[test]
     fn test_window() -> Result<()> {
         let table_scan = test_table_scan()?;
 
-        let max1 = Expr::WindowFunction(expr::WindowFunction::new(
+        let max1 = Expr::from(expr::WindowFunction::new(
             WindowFunctionDefinition::AggregateUDF(max_udaf()),
             vec![col("test.a")],
         ))
@@ -1977,7 +2162,7 @@ mod tests {
         .build()
         .unwrap();
 
-        let max2 = Expr::WindowFunction(expr::WindowFunction::new(
+        let max2 = Expr::from(expr::WindowFunction::new(
             WindowFunctionDefinition::AggregateUDF(max_udaf()),
             vec![col("test.b")],
         ));
@@ -1990,13 +2175,16 @@ mod tests {
             .project(vec![col1, col2])?
             .build()?;
 
-        let expected = "Projection: max(test.a) PARTITION BY [test.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, max(test.b) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING\
-        \n  WindowAggr: windowExpr=[[max(test.b) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]\
-        \n    Projection: test.b, max(test.a) PARTITION BY [test.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING\
-        \n      WindowAggr: windowExpr=[[max(test.a) PARTITION BY [test.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]\
-        \n        TableScan: test projection=[a, b]";
-
-        assert_optimized_plan_equal(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: max(test.a) PARTITION BY [test.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, max(test.b) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+          WindowAggr: windowExpr=[[max(test.b) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+            Projection: test.b, max(test.a) PARTITION BY [test.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+              WindowAggr: windowExpr=[[max(test.a) PARTITION BY [test.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+                TableScan: test projection=[a, b]
+        "
+        )
     }
 
     fn observe(_plan: &LogicalPlan, _rule: &dyn OptimizerRule) {}

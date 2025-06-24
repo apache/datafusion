@@ -95,7 +95,9 @@ pub use function::{
     AccumulatorFactoryFunction, PartitionEvaluatorFactory, ReturnTypeFunction,
     ScalarFunctionImplementation, StateTypeFunction,
 };
-pub use literal::{lit, lit_timestamp_nano, Literal, TimestampLiteral};
+pub use literal::{
+    lit, lit_timestamp_nano, lit_with_metadata, Literal, TimestampLiteral,
+};
 pub use logical_plan::*;
 pub use partition_evaluator::PartitionEvaluator;
 pub use sqlparser;
@@ -105,8 +107,7 @@ pub use udaf::{
     SetMonotonicity, StatisticsArgs,
 };
 pub use udf::{
-    scalar_doc_sections, ReturnInfo, ReturnTypeArgs, ScalarFunctionArgs, ScalarUDF,
-    ScalarUDFImpl,
+    scalar_doc_sections, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl,
 };
 pub use udwf::{window_doc_sections, ReversedUDWF, WindowUDF, WindowUDFImpl};
 pub use window_frame::{WindowFrame, WindowFrameBound, WindowFrameUnits};

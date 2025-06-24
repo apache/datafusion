@@ -401,8 +401,8 @@ jobs:
       - name: Run tests with headless mode
         working-directory: ./datafusion/wasmtest
         run: |
-          wasm-pack test --headless --firefox
-          wasm-pack test --headless --chrome --chromedriver $CHROMEWEBDRIVER/chromedriver
+          RUSTFLAGS='--cfg getrandom_backend="wasm_js"' wasm-pack test --headless --firefox
+          RUSTFLAGS='--cfg getrandom_backend="wasm_js"' wasm-pack test --headless --chrome --chromedriver $CHROMEWEBDRIVER/chromedriver
 
   # verify that the benchmark queries return the correct results
   verify-benchmark-results:
@@ -475,6 +475,28 @@ jobs:
           # use postgres for the host here because we have specified a container for the job
           POSTGRES_HOST: postgres
           POSTGRES_PORT: ${{ job.services.postgres.ports[5432] }}
+
+  sqllogictest-substrait:
+    name: "Run sqllogictest in Substrait round-trip mode"
+    needs: linux-build-lib
+    runs-on: ubuntu-latest
+    container:
+      image: amd64/rust
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+          fetch-depth: 1
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-builder
+        with:
+          rust-version: stable
+      - name: Run sqllogictest
+        # TODO: Right now several tests are failing in Substrait round-trip mode, so this
+        #  command cannot be run for all the .slt files. Run it for just one that works (limit.slt)
+        #  until most of the tickets in https://github.com/apache/datafusion/issues/16248 are addressed
+        #  and this command can be run without filters.
+        run: cargo test --test sqllogictests -- --substrait-round-trip limit.slt
 
   #  Temporarily commenting out the Windows flow, the reason is enormously slow running build
   #  Waiting for new Windows 2025 github runner
@@ -692,6 +714,11 @@ jobs:
         run: |
           # If you encounter an error, run './dev/update_function_docs.sh' and commit
           ./dev/update_function_docs.sh
+          git diff --exit-code
+      - name: Check if runtime_configs.md has been modified
+        run: |
+          # If you encounter an error, run './dev/update_runtime_config_docs.sh' and commit
+          ./dev/update_runtime_config_docs.sh
           git diff --exit-code
 
   # Verify MSRV for the crates which are directly used by other projects:

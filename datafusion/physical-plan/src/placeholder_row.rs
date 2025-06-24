@@ -166,6 +166,13 @@ impl ExecutionPlan for PlaceholderRowExec {
     }
 
     fn statistics(&self) -> Result<Statistics> {
+        self.partition_statistics(None)
+    }
+
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        if partition.is_some() {
+            return Ok(Statistics::new_unknown(&self.schema()));
+        }
         let batch = self
             .data()
             .expect("Create single row placeholder RecordBatch should not fail");

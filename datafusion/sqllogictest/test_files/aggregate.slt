@@ -132,37 +132,51 @@ statement error DataFusion error: Schema error: Schema contains duplicate unqual
 SELECT approx_distinct(c9) count_c9, approx_distinct(cast(c9 as varchar)) count_c9_str FROM aggregate_test_100
 
 # csv_query_approx_percentile_cont_with_weight
-statement error DataFusion error: Error during planning: Failed to coerce arguments to satisfy a call to 'approx_percentile_cont_with_weight' function: coercion from \[Utf8, Int8, Float64\] to the signature OneOf(.*) failed(.|\n)*
-SELECT approx_percentile_cont_with_weight(c1, c2, 0.95) FROM aggregate_test_100
+statement error Failed to coerce arguments to satisfy a call to 'approx_percentile_cont_with_weight' function
+SELECT approx_percentile_cont_with_weight(c2, 0.95) WITHIN GROUP (ORDER BY c1) FROM aggregate_test_100
 
-statement error DataFusion error: Error during planning: Failed to coerce arguments to satisfy a call to 'approx_percentile_cont_with_weight' function: coercion from \[Int16, Utf8, Float64\] to the signature OneOf(.*) failed(.|\n)*
-SELECT approx_percentile_cont_with_weight(c3, c1, 0.95) FROM aggregate_test_100
+statement error Failed to coerce arguments to satisfy a call to 'approx_percentile_cont_with_weight' function
+SELECT approx_percentile_cont_with_weight(c1, 0.95) WITHIN GROUP (ORDER BY c3) FROM aggregate_test_100
 
-statement error DataFusion error: Error during planning: Failed to coerce arguments to satisfy a call to 'approx_percentile_cont_with_weight' function: coercion from \[Int16, Int8, Utf8\] to the signature OneOf(.*) failed(.|\n)*
-SELECT approx_percentile_cont_with_weight(c3, c2, c1) FROM aggregate_test_100
+statement error Failed to coerce arguments to satisfy a call to 'approx_percentile_cont_with_weight' function
+SELECT approx_percentile_cont_with_weight(c2, c1) WITHIN GROUP (ORDER BY c3) FROM aggregate_test_100
 
 # csv_query_approx_percentile_cont_with_histogram_bins
 statement error DataFusion error: This feature is not implemented: Tdigest max_size value for 'APPROX_PERCENTILE_CONT' must be UInt > 0 literal \(got data type Int64\)\.
-SELECT c1, approx_percentile_cont(c3, 0.95, -1000) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
+SELECT c1, approx_percentile_cont(0.95, -1000) WITHIN GROUP (ORDER BY c3) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
 
-statement error DataFusion error: Error during planning: Failed to coerce arguments to satisfy a call to 'approx_percentile_cont' function: coercion from \[Int16, Float64, Utf8\] to the signature OneOf(.*) failed(.|\n)*
-SELECT approx_percentile_cont(c3, 0.95, c1) FROM aggregate_test_100
+statement error Failed to coerce arguments to satisfy a call to 'approx_percentile_cont' function
+SELECT approx_percentile_cont(0.95, c1) WITHIN GROUP (ORDER BY c3) FROM aggregate_test_100
 
 statement error DataFusion error: Error during planning: Failed to coerce arguments to satisfy a call to 'approx_percentile_cont' function: coercion from \[Int16, Float64, Float64\] to the signature OneOf(.*) failed(.|\n)*
-SELECT approx_percentile_cont(c3, 0.95, 111.1) FROM aggregate_test_100
+SELECT approx_percentile_cont(0.95, 111.1) WITHIN GROUP (ORDER BY c3) FROM aggregate_test_100
 
 statement error DataFusion error: Error during planning: Failed to coerce arguments to satisfy a call to 'approx_percentile_cont' function: coercion from \[Float64, Float64, Float64\] to the signature OneOf(.*) failed(.|\n)*
-SELECT approx_percentile_cont(c12, 0.95, 111.1) FROM aggregate_test_100
+SELECT approx_percentile_cont(0.95, 111.1) WITHIN GROUP (ORDER BY c12) FROM aggregate_test_100
 
 statement error DataFusion error: This feature is not implemented: Percentile value for 'APPROX_PERCENTILE_CONT' must be a literal
-SELECT approx_percentile_cont(c12, c12) FROM aggregate_test_100
+SELECT approx_percentile_cont(c12) WITHIN GROUP (ORDER BY c12) FROM aggregate_test_100
 
 statement error DataFusion error: This feature is not implemented: Tdigest max_size value for 'APPROX_PERCENTILE_CONT' must be a literal
-SELECT approx_percentile_cont(c12, 0.95, c5) FROM aggregate_test_100
+SELECT approx_percentile_cont(0.95, c5) WITHIN GROUP (ORDER BY c12) FROM aggregate_test_100
+
+statement error DataFusion error: This feature is not implemented: Conflicting ordering requirements in aggregate functions is not supported
+SELECT approx_percentile_cont(0.95) WITHIN GROUP (ORDER BY c5), approx_percentile_cont(0.2) WITHIN GROUP (ORDER BY c12) FROM aggregate_test_100
+
+statement error DataFusion error: Error during planning: \[IGNORE | RESPECT\] NULLS are not permitted for approx_percentile_cont
+SELECT approx_percentile_cont(0.95) WITHIN GROUP (ORDER BY c5) IGNORE NULLS FROM aggregate_test_100
+
+statement error DataFusion error: Error during planning: \[IGNORE | RESPECT\] NULLS are not permitted for approx_percentile_cont
+SELECT approx_percentile_cont(0.95) WITHIN GROUP (ORDER BY c5) RESPECT NULLS FROM aggregate_test_100
+
+statement error DataFusion error: This feature is not implemented: Only a single ordering expression is permitted in a WITHIN GROUP clause
+SELECT approx_percentile_cont(0.95) WITHIN GROUP (ORDER BY c5, c12) FROM aggregate_test_100
 
 # Not supported over sliding windows
-query error This feature is not implemented: Aggregate can not be used as a sliding accumulator because `retract_batch` is not implemented
-SELECT approx_percentile_cont(c3, 0.5) OVER (ROWS BETWEEN 4 PRECEDING AND CURRENT ROW) 
+query error DataFusion error: Error during planning: OVER and WITHIN GROUP clause are can not be used together. OVER is for window function, whereas WITHIN GROUP is for ordered set aggregate function
+SELECT approx_percentile_cont(0.5)
+WITHIN GROUP (ORDER BY c3)
+OVER (ROWS BETWEEN 4 PRECEDING AND CURRENT ROW)
 FROM aggregate_test_100
 
 # array agg can use order by
@@ -289,17 +303,19 @@ CREATE TABLE array_agg_distinct_list_table AS VALUES
   ('b', [1,0]),
   ('b', [1,0]),
   ('b', [1,0]),
-  ('b', [0,1])
+  ('b', [0,1]),
+  (NULL, [0,1]),
+  ('b', NULL)
 ;
 
 # Apply array_sort to have deterministic result, higher dimension nested array also works but not for array sort,
 # so they are covered in `datafusion/functions-aggregate/src/array_agg.rs`
 query ??
 select array_sort(c1), array_sort(c2) from (
-  select array_agg(distinct column1) as c1, array_agg(distinct column2) as c2 from array_agg_distinct_list_table
+  select array_agg(distinct column1) as c1, array_agg(distinct column2) ignore nulls as c2 from array_agg_distinct_list_table
 );
 ----
-[b, w] [[0, 1], [1, 0]]
+[NULL, b, w] [[0, 1], [1, 0]]
 
 statement ok
 drop table array_agg_distinct_list_table;
@@ -1276,173 +1292,173 @@ SELECT approx_distinct(c9) AS a, approx_distinct(c9) AS b FROM aggregate_test_10
 
 #csv_query_approx_percentile_cont (c2)
 query B
-SELECT (ABS(1 - CAST(approx_percentile_cont(c2, 0.1) AS DOUBLE) / 1.0) < 0.05) AS q FROM aggregate_test_100
+SELECT (ABS(1 - CAST(approx_percentile_cont(0.1) WITHIN GROUP (ORDER BY c2) AS DOUBLE) / 1.0) < 0.05) AS q FROM aggregate_test_100
 ----
 true
 
 query B
-SELECT (ABS(1 - CAST(approx_percentile_cont(c2, 0.5) AS DOUBLE) / 3.0) < 0.05) AS q FROM aggregate_test_100
+SELECT (ABS(1 - CAST(approx_percentile_cont(0.5) WITHIN GROUP (ORDER BY c2) AS DOUBLE) / 3.0) < 0.05) AS q FROM aggregate_test_100
 ----
 true
 
 query B
-SELECT (ABS(1 - CAST(approx_percentile_cont(c2, 0.9) AS DOUBLE) / 5.0) < 0.05) AS q FROM aggregate_test_100
+SELECT (ABS(1 - CAST(approx_percentile_cont(0.9) WITHIN GROUP (ORDER BY c2) AS DOUBLE) / 5.0) < 0.05) AS q FROM aggregate_test_100
 ----
 true
 
 # csv_query_approx_percentile_cont (c3)
 query B
-SELECT (ABS(1 - CAST(approx_percentile_cont(c3, 0.1) AS DOUBLE) / -95.3) < 0.05) AS q FROM aggregate_test_100
+SELECT (ABS(1 - CAST(approx_percentile_cont(0.1) WITHIN GROUP (ORDER BY c3) AS DOUBLE) / -95.3) < 0.05) AS q FROM aggregate_test_100
 ----
 true
 
 query B
-SELECT (ABS(1 - CAST(approx_percentile_cont(c3, 0.5) AS DOUBLE) / 15.5) < 0.05) AS q FROM aggregate_test_100
+SELECT (ABS(1 - CAST(approx_percentile_cont(0.5) WITHIN GROUP (ORDER BY c3) AS DOUBLE) / 15.5) < 0.05) AS q FROM aggregate_test_100
 ----
 true
 
 query B
-SELECT (ABS(1 - CAST(approx_percentile_cont(c3, 0.9) AS DOUBLE) / 102.0) < 0.05) AS q FROM aggregate_test_100
+SELECT (ABS(1 - CAST(approx_percentile_cont(0.9) WITHIN GROUP (ORDER BY c3) AS DOUBLE) / 102.0) < 0.05) AS q FROM aggregate_test_100
 ----
 true
 
 # csv_query_approx_percentile_cont (c4)
 query B
-SELECT (ABS(1 - CAST(approx_percentile_cont(c4, 0.1) AS DOUBLE) / -22925.0) < 0.05) AS q FROM aggregate_test_100
+SELECT (ABS(1 - CAST(approx_percentile_cont(0.1) WITHIN GROUP (ORDER BY c4) AS DOUBLE) / -22925.0) < 0.05) AS q FROM aggregate_test_100
 ----
 true
 
 query B
-SELECT (ABS(1 - CAST(approx_percentile_cont(c4, 0.5) AS DOUBLE) / 4599.0) < 0.05) AS q FROM aggregate_test_100
+SELECT (ABS(1 - CAST(approx_percentile_cont(0.5) WITHIN GROUP (ORDER BY c4) AS DOUBLE) / 4599.0) < 0.05) AS q FROM aggregate_test_100
 ----
 true
 
 query B
-SELECT (ABS(1 - CAST(approx_percentile_cont(c4, 0.9) AS DOUBLE) / 25334.0) < 0.05) AS q FROM aggregate_test_100
+SELECT (ABS(1 - CAST(approx_percentile_cont(0.9) WITHIN GROUP (ORDER BY c4) AS DOUBLE) / 25334.0) < 0.05) AS q FROM aggregate_test_100
 ----
 true
 
 # csv_query_approx_percentile_cont (c5)
 query B
-SELECT (ABS(1 - CAST(approx_percentile_cont(c5, 0.1) AS DOUBLE) / -1882606710.0) < 0.05) AS q FROM aggregate_test_100
+SELECT (ABS(1 - CAST(approx_percentile_cont(0.1) WITHIN GROUP (ORDER BY c5) AS DOUBLE) / -1882606710.0) < 0.05) AS q FROM aggregate_test_100
 ----
 true
 
 query B
-SELECT (ABS(1 - CAST(approx_percentile_cont(c5, 0.5) AS DOUBLE) / 377164262.0) < 0.05) AS q FROM aggregate_test_100
+SELECT (ABS(1 - CAST(approx_percentile_cont(0.5) WITHIN GROUP (ORDER BY c5) AS DOUBLE) / 377164262.0) < 0.05) AS q FROM aggregate_test_100
 ----
 true
 
 query B
-SELECT (ABS(1 - CAST(approx_percentile_cont(c5, 0.9) AS DOUBLE) / 1991374996.0) < 0.05) AS q FROM aggregate_test_100
+SELECT (ABS(1 - CAST(approx_percentile_cont(0.9) WITHIN GROUP (ORDER BY c5) AS DOUBLE) / 1991374996.0) < 0.05) AS q FROM aggregate_test_100
 ----
 true
 
 # csv_query_approx_percentile_cont (c6)
 query B
-SELECT (ABS(1 - CAST(approx_percentile_cont(c6, 0.1) AS DOUBLE) / -7250000000000000000) < 0.05) AS q FROM aggregate_test_100
+SELECT (ABS(1 - CAST(approx_percentile_cont(0.1) WITHIN GROUP (ORDER BY c6) AS DOUBLE) / -7250000000000000000) < 0.05) AS q FROM aggregate_test_100
 ----
 true
 
 query B
-SELECT (ABS(1 - CAST(approx_percentile_cont(c6, 0.5) AS DOUBLE) / 1130000000000000000) < 0.05) AS q FROM aggregate_test_100
+SELECT (ABS(1 - CAST(approx_percentile_cont(0.5) WITHIN GROUP (ORDER BY c6) AS DOUBLE) / 1130000000000000000) < 0.05) AS q FROM aggregate_test_100
 ----
 true
 
 query B
-SELECT (ABS(1 - CAST(approx_percentile_cont(c6, 0.9) AS DOUBLE) / 7370000000000000000) < 0.05) AS q FROM aggregate_test_100
+SELECT (ABS(1 - CAST(approx_percentile_cont(0.9) WITHIN GROUP (ORDER BY c6) AS DOUBLE) / 7370000000000000000) < 0.05) AS q FROM aggregate_test_100
 ----
 true
 
 # csv_query_approx_percentile_cont (c7)
 query B
-SELECT (ABS(1 - CAST(approx_percentile_cont(c7, 0.1) AS DOUBLE) / 18.9) < 0.05) AS q FROM aggregate_test_100
+SELECT (ABS(1 - CAST(approx_percentile_cont(0.1) WITHIN GROUP (ORDER BY c7) AS DOUBLE) / 18.9) < 0.05) AS q FROM aggregate_test_100
 ----
 true
 
 query B
-SELECT (ABS(1 - CAST(approx_percentile_cont(c7, 0.5) AS DOUBLE) / 134.0) < 0.05) AS q FROM aggregate_test_100
+SELECT (ABS(1 - CAST(approx_percentile_cont(0.5) WITHIN GROUP (ORDER BY c7) AS DOUBLE) / 134.0) < 0.05) AS q FROM aggregate_test_100
 ----
 true
 
 query B
-SELECT (ABS(1 - CAST(approx_percentile_cont(c7, 0.9) AS DOUBLE) / 231.0) < 0.05) AS q FROM aggregate_test_100
+SELECT (ABS(1 - CAST(approx_percentile_cont(0.9) WITHIN GROUP (ORDER BY c7) AS DOUBLE) / 231.0) < 0.05) AS q FROM aggregate_test_100
 ----
 true
 
 # csv_query_approx_percentile_cont (c8)
 query B
-SELECT (ABS(1 - CAST(approx_percentile_cont(c8, 0.1) AS DOUBLE) / 2671.0) < 0.05) AS q FROM aggregate_test_100
+SELECT (ABS(1 - CAST(approx_percentile_cont(0.1) WITHIN GROUP (ORDER BY c8) AS DOUBLE) / 2671.0) < 0.05) AS q FROM aggregate_test_100
 ----
 true
 
 query B
-SELECT (ABS(1 - CAST(approx_percentile_cont(c8, 0.5) AS DOUBLE) / 30634.0) < 0.05) AS q FROM aggregate_test_100
+SELECT (ABS(1 - CAST(approx_percentile_cont(0.5) WITHIN GROUP (ORDER BY c8) AS DOUBLE) / 30634.0) < 0.05) AS q FROM aggregate_test_100
 ----
 true
 
 query B
-SELECT (ABS(1 - CAST(approx_percentile_cont(c8, 0.9) AS DOUBLE) / 57518.0) < 0.05) AS q FROM aggregate_test_100
+SELECT (ABS(1 - CAST(approx_percentile_cont(0.9) WITHIN GROUP (ORDER BY c8) AS DOUBLE) / 57518.0) < 0.05) AS q FROM aggregate_test_100
 ----
 true
 
 # csv_query_approx_percentile_cont (c9)
 query B
-SELECT (ABS(1 - CAST(approx_percentile_cont(c9, 0.1) AS DOUBLE) / 472608672.0) < 0.05) AS q FROM aggregate_test_100
+SELECT (ABS(1 - CAST(approx_percentile_cont(0.1) WITHIN GROUP (ORDER BY c9) AS DOUBLE) / 472608672.0) < 0.05) AS q FROM aggregate_test_100
 ----
 true
 
 query B
-SELECT (ABS(1 - CAST(approx_percentile_cont(c9, 0.5) AS DOUBLE) / 2365817608.0) < 0.05) AS q FROM aggregate_test_100
+SELECT (ABS(1 - CAST(approx_percentile_cont(0.5) WITHIN GROUP (ORDER BY c9) AS DOUBLE) / 2365817608.0) < 0.05) AS q FROM aggregate_test_100
 ----
 true
 
 query B
-SELECT (ABS(1 - CAST(approx_percentile_cont(c9, 0.9) AS DOUBLE) / 3776538487.0) < 0.05) AS q FROM aggregate_test_100
+SELECT (ABS(1 - CAST(approx_percentile_cont(0.9) WITHIN GROUP (ORDER BY c9) AS DOUBLE) / 3776538487.0) < 0.05) AS q FROM aggregate_test_100
 ----
 true
 
 # csv_query_approx_percentile_cont (c10)
 query B
-SELECT (ABS(1 - CAST(approx_percentile_cont(c10, 0.1) AS DOUBLE) / 1830000000000000000) < 0.05) AS q FROM aggregate_test_100
+SELECT (ABS(1 - CAST(approx_percentile_cont(0.1) WITHIN GROUP (ORDER BY c10) AS DOUBLE) / 1830000000000000000) < 0.05) AS q FROM aggregate_test_100
 ----
 true
 
 query B
-SELECT (ABS(1 - CAST(approx_percentile_cont(c10, 0.5) AS DOUBLE) / 9300000000000000000) < 0.05) AS q FROM aggregate_test_100
+SELECT (ABS(1 - CAST(approx_percentile_cont(0.5) WITHIN GROUP (ORDER BY c10) AS DOUBLE) / 9300000000000000000) < 0.05) AS q FROM aggregate_test_100
 ----
 true
 
 query B
-SELECT (ABS(1 - CAST(approx_percentile_cont(c10, 0.9) AS DOUBLE) / 16100000000000000000) < 0.05) AS q FROM aggregate_test_100
+SELECT (ABS(1 - CAST(approx_percentile_cont(0.9) WITHIN GROUP (ORDER BY c10) AS DOUBLE) / 16100000000000000000) < 0.05) AS q FROM aggregate_test_100
 ----
 true
 
 # csv_query_approx_percentile_cont (c11)
 query B
-SELECT (ABS(1 - CAST(approx_percentile_cont(c11, 0.1) AS DOUBLE) /  0.109) < 0.05) AS q FROM aggregate_test_100
+SELECT (ABS(1 - CAST(approx_percentile_cont(0.1) WITHIN GROUP (ORDER BY c11) AS DOUBLE) /  0.109) < 0.05) AS q FROM aggregate_test_100
 ----
 true
 
 query B
-SELECT (ABS(1 - CAST(approx_percentile_cont(c11, 0.5) AS DOUBLE) / 0.491) < 0.05) AS q FROM aggregate_test_100
+SELECT (ABS(1 - CAST(approx_percentile_cont(0.5) WITHIN GROUP (ORDER BY c11) AS DOUBLE) / 0.491) < 0.05) AS q FROM aggregate_test_100
 ----
 true
 
 query B
-SELECT (ABS(1 - CAST(approx_percentile_cont(c11, 0.9) AS DOUBLE) / 0.834) < 0.05) AS q FROM aggregate_test_100
+SELECT (ABS(1 - CAST(approx_percentile_cont(0.9) WITHIN GROUP (ORDER BY c11) AS DOUBLE) / 0.834) < 0.05) AS q FROM aggregate_test_100
 ----
 true
 
 # percentile_cont_with_nulls
 query I
-SELECT APPROX_PERCENTILE_CONT(v, 0.5) FROM (VALUES (1), (2), (3), (NULL), (NULL), (NULL)) as t (v);
+SELECT APPROX_PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY v) FROM (VALUES (1), (2), (3), (NULL), (NULL), (NULL)) as t (v);
 ----
 2
 
 # percentile_cont_with_nulls_only
 query I
-SELECT APPROX_PERCENTILE_CONT(v, 0.5) FROM (VALUES (CAST(NULL as INT))) as t (v);
+SELECT APPROX_PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY v) FROM (VALUES (CAST(NULL as INT))) as t (v);
 ----
 NULL
 
@@ -1465,7 +1481,7 @@ NaN
 
 # ISSUE: https://github.com/apache/datafusion/issues/11870
 query R
-select APPROX_PERCENTILE_CONT(v2, 0.8) from tmp_percentile_cont;
+select APPROX_PERCENTILE_CONT(0.8) WITHIN GROUP (ORDER BY v2) from tmp_percentile_cont;
 ----
 NaN
 
@@ -1473,10 +1489,10 @@ NaN
 # Note: `approx_percentile_cont_with_weight()` uses the same implementation as `approx_percentile_cont()`
 query R
 SELECT APPROX_PERCENTILE_CONT_WITH_WEIGHT(
-    v2,
     '+Inf'::Double,
     0.9
 )
+WITHIN GROUP (ORDER BY v2)
 FROM tmp_percentile_cont;
 ----
 NaN
@@ -1495,7 +1511,7 @@ INSERT INTO t1 VALUES (TRUE);
 # ISSUE: https://github.com/apache/datafusion/issues/12716
 # This test verifies that approx_percentile_cont_with_weight does not panic when given 'NaN' and returns 'inf'
 query R
-SELECT approx_percentile_cont_with_weight('NaN'::DOUBLE, 0, 0) FROM t1 WHERE t1.v1;
+SELECT approx_percentile_cont_with_weight(0, 0) WITHIN GROUP (ORDER BY 'NaN'::DOUBLE) FROM t1 WHERE t1.v1;
 ----
 Infinity
 
@@ -1722,27 +1738,45 @@ b NULL NULL 7732.315789473684
 
 # csv_query_approx_percentile_cont_with_weight
 query TI
-SELECT c1, approx_percentile_cont(c3, 0.95) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
+SELECT c1, approx_percentile_cont(0.95) WITHIN GROUP (ORDER BY c3) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
 ----
 a 73
 b 68
 c 122
 d 124
 e 115
+
+query TI
+SELECT c1, approx_percentile_cont(0.95) WITHIN GROUP (ORDER BY c3 DESC) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
+----
+a -101
+b -114
+c -109
+d -98
+e -93
 
 # csv_query_approx_percentile_cont_with_weight (2)
 query TI
-SELECT c1, approx_percentile_cont_with_weight(c3, 1, 0.95) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
+SELECT c1, approx_percentile_cont_with_weight(1, 0.95) WITHIN GROUP (ORDER BY c3) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
 ----
 a 73
 b 68
 c 122
 d 124
 e 115
+
+query TI
+SELECT c1, approx_percentile_cont_with_weight(1, 0.95) WITHIN GROUP (ORDER BY c3 DESC) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
+----
+a -101
+b -114
+c -109
+d -98
+e -93
 
 # csv_query_approx_percentile_cont_with_histogram_bins
 query TI
-SELECT c1, approx_percentile_cont(c3, 0.95, 200) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
+SELECT c1, approx_percentile_cont(0.95, 200) WITHIN GROUP (ORDER BY c3) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
 ----
 a 73
 b 68
@@ -1751,7 +1785,7 @@ d 124
 e 115
 
 query TI
-SELECT c1, approx_percentile_cont_with_weight(c3, c2, 0.95) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
+SELECT c1, approx_percentile_cont_with_weight(c2, 0.95) WITHIN GROUP (ORDER BY c3) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
 ----
 a 74
 b 68
@@ -3041,7 +3075,7 @@ SELECT COUNT(DISTINCT c1) FROM test
 
 # test_approx_percentile_cont_decimal_support
 query TI
-SELECT c1, approx_percentile_cont(c2, cast(0.85 as decimal(10,2))) apc FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
+SELECT c1, approx_percentile_cont(cast(0.85 as decimal(10,2))) WITHIN GROUP (ORDER BY c2) apc FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
 ----
 a 4
 b 5
@@ -3190,6 +3224,33 @@ query ?
 select array_agg(column1) from t;
 ----
 [[[1, 2, 3], [4, 5]], [[6], [7, 8]], [[9]]]
+
+statement ok
+drop table t;
+
+# array_agg_ignore_nulls
+statement ok
+create table t as values (NULL, ''), (1, 'c'), (2, 'a'), (NULL, 'b'), (4, NULL), (NULL, NULL), (5, 'a');
+
+query ?
+select array_agg(column1) ignore nulls as c1 from t;
+----
+[1, 2, 4, 5]
+
+query II
+select count(*), array_length(array_agg(distinct column2) ignore nulls) from t;
+----
+7 4
+
+query ?
+select array_agg(column2 order by column1) ignore nulls from t;
+----
+[c, a, a, , b]
+
+query ?
+select array_agg(DISTINCT column2 order by column2) ignore nulls from t;
+----
+[, a, b, c]
 
 statement ok
 drop table t;
@@ -4952,23 +5013,114 @@ set datafusion.sql_parser.dialect = 'Generic';
 
 ## Multiple distinct aggregates and dictionaries
 statement ok
-create table dict_test as values (1, arrow_cast('foo', 'Dictionary(Int32, Utf8)')), (2, arrow_cast('bar', 'Dictionary(Int32, Utf8)'));
+create table dict_test as values (1, arrow_cast('foo', 'Dictionary(Int32, Utf8)')), (1, arrow_cast('foo', 'Dictionary(Int32, Utf8)')), (2, arrow_cast('bar', 'Dictionary(Int32, Utf8)')), (1, arrow_cast('bar', 'Dictionary(Int32, Utf8)'));
 
 query IT
-select * from dict_test;
+select * from dict_test order by column1, column2;
 ----
+1 bar
+1 foo
 1 foo
 2 bar
 
 query II
-select count(distinct column1), count(distinct column2) from dict_test group by column1;
+select count(distinct column1), count(distinct column2) from dict_test group by column1 order by column1;
 ----
-1 1
+1 2
 1 1
 
 statement ok
 drop table dict_test;
 
+# avg_duration
+
+statement ok
+create table d as values 
+  (arrow_cast(1, 'Duration(Second)'), arrow_cast(2, 'Duration(Millisecond)'), arrow_cast(3, 'Duration(Microsecond)'), arrow_cast(4, 'Duration(Nanosecond)'), 1),
+  (arrow_cast(11, 'Duration(Second)'), arrow_cast(22, 'Duration(Millisecond)'), arrow_cast(33, 'Duration(Microsecond)'), arrow_cast(44, 'Duration(Nanosecond)'), 1);
+
+query ????
+SELECT avg(column1), avg(column2), avg(column3), avg(column4) FROM d;
+----
+0 days 0 hours 0 mins 6 secs 0 days 0 hours 0 mins 0.012 secs 0 days 0 hours 0 mins 0.000018 secs 0 days 0 hours 0 mins 0.000000024 secs
+
+query ????I
+SELECT avg(column1), avg(column2), avg(column3), avg(column4), column5 FROM d GROUP BY column5;
+----
+0 days 0 hours 0 mins 6 secs 0 days 0 hours 0 mins 0.012 secs 0 days 0 hours 0 mins 0.000018 secs 0 days 0 hours 0 mins 0.000000024 secs 1
+
+statement ok
+drop table d;
+
+statement ok
+create table d as values
+  (arrow_cast(1, 'Duration(Second)'), arrow_cast(2, 'Duration(Millisecond)'), arrow_cast(3, 'Duration(Microsecond)'), arrow_cast(4, 'Duration(Nanosecond)'), 1),
+  (arrow_cast(11, 'Duration(Second)'), arrow_cast(22, 'Duration(Millisecond)'), arrow_cast(33, 'Duration(Microsecond)'), arrow_cast(44, 'Duration(Nanosecond)'), 1),
+  (arrow_cast(5, 'Duration(Second)'), arrow_cast(10, 'Duration(Millisecond)'), arrow_cast(15, 'Duration(Microsecond)'), arrow_cast(20, 'Duration(Nanosecond)'), 2),
+  (arrow_cast(25, 'Duration(Second)'), arrow_cast(50, 'Duration(Millisecond)'), arrow_cast(75, 'Duration(Microsecond)'), arrow_cast(100, 'Duration(Nanosecond)'), 2),
+  (NULL, NULL, NULL, NULL, 1),
+  (NULL, NULL, NULL, NULL, 2);
+
+
+query I? rowsort
+SELECT column5, avg(column1) FROM d GROUP BY column5;
+----
+1 0 days 0 hours 0 mins 6 secs
+2 0 days 0 hours 0 mins 15 secs
+
+query I?? rowsort
+SELECT column5, column1, avg(column1) OVER (PARTITION BY column5 ORDER BY column1 ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) as window_avg
+FROM d WHERE column1 IS NOT NULL;
+----
+1 0 days 0 hours 0 mins 1 secs 0 days 0 hours 0 mins 1 secs
+1 0 days 0 hours 0 mins 11 secs 0 days 0 hours 0 mins 6 secs
+2 0 days 0 hours 0 mins 25 secs 0 days 0 hours 0 mins 15 secs
+2 0 days 0 hours 0 mins 5 secs 0 days 0 hours 0 mins 5 secs
+
+# Cumulative average window function
+query I??
+SELECT column5, column1, avg(column1) OVER (ORDER BY column5, column1 ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) as cumulative_avg
+FROM d WHERE column1 IS NOT NULL;
+----
+1 0 days 0 hours 0 mins 1 secs 0 days 0 hours 0 mins 1 secs
+1 0 days 0 hours 0 mins 11 secs 0 days 0 hours 0 mins 6 secs
+2 0 days 0 hours 0 mins 5 secs 0 days 0 hours 0 mins 5 secs
+2 0 days 0 hours 0 mins 25 secs 0 days 0 hours 0 mins 10 secs
+
+# Centered average window function
+query I??
+SELECT column5, column1, avg(column1) OVER (ORDER BY column5 ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING) as centered_avg 
+FROM d WHERE column1 IS NOT NULL;
+----
+1 0 days 0 hours 0 mins 1 secs 0 days 0 hours 0 mins 6 secs
+1 0 days 0 hours 0 mins 11 secs 0 days 0 hours 0 mins 5 secs
+2 0 days 0 hours 0 mins 5 secs 0 days 0 hours 0 mins 13 secs
+2 0 days 0 hours 0 mins 25 secs 0 days 0 hours 0 mins 15 secs
+
+statement ok
+drop table d;
+
+statement ok
+create table dn as values
+  (arrow_cast(10, 'Duration(Second)'), 'a', 1),
+  (arrow_cast(20, 'Duration(Second)'), 'a', 2),
+  (NULL, 'b', 1),
+  (arrow_cast(40, 'Duration(Second)'), 'b', 2),
+  (arrow_cast(50, 'Duration(Second)'), 'c', 1),
+  (NULL, 'c', 2);
+
+query T?I
+SELECT column2, avg(column1), column3 FROM dn GROUP BY column2, column3 ORDER BY column2, column3;
+----
+a 0 days 0 hours 0 mins 10 secs 1
+a 0 days 0 hours 0 mins 20 secs 2
+b NULL 1
+b 0 days 0 hours 0 mins 40 secs 2
+c 0 days 0 hours 0 mins 50 secs 1
+c NULL 2
+
+statement ok
+drop table dn;
 
 # Prepare the table with dictionary values for testing
 statement ok
@@ -5159,13 +5311,13 @@ physical_plan
 06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c3], file_type=csv, has_header=true
 
 query I
-SELECT DISTINCT c3 FROM aggregate_test_100 group by c3 limit 5;
+SELECT DISTINCT c3 FROM aggregate_test_100 group by c3 order by c3 limit 5;
 ----
-1
--40
-29
--85
--82
+-117
+-111
+-107
+-106
+-101
 
 query TT
 EXPLAIN SELECT c2, c3 FROM aggregate_test_100 group by c2, c3 limit 5 offset 4;
@@ -5183,13 +5335,13 @@ physical_plan
 06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c2, c3], file_type=csv, has_header=true
 
 query II
-SELECT c2, c3 FROM aggregate_test_100 group by c2, c3 limit 5 offset 4;
+SELECT c2, c3 FROM aggregate_test_100 group by c2, c3 order by c2, c3 limit 5 offset 4;
 ----
-5 -82
-4 -111
-3 104
-3 13
-1 38
+1 -56
+1 -25
+1 -24
+1 -8
+1 -5
 
 # The limit should only apply to the aggregations which group by c3
 query TT
@@ -5218,12 +5370,12 @@ physical_plan
 13)------------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c2, c3], file_type=csv, has_header=true
 
 query I
-SELECT DISTINCT c3 FROM aggregate_test_100 WHERE c3 between 10 and 20 group by c2, c3 limit 4;
+SELECT DISTINCT c3 FROM aggregate_test_100 WHERE c3 between 10 and 20 group by c3 order by c3 limit 4;
 ----
-13
-17
 12
+13
 14
+17
 
 # An aggregate expression causes the limit to not be pushed to the aggregation
 query TT
@@ -5268,11 +5420,11 @@ physical_plan
 11)--------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c2, c3], file_type=csv, has_header=true
 
 query II
-SELECT DISTINCT c3, c2 FROM aggregate_test_100 group by c2, c3 limit 3 offset 10;
+SELECT DISTINCT c3, c2 FROM aggregate_test_100 group by c3, c2 order by c3, c2 limit 3 offset 10;
 ----
-57 1
--54 4
-112 3
+-95 3
+-94 5
+-90 4
 
 query TT
 EXPLAIN SELECT c2, c3 FROM aggregate_test_100 group by rollup(c2, c3) limit 3;
@@ -6758,7 +6910,7 @@ group1 0.0003
 # median with all nulls
 statement ok
 create table group_median_all_nulls(
-  a STRING NOT NULL, 
+  a STRING NOT NULL,
   b INT
 ) AS VALUES
 ( 'group0', NULL),
@@ -6796,3 +6948,84 @@ select c2, count(*) from test WHERE 1 = 1 group by c2;
 5 1
 6 1
 
+# Min/Max struct
+query ?? rowsort
+WITH t AS (SELECT i as c1, i + 1 as c2 FROM generate_series(1, 10) t(i))
+SELECT MIN(c), MAX(c) FROM (SELECT STRUCT(c1 AS 'a', c2 AS 'b') AS c FROM t)
+----
+{a: 1, b: 2} {a: 10, b: 11}
+
+# Min/Max struct with NULL
+query ?? rowsort
+WITH t AS (SELECT i as c1, i + 1 as c2 FROM generate_series(1, 10) t(i))
+SELECT MIN(c), MAX(c) FROM (SELECT CASE WHEN c1 % 2 == 0 THEN STRUCT(c1 AS 'a', c2 AS 'b') ELSE NULL END AS c FROM t)
+----
+{a: 2, b: 3} {a: 10, b: 11}
+
+# Min/Max struct with two recordbatch
+query ?? rowsort
+SELECT MIN(c), MAX(c) FROM (SELECT STRUCT(1 as 'a', 2 as 'b') AS c UNION SELECT STRUCT(3 as 'a', 4 as 'b') AS c )
+----
+{a: 1, b: 2} {a: 3, b: 4}
+
+# Min/Max struct empty
+query ?? rowsort
+SELECT MIN(c), MAX(c) FROM (SELECT * FROM (SELECT STRUCT(1 as 'a', 2 as 'b') AS c) LIMIT 0)
+----
+NULL NULL
+
+# Min/Max group struct
+query I?? rowsort
+WITH t AS (SELECT i as c1, i + 1 as c2 FROM generate_series(1, 10) t(i))
+SELECT key, MIN(c), MAX(c) FROM (SELECT STRUCT(c1 AS 'a', c2 AS 'b') AS c, (c1 % 2) AS key FROM t) GROUP BY key
+----
+0 {a: 2, b: 3} {a: 10, b: 11}
+1 {a: 1, b: 2} {a: 9, b: 10}
+
+# Min/Max group struct with NULL
+query I?? rowsort
+WITH t AS (SELECT i as c1, i + 1 as c2 FROM generate_series(1, 10) t(i))
+SELECT key, MIN(c), MAX(c) FROM (SELECT CASE WHEN c1 % 2 == 0 THEN STRUCT(c1 AS 'a', c2 AS 'b') ELSE NULL END AS c, (c1 % 2) AS key FROM t) GROUP BY key
+----
+0 {a: 2, b: 3} {a: 10, b: 11}
+1 NULL NULL
+
+# Min/Max group struct with NULL
+query I?? rowsort
+WITH t AS (SELECT i as c1, i + 1 as c2 FROM generate_series(1, 10) t(i))
+SELECT key, MIN(c), MAX(c) FROM (SELECT CASE WHEN c1 % 3 == 0 THEN STRUCT(c1 AS 'a', c2 AS 'b') ELSE NULL END AS c, (c1 % 2) AS key FROM t) GROUP BY key
+----
+0 {a: 6, b: 7} {a: 6, b: 7}
+1 {a: 3, b: 4} {a: 9, b: 10}
+
+# Min/Max struct empty
+query ?? rowsort
+WITH t AS (SELECT i as c1, i + 1 as c2 FROM generate_series(1, 10) t(i))
+SELECT MIN(c), MAX(c) FROM (SELECT STRUCT(c1 AS 'a', c2 AS 'b') AS c, (c1 % 2) AS key FROM t LIMIT 0) GROUP BY key
+----
+
+# Min/Max aggregation on struct with a single field
+query ??
+WITH t AS (SELECT i as c1 FROM generate_series(1, 10) t(i))
+SELECT MIN(c), MAX(c) FROM (SELECT STRUCT(c1 AS 'a') AS c FROM t);
+----
+{a: 1} {a: 10}
+
+# Min/Max aggregation on struct with identical first fields but different last fields
+query ??
+SELECT MIN(column1),MAX(column1) FROM (
+VALUES
+  (STRUCT(1 AS 'a',2 AS 'b', 3 AS 'c')),
+  (STRUCT(1 AS 'a',2 AS 'b', 4 AS 'c'))
+);
+----
+{a: 1, b: 2, c: 3} {a: 1, b: 2, c: 4}
+
+query TI
+SELECT column1, COUNT(DISTINCT column2) FROM (
+VALUES
+  ('x', arrow_cast('NAN','Float64')),
+  ('x', arrow_cast('NAN','Float64'))
+) GROUP BY 1 ORDER BY 1;
+----
+x 1

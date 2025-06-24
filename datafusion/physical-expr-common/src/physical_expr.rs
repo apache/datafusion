@@ -25,7 +25,7 @@ use crate::utils::scatter;
 
 use arrow::array::BooleanArray;
 use arrow::compute::filter_record_batch;
-use arrow::datatypes::{DataType, Schema};
+use arrow::datatypes::{DataType, Field, FieldRef, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{internal_err, not_impl_err, Result, ScalarValue};
@@ -71,11 +71,23 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + DynEq + DynHash {
     /// downcast to a specific implementation.
     fn as_any(&self) -> &dyn Any;
     /// Get the data type of this expression, given the schema of the input
-    fn data_type(&self, input_schema: &Schema) -> Result<DataType>;
+    fn data_type(&self, input_schema: &Schema) -> Result<DataType> {
+        Ok(self.return_field(input_schema)?.data_type().to_owned())
+    }
     /// Determine whether this expression is nullable, given the schema of the input
-    fn nullable(&self, input_schema: &Schema) -> Result<bool>;
+    fn nullable(&self, input_schema: &Schema) -> Result<bool> {
+        Ok(self.return_field(input_schema)?.is_nullable())
+    }
     /// Evaluate an expression against a RecordBatch
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue>;
+    /// The output field associated with this expression
+    fn return_field(&self, input_schema: &Schema) -> Result<FieldRef> {
+        Ok(Arc::new(Field::new(
+            format!("{self}"),
+            self.data_type(input_schema)?,
+            self.nullable(input_schema)?,
+        )))
+    }
     /// Evaluate an expression against a RecordBatch after first applying a
     /// validity array
     fn evaluate_selection(
@@ -434,10 +446,10 @@ where
             let mut iter = self.0.clone();
             write!(f, "[")?;
             if let Some(expr) = iter.next() {
-                write!(f, "{}", expr)?;
+                write!(f, "{expr}")?;
             }
             for expr in iter {
-                write!(f, ", {}", expr)?;
+                write!(f, ", {expr}")?;
             }
             write!(f, "]")?;
             Ok(())
@@ -453,19 +465,21 @@ where
 /// ```
 /// # // The boiler plate needed to create a `PhysicalExpr` for the example
 /// # use std::any::Any;
+/// use std::collections::HashMap;
 /// # use std::fmt::Formatter;
 /// # use std::sync::Arc;
 /// # use arrow::array::RecordBatch;
-/// # use arrow::datatypes::{DataType, Schema};
+/// # use arrow::datatypes::{DataType, Field, FieldRef, Schema};
 /// # use datafusion_common::Result;
 /// # use datafusion_expr_common::columnar_value::ColumnarValue;
 /// # use datafusion_physical_expr_common::physical_expr::{fmt_sql, DynEq, PhysicalExpr};
 /// # #[derive(Debug, Hash, PartialOrd, PartialEq)]
-/// # struct MyExpr {};
+/// # struct MyExpr {}
 /// # impl PhysicalExpr for MyExpr {fn as_any(&self) -> &dyn Any { unimplemented!() }
 /// # fn data_type(&self, input_schema: &Schema) -> Result<DataType> { unimplemented!() }
 /// # fn nullable(&self, input_schema: &Schema) -> Result<bool> { unimplemented!() }
 /// # fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> { unimplemented!() }
+/// # fn return_field(&self, input_schema: &Schema) -> Result<FieldRef> { unimplemented!() }
 /// # fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>>{ unimplemented!() }
 /// # fn with_new_children(self: Arc<Self>, children: Vec<Arc<dyn PhysicalExpr>>) -> Result<Arc<dyn PhysicalExpr>> { unimplemented!() }
 /// # fn fmt_sql(&self, f: &mut Formatter<'_>) -> std::fmt::Result { write!(f, "CASE a > b THEN 1 ELSE 0 END") }

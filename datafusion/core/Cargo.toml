@@ -95,7 +95,7 @@ extended_tests = []
 [dependencies]
 arrow = { workspace = true }
 arrow-ipc = { workspace = true }
-arrow-schema = { workspace = true }
+arrow-schema = { workspace = true, features = ["canonical_extension_types"] }
 async-trait = { workspace = true }
 bytes = { workspace = true }
 bzip2 = { version = "0.5.2", optional = true }
@@ -117,7 +117,6 @@ datafusion-functions-aggregate = { workspace = true }
 datafusion-functions-nested = { workspace = true, optional = true }
 datafusion-functions-table = { workspace = true }
 datafusion-functions-window = { workspace = true }
-datafusion-macros = { workspace = true }
 datafusion-optimizer = { workspace = true }
 datafusion-physical-expr = { workspace = true }
 datafusion-physical-expr-common = { workspace = true }
@@ -139,7 +138,7 @@ sqlparser = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true }
 url = { workspace = true }
-uuid = { version = "1.16", features = ["v4", "js"] }
+uuid = { version = "1.17", features = ["v4", "js"] }
 xz2 = { version = "0.1", optional = true, features = ["static"] }
 zstd = { version = "0.13", optional = true, default-features = false }
 
@@ -150,22 +149,23 @@ ctor = { workspace = true }
 dashmap = "6.1.0"
 datafusion-doc = { workspace = true }
 datafusion-functions-window-common = { workspace = true }
+datafusion-macros = { workspace = true }
 datafusion-physical-optimizer = { workspace = true }
 doc-comment = { workspace = true }
 env_logger = { workspace = true }
 insta = { workspace = true }
 paste = "^1.0"
 rand = { workspace = true, features = ["small_rng"] }
-rand_distr = "0.4.3"
+rand_distr = "0.5"
 regex = { workspace = true }
 rstest = { workspace = true }
 serde_json = { workspace = true }
-sysinfo = "0.34.2"
+sysinfo = "0.35.2"
 test-utils = { path = "../../test-utils" }
 tokio = { workspace = true, features = ["rt-multi-thread", "parking_lot", "fs"] }
 
 [target.'cfg(not(target_os = "windows"))'.dev-dependencies]
-nix = { version = "0.29.0", features = ["fs"] }
+nix = { version = "0.30.1", features = ["fs"] }
 
 [[bench]]
 harness = false
@@ -178,6 +178,10 @@ name = "csv_load"
 [[bench]]
 harness = false
 name = "distinct_query_sql"
+
+[[bench]]
+harness = false
+name = "push_down_filter"
 
 [[bench]]
 harness = false

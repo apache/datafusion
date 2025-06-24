@@ -106,8 +106,6 @@ pub struct Field {
         ::prost::alloc::string::String,
         ::prost::alloc::string::String,
     >,
-    #[prost(bool, tag = "6")]
-    pub dict_ordered: bool,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Timestamp {

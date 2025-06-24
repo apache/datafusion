@@ -299,6 +299,7 @@ struct PushdownChecker<'schema> {
     non_primitive_columns: bool,
     /// Does the expression reference any columns that are in the table
     /// schema but not in the file schema?
+    /// This includes partition columns and projected columns.
     projected_columns: bool,
     // Indices into the table schema of the columns required to evaluate the expression
     required_columns: BTreeSet<usize>,
@@ -366,44 +367,19 @@ fn pushdown_columns(
         .then_some(checker.required_columns.into_iter().collect()))
 }
 
-/// creates a PushdownChecker for a single use to check a given column with the given schemes. Used
-/// to check preemptively if a column name would prevent pushdowning.
-/// effectively does the inverse of [`pushdown_columns`] does, but with a single given column
-/// (instead of traversing the entire tree to determine this)
-fn would_column_prevent_pushdown(column_name: &str, table_schema: &Schema) -> bool {
-    let mut checker = PushdownChecker::new(table_schema);
-
-    // the return of this is only used for [`PushdownChecker::f_down()`], so we can safely ignore
-    // it here. I'm just verifying we know the return type of this so nobody accidentally changes
-    // the return type of this fn and it gets implicitly ignored here.
-    let _: Option<TreeNodeRecursion> = checker.check_single_column(column_name);
-
-    // and then return a value based on the state of the checker
-    checker.prevents_pushdown()
-}
-
 /// Recurses through expr as a tree, finds all `column`s, and checks if any of them would prevent
 /// this expression from being predicate pushed down. If any of them would, this returns false.
 /// Otherwise, true.
+/// Note that the schema passed in here is *not* the physical file schema (as it is not available at that point in time);
+/// it is the schema of the table that this expression is being evaluated against minus any projected columns and partition columns.
 pub fn can_expr_be_pushed_down_with_schemas(
-    expr: &datafusion_expr::Expr,
-    _file_schema: &Schema,
-    table_schema: &Schema,
+    expr: &Arc<dyn PhysicalExpr>,
+    file_schema: &Schema,
 ) -> bool {
-    let mut can_be_pushed = true;
-    expr.apply(|expr| match expr {
-        datafusion_expr::Expr::Column(column) => {
-            can_be_pushed &= !would_column_prevent_pushdown(column.name(), table_schema);
-            Ok(if can_be_pushed {
-                TreeNodeRecursion::Jump
-            } else {
-                TreeNodeRecursion::Stop
-            })
-        }
-        _ => Ok(TreeNodeRecursion::Continue),
-    })
-    .unwrap(); // we never return an Err, so we can safely unwrap this
-    can_be_pushed
+    match pushdown_columns(expr, file_schema) {
+        Ok(Some(_)) => true,
+        Ok(None) | Err(_) => false,
+    }
 }
 
 /// Calculate the total compressed size of all `Column`'s required for
@@ -516,7 +492,7 @@ mod test {
     use super::*;
     use datafusion_common::ScalarValue;
 
-    use arrow::datatypes::{Field, Fields, TimeUnit::Nanosecond};
+    use arrow::datatypes::{Field, TimeUnit::Nanosecond};
     use datafusion_datasource::schema_adapter::DefaultSchemaAdapterFactory;
     use datafusion_expr::{col, Expr};
     use datafusion_physical_expr::planner::logical2physical;
@@ -581,6 +557,7 @@ mod test {
         // Test all should fail
         let expr = col("timestamp_col").lt(Expr::Literal(
             ScalarValue::TimestampNanosecond(Some(1), Some(Arc::from("UTC"))),
+            None,
         ));
         let expr = logical2physical(&expr, &table_schema);
         let schema_adapter_factory = Arc::new(DefaultSchemaAdapterFactory);
@@ -621,6 +598,7 @@ mod test {
         // Test all should pass
         let expr = col("timestamp_col").gt(Expr::Literal(
             ScalarValue::TimestampNanosecond(Some(0), Some(Arc::from("UTC"))),
+            None,
         ));
         let expr = logical2physical(&expr, &table_schema);
         let schema_adapter_factory = Arc::new(DefaultSchemaAdapterFactory);
@@ -649,73 +627,45 @@ mod test {
 
     #[test]
     fn nested_data_structures_prevent_pushdown() {
-        let table_schema = get_basic_table_schema();
+        let table_schema = Arc::new(get_lists_table_schema());
 
-        let file_schema = Schema::new(vec![Field::new(
-            "list_col",
-            DataType::Struct(Fields::empty()),
-            true,
-        )]);
+        let expr = col("utf8_list").is_not_null();
+        let expr = logical2physical(&expr, &table_schema);
+        check_expression_can_evaluate_against_schema(&expr, &table_schema);
 
-        let expr = col("list_col").is_not_null();
-
-        assert!(!can_expr_be_pushed_down_with_schemas(
-            &expr,
-            &file_schema,
-            &table_schema
-        ));
+        assert!(!can_expr_be_pushed_down_with_schemas(&expr, &table_schema));
     }
 
     #[test]
     fn projected_columns_prevent_pushdown() {
         let table_schema = get_basic_table_schema();
 
-        let file_schema =
-            Schema::new(vec![Field::new("existing_col", DataType::Int64, true)]);
+        let expr =
+            Arc::new(Column::new("nonexistent_column", 0)) as Arc<dyn PhysicalExpr>;
 
-        let expr = col("nonexistent_column").is_null();
-
-        assert!(!can_expr_be_pushed_down_with_schemas(
-            &expr,
-            &file_schema,
-            &table_schema
-        ));
+        assert!(!can_expr_be_pushed_down_with_schemas(&expr, &table_schema));
     }
 
     #[test]
     fn basic_expr_doesnt_prevent_pushdown() {
         let table_schema = get_basic_table_schema();
 
-        let file_schema =
-            Schema::new(vec![Field::new("string_col", DataType::Utf8, true)]);
-
         let expr = col("string_col").is_null();
+        let expr = logical2physical(&expr, &table_schema);
 
-        assert!(can_expr_be_pushed_down_with_schemas(
-            &expr,
-            &file_schema,
-            &table_schema
-        ));
+        assert!(can_expr_be_pushed_down_with_schemas(&expr, &table_schema));
     }
 
     #[test]
     fn complex_expr_doesnt_prevent_pushdown() {
         let table_schema = get_basic_table_schema();
 
-        let file_schema = Schema::new(vec![
-            Field::new("string_col", DataType::Utf8, true),
-            Field::new("bigint_col", DataType::Int64, true),
-        ]);
-
         let expr = col("string_col")
             .is_not_null()
-            .or(col("bigint_col").gt(Expr::Literal(ScalarValue::Int64(Some(5)))));
+            .or(col("bigint_col").gt(Expr::Literal(ScalarValue::Int64(Some(5)), None)));
+        let expr = logical2physical(&expr, &table_schema);
 
-        assert!(can_expr_be_pushed_down_with_schemas(
-            &expr,
-            &file_schema,
-            &table_schema
-        ));
+        assert!(can_expr_be_pushed_down_with_schemas(&expr, &table_schema));
     }
 
     fn get_basic_table_schema() -> Schema {
@@ -729,5 +679,28 @@ mod test {
 
         parquet_to_arrow_schema(metadata.file_metadata().schema_descr(), None)
             .expect("parsing schema")
+    }
+
+    fn get_lists_table_schema() -> Schema {
+        let testdata = datafusion_common::test_util::parquet_test_data();
+        let file = std::fs::File::open(format!("{testdata}/list_columns.parquet"))
+            .expect("opening file");
+
+        let reader = SerializedFileReader::new(file).expect("creating reader");
+
+        let metadata = reader.metadata();
+
+        parquet_to_arrow_schema(metadata.file_metadata().schema_descr(), None)
+            .expect("parsing schema")
+    }
+
+    /// Sanity check that the given expression could be evaluated against the given schema without any errors.
+    /// This will fail if the expression references columns that are not in the schema or if the types of the columns are incompatible, etc.
+    fn check_expression_can_evaluate_against_schema(
+        expr: &Arc<dyn PhysicalExpr>,
+        table_schema: &Arc<Schema>,
+    ) -> bool {
+        let batch = RecordBatch::new_empty(Arc::clone(table_schema));
+        expr.evaluate(&batch).is_ok()
     }
 }

@@ -21,7 +21,8 @@ use abi_stable::StableAbi;
 use arrow::{
     array::{make_array, ArrayRef},
     datatypes::{Schema, SchemaRef},
-    ffi::{from_ffi, FFI_ArrowArray, FFI_ArrowSchema},
+    error::ArrowError,
+    ffi::{from_ffi, to_ffi, FFI_ArrowArray, FFI_ArrowSchema},
 };
 use log::error;
 
@@ -36,7 +37,7 @@ impl From<SchemaRef> for WrappedSchema {
         let ffi_schema = match FFI_ArrowSchema::try_from(value.as_ref()) {
             Ok(s) => s,
             Err(e) => {
-                error!("Unable to convert DataFusion Schema to FFI_ArrowSchema in FFI_PlanProperties. {}", e);
+                error!("Unable to convert DataFusion Schema to FFI_ArrowSchema in FFI_PlanProperties. {e}");
                 FFI_ArrowSchema::empty()
             }
         };
@@ -44,16 +45,19 @@ impl From<SchemaRef> for WrappedSchema {
         WrappedSchema(ffi_schema)
     }
 }
+/// Some functions are expected to always succeed, like getting the schema from a TableProvider.
+/// Since going through the FFI always has the potential to fail, we need to catch these errors,
+/// give the user a warning, and return some kind of result. In this case we default to an
+/// empty schema.
+#[cfg(not(tarpaulin_include))]
+fn catch_df_schema_error(e: ArrowError) -> Schema {
+    error!("Unable to convert from FFI_ArrowSchema to DataFusion Schema in FFI_PlanProperties. {e}");
+    Schema::empty()
+}
 
 impl From<WrappedSchema> for SchemaRef {
     fn from(value: WrappedSchema) -> Self {
-        let schema = match Schema::try_from(&value.0) {
-            Ok(s) => s,
-            Err(e) => {
-                error!("Unable to convert from FFI_ArrowSchema to DataFusion Schema in FFI_PlanProperties. {}", e);
-                Schema::empty()
-            }
-        };
+        let schema = Schema::try_from(&value.0).unwrap_or_else(catch_df_schema_error);
         Arc::new(schema)
     }
 }
@@ -71,11 +75,22 @@ pub struct WrappedArray {
 }
 
 impl TryFrom<WrappedArray> for ArrayRef {
-    type Error = arrow::error::ArrowError;
+    type Error = ArrowError;
 
     fn try_from(value: WrappedArray) -> Result<Self, Self::Error> {
         let data = unsafe { from_ffi(value.array, &value.schema.0)? };
 
         Ok(make_array(data))
+    }
+}
+
+impl TryFrom<&ArrayRef> for WrappedArray {
+    type Error = ArrowError;
+
+    fn try_from(array: &ArrayRef) -> Result<Self, Self::Error> {
+        let (array, schema) = to_ffi(&array.to_data())?;
+        let schema = WrappedSchema(schema);
+
+        Ok(WrappedArray { array, schema })
     }
 }

@@ -31,7 +31,6 @@ use datafusion::assert_batches_eq;
 use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::datasource::source::DataSourceExec;
 use datafusion::datasource::{MemTable, TableProvider};
-use datafusion::execution::disk_manager::DiskManagerConfig;
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
@@ -41,11 +40,12 @@ use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_catalog::streaming::StreamingTable;
 use datafusion_catalog::Session;
 use datafusion_common::{assert_contains, Result};
+use datafusion_execution::disk_manager::{DiskManagerBuilder, DiskManagerMode};
 use datafusion_execution::memory_pool::{
     FairSpillPool, GreedyMemoryPool, MemoryPool, TrackConsumersPool,
 };
 use datafusion_execution::runtime_env::RuntimeEnv;
-use datafusion_execution::{DiskManager, TaskContext};
+use datafusion_execution::TaskContext;
 use datafusion_expr::{Expr, TableType};
 use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion_physical_optimizer::join_selection::JoinSelection;
@@ -84,7 +84,7 @@ async fn group_by_none() {
     TestCase::new()
         .with_query("select median(request_bytes) from t")
         .with_expected_errors(vec![
-            "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as: AggregateStream"
+            "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:\n  AggregateStream"
         ])
         .with_memory_limit(2_000)
         .run()
@@ -96,7 +96,7 @@ async fn group_by_row_hash() {
     TestCase::new()
         .with_query("select count(*) from t GROUP BY response_bytes")
         .with_expected_errors(vec![
-            "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as: GroupedHashAggregateStream"
+            "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:\n  GroupedHashAggregateStream"
         ])
         .with_memory_limit(2_000)
         .run()
@@ -109,7 +109,7 @@ async fn group_by_hash() {
         // group by dict column
         .with_query("select count(*) from t GROUP BY service, host, pod, container")
         .with_expected_errors(vec![
-            "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as: GroupedHashAggregateStream"
+            "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:\n  GroupedHashAggregateStream"
         ])
         .with_memory_limit(1_000)
         .run()
@@ -122,7 +122,7 @@ async fn join_by_key_multiple_partitions() {
     TestCase::new()
         .with_query("select t1.* from t t1 JOIN t t2 ON t1.service = t2.service")
         .with_expected_errors(vec![
-            "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as: HashJoinInput",
+            "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:\n  HashJoinInput",
         ])
         .with_memory_limit(1_000)
         .with_config(config)
@@ -136,7 +136,7 @@ async fn join_by_key_single_partition() {
     TestCase::new()
         .with_query("select t1.* from t t1 JOIN t t2 ON t1.service = t2.service")
         .with_expected_errors(vec![
-            "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as: HashJoinInput",
+            "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:\n  HashJoinInput",
         ])
         .with_memory_limit(1_000)
         .with_config(config)
@@ -149,7 +149,7 @@ async fn join_by_expression() {
     TestCase::new()
         .with_query("select t1.* from t t1 JOIN t t2 ON t1.service != t2.service")
         .with_expected_errors(vec![
-           "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as: NestedLoopJoinLoad[0]",
+           "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:\n  NestedLoopJoinLoad[0]",
         ])
         .with_memory_limit(1_000)
         .run()
@@ -161,7 +161,7 @@ async fn cross_join() {
     TestCase::new()
         .with_query("select t1.*, t2.* from t t1 CROSS JOIN t t2")
         .with_expected_errors(vec![
-            "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as: CrossJoinExec",
+            "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:\n  CrossJoinExec",
         ])
         .with_memory_limit(1_000)
         .run()
@@ -204,7 +204,7 @@ async fn sort_merge_join_spill() {
         )
         .with_memory_limit(1_000)
         .with_config(config)
-        .with_disk_manager_config(DiskManagerConfig::NewOs)
+        .with_disk_manager_builder(DiskManagerBuilder::default())
         .with_scenario(Scenario::AccessLogStreaming)
         .run()
         .await
@@ -217,7 +217,7 @@ async fn symmetric_hash_join() {
             "select t1.* from t t1 JOIN t t2 ON t1.pod = t2.pod AND t1.time = t2.time",
         )
         .with_expected_errors(vec![
-            "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as: SymmetricHashJoinStream",
+            "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:\n  SymmetricHashJoinStream",
         ])
         .with_memory_limit(1_000)
         .with_scenario(Scenario::AccessLogStreaming)
@@ -235,7 +235,7 @@ async fn sort_preserving_merge() {
     // so only a merge is needed
         .with_query("select * from t ORDER BY a ASC NULLS LAST, b ASC NULLS LAST LIMIT 10")
         .with_expected_errors(vec![
-            "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as: SortPreservingMergeExec",
+            "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:\n  SortPreservingMergeExec",
         ])
         // provide insufficient memory to merge
         .with_memory_limit(partition_size / 2)
@@ -288,7 +288,7 @@ async fn sort_spill_reservation() {
         .with_memory_limit(mem_limit)
     // use a single partition so only a sort is needed
         .with_scenario(scenario)
-        .with_disk_manager_config(DiskManagerConfig::NewOs)
+        .with_disk_manager_builder(DiskManagerBuilder::default())
         .with_expected_plan(
             // It is important that this plan only has a SortExec, not
             // also merge, so we can ensure the sort could finish
@@ -315,7 +315,7 @@ async fn sort_spill_reservation() {
     test.clone()
         .with_expected_errors(vec![
             "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:",
-            "bytes for ExternalSorterMerge",
+            "B for ExternalSorterMerge",
         ])
         .with_config(config)
         .run()
@@ -344,7 +344,7 @@ async fn oom_recursive_cte() {
         SELECT * FROM nodes;",
         )
         .with_expected_errors(vec![
-            "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as: RecursiveQuery",
+            "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:\n  RecursiveQuery",
         ])
         .with_memory_limit(2_000)
         .run()
@@ -354,7 +354,7 @@ async fn oom_recursive_cte() {
 #[tokio::test]
 async fn oom_parquet_sink() {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.into_path().join("test.parquet");
+    let path = dir.path().join("test.parquet");
     let _ = File::create(path.clone()).await.unwrap();
 
     TestCase::new()
@@ -378,7 +378,7 @@ async fn oom_parquet_sink() {
 #[tokio::test]
 async fn oom_with_tracked_consumer_pool() {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.into_path().join("test.parquet");
+    let path = dir.path().join("test.parquet");
     let _ = File::create(path.clone()).await.unwrap();
 
     TestCase::new()
@@ -396,7 +396,7 @@ async fn oom_with_tracked_consumer_pool() {
         .with_expected_errors(vec![
             "Failed to allocate additional",
             "for ParquetSink(ArrowColumnWriter)",
-            "Additional allocation failed with top memory consumers (across reservations) as: ParquetSink(ArrowColumnWriter)"
+            "Additional allocation failed with top memory consumers (across reservations) as:\n  ParquetSink(ArrowColumnWriter)"
         ])
         .with_memory_pool(Arc::new(
             TrackConsumersPool::new(
@@ -404,6 +404,19 @@ async fn oom_with_tracked_consumer_pool() {
                 NonZeroUsize::new(1).unwrap()
             )
         ))
+        .run()
+        .await
+}
+
+#[tokio::test]
+async fn oom_grouped_hash_aggregate() {
+    TestCase::new()
+        .with_query("SELECT COUNT(*), SUM(request_bytes) FROM t GROUP BY host")
+        .with_expected_errors(vec![
+            "Failed to allocate additional",
+            "GroupedHashAggregateStream[0] (count(1), sum(t.request_bytes))",
+        ])
+        .with_memory_limit(1_000)
         .run()
         .await
 }
@@ -417,7 +430,7 @@ async fn oom_with_tracked_consumer_pool() {
 /// If there is memory explosion for spilled record batch, this test will fail.
 #[tokio::test]
 async fn test_stringview_external_sort() {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let array_length = 1000;
     let num_batches = 200;
     // Batches contain two columns: random 100-byte string, and random i32
@@ -427,7 +440,7 @@ async fn test_stringview_external_sort() {
         let strings: Vec<String> = (0..array_length)
             .map(|_| {
                 (0..100)
-                    .map(|_| rng.gen_range(0..=u8::MAX) as char)
+                    .map(|_| rng.random_range(0..=u8::MAX) as char)
                     .collect()
             })
             .collect();
@@ -435,8 +448,9 @@ async fn test_stringview_external_sort() {
         let string_array = StringViewArray::from(strings);
         let array_ref: ArrayRef = Arc::new(string_array);
 
-        let random_numbers: Vec<i32> =
-            (0..array_length).map(|_| rng.gen_range(0..=1000)).collect();
+        let random_numbers: Vec<i32> = (0..array_length)
+            .map(|_| rng.random_range(0..=1000))
+            .collect();
         let int_array = Int32Array::from(random_numbers);
         let int_array_ref: ArrayRef = Arc::new(int_array);
 
@@ -458,7 +472,9 @@ async fn test_stringview_external_sort() {
         .with_memory_pool(Arc::new(FairSpillPool::new(60 * 1024 * 1024)));
     let runtime = builder.build_arc().unwrap();
 
-    let config = SessionConfig::new().with_sort_spill_reservation_bytes(40 * 1024 * 1024);
+    let config = SessionConfig::new()
+        .with_sort_spill_reservation_bytes(40 * 1024 * 1024)
+        .with_repartition_file_scans(false);
 
     let ctx = SessionContext::new_with_config_rt(config, runtime);
     ctx.register_table("t", Arc::new(table)).unwrap();
@@ -534,11 +550,10 @@ async fn setup_context(
     disk_limit: u64,
     memory_pool_limit: usize,
 ) -> Result<SessionContext> {
-    let disk_manager = DiskManager::try_new(DiskManagerConfig::NewOs)?;
-
-    let disk_manager = Arc::try_unwrap(disk_manager)
-        .expect("DiskManager should be a single instance")
-        .with_max_temp_directory_size(disk_limit)?;
+    let disk_manager = DiskManagerBuilder::default()
+        .with_mode(DiskManagerMode::OsTmpDirectory)
+        .with_max_temp_directory_size(disk_limit)
+        .build()?;
 
     let runtime = RuntimeEnvBuilder::new()
         .with_memory_pool(Arc::new(FairSpillPool::new(memory_pool_limit)))
@@ -603,7 +618,7 @@ async fn test_disk_spill_limit_not_reached() -> Result<()> {
     let spill_count = plan.metrics().unwrap().spill_count().unwrap();
     let spilled_bytes = plan.metrics().unwrap().spilled_bytes().unwrap();
 
-    println!("spill count {}, spill bytes {}", spill_count, spilled_bytes);
+    println!("spill count {spill_count}, spill bytes {spilled_bytes}");
     assert!(spill_count > 0);
     assert!((spilled_bytes as u64) < disk_spill_limit);
 
@@ -627,7 +642,7 @@ struct TestCase {
     scenario: Scenario,
     /// How should the disk manager (that allows spilling) be
     /// configured? Defaults to `Disabled`
-    disk_manager_config: DiskManagerConfig,
+    disk_manager_builder: DiskManagerBuilder,
     /// Expected explain plan, if non-empty
     expected_plan: Vec<String>,
     /// Is the plan expected to pass? Defaults to false
@@ -643,7 +658,8 @@ impl TestCase {
             config: SessionConfig::new(),
             memory_pool: None,
             scenario: Scenario::AccessLog,
-            disk_manager_config: DiskManagerConfig::Disabled,
+            disk_manager_builder: DiskManagerBuilder::default()
+                .with_mode(DiskManagerMode::Disabled),
             expected_plan: vec![],
             expected_success: false,
         }
@@ -700,11 +716,11 @@ impl TestCase {
 
     /// Specify if the disk manager should be enabled. If true,
     /// operators that support it can spill
-    pub fn with_disk_manager_config(
+    pub fn with_disk_manager_builder(
         mut self,
-        disk_manager_config: DiskManagerConfig,
+        disk_manager_builder: DiskManagerBuilder,
     ) -> Self {
-        self.disk_manager_config = disk_manager_config;
+        self.disk_manager_builder = disk_manager_builder;
         self
     }
 
@@ -723,7 +739,7 @@ impl TestCase {
             memory_pool,
             config,
             scenario,
-            disk_manager_config,
+            disk_manager_builder,
             expected_plan,
             expected_success,
         } = self;
@@ -732,7 +748,7 @@ impl TestCase {
 
         let mut builder = RuntimeEnvBuilder::new()
             // disk manager setting controls the spilling
-            .with_disk_manager(disk_manager_config)
+            .with_disk_manager_builder(disk_manager_builder)
             .with_memory_limit(memory_limit, MEMORY_FRACTION);
 
         if let Some(pool) = memory_pool {

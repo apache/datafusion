@@ -45,7 +45,7 @@ use datafusion_execution::TaskContext;
 use chrono::NaiveDate;
 use futures::StreamExt;
 use object_store::path::Path;
-use rand::distributions::DistString;
+use rand::distr::SampleString;
 use tokio::sync::mpsc::{self, Receiver, Sender, UnboundedReceiver, UnboundedSender};
 
 type RecordBatchReceiver = Receiver<RecordBatch>;
@@ -151,8 +151,7 @@ async fn row_count_demuxer(
     let max_buffered_batches = exec_options.max_buffered_batches_per_output_file;
     let minimum_parallel_files = exec_options.minimum_parallel_output_files;
     let mut part_idx = 0;
-    let write_id =
-        rand::distributions::Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
+    let write_id = rand::distr::Alphanumeric.sample_string(&mut rand::rng(), 16);
 
     let mut open_file_streams = Vec::with_capacity(minimum_parallel_files);
 
@@ -225,7 +224,7 @@ fn generate_file_path(
     if !single_file_output {
         base_output_path
             .prefix()
-            .child(format!("{}_{}.{}", write_id, part_idx, file_extension))
+            .child(format!("{write_id}_{part_idx}.{file_extension}"))
     } else {
         base_output_path.prefix().to_owned()
     }
@@ -267,8 +266,7 @@ async fn hive_style_partitions_demuxer(
     file_extension: String,
     keep_partition_by_columns: bool,
 ) -> Result<()> {
-    let write_id =
-        rand::distributions::Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
+    let write_id = rand::distr::Alphanumeric.sample_string(&mut rand::rng(), 16);
 
     let exec_options = &context.session_config().options().execution;
     let max_buffered_recordbatches = exec_options.max_buffered_batches_per_output_file;
@@ -513,7 +511,7 @@ fn compute_take_arrays(
         for vals in all_partition_values.iter() {
             part_key.push(vals[i].clone().into());
         }
-        let builder = take_map.entry(part_key).or_insert(UInt64Builder::new());
+        let builder = take_map.entry(part_key).or_insert_with(UInt64Builder::new);
         builder.append_value(i as u64);
     }
     take_map
@@ -556,5 +554,5 @@ fn compute_hive_style_file_path(
         file_path = file_path.child(format!("{}={}", partition_by[j].0, part_key[j]));
     }
 
-    file_path.child(format!("{}.{}", write_id, file_extension))
+    file_path.child(format!("{write_id}.{file_extension}"))
 }

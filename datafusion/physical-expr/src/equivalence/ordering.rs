@@ -329,10 +329,10 @@ impl Display for OrderingEquivalenceClass {
         write!(f, "[")?;
         let mut iter = self.orderings.iter();
         if let Some(ordering) = iter.next() {
-            write!(f, "[{}]", ordering)?;
+            write!(f, "[{ordering}]")?;
         }
         for ordering in iter {
-            write!(f, ", [{}]", ordering)?;
+            write!(f, ", [{ordering}]")?;
         }
         write!(f, "]")?;
         Ok(())
@@ -684,8 +684,7 @@ mod tests {
             assert_eq!(
                 eq_properties.ordering_satisfy(reqs.as_ref()),
                 expected,
-                "{}",
-                err_msg
+                "{err_msg}"
             );
         }
 
@@ -739,13 +738,12 @@ mod tests {
 
         for (reqs, expected) in test_cases {
             let err_msg =
-                format!("error in test reqs: {:?}, expected: {:?}", reqs, expected,);
+                format!("error in test reqs: {reqs:?}, expected: {expected:?}",);
             let reqs = convert_to_sort_exprs(&reqs);
             assert_eq!(
                 eq_properties.ordering_satisfy(reqs.as_ref()),
                 expected,
-                "{}",
-                err_msg
+                "{err_msg}"
             );
         }
 
@@ -978,10 +976,9 @@ mod tests {
             let actual = OrderingEquivalenceClass::new(orderings.clone());
             let actual = actual.orderings;
             let err_msg = format!(
-                "orderings: {:?}, expected: {:?}, actual :{:?}",
-                orderings, expected, actual
+                "orderings: {orderings:?}, expected: {expected:?}, actual :{actual:?}"
             );
-            assert_eq!(actual.len(), expected.len(), "{}", err_msg);
+            assert_eq!(actual.len(), expected.len(), "{err_msg}");
             for elem in actual {
                 assert!(expected.contains(&elem), "{}", err_msg);
             }

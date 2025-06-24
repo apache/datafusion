@@ -69,14 +69,14 @@ use datafusion_expr::{simplify::SimplifyInfo, Cast, Expr, Operator, TryCast};
 
 pub(super) fn unwrap_cast_in_comparison_for_binary<S: SimplifyInfo>(
     info: &S,
-    cast_expr: Box<Expr>,
-    literal: Box<Expr>,
+    cast_expr: Expr,
+    literal: Expr,
     op: Operator,
 ) -> Result<Transformed<Expr>> {
-    match (*cast_expr, *literal) {
+    match (cast_expr, literal) {
         (
             Expr::TryCast(TryCast { expr, .. }) | Expr::Cast(Cast { expr, .. }),
-            Expr::Literal(lit_value),
+            Expr::Literal(lit_value, _),
         ) => {
             let Ok(expr_type) = info.get_data_type(&expr) else {
                 return internal_err!("Can't get the data type of the expr {:?}", &expr);
@@ -126,7 +126,7 @@ pub(super) fn is_cast_expr_and_support_unwrap_cast_in_comparison_for_binary<
             | Expr::Cast(Cast {
                 expr: left_expr, ..
             }),
-            Expr::Literal(lit_val),
+            Expr::Literal(lit_val, _),
         ) => {
             let Ok(expr_type) = info.get_data_type(left_expr) else {
                 return false;
@@ -183,7 +183,7 @@ pub(super) fn is_cast_expr_and_support_unwrap_cast_in_comparison_for_inlist<
         }
 
         match right {
-            Expr::Literal(lit_val)
+            Expr::Literal(lit_val, _)
                 if try_cast_literal_to_type(lit_val, &expr_type).is_some() => {}
             _ => return false,
         }
@@ -197,6 +197,7 @@ fn is_supported_type(data_type: &DataType) -> bool {
     is_supported_numeric_type(data_type)
         || is_supported_string_type(data_type)
         || is_supported_dictionary_type(data_type)
+        || is_supported_binary_type(data_type)
 }
 
 /// Returns true if unwrap_cast_in_comparison support this numeric type
@@ -228,6 +229,10 @@ fn is_supported_string_type(data_type: &DataType) -> bool {
 fn is_supported_dictionary_type(data_type: &DataType) -> bool {
     matches!(data_type,
                     DataType::Dictionary(_, inner) if is_supported_type(inner))
+}
+
+fn is_supported_binary_type(data_type: &DataType) -> bool {
+    matches!(data_type, DataType::Binary | DataType::FixedSizeBinary(_))
 }
 
 ///// Tries to move a cast from an expression (such as column) to the literal other side of a comparison operator./
@@ -292,6 +297,7 @@ pub(super) fn try_cast_literal_to_type(
     try_cast_numeric_literal(lit_value, target_type)
         .or_else(|| try_cast_string_literal(lit_value, target_type))
         .or_else(|| try_cast_dictionary(lit_value, target_type))
+        .or_else(|| try_cast_binary(lit_value, target_type))
 }
 
 /// Convert a numeric value from one numeric data type to another
@@ -498,6 +504,20 @@ fn cast_between_timestamp(from: &DataType, to: &DataType, value: i128) -> Option
         Ordering::Less => value.checked_mul(to_scale / from_scale),
         Ordering::Greater => Some(value / (from_scale / to_scale)),
         Ordering::Equal => Some(value),
+    }
+}
+
+fn try_cast_binary(
+    lit_value: &ScalarValue,
+    target_type: &DataType,
+) -> Option<ScalarValue> {
+    match (lit_value, target_type) {
+        (ScalarValue::Binary(Some(v)), DataType::FixedSizeBinary(n))
+            if v.len() == *n as usize =>
+        {
+            Some(ScalarValue::FixedSizeBinary(*n, Some(v.clone())))
+        }
+        _ => None,
     }
 }
 
@@ -1449,5 +1469,14 @@ mod tests {
                 ExpectedCast::Value(s.clone()),
             )
         }
+    }
+
+    #[test]
+    fn try_cast_to_fixed_size_binary() {
+        expect_cast(
+            ScalarValue::Binary(Some(vec![1, 2, 3])),
+            DataType::FixedSizeBinary(3),
+            ExpectedCast::Value(ScalarValue::FixedSizeBinary(3, Some(vec![1, 2, 3]))),
+        )
     }
 }

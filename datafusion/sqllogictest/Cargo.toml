@@ -42,8 +42,10 @@ async-trait = { workspace = true }
 bigdecimal = { workspace = true }
 bytes = { workspace = true, optional = true }
 chrono = { workspace = true, optional = true }
-clap = { version = "4.5.35", features = ["derive", "env"] }
+clap = { version = "4.5.39", features = ["derive", "env"] }
 datafusion = { workspace = true, default-features = true, features = ["avro"] }
+datafusion-spark = { workspace = true, default-features = true }
+datafusion-substrait = { path = "../substrait" }
 futures = { workspace = true }
 half = { workspace = true, default-features = true }
 indicatif = "0.17"
@@ -55,11 +57,11 @@ postgres-types = { version = "0.2.8", features = ["derive", "with-chrono-0_4"], 
 rust_decimal = { version = "1.37.1", features = ["tokio-pg"] }
 # When updating the following dependency verify that sqlite test file regeneration works correctly
 # by running the regenerate_sqlite_files.sh script.
-sqllogictest = "0.28.0"
+sqllogictest = "0.28.2"
 sqlparser = { workspace = true }
 tempfile = { workspace = true }
-testcontainers = { version = "0.23", features = ["default"], optional = true }
-testcontainers-modules = { version = "0.11", features = ["postgres"], optional = true }
+testcontainers = { version = "0.24", features = ["default"], optional = true }
+testcontainers-modules = { version = "0.12", features = ["postgres"], optional = true }
 thiserror = "2.0.12"
 tokio = { workspace = true }
 tokio-postgres = { version = "0.7.12", optional = true }

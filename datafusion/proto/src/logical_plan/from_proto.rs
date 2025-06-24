@@ -268,7 +268,7 @@ pub fn parse_expr(
         ExprType::Column(column) => Ok(Expr::Column(column.into())),
         ExprType::Literal(literal) => {
             let scalar_value: ScalarValue = literal.try_into()?;
-            Ok(Expr::Literal(scalar_value))
+            Ok(Expr::Literal(scalar_value, None))
         }
         ExprType::WindowExpr(expr) => {
             let window_function = expr
@@ -296,11 +296,13 @@ pub fn parse_expr(
                 window_expr_node::WindowFunction::Udaf(udaf_name) => {
                     let udaf_function = match &expr.fun_definition {
                         Some(buf) => codec.try_decode_udaf(udaf_name, buf)?,
-                        None => registry.udaf(udaf_name)?,
+                        None => registry
+                            .udaf(udaf_name)
+                            .or_else(|_| codec.try_decode_udaf(udaf_name, &[]))?,
                     };
 
                     let args = parse_exprs(&expr.exprs, registry, codec)?;
-                    Expr::WindowFunction(WindowFunction::new(
+                    Expr::from(WindowFunction::new(
                         expr::WindowFunctionDefinition::AggregateUDF(udaf_function),
                         args,
                     ))
@@ -313,11 +315,13 @@ pub fn parse_expr(
                 window_expr_node::WindowFunction::Udwf(udwf_name) => {
                     let udwf_function = match &expr.fun_definition {
                         Some(buf) => codec.try_decode_udwf(udwf_name, buf)?,
-                        None => registry.udwf(udwf_name)?,
+                        None => registry
+                            .udwf(udwf_name)
+                            .or_else(|_| codec.try_decode_udwf(udwf_name, &[]))?,
                     };
 
                     let args = parse_exprs(&expr.exprs, registry, codec)?;
-                    Expr::WindowFunction(WindowFunction::new(
+                    Expr::from(WindowFunction::new(
                         expr::WindowFunctionDefinition::WindowUDF(udwf_function),
                         args,
                     ))
@@ -540,7 +544,9 @@ pub fn parse_expr(
         }) => {
             let scalar_fn = match fun_definition {
                 Some(buf) => codec.try_decode_udf(fun_name, buf)?,
-                None => registry.udf(fun_name.as_str())?,
+                None => registry
+                    .udf(fun_name.as_str())
+                    .or_else(|_| codec.try_decode_udf(fun_name, &[]))?,
             };
             Ok(Expr::ScalarFunction(expr::ScalarFunction::new_udf(
                 scalar_fn,
@@ -550,7 +556,9 @@ pub fn parse_expr(
         ExprType::AggregateUdfExpr(pb) => {
             let agg_fn = match &pb.fun_definition {
                 Some(buf) => codec.try_decode_udaf(&pb.fun_name, buf)?,
-                None => registry.udaf(&pb.fun_name)?,
+                None => registry
+                    .udaf(&pb.fun_name)
+                    .or_else(|_| codec.try_decode_udaf(&pb.fun_name, &[]))?,
             };
 
             Ok(Expr::AggregateFunction(expr::AggregateFunction::new_udf(

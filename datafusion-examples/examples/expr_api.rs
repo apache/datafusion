@@ -65,7 +65,7 @@ async fn main() -> Result<()> {
     let expr2 = Expr::BinaryExpr(BinaryExpr::new(
         Box::new(col("a")),
         Operator::Plus,
-        Box::new(Expr::Literal(ScalarValue::Int32(Some(5)))),
+        Box::new(Expr::Literal(ScalarValue::Int32(Some(5)), None)),
     ));
     assert_eq!(expr, expr2);
 
@@ -147,8 +147,7 @@ fn evaluate_demo() -> Result<()> {
     ])) as _;
     assert!(
         matches!(&result, ColumnarValue::Array(r) if r == &expected_result),
-        "result: {:?}",
-        result
+        "result: {result:?}"
     );
 
     Ok(())
@@ -424,7 +423,7 @@ fn boundary_analysis_in_conjuctions_demo() -> Result<()> {
     //
     // But `AND` conjunctions are easier to reason with because their interval
     // arithmetic follows naturally from set intersection operations, let us
-    // now look at an example that is a tad more complicated `OR` conjunctions.
+    // now look at an example that is a tad more complicated `OR` disjunctions.
 
     // The expression we will look at is `age > 60 OR age <= 18`.
     let age_greater_than_60_less_than_18 =
@@ -435,7 +434,7 @@ fn boundary_analysis_in_conjuctions_demo() -> Result<()> {
     //
     // Initial range: [14, 79] as described in our column statistics.
     //
-    // From the left-hand side and right-hand side of our `OR` conjunctions
+    // From the left-hand side and right-hand side of our `OR` disjunctions
     // we end up with two ranges, instead of just one.
     //
     // - age > 60: [61, 79]
@@ -446,7 +445,8 @@ fn boundary_analysis_in_conjuctions_demo() -> Result<()> {
     let physical_expr = SessionContext::new()
         .create_physical_expr(age_greater_than_60_less_than_18, &df_schema)?;
 
-    // Since we don't handle interval arithmetic for `OR` operator this will error out.
+    // However, analysis only supports a single interval, so we don't yet deal
+    // with the multiple possibilities of the `OR` disjunctions.
     let analysis = analyze(
         &physical_expr,
         AnalysisContext::new(initial_boundaries),

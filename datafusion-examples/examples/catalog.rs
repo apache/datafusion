@@ -309,7 +309,7 @@ fn prepare_example_data() -> Result<TempDir> {
 3,baz"#;
 
     for i in 0..5 {
-        let mut file = File::create(path.join(format!("{}.csv", i)))?;
+        let mut file = File::create(path.join(format!("{i}.csv")))?;
         file.write_all(content.as_bytes())?;
     }
 

@@ -17,8 +17,9 @@
 
 use std::sync::Arc;
 
+use crate::fuzz_cases::aggregation_fuzzer::query_builder::QueryBuilder;
 use crate::fuzz_cases::aggregation_fuzzer::{
-    AggregationFuzzerBuilder, DatasetGeneratorConfig, QueryBuilder,
+    AggregationFuzzerBuilder, DatasetGeneratorConfig,
 };
 
 use arrow::array::{
@@ -54,7 +55,7 @@ use datafusion_execution::runtime_env::RuntimeEnvBuilder;
 use datafusion_execution::TaskContext;
 use datafusion_physical_plan::metrics::MetricValue;
 use rand::rngs::StdRng;
-use rand::{random, thread_rng, Rng, SeedableRng};
+use rand::{random, rng, Rng, SeedableRng};
 
 use super::record_batch_generator::get_supported_types_columns;
 
@@ -85,6 +86,7 @@ async fn test_min() {
         .with_aggregate_function("min")
         // min works on all column types
         .with_aggregate_arguments(data_gen_config.all_columns())
+        .with_dataset_sort_keys(data_gen_config.sort_keys_set.clone())
         .set_group_by_columns(data_gen_config.all_columns());
 
     AggregationFuzzerBuilder::from(data_gen_config)
@@ -111,6 +113,7 @@ async fn test_first_val() {
         .with_table_name("fuzz_table")
         .with_aggregate_function("first_value")
         .with_aggregate_arguments(data_gen_config.all_columns())
+        .with_dataset_sort_keys(data_gen_config.sort_keys_set.clone())
         .set_group_by_columns(data_gen_config.all_columns());
 
     AggregationFuzzerBuilder::from(data_gen_config)
@@ -137,6 +140,7 @@ async fn test_last_val() {
         .with_table_name("fuzz_table")
         .with_aggregate_function("last_value")
         .with_aggregate_arguments(data_gen_config.all_columns())
+        .with_dataset_sort_keys(data_gen_config.sort_keys_set.clone())
         .set_group_by_columns(data_gen_config.all_columns());
 
     AggregationFuzzerBuilder::from(data_gen_config)
@@ -156,6 +160,7 @@ async fn test_max() {
         .with_aggregate_function("max")
         // max works on all column types
         .with_aggregate_arguments(data_gen_config.all_columns())
+        .with_dataset_sort_keys(data_gen_config.sort_keys_set.clone())
         .set_group_by_columns(data_gen_config.all_columns());
 
     AggregationFuzzerBuilder::from(data_gen_config)
@@ -176,6 +181,7 @@ async fn test_sum() {
         .with_distinct_aggregate_function("sum")
         // sum only works on numeric columns
         .with_aggregate_arguments(data_gen_config.numeric_columns())
+        .with_dataset_sort_keys(data_gen_config.sort_keys_set.clone())
         .set_group_by_columns(data_gen_config.all_columns());
 
     AggregationFuzzerBuilder::from(data_gen_config)
@@ -196,6 +202,7 @@ async fn test_count() {
         .with_distinct_aggregate_function("count")
         // count work for all arguments
         .with_aggregate_arguments(data_gen_config.all_columns())
+        .with_dataset_sort_keys(data_gen_config.sort_keys_set.clone())
         .set_group_by_columns(data_gen_config.all_columns());
 
     AggregationFuzzerBuilder::from(data_gen_config)
@@ -216,6 +223,7 @@ async fn test_median() {
         .with_distinct_aggregate_function("median")
         // median only works on numeric columns
         .with_aggregate_arguments(data_gen_config.numeric_columns())
+        .with_dataset_sort_keys(data_gen_config.sort_keys_set.clone())
         .set_group_by_columns(data_gen_config.all_columns());
 
     AggregationFuzzerBuilder::from(data_gen_config)
@@ -233,8 +241,8 @@ async fn test_median() {
 /// 1. Floating point numbers
 /// 1. structured types
 fn baseline_config() -> DatasetGeneratorConfig {
-    let mut rng = thread_rng();
-    let columns = get_supported_types_columns(rng.gen());
+    let mut rng = rng();
+    let columns = get_supported_types_columns(rng.random());
 
     let min_num_rows = 512;
     let max_num_rows = 1024;
@@ -246,6 +254,12 @@ fn baseline_config() -> DatasetGeneratorConfig {
             // low cardinality to try and get many repeated runs
             vec![String::from("u8_low")],
             vec![String::from("utf8_low"), String::from("u8_low")],
+            vec![String::from("dictionary_utf8_low")],
+            vec![
+                String::from("dictionary_utf8_low"),
+                String::from("utf8_low"),
+                String::from("u8_low"),
+            ],
         ],
     }
 }
@@ -423,13 +437,13 @@ pub(crate) fn make_staggered_batches<const STREAM: bool>(
     let mut input4: Vec<i64> = vec![0; len];
     input123.iter_mut().for_each(|v| {
         *v = (
-            rng.gen_range(0..n_distinct) as i64,
-            rng.gen_range(0..n_distinct) as i64,
-            rng.gen_range(0..n_distinct) as i64,
+            rng.random_range(0..n_distinct) as i64,
+            rng.random_range(0..n_distinct) as i64,
+            rng.random_range(0..n_distinct) as i64,
         )
     });
     input4.iter_mut().for_each(|v| {
-        *v = rng.gen_range(0..n_distinct) as i64;
+        *v = rng.random_range(0..n_distinct) as i64;
     });
     input123.sort();
     let input1 = Int64Array::from_iter_values(input123.clone().into_iter().map(|k| k.0));
@@ -449,7 +463,7 @@ pub(crate) fn make_staggered_batches<const STREAM: bool>(
     let mut batches = vec![];
     if STREAM {
         while remainder.num_rows() > 0 {
-            let batch_size = rng.gen_range(0..50);
+            let batch_size = rng.random_range(0..50);
             if remainder.num_rows() < batch_size {
                 break;
             }
@@ -458,7 +472,7 @@ pub(crate) fn make_staggered_batches<const STREAM: bool>(
         }
     } else {
         while remainder.num_rows() > 0 {
-            let batch_size = rng.gen_range(0..remainder.num_rows() + 1);
+            let batch_size = rng.random_range(0..remainder.num_rows() + 1);
             batches.push(remainder.slice(0, batch_size));
             remainder = remainder.slice(batch_size, remainder.num_rows() - batch_size);
         }
@@ -504,7 +518,9 @@ async fn group_by_string_test(
     let expected = compute_counts(&input, column_name);
 
     let schema = input[0].schema();
-    let session_config = SessionConfig::new().with_batch_size(50);
+    let session_config = SessionConfig::new()
+        .with_batch_size(50)
+        .with_repartition_file_scans(false);
     let ctx = SessionContext::new_with_config(session_config);
 
     let provider = MemTable::try_new(schema.clone(), vec![input]).unwrap();
@@ -682,8 +698,8 @@ async fn test_single_mode_aggregate_with_spill() -> Result<()> {
         Arc::new(StringArray::from(
             (0..1024)
                 .map(|_| -> String {
-                    thread_rng()
-                        .sample_iter::<char, _>(rand::distributions::Standard)
+                    rng()
+                        .sample_iter::<char, _>(rand::distr::StandardUniform)
                         .take(5)
                         .collect()
                 })

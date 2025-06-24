@@ -150,6 +150,20 @@ impl ExecutionPlan for EmptyExec {
     }
 
     fn statistics(&self) -> Result<Statistics> {
+        self.partition_statistics(None)
+    }
+
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        if let Some(partition) = partition {
+            if partition >= self.partitions {
+                return internal_err!(
+                    "EmptyExec invalid partition {} (expected less than {})",
+                    partition,
+                    self.partitions
+                );
+            }
+        }
+
         let batch = self
             .data()
             .expect("Create empty RecordBatch should not fail");

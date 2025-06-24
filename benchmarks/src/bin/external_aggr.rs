@@ -40,7 +40,7 @@ use datafusion::execution::SessionStateBuilder;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::{collect, displayable};
 use datafusion::prelude::*;
-use datafusion_benchmarks::util::{BenchmarkRun, CommonOpt};
+use datafusion_benchmarks::util::{BenchmarkRun, CommonOpt, QueryResult};
 use datafusion_common::instant::Instant;
 use datafusion_common::utils::get_available_parallelism;
 use datafusion_common::{exec_err, DEFAULT_PARQUET_EXTENSION};
@@ -75,11 +75,6 @@ struct ExternalAggrConfig {
     /// Path to JSON benchmark result to be compare using `compare.py`
     #[structopt(parse(from_os_str), short = "o", long = "output")]
     output_path: Option<PathBuf>,
-}
-
-struct QueryResult {
-    elapsed: std::time::Duration,
-    row_count: usize,
 }
 
 /// Query Memory Limits
@@ -189,7 +184,7 @@ impl ExternalAggrConfig {
     ) -> Result<Vec<QueryResult>> {
         let query_name =
             format!("Q{query_id}({})", human_readable_size(mem_limit as usize));
-        let config = self.common.config();
+        let config = self.common.config()?;
         let memory_pool: Arc<dyn MemoryPool> = match mem_pool_type {
             "fair" => Arc::new(FairSpillPool::new(mem_limit as usize)),
             "greedy" => Arc::new(GreedyMemoryPool::new(mem_limit as usize)),
@@ -335,7 +330,7 @@ impl ExternalAggrConfig {
     fn partitions(&self) -> usize {
         self.common
             .partitions
-            .unwrap_or(get_available_parallelism())
+            .unwrap_or_else(get_available_parallelism)
     }
 }
 

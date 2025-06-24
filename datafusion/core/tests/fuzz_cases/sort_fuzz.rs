@@ -248,7 +248,7 @@ impl SortTest {
         let exec = MemorySourceConfig::try_new_exec(&input, schema, None).unwrap();
         let sort = Arc::new(SortExec::new(sort_ordering, exec));
 
-        let session_config = SessionConfig::new();
+        let session_config = SessionConfig::new().with_repartition_file_scans(false);
         let session_ctx = if let Some(pool_size) = self.pool_size {
             // Make sure there is enough space for the initial spill
             // reservation
@@ -298,20 +298,20 @@ impl SortTest {
 /// Return randomly sized record batches in a field named 'x' of type `Int32`
 /// with randomized i32 content
 fn make_staggered_i32_batches(len: usize) -> Vec<RecordBatch> {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let max_batch = 1024;
 
     let mut batches = vec![];
     let mut remaining = len;
     while remaining != 0 {
-        let to_read = rng.gen_range(0..=remaining.min(max_batch));
+        let to_read = rng.random_range(0..=remaining.min(max_batch));
         remaining -= to_read;
 
         batches.push(
             RecordBatch::try_from_iter(vec![(
                 "x",
                 Arc::new(Int32Array::from_iter_values(
-                    (0..to_read).map(|_| rng.gen()),
+                    (0..to_read).map(|_| rng.random()),
                 )) as ArrayRef,
             )])
             .unwrap(),
@@ -323,20 +323,20 @@ fn make_staggered_i32_batches(len: usize) -> Vec<RecordBatch> {
 /// Return randomly sized record batches in a field named 'x' of type `Utf8`
 /// with randomized content
 fn make_staggered_utf8_batches(len: usize) -> Vec<RecordBatch> {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let max_batch = 1024;
 
     let mut batches = vec![];
     let mut remaining = len;
     while remaining != 0 {
-        let to_read = rng.gen_range(0..=remaining.min(max_batch));
+        let to_read = rng.random_range(0..=remaining.min(max_batch));
         remaining -= to_read;
 
         batches.push(
             RecordBatch::try_from_iter(vec![(
                 "x",
                 Arc::new(StringArray::from_iter_values(
-                    (0..to_read).map(|_| format!("test_string_{}", rng.gen::<u32>())),
+                    (0..to_read).map(|_| format!("test_string_{}", rng.random::<u32>())),
                 )) as ArrayRef,
             )])
             .unwrap(),
@@ -349,13 +349,13 @@ fn make_staggered_utf8_batches(len: usize) -> Vec<RecordBatch> {
 /// with randomized i32 content and a field named 'y' of type `Utf8`
 /// with randomized content
 fn make_staggered_i32_utf8_batches(len: usize) -> Vec<RecordBatch> {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let max_batch = 1024;
 
     let mut batches = vec![];
     let mut remaining = len;
     while remaining != 0 {
-        let to_read = rng.gen_range(0..=remaining.min(max_batch));
+        let to_read = rng.random_range(0..=remaining.min(max_batch));
         remaining -= to_read;
 
         batches.push(
@@ -363,13 +363,14 @@ fn make_staggered_i32_utf8_batches(len: usize) -> Vec<RecordBatch> {
                 (
                     "x",
                     Arc::new(Int32Array::from_iter_values(
-                        (0..to_read).map(|_| rng.gen()),
+                        (0..to_read).map(|_| rng.random()),
                     )) as ArrayRef,
                 ),
                 (
                     "y",
                     Arc::new(StringArray::from_iter_values(
-                        (0..to_read).map(|_| format!("test_string_{}", rng.gen::<u32>())),
+                        (0..to_read)
+                            .map(|_| format!("test_string_{}", rng.random::<u32>())),
                     )) as ArrayRef,
                 ),
             ])

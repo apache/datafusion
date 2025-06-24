@@ -15,189 +15,25 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Execution plan for reading Arrow files
-
 use std::any::Any;
 use std::sync::Arc;
 
 use crate::datasource::physical_plan::{FileMeta, FileOpenFuture, FileOpener};
 use crate::error::Result;
+use datafusion_datasource::as_file_source;
+use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
 
 use arrow::buffer::Buffer;
 use arrow::datatypes::SchemaRef;
 use arrow_ipc::reader::FileDecoder;
-use datafusion_common::config::ConfigOptions;
-use datafusion_common::{Constraints, Statistics};
+use datafusion_common::Statistics;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
-use datafusion_datasource::source::DataSourceExec;
-use datafusion_datasource_json::source::JsonSource;
-use datafusion_execution::{SendableRecordBatchStream, TaskContext};
-use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
-use datafusion_physical_expr_common::sort_expr::LexOrdering;
-use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
-use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
-use datafusion_physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
-};
+use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 
-use datafusion_datasource::file_groups::FileGroup;
 use futures::StreamExt;
 use itertools::Itertools;
 use object_store::{GetOptions, GetRange, GetResultPayload, ObjectStore};
-
-/// Execution plan for scanning Arrow data source
-#[derive(Debug, Clone)]
-#[deprecated(since = "46.0.0", note = "use DataSourceExec instead")]
-pub struct ArrowExec {
-    inner: DataSourceExec,
-    base_config: FileScanConfig,
-}
-
-#[allow(unused, deprecated)]
-impl ArrowExec {
-    /// Create a new Arrow reader execution plan provided base configurations
-    pub fn new(base_config: FileScanConfig) -> Self {
-        let (
-            projected_schema,
-            projected_constraints,
-            projected_statistics,
-            projected_output_ordering,
-        ) = base_config.project();
-        let cache = Self::compute_properties(
-            Arc::clone(&projected_schema),
-            &projected_output_ordering,
-            projected_constraints,
-            &base_config,
-        );
-        let arrow = ArrowSource::default();
-        let base_config = base_config.with_source(Arc::new(arrow));
-        Self {
-            inner: DataSourceExec::new(Arc::new(base_config.clone())),
-            base_config,
-        }
-    }
-    /// Ref to the base configs
-    pub fn base_config(&self) -> &FileScanConfig {
-        &self.base_config
-    }
-
-    fn file_scan_config(&self) -> FileScanConfig {
-        self.inner
-            .data_source()
-            .as_any()
-            .downcast_ref::<FileScanConfig>()
-            .unwrap()
-            .clone()
-    }
-
-    fn json_source(&self) -> JsonSource {
-        self.file_scan_config()
-            .file_source()
-            .as_any()
-            .downcast_ref::<JsonSource>()
-            .unwrap()
-            .clone()
-    }
-
-    fn output_partitioning_helper(file_scan_config: &FileScanConfig) -> Partitioning {
-        Partitioning::UnknownPartitioning(file_scan_config.file_groups.len())
-    }
-
-    /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
-    fn compute_properties(
-        schema: SchemaRef,
-        output_ordering: &[LexOrdering],
-        constraints: Constraints,
-        file_scan_config: &FileScanConfig,
-    ) -> PlanProperties {
-        // Equivalence Properties
-        let eq_properties =
-            EquivalenceProperties::new_with_orderings(schema, output_ordering)
-                .with_constraints(constraints);
-
-        PlanProperties::new(
-            eq_properties,
-            Self::output_partitioning_helper(file_scan_config), // Output Partitioning
-            EmissionType::Incremental,
-            Boundedness::Bounded,
-        )
-    }
-
-    fn with_file_groups(mut self, file_groups: Vec<FileGroup>) -> Self {
-        self.base_config.file_groups = file_groups.clone();
-        let mut file_source = self.file_scan_config();
-        file_source = file_source.with_file_groups(file_groups);
-        self.inner = self.inner.with_data_source(Arc::new(file_source));
-        self
-    }
-}
-
-#[allow(unused, deprecated)]
-impl DisplayAs for ArrowExec {
-    fn fmt_as(
-        &self,
-        t: DisplayFormatType,
-        f: &mut std::fmt::Formatter,
-    ) -> std::fmt::Result {
-        self.inner.fmt_as(t, f)
-    }
-}
-
-#[allow(unused, deprecated)]
-impl ExecutionPlan for ArrowExec {
-    fn name(&self) -> &'static str {
-        "ArrowExec"
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn properties(&self) -> &PlanProperties {
-        self.inner.properties()
-    }
-    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
-        Vec::new()
-    }
-
-    fn with_new_children(
-        self: Arc<Self>,
-        _: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(self)
-    }
-
-    /// Redistribute files across partitions according to their size
-    /// See comments on `FileGroupPartitioner` for more detail.
-    fn repartitioned(
-        &self,
-        target_partitions: usize,
-        config: &ConfigOptions,
-    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-        self.inner.repartitioned(target_partitions, config)
-    }
-    fn execute(
-        &self,
-        partition: usize,
-        context: Arc<TaskContext>,
-    ) -> Result<SendableRecordBatchStream> {
-        self.inner.execute(partition, context)
-    }
-    fn metrics(&self) -> Option<MetricsSet> {
-        self.inner.metrics()
-    }
-    fn statistics(&self) -> Result<Statistics> {
-        self.inner.statistics()
-    }
-    fn fetch(&self) -> Option<usize> {
-        self.inner.fetch()
-    }
-
-    fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
-        self.inner.with_fetch(limit)
-    }
-}
 
 /// Arrow configuration struct that is given to DataSourceExec
 /// Does not hold anything special, since [`FileScanConfig`] is sufficient for arrow
@@ -205,6 +41,13 @@ impl ExecutionPlan for ArrowExec {
 pub struct ArrowSource {
     metrics: ExecutionPlanMetricsSet,
     projected_statistics: Option<Statistics>,
+    schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
+}
+
+impl From<ArrowSource> for Arc<dyn FileSource> {
+    fn from(source: ArrowSource) -> Self {
+        as_file_source(source)
+    }
 }
 
 impl FileSource for ArrowSource {
@@ -254,6 +97,20 @@ impl FileSource for ArrowSource {
 
     fn file_type(&self) -> &str {
         "arrow"
+    }
+
+    fn with_schema_adapter_factory(
+        &self,
+        schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
+    ) -> Result<Arc<dyn FileSource>> {
+        Ok(Arc::new(Self {
+            schema_adapter_factory: Some(schema_adapter_factory),
+            ..self.clone()
+        }))
+    }
+
+    fn schema_adapter_factory(&self) -> Option<Arc<dyn SchemaAdapterFactory>> {
+        self.schema_adapter_factory.clone()
     }
 }
 

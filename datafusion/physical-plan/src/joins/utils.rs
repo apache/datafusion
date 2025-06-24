@@ -314,12 +314,18 @@ pub fn build_join_schema(
         JoinType::RightSemi | JoinType::RightAnti => right_fields().unzip(),
     };
 
-    let metadata = left
+    let (schema1, schema2) = match join_type {
+        JoinType::Right | JoinType::RightSemi | JoinType::RightAnti => (left, right),
+        _ => (right, left),
+    };
+
+    let metadata = schema1
         .metadata()
         .clone()
         .into_iter()
-        .chain(right.metadata().clone())
+        .chain(schema2.metadata().clone())
         .collect();
+
     (fields.finish().with_metadata(metadata), column_indices)
 }
 
@@ -403,15 +409,12 @@ struct PartialJoinStatistics {
 
 /// Estimate the statistics for the given join's output.
 pub(crate) fn estimate_join_statistics(
-    left: Arc<dyn ExecutionPlan>,
-    right: Arc<dyn ExecutionPlan>,
+    left_stats: Statistics,
+    right_stats: Statistics,
     on: JoinOn,
     join_type: &JoinType,
     schema: &Schema,
 ) -> Result<Statistics> {
-    let left_stats = left.statistics()?;
-    let right_stats = right.statistics()?;
-
     let join_stats = estimate_join_cardinality(join_type, left_stats, right_stats, &on);
     let (num_rows, column_statistics) = match join_stats {
         Some(stats) => (Precision::Inexact(stats.num_rows), stats.column_statistics),
@@ -1501,6 +1504,7 @@ pub(super) fn swap_join_projection(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
     use std::pin::Pin;
 
     use arrow::array::Int32Array;
@@ -2245,8 +2249,7 @@ mod tests {
 
             assert_eq!(
                 output_cardinality, expected,
-                "failure for join_type: {}",
-                join_type
+                "failure for join_type: {join_type}"
             );
         }
 
@@ -2498,5 +2501,29 @@ mod tests {
             .expect("Projection items should be Column expression");
         assert_eq!(col.name(), name);
         assert_eq!(col.index(), index);
+    }
+
+    #[test]
+    fn test_join_metadata() -> Result<()> {
+        let left_schema = Schema::new(vec![Field::new("a", DataType::Int32, false)])
+            .with_metadata(HashMap::from([("key".to_string(), "left".to_string())]));
+
+        let right_schema = Schema::new(vec![Field::new("b", DataType::Int32, false)])
+            .with_metadata(HashMap::from([("key".to_string(), "right".to_string())]));
+
+        let (join_schema, _) =
+            build_join_schema(&left_schema, &right_schema, &JoinType::Left);
+        assert_eq!(
+            join_schema.metadata(),
+            &HashMap::from([("key".to_string(), "left".to_string())])
+        );
+        let (join_schema, _) =
+            build_join_schema(&left_schema, &right_schema, &JoinType::Right);
+        assert_eq!(
+            join_schema.metadata(),
+            &HashMap::from([("key".to_string(), "right".to_string())])
+        );
+
+        Ok(())
     }
 }

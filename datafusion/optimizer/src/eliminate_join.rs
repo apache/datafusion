@@ -54,7 +54,7 @@ impl OptimizerRule for EliminateJoin {
         match plan {
             LogicalPlan::Join(join) if join.join_type == Inner && join.on.is_empty() => {
                 match join.filter {
-                    Some(Expr::Literal(ScalarValue::Boolean(Some(false)))) => Ok(
+                    Some(Expr::Literal(ScalarValue::Boolean(Some(false)), _)) => Ok(
                         Transformed::yes(LogicalPlan::EmptyRelation(EmptyRelation {
                             produce_one_row: false,
                             schema: join.schema,
@@ -74,15 +74,28 @@ impl OptimizerRule for EliminateJoin {
 
 #[cfg(test)]
 mod tests {
+    use crate::assert_optimized_plan_eq_snapshot;
     use crate::eliminate_join::EliminateJoin;
-    use crate::test::*;
+    use crate::OptimizerContext;
     use datafusion_common::Result;
     use datafusion_expr::JoinType::Inner;
-    use datafusion_expr::{lit, logical_plan::builder::LogicalPlanBuilder, LogicalPlan};
+    use datafusion_expr::{lit, logical_plan::builder::LogicalPlanBuilder};
     use std::sync::Arc;
 
-    fn assert_optimized_plan_equal(plan: LogicalPlan, expected: &str) -> Result<()> {
-        assert_optimized_plan_eq(Arc::new(EliminateJoin::new()), plan, expected)
+    macro_rules! assert_optimized_plan_equal {
+        (
+            $plan:expr,
+            @ $expected:literal $(,)?
+        ) => {{
+            let optimizer_ctx = OptimizerContext::new().with_max_passes(1);
+            let rules: Vec<Arc<dyn crate::OptimizerRule + Send + Sync>> = vec![Arc::new(EliminateJoin::new())];
+            assert_optimized_plan_eq_snapshot!(
+                optimizer_ctx,
+                rules,
+                $plan,
+                @ $expected,
+            )
+        }};
     }
 
     #[test]
@@ -95,7 +108,6 @@ mod tests {
             )?
             .build()?;
 
-        let expected = "EmptyRelation";
-        assert_optimized_plan_equal(plan, expected)
+        assert_optimized_plan_equal!(plan, @"EmptyRelation")
     }
 }

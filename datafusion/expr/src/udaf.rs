@@ -24,7 +24,7 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 use std::vec;
 
-use arrow::datatypes::{DataType, Field};
+use arrow::datatypes::{DataType, Field, FieldRef};
 
 use datafusion_common::{exec_err, not_impl_err, Result, ScalarValue, Statistics};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
@@ -224,6 +224,13 @@ impl AggregateUDF {
         self.inner.return_type(args)
     }
 
+    /// Return the field of the function given its input fields
+    ///
+    /// See [`AggregateUDFImpl::return_field`] for more details.
+    pub fn return_field(&self, args: &[FieldRef]) -> Result<FieldRef> {
+        self.inner.return_field(args)
+    }
+
     /// Return an accumulator the given aggregate, given its return datatype
     pub fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         self.inner.accumulator(acc_args)
@@ -234,7 +241,7 @@ impl AggregateUDF {
     /// for more details.
     ///
     /// This is used to support multi-phase aggregations
-    pub fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
+    pub fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         self.inner.state_fields(args)
     }
 
@@ -315,6 +322,16 @@ impl AggregateUDF {
         self.inner.default_value(data_type)
     }
 
+    /// See [`AggregateUDFImpl::supports_null_handling_clause`] for more details.
+    pub fn supports_null_handling_clause(&self) -> bool {
+        self.inner.supports_null_handling_clause()
+    }
+
+    /// See [`AggregateUDFImpl::is_ordered_set_aggregate`] for more details.
+    pub fn is_ordered_set_aggregate(&self) -> bool {
+        self.inner.is_ordered_set_aggregate()
+    }
+
     /// Returns the documentation for this Aggregate UDF.
     ///
     /// Documentation can be accessed programmatically as well as
@@ -346,8 +363,8 @@ where
 /// # Basic Example
 /// ```
 /// # use std::any::Any;
-/// # use std::sync::LazyLock;
-/// # use arrow::datatypes::DataType;
+/// # use std::sync::{Arc, LazyLock};
+/// # use arrow::datatypes::{DataType, FieldRef};
 /// # use datafusion_common::{DataFusionError, plan_err, Result};
 /// # use datafusion_expr::{col, ColumnarValue, Signature, Volatility, Expr, Documentation};
 /// # use datafusion_expr::{AggregateUDFImpl, AggregateUDF, Accumulator, function::{AccumulatorArgs, StateFieldsArgs}};
@@ -391,10 +408,10 @@ where
 ///    }
 ///    // This is the accumulator factory; DataFusion uses it to create new accumulators.
 ///    fn accumulator(&self, _acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> { unimplemented!() }
-///    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
+///    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
 ///        Ok(vec![
-///             Field::new("value", args.return_type.clone(), true),
-///             Field::new("ordering", DataType::UInt32, true)
+///             Arc::new(args.return_field.as_ref().clone().with_name("value")),
+///             Arc::new(Field::new("ordering", DataType::UInt32, true))
 ///        ])
 ///    }
 ///    fn documentation(&self) -> Option<&Documentation> {
@@ -432,6 +449,14 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
             null_treatment,
         } = params;
 
+        // exclude the first function argument(= column) in ordered set aggregate function,
+        // because it is duplicated with the WITHIN GROUP clause in schema name.
+        let args = if self.is_ordered_set_aggregate() {
+            &args[1..]
+        } else {
+            &args[..]
+        };
+
         let mut schema_name = String::new();
 
         schema_name.write_fmt(format_args!(
@@ -442,7 +467,7 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
         ))?;
 
         if let Some(null_treatment) = null_treatment {
-            schema_name.write_fmt(format_args!(" {}", null_treatment))?;
+            schema_name.write_fmt(format_args!(" {null_treatment}"))?;
         }
 
         if let Some(filter) = filter {
@@ -450,8 +475,14 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
         };
 
         if let Some(order_by) = order_by {
+            let clause = match self.is_ordered_set_aggregate() {
+                true => "WITHIN GROUP",
+                false => "ORDER BY",
+            };
+
             schema_name.write_fmt(format_args!(
-                " ORDER BY [{}]",
+                " {} [{}]",
+                clause,
                 schema_name_from_sorts(order_by)?
             ))?;
         };
@@ -481,7 +512,7 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
         ))?;
 
         if let Some(null_treatment) = null_treatment {
-            schema_name.write_fmt(format_args!(" {}", null_treatment))?;
+            schema_name.write_fmt(format_args!(" {null_treatment}"))?;
         }
 
         if let Some(filter) = filter {
@@ -525,7 +556,7 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
         ))?;
 
         if let Some(null_treatment) = null_treatment {
-            schema_name.write_fmt(format_args!(" {}", null_treatment))?;
+            schema_name.write_fmt(format_args!(" {null_treatment}"))?;
         }
 
         if !partition_by.is_empty() {
@@ -572,7 +603,7 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
         ))?;
 
         if let Some(nt) = null_treatment {
-            display_name.write_fmt(format_args!(" {}", nt))?;
+            display_name.write_fmt(format_args!(" {nt}"))?;
         }
         if let Some(fe) = filter {
             display_name.write_fmt(format_args!(" FILTER (WHERE {fe})"))?;
@@ -619,7 +650,7 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
         ))?;
 
         if let Some(null_treatment) = null_treatment {
-            display_name.write_fmt(format_args!(" {}", null_treatment))?;
+            display_name.write_fmt(format_args!(" {null_treatment}"))?;
         }
 
         if !partition_by.is_empty() {
@@ -649,6 +680,35 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     /// What [`DataType`] will be returned by this function, given the types of
     /// the arguments
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType>;
+
+    /// What type will be returned by this function, given the arguments?
+    ///
+    /// By default, this function calls [`Self::return_type`] with the
+    /// types of each argument.
+    ///
+    /// # Notes
+    ///
+    /// Most UDFs should implement [`Self::return_type`] and not this
+    /// function as the output type for most functions only depends on the types
+    /// of their inputs (e.g. `sum(f64)` is always `f64`).
+    ///
+    /// This function can be used for more advanced cases such as:
+    ///
+    /// 1. specifying nullability
+    /// 2. return types based on the **values** of the arguments (rather than
+    ///    their **types**.
+    /// 3. return types based on metadata within the fields of the inputs
+    fn return_field(&self, arg_fields: &[FieldRef]) -> Result<FieldRef> {
+        let arg_types: Vec<_> =
+            arg_fields.iter().map(|f| f.data_type()).cloned().collect();
+        let data_type = self.return_type(&arg_types)?;
+
+        Ok(Arc::new(Field::new(
+            self.name(),
+            data_type,
+            self.is_nullable(),
+        )))
+    }
 
     /// Whether the aggregate function is nullable.
     ///
@@ -688,15 +748,16 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     /// The name of the fields must be unique within the query and thus should
     /// be derived from `name`. See [`format_state_name`] for a utility function
     /// to generate a unique name.
-    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
-        let fields = vec![Field::new(
-            format_state_name(args.name, "value"),
-            args.return_type.clone(),
-            true,
-        )];
+    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
+        let fields = vec![args
+            .return_field
+            .as_ref()
+            .clone()
+            .with_name(format_state_name(args.name, "value"))];
 
         Ok(fields
             .into_iter()
+            .map(Arc::new)
             .chain(args.ordering_fields.to_vec())
             .collect())
     }
@@ -891,6 +952,18 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
         ScalarValue::try_from(data_type)
     }
 
+    /// If this function supports `[IGNORE NULLS | RESPECT NULLS]` clause, return true
+    /// If the function does not, return false
+    fn supports_null_handling_clause(&self) -> bool {
+        true
+    }
+
+    /// If this function is ordered-set aggregate function, return true
+    /// If the function is not, return false
+    fn is_ordered_set_aggregate(&self) -> bool {
+        false
+    }
+
     /// Returns the documentation for this Aggregate UDF.
     ///
     /// Documentation can be accessed programmatically as well as
@@ -978,7 +1051,7 @@ impl AggregateUDFImpl for AliasedAggregateUDFImpl {
         &self.aliases
     }
 
-    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
+    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         self.inner.state_fields(args)
     }
 
@@ -1111,7 +1184,7 @@ pub enum SetMonotonicity {
 #[cfg(test)]
 mod test {
     use crate::{AggregateUDF, AggregateUDFImpl};
-    use arrow::datatypes::{DataType, Field};
+    use arrow::datatypes::{DataType, FieldRef};
     use datafusion_common::Result;
     use datafusion_expr_common::accumulator::Accumulator;
     use datafusion_expr_common::signature::{Signature, Volatility};
@@ -1157,7 +1230,7 @@ mod test {
         ) -> Result<Box<dyn Accumulator>> {
             unimplemented!()
         }
-        fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<Field>> {
+        fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
             unimplemented!()
         }
     }
@@ -1197,7 +1270,7 @@ mod test {
         ) -> Result<Box<dyn Accumulator>> {
             unimplemented!()
         }
-        fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<Field>> {
+        fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
             unimplemented!()
         }
     }

@@ -51,28 +51,26 @@ pub use datafusion_physical_expr::create_ordering;
 #[cfg(all(test, feature = "parquet"))]
 mod tests {
 
-    use crate::prelude::SessionContext;
-
-    use std::fs;
-    use std::sync::Arc;
-
-    use arrow::array::{Int32Array, StringArray};
-    use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-    use arrow::record_batch::RecordBatch;
-    use datafusion_common::test_util::batches_to_sort_string;
-    use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
     use datafusion_datasource::schema_adapter::{
         DefaultSchemaAdapterFactory, SchemaAdapter, SchemaAdapterFactory, SchemaMapper,
     };
-    use datafusion_datasource::PartitionedFile;
+
+    use crate::prelude::SessionContext;
+    use arrow::{
+        array::{Int32Array, StringArray},
+        datatypes::{DataType, Field, Schema, SchemaRef},
+        record_batch::RecordBatch,
+    };
+    use datafusion_common::{record_batch, test_util::batches_to_sort_string};
+    use datafusion_datasource::{
+        file::FileSource, file_scan_config::FileScanConfigBuilder,
+        source::DataSourceExec, PartitionedFile,
+    };
     use datafusion_datasource_parquet::source::ParquetSource;
-
-    use datafusion_common::record_batch;
-
-    use ::object_store::path::Path;
-    use ::object_store::ObjectMeta;
-    use datafusion_datasource::source::DataSourceExec;
+    use datafusion_execution::object_store::ObjectStoreUrl;
     use datafusion_physical_plan::collect;
+    use object_store::{path::Path, ObjectMeta};
+    use std::{fs, sync::Arc};
     use tempfile::TempDir;
 
     #[tokio::test]
@@ -81,7 +79,6 @@ mod tests {
         // record batches returned from parquet.  This can be useful for schema evolution
         // where older files may not have all columns.
 
-        use datafusion_execution::object_store::ObjectStoreUrl;
         let tmp_dir = TempDir::new().unwrap();
         let table_dir = tmp_dir.path().join("parquet_test");
         fs::DirBuilder::new().create(table_dir.as_path()).unwrap();
@@ -124,10 +121,9 @@ mod tests {
         let f2 = Field::new("extra_column", DataType::Utf8, true);
 
         let schema = Arc::new(Schema::new(vec![f1.clone(), f2.clone()]));
-        let source = Arc::new(
-            ParquetSource::default()
-                .with_schema_adapter_factory(Arc::new(TestSchemaAdapterFactory {})),
-        );
+        let source = ParquetSource::default()
+            .with_schema_adapter_factory(Arc::new(TestSchemaAdapterFactory {}))
+            .unwrap();
         let base_conf = FileScanConfigBuilder::new(
             ObjectStoreUrl::local_filesystem(),
             schema,
@@ -263,6 +259,13 @@ mod tests {
             new_columns.push(extra_column);
 
             Ok(RecordBatch::try_new(schema, new_columns).unwrap())
+        }
+
+        fn map_column_statistics(
+            &self,
+            _file_col_statistics: &[datafusion_common::ColumnStatistics],
+        ) -> datafusion_common::Result<Vec<datafusion_common::ColumnStatistics>> {
+            unimplemented!()
         }
     }
 }

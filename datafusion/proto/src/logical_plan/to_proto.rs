@@ -217,7 +217,7 @@ pub fn serialize_expr(
                 expr_type: Some(ExprType::Alias(alias)),
             }
         }
-        Expr::Literal(value) => {
+        Expr::Literal(value, _) => {
             let pb_value: protobuf::ScalarValue = value.try_into()?;
             protobuf::LogicalExprNode {
                 expr_type: Some(ExprType::Literal(pb_value)),
@@ -302,18 +302,19 @@ pub fn serialize_expr(
                 expr_type: Some(ExprType::SimilarTo(pb)),
             }
         }
-        Expr::WindowFunction(expr::WindowFunction {
-            ref fun,
-            params:
-                expr::WindowFunctionParams {
-                    ref args,
-                    ref partition_by,
-                    ref order_by,
-                    ref window_frame,
-                    // TODO: support null treatment in proto
-                    null_treatment: _,
-                },
-        }) => {
+        Expr::WindowFunction(window_fun) => {
+            let expr::WindowFunction {
+                ref fun,
+                params:
+                    expr::WindowFunctionParams {
+                        ref args,
+                        ref partition_by,
+                        ref order_by,
+                        ref window_frame,
+                        // TODO: support null treatment in proto
+                        null_treatment: _,
+                    },
+            } = window_fun.as_ref();
             let (window_function, fun_definition) = match fun {
                 WindowFunctionDefinition::AggregateUDF(aggr_udf) => {
                     let mut buf = Vec::new();

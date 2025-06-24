@@ -205,7 +205,7 @@ pub fn display_all_functions() -> Result<()> {
     let array = StringArray::from(
         ALL_FUNCTIONS
             .iter()
-            .map(|f| format!("{}", f))
+            .map(|f| format!("{f}"))
             .collect::<Vec<String>>(),
     );
     let schema = Schema::new(vec![Field::new("Function", DataType::Utf8, false)]);
@@ -322,7 +322,7 @@ pub struct ParquetMetadataFunc {}
 impl TableFunctionImpl for ParquetMetadataFunc {
     fn call(&self, exprs: &[Expr]) -> Result<Arc<dyn TableProvider>> {
         let filename = match exprs.first() {
-            Some(Expr::Literal(ScalarValue::Utf8(Some(s)))) => s, // single quote: parquet_metadata('x.parquet')
+            Some(Expr::Literal(ScalarValue::Utf8(Some(s)), _)) => s, // single quote: parquet_metadata('x.parquet')
             Some(Expr::Column(Column { name, .. })) => name, // double quote: parquet_metadata("x.parquet")
             _ => {
                 return plan_err!(

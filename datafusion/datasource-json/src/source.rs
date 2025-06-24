@@ -30,197 +30,24 @@ use datafusion_datasource::decoder::{deserialize_stream, DecoderDeserializer};
 use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_meta::FileMeta;
 use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
-use datafusion_datasource::{calculate_range, ListingTableUrl, RangeCalculation};
+use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
+use datafusion_datasource::{
+    as_file_source, calculate_range, ListingTableUrl, RangeCalculation,
+};
 use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
 use arrow::json::ReaderBuilder;
 use arrow::{datatypes::SchemaRef, json};
-use datafusion_common::{Constraints, Statistics};
+use datafusion_common::Statistics;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
-use datafusion_datasource::source::DataSourceExec;
-use datafusion_execution::{SendableRecordBatchStream, TaskContext};
-use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
-use datafusion_physical_expr_common::sort_expr::LexOrdering;
-use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
-use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
-use datafusion_physical_plan::{DisplayAs, DisplayFormatType, PlanProperties};
+use datafusion_execution::TaskContext;
+use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 
-use datafusion_datasource::file_groups::FileGroup;
 use futures::{StreamExt, TryStreamExt};
 use object_store::buffered::BufWriter;
 use object_store::{GetOptions, GetResultPayload, ObjectStore};
 use tokio::io::AsyncWriteExt;
-
-/// Execution plan for scanning NdJson data source
-#[derive(Debug, Clone)]
-#[deprecated(since = "46.0.0", note = "use DataSourceExec instead")]
-pub struct NdJsonExec {
-    inner: DataSourceExec,
-    base_config: FileScanConfig,
-    file_compression_type: FileCompressionType,
-}
-
-#[allow(unused, deprecated)]
-impl NdJsonExec {
-    /// Create a new JSON reader execution plan provided base configurations
-    pub fn new(
-        base_config: FileScanConfig,
-        file_compression_type: FileCompressionType,
-    ) -> Self {
-        let (
-            projected_schema,
-            projected_constraints,
-            projected_statistics,
-            projected_output_ordering,
-        ) = base_config.project();
-        let cache = Self::compute_properties(
-            projected_schema,
-            &projected_output_ordering,
-            projected_constraints,
-            &base_config,
-        );
-
-        let json = JsonSource::default();
-        let base_config = base_config
-            .with_file_compression_type(file_compression_type)
-            .with_source(Arc::new(json));
-
-        Self {
-            inner: DataSourceExec::new(Arc::new(base_config.clone())),
-            file_compression_type: base_config.file_compression_type,
-            base_config,
-        }
-    }
-
-    /// Ref to the base configs
-    pub fn base_config(&self) -> &FileScanConfig {
-        &self.base_config
-    }
-
-    /// Ref to file compression type
-    pub fn file_compression_type(&self) -> &FileCompressionType {
-        &self.file_compression_type
-    }
-
-    fn file_scan_config(&self) -> FileScanConfig {
-        self.inner
-            .data_source()
-            .as_any()
-            .downcast_ref::<FileScanConfig>()
-            .unwrap()
-            .clone()
-    }
-
-    fn json_source(&self) -> JsonSource {
-        let source = self.file_scan_config();
-        source
-            .file_source()
-            .as_any()
-            .downcast_ref::<JsonSource>()
-            .unwrap()
-            .clone()
-    }
-
-    fn output_partitioning_helper(file_scan_config: &FileScanConfig) -> Partitioning {
-        Partitioning::UnknownPartitioning(file_scan_config.file_groups.len())
-    }
-
-    /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
-    fn compute_properties(
-        schema: SchemaRef,
-        orderings: &[LexOrdering],
-        constraints: Constraints,
-        file_scan_config: &FileScanConfig,
-    ) -> PlanProperties {
-        // Equivalence Properties
-        let eq_properties = EquivalenceProperties::new_with_orderings(schema, orderings)
-            .with_constraints(constraints);
-
-        PlanProperties::new(
-            eq_properties,
-            Self::output_partitioning_helper(file_scan_config), // Output Partitioning
-            EmissionType::Incremental,
-            Boundedness::Bounded,
-        )
-    }
-
-    fn with_file_groups(mut self, file_groups: Vec<FileGroup>) -> Self {
-        self.base_config.file_groups = file_groups.clone();
-        let mut file_source = self.file_scan_config();
-        file_source = file_source.with_file_groups(file_groups);
-        self.inner = self.inner.with_data_source(Arc::new(file_source));
-        self
-    }
-}
-
-#[allow(unused, deprecated)]
-impl DisplayAs for NdJsonExec {
-    fn fmt_as(
-        &self,
-        t: DisplayFormatType,
-        f: &mut std::fmt::Formatter,
-    ) -> std::fmt::Result {
-        self.inner.fmt_as(t, f)
-    }
-}
-
-#[allow(unused, deprecated)]
-impl ExecutionPlan for NdJsonExec {
-    fn name(&self) -> &'static str {
-        "NdJsonExec"
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-    fn properties(&self) -> &PlanProperties {
-        self.inner.properties()
-    }
-
-    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
-        Vec::new()
-    }
-
-    fn with_new_children(
-        self: Arc<Self>,
-        _: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(self)
-    }
-
-    fn repartitioned(
-        &self,
-        target_partitions: usize,
-        config: &datafusion_common::config::ConfigOptions,
-    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-        self.inner.repartitioned(target_partitions, config)
-    }
-
-    fn execute(
-        &self,
-        partition: usize,
-        context: Arc<TaskContext>,
-    ) -> Result<SendableRecordBatchStream> {
-        self.inner.execute(partition, context)
-    }
-
-    fn statistics(&self) -> Result<Statistics> {
-        self.inner.statistics()
-    }
-
-    fn metrics(&self) -> Option<MetricsSet> {
-        self.inner.metrics()
-    }
-
-    fn fetch(&self) -> Option<usize> {
-        self.inner.fetch()
-    }
-
-    fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
-        self.inner.with_fetch(limit)
-    }
-}
 
 /// A [`FileOpener`] that opens a JSON file and yields a [`FileOpenFuture`]
 pub struct JsonOpener {
@@ -253,12 +80,19 @@ pub struct JsonSource {
     batch_size: Option<usize>,
     metrics: ExecutionPlanMetricsSet,
     projected_statistics: Option<Statistics>,
+    schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
 }
 
 impl JsonSource {
     /// Initialize a JsonSource with default values
     pub fn new() -> Self {
         Self::default()
+    }
+}
+
+impl From<JsonSource> for Arc<dyn FileSource> {
+    fn from(source: JsonSource) -> Self {
+        as_file_source(source)
     }
 }
 
@@ -315,6 +149,20 @@ impl FileSource for JsonSource {
 
     fn file_type(&self) -> &str {
         "json"
+    }
+
+    fn with_schema_adapter_factory(
+        &self,
+        schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
+    ) -> Result<Arc<dyn FileSource>> {
+        Ok(Arc::new(Self {
+            schema_adapter_factory: Some(schema_adapter_factory),
+            ..self.clone()
+        }))
+    }
+
+    fn schema_adapter_factory(&self) -> Option<Arc<dyn SchemaAdapterFactory>> {
+        self.schema_adapter_factory.clone()
     }
 }
 
@@ -399,6 +247,11 @@ pub async fn plan_to_json(
     let parsed = ListingTableUrl::parse(path)?;
     let object_store_url = parsed.object_store();
     let store = task_ctx.runtime_env().object_store(&object_store_url)?;
+    let writer_buffer_size = task_ctx
+        .session_config()
+        .options()
+        .execution
+        .objectstore_writer_buffer_size;
     let mut join_set = JoinSet::new();
     for i in 0..plan.output_partitioning().partition_count() {
         let storeref = Arc::clone(&store);
@@ -408,7 +261,8 @@ pub async fn plan_to_json(
 
         let mut stream = plan.execute(i, Arc::clone(&task_ctx))?;
         join_set.spawn(async move {
-            let mut buf_writer = BufWriter::new(storeref, file.clone());
+            let mut buf_writer =
+                BufWriter::with_capacity(storeref, file.clone(), writer_buffer_size);
 
             let mut buffer = Vec::with_capacity(1024);
             while let Some(batch) = stream.next().await.transpose()? {

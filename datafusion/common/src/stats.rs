@@ -233,8 +233,8 @@ impl Precision<ScalarValue> {
 impl<T: Debug + Clone + PartialEq + Eq + PartialOrd> Debug for Precision<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Precision::Exact(inner) => write!(f, "Exact({:?})", inner),
-            Precision::Inexact(inner) => write!(f, "Inexact({:?})", inner),
+            Precision::Exact(inner) => write!(f, "Exact({inner:?})"),
+            Precision::Inexact(inner) => write!(f, "Inexact({inner:?})"),
             Precision::Absent => write!(f, "Absent"),
         }
     }
@@ -243,8 +243,8 @@ impl<T: Debug + Clone + PartialEq + Eq + PartialOrd> Debug for Precision<T> {
 impl<T: Debug + Clone + PartialEq + Eq + PartialOrd> Display for Precision<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Precision::Exact(inner) => write!(f, "Exact({:?})", inner),
-            Precision::Inexact(inner) => write!(f, "Inexact({:?})", inner),
+            Precision::Exact(inner) => write!(f, "Exact({inner:?})"),
+            Precision::Inexact(inner) => write!(f, "Inexact({inner:?})"),
             Precision::Absent => write!(f, "Absent"),
         }
     }
@@ -352,6 +352,7 @@ impl Statistics {
             return self;
         };
 
+        #[allow(clippy::large_enum_variant)]
         enum Slot {
             /// The column is taken and put into the specified statistics location
             Taken(usize),
@@ -450,6 +451,9 @@ impl Statistics {
     }
 
     /// Summarize zero or more statistics into a single `Statistics` instance.
+    ///
+    /// The method assumes that all statistics are for the same schema.
+    /// If not, maybe you can call `SchemaMapper::map_column_statistics` to make them consistent.
     ///
     /// Returns an error if the statistics do not match the specified schemas.
     pub fn try_merge_iter<'a, I>(items: I, schema: &Schema) -> Result<Statistics>
@@ -569,7 +573,7 @@ impl Display for Statistics {
             .iter()
             .enumerate()
             .map(|(i, cs)| {
-                let s = format!("(Col[{}]:", i);
+                let s = format!("(Col[{i}]:");
                 let s = if cs.min_value != Precision::Absent {
                     format!("{} Min={}", s, cs.min_value)
                 } else {

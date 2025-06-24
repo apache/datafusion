@@ -74,7 +74,7 @@ fn find_closest_match(candidates: Vec<String>, target: &str) -> Option<String> {
     })
 }
 
-/// Arguments to for a function call extracted from the SQL AST
+/// Arguments for a function call extracted from the SQL AST
 #[derive(Debug)]
 struct FunctionArgs {
     /// Function name
@@ -91,6 +91,8 @@ struct FunctionArgs {
     null_treatment: Option<NullTreatment>,
     /// DISTINCT
     distinct: bool,
+    /// WITHIN GROUP clause, if any
+    within_group: Vec<OrderByExpr>,
 }
 
 impl FunctionArgs {
@@ -115,6 +117,7 @@ impl FunctionArgs {
                 filter,
                 null_treatment,
                 distinct: false,
+                within_group,
             });
         };
 
@@ -144,6 +147,9 @@ impl FunctionArgs {
                 }
                 FunctionArgumentClause::OrderBy(oby) => {
                     if order_by.is_some() {
+                        if !within_group.is_empty() {
+                            return plan_err!("ORDER BY clause is only permitted in WITHIN GROUP clause when a WITHIN GROUP is used");
+                        }
                         return not_impl_err!("Calling {name}: Duplicated ORDER BY clause in function arguments");
                     }
                     order_by = Some(oby);
@@ -176,8 +182,10 @@ impl FunctionArgs {
             }
         }
 
-        if !within_group.is_empty() {
-            return not_impl_err!("WITHIN GROUP is not supported yet: {within_group:?}");
+        if within_group.len() > 1 {
+            return not_impl_err!(
+                "Only a single ordering expression is permitted in a WITHIN GROUP clause"
+            );
         }
 
         let order_by = order_by.unwrap_or_default();
@@ -190,6 +198,7 @@ impl FunctionArgs {
             filter,
             null_treatment,
             distinct,
+            within_group,
         })
     }
 }
@@ -210,7 +219,13 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             filter,
             null_treatment,
             distinct,
+            within_group,
         } = function_args;
+
+        if over.is_some() && !within_group.is_empty() {
+            return plan_err!("OVER and WITHIN GROUP clause are can not be used together. \
+                OVER is for window function, whereas WITHIN GROUP is for ordered set aggregate function");
+        }
 
         // If function is a window function (it has an OVER clause),
         // it shouldn't have ordering requirement as function argument
@@ -346,7 +361,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     null_treatment,
                 } = window_expr;
 
-                return Expr::WindowFunction(expr::WindowFunction::new(func_def, args))
+                return Expr::from(expr::WindowFunction::new(func_def, args))
                     .partition_by(partition_by)
                     .order_by(order_by)
                     .window_frame(window_frame)
@@ -356,15 +371,49 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         } else {
             // User defined aggregate functions (UDAF) have precedence in case it has the same name as a scalar built-in function
             if let Some(fm) = self.context_provider.get_aggregate_meta(&name) {
-                let order_by = self.order_by_to_sort_expr(
-                    order_by,
-                    schema,
-                    planner_context,
-                    true,
-                    None,
-                )?;
-                let order_by = (!order_by.is_empty()).then_some(order_by);
-                let args = self.function_args_to_expr(args, schema, planner_context)?;
+                if fm.is_ordered_set_aggregate() && within_group.is_empty() {
+                    return plan_err!("WITHIN GROUP clause is required when calling ordered set aggregate function({})", fm.name());
+                }
+
+                if null_treatment.is_some() && !fm.supports_null_handling_clause() {
+                    return plan_err!(
+                        "[IGNORE | RESPECT] NULLS are not permitted for {}",
+                        fm.name()
+                    );
+                }
+
+                let mut args =
+                    self.function_args_to_expr(args, schema, planner_context)?;
+
+                let order_by = if fm.is_ordered_set_aggregate() {
+                    let within_group = self.order_by_to_sort_expr(
+                        within_group,
+                        schema,
+                        planner_context,
+                        false,
+                        None,
+                    )?;
+
+                    // add target column expression in within group clause to function arguments
+                    if !within_group.is_empty() {
+                        args = within_group
+                            .iter()
+                            .map(|sort| sort.expr.clone())
+                            .chain(args)
+                            .collect::<Vec<_>>();
+                    }
+                    (!within_group.is_empty()).then_some(within_group)
+                } else {
+                    let order_by = self.order_by_to_sort_expr(
+                        order_by,
+                        schema,
+                        planner_context,
+                        true,
+                        None,
+                    )?;
+                    (!order_by.is_empty()).then_some(order_by)
+                };
+
                 let filter: Option<Box<Expr>> = filter
                     .map(|e| self.sql_expr_to_logical_expr(*e, schema, planner_context))
                     .transpose()?
@@ -408,17 +457,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         if let Some(suggested_func_name) =
             suggest_valid_function(&name, is_function_window, self.context_provider)
         {
-            plan_err!("Invalid function '{name}'.\nDid you mean '{suggested_func_name}'?")
-                .map_err(|e| {
-                    let span = Span::try_from_sqlparser_span(sql_parser_span);
-                    let mut diagnostic =
-                        Diagnostic::new_error(format!("Invalid function '{name}'"), span);
-                    diagnostic.add_note(
-                        format!("Possible function '{}'", suggested_func_name),
-                        None,
-                    );
-                    e.with_diagnostic(diagnostic)
-                })
+            let span = Span::try_from_sqlparser_span(sql_parser_span);
+            let mut diagnostic =
+                Diagnostic::new_error(format!("Invalid function '{name}'"), span);
+            diagnostic
+                .add_note(format!("Possible function '{suggested_func_name}'"), None);
+            plan_err!("Invalid function '{name}'.\nDid you mean '{suggested_func_name}'?"; diagnostic=diagnostic)
         } else {
             internal_err!("No functions registered with this context.")
         }

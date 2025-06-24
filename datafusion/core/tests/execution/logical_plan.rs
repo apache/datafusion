@@ -19,15 +19,19 @@
 //! create them and depend on them. Test executable semantics of logical plans.
 
 use arrow::array::Int64Array;
-use arrow::datatypes::{DataType, Field};
+use arrow::datatypes::{DataType, Field, Schema};
+use datafusion::datasource::{provider_as_source, ViewTable};
 use datafusion::execution::session_state::SessionStateBuilder;
-use datafusion_common::{Column, DFSchema, Result, ScalarValue, Spans};
+use datafusion_common::{Column, DFSchema, DFSchemaRef, Result, ScalarValue, Spans};
 use datafusion_execution::TaskContext;
 use datafusion_expr::expr::{AggregateFunction, AggregateFunctionParams};
 use datafusion_expr::logical_plan::{LogicalPlan, Values};
-use datafusion_expr::{Aggregate, AggregateUDF, Expr};
+use datafusion_expr::{
+    Aggregate, AggregateUDF, EmptyRelation, Expr, LogicalPlanBuilder, UNNAMED_TABLE,
+};
 use datafusion_functions_aggregate::count::Count;
 use datafusion_physical_plan::collect;
+use insta::assert_snapshot;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::ops::Deref;
@@ -43,9 +47,9 @@ async fn count_only_nulls() -> Result<()> {
     let input = Arc::new(LogicalPlan::Values(Values {
         schema: input_schema,
         values: vec![
-            vec![Expr::Literal(ScalarValue::Null)],
-            vec![Expr::Literal(ScalarValue::Null)],
-            vec![Expr::Literal(ScalarValue::Null)],
+            vec![Expr::Literal(ScalarValue::Null, None)],
+            vec![Expr::Literal(ScalarValue::Null, None)],
+            vec![Expr::Literal(ScalarValue::Null, None)],
         ],
     }));
     let input_col_ref = Expr::Column(Column {
@@ -92,7 +96,41 @@ where
     T: Debug,
 {
     let [element] = elements else {
-        panic!("Expected exactly one element, got {:?}", elements);
+        panic!("Expected exactly one element, got {elements:?}");
     };
     element
+}
+
+#[test]
+fn inline_scan_projection_test() -> Result<()> {
+    let name = UNNAMED_TABLE;
+    let column = "a";
+
+    let schema = Schema::new(vec![
+        Field::new("a", DataType::Int32, false),
+        Field::new("b", DataType::Int32, false),
+    ]);
+    let projection = vec![schema.index_of(column)?];
+
+    let provider = ViewTable::new(
+        LogicalPlan::EmptyRelation(EmptyRelation {
+            produce_one_row: false,
+            schema: DFSchemaRef::new(DFSchema::try_from(schema)?),
+        }),
+        None,
+    );
+    let source = provider_as_source(Arc::new(provider));
+
+    let plan = LogicalPlanBuilder::scan(name, source, Some(projection))?.build()?;
+
+    assert_snapshot!(
+        format!("{plan}"),
+        @r"
+    SubqueryAlias: ?table?
+      Projection: a
+        EmptyRelation
+    "
+    );
+
+    Ok(())
 }

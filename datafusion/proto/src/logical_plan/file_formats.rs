@@ -205,10 +205,7 @@ impl LogicalExtensionCodec for CsvLogicalExtensionCodec {
         _ctx: &SessionContext,
     ) -> datafusion_common::Result<Arc<dyn FileFormatFactory>> {
         let proto = CsvOptionsProto::decode(buf).map_err(|e| {
-            DataFusionError::Execution(format!(
-                "Failed to decode CsvOptionsProto: {:?}",
-                e
-            ))
+            DataFusionError::Execution(format!("Failed to decode CsvOptionsProto: {e:?}"))
         })?;
         let options: CsvOptions = (&proto).into();
         Ok(Arc::new(CsvFormatFactory {
@@ -233,7 +230,7 @@ impl LogicalExtensionCodec for CsvLogicalExtensionCodec {
         });
 
         proto.encode(buf).map_err(|e| {
-            DataFusionError::Execution(format!("Failed to encode CsvOptions: {:?}", e))
+            DataFusionError::Execution(format!("Failed to encode CsvOptions: {e:?}"))
         })?;
 
         Ok(())
@@ -316,8 +313,7 @@ impl LogicalExtensionCodec for JsonLogicalExtensionCodec {
     ) -> datafusion_common::Result<Arc<dyn FileFormatFactory>> {
         let proto = JsonOptionsProto::decode(buf).map_err(|e| {
             DataFusionError::Execution(format!(
-                "Failed to decode JsonOptionsProto: {:?}",
-                e
+                "Failed to decode JsonOptionsProto: {e:?}"
             ))
         })?;
         let options: JsonOptions = (&proto).into();
@@ -346,7 +342,7 @@ impl LogicalExtensionCodec for JsonLogicalExtensionCodec {
         });
 
         proto.encode(buf).map_err(|e| {
-            DataFusionError::Execution(format!("Failed to encode JsonOptions: {:?}", e))
+            DataFusionError::Execution(format!("Failed to encode JsonOptions: {e:?}"))
         })?;
 
         Ok(())
@@ -632,8 +628,7 @@ impl LogicalExtensionCodec for ParquetLogicalExtensionCodec {
     ) -> datafusion_common::Result<Arc<dyn FileFormatFactory>> {
         let proto = TableParquetOptionsProto::decode(buf).map_err(|e| {
             DataFusionError::Execution(format!(
-                "Failed to decode TableParquetOptionsProto: {:?}",
-                e
+                "Failed to decode TableParquetOptionsProto: {e:?}"
             ))
         })?;
         let options: TableParquetOptions = (&proto).into();
@@ -663,8 +658,7 @@ impl LogicalExtensionCodec for ParquetLogicalExtensionCodec {
 
         proto.encode(buf).map_err(|e| {
             DataFusionError::Execution(format!(
-                "Failed to encode TableParquetOptionsProto: {:?}",
-                e
+                "Failed to encode TableParquetOptionsProto: {e:?}"
             ))
         })?;
 

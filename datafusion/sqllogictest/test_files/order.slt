@@ -1040,12 +1040,12 @@ limit 5;
 ----
 logical_plan
 01)Sort: c_str ASC NULLS LAST, fetch=5
-02)--Projection: CAST(ordered_table.c AS Utf8) AS c_str
+02)--Projection: CAST(ordered_table.c AS Utf8View) AS c_str
 03)----TableScan: ordered_table projection=[c]
 physical_plan
 01)SortPreservingMergeExec: [c_str@0 ASC NULLS LAST], fetch=5
 02)--SortExec: TopK(fetch=5), expr=[c_str@0 ASC NULLS LAST], preserve_partitioning=[true]
-03)----ProjectionExec: expr=[CAST(c@0 AS Utf8) as c_str]
+03)----ProjectionExec: expr=[CAST(c@0 AS Utf8View) as c_str]
 04)------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[c], output_ordering=[c@0 ASC NULLS LAST], file_type=csv, has_header=true
 
@@ -1380,3 +1380,42 @@ physical_plan
 
 statement ok
 drop table table_with_ordered_not_null;
+
+# ORDER BY ALL
+statement ok
+set datafusion.sql_parser.dialect = 'DuckDB';
+
+statement ok
+CREATE OR REPLACE TABLE addresses AS
+    SELECT '123 Quack Blvd' AS address, 'DuckTown' AS city, '11111' AS zip
+    UNION ALL
+    SELECT '111 Duck Duck Goose Ln', 'DuckTown', '11111'
+    UNION ALL
+    SELECT '111 Duck Duck Goose Ln', 'Duck Town', '11111'
+    UNION ALL
+    SELECT '111 Duck Duck Goose Ln', 'Duck Town', '11111-0001';
+
+
+query TTT
+SELECT * FROM addresses ORDER BY ALL;
+----
+111 Duck Duck Goose Ln Duck Town 11111
+111 Duck Duck Goose Ln Duck Town 11111-0001
+111 Duck Duck Goose Ln DuckTown 11111
+123 Quack Blvd DuckTown 11111
+
+query TTT
+SELECT * FROM addresses ORDER BY ALL DESC;
+----
+123 Quack Blvd DuckTown 11111
+111 Duck Duck Goose Ln DuckTown 11111
+111 Duck Duck Goose Ln Duck Town 11111-0001
+111 Duck Duck Goose Ln Duck Town 11111
+
+query TT
+SELECT address, zip FROM addresses ORDER BY ALL;
+----
+111 Duck Duck Goose Ln 11111
+111 Duck Duck Goose Ln 11111
+111 Duck Duck Goose Ln 11111-0001
+123 Quack Blvd 11111

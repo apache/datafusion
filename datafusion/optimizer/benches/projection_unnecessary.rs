@@ -30,7 +30,7 @@ fn is_projection_unnecessary_old(
     // First check if all expressions are trivial (cheaper operation than `projection_schema`)
     if !proj_exprs
         .iter()
-        .all(|expr| matches!(expr, Expr::Column(_) | Expr::Literal(_)))
+        .all(|expr| matches!(expr, Expr::Column(_) | Expr::Literal(_, _)))
     {
         return Ok(false);
     }
@@ -41,7 +41,7 @@ fn is_projection_unnecessary_old(
 fn create_plan_with_many_exprs(num_exprs: usize) -> (LogicalPlan, Vec<Expr>) {
     // Create schema with many fields
     let fields = (0..num_exprs)
-        .map(|i| Field::new(format!("col{}", i), DataType::Int32, false))
+        .map(|i| Field::new(format!("col{i}"), DataType::Int32, false))
         .collect::<Vec<_>>();
     let schema = Schema::new(fields);
 
@@ -53,7 +53,7 @@ fn create_plan_with_many_exprs(num_exprs: usize) -> (LogicalPlan, Vec<Expr>) {
 
     // Create projection expressions (just column references)
     let exprs = (0..num_exprs)
-        .map(|i| Expr::Column(Column::new(None::<TableReference>, format!("col{}", i))))
+        .map(|i| Expr::Column(Column::new(None::<TableReference>, format!("col{i}"))))
         .collect();
 
     (table_scan, exprs)

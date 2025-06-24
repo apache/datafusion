@@ -629,3 +629,78 @@ physical_plan
 
 statement ok
 drop table foo
+
+
+# Tests for int96 timestamps written by spark
+# See https://github.com/apache/datafusion/issues/9981
+
+statement ok
+CREATE EXTERNAL TABLE int96_from_spark
+STORED AS PARQUET
+LOCATION '../../parquet-testing/data/int96_from_spark.parquet';
+
+# by default the value is read as nanosecond precision
+query TTT
+describe int96_from_spark
+----
+a Timestamp(Nanosecond, None) YES
+
+# Note that the values are read as nanosecond precision
+query P
+select * from int96_from_spark
+----
+2024-01-01T20:34:56.123456
+2024-01-01T01:00:00
+1816-03-29T08:56:08.066277376
+2024-12-30T23:00:00
+NULL
+1815-11-08T16:01:01.191053312
+
+statement ok
+drop table int96_from_spark;
+
+# Enable coercion of int96 to microseconds
+statement ok
+set datafusion.execution.parquet.coerce_int96 = ms;
+
+statement ok
+CREATE EXTERNAL TABLE int96_from_spark
+STORED AS PARQUET
+LOCATION '../../parquet-testing/data/int96_from_spark.parquet';
+
+# Print schema
+query TTT
+describe int96_from_spark;
+----
+a Timestamp(Millisecond, None) YES
+
+# Per https://github.com/apache/parquet-testing/blob/6e851ddd768d6af741c7b15dc594874399fc3cff/data/int96_from_spark.md?plain=1#L37
+# these values should be
+#
+# Some("2024-01-01T12:34:56.123456"),
+# Some("2024-01-01T01:00:00Z"),
+# Some("9999-12-31T01:00:00-02:00"),
+# Some("2024-12-31T01:00:00+02:00"),
+# None,
+# Some("290000-12-31T01:00:00+02:00"))
+#
+# However, printing the large dates (9999-12-31 and 290000-12-31) is not supported by
+# arrow yet
+#
+# See https://github.com/apache/arrow-rs/issues/7287
+query P
+select * from int96_from_spark
+----
+2024-01-01T20:34:56.123
+2024-01-01T01:00:00
+9999-12-31T03:00:00
+2024-12-30T23:00:00
+NULL
+ERROR: Cast error: Failed to convert -9357363680509551 to datetime for Timestamp(Millisecond, None)
+
+# Cleanup / reset default setting
+statement ok
+drop table int96_from_spark;
+
+statement ok
+set datafusion.execution.parquet.coerce_int96 = ns;

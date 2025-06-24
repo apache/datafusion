@@ -62,7 +62,9 @@ use arrow::array::{builder::StringBuilder, RecordBatch};
 use arrow::compute::SortOptions;
 use arrow::datatypes::{Schema, SchemaRef};
 use datafusion_common::display::ToStringifiedPlan;
-use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
+use datafusion_common::tree_node::{
+    Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeVisitor,
+};
 use datafusion_common::{
     exec_err, internal_datafusion_err, internal_err, not_impl_err, plan_err, DFSchema,
     ScalarValue,
@@ -522,7 +524,7 @@ impl DefaultPhysicalPlanner {
                     Some("true") => true,
                     Some("false") => false,
                     Some(value) =>
-                        return Err(DataFusionError::Configuration(format!("provided value for 'execution.keep_partition_by_columns' was not recognized: \"{}\"", value))),
+                        return Err(DataFusionError::Configuration(format!("provided value for 'execution.keep_partition_by_columns' was not recognized: \"{value}\""))),
                 };
 
                 let sink_format = file_type_to_format(file_type)?
@@ -572,27 +574,25 @@ impl DefaultPhysicalPlanner {
                 let input_exec = children.one()?;
 
                 let get_sort_keys = |expr: &Expr| match expr {
-                    Expr::WindowFunction(WindowFunction {
-                        params:
-                            WindowFunctionParams {
-                                ref partition_by,
-                                ref order_by,
-                                ..
-                            },
-                        ..
-                    }) => generate_sort_key(partition_by, order_by),
+                    Expr::WindowFunction(window_fun) => {
+                        let WindowFunctionParams {
+                            ref partition_by,
+                            ref order_by,
+                            ..
+                        } = &window_fun.as_ref().params;
+                        generate_sort_key(partition_by, order_by)
+                    }
                     Expr::Alias(Alias { expr, .. }) => {
                         // Convert &Box<T> to &T
                         match &**expr {
-                            Expr::WindowFunction(WindowFunction {
-                                params:
-                                    WindowFunctionParams {
-                                        ref partition_by,
-                                        ref order_by,
-                                        ..
-                                    },
-                                ..
-                            }) => generate_sort_key(partition_by, order_by),
+                            Expr::WindowFunction(window_fun) => {
+                                let WindowFunctionParams {
+                                    ref partition_by,
+                                    ref order_by,
+                                    ..
+                                } = &window_fun.as_ref().params;
+                                generate_sort_key(partition_by, order_by)
+                            }
                             _ => unreachable!(),
                         }
                     }
@@ -694,7 +694,7 @@ impl DefaultPhysicalPlanner {
                     }
                     return internal_err!("Physical input schema should be the same as the one converted from logical input schema. Differences: {}", differences
                         .iter()
-                        .map(|s| format!("\n\t- {}", s))
+                        .map(|s| format!("\n\t- {s}"))
                         .join(""));
                 }
 
@@ -1113,8 +1113,6 @@ impl DefaultPhysicalPlanner {
                     && !prefer_hash_join
                 {
                     // Use SortMergeJoin if hash join is not preferred
-                    // Sort-Merge join support currently is experimental
-
                     let join_on_len = join_on.len();
                     Arc::new(SortMergeJoinExec::try_new(
                         physical_left,
@@ -1506,17 +1504,18 @@ pub fn create_window_expr_with_name(
     let name = name.into();
     let physical_schema: &Schema = &logical_schema.into();
     match e {
-        Expr::WindowFunction(WindowFunction {
-            fun,
-            params:
-                WindowFunctionParams {
-                    args,
-                    partition_by,
-                    order_by,
-                    window_frame,
-                    null_treatment,
-                },
-        }) => {
+        Expr::WindowFunction(window_fun) => {
+            let WindowFunction {
+                fun,
+                params:
+                    WindowFunctionParams {
+                        args,
+                        partition_by,
+                        order_by,
+                        window_frame,
+                        null_treatment,
+                    },
+            } = window_fun.as_ref();
             let physical_args =
                 create_physical_exprs(args, logical_schema, execution_props)?;
             let partition_by =
@@ -1713,6 +1712,14 @@ impl DefaultPhysicalPlanner {
 
         let config = &session_state.config_options().explain;
         let explain_format = &e.explain_format;
+
+        if !e.logical_optimization_succeeded {
+            return Ok(Arc::new(ExplainExec::new(
+                Arc::clone(e.schema.inner()),
+                e.stringified_plans.clone(),
+                true,
+            )));
+        }
 
         match explain_format {
             ExplainFormat::Indent => { /* fall through */ }
@@ -1952,7 +1959,7 @@ impl DefaultPhysicalPlanner {
             "Optimized physical plan:\n{}\n",
             displayable(new_plan.as_ref()).indent(false)
         );
-        trace!("Detailed optimized physical plan:\n{:?}", new_plan);
+        trace!("Detailed optimized physical plan:\n{new_plan:?}");
         Ok(new_plan)
     }
 
@@ -2069,29 +2076,36 @@ fn maybe_fix_physical_column_name(
     expr: Result<Arc<dyn PhysicalExpr>>,
     input_physical_schema: &SchemaRef,
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    if let Ok(e) = &expr {
-        if let Some(column) = e.as_any().downcast_ref::<Column>() {
-            let physical_field = input_physical_schema.field(column.index());
+    let Ok(expr) = expr else { return expr };
+    expr.transform_down(|node| {
+        if let Some(column) = node.as_any().downcast_ref::<Column>() {
+            let idx = column.index();
+            let physical_field = input_physical_schema.field(idx);
             let expr_col_name = column.name();
             let physical_name = physical_field.name();
 
-            if physical_name != expr_col_name {
+            if expr_col_name != physical_name {
                 // handle edge cases where the physical_name contains ':'.
                 let colon_count = physical_name.matches(':').count();
                 let mut splits = expr_col_name.match_indices(':');
                 let split_pos = splits.nth(colon_count);
 
-                if let Some((idx, _)) = split_pos {
-                    let base_name = &expr_col_name[..idx];
+                if let Some((i, _)) = split_pos {
+                    let base_name = &expr_col_name[..i];
                     if base_name == physical_name {
-                        let updated_column = Column::new(physical_name, column.index());
-                        return Ok(Arc::new(updated_column));
+                        let updated_column = Column::new(physical_name, idx);
+                        return Ok(Transformed::yes(Arc::new(updated_column)));
                     }
                 }
             }
+
+            // If names already match or fix is not possible, just leave it as it is
+            Ok(Transformed::no(node))
+        } else {
+            Ok(Transformed::no(node))
         }
-    }
-    expr
+    })
+    .data()
 }
 
 struct OptimizationInvariantChecker<'a> {
@@ -2192,11 +2206,16 @@ mod tests {
     use arrow::array::{ArrayRef, DictionaryArray, Int32Array};
     use arrow::datatypes::{DataType, Field, Int32Type};
     use datafusion_common::config::ConfigOptions;
-    use datafusion_common::{assert_contains, DFSchemaRef, TableReference};
+    use datafusion_common::{
+        assert_contains, DFSchemaRef, TableReference, ToDFSchema as _,
+    };
     use datafusion_execution::runtime_env::RuntimeEnv;
     use datafusion_execution::TaskContext;
-    use datafusion_expr::{col, lit, LogicalPlanBuilder, UserDefinedLogicalNodeCore};
+    use datafusion_expr::{
+        col, lit, LogicalPlanBuilder, Operator, UserDefinedLogicalNodeCore,
+    };
     use datafusion_functions_aggregate::expr_fn::sum;
+    use datafusion_physical_expr::expressions::{BinaryExpr, IsNotNullExpr};
     use datafusion_physical_expr::EquivalenceProperties;
     use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 
@@ -2238,7 +2257,8 @@ mod tests {
         // verify that the plan correctly casts u8 to i64
         // the cast from u8 to i64 for literal will be simplified, and get lit(int64(5))
         // the cast here is implicit so has CastOptions with safe=true
-        let expected = "BinaryExpr { left: Column { name: \"c7\", index: 2 }, op: Lt, right: Literal { value: Int64(5) }, fail_on_overflow: false }";
+        let expected = r#"BinaryExpr { left: Column { name: "c7", index: 2 }, op: Lt, right: Literal { value: Int64(5), field: Field { name: "5", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }, fail_on_overflow: false }"#;
+
         assert!(format!("{exec_plan:?}").contains(expected));
         Ok(())
     }
@@ -2263,7 +2283,7 @@ mod tests {
             &session_state,
         );
 
-        let expected = r#"Ok(PhysicalGroupBy { expr: [(Column { name: "c1", index: 0 }, "c1"), (Column { name: "c2", index: 1 }, "c2"), (Column { name: "c3", index: 2 }, "c3")], null_expr: [(Literal { value: Utf8(NULL) }, "c1"), (Literal { value: Int64(NULL) }, "c2"), (Literal { value: Int64(NULL) }, "c3")], groups: [[false, false, false], [true, false, false], [false, true, false], [false, false, true], [true, true, false], [true, false, true], [false, true, true], [true, true, true]] })"#;
+        let expected = r#"Ok(PhysicalGroupBy { expr: [(Column { name: "c1", index: 0 }, "c1"), (Column { name: "c2", index: 1 }, "c2"), (Column { name: "c3", index: 2 }, "c3")], null_expr: [(Literal { value: Utf8(NULL), field: Field { name: "NULL", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} } }, "c1"), (Literal { value: Int64(NULL), field: Field { name: "NULL", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} } }, "c2"), (Literal { value: Int64(NULL), field: Field { name: "NULL", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} } }, "c3")], groups: [[false, false, false], [true, false, false], [false, true, false], [false, false, true], [true, true, false], [true, false, true], [false, true, true], [true, true, true]] })"#;
 
         assert_eq!(format!("{cube:?}"), expected);
 
@@ -2290,7 +2310,7 @@ mod tests {
             &session_state,
         );
 
-        let expected = r#"Ok(PhysicalGroupBy { expr: [(Column { name: "c1", index: 0 }, "c1"), (Column { name: "c2", index: 1 }, "c2"), (Column { name: "c3", index: 2 }, "c3")], null_expr: [(Literal { value: Utf8(NULL) }, "c1"), (Literal { value: Int64(NULL) }, "c2"), (Literal { value: Int64(NULL) }, "c3")], groups: [[true, true, true], [false, true, true], [false, false, true], [false, false, false]] })"#;
+        let expected = r#"Ok(PhysicalGroupBy { expr: [(Column { name: "c1", index: 0 }, "c1"), (Column { name: "c2", index: 1 }, "c2"), (Column { name: "c3", index: 2 }, "c3")], null_expr: [(Literal { value: Utf8(NULL), field: Field { name: "NULL", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} } }, "c1"), (Literal { value: Int64(NULL), field: Field { name: "NULL", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} } }, "c2"), (Literal { value: Int64(NULL), field: Field { name: "NULL", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} } }, "c3")], groups: [[true, true, true], [false, true, true], [false, false, true], [false, false, false]] })"#;
 
         assert_eq!(format!("{rollup:?}"), expected);
 
@@ -2474,7 +2494,7 @@ mod tests {
         let execution_plan = plan(&logical_plan).await?;
         // verify that the plan correctly adds cast from Int64(1) to Utf8, and the const will be evaluated.
 
-        let expected = "expr: [(BinaryExpr { left: BinaryExpr { left: Column { name: \"c1\", index: 0 }, op: Eq, right: Literal { value: Utf8(\"a\") }, fail_on_overflow: false }, op: Or, right: BinaryExpr { left: Column { name: \"c1\", index: 0 }, op: Eq, right: Literal { value: Utf8(\"1\") }, fail_on_overflow: false }, fail_on_overflow: false }";
+        let expected = "expr: [(BinaryExpr { left: BinaryExpr { left: Column { name: \"c1\", index: 0 }, op: Eq, right: Literal { value: Utf8(\"a\"), field: Field { name: \"a\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }, fail_on_overflow: false }, op: Or, right: BinaryExpr { left: Column { name: \"c1\", index: 0 }, op: Eq, right: Literal { value: Utf8(\"1\"), field: Field { name: \"1\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }, fail_on_overflow: false }, fail_on_overflow: false }";
 
         let actual = format!("{execution_plan:?}");
         assert!(actual.contains(expected), "{}", actual);
@@ -2690,6 +2710,54 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_explain_indent_err() {
+        let planner = DefaultPhysicalPlanner::default();
+        let ctx = SessionContext::new();
+        let schema = Schema::new(vec![Field::new("id", DataType::Int32, false)]);
+        let plan = Arc::new(
+            scan_empty(Some("employee"), &schema, None)
+                .unwrap()
+                .explain(true, false)
+                .unwrap()
+                .build()
+                .unwrap(),
+        );
+
+        // Create a schema
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("plan_type", DataType::Utf8, false),
+            Field::new("plan", DataType::Utf8, false),
+        ]));
+
+        // Create invalid indentation in the plan
+        let stringified_plans =
+            vec![StringifiedPlan::new(PlanType::FinalLogicalPlan, "Test Err")];
+
+        let explain = Explain {
+            verbose: false,
+            explain_format: ExplainFormat::Indent,
+            plan,
+            stringified_plans,
+            schema: schema.to_dfschema_ref().unwrap(),
+            logical_optimization_succeeded: false,
+        };
+        let plan = planner
+            .handle_explain(&explain, &ctx.state())
+            .await
+            .unwrap();
+        if let Some(plan) = plan.as_any().downcast_ref::<ExplainExec>() {
+            let stringified_plans = plan.stringified_plans();
+            assert_eq!(stringified_plans.len(), 1);
+            assert_eq!(stringified_plans[0].plan.as_str(), "Test Err");
+        } else {
+            panic!(
+                "Plan was not an explain plan: {}",
+                displayable(plan.as_ref()).indent(true)
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn test_maybe_fix_colon_in_physical_name() {
         // The physical schema has a field name with a colon
         let schema = Schema::new(vec![Field::new("metric:avg", DataType::Int32, false)]);
@@ -2712,6 +2780,47 @@ mod tests {
             .expect("Column");
 
         assert_eq!(col.name(), "metric:avg");
+    }
+
+    #[tokio::test]
+    async fn test_maybe_fix_nested_column_name_with_colon() {
+        let schema = Schema::new(vec![Field::new("column", DataType::Int32, false)]);
+        let schema_ref: SchemaRef = Arc::new(schema);
+
+        // Construct the nested expr
+        let col_expr = Arc::new(Column::new("column:1", 0)) as Arc<dyn PhysicalExpr>;
+        let is_not_null_expr = Arc::new(IsNotNullExpr::new(col_expr.clone()));
+
+        // Create a binary expression and put the column inside
+        let binary_expr = Arc::new(BinaryExpr::new(
+            is_not_null_expr.clone(),
+            Operator::Or,
+            is_not_null_expr.clone(),
+        )) as Arc<dyn PhysicalExpr>;
+
+        let fixed_expr =
+            maybe_fix_physical_column_name(Ok(binary_expr), &schema_ref).unwrap();
+
+        let bin = fixed_expr
+            .as_any()
+            .downcast_ref::<BinaryExpr>()
+            .expect("Expected BinaryExpr");
+
+        // Check that both sides where renamed
+        for expr in &[bin.left(), bin.right()] {
+            let is_not_null = expr
+                .as_any()
+                .downcast_ref::<IsNotNullExpr>()
+                .expect("Expected IsNotNull");
+
+            let col = is_not_null
+                .arg()
+                .as_any()
+                .downcast_ref::<Column>()
+                .expect("Expected Column");
+
+            assert_eq!(col.name(), "column");
+        }
     }
     struct ErrorExtensionPlanner {}
 

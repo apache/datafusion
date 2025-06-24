@@ -28,7 +28,9 @@ use arrow::{
     datatypes::{DataType, Field, Schema, SchemaRef},
     record_batch::{RecordBatch, RecordBatchOptions},
 };
-use log::trace;
+// pub use for backwards compatibility
+pub use datafusion_common::pruning::PruningStatistics;
+use log::{debug, trace};
 
 use datafusion_common::error::{DataFusionError, Result};
 use datafusion_common::tree_node::TransformedResult;
@@ -43,106 +45,6 @@ use datafusion_physical_expr::utils::{collect_columns, Guarantee, LiteralGuarant
 use datafusion_physical_expr::{expressions as phys_expr, PhysicalExprRef};
 use datafusion_physical_expr_common::physical_expr::snapshot_physical_expr;
 use datafusion_physical_plan::{ColumnarValue, PhysicalExpr};
-
-/// A source of runtime statistical information to [`PruningPredicate`]s.
-///
-/// # Supported Information
-///
-/// 1. Minimum and maximum values for columns
-///
-/// 2. Null counts and row counts for columns
-///
-/// 3. Whether the values in a column are contained in a set of literals
-///
-/// # Vectorized Interface
-///
-/// Information for containers / files are returned as Arrow [`ArrayRef`], so
-/// the evaluation happens once on a single `RecordBatch`, which amortizes the
-/// overhead of evaluating the predicate. This is important when pruning 1000s
-/// of containers which often happens in analytic systems that have 1000s of
-/// potential files to consider.
-///
-/// For example, for the following three files with a single column `a`:
-/// ```text
-/// file1: column a: min=5, max=10
-/// file2: column a: No stats
-/// file2: column a: min=20, max=30
-/// ```
-///
-/// PruningStatistics would return:
-///
-/// ```text
-/// min_values("a") -> Some([5, Null, 20])
-/// max_values("a") -> Some([10, Null, 30])
-/// min_values("X") -> None
-/// ```
-pub trait PruningStatistics {
-    /// Return the minimum values for the named column, if known.
-    ///
-    /// If the minimum value for a particular container is not known, the
-    /// returned array should have `null` in that row. If the minimum value is
-    /// not known for any row, return `None`.
-    ///
-    /// Note: the returned array must contain [`Self::num_containers`] rows
-    fn min_values(&self, column: &Column) -> Option<ArrayRef>;
-
-    /// Return the maximum values for the named column, if known.
-    ///
-    /// See [`Self::min_values`] for when to return `None` and null values.
-    ///
-    /// Note: the returned array must contain [`Self::num_containers`] rows
-    fn max_values(&self, column: &Column) -> Option<ArrayRef>;
-
-    /// Return the number of containers (e.g. Row Groups) being pruned with
-    /// these statistics.
-    ///
-    /// This value corresponds to the size of the [`ArrayRef`] returned by
-    /// [`Self::min_values`], [`Self::max_values`], [`Self::null_counts`],
-    /// and [`Self::row_counts`].
-    fn num_containers(&self) -> usize;
-
-    /// Return the number of null values for the named column as an
-    /// [`UInt64Array`]
-    ///
-    /// See [`Self::min_values`] for when to return `None` and null values.
-    ///
-    /// Note: the returned array must contain [`Self::num_containers`] rows
-    ///
-    /// [`UInt64Array`]: arrow::array::UInt64Array
-    fn null_counts(&self, column: &Column) -> Option<ArrayRef>;
-
-    /// Return the number of rows for the named column in each container
-    /// as an [`UInt64Array`].
-    ///
-    /// See [`Self::min_values`] for when to return `None` and null values.
-    ///
-    /// Note: the returned array must contain [`Self::num_containers`] rows
-    ///
-    /// [`UInt64Array`]: arrow::array::UInt64Array
-    fn row_counts(&self, column: &Column) -> Option<ArrayRef>;
-
-    /// Returns [`BooleanArray`] where each row represents information known
-    /// about specific literal `values` in a column.
-    ///
-    /// For example, Parquet Bloom Filters implement this API to communicate
-    /// that `values` are known not to be present in a Row Group.
-    ///
-    /// The returned array has one row for each container, with the following
-    /// meanings:
-    /// * `true` if the values in `column`  ONLY contain values from `values`
-    /// * `false` if the values in `column` are NOT ANY of `values`
-    /// * `null` if the neither of the above holds or is unknown.
-    ///
-    /// If these statistics can not determine column membership for any
-    /// container, return `None` (the default).
-    ///
-    /// Note: the returned array must contain [`Self::num_containers`] rows
-    fn contained(
-        &self,
-        column: &Column,
-        values: &HashSet<ScalarValue>,
-    ) -> Option<BooleanArray>;
-}
 
 /// Used to prove that arbitrary predicates (boolean expression) can not
 /// possibly evaluate to `true` given information about a column provided by
@@ -991,11 +893,7 @@ fn build_statistics_record_batch<S: PruningStatistics>(
     let mut options = RecordBatchOptions::default();
     options.row_count = Some(statistics.num_containers());
 
-    trace!(
-        "Creating statistics batch for {:#?} with {:#?}",
-        required_columns,
-        arrays
-    );
+    trace!("Creating statistics batch for {required_columns:#?} with {arrays:#?}");
 
     RecordBatch::try_new_with_options(schema, arrays, &options).map_err(|err| {
         plan_datafusion_err!("Can not create statistics record batch: {err}")
@@ -1217,23 +1115,35 @@ fn is_compare_op(op: Operator) -> bool {
     )
 }
 
+fn is_string_type(data_type: &DataType) -> bool {
+    matches!(
+        data_type,
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+    )
+}
+
 // The pruning logic is based on the comparing the min/max bounds.
 // Must make sure the two type has order.
 // For example, casts from string to numbers is not correct.
 // Because the "13" is less than "3" with UTF8 comparison order.
 fn verify_support_type_for_prune(from_type: &DataType, to_type: &DataType) -> Result<()> {
-    // TODO: support other data type for prunable cast or try cast
-    if matches!(
-        from_type,
-        DataType::Int8
-            | DataType::Int16
-            | DataType::Int32
-            | DataType::Int64
-            | DataType::Decimal128(_, _)
-    ) && matches!(
-        to_type,
-        DataType::Int8 | DataType::Int32 | DataType::Int64 | DataType::Decimal128(_, _)
-    ) {
+    // Dictionary casts are always supported as long as the value types are supported
+    let from_type = match from_type {
+        DataType::Dictionary(_, t) => {
+            return verify_support_type_for_prune(t.as_ref(), to_type)
+        }
+        _ => from_type,
+    };
+    let to_type = match to_type {
+        DataType::Dictionary(_, t) => {
+            return verify_support_type_for_prune(from_type, t.as_ref())
+        }
+        _ => to_type,
+    };
+    // If both types are strings or both are not strings (number, timestamp, etc)
+    // then we can compare them.
+    // PruningPredicate does not support casting of strings to numbers and such.
+    if is_string_type(from_type) == is_string_type(to_type) {
         Ok(())
     } else {
         plan_err!(
@@ -1564,7 +1474,10 @@ fn build_predicate_expression(
         Ok(builder) => builder,
         // allow partial failure in predicate expression generation
         // this can still produce a useful predicate when multiple conditions are joined using AND
-        Err(_) => return unhandled_hook.handle(expr),
+        Err(e) => {
+            debug!("Error building pruning expression: {e}");
+            return unhandled_hook.handle(expr);
+        }
     };
 
     build_statistics_expr(&mut expr_builder)
@@ -2325,8 +2238,7 @@ mod tests {
             let was_new = fields.insert(field);
             if !was_new {
                 panic!(
-                    "Duplicate field in required schema: {:?}. Previous fields:\n{:#?}",
-                    field, fields
+                    "Duplicate field in required schema: {field:?}. Previous fields:\n{fields:#?}"
                 );
             }
         }
@@ -2831,8 +2743,8 @@ mod tests {
         let predicate_expr =
             test_build_predicate_expression(&expr, &schema, &mut required_columns);
         assert_eq!(predicate_expr.to_string(), expected_expr);
-        println!("required_columns: {:#?}", required_columns); // for debugging assertions below
-                                                               // c1 < 1 should add c1_min
+        println!("required_columns: {required_columns:#?}"); // for debugging assertions below
+                                                             // c1 < 1 should add c1_min
         let c1_min_field = Field::new("c1_min", DataType::Int32, false);
         assert_eq!(
             required_columns.columns[0],
@@ -3026,7 +2938,7 @@ mod tests {
     }
 
     #[test]
-    fn row_group_predicate_cast() -> Result<()> {
+    fn row_group_predicate_cast_int_int() -> Result<()> {
         let schema = Schema::new(vec![Field::new("c1", DataType::Int32, false)]);
         let expected_expr = "c1_null_count@2 != row_count@3 AND CAST(c1_min@0 AS Int64) <= 1 AND 1 <= CAST(c1_max@1 AS Int64)";
 
@@ -3056,6 +2968,291 @@ mod tests {
         // test column on the right
         let expr =
             lit(ScalarValue::Int64(Some(1))).lt(try_cast(col("c1"), DataType::Int64));
+        let predicate_expr =
+            test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
+        assert_eq!(predicate_expr.to_string(), expected_expr);
+
+        Ok(())
+    }
+
+    #[test]
+    fn row_group_predicate_cast_string_string() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("c1", DataType::Utf8View, false)]);
+        let expected_expr = "c1_null_count@2 != row_count@3 AND CAST(c1_min@0 AS Utf8) <= 1 AND 1 <= CAST(c1_max@1 AS Utf8)";
+
+        // test column on the left
+        let expr = cast(col("c1"), DataType::Utf8)
+            .eq(lit(ScalarValue::Utf8(Some("1".to_string()))));
+        let predicate_expr =
+            test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
+        assert_eq!(predicate_expr.to_string(), expected_expr);
+
+        // test column on the right
+        let expr = lit(ScalarValue::Utf8(Some("1".to_string())))
+            .eq(cast(col("c1"), DataType::Utf8));
+        let predicate_expr =
+            test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
+        assert_eq!(predicate_expr.to_string(), expected_expr);
+
+        Ok(())
+    }
+
+    #[test]
+    fn row_group_predicate_cast_string_int() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("c1", DataType::Utf8View, false)]);
+        let expected_expr = "true";
+
+        // test column on the left
+        let expr = cast(col("c1"), DataType::Int32).eq(lit(ScalarValue::Int32(Some(1))));
+        let predicate_expr =
+            test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
+        assert_eq!(predicate_expr.to_string(), expected_expr);
+
+        // test column on the right
+        let expr = lit(ScalarValue::Int32(Some(1))).eq(cast(col("c1"), DataType::Int32));
+        let predicate_expr =
+            test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
+        assert_eq!(predicate_expr.to_string(), expected_expr);
+
+        Ok(())
+    }
+
+    #[test]
+    fn row_group_predicate_cast_int_string() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("c1", DataType::Int32, false)]);
+        let expected_expr = "true";
+
+        // test column on the left
+        let expr = cast(col("c1"), DataType::Utf8)
+            .eq(lit(ScalarValue::Utf8(Some("1".to_string()))));
+        let predicate_expr =
+            test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
+        assert_eq!(predicate_expr.to_string(), expected_expr);
+
+        // test column on the right
+        let expr = lit(ScalarValue::Utf8(Some("1".to_string())))
+            .eq(cast(col("c1"), DataType::Utf8));
+        let predicate_expr =
+            test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
+        assert_eq!(predicate_expr.to_string(), expected_expr);
+
+        Ok(())
+    }
+
+    #[test]
+    fn row_group_predicate_date_date() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("c1", DataType::Date32, false)]);
+        let expected_expr = "c1_null_count@2 != row_count@3 AND CAST(c1_min@0 AS Date64) <= 1970-01-01 AND 1970-01-01 <= CAST(c1_max@1 AS Date64)";
+
+        // test column on the left
+        let expr =
+            cast(col("c1"), DataType::Date64).eq(lit(ScalarValue::Date64(Some(123))));
+        let predicate_expr =
+            test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
+        assert_eq!(predicate_expr.to_string(), expected_expr);
+
+        // test column on the right
+        let expr =
+            lit(ScalarValue::Date64(Some(123))).eq(cast(col("c1"), DataType::Date64));
+        let predicate_expr =
+            test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
+        assert_eq!(predicate_expr.to_string(), expected_expr);
+
+        Ok(())
+    }
+
+    #[test]
+    fn row_group_predicate_dict_string_date() -> Result<()> {
+        // Test with Dictionary<UInt8, Utf8> for the literal
+        let schema = Schema::new(vec![Field::new("c1", DataType::Date32, false)]);
+        let expected_expr = "true";
+
+        // test column on the left
+        let expr = cast(
+            col("c1"),
+            DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::Utf8)),
+        )
+        .eq(lit(ScalarValue::Utf8(Some("2024-01-01".to_string()))));
+        let predicate_expr =
+            test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
+        assert_eq!(predicate_expr.to_string(), expected_expr);
+
+        // test column on the right
+        let expr = lit(ScalarValue::Utf8(Some("2024-01-01".to_string()))).eq(cast(
+            col("c1"),
+            DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::Utf8)),
+        ));
+        let predicate_expr =
+            test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
+        assert_eq!(predicate_expr.to_string(), expected_expr);
+
+        Ok(())
+    }
+
+    #[test]
+    fn row_group_predicate_date_dict_string() -> Result<()> {
+        // Test with Dictionary<UInt8, Utf8> for the column
+        let schema = Schema::new(vec![Field::new(
+            "c1",
+            DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::Utf8)),
+            false,
+        )]);
+        let expected_expr = "true";
+
+        // test column on the left
+        let expr =
+            cast(col("c1"), DataType::Date32).eq(lit(ScalarValue::Date32(Some(123))));
+        let predicate_expr =
+            test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
+        assert_eq!(predicate_expr.to_string(), expected_expr);
+
+        // test column on the right
+        let expr =
+            lit(ScalarValue::Date32(Some(123))).eq(cast(col("c1"), DataType::Date32));
+        let predicate_expr =
+            test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
+        assert_eq!(predicate_expr.to_string(), expected_expr);
+
+        Ok(())
+    }
+
+    #[test]
+    fn row_group_predicate_dict_dict_same_value_type() -> Result<()> {
+        // Test with Dictionary types that have the same value type but different key types
+        let schema = Schema::new(vec![Field::new(
+            "c1",
+            DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::Utf8)),
+            false,
+        )]);
+
+        // Direct comparison with no cast
+        let expr = col("c1").eq(lit(ScalarValue::Utf8(Some("test".to_string()))));
+        let predicate_expr =
+            test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
+        let expected_expr =
+            "c1_null_count@2 != row_count@3 AND c1_min@0 <= test AND test <= c1_max@1";
+        assert_eq!(predicate_expr.to_string(), expected_expr);
+
+        // Test with column cast to a dictionary with different key type
+        let expr = cast(
+            col("c1"),
+            DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::Utf8)),
+        )
+        .eq(lit(ScalarValue::Utf8(Some("test".to_string()))));
+        let predicate_expr =
+            test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
+        let expected_expr = "c1_null_count@2 != row_count@3 AND CAST(c1_min@0 AS Dictionary(UInt16, Utf8)) <= test AND test <= CAST(c1_max@1 AS Dictionary(UInt16, Utf8))";
+        assert_eq!(predicate_expr.to_string(), expected_expr);
+
+        Ok(())
+    }
+
+    #[test]
+    fn row_group_predicate_dict_dict_different_value_type() -> Result<()> {
+        // Test with Dictionary types that have different value types
+        let schema = Schema::new(vec![Field::new(
+            "c1",
+            DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::Int32)),
+            false,
+        )]);
+        let expected_expr = "c1_null_count@2 != row_count@3 AND CAST(c1_min@0 AS Int64) <= 123 AND 123 <= CAST(c1_max@1 AS Int64)";
+
+        // Test with literal of a different type
+        let expr =
+            cast(col("c1"), DataType::Int64).eq(lit(ScalarValue::Int64(Some(123))));
+        let predicate_expr =
+            test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
+        assert_eq!(predicate_expr.to_string(), expected_expr);
+
+        Ok(())
+    }
+
+    #[test]
+    fn row_group_predicate_nested_dict() -> Result<()> {
+        // Test with nested Dictionary types
+        let schema = Schema::new(vec![Field::new(
+            "c1",
+            DataType::Dictionary(
+                Box::new(DataType::UInt8),
+                Box::new(DataType::Dictionary(
+                    Box::new(DataType::UInt16),
+                    Box::new(DataType::Utf8),
+                )),
+            ),
+            false,
+        )]);
+        let expected_expr =
+            "c1_null_count@2 != row_count@3 AND c1_min@0 <= test AND test <= c1_max@1";
+
+        // Test with a simple literal
+        let expr = col("c1").eq(lit(ScalarValue::Utf8(Some("test".to_string()))));
+        let predicate_expr =
+            test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
+        assert_eq!(predicate_expr.to_string(), expected_expr);
+
+        Ok(())
+    }
+
+    #[test]
+    fn row_group_predicate_dict_date_dict_date() -> Result<()> {
+        // Test with dictionary-wrapped date types for both sides
+        let schema = Schema::new(vec![Field::new(
+            "c1",
+            DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::Date32)),
+            false,
+        )]);
+        let expected_expr = "c1_null_count@2 != row_count@3 AND CAST(c1_min@0 AS Dictionary(UInt16, Date64)) <= 1970-01-01 AND 1970-01-01 <= CAST(c1_max@1 AS Dictionary(UInt16, Date64))";
+
+        // Test with a cast to a different date type
+        let expr = cast(
+            col("c1"),
+            DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::Date64)),
+        )
+        .eq(lit(ScalarValue::Date64(Some(123))));
+        let predicate_expr =
+            test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
+        assert_eq!(predicate_expr.to_string(), expected_expr);
+
+        Ok(())
+    }
+
+    #[test]
+    fn row_group_predicate_date_string() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("c1", DataType::Utf8, false)]);
+        let expected_expr = "true";
+
+        // test column on the left
+        let expr =
+            cast(col("c1"), DataType::Date32).eq(lit(ScalarValue::Date32(Some(123))));
+        let predicate_expr =
+            test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
+        assert_eq!(predicate_expr.to_string(), expected_expr);
+
+        // test column on the right
+        let expr =
+            lit(ScalarValue::Date32(Some(123))).eq(cast(col("c1"), DataType::Date32));
+        let predicate_expr =
+            test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
+        assert_eq!(predicate_expr.to_string(), expected_expr);
+
+        Ok(())
+    }
+
+    #[test]
+    fn row_group_predicate_string_date() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("c1", DataType::Date32, false)]);
+        let expected_expr = "true";
+
+        // test column on the left
+        let expr = cast(col("c1"), DataType::Utf8)
+            .eq(lit(ScalarValue::Utf8(Some("2024-01-01".to_string()))));
+        let predicate_expr =
+            test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
+        assert_eq!(predicate_expr.to_string(), expected_expr);
+
+        // test column on the right
+        let expr = lit(ScalarValue::Utf8(Some("2024-01-01".to_string())))
+            .eq(cast(col("c1"), DataType::Utf8));
         let predicate_expr =
             test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
         assert_eq!(predicate_expr.to_string(), expected_expr);
@@ -4873,7 +5070,7 @@ mod tests {
         statistics: &TestStatistics,
         expected: &[bool],
     ) {
-        println!("Pruning with expr: {}", expr);
+        println!("Pruning with expr: {expr}");
         let expr = logical2physical(&expr, schema);
         let p = PruningPredicate::try_new(expr, Arc::<Schema>::clone(schema)).unwrap();
         let result = p.prune(statistics).unwrap();

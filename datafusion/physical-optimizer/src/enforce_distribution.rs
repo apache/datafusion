@@ -42,7 +42,6 @@ use datafusion_physical_expr::utils::map_columns_before_projection;
 use datafusion_physical_expr::{
     physical_exprs_equal, EquivalenceProperties, PhysicalExpr, PhysicalExprRef,
 };
-use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
 };
@@ -1034,7 +1033,7 @@ fn remove_dist_changing_operators(
 /// "    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2",
 /// "      DataSourceExec: file_groups={2 groups: \[\[x], \[y]]}, projection=\[a, b, c, d, e], output_ordering=\[a@0 ASC], file_type=parquet",
 /// ```
-fn replace_order_preserving_variants(
+pub fn replace_order_preserving_variants(
     mut context: DistributionContext,
     ordering_satisfied: bool,
 ) -> Result<(DistributionContext, Option<usize>)> {
@@ -1139,7 +1138,8 @@ fn get_repartition_requirement_status(
     {
         // Decide whether adding a round robin is beneficial depending on
         // the statistical information we have on the number of rows:
-        let roundrobin_beneficial_stats = match child.statistics()?.num_rows {
+        let roundrobin_beneficial_stats = match child.partition_statistics(None)?.num_rows
+        {
             Precision::Exact(n_rows) => n_rows > batch_size,
             Precision::Inexact(n_rows) => !should_use_estimates || (n_rows > batch_size),
             Precision::Absent => true,
@@ -1182,6 +1182,10 @@ fn get_repartition_requirement_status(
 /// operators to satisfy distribution requirements. Since this function
 /// takes care of such requirements, we should avoid manually adding data
 /// exchange operators in other places.
+///
+/// This function is intended to be used in a bottom up traversal, as it
+/// can first repartition (or newly partition) at the datasources -- these
+/// source partitions may be later repartitioned with additional data exchange operators.
 pub fn ensure_distribution(
     dist_context: DistributionContext,
     config: &ConfigOptions,

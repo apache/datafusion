@@ -18,7 +18,7 @@
 use std::path::Path;
 use std::path::PathBuf;
 
-use crate::util::{BenchmarkRun, CommonOpt};
+use crate::util::{BenchmarkRun, CommonOpt, QueryResult};
 use datafusion::{
     error::{DataFusionError, Result},
     prelude::SessionContext,
@@ -116,7 +116,7 @@ impl RunOpt {
         };
 
         // configure parquet options
-        let mut config = self.common.config();
+        let mut config = self.common.config()?;
         {
             let parquet_options = &mut config.options_mut().execution.parquet;
             // The hits_partitioned dataset specifies string columns
@@ -128,34 +128,56 @@ impl RunOpt {
         let ctx = SessionContext::new_with_config_rt(config, rt_builder.build_arc()?);
         self.register_hits(&ctx).await?;
 
-        let iterations = self.common.iterations;
         let mut benchmark_run = BenchmarkRun::new();
         for query_id in query_range {
-            let mut millis = Vec::with_capacity(iterations);
             benchmark_run.start_new_case(&format!("Query {query_id}"));
-            let sql = queries.get_query(query_id)?;
-            println!("Q{query_id}: {sql}");
-
-            for i in 0..iterations {
-                let start = Instant::now();
-                let results = ctx.sql(sql).await?.collect().await?;
-                let elapsed = start.elapsed();
-                let ms = elapsed.as_secs_f64() * 1000.0;
-                millis.push(ms);
-                let row_count: usize = results.iter().map(|b| b.num_rows()).sum();
-                println!(
-                    "Query {query_id} iteration {i} took {ms:.1} ms and returned {row_count} rows"
-                );
-                benchmark_run.write_iter(elapsed, row_count);
+            let query_run = self.benchmark_query(&queries, query_id, &ctx).await;
+            match query_run {
+                Ok(query_results) => {
+                    for iter in query_results {
+                        benchmark_run.write_iter(iter.elapsed, iter.row_count);
+                    }
+                }
+                Err(e) => {
+                    benchmark_run.mark_failed();
+                    eprintln!("Query {query_id} failed: {e}");
+                }
             }
-            if self.common.debug {
-                ctx.sql(sql).await?.explain(false, false)?.show().await?;
-            }
-            let avg = millis.iter().sum::<f64>() / millis.len() as f64;
-            println!("Query {query_id} avg time: {avg:.2} ms");
         }
         benchmark_run.maybe_write_json(self.output_path.as_ref())?;
+        benchmark_run.maybe_print_failures();
         Ok(())
+    }
+
+    async fn benchmark_query(
+        &self,
+        queries: &AllQueries,
+        query_id: usize,
+        ctx: &SessionContext,
+    ) -> Result<Vec<QueryResult>> {
+        let sql = queries.get_query(query_id)?;
+        println!("Q{query_id}: {sql}");
+
+        let mut millis = Vec::with_capacity(self.iterations());
+        let mut query_results = vec![];
+        for i in 0..self.iterations() {
+            let start = Instant::now();
+            let results = ctx.sql(sql).await?.collect().await?;
+            let elapsed = start.elapsed();
+            let ms = elapsed.as_secs_f64() * 1000.0;
+            millis.push(ms);
+            let row_count: usize = results.iter().map(|b| b.num_rows()).sum();
+            println!(
+                "Query {query_id} iteration {i} took {ms:.1} ms and returned {row_count} rows"
+            );
+            query_results.push(QueryResult { elapsed, row_count })
+        }
+        if self.common.debug {
+            ctx.sql(sql).await?.explain(false, false)?.show().await?;
+        }
+        let avg = millis.iter().sum::<f64>() / millis.len() as f64;
+        println!("Query {query_id} avg time: {avg:.2} ms");
+        Ok(query_results)
     }
 
     /// Registers the `hits.parquet` as a table named `hits`
@@ -170,5 +192,9 @@ impl RunOpt {
                     Box::new(e),
                 )
             })
+    }
+
+    fn iterations(&self) -> usize {
+        self.common.iterations
     }
 }

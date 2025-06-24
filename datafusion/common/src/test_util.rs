@@ -18,9 +18,24 @@
 //! Utility functions to make testing DataFusion based crates easier
 
 use crate::arrow::util::pretty::pretty_format_batches_with_options;
-use crate::format::DEFAULT_FORMAT_OPTIONS;
-use arrow::array::RecordBatch;
+use arrow::array::{ArrayRef, RecordBatch};
+use arrow::error::ArrowError;
+use std::fmt::Display;
 use std::{error::Error, path::PathBuf};
+
+/// Converts a vector or array into an ArrayRef.
+pub trait IntoArrayRef {
+    fn into_array_ref(self) -> ArrayRef;
+}
+
+pub fn format_batches(results: &[RecordBatch]) -> Result<impl Display, ArrowError> {
+    let datafusion_format_options = crate::config::FormatOptions::default();
+
+    let arrow_format_options: arrow::util::display::FormatOptions =
+        (&datafusion_format_options).try_into().unwrap();
+
+    pretty_format_batches_with_options(results, &arrow_format_options)
+}
 
 /// Compares formatted output of a record batch with an expected
 /// vector of strings, with the result of pretty formatting record
@@ -59,12 +74,9 @@ macro_rules! assert_batches_eq {
         let expected_lines: Vec<String> =
             $EXPECTED_LINES.iter().map(|&s| s.into()).collect();
 
-        let formatted = $crate::arrow::util::pretty::pretty_format_batches_with_options(
-            $CHUNKS,
-            &$crate::format::DEFAULT_FORMAT_OPTIONS,
-        )
-        .unwrap()
-        .to_string();
+        let formatted = $crate::test_util::format_batches($CHUNKS)
+            .unwrap()
+            .to_string();
 
         let actual_lines: Vec<&str> = formatted.trim().lines().collect();
 
@@ -77,18 +89,13 @@ macro_rules! assert_batches_eq {
 }
 
 pub fn batches_to_string(batches: &[RecordBatch]) -> String {
-    let actual = pretty_format_batches_with_options(batches, &DEFAULT_FORMAT_OPTIONS)
-        .unwrap()
-        .to_string();
+    let actual = format_batches(batches).unwrap().to_string();
 
     actual.trim().to_string()
 }
 
 pub fn batches_to_sort_string(batches: &[RecordBatch]) -> String {
-    let actual_lines =
-        pretty_format_batches_with_options(batches, &DEFAULT_FORMAT_OPTIONS)
-            .unwrap()
-            .to_string();
+    let actual_lines = format_batches(batches).unwrap().to_string();
 
     let mut actual_lines: Vec<&str> = actual_lines.trim().lines().collect();
 
@@ -122,12 +129,9 @@ macro_rules! assert_batches_sorted_eq {
             expected_lines.as_mut_slice()[2..num_lines - 1].sort_unstable()
         }
 
-        let formatted = $crate::arrow::util::pretty::pretty_format_batches_with_options(
-            $CHUNKS,
-            &$crate::format::DEFAULT_FORMAT_OPTIONS,
-        )
-        .unwrap()
-        .to_string();
+        let formatted = $crate::test_util::format_batches($CHUNKS)
+            .unwrap()
+            .to_string();
         // fix for windows: \r\n -->
 
         let mut actual_lines: Vec<&str> = formatted.trim().lines().collect();
@@ -380,6 +384,326 @@ macro_rules! record_batch {
             );
 
             batch
+        }
+    }
+}
+
+pub mod array_conversion {
+    use arrow::array::ArrayRef;
+
+    use super::IntoArrayRef;
+
+    impl IntoArrayRef for Vec<bool> {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(Boolean, self)
+        }
+    }
+
+    impl IntoArrayRef for Vec<Option<bool>> {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(Boolean, self)
+        }
+    }
+
+    impl IntoArrayRef for &[bool] {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(Boolean, self.to_vec())
+        }
+    }
+
+    impl IntoArrayRef for &[Option<bool>] {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(Boolean, self.to_vec())
+        }
+    }
+
+    impl IntoArrayRef for Vec<i8> {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(Int8, self)
+        }
+    }
+
+    impl IntoArrayRef for Vec<Option<i8>> {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(Int8, self)
+        }
+    }
+
+    impl IntoArrayRef for &[i8] {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(Int8, self.to_vec())
+        }
+    }
+
+    impl IntoArrayRef for &[Option<i8>] {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(Int8, self.to_vec())
+        }
+    }
+
+    impl IntoArrayRef for Vec<i16> {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(Int16, self)
+        }
+    }
+
+    impl IntoArrayRef for Vec<Option<i16>> {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(Int16, self)
+        }
+    }
+
+    impl IntoArrayRef for &[i16] {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(Int16, self.to_vec())
+        }
+    }
+
+    impl IntoArrayRef for &[Option<i16>] {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(Int16, self.to_vec())
+        }
+    }
+
+    impl IntoArrayRef for Vec<i32> {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(Int32, self)
+        }
+    }
+
+    impl IntoArrayRef for Vec<Option<i32>> {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(Int32, self)
+        }
+    }
+
+    impl IntoArrayRef for &[i32] {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(Int32, self.to_vec())
+        }
+    }
+
+    impl IntoArrayRef for &[Option<i32>] {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(Int32, self.to_vec())
+        }
+    }
+
+    impl IntoArrayRef for Vec<i64> {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(Int64, self)
+        }
+    }
+
+    impl IntoArrayRef for Vec<Option<i64>> {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(Int64, self)
+        }
+    }
+
+    impl IntoArrayRef for &[i64] {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(Int64, self.to_vec())
+        }
+    }
+
+    impl IntoArrayRef for &[Option<i64>] {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(Int64, self.to_vec())
+        }
+    }
+
+    impl IntoArrayRef for Vec<u8> {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(UInt8, self)
+        }
+    }
+
+    impl IntoArrayRef for Vec<Option<u8>> {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(UInt8, self)
+        }
+    }
+
+    impl IntoArrayRef for &[u8] {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(UInt8, self.to_vec())
+        }
+    }
+
+    impl IntoArrayRef for &[Option<u8>] {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(UInt8, self.to_vec())
+        }
+    }
+
+    impl IntoArrayRef for Vec<u16> {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(UInt16, self)
+        }
+    }
+
+    impl IntoArrayRef for Vec<Option<u16>> {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(UInt16, self)
+        }
+    }
+
+    impl IntoArrayRef for &[u16] {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(UInt16, self.to_vec())
+        }
+    }
+
+    impl IntoArrayRef for &[Option<u16>] {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(UInt16, self.to_vec())
+        }
+    }
+
+    impl IntoArrayRef for Vec<u32> {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(UInt32, self)
+        }
+    }
+
+    impl IntoArrayRef for Vec<Option<u32>> {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(UInt32, self)
+        }
+    }
+
+    impl IntoArrayRef for &[u32] {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(UInt32, self.to_vec())
+        }
+    }
+
+    impl IntoArrayRef for &[Option<u32>] {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(UInt32, self.to_vec())
+        }
+    }
+
+    impl IntoArrayRef for Vec<u64> {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(UInt64, self)
+        }
+    }
+
+    impl IntoArrayRef for Vec<Option<u64>> {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(UInt64, self)
+        }
+    }
+
+    impl IntoArrayRef for &[u64] {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(UInt64, self.to_vec())
+        }
+    }
+
+    impl IntoArrayRef for &[Option<u64>] {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(UInt64, self.to_vec())
+        }
+    }
+
+    //#TODO add impl for f16
+
+    impl IntoArrayRef for Vec<f32> {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(Float32, self)
+        }
+    }
+
+    impl IntoArrayRef for Vec<Option<f32>> {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(Float32, self)
+        }
+    }
+
+    impl IntoArrayRef for &[f32] {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(Float32, self.to_vec())
+        }
+    }
+
+    impl IntoArrayRef for &[Option<f32>] {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(Float32, self.to_vec())
+        }
+    }
+
+    impl IntoArrayRef for Vec<f64> {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(Float64, self)
+        }
+    }
+
+    impl IntoArrayRef for Vec<Option<f64>> {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(Float64, self)
+        }
+    }
+
+    impl IntoArrayRef for &[f64] {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(Float64, self.to_vec())
+        }
+    }
+
+    impl IntoArrayRef for &[Option<f64>] {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(Float64, self.to_vec())
+        }
+    }
+
+    impl IntoArrayRef for Vec<&str> {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(Utf8, self)
+        }
+    }
+
+    impl IntoArrayRef for Vec<Option<&str>> {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(Utf8, self)
+        }
+    }
+
+    impl IntoArrayRef for &[&str] {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(Utf8, self.to_vec())
+        }
+    }
+
+    impl IntoArrayRef for &[Option<&str>] {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(Utf8, self.to_vec())
+        }
+    }
+
+    impl IntoArrayRef for Vec<String> {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(Utf8, self)
+        }
+    }
+
+    impl IntoArrayRef for Vec<Option<String>> {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(Utf8, self)
+        }
+    }
+
+    impl IntoArrayRef for &[String] {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(Utf8, self.to_vec())
+        }
+    }
+
+    impl IntoArrayRef for &[Option<String>] {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(Utf8, self.to_vec())
         }
     }
 }

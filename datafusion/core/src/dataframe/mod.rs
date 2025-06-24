@@ -33,8 +33,8 @@ use crate::execution::context::{SessionState, TaskContext};
 use crate::execution::FunctionRegistry;
 use crate::logical_expr::utils::find_window_exprs;
 use crate::logical_expr::{
-    col, Expr, JoinType, LogicalPlan, LogicalPlanBuilder, LogicalPlanBuilderOptions,
-    Partitioning, TableType,
+    col, ident, Expr, JoinType, LogicalPlan, LogicalPlanBuilder,
+    LogicalPlanBuilderOptions, Partitioning, TableType,
 };
 use crate::physical_plan::{
     collect, collect_partitioned, execute_stream, execute_stream_partitioned,
@@ -166,9 +166,12 @@ impl Default for DataFrameWriteOptions {
 ///
 /// # Example
 /// ```
+/// # use std::sync::Arc;
 /// # use datafusion::prelude::*;
 /// # use datafusion::error::Result;
 /// # use datafusion::functions_aggregate::expr_fn::min;
+/// # use datafusion::arrow::array::{Int32Array, RecordBatch, StringArray};
+/// # use datafusion::arrow::datatypes::{DataType, Field, Schema};
 /// # #[tokio::main]
 /// # async fn main() -> Result<()> {
 /// let ctx = SessionContext::new();
@@ -181,6 +184,28 @@ impl Default for DataFrameWriteOptions {
 ///            .limit(0, Some(100))?;
 /// // Perform the actual computation
 /// let results = df.collect();
+///
+/// // Create a new dataframe with in-memory data
+/// let schema = Schema::new(vec![
+///     Field::new("id", DataType::Int32, true),
+///     Field::new("name", DataType::Utf8, true),
+/// ]);
+/// let batch = RecordBatch::try_new(
+///     Arc::new(schema),
+///     vec![
+///         Arc::new(Int32Array::from(vec![1, 2, 3])),
+///         Arc::new(StringArray::from(vec!["foo", "bar", "baz"])),
+///     ],
+/// )?;
+/// let df = ctx.read_batch(batch)?;
+/// df.show().await?;
+///
+/// // Create a new dataframe with in-memory data using macro
+/// let df = dataframe!(
+///     "id" => [1, 2, 3],
+///     "name" => ["foo", "bar", "baz"]
+///  )?;
+/// df.show().await?;
 /// # Ok(())
 /// # }
 /// ```
@@ -934,7 +959,7 @@ impl DataFrame {
                 vec![],
                 original_schema_fields
                     .clone()
-                    .map(|f| count(col(f.name())).alias(f.name()))
+                    .map(|f| count(ident(f.name())).alias(f.name()))
                     .collect::<Vec<_>>(),
             ),
             // null_count aggregation
@@ -943,7 +968,7 @@ impl DataFrame {
                 original_schema_fields
                     .clone()
                     .map(|f| {
-                        sum(case(is_null(col(f.name())))
+                        sum(case(is_null(ident(f.name())))
                             .when(lit(true), lit(1))
                             .otherwise(lit(0))
                             .unwrap())
@@ -957,7 +982,7 @@ impl DataFrame {
                 original_schema_fields
                     .clone()
                     .filter(|f| f.data_type().is_numeric())
-                    .map(|f| avg(col(f.name())).alias(f.name()))
+                    .map(|f| avg(ident(f.name())).alias(f.name()))
                     .collect::<Vec<_>>(),
             ),
             // std aggregation
@@ -966,7 +991,7 @@ impl DataFrame {
                 original_schema_fields
                     .clone()
                     .filter(|f| f.data_type().is_numeric())
-                    .map(|f| stddev(col(f.name())).alias(f.name()))
+                    .map(|f| stddev(ident(f.name())).alias(f.name()))
                     .collect::<Vec<_>>(),
             ),
             // min aggregation
@@ -977,7 +1002,7 @@ impl DataFrame {
                     .filter(|f| {
                         !matches!(f.data_type(), DataType::Binary | DataType::Boolean)
                     })
-                    .map(|f| min(col(f.name())).alias(f.name()))
+                    .map(|f| min(ident(f.name())).alias(f.name()))
                     .collect::<Vec<_>>(),
             ),
             // max aggregation
@@ -988,7 +1013,7 @@ impl DataFrame {
                     .filter(|f| {
                         !matches!(f.data_type(), DataType::Binary | DataType::Boolean)
                     })
-                    .map(|f| max(col(f.name())).alias(f.name()))
+                    .map(|f| max(ident(f.name())).alias(f.name()))
                     .collect::<Vec<_>>(),
             ),
             // median aggregation
@@ -997,7 +1022,7 @@ impl DataFrame {
                 original_schema_fields
                     .clone()
                     .filter(|f| f.data_type().is_numeric())
-                    .map(|f| median(col(f.name())).alias(f.name()))
+                    .map(|f| median(ident(f.name())).alias(f.name()))
                     .collect::<Vec<_>>(),
             ),
         ];
@@ -1312,7 +1337,10 @@ impl DataFrame {
     /// ```
     pub async fn count(self) -> Result<usize> {
         let rows = self
-            .aggregate(vec![], vec![count(Expr::Literal(COUNT_STAR_EXPANSION))])?
+            .aggregate(
+                vec![],
+                vec![count(Expr::Literal(COUNT_STAR_EXPANSION, None))],
+            )?
             .collect()
             .await?;
         let len = *rows
@@ -1366,8 +1394,47 @@ impl DataFrame {
     /// # }
     /// ```
     pub async fn show(self) -> Result<()> {
+        println!("{}", self.to_string().await?);
+        Ok(())
+    }
+
+    /// Execute the `DataFrame` and return a string representation of the results.
+    ///
+    /// # Example
+    /// ```
+    /// # use datafusion::prelude::*;
+    /// # use datafusion::error::Result;
+    /// # use datafusion::execution::SessionStateBuilder;
+    ///
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// let cfg = SessionConfig::new()
+    ///     .set_str("datafusion.format.null", "no-value");
+    /// let session_state = SessionStateBuilder::new()
+    ///     .with_config(cfg)
+    ///     .with_default_features()
+    ///     .build();
+    /// let ctx = SessionContext::new_with_state(session_state);
+    /// let df = ctx.sql("select null as 'null-column'").await?;
+    /// let result = df.to_string().await?;
+    /// assert_eq!(result,
+    /// "+-------------+
+    /// | null-column |
+    /// +-------------+
+    /// | no-value    |
+    /// +-------------+"
+    /// );
+    /// # Ok(())
+    /// # }
+    pub async fn to_string(self) -> Result<String> {
+        let options = self.session_state.config().options().format.clone();
+        let arrow_options: arrow::util::display::FormatOptions = (&options).try_into()?;
+
         let results = self.collect().await?;
-        Ok(pretty::print_batches(&results)?)
+        Ok(
+            pretty::pretty_format_batches_with_options(&results, &arrow_options)?
+                .to_string(),
+        )
     }
 
     /// Execute the `DataFrame` and print only the first `num` rows of the
@@ -2160,6 +2227,94 @@ impl DataFrame {
             })
             .collect()
     }
+
+    /// Helper for creating DataFrame.
+    /// # Example
+    /// ```
+    /// use std::sync::Arc;
+    /// use arrow::array::{ArrayRef, Int32Array, StringArray};
+    /// use datafusion::prelude::DataFrame;
+    /// let id: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
+    /// let name: ArrayRef = Arc::new(StringArray::from(vec!["foo", "bar", "baz"]));
+    /// let df = DataFrame::from_columns(vec![("id", id), ("name", name)]).unwrap();
+    /// // +----+------+,
+    /// // | id | name |,
+    /// // +----+------+,
+    /// // | 1  | foo  |,
+    /// // | 2  | bar  |,
+    /// // | 3  | baz  |,
+    /// // +----+------+,
+    /// ```
+    pub fn from_columns(columns: Vec<(&str, ArrayRef)>) -> Result<Self> {
+        let fields = columns
+            .iter()
+            .map(|(name, array)| Field::new(*name, array.data_type().clone(), true))
+            .collect::<Vec<_>>();
+
+        let arrays = columns
+            .into_iter()
+            .map(|(_, array)| array)
+            .collect::<Vec<_>>();
+
+        let schema = Arc::new(Schema::new(fields));
+        let batch = RecordBatch::try_new(schema, arrays)?;
+        let ctx = SessionContext::new();
+        let df = ctx.read_batch(batch)?;
+        Ok(df)
+    }
+}
+
+/// Macro for creating DataFrame.
+/// # Example
+/// ```
+/// use datafusion::prelude::dataframe;
+/// # use datafusion::error::Result;
+/// # #[tokio::main]
+/// # async fn main() -> Result<()> {
+/// let df = dataframe!(
+///    "id" => [1, 2, 3],
+///    "name" => ["foo", "bar", "baz"]
+///  )?;
+/// df.show().await?;
+/// // +----+------+,
+/// // | id | name |,
+/// // +----+------+,
+/// // | 1  | foo  |,
+/// // | 2  | bar  |,
+/// // | 3  | baz  |,
+/// // +----+------+,
+/// let df_empty = dataframe!()?; // empty DataFrame
+/// assert_eq!(df_empty.schema().fields().len(), 0);
+/// assert_eq!(df_empty.count().await?, 0);
+/// # Ok(())
+/// # }
+/// ```
+#[macro_export]
+macro_rules! dataframe {
+    () => {{
+        use std::sync::Arc;
+
+        use datafusion::prelude::SessionContext;
+        use datafusion::arrow::array::RecordBatch;
+        use datafusion::arrow::datatypes::Schema;
+
+        let ctx = SessionContext::new();
+        let batch = RecordBatch::new_empty(Arc::new(Schema::empty()));
+        ctx.read_batch(batch)
+    }};
+
+    ($($name:expr => $data:expr),+ $(,)?) => {{
+        use datafusion::prelude::DataFrame;
+        use datafusion::common::test_util::IntoArrayRef;
+
+        let columns = vec![
+            $(
+                ($name, $data.into_array_ref()),
+            )+
+        ];
+
+        DataFrame::from_columns(columns)
+    }};
 }
 
 #[derive(Debug)]

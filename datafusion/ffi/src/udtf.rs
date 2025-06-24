@@ -214,7 +214,7 @@ mod tests {
             let args = args
                 .iter()
                 .map(|arg| {
-                    if let Expr::Literal(scalar) = arg {
+                    if let Expr::Literal(scalar, _) = arg {
                         Ok(scalar)
                     } else {
                         exec_err!("Expected only literal arguments to table udf")
@@ -243,21 +243,21 @@ mod tests {
                     ScalarValue::Utf8(s) => {
                         let s_vec = vec![s.to_owned(); num_rows];
                         (
-                            Field::new(format!("field-{}", idx), DataType::Utf8, true),
+                            Field::new(format!("field-{idx}"), DataType::Utf8, true),
                             Arc::new(StringArray::from(s_vec)) as ArrayRef,
                         )
                     }
                     ScalarValue::UInt64(v) => {
                         let v_vec = vec![v.to_owned(); num_rows];
                         (
-                            Field::new(format!("field-{}", idx), DataType::UInt64, true),
+                            Field::new(format!("field-{idx}"), DataType::UInt64, true),
                             Arc::new(UInt64Array::from(v_vec)) as ArrayRef,
                         )
                     }
                     ScalarValue::Float64(v) => {
                         let v_vec = vec![v.to_owned(); num_rows];
                         (
-                            Field::new(format!("field-{}", idx), DataType::Float64, true),
+                            Field::new(format!("field-{idx}"), DataType::Float64, true),
                             Arc::new(Float64Array::from(v_vec)) as ArrayRef,
                         )
                     }

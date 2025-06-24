@@ -27,7 +27,10 @@ pub(crate) mod test_util {
 
     use crate::test::object_store::local_unpartitioned_file;
 
-    /// Writes `batches` to a temporary parquet file
+    /// Writes each `batch` to at least one temporary parquet file
+    ///
+    /// For example, if `batches` contains 2 batches, the function will create
+    /// 2 temporary files, each containing the contents of one batch
     ///
     /// If multi_page is set to `true`, the parquet file(s) are written
     /// with 2 rows per data page (used to test page filtering and
@@ -52,7 +55,7 @@ pub(crate) mod test_util {
             }
         }
 
-        // we need the tmp files to be sorted as some tests rely on the how the returning files are ordered
+        // we need the tmp files to be sorted as some tests rely on the returned file ordering
         // https://github.com/apache/datafusion/pull/6629
         let tmp_files = {
             let mut tmp_files: Vec<_> = (0..batches.len())
@@ -104,10 +107,8 @@ pub(crate) mod test_util {
 mod tests {
 
     use std::fmt::{self, Display, Formatter};
-    use std::pin::Pin;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
-    use std::task::{Context, Poll};
     use std::time::Duration;
 
     use crate::datasource::file_format::parquet::test_util::store_parquet;
@@ -117,7 +118,7 @@ mod tests {
     use crate::prelude::{ParquetReadOptions, SessionConfig, SessionContext};
 
     use arrow::array::RecordBatch;
-    use arrow_schema::{Schema, SchemaRef};
+    use arrow_schema::Schema;
     use datafusion_catalog::Session;
     use datafusion_common::cast::{
         as_binary_array, as_binary_view_array, as_boolean_array, as_float32_array,
@@ -137,7 +138,7 @@ mod tests {
     };
     use datafusion_execution::object_store::ObjectStoreUrl;
     use datafusion_execution::runtime_env::RuntimeEnv;
-    use datafusion_execution::{RecordBatchStream, TaskContext};
+    use datafusion_execution::TaskContext;
     use datafusion_expr::dml::InsertOp;
     use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
     use datafusion_physical_plan::{collect, ExecutionPlan};
@@ -150,7 +151,7 @@ mod tests {
     use async_trait::async_trait;
     use datafusion_datasource::file_groups::FileGroup;
     use futures::stream::BoxStream;
-    use futures::{Stream, StreamExt};
+    use futures::StreamExt;
     use insta::assert_snapshot;
     use log::error;
     use object_store::local::LocalFileSystem;
@@ -165,6 +166,8 @@ mod tests {
     use parquet::file::page_index::index::Index;
     use parquet::format::FileMetaData;
     use tokio::fs::File;
+
+    use crate::test_util::bounded_stream;
 
     enum ForceViews {
         Yes,
@@ -616,9 +619,15 @@ mod tests {
         assert_eq!(tt_batches, 4 /* 8/2 */);
 
         // test metadata
-        assert_eq!(exec.statistics()?.num_rows, Precision::Exact(8));
+        assert_eq!(
+            exec.partition_statistics(None)?.num_rows,
+            Precision::Exact(8)
+        );
         // TODO correct byte size: https://github.com/apache/datafusion/issues/14936
-        assert_eq!(exec.statistics()?.total_byte_size, Precision::Exact(671));
+        assert_eq!(
+            exec.partition_statistics(None)?.total_byte_size,
+            Precision::Exact(671)
+        );
 
         Ok(())
     }
@@ -659,9 +668,15 @@ mod tests {
             get_exec(&state, "alltypes_plain.parquet", projection, Some(1)).await?;
 
         // note: even if the limit is set, the executor rounds up to the batch size
-        assert_eq!(exec.statistics()?.num_rows, Precision::Exact(8));
+        assert_eq!(
+            exec.partition_statistics(None)?.num_rows,
+            Precision::Exact(8)
+        );
         // TODO correct byte size: https://github.com/apache/datafusion/issues/14936
-        assert_eq!(exec.statistics()?.total_byte_size, Precision::Exact(671));
+        assert_eq!(
+            exec.partition_statistics(None)?.total_byte_size,
+            Precision::Exact(671)
+        );
         let batches = collect(exec, task_ctx).await?;
         assert_eq!(1, batches.len());
         assert_eq!(11, batches[0].num_columns());
@@ -1073,7 +1088,7 @@ mod tests {
         let format = state
             .get_file_format_factory("parquet")
             .map(|factory| factory.create(state, &Default::default()).unwrap())
-            .unwrap_or(Arc::new(ParquetFormat::new()));
+            .unwrap_or_else(|| Arc::new(ParquetFormat::new()));
 
         scan_format(
             state, &*format, None, &testdata, file_name, projection, limit,
@@ -1308,7 +1323,7 @@ mod tests {
     #[tokio::test]
     async fn parquet_sink_write_with_extension() -> Result<()> {
         let filename = "test_file.custom_ext";
-        let file_path = format!("file:///path/to/{}", filename);
+        let file_path = format!("file:///path/to/{filename}");
         let parquet_sink = create_written_parquet_sink(file_path.as_str()).await?;
 
         // assert written to proper path
@@ -1523,8 +1538,7 @@ mod tests {
             let prefix = path_parts[0].as_ref();
             assert!(
                 expected_partitions.contains(prefix),
-                "expected path prefix to match partition, instead found {:?}",
-                prefix
+                "expected path prefix to match partition, instead found {prefix:?}"
             );
             expected_partitions.remove(prefix);
 
@@ -1647,44 +1661,5 @@ mod tests {
             .expect("should track for column-parallel writes");
 
         Ok(())
-    }
-
-    /// Creates an bounded stream for testing purposes.
-    fn bounded_stream(
-        batch: RecordBatch,
-        limit: usize,
-    ) -> datafusion_execution::SendableRecordBatchStream {
-        Box::pin(BoundedStream {
-            count: 0,
-            limit,
-            batch,
-        })
-    }
-
-    struct BoundedStream {
-        limit: usize,
-        count: usize,
-        batch: RecordBatch,
-    }
-
-    impl Stream for BoundedStream {
-        type Item = Result<RecordBatch>;
-
-        fn poll_next(
-            mut self: Pin<&mut Self>,
-            _cx: &mut Context<'_>,
-        ) -> Poll<Option<Self::Item>> {
-            if self.count >= self.limit {
-                return Poll::Ready(None);
-            }
-            self.count += 1;
-            Poll::Ready(Some(Ok(self.batch.clone())))
-        }
-    }
-
-    impl RecordBatchStream for BoundedStream {
-        fn schema(&self) -> SchemaRef {
-            self.batch.schema()
-        }
     }
 }

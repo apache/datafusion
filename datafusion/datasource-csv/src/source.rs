@@ -17,6 +17,7 @@
 
 //! Execution plan for reading CSV files
 
+use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
 use std::any::Any;
 use std::fmt;
 use std::io::{Read, Seek, SeekFrom};
@@ -28,378 +29,26 @@ use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_meta::FileMeta;
 use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
 use datafusion_datasource::{
-    calculate_range, FileRange, ListingTableUrl, RangeCalculation,
+    as_file_source, calculate_range, FileRange, ListingTableUrl, RangeCalculation,
 };
 
 use arrow::csv;
 use arrow::datatypes::SchemaRef;
-use datafusion_common::config::ConfigOptions;
-use datafusion_common::{Constraints, DataFusionError, Result, Statistics};
+use datafusion_common::{DataFusionError, Result, Statistics};
 use datafusion_common_runtime::JoinSet;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
-use datafusion_datasource::source::DataSourceExec;
-use datafusion_execution::{SendableRecordBatchStream, TaskContext};
-use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
-use datafusion_physical_expr_common::sort_expr::LexOrdering;
-use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
-use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
-use datafusion_physical_plan::projection::ProjectionExec;
+use datafusion_execution::TaskContext;
+use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion_physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
+    DisplayFormatType, ExecutionPlan, ExecutionPlanProperties,
 };
 
 use crate::file_format::CsvDecoder;
-use datafusion_datasource::file_groups::FileGroup;
 use futures::{StreamExt, TryStreamExt};
 use object_store::buffered::BufWriter;
 use object_store::{GetOptions, GetResultPayload, ObjectStore};
 use tokio::io::AsyncWriteExt;
-
-/// Old Csv source, deprecated with DataSourceExec implementation and CsvSource
-///
-/// See examples on `CsvSource`
-#[derive(Debug, Clone)]
-#[deprecated(since = "46.0.0", note = "use DataSourceExec instead")]
-pub struct CsvExec {
-    base_config: FileScanConfig,
-    inner: DataSourceExec,
-}
-
-/// Builder for [`CsvExec`].
-///
-/// See example on [`CsvExec`].
-#[derive(Debug, Clone)]
-#[deprecated(since = "46.0.0", note = "use FileScanConfig instead")]
-pub struct CsvExecBuilder {
-    file_scan_config: FileScanConfig,
-    file_compression_type: FileCompressionType,
-    // TODO: it seems like these format options could be reused across all the various CSV config
-    has_header: bool,
-    delimiter: u8,
-    quote: u8,
-    terminator: Option<u8>,
-    escape: Option<u8>,
-    comment: Option<u8>,
-    newlines_in_values: bool,
-}
-
-#[allow(unused, deprecated)]
-impl CsvExecBuilder {
-    /// Create a new builder to read the provided file scan configuration.
-    pub fn new(file_scan_config: FileScanConfig) -> Self {
-        Self {
-            file_scan_config,
-            // TODO: these defaults are duplicated from `CsvOptions` - should they be computed?
-            has_header: false,
-            delimiter: b',',
-            quote: b'"',
-            terminator: None,
-            escape: None,
-            comment: None,
-            newlines_in_values: false,
-            file_compression_type: FileCompressionType::UNCOMPRESSED,
-        }
-    }
-
-    /// Set whether the first row defines the column names.
-    ///
-    /// The default value is `false`.
-    pub fn with_has_header(mut self, has_header: bool) -> Self {
-        self.has_header = has_header;
-        self
-    }
-
-    /// Set the column delimeter.
-    ///
-    /// The default is `,`.
-    pub fn with_delimeter(mut self, delimiter: u8) -> Self {
-        self.delimiter = delimiter;
-        self
-    }
-
-    /// Set the quote character.
-    ///
-    /// The default is `"`.
-    pub fn with_quote(mut self, quote: u8) -> Self {
-        self.quote = quote;
-        self
-    }
-
-    /// Set the line terminator. If not set, the default is CRLF.
-    ///
-    /// The default is None.
-    pub fn with_terminator(mut self, terminator: Option<u8>) -> Self {
-        self.terminator = terminator;
-        self
-    }
-
-    /// Set the escape character.
-    ///
-    /// The default is `None` (i.e. quotes cannot be escaped).
-    pub fn with_escape(mut self, escape: Option<u8>) -> Self {
-        self.escape = escape;
-        self
-    }
-
-    /// Set the comment character.
-    ///
-    /// The default is `None` (i.e. comments are not supported).
-    pub fn with_comment(mut self, comment: Option<u8>) -> Self {
-        self.comment = comment;
-        self
-    }
-
-    /// Set whether newlines in (quoted) values are supported.
-    ///
-    /// Parsing newlines in quoted values may be affected by execution behaviour such as
-    /// parallel file scanning. Setting this to `true` ensures that newlines in values are
-    /// parsed successfully, which may reduce performance.
-    ///
-    /// The default value is `false`.
-    pub fn with_newlines_in_values(mut self, newlines_in_values: bool) -> Self {
-        self.newlines_in_values = newlines_in_values;
-        self
-    }
-
-    /// Set the file compression type.
-    ///
-    /// The default is [`FileCompressionType::UNCOMPRESSED`].
-    pub fn with_file_compression_type(
-        mut self,
-        file_compression_type: FileCompressionType,
-    ) -> Self {
-        self.file_compression_type = file_compression_type;
-        self
-    }
-
-    /// Build a [`CsvExec`].
-    #[must_use]
-    pub fn build(self) -> CsvExec {
-        let Self {
-            file_scan_config: base_config,
-            file_compression_type,
-            has_header,
-            delimiter,
-            quote,
-            terminator,
-            escape,
-            comment,
-            newlines_in_values,
-        } = self;
-
-        let (
-            projected_schema,
-            projected_constraints,
-            projected_statistics,
-            projected_output_ordering,
-        ) = base_config.project();
-        let cache = CsvExec::compute_properties(
-            projected_schema,
-            &projected_output_ordering,
-            projected_constraints,
-            &base_config,
-        );
-        let csv = CsvSource::new(has_header, delimiter, quote)
-            .with_comment(comment)
-            .with_escape(escape)
-            .with_terminator(terminator);
-        let base_config = base_config
-            .with_newlines_in_values(newlines_in_values)
-            .with_file_compression_type(file_compression_type)
-            .with_source(Arc::new(csv));
-
-        CsvExec {
-            inner: DataSourceExec::new(Arc::new(base_config.clone())),
-            base_config,
-        }
-    }
-}
-
-#[allow(unused, deprecated)]
-impl CsvExec {
-    /// Create a new CSV reader execution plan provided base and specific configurations
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        base_config: FileScanConfig,
-        has_header: bool,
-        delimiter: u8,
-        quote: u8,
-        terminator: Option<u8>,
-        escape: Option<u8>,
-        comment: Option<u8>,
-        newlines_in_values: bool,
-        file_compression_type: FileCompressionType,
-    ) -> Self {
-        CsvExecBuilder::new(base_config)
-            .with_has_header(has_header)
-            .with_delimeter(delimiter)
-            .with_quote(quote)
-            .with_terminator(terminator)
-            .with_escape(escape)
-            .with_comment(comment)
-            .with_newlines_in_values(newlines_in_values)
-            .with_file_compression_type(file_compression_type)
-            .build()
-    }
-
-    /// Return a [`CsvExecBuilder`].
-    ///
-    /// See example on [`CsvExec`] and [`CsvExecBuilder`] for specifying CSV table options.
-    pub fn builder(file_scan_config: FileScanConfig) -> CsvExecBuilder {
-        CsvExecBuilder::new(file_scan_config)
-    }
-
-    /// Ref to the base configs
-    pub fn base_config(&self) -> &FileScanConfig {
-        &self.base_config
-    }
-
-    fn file_scan_config(&self) -> FileScanConfig {
-        self.inner
-            .data_source()
-            .as_any()
-            .downcast_ref::<FileScanConfig>()
-            .unwrap()
-            .clone()
-    }
-
-    fn csv_source(&self) -> CsvSource {
-        let source = self.file_scan_config();
-        source
-            .file_source()
-            .as_any()
-            .downcast_ref::<CsvSource>()
-            .unwrap()
-            .clone()
-    }
-
-    /// true if the first line of each file is a header
-    pub fn has_header(&self) -> bool {
-        self.csv_source().has_header()
-    }
-
-    /// Specifies whether newlines in (quoted) values are supported.
-    ///
-    /// Parsing newlines in quoted values may be affected by execution behaviour such as
-    /// parallel file scanning. Setting this to `true` ensures that newlines in values are
-    /// parsed successfully, which may reduce performance.
-    ///
-    /// The default behaviour depends on the `datafusion.catalog.newlines_in_values` setting.
-    pub fn newlines_in_values(&self) -> bool {
-        let source = self.file_scan_config();
-        source.newlines_in_values()
-    }
-
-    fn output_partitioning_helper(file_scan_config: &FileScanConfig) -> Partitioning {
-        Partitioning::UnknownPartitioning(file_scan_config.file_groups.len())
-    }
-
-    /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
-    fn compute_properties(
-        schema: SchemaRef,
-        orderings: &[LexOrdering],
-        constraints: Constraints,
-        file_scan_config: &FileScanConfig,
-    ) -> PlanProperties {
-        // Equivalence Properties
-        let eq_properties = EquivalenceProperties::new_with_orderings(schema, orderings)
-            .with_constraints(constraints);
-
-        PlanProperties::new(
-            eq_properties,
-            Self::output_partitioning_helper(file_scan_config), // Output Partitioning
-            EmissionType::Incremental,
-            Boundedness::Bounded,
-        )
-    }
-
-    fn with_file_groups(mut self, file_groups: Vec<FileGroup>) -> Self {
-        self.base_config.file_groups = file_groups.clone();
-        let mut file_source = self.file_scan_config();
-        file_source = file_source.with_file_groups(file_groups);
-        self.inner = self.inner.with_data_source(Arc::new(file_source));
-        self
-    }
-}
-
-#[allow(unused, deprecated)]
-impl DisplayAs for CsvExec {
-    fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
-        self.inner.fmt_as(t, f)
-    }
-}
-
-#[allow(unused, deprecated)]
-impl ExecutionPlan for CsvExec {
-    fn name(&self) -> &'static str {
-        "CsvExec"
-    }
-
-    /// Return a reference to Any that can be used for downcasting
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn properties(&self) -> &PlanProperties {
-        self.inner.properties()
-    }
-
-    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
-        // this is a leaf node and has no children
-        vec![]
-    }
-
-    fn with_new_children(
-        self: Arc<Self>,
-        _: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(self)
-    }
-
-    /// Redistribute files across partitions according to their size
-    /// See comments on `FileGroupPartitioner` for more detail.
-    ///
-    /// Return `None` if can't get repartitioned (empty, compressed file, or `newlines_in_values` set).
-    fn repartitioned(
-        &self,
-        target_partitions: usize,
-        config: &ConfigOptions,
-    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-        self.inner.repartitioned(target_partitions, config)
-    }
-
-    fn execute(
-        &self,
-        partition: usize,
-        context: Arc<TaskContext>,
-    ) -> Result<SendableRecordBatchStream> {
-        self.inner.execute(partition, context)
-    }
-
-    fn statistics(&self) -> Result<Statistics> {
-        self.inner.statistics()
-    }
-
-    fn metrics(&self) -> Option<MetricsSet> {
-        self.inner.metrics()
-    }
-
-    fn fetch(&self) -> Option<usize> {
-        self.inner.fetch()
-    }
-
-    fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
-        self.inner.with_fetch(limit)
-    }
-
-    fn try_swapping_with_projection(
-        &self,
-        projection: &ProjectionExec,
-    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-        self.inner.try_swapping_with_projection(projection)
-    }
-}
 
 /// A Config for [`CsvOpener`]
 ///
@@ -443,6 +92,7 @@ pub struct CsvSource {
     comment: Option<u8>,
     metrics: ExecutionPlanMetricsSet,
     projected_statistics: Option<Statistics>,
+    schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
 }
 
 impl CsvSource {
@@ -564,6 +214,12 @@ impl CsvOpener {
     }
 }
 
+impl From<CsvSource> for Arc<dyn FileSource> {
+    fn from(source: CsvSource) -> Self {
+        as_file_source(source)
+    }
+}
+
 impl FileSource for CsvSource {
     fn create_file_opener(
         &self,
@@ -625,6 +281,20 @@ impl FileSource for CsvSource {
             }
             DisplayFormatType::TreeRender => Ok(()),
         }
+    }
+
+    fn with_schema_adapter_factory(
+        &self,
+        schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
+    ) -> Result<Arc<dyn FileSource>> {
+        Ok(Arc::new(Self {
+            schema_adapter_factory: Some(schema_adapter_factory),
+            ..self.clone()
+        }))
+    }
+
+    fn schema_adapter_factory(&self) -> Option<Arc<dyn SchemaAdapterFactory>> {
+        self.schema_adapter_factory.clone()
     }
 }
 
@@ -743,6 +413,11 @@ pub async fn plan_to_csv(
     let parsed = ListingTableUrl::parse(path)?;
     let object_store_url = parsed.object_store();
     let store = task_ctx.runtime_env().object_store(&object_store_url)?;
+    let writer_buffer_size = task_ctx
+        .session_config()
+        .options()
+        .execution
+        .objectstore_writer_buffer_size;
     let mut join_set = JoinSet::new();
     for i in 0..plan.output_partitioning().partition_count() {
         let storeref = Arc::clone(&store);
@@ -752,7 +427,8 @@ pub async fn plan_to_csv(
 
         let mut stream = plan.execute(i, Arc::clone(&task_ctx))?;
         join_set.spawn(async move {
-            let mut buf_writer = BufWriter::new(storeref, file.clone());
+            let mut buf_writer =
+                BufWriter::with_capacity(storeref, file.clone(), writer_buffer_size);
             let mut buffer = Vec::with_capacity(1024);
             //only write headers on first iteration
             let mut write_headers = true;

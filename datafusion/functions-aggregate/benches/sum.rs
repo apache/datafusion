@@ -26,9 +26,10 @@ use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use std::sync::Arc;
 
 fn prepare_accumulator(data_type: &DataType) -> Box<dyn GroupsAccumulator> {
-    let schema = Arc::new(Schema::new(vec![Field::new("f", data_type.clone(), true)]));
+    let field = Field::new("f", data_type.clone(), true).into();
+    let schema = Arc::new(Schema::new(vec![Arc::clone(&field)]));
     let accumulator_args = AccumulatorArgs {
-        return_type: data_type,
+        return_field: field,
         schema: &schema,
         ignore_nulls: false,
         ordering_req: &LexOrdering::default(),

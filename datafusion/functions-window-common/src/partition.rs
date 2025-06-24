@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion_common::arrow::datatypes::DataType;
+use datafusion_common::arrow::datatypes::FieldRef;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use std::sync::Arc;
 
@@ -26,9 +26,9 @@ pub struct PartitionEvaluatorArgs<'a> {
     /// The expressions passed as arguments to the user-defined window
     /// function.
     input_exprs: &'a [Arc<dyn PhysicalExpr>],
-    /// The corresponding data types of expressions passed as arguments
+    /// The corresponding fields of expressions passed as arguments
     /// to the user-defined window function.
-    input_types: &'a [DataType],
+    input_fields: &'a [FieldRef],
     /// Set to `true` if the user-defined window function is reversed.
     is_reversed: bool,
     /// Set to `true` if `IGNORE NULLS` is specified.
@@ -51,13 +51,13 @@ impl<'a> PartitionEvaluatorArgs<'a> {
     ///
     pub fn new(
         input_exprs: &'a [Arc<dyn PhysicalExpr>],
-        input_types: &'a [DataType],
+        input_fields: &'a [FieldRef],
         is_reversed: bool,
         ignore_nulls: bool,
     ) -> Self {
         Self {
             input_exprs,
-            input_types,
+            input_fields,
             is_reversed,
             ignore_nulls,
         }
@@ -69,10 +69,10 @@ impl<'a> PartitionEvaluatorArgs<'a> {
         self.input_exprs
     }
 
-    /// Returns the [`DataType`]s corresponding to the input expressions
+    /// Returns the [`FieldRef`]s corresponding to the input expressions
     /// to the user-defined window function.
-    pub fn input_types(&self) -> &'a [DataType] {
-        self.input_types
+    pub fn input_fields(&self) -> &'a [FieldRef] {
+        self.input_fields
     }
 
     /// Returns `true` when the user-defined window function is

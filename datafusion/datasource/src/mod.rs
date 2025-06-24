@@ -48,6 +48,7 @@ pub mod test_util;
 
 pub mod url;
 pub mod write;
+pub use self::file::as_file_source;
 pub use self::url::ListingTableUrl;
 use crate::file_groups::FileGroup;
 use chrono::TimeZone;
@@ -379,7 +380,7 @@ pub fn generate_test_files(num_files: usize, overlap_factor: f64) -> Vec<FileGro
 
         let file = PartitionedFile {
             object_meta: ObjectMeta {
-                location: Path::from(format!("file_{}.parquet", i)),
+                location: Path::from(format!("file_{i}.parquet")),
                 last_modified: chrono::Utc::now(),
                 size: 1000,
                 e_tag: None,

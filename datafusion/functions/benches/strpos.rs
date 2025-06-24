@@ -18,10 +18,10 @@
 extern crate criterion;
 
 use arrow::array::{StringArray, StringViewArray};
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field};
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
-use rand::distributions::Alphanumeric;
+use rand::distr::Alphanumeric;
 use rand::prelude::StdRng;
 use rand::{Rng, SeedableRng};
 use std::str::Chars;
@@ -46,7 +46,7 @@ fn gen_string_array(
     let mut output_string_vec: Vec<Option<String>> = Vec::with_capacity(n_rows);
     let mut output_sub_string_vec: Vec<Option<String>> = Vec::with_capacity(n_rows);
     for _ in 0..n_rows {
-        let rand_num = rng_ref.gen::<f32>(); // [0.0, 1.0)
+        let rand_num = rng_ref.random::<f32>(); // [0.0, 1.0)
         if rand_num < null_density {
             output_sub_string_vec.push(None);
             output_string_vec.push(None);
@@ -54,7 +54,7 @@ fn gen_string_array(
             // Generate random UTF8 string
             let mut generated_string = String::with_capacity(str_len_chars);
             for _ in 0..str_len_chars {
-                let idx = rng_ref.gen_range(0..corpus_char_count);
+                let idx = rng_ref.random_range(0..corpus_char_count);
                 let char = utf8.chars().nth(idx).unwrap();
                 generated_string.push(char);
             }
@@ -94,8 +94,8 @@ fn random_substring(chars: Chars) -> String {
     // get the substring of a random length from the input string by byte unit
     let mut rng = StdRng::seed_from_u64(44);
     let count = chars.clone().count();
-    let start = rng.gen_range(0..count - 1);
-    let end = rng.gen_range(start + 1..count);
+    let start = rng.random_range(0..count - 1);
+    let end = rng.random_range(start + 1..count);
     chars
         .enumerate()
         .filter(|(i, _)| *i >= start && *i < end)
@@ -111,14 +111,18 @@ fn criterion_benchmark(c: &mut Criterion) {
     for str_len in [8, 32, 128, 4096] {
         // StringArray ASCII only
         let args_string_ascii = gen_string_array(n_rows, str_len, 0.1, 0.0, false);
+        let arg_fields =
+            vec![Field::new("a", args_string_ascii[0].data_type(), true).into()];
+        let return_field = Field::new("f", DataType::Int32, true).into();
         c.bench_function(
-            &format!("strpos_StringArray_ascii_str_len_{}", str_len),
+            &format!("strpos_StringArray_ascii_str_len_{str_len}"),
             |b| {
                 b.iter(|| {
                     black_box(strpos.invoke_with_args(ScalarFunctionArgs {
                         args: args_string_ascii.clone(),
+                        arg_fields: arg_fields.clone(),
                         number_rows: n_rows,
-                        return_type: &DataType::Int32,
+                        return_field: Arc::clone(&return_field),
                     }))
                 })
             },
@@ -126,29 +130,34 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         // StringArray UTF8
         let args_string_utf8 = gen_string_array(n_rows, str_len, 0.1, 0.5, false);
-        c.bench_function(
-            &format!("strpos_StringArray_utf8_str_len_{}", str_len),
-            |b| {
-                b.iter(|| {
-                    black_box(strpos.invoke_with_args(ScalarFunctionArgs {
-                        args: args_string_utf8.clone(),
-                        number_rows: n_rows,
-                        return_type: &DataType::Int32,
-                    }))
-                })
-            },
-        );
+        let arg_fields =
+            vec![Field::new("a", args_string_utf8[0].data_type(), true).into()];
+        let return_field = Field::new("f", DataType::Int32, true).into();
+        c.bench_function(&format!("strpos_StringArray_utf8_str_len_{str_len}"), |b| {
+            b.iter(|| {
+                black_box(strpos.invoke_with_args(ScalarFunctionArgs {
+                    args: args_string_utf8.clone(),
+                    arg_fields: arg_fields.clone(),
+                    number_rows: n_rows,
+                    return_field: Arc::clone(&return_field),
+                }))
+            })
+        });
 
         // StringViewArray ASCII only
         let args_string_view_ascii = gen_string_array(n_rows, str_len, 0.1, 0.0, true);
+        let arg_fields =
+            vec![Field::new("a", args_string_view_ascii[0].data_type(), true).into()];
+        let return_field = Field::new("f", DataType::Int32, true).into();
         c.bench_function(
-            &format!("strpos_StringViewArray_ascii_str_len_{}", str_len),
+            &format!("strpos_StringViewArray_ascii_str_len_{str_len}"),
             |b| {
                 b.iter(|| {
                     black_box(strpos.invoke_with_args(ScalarFunctionArgs {
                         args: args_string_view_ascii.clone(),
+                        arg_fields: arg_fields.clone(),
                         number_rows: n_rows,
-                        return_type: &DataType::Int32,
+                        return_field: Arc::clone(&return_field),
                     }))
                 })
             },
@@ -156,14 +165,18 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         // StringViewArray UTF8
         let args_string_view_utf8 = gen_string_array(n_rows, str_len, 0.1, 0.5, true);
+        let arg_fields =
+            vec![Field::new("a", args_string_view_utf8[0].data_type(), true).into()];
+        let return_field = Field::new("f", DataType::Int32, true).into();
         c.bench_function(
-            &format!("strpos_StringViewArray_utf8_str_len_{}", str_len),
+            &format!("strpos_StringViewArray_utf8_str_len_{str_len}"),
             |b| {
                 b.iter(|| {
                     black_box(strpos.invoke_with_args(ScalarFunctionArgs {
                         args: args_string_view_utf8.clone(),
+                        arg_fields: arg_fields.clone(),
                         number_rows: n_rows,
-                        return_type: &DataType::Int32,
+                        return_field: Arc::clone(&return_field),
                     }))
                 })
             },

@@ -337,10 +337,15 @@ impl ExecutionPlan for CrossJoinExec {
     }
 
     fn statistics(&self) -> Result<Statistics> {
-        Ok(stats_cartesian_product(
-            self.left.statistics()?,
-            self.right.statistics()?,
-        ))
+        self.partition_statistics(None)
+    }
+
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        // Get the all partitions statistics of the left
+        let left_stats = self.left.partition_statistics(None)?;
+        let right_stats = self.right.partition_statistics(partition)?;
+
+        Ok(stats_cartesian_product(left_stats, right_stats))
     }
 
     fn with_node_id(
@@ -879,7 +884,7 @@ mod tests {
 
         assert_contains!(
             err.to_string(),
-            "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as: CrossJoinExec"
+            "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:\n  CrossJoinExec"
         );
 
         Ok(())

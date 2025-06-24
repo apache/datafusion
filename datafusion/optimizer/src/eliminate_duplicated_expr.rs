@@ -118,16 +118,26 @@ impl OptimizerRule for EliminateDuplicatedExpr {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::assert_optimized_plan_eq_snapshot;
     use crate::test::*;
+    use crate::OptimizerContext;
     use datafusion_expr::{col, logical_plan::builder::LogicalPlanBuilder};
     use std::sync::Arc;
 
-    fn assert_optimized_plan_eq(plan: LogicalPlan, expected: &str) -> Result<()> {
-        crate::test::assert_optimized_plan_eq(
-            Arc::new(EliminateDuplicatedExpr::new()),
-            plan,
-            expected,
-        )
+    macro_rules! assert_optimized_plan_equal {
+        (
+            $plan:expr,
+            @ $expected:literal $(,)?
+        ) => {{
+            let optimizer_ctx = OptimizerContext::new().with_max_passes(1);
+            let rules: Vec<Arc<dyn crate::OptimizerRule + Send + Sync>> = vec![Arc::new(EliminateDuplicatedExpr::new())];
+            assert_optimized_plan_eq_snapshot!(
+                optimizer_ctx,
+                rules,
+                $plan,
+                @ $expected,
+            )
+        }};
     }
 
     #[test]
@@ -137,10 +147,12 @@ mod tests {
             .sort_by(vec![col("a"), col("a"), col("b"), col("c")])?
             .limit(5, Some(10))?
             .build()?;
-        let expected = "Limit: skip=5, fetch=10\
-        \n  Sort: test.a ASC NULLS LAST, test.b ASC NULLS LAST, test.c ASC NULLS LAST\
-        \n    TableScan: test";
-        assert_optimized_plan_eq(plan, expected)
+
+        assert_optimized_plan_equal!(plan, @r"
+        Limit: skip=5, fetch=10
+          Sort: test.a ASC NULLS LAST, test.b ASC NULLS LAST, test.c ASC NULLS LAST
+            TableScan: test
+        ")
     }
 
     #[test]
@@ -156,9 +168,11 @@ mod tests {
             .sort(sort_exprs)?
             .limit(5, Some(10))?
             .build()?;
-        let expected = "Limit: skip=5, fetch=10\
-        \n  Sort: test.a ASC NULLS FIRST, test.b ASC NULLS LAST\
-        \n    TableScan: test";
-        assert_optimized_plan_eq(plan, expected)
+
+        assert_optimized_plan_equal!(plan, @r"
+        Limit: skip=5, fetch=10
+          Sort: test.a ASC NULLS FIRST, test.b ASC NULLS LAST
+            TableScan: test
+        ")
     }
 }

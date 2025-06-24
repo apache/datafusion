@@ -348,7 +348,7 @@ mod tests {
     use crate::unicode::find_in_set::FindInSetFunc;
     use crate::utils::test::test_function;
     use arrow::array::{Array, Int32Array, StringArray};
-    use arrow::datatypes::DataType::Int32;
+    use arrow::datatypes::{DataType::Int32, Field};
     use datafusion_common::{Result, ScalarValue};
     use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
     use std::sync::Arc;
@@ -471,10 +471,18 @@ mod tests {
                     })
                     .unwrap_or(1);
                 let return_type = fis.return_type(&type_array)?;
+                let arg_fields = args
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, a)| {
+                        Field::new(format!("arg_{idx}"), a.data_type(), true).into()
+                    })
+                    .collect::<Vec<_>>();
                 let result = fis.invoke_with_args(ScalarFunctionArgs {
                     args,
+                    arg_fields,
                     number_rows: cardinality,
-                    return_type: &return_type,
+                    return_field: Field::new("f", return_type, true).into(),
                 });
                 assert!(result.is_ok());
 

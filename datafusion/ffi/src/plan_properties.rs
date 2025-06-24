@@ -300,7 +300,10 @@ impl From<FFI_EmissionType> for EmissionType {
 
 #[cfg(test)]
 mod tests {
-    use datafusion::physical_plan::Partitioning;
+    use datafusion::{
+        physical_expr::{LexOrdering, PhysicalSortExpr},
+        physical_plan::Partitioning,
+    };
 
     use super::*;
 
@@ -311,8 +314,13 @@ mod tests {
             Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, false)]));
 
         let original_props = PlanProperties::new(
-            EquivalenceProperties::new(schema),
-            Partitioning::UnknownPartitioning(3),
+            EquivalenceProperties::new(Arc::clone(&schema)).with_reorder(
+                LexOrdering::new(vec![PhysicalSortExpr {
+                    expr: datafusion::physical_plan::expressions::col("a", &schema)?,
+                    options: Default::default(),
+                }]),
+            ),
+            Partitioning::RoundRobinBatch(3),
             EmissionType::Incremental,
             Boundedness::Bounded,
         );
@@ -321,7 +329,7 @@ mod tests {
 
         let foreign_props: PlanProperties = local_props_ptr.try_into()?;
 
-        assert!(format!("{:?}", foreign_props) == format!("{:?}", original_props));
+        assert_eq!(format!("{foreign_props:?}"), format!("{original_props:?}"));
 
         Ok(())
     }
