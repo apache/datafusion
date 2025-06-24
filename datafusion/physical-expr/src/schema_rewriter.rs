@@ -139,6 +139,7 @@ impl<'a> PhysicalExprSchemaRewriter<'a> {
                     // If the column is missing from the physical schema fill it in with nulls as `SchemaAdapter` would do.
                     // TODO: do we need to sync this with what the `SchemaAdapter` actually does?
                     // While the default implementation fills in nulls in theory a custom `SchemaAdapter` could do something else!
+                    // See https://github.com/apache/datafusion/issues/16527
                     let null_value =
                         ScalarValue::Null.cast_to(logical_field.data_type())?;
                     return Ok(Transformed::yes(expressions::lit(null_value)));
@@ -197,9 +198,12 @@ impl<'a> PhysicalExprSchemaRewriter<'a> {
 
 #[cfg(test)]
 mod tests {
+    use crate::expressions::lit;
+
     use super::*;
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::ScalarValue;
+    use datafusion_expr::Operator;
     use std::sync::Arc;
 
     fn create_test_schema() -> (Schema, Schema) {
@@ -218,18 +222,68 @@ mod tests {
     }
 
     #[test]
-    fn test_rewrite_column_with_type_cast() -> Result<()> {
+    fn test_rewrite_column_with_type_cast() {
         let (physical_schema, logical_schema) = create_test_schema();
 
         let rewriter = PhysicalExprSchemaRewriter::new(&physical_schema, &logical_schema);
         let column_expr = Arc::new(Column::new("a", 0));
 
-        let result = rewriter.rewrite(column_expr)?;
+        let result = rewriter.rewrite(column_expr).unwrap();
 
         // Should be wrapped in a cast expression
         assert!(result.as_any().downcast_ref::<CastExpr>().is_some());
+    }
 
-        Ok(())
+    #[test]
+    fn test_rewrite_mulit_column_expr_with_type_cast() {
+        let (physical_schema, logical_schema) = create_test_schema();
+        let rewriter = PhysicalExprSchemaRewriter::new(&physical_schema, &logical_schema);
+
+        // Create a complex expression: (a + 5) OR (c > 0.0) that tests the recursive case of the rewriter
+        let column_a = Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>;
+        let column_c = Arc::new(Column::new("c", 2)) as Arc<dyn PhysicalExpr>;
+        let expr = expressions::BinaryExpr::new(
+            Arc::clone(&column_a),
+            Operator::Plus,
+            Arc::new(expressions::Literal::new(ScalarValue::Int64(Some(5)))),
+        );
+        let expr = expressions::BinaryExpr::new(
+            Arc::new(expr),
+            Operator::Or,
+            Arc::new(expressions::BinaryExpr::new(
+                Arc::clone(&column_c),
+                Operator::Gt,
+                Arc::new(expressions::Literal::new(ScalarValue::Float64(Some(0.0)))),
+            )),
+        );
+
+        let result = rewriter.rewrite(Arc::new(expr)).unwrap();
+        println!("Rewritten expression: {}", result);
+
+        let expected = expressions::BinaryExpr::new(
+            Arc::new(CastExpr::new(
+                Arc::new(Column::new("a", 0)),
+                DataType::Int64,
+                None,
+            )),
+            Operator::Plus,
+            Arc::new(expressions::Literal::new(ScalarValue::Int64(Some(5)))),
+        );
+        let expected = Arc::new(expressions::BinaryExpr::new(
+            Arc::new(expected),
+            Operator::Or,
+            Arc::new(expressions::BinaryExpr::new(
+                lit(ScalarValue::Null),
+                Operator::Gt,
+                Arc::new(expressions::Literal::new(ScalarValue::Float64(Some(0.0)))),
+            )),
+        )) as Arc<dyn PhysicalExpr>;
+
+        assert_eq!(
+            result.to_string(),
+            expected.to_string(),
+            "The rewritten expression did not match the expected output"
+        );
     }
 
     #[test]

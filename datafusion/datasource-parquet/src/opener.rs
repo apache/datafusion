@@ -248,6 +248,8 @@ impl FileOpener for ParquetOpener {
                 }
             }
 
+            // Adapt the predicate to the physical file schema.
+            // This evaluates missing columns and inserts any necessary casts.
             let predicate = predicate
                 .map(|p| {
                     PhysicalExprSchemaRewriter::new(
