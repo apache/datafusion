@@ -258,7 +258,7 @@ mod tests {
         );
 
         let result = rewriter.rewrite(Arc::new(expr)).unwrap();
-        println!("Rewritten expression: {}", result);
+        println!("Rewritten expression: {result}");
 
         let expected = expressions::BinaryExpr::new(
             Arc::new(CastExpr::new(
