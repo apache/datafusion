@@ -682,16 +682,10 @@ impl DisplayAs for HashJoinExec {
                     .map(|(c1, c2)| format!("({c1}, {c2})"))
                     .collect::<Vec<String>>()
                     .join(", ");
-                let dynamic_filter_display =
-                    if let Ok(current) = self.dynamic_filter.current() {
-                        if !current.eq(&lit(true)) {
-                            format!(", filter=[{current}]")
-                        } else {
-                            "".to_string()
-                        }
-                    } else {
-                        "".to_string()
-                    };
+                let dynamic_filter_display = match self.dynamic_filter.current() {
+                    Ok(current) if current != lit(true) => format!(", filter=[{current}]"),
+                    _ => "".to_string(),
+                };
                 write!(
                     f,
                     "HashJoinExec: mode={:?}, join_type={:?}, on=[{}]{}{}{}",
