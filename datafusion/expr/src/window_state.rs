@@ -675,9 +675,9 @@ mod tests {
         (range_columns, sort_options)
     }
 
-    fn assert_expected(
-        expected_results: Vec<(Range<usize>, usize)>,
+    fn assert_group_ranges(
         window_frame: &Arc<WindowFrame>,
+        expected_results: Vec<(Range<usize>, usize)>,
     ) -> Result<()> {
         let mut window_frame_groups = WindowFrameStateGroups::default();
         let (range_columns, _) = get_test_data();
@@ -704,18 +704,20 @@ mod tests {
             WindowFrameBound::Preceding(ScalarValue::UInt64(Some(1))),
             WindowFrameBound::Following(ScalarValue::UInt64(Some(1))),
         ));
-        let expected_results = vec![
-            (Range { start: 0, end: 2 }, 0),
-            (Range { start: 0, end: 4 }, 1),
-            (Range { start: 1, end: 5 }, 2),
-            (Range { start: 1, end: 5 }, 2),
-            (Range { start: 2, end: 8 }, 3),
-            (Range { start: 4, end: 9 }, 4),
-            (Range { start: 4, end: 9 }, 4),
-            (Range { start: 4, end: 9 }, 4),
-            (Range { start: 5, end: 9 }, 5),
-        ];
-        assert_expected(expected_results, &window_frame)
+        assert_group_ranges(
+            &window_frame,
+            vec![
+                (Range { start: 0, end: 2 }, 0),
+                (Range { start: 0, end: 4 }, 1),
+                (Range { start: 1, end: 5 }, 2),
+                (Range { start: 1, end: 5 }, 2),
+                (Range { start: 2, end: 8 }, 3),
+                (Range { start: 4, end: 9 }, 4),
+                (Range { start: 4, end: 9 }, 4),
+                (Range { start: 4, end: 9 }, 4),
+                (Range { start: 5, end: 9 }, 5),
+            ],
+        )
     }
 
     #[test]
@@ -725,18 +727,20 @@ mod tests {
             WindowFrameBound::Following(ScalarValue::UInt64(Some(1))),
             WindowFrameBound::Following(ScalarValue::UInt64(Some(2))),
         ));
-        let expected_results = vec![
-            (Range::<usize> { start: 1, end: 4 }, 0),
-            (Range::<usize> { start: 2, end: 5 }, 1),
-            (Range::<usize> { start: 4, end: 8 }, 2),
-            (Range::<usize> { start: 4, end: 8 }, 2),
-            (Range::<usize> { start: 5, end: 9 }, 3),
-            (Range::<usize> { start: 8, end: 9 }, 4),
-            (Range::<usize> { start: 8, end: 9 }, 4),
-            (Range::<usize> { start: 8, end: 9 }, 4),
-            (Range::<usize> { start: 9, end: 9 }, 5),
-        ];
-        assert_expected(expected_results, &window_frame)
+        assert_group_ranges(
+            &window_frame,
+            vec![
+                (Range::<usize> { start: 1, end: 4 }, 0),
+                (Range::<usize> { start: 2, end: 5 }, 1),
+                (Range::<usize> { start: 4, end: 8 }, 2),
+                (Range::<usize> { start: 4, end: 8 }, 2),
+                (Range::<usize> { start: 5, end: 9 }, 3),
+                (Range::<usize> { start: 8, end: 9 }, 4),
+                (Range::<usize> { start: 8, end: 9 }, 4),
+                (Range::<usize> { start: 8, end: 9 }, 4),
+                (Range::<usize> { start: 9, end: 9 }, 5),
+            ],
+        )
     }
 
     #[test]
@@ -746,17 +750,19 @@ mod tests {
             WindowFrameBound::Preceding(ScalarValue::UInt64(Some(2))),
             WindowFrameBound::Preceding(ScalarValue::UInt64(Some(1))),
         ));
-        let expected_results = vec![
-            (Range::<usize> { start: 0, end: 0 }, 0),
-            (Range::<usize> { start: 0, end: 1 }, 1),
-            (Range::<usize> { start: 0, end: 2 }, 2),
-            (Range::<usize> { start: 0, end: 2 }, 2),
-            (Range::<usize> { start: 1, end: 4 }, 3),
-            (Range::<usize> { start: 2, end: 5 }, 4),
-            (Range::<usize> { start: 2, end: 5 }, 4),
-            (Range::<usize> { start: 2, end: 5 }, 4),
-            (Range::<usize> { start: 4, end: 8 }, 5),
-        ];
-        assert_expected(expected_results, &window_frame)
+        assert_group_ranges(
+            &window_frame,
+            vec![
+                (Range::<usize> { start: 0, end: 0 }, 0),
+                (Range::<usize> { start: 0, end: 1 }, 1),
+                (Range::<usize> { start: 0, end: 2 }, 2),
+                (Range::<usize> { start: 0, end: 2 }, 2),
+                (Range::<usize> { start: 1, end: 4 }, 3),
+                (Range::<usize> { start: 2, end: 5 }, 4),
+                (Range::<usize> { start: 2, end: 5 }, 4),
+                (Range::<usize> { start: 2, end: 5 }, 4),
+                (Range::<usize> { start: 4, end: 8 }, 5),
+            ],
+        )
     }
 }
