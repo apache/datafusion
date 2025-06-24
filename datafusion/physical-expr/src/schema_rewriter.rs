@@ -413,7 +413,7 @@ mod tests {
 
         let logical_schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Int64, true), // Different type
-            Field::new("b", DataType::Utf8, true),   // Missing from physical
+            Field::new("b", DataType::Utf8, true),  // Missing from physical
         ]));
 
         let projection = vec![
@@ -432,7 +432,7 @@ mod tests {
             adapted_projection
                 .iter()
                 .map(|expr| expr.return_field(&physical_schema).unwrap())
-                .collect_vec()
+                .collect_vec(),
         ));
 
         let res = batch_project(
