@@ -126,13 +126,13 @@ fn bench_spill_io(c: &mut Criterion) {
     group.finish();
 }
 
-// Generate 50 RecordBatches mimicking TPC-H Q2's partial aggregate result:
+// Generate `num_batches` RecordBatches mimicking TPC-H Q2's partial aggregate result:
 // GROUP BY ps_partkey -> MIN(ps_supplycost)
-fn create_q2_like_batches() -> (Arc<Schema>, Vec<RecordBatch>) {
+fn create_q2_like_batches(num_batches: usize) -> (Arc<Schema>, Vec<RecordBatch>) {
     // use fixed seed
     let seed = 2;
     let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
-    let mut batches = Vec::with_capacity(50);
+    let mut batches = Vec::with_capacity(num_batches);
 
     let mut current_key = 400000_i64;
 
@@ -141,7 +141,7 @@ fn create_q2_like_batches() -> (Arc<Schema>, Vec<RecordBatch>) {
         Field::new("min_ps_supplycost", DataType::Decimal128(15, 2), true),
     ]));
 
-    for _ in 0..50 {
+    for _ in 0..num_batches {
         let mut partkey_builder = Int64Builder::new();
         let mut cost_builder = Decimal128Builder::new()
             .with_precision_and_scale(15, 2)
@@ -177,12 +177,12 @@ fn create_q2_like_batches() -> (Arc<Schema>, Vec<RecordBatch>) {
     (schema, batches)
 }
 
-/// Generate 50 RecordBatches mimicking TPC-H Q16's partial aggregate result:
+/// Generate `num_batches` RecordBatches mimicking TPC-H Q16's partial aggregate result:
 /// GROUP BY (p_brand, p_type, p_size) -> COUNT(DISTINCT ps_suppkey)
-pub fn create_q16_like_batches() -> (Arc<Schema>, Vec<RecordBatch>) {
+pub fn create_q16_like_batches(num_batches: usize) -> (Arc<Schema>, Vec<RecordBatch>) {
     let seed = 16;
     let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
-    let mut batches = Vec::with_capacity(50);
+    let mut batches = Vec::with_capacity(num_batches);
 
     let schema = Arc::new(Schema::new(vec![
         Field::new("p_brand", DataType::Utf8, false),
@@ -205,7 +205,7 @@ pub fn create_q16_like_batches() -> (Arc<Schema>, Vec<RecordBatch>) {
     ];
     let sizes = [3, 9, 14, 19, 23, 36, 45, 49];
 
-    for _ in 0..50 {
+    for _ in 0..num_batches {
         let mut brand_builder = StringBuilder::new();
         let mut type_builder = StringBuilder::new();
         let mut size_builder = Int32Builder::new();
@@ -240,12 +240,12 @@ pub fn create_q16_like_batches() -> (Arc<Schema>, Vec<RecordBatch>) {
     (schema, batches)
 }
 
-// Generate 50 RecordBatches mimicking TPC-H Q20's partial aggregate result:
+// Generate `num_batches` RecordBatches mimicking TPC-H Q20's partial aggregate result:
 // GROUP BY (l_partkey, l_suppkey) -> SUM(l_quantity)
-fn create_q20_like_batches() -> (Arc<Schema>, Vec<RecordBatch>) {
+fn create_q20_like_batches(num_batches: usize) -> (Arc<Schema>, Vec<RecordBatch>) {
     let seed = 20;
     let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
-    let mut batches = Vec::with_capacity(50);
+    let mut batches = Vec::with_capacity(num_batches);
 
     let mut current_partkey = 400000_i64;
 
@@ -255,7 +255,7 @@ fn create_q20_like_batches() -> (Arc<Schema>, Vec<RecordBatch>) {
         Field::new("sum_l_quantity", DataType::Decimal128(25, 2), true),
     ]));
 
-    for _ in 0..50 {
+    for _ in 0..num_batches {
         let mut partkey_builder = Int64Builder::new();
         let mut suppkey_builder = Int64Builder::new();
         let mut quantity_builder = Decimal128Builder::new()
@@ -295,11 +295,115 @@ fn create_q20_like_batches() -> (Arc<Schema>, Vec<RecordBatch>) {
     (schema, batches)
 }
 
+/// Genereate `num_batches` wide RecordBatches resembling sort-tpch Q10 for benchmarking.
+/// This includes multiple numeric, date, and Utf8View columns (15 total).
+pub fn create_wide_batches(num_batches: usize) -> (Arc<Schema>, Vec<RecordBatch>) {
+    let seed = 10;
+    let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+    let mut batches = Vec::with_capacity(num_batches);
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("l_linenumber", DataType::Int32, false),
+        Field::new("l_suppkey", DataType::Int64, false),
+        Field::new("l_orderkey", DataType::Int64, false),
+        Field::new("l_partkey", DataType::Int64, false),
+        Field::new("l_quantity", DataType::Decimal128(15, 2), false),
+        Field::new("l_extendedprice", DataType::Decimal128(15, 2), false),
+        Field::new("l_discount", DataType::Decimal128(15, 2), false),
+        Field::new("l_tax", DataType::Decimal128(15, 2), false),
+        Field::new("l_returnflag", DataType::Utf8, false),
+        Field::new("l_linestatus", DataType::Utf8, false),
+        Field::new("l_shipdate", DataType::Date32, false),
+        Field::new("l_commitdate", DataType::Date32, false),
+        Field::new("l_receiptdate", DataType::Date32, false),
+        Field::new("l_shipinstruct", DataType::Utf8, false),
+        Field::new("l_shipmode", DataType::Utf8, false),
+    ]));
+
+    for _ in 0..num_batches {
+        let mut linenum = Int32Builder::new();
+        let mut suppkey = Int64Builder::new();
+        let mut orderkey = Int64Builder::new();
+        let mut partkey = Int64Builder::new();
+        let mut quantity = Decimal128Builder::new()
+            .with_precision_and_scale(15, 2)
+            .unwrap();
+        let mut extprice = Decimal128Builder::new()
+            .with_precision_and_scale(15, 2)
+            .unwrap();
+        let mut discount = Decimal128Builder::new()
+            .with_precision_and_scale(15, 2)
+            .unwrap();
+        let mut tax = Decimal128Builder::new()
+            .with_precision_and_scale(15, 2)
+            .unwrap();
+        let mut retflag = StringBuilder::new();
+        let mut linestatus = StringBuilder::new();
+        let mut shipdate = Date32Builder::new();
+        let mut commitdate = Date32Builder::new();
+        let mut receiptdate = Date32Builder::new();
+        let mut shipinstruct = StringBuilder::new();
+        let mut shipmode = StringBuilder::new();
+
+        let return_flags = ["A", "N", "R"];
+        let statuses = ["F", "O"];
+        let instructs = ["DELIVER IN PERSON", "COLLECT COD", "NONE"];
+        let modes = ["TRUCK", "MAIL", "SHIP", "RAIL", "AIR"];
+
+        for i in 0..8192 {
+            linenum.append_value(i % 7);
+            suppkey.append_value(rng.random_range(0..100_000));
+            orderkey.append_value(1_000_000 + i as i64);
+            partkey.append_value(rng.random_range(0..200_000));
+
+            quantity.append_value(rng.random_range(100..10000) as i128);
+            extprice.append_value(rng.random_range(1_000..1_000_000) as i128);
+            discount.append_value(rng.random_range(0..10000) as i128);
+            tax.append_value(rng.random_range(0..5000) as i128);
+
+            retflag.append_value(return_flags[rng.random_range(0..return_flags.len())]);
+            linestatus.append_value(statuses[rng.random_range(0..statuses.len())]);
+
+            let base_date = 10_000;
+            shipdate.append_value(base_date + (i % 1000));
+            commitdate.append_value(base_date + (i % 1000) + 1);
+            receiptdate.append_value(base_date + (i % 1000) + 2);
+
+            shipinstruct.append_value(instructs[rng.random_range(0..instructs.len())]);
+            shipmode.append_value(modes[rng.random_range(0..modes.len())]);
+        }
+
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(linenum.finish()),
+                Arc::new(suppkey.finish()),
+                Arc::new(orderkey.finish()),
+                Arc::new(partkey.finish()),
+                Arc::new(quantity.finish()),
+                Arc::new(extprice.finish()),
+                Arc::new(discount.finish()),
+                Arc::new(tax.finish()),
+                Arc::new(retflag.finish()),
+                Arc::new(linestatus.finish()),
+                Arc::new(shipdate.finish()),
+                Arc::new(commitdate.finish()),
+                Arc::new(receiptdate.finish()),
+                Arc::new(shipinstruct.finish()),
+                Arc::new(shipmode.finish()),
+            ],
+        )
+        .unwrap();
+        batches.push(batch);
+    }
+    (schema, batches)
+}
+
 // Benchmarks spill write + read performance across multiple compression codecs
 // using realistic input data inspired by TPC-H aggregate spill scenarios.
 //
 // This function prepares synthetic RecordBatches that mimic the schema and distribution
-// of intermediate aggregate results from representative TPC-H queries (Q2, Q16, Q20).
+// of intermediate aggregate results from representative TPC-H queries (Q2, Q16, Q20) and sort-tpch Q10
 // For each dataset:
 // - It evaluates spill performance under different compression codecs (e.g., Uncompressed, Zstd, LZ4).
 // - It measures end-to-end spill write + read performance using Criterion.
@@ -316,8 +420,11 @@ fn bench_spill_compression(c: &mut Criterion) {
         SpillCompression::Lz4Frame,
     ];
 
-    // Q2
-    let (schema, batches) = create_q2_like_batches();
+    // Modify this value to change data volume. Note that each batch contains 8192 rows.
+    let num_batches = 50;
+
+    // Q2 [Int64, Decimal128]
+    let (schema, batches) = create_q2_like_batches(50);
     benchmark_spill_batches_for_all_codec(
         &mut group,
         "q2",
@@ -327,8 +434,8 @@ fn bench_spill_compression(c: &mut Criterion) {
         env.clone(),
         schema,
     );
-    // Q16
-    let (schema, batches) = create_q16_like_batches();
+    // Q16 [Utf8, Utf8, Int32, Int64]
+    let (schema, batches) = create_q16_like_batches(50);
     benchmark_spill_batches_for_all_codec(
         &mut group,
         "q16",
@@ -338,18 +445,28 @@ fn bench_spill_compression(c: &mut Criterion) {
         env.clone(),
         schema,
     );
-    // Q20
-    let (schema, batches) = create_q20_like_batches();
+    // Q20 [Int64, Int64, Decimal128]
+    let (schema, batches) = create_q20_like_batches(50);
     benchmark_spill_batches_for_all_codec(
         &mut group,
         "q20",
         batches,
         &compressions,
         &rt,
+        env.clone(),
+        schema,
+    );
+    // wide [Int32, Int64 * 3, Decimal128 * 4, Date * 3, Utf8 * 4]
+    let (schema, batches) = create_wide_batches(num_batches);
+    benchmark_spill_batches_for_all_codec(
+        &mut group,
+        "wide",
+        batches,
+        &compressions,
+        &rt,
         env,
         schema,
     );
-
     group.finish();
 }
 
