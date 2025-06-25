@@ -97,9 +97,6 @@ pub(super) struct ParquetOpener {
 
 impl FileOpener for ParquetOpener {
     fn open(&self, file_meta: FileMeta, file: PartitionedFile) -> Result<FileOpenFuture> {
-        let predicate_creation_errors = MetricBuilder::new(&self.metrics)
-            .global_counter("num_predicate_creation_errors");
-
         let file_range = file_meta.range.clone();
         let extensions = file_meta.extensions.clone();
         let file_name = file_meta.location().to_string();
@@ -652,6 +649,7 @@ mod test {
                 schema_adapter_factory: Arc::new(DefaultSchemaAdapterFactory),
                 enable_row_group_stats_pruning: true,
                 coerce_int96: None,
+                file_decryption_properties: None,
             }
         };
 
@@ -736,6 +734,7 @@ mod test {
                 schema_adapter_factory: Arc::new(DefaultSchemaAdapterFactory),
                 enable_row_group_stats_pruning: true,
                 coerce_int96: None,
+                file_decryption_properties: None,
             }
         };
 
@@ -832,6 +831,7 @@ mod test {
                 schema_adapter_factory: Arc::new(DefaultSchemaAdapterFactory),
                 enable_row_group_stats_pruning: true,
                 coerce_int96: None,
+                file_decryption_properties: None,
             }
         };
         let make_meta = || FileMeta {
