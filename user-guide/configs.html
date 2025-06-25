@@ -33,7 +33,7 @@
     <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
-    <link rel="next" title="Runtime Environment Configurations" href="runtime_configs.html" />
+    <link rel="next" title="Reading Explain Plans" href="explain-usage.html" />
     <link rel="prev" title="Prepared Statements" href="sql/prepared_statements.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="docsearch:language" content="en">
@@ -295,11 +295,6 @@
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="runtime_configs.html">
-   Runtime Environment Configurations
-  </a>
- </li>
- <li class="toctree-l1">
   <a class="reference internal" href="explain-usage.html">
    Reading Explain Plans
   </a>
@@ -543,9 +538,24 @@
               
               <div class="toc-item">
                 
+<div class="tocsection onthispage pt-5 pb-3">
+    <i class="fas fa-list"></i> On this page
+</div>
 
 <nav id="bd-toc-nav">
-    
+    <ul class="visible nav section-nav flex-column">
+ <li class="toc-h1 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#">
+   Configuration Settings
+  </a>
+ </li>
+ <li class="toc-h1 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#runtime-configuration-settings">
+   Runtime Configuration Settings
+  </a>
+ </li>
+</ul>
+
 </nav>
               </div>
               
@@ -1044,6 +1054,29 @@ Environment variables are read during <code class="docutils literal notranslate"
 </tbody>
 </table>
 </section>
+<section id="runtime-configuration-settings">
+<h1>Runtime Configuration Settings<a class="headerlink" href="#runtime-configuration-settings" title="Link to this heading">¶</a></h1>
+<p>DataFusion runtime configurations can be set via SQL using the <code class="docutils literal notranslate"><span class="pre">SET</span></code> command.</p>
+<p>For example, to configure <code class="docutils literal notranslate"><span class="pre">datafusion.runtime.memory_limit</span></code>:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SET</span><span class="w"> </span><span class="n">datafusion</span><span class="p">.</span><span class="n">runtime</span><span class="p">.</span><span class="n">memory_limit</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;2G&#39;</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>The following runtime configuration settings are available:</p>
+<table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>key</p></th>
+<th class="head"><p>default</p></th>
+<th class="head"><p>description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>datafusion.runtime.memory_limit</p></td>
+<td><p>NULL</p></td>
+<td><p>Maximum memory limit for query execution. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes). Example: ‘2G’ for 2 gigabytes.</p></td>
+</tr>
+</tbody>
+</table>
+</section>
 
 
               </div>
@@ -1058,10 +1091,10 @@ Environment variables are read during <code class="docutils literal notranslate"
             <p class="prev-next-title">Prepared Statements</p>
         </div>
     </a>
-    <a class='right-next' id="next-link" href="runtime_configs.html" title="next page">
+    <a class='right-next' id="next-link" href="explain-usage.html" title="next page">
     <div class="prev-next-info">
         <p class="prev-next-subtitle">next</p>
-        <p class="prev-next-title">Runtime Environment Configurations</p>
+        <p class="prev-next-title">Reading Explain Plans</p>
     </div>
     <i class="fas fa-angle-right"></i>
     </a>
