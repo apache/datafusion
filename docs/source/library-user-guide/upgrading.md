@@ -21,7 +21,8 @@
 
 ## DataFusion `49.0.0`
 
-**Note:** DataFusion 49.0.0 has not been released yet. The information provided in this section pertains to features and changes that have already been merged to the main branch and are awaiting release in this version.
+**Note:** DataFusion `49.0.0` has not been released yet. The information provided in this section pertains to features and changes that have already been merged to the main branch and are awaiting release in this version.
+You can see the current [status of the `49.0.0 `release here](https://github.com/apache/datafusion/issues/16235)
 
 ### `datafusion.execution.collect_statistics` now defaults to `true`
 
