@@ -1263,6 +1263,61 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_parquet_write_empty_file() -> Result<()> {
+        // Case 1. write to a single file
+        // Expect: an empty file created
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let path = format!("{}/empty.parquet", tmp_dir.path().to_string_lossy());
+
+        let ctx = SessionContext::new();
+
+        let df = ctx.sql("SELECT 1 limit 0").await?;
+
+        let cfg1 =
+            crate::dataframe::DataFrameWriteOptions::new().with_single_file_output(true);
+        let cfg2 = TableParquetOptions::default();
+
+        df.write_parquet(&path, cfg1, Some(cfg2)).await?;
+        assert!(std::path::Path::new(&path).exists());
+
+        // Case 2. write to a directory without partition columns
+        // Expect: under the directory, an empty file is created
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let path = format!("{}", tmp_dir.path().to_string_lossy());
+
+        let cfg1 =
+            crate::dataframe::DataFrameWriteOptions::new().with_single_file_output(true);
+        let cfg2 = TableParquetOptions::default();
+
+        let df = ctx.sql("SELECT 1 limit 0").await?;
+
+        df.write_parquet(&path, cfg1, Some(cfg2)).await?;
+        assert!(std::path::Path::new(&path).exists());
+
+        let files = std::fs::read_dir(&path).unwrap();
+        assert!(files.count() == 1);
+
+        // Case 3. write to a directory with partition columns
+        // Expect: No file is created
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let path = format!("{}", tmp_dir.path().to_string_lossy());
+
+        let df = ctx.sql("SELECT 1 as col1, 2 as col2 limit 0").await?;
+
+        let cfg1 = crate::dataframe::DataFrameWriteOptions::new()
+            .with_single_file_output(true)
+            .with_partition_by(vec!["col1".to_string()]);
+        let cfg2 = TableParquetOptions::default();
+
+        df.write_parquet(&path, cfg1, Some(cfg2)).await?;
+
+        assert!(std::path::Path::new(&path).exists());
+        let files = std::fs::read_dir(&path).unwrap();
+        assert!(files.count() == 0);
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn parquet_sink_write_insert_schema_into_metadata() -> Result<()> {
         // expected kv metadata without schema
         let expected_without = vec![

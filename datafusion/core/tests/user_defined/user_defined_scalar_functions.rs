@@ -40,6 +40,7 @@ use datafusion_common::{
     assert_batches_eq, assert_batches_sorted_eq, assert_contains, exec_err, not_impl_err,
     plan_err, DFSchema, DataFusionError, Result, ScalarValue,
 };
+use datafusion_expr::expr::FieldMetadata;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::{
     lit_with_metadata, Accumulator, ColumnarValue, CreateFunction, CreateFunctionBody,
@@ -1180,7 +1181,7 @@ async fn create_scalar_function_from_sql_statement_postgres_syntax() -> Result<(
                 quote_style: None,
                 span: Span::empty(),
             }),
-            data_type: DataType::Utf8,
+            data_type: DataType::Utf8View,
             default_expr: None,
         }]),
         return_type: Some(DataType::Int32),
@@ -1532,6 +1533,7 @@ async fn test_metadata_based_udf_with_literal() -> Result<()> {
         [("modify_values".to_string(), "double_output".to_string())]
             .into_iter()
             .collect();
+    let input_metadata = FieldMetadata::from(input_metadata);
     let df = ctx.sql("select 0;").await?.select(vec![
         lit(5u64).alias_with_metadata("lit_with_doubling", Some(input_metadata.clone())),
         lit(5u64).alias("lit_no_doubling"),

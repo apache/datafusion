@@ -25,8 +25,8 @@ use crate::coalesce_batches::CoalesceBatches;
 use crate::combine_partial_final_agg::CombinePartialFinalAggregate;
 use crate::enforce_distribution::EnforceDistribution;
 use crate::enforce_sorting::EnforceSorting;
+use crate::ensure_coop::EnsureCooperative;
 use crate::filter_pushdown::FilterPushdown;
-use crate::insert_yield_exec::InsertYieldExec;
 use crate::join_selection::JoinSelection;
 use crate::limit_pushdown::LimitPushdown;
 use crate::limited_distinct_aggregation::LimitedDistinctAggregation;
@@ -36,6 +36,7 @@ use crate::sanity_checker::SanityCheckPlan;
 use crate::topk_aggregation::TopKAggregation;
 use crate::update_aggr_exprs::OptimizeAggregateOrder;
 
+use crate::coalesce_async_exec_input::CoalesceAsyncExecInput;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::Result;
 use datafusion_physical_plan::ExecutionPlan;
@@ -97,8 +98,10 @@ impl PhysicalOptimizer {
             // Applying the rule early means only directly-connected AggregateExecs must be examined.
             Arc::new(LimitedDistinctAggregation::new()),
             // The FilterPushdown rule tries to push down filters as far as it can.
-            // For example, it will push down filtering from a `FilterExec` to
-            // a `DataSourceExec`, or from a `TopK`'s current state to a `DataSourceExec`.
+            // For example, it will push down filtering from a `FilterExec` to `DataSourceExec`.
+            // Note that this does not push down dynamic filters (such as those created by a `SortExec` operator in TopK mode),
+            // those are handled by the later `FilterPushdown` rule.
+            // See `FilterPushdownPhase` for more details.
             Arc::new(FilterPushdown::new()),
             // The EnforceDistribution rule is for adding essential repartitioning to satisfy distribution
             // requirements. Please make sure that the whole plan tree is determined before this rule.
@@ -119,6 +122,7 @@ impl PhysicalOptimizer {
             // The CoalesceBatches rule will not influence the distribution and ordering of the
             // whole plan tree. Therefore, to avoid influencing other rules, it should run last.
             Arc::new(CoalesceBatches::new()),
+            Arc::new(CoalesceAsyncExecInput::new()),
             // Remove the ancillary output requirement operator since we are done with the planning
             // phase.
             Arc::new(OutputRequirements::new_remove_mode()),
@@ -138,7 +142,11 @@ impl PhysicalOptimizer {
             // are not present, the load of executors such as join or union will be
             // reduced by narrowing their input tables.
             Arc::new(ProjectionPushdown::new()),
-            Arc::new(InsertYieldExec::new()),
+            Arc::new(EnsureCooperative::new()),
+            // This FilterPushdown handles dynamic filters that may have references to the source ExecutionPlan.
+            // Therefore it should be run at the end of the optimization process since any changes to the plan may break the dynamic filter's references.
+            // See `FilterPushdownPhase` for more details.
+            Arc::new(FilterPushdown::new_post_optimization()),
             // The SanityCheckPlan rule checks whether the order and
             // distribution requirements of each node in the plan
             // is satisfied. It will also reject non-runnable query

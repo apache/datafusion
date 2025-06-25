@@ -56,8 +56,8 @@ use datafusion_common::tree_node::{
 use datafusion_common::{
     aggregate_functional_dependencies, internal_err, plan_err, Column, Constraints,
     DFSchema, DFSchemaRef, DataFusionError, Dependency, FunctionalDependence,
-    FunctionalDependencies, ParamValues, Result, ScalarValue, Spans, TableReference,
-    UnnestOptions,
+    FunctionalDependencies, NullEquality, ParamValues, Result, ScalarValue, Spans,
+    TableReference, UnnestOptions,
 };
 use indexmap::IndexSet;
 
@@ -556,7 +556,9 @@ impl LogicalPlan {
                 JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark => {
                     left.head_output_expr()
                 }
-                JoinType::RightSemi | JoinType::RightAnti => right.head_output_expr(),
+                JoinType::RightSemi | JoinType::RightAnti | JoinType::RightMark => {
+                    right.head_output_expr()
+                }
             },
             LogicalPlan::RecursiveQuery(RecursiveQuery { static_term, .. }) => {
                 static_term.head_output_expr()
@@ -655,7 +657,7 @@ impl LogicalPlan {
                 join_constraint,
                 on,
                 schema: _,
-                null_equals_null,
+                null_equality,
             }) => {
                 let schema =
                     build_join_schema(left.schema(), right.schema(), &join_type)?;
@@ -676,7 +678,7 @@ impl LogicalPlan {
                     on: new_on,
                     filter,
                     schema: DFSchemaRef::new(schema),
-                    null_equals_null,
+                    null_equality,
                 }))
             }
             LogicalPlan::Subquery(_) => Ok(self),
@@ -894,7 +896,7 @@ impl LogicalPlan {
                 join_type,
                 join_constraint,
                 on,
-                null_equals_null,
+                null_equality,
                 ..
             }) => {
                 let (left, right) = self.only_two_inputs(inputs)?;
@@ -933,7 +935,7 @@ impl LogicalPlan {
                     on: new_on,
                     filter: filter_expr,
                     schema: DFSchemaRef::new(schema),
-                    null_equals_null: *null_equals_null,
+                    null_equality: *null_equality,
                 }))
             }
             LogicalPlan::Subquery(Subquery {
@@ -1340,7 +1342,9 @@ impl LogicalPlan {
                 JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark => {
                     left.max_rows()
                 }
-                JoinType::RightSemi | JoinType::RightAnti => right.max_rows(),
+                JoinType::RightSemi | JoinType::RightAnti | JoinType::RightMark => {
+                    right.max_rows()
+                }
             },
             LogicalPlan::Repartition(Repartition { input, .. }) => input.max_rows(),
             LogicalPlan::Union(Union { inputs, .. }) => {
@@ -3704,8 +3708,8 @@ pub struct Join {
     pub join_constraint: JoinConstraint,
     /// The output schema, containing fields from the left and right inputs
     pub schema: DFSchemaRef,
-    /// If null_equals_null is true, null == null else null != null
-    pub null_equals_null: bool,
+    /// Defines the null equality for the join.
+    pub null_equality: NullEquality,
 }
 
 impl Join {
@@ -3722,7 +3726,7 @@ impl Join {
     /// * `filter` - Optional filter expression (for non-equijoin conditions)
     /// * `join_type` - Type of join (Inner, Left, Right, etc.)
     /// * `join_constraint` - Join constraint (On, Using)
-    /// * `null_equals_null` - Whether NULL = NULL in join comparisons
+    /// * `null_equality` - How to handle nulls in join comparisons
     ///
     /// # Returns
     ///
@@ -3734,7 +3738,7 @@ impl Join {
         filter: Option<Expr>,
         join_type: JoinType,
         join_constraint: JoinConstraint,
-        null_equals_null: bool,
+        null_equality: NullEquality,
     ) -> Result<Self> {
         let join_schema = build_join_schema(left.schema(), right.schema(), &join_type)?;
 
@@ -3746,7 +3750,7 @@ impl Join {
             join_type,
             join_constraint,
             schema: Arc::new(join_schema),
-            null_equals_null,
+            null_equality,
         })
     }
 
@@ -3779,7 +3783,7 @@ impl Join {
             join_type: original_join.join_type,
             join_constraint: original_join.join_constraint,
             schema: Arc::new(join_schema),
-            null_equals_null: original_join.null_equals_null,
+            null_equality: original_join.null_equality,
         })
     }
 }
@@ -3801,8 +3805,8 @@ impl PartialOrd for Join {
             pub join_type: &'a JoinType,
             /// Join constraint
             pub join_constraint: &'a JoinConstraint,
-            /// If null_equals_null is true, null == null else null != null
-            pub null_equals_null: &'a bool,
+            /// The null handling behavior for equalities
+            pub null_equality: &'a NullEquality,
         }
         let comparable_self = ComparableJoin {
             left: &self.left,
@@ -3811,7 +3815,7 @@ impl PartialOrd for Join {
             filter: &self.filter,
             join_type: &self.join_type,
             join_constraint: &self.join_constraint,
-            null_equals_null: &self.null_equals_null,
+            null_equality: &self.null_equality,
         };
         let comparable_other = ComparableJoin {
             left: &other.left,
@@ -3820,7 +3824,7 @@ impl PartialOrd for Join {
             filter: &other.filter,
             join_type: &other.join_type,
             join_constraint: &other.join_constraint,
-            null_equals_null: &other.null_equals_null,
+            null_equality: &other.null_equality,
         };
         comparable_self.partial_cmp(&comparable_other)
     }
@@ -4891,7 +4895,7 @@ mod tests {
                 join_type: JoinType::Inner,
                 join_constraint: JoinConstraint::On,
                 schema: Arc::new(left_schema.join(&right_schema)?),
-                null_equals_null: false,
+                null_equality: NullEquality::NullEqualsNothing,
             }))
         }
 
@@ -5002,7 +5006,7 @@ mod tests {
                 Some(col("t1.b").gt(col("t2.b"))),
                 join_type,
                 JoinConstraint::On,
-                false,
+                NullEquality::NullEqualsNothing,
             )?;
 
             match join_type {
@@ -5112,7 +5116,7 @@ mod tests {
             assert_eq!(join.filter, Some(col("t1.b").gt(col("t2.b"))));
             assert_eq!(join.join_type, join_type);
             assert_eq!(join.join_constraint, JoinConstraint::On);
-            assert!(!join.null_equals_null);
+            assert_eq!(join.null_equality, NullEquality::NullEqualsNothing);
         }
 
         Ok(())
@@ -5147,7 +5151,7 @@ mod tests {
                 None,
                 JoinType::Inner,
                 JoinConstraint::Using,
-                false,
+                NullEquality::NullEqualsNothing,
             )?;
 
             let fields = join.schema.fields();
@@ -5198,7 +5202,7 @@ mod tests {
                 Some(col("t1.value").lt(col("t2.value"))), // Non-equi filter condition
                 JoinType::Inner,
                 JoinConstraint::On,
-                false,
+                NullEquality::NullEqualsNothing,
             )?;
 
             let fields = join.schema.fields();
@@ -5247,10 +5251,10 @@ mod tests {
                 None,
                 JoinType::Inner,
                 JoinConstraint::On,
-                true,
+                NullEquality::NullEqualsNull,
             )?;
 
-            assert!(join.null_equals_null);
+            assert_eq!(join.null_equality, NullEquality::NullEqualsNull);
         }
 
         Ok(())
@@ -5289,7 +5293,7 @@ mod tests {
                 Some(col("t1.value").gt(lit(5.0))),
                 join_type,
                 JoinConstraint::On,
-                false,
+                NullEquality::NullEqualsNothing,
             )?;
 
             let fields = join.schema.fields();
@@ -5328,7 +5332,7 @@ mod tests {
             None,
             JoinType::Inner,
             JoinConstraint::Using,
-            false,
+            NullEquality::NullEqualsNothing,
         )?;
 
         assert_eq!(

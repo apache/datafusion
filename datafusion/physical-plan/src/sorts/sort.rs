@@ -27,6 +27,7 @@ use std::sync::Arc;
 use crate::common::spawn_buffered;
 use crate::execution_plan::{Boundedness, CardinalityEffect, EmissionType};
 use crate::expressions::PhysicalSortExpr;
+use crate::filter_pushdown::{FilterDescription, FilterPushdownPhase};
 use crate::limit::LimitStream;
 use crate::metrics::{
     BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet, SpillMetrics,
@@ -47,12 +48,15 @@ use crate::{
 use arrow::array::{Array, RecordBatch, RecordBatchOptions, StringViewArray};
 use arrow::compute::{concat_batches, lexsort_to_indices, take_arrays};
 use arrow::datatypes::SchemaRef;
+use datafusion_common::config::SpillCompression;
 use datafusion_common::{internal_datafusion_err, internal_err, DataFusionError, Result};
 use datafusion_execution::disk_manager::RefCountedTempFile;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_execution::TaskContext;
+use datafusion_physical_expr::expressions::{lit, DynamicFilterPhysicalExpr};
 use datafusion_physical_expr::LexOrdering;
+use datafusion_physical_expr::PhysicalExpr;
 
 use futures::{StreamExt, TryStreamExt};
 use log::{debug, trace};
@@ -255,6 +259,8 @@ impl ExternalSorter {
         batch_size: usize,
         sort_spill_reservation_bytes: usize,
         sort_in_place_threshold_bytes: usize,
+        // Configured via `datafusion.execution.spill_compression`.
+        spill_compression: SpillCompression,
         metrics: &ExecutionPlanMetricsSet,
         runtime: Arc<RuntimeEnv>,
     ) -> Result<Self> {
@@ -271,7 +277,8 @@ impl ExternalSorter {
             Arc::clone(&runtime),
             metrics.spill_metrics.clone(),
             Arc::clone(&schema),
-        );
+        )
+        .with_compression_type(spill_compression);
 
         Ok(Self {
             schema,
@@ -843,6 +850,8 @@ pub struct SortExec {
     common_sort_prefix: Vec<PhysicalSortExpr>,
     /// Cache holding plan properties like equivalences, output partitioning etc.
     cache: PlanProperties,
+    /// Filter matching the state of the sort for dynamic filter pushdown
+    filter: Option<Arc<DynamicFilterPhysicalExpr>>,
 }
 
 impl SortExec {
@@ -861,6 +870,7 @@ impl SortExec {
             fetch: None,
             common_sort_prefix: sort_prefix,
             cache,
+            filter: None,
         }
     }
 
@@ -906,6 +916,17 @@ impl SortExec {
         if fetch.is_some() && is_pipeline_friendly {
             cache = cache.with_boundedness(Boundedness::Bounded);
         }
+        let filter = fetch.is_some().then(|| {
+            // If we already have a filter, keep it. Otherwise, create a new one.
+            self.filter.clone().unwrap_or_else(|| {
+                let children = self
+                    .expr
+                    .iter()
+                    .map(|sort_expr| Arc::clone(&sort_expr.expr))
+                    .collect::<Vec<_>>();
+                Arc::new(DynamicFilterPhysicalExpr::new(children, lit(true)))
+            })
+        });
         SortExec {
             input: Arc::clone(&self.input),
             expr: self.expr.clone(),
@@ -914,6 +935,7 @@ impl SortExec {
             common_sort_prefix: self.common_sort_prefix.clone(),
             fetch,
             cache,
+            filter,
         }
     }
 
@@ -1009,6 +1031,13 @@ impl DisplayAs for SortExec {
                 match self.fetch {
                     Some(fetch) => {
                         write!(f, "SortExec: TopK(fetch={fetch}), expr=[{}], preserve_partitioning=[{preserve_partitioning}]", self.expr)?;
+                        if let Some(filter) = &self.filter {
+                            if let Ok(current) = filter.current() {
+                                if !current.eq(&lit(true)) {
+                                    write!(f, ", filter=[{current}]")?;
+                                }
+                            }
+                        }
                         if !self.common_sort_prefix.is_empty() {
                             write!(f, ", sort_prefix=[")?;
                             let mut first = true;
@@ -1079,9 +1108,10 @@ impl ExecutionPlan for SortExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let new_sort = SortExec::new(self.expr.clone(), Arc::clone(&children[0]))
+        let mut new_sort = SortExec::new(self.expr.clone(), Arc::clone(&children[0]))
             .with_fetch(self.fetch)
             .with_preserve_partitioning(self.preserve_partitioning);
+        new_sort.filter = self.filter.clone();
 
         Ok(Arc::new(new_sort))
     }
@@ -1122,6 +1152,7 @@ impl ExecutionPlan for SortExec {
                     context.session_config().batch_size(),
                     context.runtime_env(),
                     &self.metrics_set,
+                    self.filter.clone(),
                 )?;
                 Ok(Box::pin(RecordBatchStreamAdapter::new(
                     self.schema(),
@@ -1146,6 +1177,7 @@ impl ExecutionPlan for SortExec {
                     context.session_config().batch_size(),
                     execution_options.sort_spill_reservation_bytes,
                     execution_options.sort_in_place_threshold_bytes,
+                    context.session_config().spill_compression(),
                     &self.metrics_set,
                     context.runtime_env(),
                 )?;
@@ -1227,6 +1259,28 @@ impl ExecutionPlan for SortExec {
                 .with_fetch(self.fetch())
                 .with_preserve_partitioning(self.preserve_partitioning()),
         )))
+    }
+
+    fn gather_filters_for_pushdown(
+        &self,
+        phase: FilterPushdownPhase,
+        parent_filters: Vec<Arc<dyn PhysicalExpr>>,
+        config: &datafusion_common::config::ConfigOptions,
+    ) -> Result<FilterDescription> {
+        if !matches!(phase, FilterPushdownPhase::Post) {
+            return Ok(FilterDescription::new_with_child_count(1)
+                .all_parent_filters_supported(parent_filters));
+        }
+        if let Some(filter) = &self.filter {
+            if config.optimizer.enable_dynamic_filter_pushdown {
+                let filter = Arc::clone(filter) as Arc<dyn PhysicalExpr>;
+                return Ok(FilterDescription::new_with_child_count(1)
+                    .all_parent_filters_supported(parent_filters)
+                    .with_self_filter(filter));
+            }
+        }
+        Ok(FilterDescription::new_with_child_count(1)
+            .all_parent_filters_supported(parent_filters))
     }
 }
 
@@ -1460,7 +1514,7 @@ mod tests {
         // bytes. We leave a little wiggle room for the actual numbers.
         assert!((3..=10).contains(&spill_count));
         assert!((9000..=10000).contains(&spilled_rows));
-        assert!((38000..=42000).contains(&spilled_bytes));
+        assert!((38000..=44000).contains(&spilled_bytes));
 
         let columns = result[0].columns();
 

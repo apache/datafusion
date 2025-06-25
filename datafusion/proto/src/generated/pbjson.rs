@@ -2574,6 +2574,97 @@ impl<'de> serde::Deserialize<'de> for ColumnUnnestListRecursions {
         deserializer.deserialize_struct("datafusion.ColumnUnnestListRecursions", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for CooperativeExecNode {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.input.is_some() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion.CooperativeExecNode", len)?;
+        if let Some(v) = self.input.as_ref() {
+            struct_ser.serialize_field("input", v)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for CooperativeExecNode {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "input",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Input,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "input" => Ok(GeneratedField::Input),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = CooperativeExecNode;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion.CooperativeExecNode")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<CooperativeExecNode, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut input__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Input => {
+                            if input__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("input"));
+                            }
+                            input__ = map_.next_value()?;
+                        }
+                    }
+                }
+                Ok(CooperativeExecNode {
+                    input: input__,
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion.CooperativeExecNode", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for CopyToNode {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -6851,7 +6942,7 @@ impl serde::Serialize for HashJoinExecNode {
         if self.partition_mode != 0 {
             len += 1;
         }
-        if self.null_equals_null {
+        if self.null_equality != 0 {
             len += 1;
         }
         if self.filter.is_some() {
@@ -6880,8 +6971,10 @@ impl serde::Serialize for HashJoinExecNode {
                 .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {}", self.partition_mode)))?;
             struct_ser.serialize_field("partitionMode", &v)?;
         }
-        if self.null_equals_null {
-            struct_ser.serialize_field("nullEqualsNull", &self.null_equals_null)?;
+        if self.null_equality != 0 {
+            let v = super::datafusion_common::NullEquality::try_from(self.null_equality)
+                .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {}", self.null_equality)))?;
+            struct_ser.serialize_field("nullEquality", &v)?;
         }
         if let Some(v) = self.filter.as_ref() {
             struct_ser.serialize_field("filter", v)?;
@@ -6906,8 +6999,8 @@ impl<'de> serde::Deserialize<'de> for HashJoinExecNode {
             "joinType",
             "partition_mode",
             "partitionMode",
-            "null_equals_null",
-            "nullEqualsNull",
+            "null_equality",
+            "nullEquality",
             "filter",
             "projection",
         ];
@@ -6919,7 +7012,7 @@ impl<'de> serde::Deserialize<'de> for HashJoinExecNode {
             On,
             JoinType,
             PartitionMode,
-            NullEqualsNull,
+            NullEquality,
             Filter,
             Projection,
         }
@@ -6948,7 +7041,7 @@ impl<'de> serde::Deserialize<'de> for HashJoinExecNode {
                             "on" => Ok(GeneratedField::On),
                             "joinType" | "join_type" => Ok(GeneratedField::JoinType),
                             "partitionMode" | "partition_mode" => Ok(GeneratedField::PartitionMode),
-                            "nullEqualsNull" | "null_equals_null" => Ok(GeneratedField::NullEqualsNull),
+                            "nullEquality" | "null_equality" => Ok(GeneratedField::NullEquality),
                             "filter" => Ok(GeneratedField::Filter),
                             "projection" => Ok(GeneratedField::Projection),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
@@ -6975,7 +7068,7 @@ impl<'de> serde::Deserialize<'de> for HashJoinExecNode {
                 let mut on__ = None;
                 let mut join_type__ = None;
                 let mut partition_mode__ = None;
-                let mut null_equals_null__ = None;
+                let mut null_equality__ = None;
                 let mut filter__ = None;
                 let mut projection__ = None;
                 while let Some(k) = map_.next_key()? {
@@ -7010,11 +7103,11 @@ impl<'de> serde::Deserialize<'de> for HashJoinExecNode {
                             }
                             partition_mode__ = Some(map_.next_value::<PartitionMode>()? as i32);
                         }
-                        GeneratedField::NullEqualsNull => {
-                            if null_equals_null__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("nullEqualsNull"));
+                        GeneratedField::NullEquality => {
+                            if null_equality__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("nullEquality"));
                             }
-                            null_equals_null__ = Some(map_.next_value()?);
+                            null_equality__ = Some(map_.next_value::<super::datafusion_common::NullEquality>()? as i32);
                         }
                         GeneratedField::Filter => {
                             if filter__.is_some() {
@@ -7039,7 +7132,7 @@ impl<'de> serde::Deserialize<'de> for HashJoinExecNode {
                     on: on__.unwrap_or_default(),
                     join_type: join_type__.unwrap_or_default(),
                     partition_mode: partition_mode__.unwrap_or_default(),
-                    null_equals_null: null_equals_null__.unwrap_or_default(),
+                    null_equality: null_equality__.unwrap_or_default(),
                     filter: filter__,
                     projection: projection__.unwrap_or_default(),
                 })
@@ -8475,7 +8568,7 @@ impl serde::Serialize for JoinNode {
         if !self.right_join_key.is_empty() {
             len += 1;
         }
-        if self.null_equals_null {
+        if self.null_equality != 0 {
             len += 1;
         }
         if self.filter.is_some() {
@@ -8504,8 +8597,10 @@ impl serde::Serialize for JoinNode {
         if !self.right_join_key.is_empty() {
             struct_ser.serialize_field("rightJoinKey", &self.right_join_key)?;
         }
-        if self.null_equals_null {
-            struct_ser.serialize_field("nullEqualsNull", &self.null_equals_null)?;
+        if self.null_equality != 0 {
+            let v = super::datafusion_common::NullEquality::try_from(self.null_equality)
+                .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {}", self.null_equality)))?;
+            struct_ser.serialize_field("nullEquality", &v)?;
         }
         if let Some(v) = self.filter.as_ref() {
             struct_ser.serialize_field("filter", v)?;
@@ -8530,8 +8625,8 @@ impl<'de> serde::Deserialize<'de> for JoinNode {
             "leftJoinKey",
             "right_join_key",
             "rightJoinKey",
-            "null_equals_null",
-            "nullEqualsNull",
+            "null_equality",
+            "nullEquality",
             "filter",
         ];
 
@@ -8543,7 +8638,7 @@ impl<'de> serde::Deserialize<'de> for JoinNode {
             JoinConstraint,
             LeftJoinKey,
             RightJoinKey,
-            NullEqualsNull,
+            NullEquality,
             Filter,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -8572,7 +8667,7 @@ impl<'de> serde::Deserialize<'de> for JoinNode {
                             "joinConstraint" | "join_constraint" => Ok(GeneratedField::JoinConstraint),
                             "leftJoinKey" | "left_join_key" => Ok(GeneratedField::LeftJoinKey),
                             "rightJoinKey" | "right_join_key" => Ok(GeneratedField::RightJoinKey),
-                            "nullEqualsNull" | "null_equals_null" => Ok(GeneratedField::NullEqualsNull),
+                            "nullEquality" | "null_equality" => Ok(GeneratedField::NullEquality),
                             "filter" => Ok(GeneratedField::Filter),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
@@ -8599,7 +8694,7 @@ impl<'de> serde::Deserialize<'de> for JoinNode {
                 let mut join_constraint__ = None;
                 let mut left_join_key__ = None;
                 let mut right_join_key__ = None;
-                let mut null_equals_null__ = None;
+                let mut null_equality__ = None;
                 let mut filter__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
@@ -8639,11 +8734,11 @@ impl<'de> serde::Deserialize<'de> for JoinNode {
                             }
                             right_join_key__ = Some(map_.next_value()?);
                         }
-                        GeneratedField::NullEqualsNull => {
-                            if null_equals_null__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("nullEqualsNull"));
+                        GeneratedField::NullEquality => {
+                            if null_equality__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("nullEquality"));
                             }
-                            null_equals_null__ = Some(map_.next_value()?);
+                            null_equality__ = Some(map_.next_value::<super::datafusion_common::NullEquality>()? as i32);
                         }
                         GeneratedField::Filter => {
                             if filter__.is_some() {
@@ -8660,7 +8755,7 @@ impl<'de> serde::Deserialize<'de> for JoinNode {
                     join_constraint: join_constraint__.unwrap_or_default(),
                     left_join_key: left_join_key__.unwrap_or_default(),
                     right_join_key: right_join_key__.unwrap_or_default(),
-                    null_equals_null: null_equals_null__.unwrap_or_default(),
+                    null_equality: null_equality__.unwrap_or_default(),
                     filter: filter__,
                 })
             }
@@ -15796,8 +15891,8 @@ impl serde::Serialize for PhysicalPlanNode {
                 physical_plan_node::PhysicalPlanType::JsonScan(v) => {
                     struct_ser.serialize_field("jsonScan", v)?;
                 }
-                physical_plan_node::PhysicalPlanType::YieldStream(v) => {
-                    struct_ser.serialize_field("yieldStream", v)?;
+                physical_plan_node::PhysicalPlanType::Cooperative(v) => {
+                    struct_ser.serialize_field("cooperative", v)?;
                 }
             }
         }
@@ -15857,8 +15952,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalPlanNode {
             "unnest",
             "json_scan",
             "jsonScan",
-            "yield_stream",
-            "yieldStream",
+            "cooperative",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -15893,7 +15987,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalPlanNode {
             ParquetSink,
             Unnest,
             JsonScan,
-            YieldStream,
+            Cooperative,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -15945,7 +16039,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalPlanNode {
                             "parquetSink" | "parquet_sink" => Ok(GeneratedField::ParquetSink),
                             "unnest" => Ok(GeneratedField::Unnest),
                             "jsonScan" | "json_scan" => Ok(GeneratedField::JsonScan),
-                            "yieldStream" | "yield_stream" => Ok(GeneratedField::YieldStream),
+                            "cooperative" => Ok(GeneratedField::Cooperative),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -16178,11 +16272,11 @@ impl<'de> serde::Deserialize<'de> for PhysicalPlanNode {
                             physical_plan_type__ = map_.next_value::<::std::option::Option<_>>()?.map(physical_plan_node::PhysicalPlanType::JsonScan)
 ;
                         }
-                        GeneratedField::YieldStream => {
+                        GeneratedField::Cooperative => {
                             if physical_plan_type__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("yieldStream"));
+                                return Err(serde::de::Error::duplicate_field("cooperative"));
                             }
-                            physical_plan_type__ = map_.next_value::<::std::option::Option<_>>()?.map(physical_plan_node::PhysicalPlanType::YieldStream)
+                            physical_plan_type__ = map_.next_value::<::std::option::Option<_>>()?.map(physical_plan_node::PhysicalPlanType::Cooperative)
 ;
                         }
                     }
@@ -20041,7 +20135,7 @@ impl serde::Serialize for SymmetricHashJoinExecNode {
         if self.partition_mode != 0 {
             len += 1;
         }
-        if self.null_equals_null {
+        if self.null_equality != 0 {
             len += 1;
         }
         if self.filter.is_some() {
@@ -20073,8 +20167,10 @@ impl serde::Serialize for SymmetricHashJoinExecNode {
                 .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {}", self.partition_mode)))?;
             struct_ser.serialize_field("partitionMode", &v)?;
         }
-        if self.null_equals_null {
-            struct_ser.serialize_field("nullEqualsNull", &self.null_equals_null)?;
+        if self.null_equality != 0 {
+            let v = super::datafusion_common::NullEquality::try_from(self.null_equality)
+                .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {}", self.null_equality)))?;
+            struct_ser.serialize_field("nullEquality", &v)?;
         }
         if let Some(v) = self.filter.as_ref() {
             struct_ser.serialize_field("filter", v)?;
@@ -20102,8 +20198,8 @@ impl<'de> serde::Deserialize<'de> for SymmetricHashJoinExecNode {
             "joinType",
             "partition_mode",
             "partitionMode",
-            "null_equals_null",
-            "nullEqualsNull",
+            "null_equality",
+            "nullEquality",
             "filter",
             "left_sort_exprs",
             "leftSortExprs",
@@ -20118,7 +20214,7 @@ impl<'de> serde::Deserialize<'de> for SymmetricHashJoinExecNode {
             On,
             JoinType,
             PartitionMode,
-            NullEqualsNull,
+            NullEquality,
             Filter,
             LeftSortExprs,
             RightSortExprs,
@@ -20148,7 +20244,7 @@ impl<'de> serde::Deserialize<'de> for SymmetricHashJoinExecNode {
                             "on" => Ok(GeneratedField::On),
                             "joinType" | "join_type" => Ok(GeneratedField::JoinType),
                             "partitionMode" | "partition_mode" => Ok(GeneratedField::PartitionMode),
-                            "nullEqualsNull" | "null_equals_null" => Ok(GeneratedField::NullEqualsNull),
+                            "nullEquality" | "null_equality" => Ok(GeneratedField::NullEquality),
                             "filter" => Ok(GeneratedField::Filter),
                             "leftSortExprs" | "left_sort_exprs" => Ok(GeneratedField::LeftSortExprs),
                             "rightSortExprs" | "right_sort_exprs" => Ok(GeneratedField::RightSortExprs),
@@ -20176,7 +20272,7 @@ impl<'de> serde::Deserialize<'de> for SymmetricHashJoinExecNode {
                 let mut on__ = None;
                 let mut join_type__ = None;
                 let mut partition_mode__ = None;
-                let mut null_equals_null__ = None;
+                let mut null_equality__ = None;
                 let mut filter__ = None;
                 let mut left_sort_exprs__ = None;
                 let mut right_sort_exprs__ = None;
@@ -20212,11 +20308,11 @@ impl<'de> serde::Deserialize<'de> for SymmetricHashJoinExecNode {
                             }
                             partition_mode__ = Some(map_.next_value::<StreamPartitionMode>()? as i32);
                         }
-                        GeneratedField::NullEqualsNull => {
-                            if null_equals_null__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("nullEqualsNull"));
+                        GeneratedField::NullEquality => {
+                            if null_equality__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("nullEquality"));
                             }
-                            null_equals_null__ = Some(map_.next_value()?);
+                            null_equality__ = Some(map_.next_value::<super::datafusion_common::NullEquality>()? as i32);
                         }
                         GeneratedField::Filter => {
                             if filter__.is_some() {
@@ -20244,7 +20340,7 @@ impl<'de> serde::Deserialize<'de> for SymmetricHashJoinExecNode {
                     on: on__.unwrap_or_default(),
                     join_type: join_type__.unwrap_or_default(),
                     partition_mode: partition_mode__.unwrap_or_default(),
-                    null_equals_null: null_equals_null__.unwrap_or_default(),
+                    null_equality: null_equality__.unwrap_or_default(),
                     filter: filter__,
                     left_sort_exprs: left_sort_exprs__.unwrap_or_default(),
                     right_sort_exprs: right_sort_exprs__.unwrap_or_default(),
@@ -22677,115 +22773,5 @@ impl<'de> serde::Deserialize<'de> for WindowNode {
             }
         }
         deserializer.deserialize_struct("datafusion.WindowNode", FIELDS, GeneratedVisitor)
-    }
-}
-impl serde::Serialize for YieldStreamExecNode {
-    #[allow(deprecated)]
-    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        use serde::ser::SerializeStruct;
-        let mut len = 0;
-        if self.input.is_some() {
-            len += 1;
-        }
-        if self.frequency != 0 {
-            len += 1;
-        }
-        let mut struct_ser = serializer.serialize_struct("datafusion.YieldStreamExecNode", len)?;
-        if let Some(v) = self.input.as_ref() {
-            struct_ser.serialize_field("input", v)?;
-        }
-        if self.frequency != 0 {
-            struct_ser.serialize_field("frequency", &self.frequency)?;
-        }
-        struct_ser.end()
-    }
-}
-impl<'de> serde::Deserialize<'de> for YieldStreamExecNode {
-    #[allow(deprecated)]
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        const FIELDS: &[&str] = &[
-            "input",
-            "frequency",
-        ];
-
-        #[allow(clippy::enum_variant_names)]
-        enum GeneratedField {
-            Input,
-            Frequency,
-        }
-        impl<'de> serde::Deserialize<'de> for GeneratedField {
-            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
-            where
-                D: serde::Deserializer<'de>,
-            {
-                struct GeneratedVisitor;
-
-                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
-                    type Value = GeneratedField;
-
-                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                        write!(formatter, "expected one of: {:?}", &FIELDS)
-                    }
-
-                    #[allow(unused_variables)]
-                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
-                    where
-                        E: serde::de::Error,
-                    {
-                        match value {
-                            "input" => Ok(GeneratedField::Input),
-                            "frequency" => Ok(GeneratedField::Frequency),
-                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
-                        }
-                    }
-                }
-                deserializer.deserialize_identifier(GeneratedVisitor)
-            }
-        }
-        struct GeneratedVisitor;
-        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
-            type Value = YieldStreamExecNode;
-
-            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                formatter.write_str("struct datafusion.YieldStreamExecNode")
-            }
-
-            fn visit_map<V>(self, mut map_: V) -> std::result::Result<YieldStreamExecNode, V::Error>
-                where
-                    V: serde::de::MapAccess<'de>,
-            {
-                let mut input__ = None;
-                let mut frequency__ = None;
-                while let Some(k) = map_.next_key()? {
-                    match k {
-                        GeneratedField::Input => {
-                            if input__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("input"));
-                            }
-                            input__ = map_.next_value()?;
-                        }
-                        GeneratedField::Frequency => {
-                            if frequency__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("frequency"));
-                            }
-                            frequency__ = 
-                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
-                            ;
-                        }
-                    }
-                }
-                Ok(YieldStreamExecNode {
-                    input: input__,
-                    frequency: frequency__.unwrap_or_default(),
-                })
-            }
-        }
-        deserializer.deserialize_struct("datafusion.YieldStreamExecNode", FIELDS, GeneratedVisitor)
     }
 }

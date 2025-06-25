@@ -64,6 +64,7 @@ use datafusion::physical_plan::aggregates::{AggregateExec, PhysicalGroupBy};
 use datafusion::physical_plan::analyze::AnalyzeExec;
 use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
+use datafusion::physical_plan::coop::CooperativeExec;
 use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::explain::ExplainExec;
 use datafusion::physical_plan::expressions::PhysicalSortExpr;
@@ -82,7 +83,6 @@ use datafusion::physical_plan::sorts::sort_preserving_merge::SortPreservingMerge
 use datafusion::physical_plan::union::{InterleaveExec, UnionExec};
 use datafusion::physical_plan::unnest::{ListUnnest, UnnestExec};
 use datafusion::physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
-use datafusion::physical_plan::yield_stream::YieldStreamExec;
 use datafusion::physical_plan::{
     ExecutionPlan, InputOrderMode, PhysicalExpr, WindowExpr,
 };
@@ -324,9 +324,9 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                 runtime,
                 extension_codec,
             ),
-            PhysicalPlanType::YieldStream(yield_stream) => self
-                .try_into_yield_stream_physical_plan(
-                    yield_stream,
+            PhysicalPlanType::Cooperative(cooperative) => self
+                .try_into_cooperative_physical_plan(
+                    cooperative,
                     registry,
                     runtime,
                     extension_codec,
@@ -520,8 +520,8 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
             );
         }
 
-        if let Some(exec) = plan.downcast_ref::<YieldStreamExec>() {
-            return protobuf::PhysicalPlanNode::try_from_yield_stream_exec(
+        if let Some(exec) = plan.downcast_ref::<CooperativeExec>() {
+            return protobuf::PhysicalPlanNode::try_from_cooperative_exec(
                 exec,
                 extension_codec,
             );
@@ -1152,6 +1152,13 @@ impl protobuf::PhysicalPlanNode {
                     hashjoin.join_type
                 ))
             })?;
+        let null_equality = protobuf::NullEquality::try_from(hashjoin.null_equality)
+            .map_err(|_| {
+                proto_error(format!(
+                    "Received a HashJoinNode message with unknown NullEquality {}",
+                    hashjoin.null_equality
+                ))
+            })?;
         let filter = hashjoin
             .filter
             .as_ref()
@@ -1220,7 +1227,7 @@ impl protobuf::PhysicalPlanNode {
             &join_type.into(),
             projection,
             partition_mode,
-            hashjoin.null_equals_null,
+            null_equality.into(),
         )?))
     }
 
@@ -1261,6 +1268,13 @@ impl protobuf::PhysicalPlanNode {
                 proto_error(format!(
                     "Received a SymmetricHashJoin message with unknown JoinType {}",
                     sym_join.join_type
+                ))
+            })?;
+        let null_equality = protobuf::NullEquality::try_from(sym_join.null_equality)
+            .map_err(|_| {
+                proto_error(format!(
+                    "Received a SymmetricHashJoin message with unknown NullEquality {}",
+                    sym_join.null_equality
                 ))
             })?;
         let filter = sym_join
@@ -1339,7 +1353,7 @@ impl protobuf::PhysicalPlanNode {
             on,
             filter,
             &join_type.into(),
-            sym_join.null_equals_null,
+            null_equality.into(),
             left_sort_exprs,
             right_sort_exprs,
             partition_mode,
@@ -1780,19 +1794,16 @@ impl protobuf::PhysicalPlanNode {
         )))
     }
 
-    fn try_into_yield_stream_physical_plan(
+    fn try_into_cooperative_physical_plan(
         &self,
-        field_stream: &protobuf::YieldStreamExecNode,
+        field_stream: &protobuf::CooperativeExecNode,
         registry: &dyn FunctionRegistry,
         runtime: &RuntimeEnv,
         extension_codec: &dyn PhysicalExtensionCodec,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let input =
             into_physical_plan(&field_stream.input, registry, runtime, extension_codec)?;
-        Ok(Arc::new(YieldStreamExec::new(
-            input,
-            field_stream.frequency as _,
-        )))
+        Ok(Arc::new(CooperativeExec::new(input)))
     }
 
     fn try_from_explain_exec(
@@ -1950,6 +1961,7 @@ impl protobuf::PhysicalPlanNode {
             })
             .collect::<Result<_>>()?;
         let join_type: protobuf::JoinType = exec.join_type().to_owned().into();
+        let null_equality: protobuf::NullEquality = exec.null_equality().into();
         let filter = exec
             .filter()
             .as_ref()
@@ -1990,7 +2002,7 @@ impl protobuf::PhysicalPlanNode {
                     on,
                     join_type: join_type.into(),
                     partition_mode: partition_mode.into(),
-                    null_equals_null: exec.null_equals_null(),
+                    null_equality: null_equality.into(),
                     filter,
                     projection: exec.projection.as_ref().map_or_else(Vec::new, |v| {
                         v.iter().map(|x| *x as u32).collect::<Vec<u32>>()
@@ -2025,6 +2037,7 @@ impl protobuf::PhysicalPlanNode {
             })
             .collect::<Result<_>>()?;
         let join_type: protobuf::JoinType = exec.join_type().to_owned().into();
+        let null_equality: protobuf::NullEquality = exec.null_equality().into();
         let filter = exec
             .filter()
             .as_ref()
@@ -2108,7 +2121,7 @@ impl protobuf::PhysicalPlanNode {
                     on,
                     join_type: join_type.into(),
                     partition_mode: partition_mode.into(),
-                    null_equals_null: exec.null_equals_null(),
+                    null_equality: null_equality.into(),
                     left_sort_exprs,
                     right_sort_exprs,
                     filter,
@@ -2775,8 +2788,8 @@ impl protobuf::PhysicalPlanNode {
         })
     }
 
-    fn try_from_yield_stream_exec(
-        exec: &YieldStreamExec,
+    fn try_from_cooperative_exec(
+        exec: &CooperativeExec,
         extension_codec: &dyn PhysicalExtensionCodec,
     ) -> Result<Self> {
         let input = protobuf::PhysicalPlanNode::try_from_physical_plan(
@@ -2785,10 +2798,9 @@ impl protobuf::PhysicalPlanNode {
         )?;
 
         Ok(protobuf::PhysicalPlanNode {
-            physical_plan_type: Some(PhysicalPlanType::YieldStream(Box::new(
-                protobuf::YieldStreamExecNode {
+            physical_plan_type: Some(PhysicalPlanType::Cooperative(Box::new(
+                protobuf::CooperativeExecNode {
                     input: Some(Box::new(input)),
-                    frequency: exec.yield_period() as _,
                 },
             ))),
         })

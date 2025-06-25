@@ -17,7 +17,8 @@
 
 pub use crate::display::{DefaultDisplay, DisplayAs, DisplayFormatType, VerboseDisplay};
 use crate::filter_pushdown::{
-    ChildPushdownResult, FilterDescription, FilterPushdownPropagation,
+    ChildPushdownResult, FilterDescription, FilterPushdownPhase,
+    FilterPushdownPropagation,
 };
 pub use crate::metrics::Metric;
 pub use crate::ordering::InputOrderMode;
@@ -41,8 +42,6 @@ use crate::coalesce_partitions::CoalescePartitionsExec;
 use crate::display::DisplayableExecutionPlan;
 use crate::metrics::MetricsSet;
 use crate::projection::ProjectionExec;
-use crate::repartition::RepartitionExec;
-use crate::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use crate::stream::RecordBatchStreamAdapter;
 
 use arrow::array::{Array, RecordBatch};
@@ -270,11 +269,13 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// batch is superlinear. See this [general guideline][async-guideline] for more context
     /// on this point, which explains why one should avoid spending a long time without
     /// reaching an `await`/yield point in asynchronous runtimes.
-    /// This can be achieved by manually returning [`Poll::Pending`] and setting up wakers
-    /// appropriately, or the use of [`tokio::task::yield_now()`] when appropriate.
+    /// This can be achieved by using the utilities from the [`coop`](crate::coop) module, by
+    /// manually returning [`Poll::Pending`] and setting up wakers appropriately, or by calling
+    /// [`tokio::task::yield_now()`] when appropriate.
     /// In special cases that warrant manual yielding, determination for "regularly" may be
-    /// made using a timer (being careful with the overhead-heavy system call needed to
-    /// take the time), or by counting rows or batches.
+    /// made using the [Tokio task budget](https://docs.rs/tokio/latest/tokio/task/coop/index.html),
+    /// a timer (being careful with the overhead-heavy system call needed to take the time), or by
+    /// counting rows or batches.
     ///
     /// The [cancellation benchmark] tracks some cases of how quickly queries can
     /// be cancelled.
@@ -509,8 +510,13 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     ///
     /// The default implementation bars all parent filters from being pushed down and adds no new filters.
     /// This is the safest option, making filter pushdown opt-in on a per-node pasis.
+    ///
+    /// There are two different phases in filter pushdown, which some operators may handle the same and some differently.
+    /// Depending on the phase the operator may or may not be allowed to modify the plan.
+    /// See [`FilterPushdownPhase`] for more details.
     fn gather_filters_for_pushdown(
         &self,
+        _phase: FilterPushdownPhase,
         parent_filters: Vec<Arc<dyn PhysicalExpr>>,
         _config: &ConfigOptions,
     ) -> Result<FilterDescription> {
@@ -521,37 +527,88 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     }
 
     /// Handle the result of a child pushdown.
-    /// This is called as we recurse back up the plan tree after recursing down and calling [`ExecutionPlan::gather_filters_for_pushdown`].
-    /// Once we know what the result of pushing down filters into children is we ask the current node what it wants to do with that result.
-    /// For a `DataSourceExec` that may be absorbing the filters to apply them during the scan phase
-    /// (also known as late materialization).
-    /// A `FilterExec` may absorb any filters its children could not absorb, or if there are no filters left it
-    /// may remove itself from the plan altogether.
-    /// It combines both [`ChildPushdownResult::parent_filters`] and [`ChildPushdownResult::self_filters`] into a single
-    /// predicate and replaces it's own predicate.
-    /// Then it passes [`PredicateSupport::Supported`] for each parent predicate to the parent.
-    /// A `HashJoinExec` may ignore the pushdown result since it needs to apply the filters as part of the join anyhow.
-    /// It passes [`ChildPushdownResult::parent_filters`] back up to it's parents wrapped in [`FilterPushdownPropagation::transparent`]
-    /// and [`ChildPushdownResult::self_filters`] is discarded.
+    /// This method is called as we recurse back up the plan tree after pushing
+    /// filters down to child nodes via [`ExecutionPlan::gather_filters_for_pushdown`].
+    /// It allows the current node to process the results of filter pushdown from
+    /// its children, deciding whether to absorb filters, modify the plan, or pass
+    /// filters back up to its parent.
     ///
-    /// The default implementation is a no-op that passes the result of pushdown from the children to its parent.
+    /// **Purpose and Context:**
+    /// Filter pushdown is a critical optimization in DataFusion that aims to
+    /// reduce the amount of data processed by applying filters as early as
+    /// possible in the query plan. This method is part of the second phase of
+    /// filter pushdown, where results are propagated back up the tree after
+    /// being pushed down. Each node can inspect the pushdown results from its
+    /// children and decide how to handle any unapplied filters, potentially
+    /// optimizing the plan structure or filter application.
     ///
-    /// When returning filters via [`FilterPushdownPropagation`] the order of the filters need not match
-    /// the order they were passed in via `child_pushdown_result`, but preserving the order may be beneficial
-    /// for debugging and reasoning about the resulting plans so it is recommended to preserve the order.
+    /// **Behavior in Different Nodes:**
+    /// - For a `DataSourceExec`, this often means absorbing the filters to apply
+    ///   them during the scan phase (late materialization), reducing the data
+    ///   read from the source.
+    /// - A `FilterExec` may absorb any filters its children could not handle,
+    ///   combining them with its own predicate. If no filters remain (i.e., the
+    ///   predicate becomes trivially true), it may remove itself from the plan
+    ///   altogether. It typically marks parent filters as supported, indicating
+    ///   they have been handled.
+    /// - A `HashJoinExec` might ignore the pushdown result if filters need to
+    ///   be applied during the join operation. It passes the parent filters back
+    ///   up wrapped in [`FilterPushdownPropagation::transparent`], discarding
+    ///   any self-filters from children.
     ///
-    /// There are various helper methods to make implementing this method easier, see:
-    /// - [`FilterPushdownPropagation::unsupported`]: to indicate that the node does not support filter pushdown at all.
-    /// - [`FilterPushdownPropagation::transparent`]: to indicate that the node supports filter pushdown but does not involve itself in it,
-    ///   instead if simply transmits the result of pushdown into its children back up to its parent.
-    /// - [`PredicateSupports::new_with_supported_check`]: takes a callback that returns true / false for each filter to indicate pushdown support.
-    ///   This can be used alongside [`FilterPushdownPropagation::with_filters`] and [`FilterPushdownPropagation::with_updated_node`]
-    ///   to dynamically build a result with a mix of supported and unsupported filters.
+    /// **Example Walkthrough:**
+    /// Consider a query plan: `FilterExec (f1) -> HashJoinExec -> DataSourceExec`.
+    /// 1. **Downward Phase (`gather_filters_for_pushdown`):** Starting at
+    ///    `FilterExec`, the filter `f1` is gathered and pushed down to
+    ///    `HashJoinExec`. `HashJoinExec` may allow `f1` to pass to one side of
+    ///    the join or add its own filters (e.g., a min-max filter from the build side),
+    ///    then pushes filters to `DataSourceExec`. `DataSourceExec`, being a leaf node,
+    ///    has no children to push to, so it prepares to handle filters in the
+    ///    upward phase.
+    /// 2. **Upward Phase (`handle_child_pushdown_result`):** Starting at
+    ///    `DataSourceExec`, it absorbs applicable filters from `HashJoinExec`
+    ///    for late materialization during scanning, marking them as supported.
+    ///    `HashJoinExec` receives the result, decides whether to apply any
+    ///    remaining filters during the join, and passes unhandled filters back
+    ///    up to `FilterExec`. `FilterExec` absorbs any unhandled filters,
+    ///    updates its predicate if necessary, or removes itself if the predicate
+    ///    becomes trivial (e.g., `lit(true)`), and marks filters as supported
+    ///    for its parent.
+    ///
+    /// The default implementation is a no-op that passes the result of pushdown
+    /// from the children to its parent transparently, ensuring no filters are
+    /// lost if a node does not override this behavior.
+    ///
+    /// **Notes for Implementation:**
+    /// When returning filters via [`FilterPushdownPropagation`], the order of
+    /// filters need not match the order they were passed in via
+    /// `child_pushdown_result`. However, preserving the order is recommended for
+    /// debugging and ease of reasoning about the resulting plans.
+    ///
+    /// **Helper Methods for Customization:**
+    /// There are various helper methods to simplify implementing this method:
+    /// - [`FilterPushdownPropagation::unsupported`]: Indicates that the node
+    ///   does not support filter pushdown at all, rejecting all filters.
+    /// - [`FilterPushdownPropagation::transparent`]: Indicates that the node
+    ///   supports filter pushdown but does not modify it, simply transmitting
+    ///   the children's pushdown results back up to its parent.
+    /// - [`PredicateSupports::new_with_supported_check`]: Takes a callback to
+    ///   dynamically determine support for each filter, useful with
+    ///   [`FilterPushdownPropagation::with_filters`] and
+    ///   [`FilterPushdownPropagation::with_updated_node`] to build mixed results
+    ///   of supported and unsupported filters.
+    ///
+    /// **Filter Pushdown Phases:**
+    /// There are two different phases in filter pushdown (`Pre` and others),
+    /// which some operators may handle differently. Depending on the phase, the
+    /// operator may or may not be allowed to modify the plan. See
+    /// [`FilterPushdownPhase`] for more details on phase-specific behavior.
     ///
     /// [`PredicateSupport::Supported`]: crate::filter_pushdown::PredicateSupport::Supported
     /// [`PredicateSupports::new_with_supported_check`]: crate::filter_pushdown::PredicateSupports::new_with_supported_check
     fn handle_child_pushdown_result(
         &self,
+        _phase: FilterPushdownPhase,
         child_pushdown_result: ChildPushdownResult,
         _config: &ConfigOptions,
     ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
@@ -560,13 +617,26 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
         ))
     }
 
-    /// Returns a version of this plan that cooperates with the runtime via
-    /// built‐in yielding. If such a version doesn't exist, returns `None`.
-    /// You do not need to do provide such a version of a custom operator,
-    /// but DataFusion will utilize it while optimizing the plan if it exists.
-    fn with_cooperative_yields(self: Arc<Self>) -> Option<Arc<dyn ExecutionPlan>> {
-        // Conservative default implementation assumes that a leaf does not
-        // cooperate with yielding.
+    /// Injects arbitrary run-time state into this execution plan, returning a new plan
+    /// instance that incorporates that state *if* it is relevant to the concrete
+    /// node implementation.
+    ///
+    /// This is a generic entry point: the `state` can be any type wrapped in
+    /// `Arc<dyn Any + Send + Sync>`.  A node that cares about the state should
+    /// down-cast it to the concrete type it expects and, if successful, return a
+    /// modified copy of itself that captures the provided value.  If the state is
+    /// not applicable, the default behaviour is to return `None` so that parent
+    /// nodes can continue propagating the attempt further down the plan tree.
+    ///
+    /// For example, [`WorkTableExec`](crate::work_table::WorkTableExec)
+    /// down-casts the supplied state to an `Arc<WorkTable>`
+    /// in order to wire up the working table used during recursive-CTE execution.
+    /// Similar patterns can be followed by custom nodes that need late-bound
+    /// dependencies or shared state.
+    fn with_new_state(
+        &self,
+        _state: Arc<dyn Any + Send + Sync>,
+    ) -> Option<Arc<dyn ExecutionPlan>> {
         None
     }
 }
@@ -743,6 +813,49 @@ pub enum EmissionType {
     Both,
 }
 
+/// Represents whether an operator's `Stream` has been implemented to actively cooperate with the
+/// Tokio scheduler or not. Please refer to the [`coop`](crate::coop) module for more details.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SchedulingType {
+    /// The stream generated by [`execute`](ExecutionPlan::execute) does not actively participate in
+    /// cooperative scheduling. This means the implementation of the `Stream` returned by
+    /// [`ExecutionPlan::execute`] does not contain explicit task budget consumption such as
+    /// [`tokio::task::coop::consume_budget`].
+    ///
+    /// `NonCooperative` is the default value and is acceptable for most operators. Please refer to
+    /// the [`coop`](crate::coop) module for details on when it may be useful to use
+    /// `Cooperative` instead.
+    NonCooperative,
+    /// The stream generated by [`execute`](ExecutionPlan::execute) actively participates in
+    /// cooperative scheduling by consuming task budget when it was able to produce a
+    /// [`RecordBatch`].
+    Cooperative,
+}
+
+/// Represents how an operator's `Stream` implementation generates `RecordBatch`es.
+///
+/// Most operators in DataFusion generate `RecordBatch`es when asked to do so by a call to
+/// `Stream::poll_next`. This is known as demand-driven or lazy evaluation.
+///
+/// Some operators like `Repartition` need to drive `RecordBatch` generation themselves though. This
+/// is known as data-driven or eager evaluation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EvaluationType {
+    /// The stream generated by [`execute`](ExecutionPlan::execute) only generates `RecordBatch`
+    /// instances when it is demanded by invoking `Stream::poll_next`.
+    /// Filter, projection, and join are examples of such lazy operators.
+    ///
+    /// Lazy operators are also known as demand-driven operators.
+    Lazy,
+    /// The stream generated by [`execute`](ExecutionPlan::execute) eagerly generates `RecordBatch`
+    /// in one or more spawned Tokio tasks. Eager evaluation is only started the first time
+    /// `Stream::poll_next` is called.
+    /// Examples of eager operators are repartition, coalesce partitions, and sort preserving merge.
+    ///
+    /// Eager operators are also known as a data-driven operators.
+    Eager,
+}
+
 /// Utility to determine an operator's boundedness based on its children's boundedness.
 ///
 /// Assumes boundedness can be inferred from child operators:
@@ -831,6 +944,8 @@ pub struct PlanProperties {
     pub emission_type: EmissionType,
     /// See [ExecutionPlanProperties::boundedness]
     pub boundedness: Boundedness,
+    pub evaluation_type: EvaluationType,
+    pub scheduling_type: SchedulingType,
     /// See [ExecutionPlanProperties::output_ordering]
     output_ordering: Option<LexOrdering>,
 }
@@ -850,6 +965,8 @@ impl PlanProperties {
             partitioning,
             emission_type,
             boundedness,
+            evaluation_type: EvaluationType::Lazy,
+            scheduling_type: SchedulingType::NonCooperative,
             output_ordering,
         }
     }
@@ -881,6 +998,22 @@ impl PlanProperties {
         self
     }
 
+    /// Set the [`SchedulingType`].
+    ///
+    /// Defaults to [`SchedulingType::NonCooperative`]
+    pub fn with_scheduling_type(mut self, scheduling_type: SchedulingType) -> Self {
+        self.scheduling_type = scheduling_type;
+        self
+    }
+
+    /// Set the [`EvaluationType`].
+    ///
+    /// Defaults to [`EvaluationType::Lazy`]
+    pub fn with_evaluation_type(mut self, drive_type: EvaluationType) -> Self {
+        self.evaluation_type = drive_type;
+        self
+    }
+
     /// Overwrite constraints with its new value.
     pub fn with_constraints(mut self, constraints: Constraints) -> Self {
         self.eq_properties = self.eq_properties.with_constraints(constraints);
@@ -907,30 +1040,12 @@ impl PlanProperties {
 
 /// Indicate whether a data exchange is needed for the input of `plan`, which will be very helpful
 /// especially for the distributed engine to judge whether need to deal with shuffling.
-/// Currently there are 3 kinds of execution plan which needs data exchange
+/// Currently, there are 3 kinds of execution plan which needs data exchange
 ///     1. RepartitionExec for changing the partition number between two `ExecutionPlan`s
 ///     2. CoalescePartitionsExec for collapsing all of the partitions into one without ordering guarantee
 ///     3. SortPreservingMergeExec for collapsing all of the sorted partitions into one with ordering guarantee
 pub fn need_data_exchange(plan: Arc<dyn ExecutionPlan>) -> bool {
-    if let Some(repartition) = plan.as_any().downcast_ref::<RepartitionExec>() {
-        !matches!(
-            repartition.properties().output_partitioning(),
-            Partitioning::RoundRobinBatch(_)
-        )
-    } else if let Some(coalesce) = plan.as_any().downcast_ref::<CoalescePartitionsExec>()
-    {
-        coalesce.input().output_partitioning().partition_count() > 1
-    } else if let Some(sort_preserving_merge) =
-        plan.as_any().downcast_ref::<SortPreservingMergeExec>()
-    {
-        sort_preserving_merge
-            .input()
-            .output_partitioning()
-            .partition_count()
-            > 1
-    } else {
-        false
-    }
+    plan.properties().evaluation_type == EvaluationType::Eager
 }
 
 /// Returns a copy of this plan if we change any child according to the pointer comparison.

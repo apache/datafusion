@@ -22,7 +22,9 @@ use std::fmt;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
-use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
+use datafusion_physical_plan::execution_plan::{
+    Boundedness, EmissionType, SchedulingType,
+};
 use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::{
@@ -36,9 +38,8 @@ use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::filter_pushdown::{
-    ChildPushdownResult, FilterPushdownPropagation,
+    ChildPushdownResult, FilterPushdownPhase, FilterPushdownPropagation,
 };
-use datafusion_physical_plan::yield_stream::wrap_yield_stream;
 
 /// A source of data, typically a list of files or memory
 ///
@@ -144,6 +145,9 @@ pub trait DataSource: Send + Sync + Debug {
 
     fn output_partitioning(&self) -> Partitioning;
     fn eq_properties(&self) -> EquivalenceProperties;
+    fn scheduling_type(&self) -> SchedulingType {
+        SchedulingType::NonCooperative
+    }
     fn statistics(&self) -> Result<Statistics>;
     /// Return a copy of this DataSource with a new fetch limit
     fn with_fetch(&self, _limit: Option<usize>) -> Option<Arc<dyn DataSource>>;
@@ -186,8 +190,6 @@ pub struct DataSourceExec {
     data_source: Arc<dyn DataSource>,
     /// Cached plan properties such as sort order
     cache: PlanProperties,
-    /// Indicates whether to enable cooperative yielding mode.
-    cooperative: bool,
 }
 
 impl DisplayAs for DataSourceExec {
@@ -259,13 +261,7 @@ impl ExecutionPlan for DataSourceExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        self.data_source
-            .open(partition, Arc::clone(&context))
-            .map(|stream| wrap_yield_stream(stream, &context, self.cooperative))
-    }
-
-    fn with_cooperative_yields(self: Arc<Self>) -> Option<Arc<dyn ExecutionPlan>> {
-        self.cooperative.then_some(self)
+        self.data_source.open(partition, Arc::clone(&context))
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
@@ -298,11 +294,7 @@ impl ExecutionPlan for DataSourceExec {
         let data_source = self.data_source.with_fetch(limit)?;
         let cache = self.cache.clone();
 
-        Some(Arc::new(Self {
-            data_source,
-            cache,
-            cooperative: self.cooperative,
-        }))
+        Some(Arc::new(Self { data_source, cache }))
     }
 
     fn fetch(&self) -> Option<usize> {
@@ -318,6 +310,7 @@ impl ExecutionPlan for DataSourceExec {
 
     fn handle_child_pushdown_result(
         &self,
+        _phase: FilterPushdownPhase,
         child_pushdown_result: ChildPushdownResult,
         config: &ConfigOptions,
     ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
@@ -353,11 +346,7 @@ impl DataSourceExec {
     // Default constructor for `DataSourceExec`, setting the `cooperative` flag to `true`.
     pub fn new(data_source: Arc<dyn DataSource>) -> Self {
         let cache = Self::compute_properties(Arc::clone(&data_source));
-        Self {
-            data_source,
-            cache,
-            cooperative: true,
-        }
+        Self { data_source, cache }
     }
 
     /// Return the source object
@@ -383,12 +372,6 @@ impl DataSourceExec {
         self
     }
 
-    /// Assign yielding mode
-    pub fn with_cooperative(mut self, cooperative: bool) -> Self {
-        self.cooperative = cooperative;
-        self
-    }
-
     fn compute_properties(data_source: Arc<dyn DataSource>) -> PlanProperties {
         PlanProperties::new(
             data_source.eq_properties(),
@@ -396,6 +379,7 @@ impl DataSourceExec {
             EmissionType::Incremental,
             Boundedness::Bounded,
         )
+        .with_scheduling_type(data_source.scheduling_type())
     }
 
     /// Downcast the `DataSourceExec`'s `data_source` to a specific file source

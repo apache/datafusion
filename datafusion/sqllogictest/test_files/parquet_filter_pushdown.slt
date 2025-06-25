@@ -212,14 +212,13 @@ logical_plan
 physical_plan
 01)CoalesceBatchesExec: target_batch_size=8192
 02)--FilterExec: val@0 != part@1
-03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=3
-04)------DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_part_test/part=a/file.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_part_test/part=b/file.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_part_test/part=c/file.parquet]]}, projection=[val, part], file_type=parquet
+03)----DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_part_test/part=a/file.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_part_test/part=b/file.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_part_test/part=c/file.parquet]]}, projection=[val, part], file_type=parquet
 
-# If we reference only a partition column it gets evaluted during the listing phase
+# If we reference only a partition column it gets evaluated during the listing phase
 query TT
 EXPLAIN select * from t_pushdown where part != 'a';
 ----
-logical_plan TableScan: t_pushdown projection=[val, part], full_filters=[t_pushdown.part != Utf8("a")]
+logical_plan TableScan: t_pushdown projection=[val, part], full_filters=[t_pushdown.part != Utf8View("a")]
 physical_plan DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_part_test/part=b/file.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_part_test/part=c/file.parquet]]}, projection=[val, part], file_type=parquet
 
 # And if we reference only a file column it gets pushed down
@@ -227,8 +226,8 @@ query TT
 EXPLAIN select * from t_pushdown where val != 'c';
 ----
 logical_plan
-01)Filter: t_pushdown.val != Utf8("c")
-02)--TableScan: t_pushdown projection=[val, part], partial_filters=[t_pushdown.val != Utf8("c")]
+01)Filter: t_pushdown.val != Utf8View("c")
+02)--TableScan: t_pushdown projection=[val, part], partial_filters=[t_pushdown.val != Utf8View("c")]
 physical_plan DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_part_test/part=a/file.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_part_test/part=b/file.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_part_test/part=c/file.parquet]]}, projection=[val, part], file_type=parquet, predicate=val@0 != c, pruning_predicate=val_null_count@2 != row_count@3 AND (val_min@0 != c OR c != val_max@1), required_guarantees=[val not in (c)]
 
 # If we have a mix of filters:
@@ -239,8 +238,8 @@ query TT
 EXPLAIN select * from t_pushdown where val != 'd' AND val != 'c' AND part = 'a' AND part != val;
 ----
 logical_plan
-01)Filter: t_pushdown.val != Utf8("d") AND t_pushdown.val != Utf8("c") AND t_pushdown.val != t_pushdown.part
-02)--TableScan: t_pushdown projection=[val, part], full_filters=[t_pushdown.part = Utf8("a")], partial_filters=[t_pushdown.val != Utf8("d"), t_pushdown.val != Utf8("c"), t_pushdown.val != t_pushdown.part]
+01)Filter: t_pushdown.val != Utf8View("d") AND t_pushdown.val != Utf8View("c") AND t_pushdown.val != t_pushdown.part
+02)--TableScan: t_pushdown projection=[val, part], full_filters=[t_pushdown.part = Utf8View("a")], partial_filters=[t_pushdown.val != Utf8View("d"), t_pushdown.val != Utf8View("c"), t_pushdown.val != t_pushdown.part]
 physical_plan
 01)CoalesceBatchesExec: target_batch_size=8192
 02)--FilterExec: val@0 != part@1
@@ -253,12 +252,11 @@ EXPLAIN select val, part from t_pushdown where part = 'a' AND part = val;
 ----
 logical_plan
 01)Filter: t_pushdown.val = t_pushdown.part
-02)--TableScan: t_pushdown projection=[val, part], full_filters=[t_pushdown.part = Utf8("a")], partial_filters=[t_pushdown.val = t_pushdown.part]
+02)--TableScan: t_pushdown projection=[val, part], full_filters=[t_pushdown.part = Utf8View("a")], partial_filters=[t_pushdown.val = t_pushdown.part]
 physical_plan
 01)CoalesceBatchesExec: target_batch_size=8192
 02)--FilterExec: val@0 = part@1
-03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_part_test/part=a/file.parquet]]}, projection=[val, part], file_type=parquet
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_part_test/part=a/file.parquet]]}, projection=[val, part], file_type=parquet
 
 query TT
 select val, part from t_pushdown where part = 'a' AND part = val;
@@ -270,12 +268,11 @@ EXPLAIN select val, part from t_pushdown where part = val AND part = 'a';
 ----
 logical_plan
 01)Filter: t_pushdown.val = t_pushdown.part
-02)--TableScan: t_pushdown projection=[val, part], full_filters=[t_pushdown.part = Utf8("a")], partial_filters=[t_pushdown.val = t_pushdown.part]
+02)--TableScan: t_pushdown projection=[val, part], full_filters=[t_pushdown.part = Utf8View("a")], partial_filters=[t_pushdown.val = t_pushdown.part]
 physical_plan
 01)CoalesceBatchesExec: target_batch_size=8192
 02)--FilterExec: val@0 = part@1
-03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_part_test/part=a/file.parquet]]}, projection=[val, part], file_type=parquet
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_part_test/part=a/file.parquet]]}, projection=[val, part], file_type=parquet
 
 query TT
 select val, part from t_pushdown where part = val AND part = 'a';

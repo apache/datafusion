@@ -17,8 +17,8 @@
 
 use super::{Between, Expr, Like};
 use crate::expr::{
-    AggregateFunction, AggregateFunctionParams, Alias, BinaryExpr, Cast, InList,
-    InSubquery, Placeholder, ScalarFunction, TryCast, Unnest, WindowFunction,
+    AggregateFunction, AggregateFunctionParams, Alias, BinaryExpr, Cast, FieldMetadata,
+    InList, InSubquery, Placeholder, ScalarFunction, TryCast, Unnest, WindowFunction,
     WindowFunctionParams,
 };
 use crate::type_coercion::functions::{
@@ -34,7 +34,6 @@ use datafusion_common::{
 };
 use datafusion_expr_common::type_coercion::binary::BinaryTypeCoercer;
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
-use std::collections::HashMap;
 use std::sync::Arc;
 
 /// Trait to allow expr to typable with respect to a schema
@@ -46,7 +45,7 @@ pub trait ExprSchemable {
     fn nullable(&self, input_schema: &dyn ExprSchema) -> Result<bool>;
 
     /// Given a schema, return the expr's optional metadata
-    fn metadata(&self, schema: &dyn ExprSchema) -> Result<HashMap<String, String>>;
+    fn metadata(&self, schema: &dyn ExprSchema) -> Result<FieldMetadata>;
 
     /// Convert to a field with respect to a schema
     fn to_field(
@@ -346,9 +345,9 @@ impl ExprSchemable for Expr {
         }
     }
 
-    fn metadata(&self, schema: &dyn ExprSchema) -> Result<HashMap<String, String>> {
+    fn metadata(&self, schema: &dyn ExprSchema) -> Result<FieldMetadata> {
         self.to_field(schema)
-            .map(|(_, field)| field.metadata().clone())
+            .map(|(_, field)| FieldMetadata::from(field.metadata()))
     }
 
     /// Returns the datatype and nullability of the expression based on [ExprSchema].
@@ -405,12 +404,10 @@ impl ExprSchemable for Expr {
 
                 let mut combined_metadata = expr.metadata(schema)?;
                 if let Some(metadata) = metadata {
-                    if !metadata.is_empty() {
-                        combined_metadata.extend(metadata.clone());
-                    }
+                    combined_metadata.extend(metadata.clone());
                 }
 
-                Ok(Arc::new(field.with_metadata(combined_metadata)))
+                Ok(Arc::new(combined_metadata.add_to_field(field)))
             }
             Expr::Negative(expr) => expr.to_field(schema).map(|(_, f)| f),
             Expr::Column(c) => schema.field_from_column(c).map(|f| Arc::new(f.clone())),
@@ -423,12 +420,7 @@ impl ExprSchemable for Expr {
             Expr::Literal(l, metadata) => {
                 let mut field = Field::new(&schema_name, l.data_type(), l.is_null());
                 if let Some(metadata) = metadata {
-                    field = field.with_metadata(
-                        metadata
-                            .iter()
-                            .map(|(k, v)| (k.clone(), v.clone()))
-                            .collect(),
-                    );
+                    field = metadata.add_to_field(field);
                 }
                 Ok(Arc::new(field))
             }
@@ -741,7 +733,7 @@ mod tests {
     use super::*;
     use crate::{col, lit};
 
-    use datafusion_common::{internal_err, DFSchema, ScalarValue};
+    use datafusion_common::{internal_err, DFSchema, HashMap, ScalarValue};
 
     macro_rules! test_is_expr_nullable {
         ($EXPR_TYPE:ident) => {{
@@ -847,6 +839,7 @@ mod tests {
     fn test_expr_metadata() {
         let mut meta = HashMap::new();
         meta.insert("bar".to_string(), "buzz".to_string());
+        let meta = FieldMetadata::from(meta);
         let expr = col("foo");
         let schema = MockExprSchema::new()
             .with_data_type(DataType::Int32)
@@ -865,14 +858,13 @@ mod tests {
         );
 
         let schema = DFSchema::from_unqualified_fields(
-            vec![Field::new("foo", DataType::Int32, true).with_metadata(meta.clone())]
-                .into(),
-            HashMap::new(),
+            vec![meta.add_to_field(Field::new("foo", DataType::Int32, true))].into(),
+            std::collections::HashMap::new(),
         )
         .unwrap();
 
         // verify to_field method populates metadata
-        assert_eq!(&meta, expr.to_field(&schema).unwrap().1.metadata());
+        assert_eq!(meta, expr.metadata(&schema).unwrap());
     }
 
     #[derive(Debug)]
@@ -904,8 +896,8 @@ mod tests {
             self
         }
 
-        fn with_metadata(mut self, metadata: HashMap<String, String>) -> Self {
-            self.field = self.field.with_metadata(metadata);
+        fn with_metadata(mut self, metadata: FieldMetadata) -> Self {
+            self.field = metadata.add_to_field(self.field);
             self
         }
     }
