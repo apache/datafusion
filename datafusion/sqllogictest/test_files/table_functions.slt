@@ -394,3 +394,9 @@ SELECT * FROM range(TIMESTAMP '2023-01-01T00:00:00', TIMESTAMP '2023-01-03T00:00
 # Zero-length interval gives error
 query error DataFusion error: Error during planning: Step interval cannot be zero
 SELECT * FROM range(TIMESTAMP '2023-01-01T00:00:00', TIMESTAMP '2023-01-03T00:00:00', INTERVAL '0' DAY)
+
+# Timezone-aware
+query P
+SELECT * FROM range(TIMESTAMPTZ '2023-02-01T00:00:00-07:00', TIMESTAMPTZ '2023-02-01T09:00:00+01:00', INTERVAL '1' HOUR);
+----
+2023-02-01T07:00:00Z

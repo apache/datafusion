@@ -17,7 +17,7 @@
 
 use arrow::array::timezone::Tz;
 use arrow::array::types::TimestampNanosecondType;
-use arrow::array::{Int64Array, TimestampNanosecondArray};
+use arrow::array::{ArrayRef, Int64Array, TimestampNanosecondArray};
 use arrow::datatypes::{
     DataType, Field, IntervalMonthDayNano, Schema, SchemaRef, TimeUnit,
 };
@@ -34,6 +34,135 @@ use parking_lot::RwLock;
 use std::fmt;
 use std::str::FromStr;
 use std::sync::Arc;
+
+/// Empty generator that produces no rows - used when series arguments contain null values
+#[derive(Debug, Clone)]
+struct Empty {
+    name: &'static str,
+}
+
+impl LazyBatchGenerator for Empty {
+    fn generate_next_batch(&mut self) -> Result<Option<RecordBatch>> {
+        Ok(None)
+    }
+}
+
+impl fmt::Display for Empty {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}: empty", self.name)
+    }
+}
+
+/// Trait for values that can be generated in a series
+trait SeriesValue: fmt::Debug + Clone + Send + Sync + 'static {
+    type StepType: fmt::Debug + Clone + Send + Sync;
+    type ValueType: fmt::Debug + Clone + Send + Sync;
+
+    /// Check if we've reached the end of the series
+    fn should_stop(&self, end: Self, step: &Self::StepType, include_end: bool) -> bool;
+
+    /// Advance to the next value in the series
+    fn advance(&mut self, step: &Self::StepType) -> Result<()>;
+
+    /// Create an Arrow array from a vector of values
+    fn create_array(&self, values: Vec<Self::ValueType>) -> Result<ArrayRef>;
+
+    /// Convert self to ValueType for array creation
+    fn to_value_type(&self) -> Self::ValueType;
+
+    /// Display the value for debugging
+    fn display_value(&self) -> String;
+}
+
+impl SeriesValue for i64 {
+    type StepType = i64;
+    type ValueType = i64;
+
+    fn should_stop(&self, end: Self, step: &Self::StepType, include_end: bool) -> bool {
+        reach_end_int64(*self, end, *step, include_end)
+    }
+
+    fn advance(&mut self, step: &Self::StepType) -> Result<()> {
+        *self += step;
+        Ok(())
+    }
+
+    fn create_array(&self, values: Vec<Self::ValueType>) -> Result<ArrayRef> {
+        Ok(Arc::new(Int64Array::from(values)))
+    }
+
+    fn to_value_type(&self) -> Self::ValueType {
+        *self
+    }
+
+    fn display_value(&self) -> String {
+        self.to_string()
+    }
+}
+
+#[derive(Debug, Clone)]
+struct TimestampValue {
+    value: i64,
+    parsed_tz: Tz,
+    tz_str: Option<Arc<str>>,
+}
+
+impl SeriesValue for TimestampValue {
+    type StepType = IntervalMonthDayNano;
+    type ValueType = i64;
+
+    fn should_stop(&self, end: Self, step: &Self::StepType, include_end: bool) -> bool {
+        let step_negative = step.months < 0 || step.days < 0 || step.nanoseconds < 0;
+
+        if include_end {
+            if step_negative {
+                self.value < end.value
+            } else {
+                self.value > end.value
+            }
+        } else if step_negative {
+            self.value <= end.value
+        } else {
+            self.value >= end.value
+        }
+    }
+
+    fn advance(&mut self, step: &Self::StepType) -> Result<()> {
+        let Some(next_ts) = TimestampNanosecondType::add_month_day_nano(
+            self.value,
+            *step,
+            self.parsed_tz,
+        ) else {
+            return plan_err!(
+                "Failed to add interval {:?} to timestamp {}",
+                step,
+                self.value
+            );
+        };
+        self.value = next_ts;
+        Ok(())
+    }
+
+    fn create_array(&self, values: Vec<Self::ValueType>) -> Result<ArrayRef> {
+        let array = TimestampNanosecondArray::from(values);
+
+        // Use timezone from self (now we have access to tz through &self)
+        let array = match self.tz_str.as_ref() {
+            Some(tz_str) => array.with_timezone(Arc::clone(tz_str)),
+            None => array,
+        };
+
+        Ok(Arc::new(array))
+    }
+
+    fn to_value_type(&self) -> Self::ValueType {
+        self.value
+    }
+
+    fn display_value(&self) -> String {
+        self.value.to_string()
+    }
+}
 
 /// Indicates the arguments used for generating a series.
 #[derive(Debug, Clone)]
@@ -68,178 +197,51 @@ struct GenerateSeriesTable {
     args: GenSeriesArgs,
 }
 
-/// Table state that generates a series of values from `start`(inclusive) to `end`, incrementing by step
 #[derive(Debug, Clone)]
-enum GenerateSeriesState {
-    Int64 {
-        schema: SchemaRef,
-        start: i64, // Kept for display
-        end: i64,
-        step: i64,
-        batch_size: usize,
-        /// Tracks current position when generating table
-        current: i64,
-        /// Indicates whether the end value should be included in the series.
-        include_end: bool,
-        name: &'static str,
-    },
-    Timestamp {
-        schema: SchemaRef,
-        start: i64,
-        end: i64,
-        step: IntervalMonthDayNano,
-        tz: Option<Arc<str>>,
-        parsed_tz: Tz,
-        batch_size: usize,
-        /// Tracks current position when generating table
-        current: i64,
-        /// Indicates whether the end value should be included in the series.
-        include_end: bool,
-        name: &'static str,
-    },
-    Empty {
-        batch_size: usize,
-        name: &'static str,
-    },
+struct GenericSeriesState<T: SeriesValue> {
+    schema: SchemaRef,
+    start: T,
+    end: T,
+    step: T::StepType,
+    batch_size: usize,
+    current: T,
+    include_end: bool,
+    name: &'static str,
 }
 
-/// Detail to display for 'Explain' plan
-impl fmt::Display for GenerateSeriesState {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            GenerateSeriesState::Int64 {
-                name,
-                start,
-                end,
-                batch_size,
-                ..
-            }
-            | GenerateSeriesState::Timestamp {
-                name,
-                start,
-                end,
-                batch_size,
-                ..
-            } => {
-                write!(
-                    f,
-                    "{name}: start={start}, end={end}, batch_size={batch_size}"
-                )
-            }
-            GenerateSeriesState::Empty {
-                name, batch_size, ..
-            } => {
-                write!(f, "{name}: empty, batch_size={batch_size}")
-            }
+impl<T: SeriesValue> LazyBatchGenerator for GenericSeriesState<T> {
+    fn generate_next_batch(&mut self) -> Result<Option<RecordBatch>> {
+        let mut buf = Vec::with_capacity(self.batch_size);
+
+        while buf.len() < self.batch_size
+            && !self
+                .current
+                .should_stop(self.end.clone(), &self.step, self.include_end)
+        {
+            buf.push(self.current.to_value_type());
+            self.current.advance(&self.step)?;
         }
+
+        if buf.is_empty() {
+            return Ok(None);
+        }
+
+        let array = self.current.create_array(buf)?;
+        let batch = RecordBatch::try_new(Arc::clone(&self.schema), vec![array])?;
+        Ok(Some(batch))
     }
 }
 
-impl LazyBatchGenerator for GenerateSeriesState {
-    fn generate_next_batch(&mut self) -> Result<Option<RecordBatch>> {
-        match self {
-            GenerateSeriesState::Int64 {
-                schema,
-                end,
-                step,
-                batch_size,
-                current,
-                include_end,
-                ..
-            } => {
-                let mut buf = Vec::with_capacity(*batch_size);
-                let end_val = *end;
-                let step_val = *step;
-                let include_end_val = *include_end;
-
-                while buf.len() < *batch_size
-                    && !reach_end_int64(*current, end_val, step_val, include_end_val)
-                {
-                    buf.push(*current);
-                    *current += step_val;
-                }
-                let array = Int64Array::from(buf);
-
-                if array.is_empty() {
-                    return Ok(None);
-                }
-
-                let batch =
-                    RecordBatch::try_new(Arc::clone(schema), vec![Arc::new(array)])?;
-                Ok(Some(batch))
-            }
-            GenerateSeriesState::Timestamp {
-                schema,
-                end,
-                step,
-                tz,
-                parsed_tz,
-                batch_size,
-                current,
-                include_end,
-                start: _,
-                name: _,
-            } => {
-                let mut buf = Vec::with_capacity(*batch_size);
-                let step_val = *step;
-                let include_end_val = *include_end;
-                let step_negative =
-                    step_val.months < 0 || step_val.days < 0 || step_val.nanoseconds < 0;
-
-                while buf.len() < *batch_size {
-                    let should_stop = if include_end_val {
-                        if step_negative {
-                            current < end
-                        } else {
-                            current > end
-                        }
-                    } else if step_negative {
-                        current <= end
-                    } else {
-                        current >= end
-                    };
-
-                    if should_stop {
-                        break;
-                    }
-
-                    // Store current value before advancing
-                    let current_value = *current;
-
-                    // Add interval using proper calendar arithmetic for next iteration
-                    let Some(next_ts) = TimestampNanosecondType::add_month_day_nano(
-                        *current, step_val, *parsed_tz,
-                    ) else {
-                        return plan_err!(
-                            "Failed to add interval {:?} to timestamp {}",
-                            step_val,
-                            current_value
-                        );
-                    };
-
-                    *current = next_ts;
-
-                    // Push the current value after successfully advancing
-                    buf.push(current_value);
-                }
-
-                let array = TimestampNanosecondArray::from(buf);
-                // Create array with proper timezone
-                let array = match tz {
-                    Some(tz_str) => array.with_timezone(Arc::clone(tz_str)),
-                    None => array,
-                };
-
-                if array.is_empty() {
-                    return Ok(None);
-                }
-
-                let batch =
-                    RecordBatch::try_new(Arc::clone(schema), vec![Arc::new(array)])?;
-                Ok(Some(batch))
-            }
-            GenerateSeriesState::Empty { .. } => Ok(None),
-        }
+impl<T: SeriesValue> fmt::Display for GenericSeriesState<T> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "{}: start={}, end={}, batch_size={}",
+            self.name,
+            self.start.display_value(),
+            self.end.display_value(),
+            self.batch_size
+        )
     }
 }
 
@@ -283,18 +285,15 @@ impl TableProvider for GenerateSeriesTable {
             Some(projection) => Arc::new(self.schema.project(projection)?),
             None => self.schema(),
         };
-        let series_state = match &self.args {
-            // if args have null, then return 0 row
-            GenSeriesArgs::ContainsNull { name } => {
-                GenerateSeriesState::Empty { batch_size, name }
-            }
+        let generator: Arc<RwLock<dyn LazyBatchGenerator>> = match &self.args {
+            GenSeriesArgs::ContainsNull { name } => Arc::new(RwLock::new(Empty { name })),
             GenSeriesArgs::Int64Args {
                 start,
                 end,
                 step,
                 include_end,
                 name,
-            } => GenerateSeriesState::Int64 {
+            } => Arc::new(RwLock::new(GenericSeriesState {
                 schema: self.schema(),
                 start: *start,
                 end: *end,
@@ -303,7 +302,7 @@ impl TableProvider for GenerateSeriesTable {
                 batch_size,
                 include_end: *include_end,
                 name,
-            },
+            })),
             GenSeriesArgs::TimestampArgs {
                 start,
                 end,
@@ -322,25 +321,32 @@ impl TableProvider for GenerateSeriesTable {
                         ))
                     })?
                     .unwrap_or_else(|| Tz::from_str("+00:00").unwrap());
-                GenerateSeriesState::Timestamp {
+                Arc::new(RwLock::new(GenericSeriesState {
                     schema: self.schema(),
-                    start: *start,
-                    end: *end,
+                    start: TimestampValue {
+                        value: *start,
+                        parsed_tz,
+                        tz_str: tz.clone(),
+                    },
+                    end: TimestampValue {
+                        value: *end,
+                        parsed_tz,
+                        tz_str: tz.clone(),
+                    },
                     step: *step,
-                    tz: tz.clone(),
-                    parsed_tz,
-                    current: *start,
+                    current: TimestampValue {
+                        value: *start,
+                        parsed_tz,
+                        tz_str: tz.clone(),
+                    },
                     batch_size,
                     include_end: *include_end,
                     name,
-                }
+                }))
             }
         };
 
-        Ok(Arc::new(LazyMemoryExec::try_new(
-            schema,
-            vec![Arc::new(RwLock::new(series_state))],
-        )?))
+        Ok(Arc::new(LazyMemoryExec::try_new(schema, vec![generator])?))
     }
 }
 
