@@ -42,6 +42,7 @@ members = [
     "datafusion/physical-expr",
     "datafusion/physical-expr-common",
     "datafusion/physical-optimizer",
+    "datafusion/pruning",
     "datafusion/physical-plan",
     "datafusion/proto",
     "datafusion/proto/gen",
@@ -136,6 +137,7 @@ datafusion-optimizer = { path = "datafusion/optimizer", version = "48.0.0", defa
 datafusion-physical-expr = { path = "datafusion/physical-expr", version = "48.0.0", default-features = false }
 datafusion-physical-expr-common = { path = "datafusion/physical-expr-common", version = "48.0.0", default-features = false }
 datafusion-physical-optimizer = { path = "datafusion/physical-optimizer", version = "48.0.0" }
+datafusion-pruning = { path = "datafusion/pruning", version = "48.0.0" }
 datafusion-physical-plan = { path = "datafusion/physical-plan", version = "48.0.0" }
 datafusion-proto = { path = "datafusion/proto", version = "48.0.0" }
 datafusion-proto-common = { path = "datafusion/proto-common", version = "48.0.0" }

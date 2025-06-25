@@ -2550,6 +2550,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "datafusion-pruning"
+version = "48.0.0"
+dependencies = [
+ "arrow",
+ "arrow-schema",
+ "datafusion-common",
+ "datafusion-expr-common",
+ "datafusion-physical-expr",
+ "datafusion-physical-expr-common",
+ "datafusion-physical-plan",
+ "log",
+]
+
+[[package]]
 name = "datafusion-session"
 version = "48.0.0"
 dependencies = [

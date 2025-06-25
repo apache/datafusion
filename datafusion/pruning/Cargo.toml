@@ -1,0 +1,22 @@
+[package]
+name = "datafusion-pruning"
+description = "DataFusion Pruning Logic"
+version = { workspace = true }
+edition = { workspace = true }
+homepage = { workspace = true }
+repository = { workspace = true }
+license = { workspace = true }
+authors = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+arrow = { workspace = true }
+log = { workspace = true }
+arrow-schema = { workspace = true, package = "arrow-schema" }
+datafusion-common = { workspace = true, default-features = true }
+datafusion-expr-common = { workspace = true, default-features = true }
+datafusion-physical-expr = { workspace = true }
+datafusion-physical-expr-common = { workspace = true }
+datafusion-physical-plan = { workspace = true }
