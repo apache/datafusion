@@ -1743,6 +1743,22 @@ pub struct TableParquetOptions {
     /// ```
     pub key_value_metadata: HashMap<String, Option<String>>,
     /// Options for configuring Parquet modular encryption
+    /// See ConfigFileEncryptionProperties and ConfigFileDecryptionProperties in datafusion/common/src/config.rs
+    /// These can be set via 'format.crypto', for example:
+    /// ```sql
+    /// OPTIONS (
+    ///    'format.crypto.file_encryption.encrypt_footer' 'true',
+    ///    'format.crypto.file_encryption.footer_key_as_hex' '30313233343536373839303132333435',  -- b"0123456789012345" */
+    ///    'format.crypto.file_encryption.column_key_as_hex::double_field' '31323334353637383930313233343530', -- b"1234567890123450"
+    ///    'format.crypto.file_encryption.column_key_as_hex::float_field' '31323334353637383930313233343531', -- b"1234567890123451"
+    ///     -- Same for decryption
+    ///    'format.crypto.file_decryption.footer_key_as_hex' '30313233343536373839303132333435', -- b"0123456789012345"
+    ///    'format.crypto.file_decryption.column_key_as_hex::double_field' '31323334353637383930313233343530', -- b"1234567890123450"
+    ///    'format.crypto.file_decryption.column_key_as_hex::float_field' '31323334353637383930313233343531', -- b"1234567890123451"
+    /// )
+    /// ```
+    /// See datafusion-cli/tests/sql/encrypted_parquet.sql for a more complete example.
+    /// Note that keys must be provided as in hex format since these are binary strings.
     pub crypto: ParquetEncryptionOptions,
 }
 
@@ -1794,8 +1810,8 @@ impl ConfigField for TableParquetOptions {
             };
             self.key_value_metadata.insert(k, Some(value.into()));
             Ok(())
-        } else if key.starts_with("crypto.") {
-            self.crypto.set(&key[7..], value)
+        } else if let Some(crypto_feature) = key.strip_prefix("crypto.") {
+            self.crypto.set(crypto_feature, value)
         } else if key.contains("::") {
             self.column_specific_options.set(key, value)
         } else {
@@ -1948,11 +1964,17 @@ config_namespace_with_hashmap! {
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ConfigFileEncryptionProperties {
+    /// Should the parquet footer be encrypted
     pub encrypt_footer: bool,
+    /// Key to use for the parquet footer encoded in hex format
     pub footer_key_as_hex: String,
+    /// Metadata information for footer key
     pub footer_key_metadata_as_hex: String,
+    /// HashMap of column names --> (key in hex format, metadata)
     pub column_encryption_properties: HashMap<String, ColumnEncryptionProperties>,
+    /// AAD prefix string uniquely identifies the file and prevents file swapping
     pub aad_prefix_as_hex: String,
+    /// If true, store the AAD prefix in the file
     pub store_aad_prefix: bool,
 }
 
@@ -1996,9 +2018,7 @@ impl ConfigField for ConfigFileEncryptionProperties {
 
         if key.contains("::") {
             // Handle any column specific properties
-            return self
-                .column_encryption_properties
-                .set(&key, &value.to_string());
+            return self.column_encryption_properties.set(key, value);
         };
 
         let (key, rem) = key.split_once('.').unwrap_or((key, ""));
@@ -2106,10 +2126,15 @@ impl From<&FileEncryptionProperties> for ConfigFileEncryptionProperties {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ConfigFileDecryptionProperties {
+    /// Binary string to use for the parquet footer encoded in hex format
     pub footer_key_as_hex: String,
+    /// HashMap of column names --> key in hex format
     pub column_decryption_properties: HashMap<String, ColumnDecryptionProperties>,
+    /// AAD prefix string uniquely identifies the file and prevents file swapping
     pub aad_prefix_as_hex: String,
-    pub footer_signature_verification: bool, // default = true
+    /// If true, then verify signature for files with plaintext footers.
+    /// default = true
+    pub footer_signature_verification: bool,
 }
 
 config_namespace_with_hashmap! {
@@ -2154,9 +2179,7 @@ impl ConfigField for ConfigFileDecryptionProperties {
 
         if key.contains("::") {
             // Handle any column specific properties
-            return self
-                .column_decryption_properties
-                .set(&key, &value.to_string());
+            return self.column_decryption_properties.set(key, value);
         };
 
         let (key, rem) = key.split_once('.').unwrap_or((key, ""));
