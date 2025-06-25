@@ -29,7 +29,7 @@ use datafusion::physical_plan::execution_plan::Boundedness;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionContext;
 use datafusion_common::{DataFusionError, JoinType, ScalarValue};
-use datafusion_execution::TaskContext;
+use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr_common::operator::Operator;
 use datafusion_expr_common::operator::Operator::{Divide, Eq, Gt, Modulo};
 use datafusion_functions_aggregate::min_max;
@@ -248,6 +248,172 @@ async fn agg_grouped_topk_yields(
     );
 
     query_yields(aggr, session_ctx.task_ctx()).await
+}
+
+// Note that this test succeeds, but it's because internal budget is exhausted 
+// in early sorting stage (before spill, before SPM), so it's actually testing the same behavior as sort_yields
+#[rstest]
+#[tokio::test]
+async fn spill_sort_yields(
+    #[values(false, true)] pretend_infinite: bool,
+) -> Result<(), Box<dyn Error>> {
+    use datafusion::prelude::SessionConfig;
+    use datafusion_execution::runtime_env::RuntimeEnvBuilder;
+    let session_config = SessionConfig::new().with_target_partitions(2);
+    let sort_spill_reservation_bytes = session_config
+        .options()
+        .execution
+        .sort_spill_reservation_bytes;
+    let runtime = RuntimeEnvBuilder::new()
+        // .with_memory_limit(sort_spill_reservation_bytes + 12288, 1.05)
+        .with_memory_limit(sort_spill_reservation_bytes + 12288, 1.02)
+        .build_arc()?;
+    let task_ctx = Arc::new(
+        TaskContext::default()
+            .with_session_config(session_config)
+            .with_runtime(runtime),
+    );
+
+    // set up the infinite source
+    let inf = Arc::new(make_lazy_exec("value", pretend_infinite));
+
+    // set up a SortExec that will not be able to finish in time because input is very large
+    let sort_expr = PhysicalSortExpr::new(
+        col("value", &inf.schema())?,
+        SortOptions {
+            descending: true,
+            nulls_first: true,
+        },
+    );
+
+    let lex_ordering = LexOrdering::new(vec![sort_expr]).unwrap();
+    let sort_exec = Arc::new(SortExec::new(lex_ordering, inf.clone()));
+
+    let res = query_yields(sort_exec.clone(), task_ctx).await;
+
+    let metrics = sort_exec.metrics().unwrap();
+    // check whether spill actually happened
+    let did_it_spill = metrics.spill_count().unwrap_or(0) > 0;
+    assert!(did_it_spill);
+    println!("spill counts {}", metrics.spill_count().unwrap_or(0));
+    res
+}
+
+// Manually make a Producer Stream that  
+#[rstest]
+#[tokio::test]
+async fn spill_reader_yield(
+) -> Result<(), Box<dyn Error>> {
+    use std::{pin::Pin, task::Context};
+    use datafusion_physical_plan::common::spawn_buffered;
+    use datafusion_common::{Result};
+    use datafusion_execution::{RecordBatchStream};
+    use datafusion_physical_plan::{coop::cooperative, test::build_table_i32};
+    use futures::{Stream};
+
+    let batch = build_table_i32(
+        ("a2", &vec![0, 1, 2]),
+        ("b2", &vec![3, 4, 5]),
+        ("c2", &vec![4, 5, 6]),
+    );
+
+    let schema = batch.schema();
+    // Set large buffer so that buffer always has free space for the producer/sender 
+    let buffer_capacity = 100_000;  
+    /// A mock stream that always returns `Poll::Ready(Some(...))` immediately
+    struct AlwaysReadyStream {
+        batch: RecordBatch,
+        schema: Arc<Schema>,
+        remaining: usize
+    }
+
+    impl AlwaysReadyStream {
+        pub fn new(batch: RecordBatch, schema: Arc<Schema>) -> Self {
+            Self { batch, schema, remaining: 200 }
+        }
+    }
+
+    impl Stream for AlwaysReadyStream {
+        type Item = Result<RecordBatch>;
+
+        fn poll_next(
+            mut self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+        ) -> Poll<Option<Self::Item>> {
+            if self.remaining == 0 {
+                Poll::Ready(None)
+            } else {
+                self.remaining -= 1;
+                Poll::Ready(Some(Ok(self.batch.clone())))
+            }
+        }
+    }
+
+    impl RecordBatchStream for AlwaysReadyStream {
+        fn schema(&self) -> SchemaRef {
+            Arc::clone(&self.schema)
+        }
+    }
+
+    struct ConsumerStream {
+        inner: SendableRecordBatchStream,
+    }
+
+    impl Stream for ConsumerStream {
+        type Item = Result<RecordBatch>;
+
+        fn poll_next(
+            mut self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
+        ) -> Poll<Option<Self::Item>> {
+            use arrow::compute::concat_batches;
+            let mut collected = vec![]; 
+            // To make sure that inner stream is polled multiple times, loop forever if inner (producer) stream returns Ready
+            loop {
+                match self.inner.as_mut().poll_next(cx) {
+                    Poll::Ready(Some(Ok(batch))) => {
+                        println!("received batch from inner");
+                        collected.push(batch);
+                    }
+                    Poll::Ready(Some(Err(e))) => {
+                        println!("error from inner");
+                        return Poll::Ready(Some(Err(e)));
+                    }
+                    Poll::Ready(None) => {
+                        println!("inner stream ended");
+                        break;
+                    }
+                    Poll::Pending => {
+                        // polling inner stream may return Pending only when it reaches budget, since 
+                        // we intentionally made ProducerStream always return Ready
+                        return Poll::Pending;
+                    }
+                }
+            }
+
+            // This should be unreachable since the stream is canceled
+            let combined = concat_batches(&self.inner.schema(), &collected)
+                .expect("Failed to concat batches");
+
+            Poll::Ready(Some(Ok(combined)))
+        }
+    }
+
+    impl RecordBatchStream for ConsumerStream {
+        fn schema(&self) -> SchemaRef {
+            self.inner.schema()
+        }
+    }
+
+    // this function makes a consumer stream that resembles how read_stream from spill file is constructed 
+    fn mock_read_spill_as_stream(batch: RecordBatch, schema: Arc<Schema>, buffer_capacity: usize) -> Result<SendableRecordBatchStream> {
+        let stream = Box::pin(cooperative(AlwaysReadyStream::new(batch, schema)));
+        Ok(spawn_buffered(stream, buffer_capacity))
+    }
+
+    let mock_stream = mock_read_spill_as_stream(batch, schema.clone(), buffer_capacity).unwrap();
+    let consumer_stream = Box::pin(ConsumerStream { inner: mock_stream });
+    stream_yields(consumer_stream).await
 }
 
 #[rstest]
@@ -696,6 +862,54 @@ enum Yielded {
     ReadyOrPending,
     Err(#[allow(dead_code)] DataFusionError),
     Timeout,
+}
+
+async fn stream_yields(
+    mut stream: SendableRecordBatchStream,
+) -> Result<(), Box<dyn Error>> {
+    // Create an independent executor pool
+    let child_runtime = Runtime::new()?;
+
+    // Spawn a task that tries to poll the stream
+    // The task returns Ready when the stream yielded with either Ready or Pending
+    let join_handle = child_runtime.spawn(std::future::poll_fn(move |cx| {
+        match stream.poll_next_unpin(cx) {
+            Poll::Ready(Some(Ok(_))) => Poll::Ready(Poll::Ready(Ok(()))),
+            Poll::Ready(Some(Err(e))) => Poll::Ready(Poll::Ready(Err(e))),
+            Poll::Ready(None) => Poll::Ready(Poll::Ready(Ok(()))),
+            Poll::Pending => Poll::Ready(Poll::Pending),
+        }
+    }));
+
+    let abort_handle = join_handle.abort_handle();
+
+    // Now select on the join handle of the task running in the child executor with a timeout
+    let yielded = select! {
+        result = join_handle => {
+            match result {
+                Ok(Pending) => Yielded::ReadyOrPending,
+                Ok(Ready(Ok(_))) => Yielded::ReadyOrPending,
+                Ok(Ready(Err(e))) => Yielded::Err(e),
+                Err(_) => Yielded::Err(DataFusionError::Execution("join error".into())),
+            }
+        },
+        _ = tokio::time::sleep(Duration::from_secs(10)) => {
+            Yielded::Timeout
+        }
+    };
+
+    // Try to abort the poll task and shutdown the child runtime
+    abort_handle.abort();
+    Handle::current().spawn_blocking(move || {
+        child_runtime.shutdown_timeout(Duration::from_secs(5));
+    });
+
+    // Finally, check if poll_next yielded
+    assert!(
+        matches!(yielded, Yielded::ReadyOrPending),
+        "Result is not Ready or Pending: {yielded:?}"
+    );
+    Ok(())
 }
 
 async fn query_yields(
