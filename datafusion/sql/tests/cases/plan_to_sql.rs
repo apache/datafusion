@@ -949,6 +949,12 @@ fn roundtrip_statement_with_dialect_special_char_alias() -> Result<(), DataFusio
         unparser_dialect: BigQueryDialect {},
         expected: @r#"SELECT `a_42`, `b_64` FROM (SELECT `a` AS `a_42`, `b` AS `b_64` FROM (SELECT 1 AS `a`, 2 AS `b`)) WHERE (`a_42` = 1)"#,
     );
+    roundtrip_statement_with_dialect_helper!(
+        sql: "select * from (select a as \"a*\", b as \"b@\" from (select 1 as a , 2 as b)) where \"a*\" = 1",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserDefaultDialect {},
+        expected: @r#"SELECT "a*", "b@" FROM (SELECT a AS "a*", b AS "b@" FROM (SELECT 1 AS a, 2 AS b)) WHERE ("a*" = 1)"#,
+    );
     Ok(())
 }
 
