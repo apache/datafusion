@@ -103,7 +103,7 @@ impl SeriesValue for i64 {
 #[derive(Debug, Clone)]
 struct TimestampValue {
     value: i64,
-    parsed_tz: Tz,
+    parsed_tz: Option<Tz>,
     tz_str: Option<Arc<str>>,
 }
 
@@ -128,11 +128,12 @@ impl SeriesValue for TimestampValue {
     }
 
     fn advance(&mut self, step: &Self::StepType) -> Result<()> {
-        let Some(next_ts) = TimestampNanosecondType::add_month_day_nano(
-            self.value,
-            *step,
-            self.parsed_tz,
-        ) else {
+        let tz = self
+            .parsed_tz
+            .unwrap_or_else(|| Tz::from_str("+00:00").unwrap());
+        let Some(next_ts) =
+            TimestampNanosecondType::add_month_day_nano(self.value, *step, tz)
+        else {
             return plan_err!(
                 "Failed to add interval {:?} to timestamp {}",
                 step,
@@ -184,6 +185,16 @@ enum GenSeriesArgs {
         end: i64,
         step: IntervalMonthDayNano,
         tz: Option<Arc<str>>,
+        /// Indicates whether the end value should be included in the series.
+        include_end: bool,
+        name: &'static str,
+    },
+    /// DateArgs holds the start, end, and step values for generating date series when all arguments are not null.
+    /// Internally, dates are converted to timestamps and use the timestamp logic.
+    DateArgs {
+        start: i64,
+        end: i64,
+        step: IntervalMonthDayNano,
         /// Indicates whether the end value should be included in the series.
         include_end: bool,
         name: &'static str,
@@ -259,6 +270,29 @@ fn reach_end_int64(val: i64, end: i64, step: i64, include_end: bool) -> bool {
     }
 }
 
+fn validate_interval_step(
+    step: IntervalMonthDayNano,
+    start: i64,
+    end: i64,
+) -> Result<()> {
+    if step.months == 0 && step.days == 0 && step.nanoseconds == 0 {
+        return plan_err!("Step interval cannot be zero");
+    }
+
+    let step_is_positive = step.months > 0 || step.days > 0 || step.nanoseconds > 0;
+    let step_is_negative = step.months < 0 || step.days < 0 || step.nanoseconds < 0;
+
+    if start > end && step_is_positive {
+        return plan_err!("Start is bigger than end, but increment is positive: Cannot generate infinite series");
+    }
+
+    if start < end && step_is_negative {
+        return plan_err!("Start is smaller than end, but increment is negative: Cannot generate infinite series");
+    }
+
+    Ok(())
+}
+
 #[async_trait]
 impl TableProvider for GenerateSeriesTable {
     fn as_any(&self) -> &dyn std::any::Any {
@@ -325,18 +359,18 @@ impl TableProvider for GenerateSeriesTable {
                     schema: self.schema(),
                     start: TimestampValue {
                         value: *start,
-                        parsed_tz,
+                        parsed_tz: Some(parsed_tz),
                         tz_str: tz.clone(),
                     },
                     end: TimestampValue {
                         value: *end,
-                        parsed_tz,
+                        parsed_tz: Some(parsed_tz),
                         tz_str: tz.clone(),
                     },
                     step: *step,
                     current: TimestampValue {
                         value: *start,
-                        parsed_tz,
+                        parsed_tz: Some(parsed_tz),
                         tz_str: tz.clone(),
                     },
                     batch_size,
@@ -344,6 +378,34 @@ impl TableProvider for GenerateSeriesTable {
                     name,
                 }))
             }
+            GenSeriesArgs::DateArgs {
+                start,
+                end,
+                step,
+                include_end,
+                name,
+            } => Arc::new(RwLock::new(GenericSeriesState {
+                schema: self.schema(),
+                start: TimestampValue {
+                    value: *start,
+                    parsed_tz: None,
+                    tz_str: None,
+                },
+                end: TimestampValue {
+                    value: *end,
+                    parsed_tz: None,
+                    tz_str: None,
+                },
+                step: *step,
+                current: TimestampValue {
+                    value: *start,
+                    parsed_tz: None,
+                    tz_str: None,
+                },
+                batch_size,
+                include_end: *include_end,
+                name,
+            })),
         };
 
         Ok(Arc::new(LazyMemoryExec::try_new(schema, vec![generator])?))
@@ -372,9 +434,12 @@ impl TableFunctionImpl for GenerateSeriesFuncImpl {
             Expr::Literal(s, _) if matches!(s.data_type(), DataType::Timestamp(_, _)) => {
                 self.call_timestamp(exprs)
             }
+            Expr::Literal(s, _) if matches!(s.data_type(), DataType::Date32) => {
+                self.call_date(exprs)
+            }
             Expr::Literal(scalar, _) => {
                 plan_err!(
-                    "Argument #1 must be an INTEGER, TIMESTAMP or NULL, got {:?}",
+                    "Argument #1 must be an INTEGER, TIMESTAMP, DATE or NULL, got {:?}",
                     scalar.data_type()
                 )
             }
@@ -507,22 +572,8 @@ impl GenerateSeriesFuncImpl {
             }));
         };
 
-        // Basic validation
-        if step.months == 0 && step.days == 0 && step.nanoseconds == 0 {
-            return plan_err!("Step interval cannot be zero");
-        }
-
-        // Check for infinite series conditions with timestamps
-        let step_is_positive = step.months > 0 || step.days > 0 || step.nanoseconds > 0;
-        let step_is_negative = step.months < 0 || step.days < 0 || step.nanoseconds < 0;
-
-        if start > end && step_is_positive {
-            return plan_err!("Start is bigger than end, but increment is positive: Cannot generate infinite series");
-        }
-
-        if start < end && step_is_negative {
-            return plan_err!("Start is smaller than end, but increment is negative: Cannot generate infinite series");
-        }
+        // Validate step interval
+        validate_interval_step(step, start, end)?;
 
         Ok(Arc::new(GenerateSeriesTable {
             schema,
@@ -531,6 +582,98 @@ impl GenerateSeriesFuncImpl {
                 end,
                 step,
                 tz,
+                include_end: self.include_end,
+                name: self.name,
+            },
+        }))
+    }
+
+    fn call_date(&self, exprs: &[Expr]) -> Result<Arc<dyn TableProvider>> {
+        if exprs.len() != 3 {
+            return plan_err!(
+                "{} function with dates requires exactly 3 arguments",
+                self.name
+            );
+        }
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+            false,
+        )]));
+
+        // Parse start date
+        let start_date = match &exprs[0] {
+            Expr::Literal(ScalarValue::Date32(Some(date)), _) => *date,
+            Expr::Literal(ScalarValue::Date32(None), _)
+            | Expr::Literal(ScalarValue::Null, _) => {
+                return Ok(Arc::new(GenerateSeriesTable {
+                    schema,
+                    args: GenSeriesArgs::ContainsNull { name: self.name },
+                }));
+            }
+            other => {
+                return plan_err!(
+                    "First argument must be a date or NULL, got {:?}",
+                    other
+                )
+            }
+        };
+
+        // Parse end date
+        let end_date = match &exprs[1] {
+            Expr::Literal(ScalarValue::Date32(Some(date)), _) => *date,
+            Expr::Literal(ScalarValue::Date32(None), _)
+            | Expr::Literal(ScalarValue::Null, _) => {
+                return Ok(Arc::new(GenerateSeriesTable {
+                    schema,
+                    args: GenSeriesArgs::ContainsNull { name: self.name },
+                }));
+            }
+            other => {
+                return plan_err!(
+                    "Second argument must be a date or NULL, got {:?}",
+                    other
+                )
+            }
+        };
+
+        // Parse step interval
+        let step_interval = match &exprs[2] {
+            Expr::Literal(ScalarValue::IntervalMonthDayNano(Some(interval)), _) => {
+                *interval
+            }
+            Expr::Literal(ScalarValue::IntervalMonthDayNano(None), _)
+            | Expr::Literal(ScalarValue::Null, _) => {
+                return Ok(Arc::new(GenerateSeriesTable {
+                    schema,
+                    args: GenSeriesArgs::ContainsNull { name: self.name },
+                }));
+            }
+            other => {
+                return plan_err!(
+                    "Third argument must be an interval or NULL, got {:?}",
+                    other
+                )
+            }
+        };
+
+        // Convert Date32 (days since epoch) to timestamp nanoseconds (nanoseconds since epoch)
+        // Date32 is days since 1970-01-01, so multiply by nanoseconds per day
+        const NANOS_PER_DAY: i64 = 24 * 60 * 60 * 1_000_000_000;
+
+        let start_ts = start_date as i64 * NANOS_PER_DAY;
+        let end_ts = end_date as i64 * NANOS_PER_DAY;
+
+        // Validate step interval
+        validate_interval_step(step_interval, start_ts, end_ts)?;
+
+        Ok(Arc::new(GenerateSeriesTable {
+            schema,
+            args: GenSeriesArgs::DateArgs {
+                start: start_ts,
+                end: end_ts,
+                step: step_interval,
                 include_end: self.include_end,
                 name: self.name,
             },
