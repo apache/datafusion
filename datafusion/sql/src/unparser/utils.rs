@@ -15,13 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{cmp::Ordering, sync::Arc, vec};
+use std::{any::Any, cmp::Ordering, sync::Arc, vec};
 
 use super::{
     dialect::CharacterLengthStyle, dialect::DateFieldExtractStyle,
     rewrite::TableAliasRewriter, Unparser,
 };
-use arrow::array::{Array, Int32Array};
+use arrow::{
+    array::{Array, Int32Array},
+    datatypes::DataType,
+};
 use datafusion_common::{
     internal_err,
     tree_node::{Transformed, TransformedResult, TreeNode},
@@ -29,15 +32,51 @@ use datafusion_common::{
 };
 use datafusion_expr::{
     expr::{self, AggregateFunction},
+    function::AccumulatorArgs,
     utils::grouping_set_to_exprlist,
-    Aggregate, Expr, LogicalPlan, LogicalPlanBuilder, Projection, SortExpr, Unnest,
-    Window,
+    Accumulator, Aggregate, AggregateUDF, AggregateUDFImpl, Expr, LogicalPlan,
+    LogicalPlanBuilder, Projection, Signature, SortExpr, Unnest, Volatility, Window,
 };
 
-use datafusion_functions_aggregate::grouping::grouping_udaf;
 use indexmap::IndexSet;
 use sqlparser::ast;
 use sqlparser::tokenizer::Span;
+
+// To avoid adding datafusion-functions-aggregate dependency, implement a DummyGroupingUDAF here
+#[derive(Debug)]
+struct DummyGroupingUDAF {
+    signature: Signature,
+}
+
+impl DummyGroupingUDAF {
+    fn new() -> Self {
+        Self {
+            signature: Signature::variadic_any(Volatility::Immutable),
+        }
+    }
+}
+
+impl AggregateUDFImpl for DummyGroupingUDAF {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        "grouping"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(DataType::Int32)
+    }
+
+    fn accumulator(&self, _acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+        todo!()
+    }
+}
 
 /// Recursively searches children of [LogicalPlan] to find an Aggregate node if exists
 /// prior to encountering a Join, TableScan, or a nested subquery (derived table factor).
@@ -219,7 +258,7 @@ pub(crate) fn unproject_agg_exprs(
                     return internal_err!("The second argument of grouping function must be a list");
                 };
                 Ok(Transformed::yes(Expr::AggregateFunction(AggregateFunction::new_udf(
-                    grouping_udaf(), args, false, None, None, None))))
+                    Arc::new(AggregateUDF::from(DummyGroupingUDAF::new())), args, false, None, None, None))))
             }
             _ => Ok(Transformed::no(sub_expr))
         }
