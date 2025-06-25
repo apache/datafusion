@@ -13,10 +13,15 @@ workspace = true
 
 [dependencies]
 arrow = { workspace = true }
-log = { workspace = true }
-arrow-schema = { workspace = true, package = "arrow-schema" }
+arrow-schema = { workspace = true }
 datafusion-common = { workspace = true, default-features = true }
 datafusion-expr-common = { workspace = true, default-features = true }
 datafusion-physical-expr = { workspace = true }
 datafusion-physical-expr-common = { workspace = true }
 datafusion-physical-plan = { workspace = true }
+log = { workspace = true }
+
+[dev-dependencies]
+datafusion-expr = { workspace = true }
+datafusion-functions-nested = { workspace = true }
+insta = { workspace = true }

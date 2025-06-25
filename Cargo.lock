@@ -2471,6 +2471,7 @@ dependencies = [
  "datafusion-physical-expr",
  "datafusion-physical-expr-common",
  "datafusion-physical-plan",
+ "datafusion-pruning",
  "insta",
  "itertools 0.14.0",
  "log",
@@ -2556,10 +2557,13 @@ dependencies = [
  "arrow",
  "arrow-schema",
  "datafusion-common",
+ "datafusion-expr",
  "datafusion-expr-common",
+ "datafusion-functions-nested",
  "datafusion-physical-expr",
  "datafusion-physical-expr-common",
  "datafusion-physical-plan",
+ "insta",
  "log",
 ]
 
