@@ -152,6 +152,10 @@ impl TestOutput {
         self.metric_value("row_groups_pruned_statistics")
     }
 
+    fn files_pruned_statistics(&self) -> Option<usize> {
+        self.metric_value("files_pruned_statistics")
+    }
+
     /// The number of row_groups matched by bloom filter or statistics
     fn row_groups_matched(&self) -> Option<usize> {
         self.row_groups_matched_bloom_filter()
