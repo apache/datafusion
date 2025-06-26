@@ -21,7 +21,6 @@ use std::sync::Arc;
 
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{FieldRef, Schema};
-use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
     exec_err,
     tree_node::{Transformed, TransformedResult, TreeNode},
@@ -114,23 +113,16 @@ impl<'a> PhysicalExprSchemaRewriter<'a> {
     pub fn rewrite(&self, expr: Arc<dyn PhysicalExpr>) -> Result<Arc<dyn PhysicalExpr>> {
         println!("Top level expression: {expr}");
         expr.transform(|expr| {
-            println!("Rewriting expression: {expr}");
-            let transformed = if let Some(rewriter) = self.rewrite_hook.as_ref() {
+            if let Some(rewriter) = self.rewrite_hook.as_ref() {
                 // If a rewrite hook is provided, apply it first
                 let transformed =
-                    rewriter.rewrite(expr.clone(), &self.physical_file_schema)?;
-                Ok(transformed)
-                // if transformed.tnr == TreeNodeRecursion::Stop {
-                //     // If the hook indicates no further recursion, return the transformed expression
-                //     return Ok(transformed);
-                // } else {
-                //     transformed.transform_parent(|expr| self.rewrite_expr(expr))
-                // }
-            } else {
-                // Otherwise, rewrite the expression directly
-                self.rewrite_expr(expr.clone())
-            }?;
-            Ok(transformed)
+                    rewriter.rewrite(Arc::clone(&expr), &self.physical_file_schema)?;
+                if transformed.transformed {
+                    // If the hook transformed the expression, return it
+                    return Ok(transformed);
+                }
+            }
+            self.rewrite_expr(Arc::clone(&expr))
         })
         .data()
     }

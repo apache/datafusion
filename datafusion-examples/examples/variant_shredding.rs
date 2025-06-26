@@ -18,29 +18,23 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::array::{
-    as_string_array, ArrayRef, Int32Array, RecordBatch, StringArray, StructArray,
-};
+use arrow::array::{RecordBatch, StringArray};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use arrow_schema::Fields;
 use async_trait::async_trait;
 
 use datafusion::assert_batches_eq;
 use datafusion::catalog::memory::DataSourceExec;
 use datafusion::catalog::{Session, TableProvider};
-use datafusion::common::tree_node::{
-    Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter
-};
+use datafusion::common::tree_node::{Transformed, TreeNodeRecursion};
 use datafusion::common::{assert_contains, DFSchema, Result};
 use datafusion::datasource::listing::PartitionedFile;
-use datafusion::datasource::physical_plan::parquet::source;
 use datafusion::datasource::physical_plan::{FileScanConfigBuilder, ParquetSource};
 use datafusion::execution::context::SessionContext;
 use datafusion::execution::object_store::ObjectStoreUrl;
-use datafusion::functions::core::getfield::GetFieldFunc;
 use datafusion::logical_expr::utils::conjunction;
 use datafusion::logical_expr::{
-    ColumnarValue, Expr, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, TableProviderFilterPushDown, TableType, Volatility
+    ColumnarValue, Expr, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
+    TableProviderFilterPushDown, TableType, Volatility,
 };
 use datafusion::parquet::arrow::ArrowWriter;
 use datafusion::parquet::file::properties::WriterProperties;
@@ -55,19 +49,19 @@ use object_store::memory::InMemory;
 use object_store::path::Path;
 use object_store::{ObjectStore, PutPayload};
 
-// Example showing how to implement custom filter rewriting for struct fields.
+// Example showing how to implement custom filter rewriting for variant shredding.
 //
-// In this example, we have a table with a struct column like:
-// struct_col: {"a": 1, "b": "foo"}
+// In this example, we have a table with flat columns using underscore prefixes:
+// data: "...", _data.name: "..."
 //
 // Our custom TableProvider will use a FilterExpressionRewriter to rewrite
-// expressions like `struct_col['a'] = 10` to use a flattened column name
-// `_struct_col.a` if it exists in the file schema.
+// expressions like `json_get_str('name', data)` to use a flattened column name
+// `_data.name` if it exists in the file schema.
 #[tokio::main]
 async fn main() -> Result<()> {
-    println!("=== Creating example data with structs and flattened fields ===");
+    println!("=== Creating example data with flat columns and underscore prefixes ===");
 
-    // Create sample data with both struct columns and flattened fields
+    // Create sample data with flat columns using underscore prefixes
     let (table_schema, batch) = create_sample_data();
 
     let store = InMemory::new();
@@ -75,7 +69,7 @@ async fn main() -> Result<()> {
         let mut buf = vec![];
 
         let props = WriterProperties::builder()
-            .set_max_row_group_size(1)
+            .set_max_row_group_size(2)
             .build();
 
         let mut writer = ArrowWriter::try_new(&mut buf, batch.schema(), Some(props))
@@ -106,85 +100,68 @@ async fn main() -> Result<()> {
         Arc::new(store),
     );
 
-    // println!("\n=== Showing all data ===");
-    // let batches = ctx.sql("SELECT * FROM structs").await?.collect().await?;
-    // arrow::util::pretty::print_batches(&batches)?;
+    println!("\n=== Showing all data ===");
+    let batches = ctx.sql("SELECT * FROM structs").await?.collect().await?;
+    arrow::util::pretty::print_batches(&batches)?;
 
-    println!("\n=== Running query with struct field access and filter < 30 ===");
-    let query = "SELECT count(*) FROM structs WHERE json_get_str('name', user_info) = 'Bob'";
+    println!("\n=== Running query with flat column access and filter ===");
+    let query = "SELECT json_get_str('age', data) as age FROM structs WHERE json_get_str('name', data) = 'Bob'";
     println!("Query: {query}");
 
-    let batches = ctx
-        .sql(query)
-        .await?
-        .collect()
-        .await?;
+    let batches = ctx.sql(query).await?.collect().await?;
 
     #[rustfmt::skip]
     let expected = [
-        "+-------------------------+",
-        "| structs.user_info[name] |",
-        "+-------------------------+",
-        "| Bob                     |",
-        "| Dave                    |",
-        "+-------------------------+",
+        "+-----+",
+        "| age |",
+        "+-----+",
+        "| 25  |",
+        "+-----+",
     ];
     arrow::util::pretty::print_batches(&batches)?;
-    println!("batches: {batches:?}");
     assert_batches_eq!(expected, &batches);
 
-    // println!("\n=== Running explain analyze to confirm row group pruning ===");
+    println!("\n=== Running explain analyze to confirm row group pruning ===");
 
-    // let batches = ctx
-    //     .sql("EXPLAIN ANALYZE SELECT user_info['name'] FROM structs WHERE user_info['age'] < 30")
-    //     .await?
-    //     .collect()
-    //     .await?;
-    // let plan = format!("{}", arrow::util::pretty::pretty_format_batches(&batches)?);
-    // println!("{plan}");
-    // assert_contains!(&plan, "row_groups_pruned_statistics=2");
+    let batches = ctx
+        .sql(&format!("EXPLAIN ANALYZE {query}"))
+        .await?
+        .collect()
+        .await?;
+    let plan = format!("{}", arrow::util::pretty::pretty_format_batches(&batches)?);
+    println!("{plan}");
+    assert_contains!(&plan, "row_groups_pruned_statistics=1");
+    assert_contains!(&plan, "pushdown_rows_pruned=1");
 
     Ok(())
 }
 
-/// Create the example data that has a struct column with `name` as a shredded field and `age` as a non-shredded field.
+/// Create the example data with flat columns using underscore prefixes.
+/// The table schema has `data` column, while the file schema has both `data` and `_data.name` as flat columns.
 fn create_sample_data() -> (SchemaRef, RecordBatch) {
-    // The table schema doesn't have any shredded fields
-    let struct_fields = Fields::from(vec![
+    // The table schema only has the main data column
+    let table_schema = Schema::new(vec![Field::new("data", DataType::Utf8, false)]);
+
+    // The file schema has both the main column and the shredded flat column with underscore prefix
+    let file_schema = Schema::new(vec![
         Field::new("data", DataType::Utf8, false),
+        Field::new("_data.name", DataType::Utf8, false),
     ]);
-    let struct_field = Field::new("user_info", DataType::Struct(struct_fields), false);
-    let table_schema = Schema::new(vec![struct_field.clone()]);
-    // The file schema has `name` as a shredded field
-    let struct_fields = Fields::from(vec![
-        Field::new("data", DataType::Utf8, false),
-        Field::new("name", DataType::Utf8, false),
+
+    // Build a RecordBatch with flat columns
+    let data_array = StringArray::from(vec![
+        r#"{"age": 30}"#,
+        r#"{"age": 25}"#,
+        r#"{"age": 35}"#,
+        r#"{"age": 22}"#,
     ]);
-    let struct_field = Field::new("user_info", DataType::Struct(struct_fields), false);
-    let file_schema = Schema::new(vec![struct_field.clone()]);
-    // Build a RecordBatch with shredded data
-    let names = StringArray::from(vec!["Alice", "Bob", "Charlie", "Dave"]);
-    let user_info = StructArray::from(vec![
-        (
-            Arc::new(Field::new("data", DataType::Utf8, false)),
-            Arc::new(StringArray::from(vec![
-                r#"{"age": 30}"#,
-                r#"{"age": 25}"#,
-                r#"{"age": 35}"#,
-                r#"{"age": 22}"#,
-            ])) as ArrayRef,
-        ),
-        (
-            Arc::new(Field::new("name", DataType::Utf8, false)),
-            Arc::new(names.clone()) as ArrayRef,
-        ),
-    ]);
+    let names_array = StringArray::from(vec!["Alice", "Bob", "Charlie", "Dave"]);
 
     (
         Arc::new(table_schema),
         RecordBatch::try_new(
             Arc::new(file_schema),
-            vec![Arc::new(user_info)],
+            vec![Arc::new(data_array), Arc::new(names_array)],
         )
         .unwrap(),
     )
@@ -326,34 +303,19 @@ impl ScalarUDFImpl for JsonGetStr {
                 ))
             }
         };
-        // We expect a struct array with a field called `data` that contains JSON strings
-        let struct_array = match &args.args[1] {
+        // We expect a string array that contains JSON strings
+        let json_array = match &args.args[1] {
             ColumnarValue::Array(array) => array
                 .as_any()
-                .downcast_ref::<StructArray>()
+                .downcast_ref::<StringArray>()
                 .ok_or_else(|| {
                 datafusion::error::DataFusionError::Execution(
-                    "json_get_str second argument must be a struct array".to_string(),
+                    "json_get_str second argument must be a string array".to_string(),
                 )
             })?,
             _ => {
                 return Err(datafusion::error::DataFusionError::Execution(
-                    "json_get_str second argument must be a struct array".to_string(),
-                ))
-            }
-        };
-        // Extract the "data" field from the struct array
-        let data_array = struct_array.column_by_name("data").ok_or_else(|| {
-            datafusion::error::DataFusionError::Execution(
-                "json_get_str second argument must have a 'data' field".to_string(),
-            )
-        })?;
-        let json_array = match data_array.as_any().downcast_ref::<StringArray>() {
-            Some(array) => array,
-            None => {
-                return Err(datafusion::error::DataFusionError::Execution(
-                    "json_get_str second argument 'data' field must be a StringArray"
-                        .to_string(),
+                    "json_get_str second argument must be a string array".to_string(),
                 ))
             }
         };
@@ -364,10 +326,7 @@ impl ScalarUDFImpl for JsonGetStr {
                     .map(|v| {
                         let json_value: serde_json::Value =
                             serde_json::from_str(&v).unwrap_or_default();
-                        json_value
-                            .get(&key)
-                            .and_then(|v| v.as_str())
-                            .map(|s| s.to_string())
+                        json_value.get(&key).map(|v| v.to_string())
                     })
                     .flatten()
             })
@@ -380,7 +339,7 @@ impl ScalarUDFImpl for JsonGetStr {
     }
 }
 
-/// Rewriter that converts struct field access to flattened column references
+/// Rewriter that converts json_get_str calls to direct flat column references
 #[derive(Debug)]
 struct ShreddedVariantRewriter;
 
@@ -391,8 +350,7 @@ impl PhysicalExprSchemaRewriteHook for ShreddedVariantRewriter {
         physical_file_schema: &Schema,
     ) -> Result<Transformed<Arc<dyn PhysicalExpr>>> {
         if let Some(func) = expr.as_any().downcast_ref::<ScalarFunctionExpr>() {
-            if 
-            func.name() == "json_get_str" && func.args().len() == 2 {
+            if func.name() == "json_get_str" && func.args().len() == 2 {
                 // Get the key from the first argument
                 if let Some(literal) = func.args()[0]
                     .as_any()
@@ -405,59 +363,29 @@ impl PhysicalExprSchemaRewriteHook for ShreddedVariantRewriter {
                             .downcast_ref::<expressions::Column>()
                         {
                             let column_name = column.name();
-                            // Get the physical file schema's field
-                            if let Ok(source_field_index) =
-                                physical_file_schema.index_of(column_name)
+                            // Check if there's a flat column with underscore prefix
+                            let flat_column_name =
+                                format!("_{}.{}", column_name, field_name);
+
+                            if let Ok(flat_field_index) =
+                                physical_file_schema.index_of(&flat_column_name)
                             {
-                                let source_field =
-                                    physical_file_schema.field(source_field_index);
-                                // If it's a struct field check if there is a shredded field with the name `field_name`
-                                if let DataType::Struct(struct_fields) =
-                                    source_field.data_type()
-                                {
-                                    if let Some((_, shredded_field)) =
-                                        struct_fields.find(field_name)
-                                    {
-                                        if shredded_field.data_type() == &DataType::Utf8 {
-                                            // Replace the whole expression with a struct field access on the shredded field
-                                            let args = vec![
-                                                Arc::new(expressions::Column::new(
-                                                    source_field.name(),
-                                                    source_field_index,
-                                                ))
-                                                    as Arc<dyn PhysicalExpr>,
-                                                Arc::new(expressions::Literal::new(
-                                                    ScalarValue::Utf8(Some(
-                                                        field_name.clone(),
-                                                    )),
-                                                )),
-                                            ];
-                                            let return_field = Arc::new(
-                                                Field::new(
-                                                    format!(
-                                                        "{}.{}",
-                                                        source_field.name(),
-                                                        field_name
-                                                    ),
-                                                    DataType::Utf8,
-                                                    true,
-                                                ),
-                                            );
-                                            let new_expr = Arc::new(
-                                                ScalarFunctionExpr::new(
-                                                    "get_field",
-                                                    Arc::new(GetFieldFunc::new().into()),
-                                                    args,
-                                                    return_field,
-                                                ),
-                                            );
-                                            return Ok(Transformed {
-                                                data: new_expr,
-                                                tnr: TreeNodeRecursion::Stop,
-                                                transformed: true,
-                                            });
-                                        }
-                                    }
+                                let flat_field =
+                                    physical_file_schema.field(flat_field_index);
+
+                                if flat_field.data_type() == &DataType::Utf8 {
+                                    // Replace the whole expression with a direct column reference
+                                    let new_expr = Arc::new(expressions::Column::new(
+                                        &flat_column_name,
+                                        flat_field_index,
+                                    ))
+                                        as Arc<dyn PhysicalExpr>;
+
+                                    return Ok(Transformed {
+                                        data: new_expr,
+                                        tnr: TreeNodeRecursion::Stop,
+                                        transformed: true,
+                                    });
                                 }
                             }
                         }
