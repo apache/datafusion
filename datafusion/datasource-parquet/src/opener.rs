@@ -267,8 +267,6 @@ impl FileOpener for ParquetOpener {
                 .transpose()?
                 .transpose()?;
 
-            println!("predicate: {predicate:?}");
-
             // Build predicates for this specific file
             let (pruning_predicate, page_pruning_predicate) = build_pruning_predicates(
                 predicate.as_ref(),
