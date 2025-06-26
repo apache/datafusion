@@ -111,6 +111,7 @@ mod tests {
             args: vec![ColumnarValue::Array(input)],
             arg_fields,
             return_field: Field::new("f", Utf8, true).into(),
+            execution_time_zone: "UTC".to_string(),
         };
 
         let result = match func.invoke_with_args(args)? {

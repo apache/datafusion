@@ -39,6 +39,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                             arg_fields: vec![],
                             number_rows: 8192,
                             return_field: Arc::clone(&return_field),
+                            execution_time_zone: "UTC".to_string(),
                         })
                         .unwrap(),
                 );
@@ -59,6 +60,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                             arg_fields: vec![],
                             number_rows: 128,
                             return_field: Arc::clone(&return_field),
+                            execution_time_zone: "UTC".to_string(),
                         })
                         .unwrap(),
                 );

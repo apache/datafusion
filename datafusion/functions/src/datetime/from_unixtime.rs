@@ -177,6 +177,7 @@ mod test {
             arg_fields: vec![arg_field],
             number_rows: 1,
             return_field: Field::new("f", DataType::Timestamp(Second, None), true).into(),
+            execution_time_zone: "UTC".to_string(),
         };
         let result = FromUnixtimeFunc::new().invoke_with_args(args).unwrap();
 
@@ -209,6 +210,7 @@ mod test {
                 true,
             )
             .into(),
+            execution_time_zone: "UTC".to_string(),
         };
         let result = FromUnixtimeFunc::new().invoke_with_args(args).unwrap();
 

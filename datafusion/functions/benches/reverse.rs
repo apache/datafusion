@@ -53,6 +53,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         ).into()],
                         number_rows: N_ROWS,
                         return_field: Field::new("f", DataType::Utf8, true).into(),
+                        execution_time_zone: "UTC".to_string(),
                     }))
                 })
             },
@@ -74,6 +75,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         ],
                         number_rows: N_ROWS,
                         return_field: Field::new("f", DataType::Utf8, true).into(),
+                        execution_time_zone: "UTC".to_string(),
                     }))
                 })
             },
@@ -100,6 +102,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         ).into()],
                         number_rows: N_ROWS,
                         return_field: Field::new("f", DataType::Utf8, true).into(),
+                        execution_time_zone: "UTC".to_string(),
                     }))
                 })
             },
@@ -122,7 +125,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                             true,
                         ).into()],
                         number_rows: N_ROWS,
-                        return_field: Field::new("f", DataType::Utf8, true).into(),
+                        return_field: Field::new("f", DataType::Utf8, true).into(),execution_time_zone: "UTC".to_string(),
                     }))
                 })
             },

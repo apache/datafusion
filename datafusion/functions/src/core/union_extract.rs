@@ -207,6 +207,7 @@ mod tests {
             arg_fields,
             number_rows: 1,
             return_field: Field::new("f", DataType::Utf8, true).into(),
+            execution_time_zone: "UTC".to_string(),
         })?;
 
         assert_scalar(result, ScalarValue::Utf8(None));
@@ -229,6 +230,7 @@ mod tests {
             arg_fields,
             number_rows: 1,
             return_field: Field::new("f", DataType::Utf8, true).into(),
+            execution_time_zone: "UTC".to_string(),
         })?;
 
         assert_scalar(result, ScalarValue::Utf8(None));
@@ -250,6 +252,7 @@ mod tests {
             arg_fields,
             number_rows: 1,
             return_field: Field::new("f", DataType::Utf8, true).into(),
+            execution_time_zone: "UTC".to_string(),
         })?;
 
         assert_scalar(result, ScalarValue::new_utf8("42"));

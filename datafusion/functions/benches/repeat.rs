@@ -72,6 +72,7 @@ fn invoke_repeat_with_args(
         arg_fields,
         number_rows: repeat_times as usize,
         return_field: Field::new("f", DataType::Utf8, true).into(),
+        execution_time_zone: "UTC".to_string(),
     })
 }
 

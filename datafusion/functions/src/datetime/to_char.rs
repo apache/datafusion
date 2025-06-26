@@ -395,6 +395,7 @@ mod tests {
                 arg_fields,
                 number_rows: 1,
                 return_field: Field::new("f", DataType::Utf8, true).into(),
+                execution_time_zone: "UTC".to_string(),
             };
             let result = ToCharFunc::new()
                 .invoke_with_args(args)
@@ -483,6 +484,7 @@ mod tests {
                 arg_fields,
                 number_rows: batch_len,
                 return_field: Field::new("f", DataType::Utf8, true).into(),
+                execution_time_zone: "UTC".to_string(),
             };
             let result = ToCharFunc::new()
                 .invoke_with_args(args)
@@ -619,6 +621,7 @@ mod tests {
                 arg_fields,
                 number_rows: batch_len,
                 return_field: Field::new("f", DataType::Utf8, true).into(),
+                execution_time_zone: "UTC".to_string(),
             };
             let result = ToCharFunc::new()
                 .invoke_with_args(args)
@@ -646,6 +649,7 @@ mod tests {
                 arg_fields,
                 number_rows: batch_len,
                 return_field: Field::new("f", DataType::Utf8, true).into(),
+                execution_time_zone: "UTC".to_string(),
             };
             let result = ToCharFunc::new()
                 .invoke_with_args(args)
@@ -670,6 +674,7 @@ mod tests {
             arg_fields: vec![arg_field],
             number_rows: 1,
             return_field: Field::new("f", DataType::Utf8, true).into(),
+            execution_time_zone: "UTC".to_string(),
         };
         let result = ToCharFunc::new().invoke_with_args(args);
         assert_eq!(
@@ -690,6 +695,7 @@ mod tests {
             arg_fields,
             number_rows: 1,
             return_field: Field::new("f", DataType::Utf8, true).into(),
+            execution_time_zone: "UTC".to_string(),
         };
         let result = ToCharFunc::new().invoke_with_args(args);
         assert_eq!(

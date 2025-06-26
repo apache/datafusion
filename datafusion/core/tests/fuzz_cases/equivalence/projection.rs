@@ -49,6 +49,7 @@ fn project_orderings_random() -> Result<()> {
             Arc::clone(&test_fun),
             vec![col_a],
             &test_schema,
+            "UTC".to_string(),
         )?);
         // a + b
         let a_plus_b = Arc::new(BinaryExpr::new(
@@ -122,6 +123,7 @@ fn ordering_satisfy_after_projection_random() -> Result<()> {
             Arc::clone(&test_fun),
             vec![col_a],
             &test_schema,
+            "UTC".to_string(),
         )?) as PhysicalExprRef;
         // a + b
         let a_plus_b = Arc::new(BinaryExpr::new(

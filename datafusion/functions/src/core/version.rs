@@ -109,6 +109,7 @@ mod test {
                 arg_fields: vec![],
                 number_rows: 0,
                 return_field: Field::new("f", DataType::Utf8, true).into(),
+                execution_time_zone: "UTC".to_string(),
             })
             .unwrap();
 

@@ -110,6 +110,7 @@ fn test_ordering_satisfy_with_equivalence_complex_random() -> Result<()> {
             Arc::clone(&test_fun),
             vec![col_a],
             &test_schema,
+            "UTC".to_string(),
         )?);
         let a_plus_b = Arc::new(BinaryExpr::new(
             col("a", &test_schema)?,

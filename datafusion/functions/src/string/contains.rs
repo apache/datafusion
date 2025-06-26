@@ -175,6 +175,7 @@ mod test {
             arg_fields,
             number_rows: 2,
             return_field: Field::new("f", DataType::Boolean, true).into(),
+            execution_time_zone: "UTC".to_string(),
         };
 
         let actual = udf.invoke_with_args(args).unwrap();

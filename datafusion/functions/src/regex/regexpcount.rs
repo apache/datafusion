@@ -662,6 +662,7 @@ mod tests {
             arg_fields,
             number_rows: args.len(),
             return_field: Field::new("f", Int64, true).into(),
+            execution_time_zone: "UTC".to_string(),
         })
     }
 

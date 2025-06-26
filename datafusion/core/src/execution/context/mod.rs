@@ -1640,7 +1640,10 @@ impl SessionContext {
     /// [`ConfigOptions`]: crate::config::ConfigOptions
     pub fn state(&self) -> SessionState {
         let mut state = self.state.read().clone();
-        state.execution_props_mut().start_execution();
+        let execution_time_zone = state.config().options().execution.time_zone.clone();
+        state
+            .execution_props_mut()
+            .start_execution(execution_time_zone);
         state
     }
 

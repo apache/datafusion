@@ -322,6 +322,7 @@ pub fn create_physical_expr(
                 Arc::clone(func),
                 physical_args,
                 input_schema,
+                execution_props.query_execution_time_zone.clone(),
             )?))
         }
         Expr::Between(Between {

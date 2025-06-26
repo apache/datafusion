@@ -311,6 +311,8 @@ pub struct ScalarFunctionArgs {
     /// or `return_field_from_args`) when creating the physical expression
     /// from the logical expression
     pub return_field: FieldRef,
+    /// The configured execution time zone (a.k.a. session time zone)
+    pub execution_time_zone: String,
 }
 
 impl ScalarFunctionArgs {

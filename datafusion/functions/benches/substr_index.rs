@@ -107,6 +107,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         arg_fields: arg_fields.clone(),
                         number_rows: batch_len,
                         return_field: Field::new("f", DataType::Utf8, true).into(),
+                        execution_time_zone: "UTC".to_string(),
                     })
                     .expect("substr_index should work on valid values"),
             )

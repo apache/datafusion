@@ -163,6 +163,7 @@ mod test {
             arg_fields,
             number_rows: array.len(),
             return_field: Field::new("f", DataType::Float32, true).into(),
+            execution_time_zone: "UTC".to_string(),
         };
         let result = SignumFunc::new()
             .invoke_with_args(args)
@@ -209,6 +210,7 @@ mod test {
             arg_fields,
             number_rows: array.len(),
             return_field: Field::new("f", DataType::Float64, true).into(),
+            execution_time_zone: "UTC".to_string(),
         };
         let result = SignumFunc::new()
             .invoke_with_args(args)

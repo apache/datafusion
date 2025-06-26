@@ -206,6 +206,7 @@ unsafe extern "C" fn invoke_with_args_fn_wrapper(
         arg_fields,
         number_rows,
         return_field,
+        execution_time_zone: "unknown".to_string(),
     };
 
     let result = rresult_return!(udf
@@ -347,6 +348,7 @@ impl ScalarUDFImpl for ForeignScalarUDF {
             arg_fields,
             number_rows,
             return_field,
+            execution_time_zone: _,
         } = invoke_args;
 
         let args = args

@@ -493,6 +493,7 @@ mod tests {
             arg_fields,
             number_rows: 3,
             return_field: Field::new("f", Utf8, true).into(),
+            execution_time_zone: "UTC".to_string(),
         };
 
         let result = ConcatWsFunc::new().invoke_with_args(args)?;
@@ -529,6 +530,7 @@ mod tests {
             arg_fields,
             number_rows: 3,
             return_field: Field::new("f", Utf8, true).into(),
+            execution_time_zone: "UTC".to_string(),
         };
 
         let result = ConcatWsFunc::new().invoke_with_args(args)?;
