@@ -4129,6 +4129,7 @@ select struct(a as field_a, b) from t;
 
 - [element_at](#element_at)
 - [map](#map)
+- [map_entries](#map_entries)
 - [map_extract](#map_extract)
 - [map_keys](#map_keys)
 - [map_values](#map_values)
@@ -4184,6 +4185,30 @@ SELECT MAKE_MAP(['POST', 'HEAD'], [41, 33]);
 SELECT MAKE_MAP(['key1', 'key2'], ['value1', null]);
 ----
 {key1: value1, key2: }
+```
+
+### `map_entries`
+
+Returns a list of all entries in the map.
+
+```sql
+map_entries(map)
+```
+
+#### Arguments
+
+- **map**: Map expression. Can be a constant, column, or function, and any combination of map operators.
+
+#### Example
+
+```sql
+SELECT map_entries(MAP {'a': 1, 'b': NULL, 'c': 3});
+----
+[{'key': a, 'value': 1}, {'key': b, 'value': NULL}, {'key': c, 'value': 3}]
+
+SELECT map_entries(map([100, 5], [42, 43]));
+----
+[{'key': 100, 'value': 42}, {'key': 5, 'value': 43}]
 ```
 
 ### `map_extract`
