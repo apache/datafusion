@@ -2552,6 +2552,7 @@ _Alias of [current_date](#current_date)._
 - [array_join](#array_join)
 - [array_length](#array_length)
 - [array_max](#array_max)
+- [array_min](#array_max)
 - [array_ndims](#array_ndims)
 - [array_pop_back](#array_pop_back)
 - [array_pop_front](#array_pop_front)
@@ -3057,6 +3058,29 @@ array_max(array)
 #### Aliases
 
 - list_max
+
+### `array_min`
+
+Returns the minimum value in the array.
+
+```sql
+array_min(array)
+```
+
+#### Arguments
+
+- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+
+#### Example
+
+```sql
+> select array_min([3,1,4,2]);
++-----------------------------------------+
+| array_min(List([3,1,4,2]))              |
++-----------------------------------------+
+| 1                                       |
++-----------------------------------------+
+```
 
 ### `array_ndims`
 
