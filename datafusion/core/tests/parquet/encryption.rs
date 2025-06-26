@@ -111,7 +111,8 @@ async fn round_trip_encryption() {
 
     // Read encrypted parquet
     let ctx: SessionContext = SessionContext::new();
-    let options = ParquetReadOptions::default().file_decryption_properties(decrypt);
+    let options =
+        ParquetReadOptions::default().file_decryption_properties((&decrypt).into());
 
     let encrypted_batches = read_parquet_test_data(
         tempfile.into_os_string().into_string().unwrap(),

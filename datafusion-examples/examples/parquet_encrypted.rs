@@ -66,7 +66,8 @@ async fn main() -> datafusion::common::Result<()> {
 
     // Read encrypted parquet
     let ctx: SessionContext = SessionContext::new();
-    let read_options = ParquetReadOptions::default().file_decryption_properties(decrypt);
+    let read_options =
+        ParquetReadOptions::default().file_decryption_properties((&decrypt).into());
 
     let encrypted_parquet_df = ctx.read_parquet(tempfile_str, read_options).await?;
 
