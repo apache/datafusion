@@ -286,3 +286,85 @@ pub fn as_generic_string_array<T: OffsetSizeTrait>(
 ) -> Result<&GenericStringArray<T>> {
     Ok(downcast_value!(array, GenericStringArray, T))
 }
+
+pub fn as_run_end_array<R: RunEndIndexType>(array: &dyn Array) -> Result<&RunArray<R>> {
+    Ok(downcast_value!(array, RunArray, R))
+}
+
+pub fn run_end_array_values<R: RunEndIndexType>(array: &dyn Array) -> Result<&dyn Array> {
+    match array.data_type() {
+        DataType::RunEndEncoded(run_end_type, _) => match run_end_type.data_type() {
+            DataType::Int16 => {
+                let run_array = as_run_end_array::<Int16Type>(array)?;
+                Ok(run_array.values())
+            }
+            DataType::Int32 => {
+                let run_array = as_run_end_array::<Int32Type>(array)?;
+                Ok(run_array.values())
+            }
+            DataType::Int64 => {
+                let run_array = as_run_end_array::<Int64Type>(array)?;
+                Ok(run_array.values())
+            }
+            _ => Err(DataFusionError::Internal(
+                "Run end type not supported".to_string(),
+            )),
+        },
+        _ => Err(DataFusionError::Internal(format!(
+            "Expected RunEndArray got {} instead ",
+            array.data_type()
+        ))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_run_end_cast() {
+        // Create a values array
+        let values = Int16Array::from(vec![1, 2, 3]);
+        // Create run-ends array (indices where runs end)
+        let run_ends = Int16Array::from(vec![1, 2, 3]);
+
+        // Create the RunEndEncoded array
+        let run_array = RunArray::<Int16Type>::try_new(&run_ends, &values).unwrap();
+
+        // Test the cast
+        let result = as_run_end_array::<Int16Type>(&run_array);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_valid_run_end_cast_with_nulls() {
+        // Create a values array with nulls
+        let values = Int32Array::from(vec![Some(10), None, Some(30)]);
+        // Create run-ends array (indices where runs end)
+        let run_ends = Int32Array::from(vec![1, 2, 3]);
+
+        // Create the RunEndEncoded array
+        let run_array = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+
+        // Test the cast
+        let result = as_run_end_array::<Int32Type>(&run_array);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_run_end_array_values() {
+        // Create a values array
+        let values = Int32Array::from(vec![10, 11, 20, 30]);
+        // Create run-ends array
+        let run_ends = Int32Array::from(vec![1, 2, 3, 4]);
+
+        // Create the RunEndEncoded array
+        let run_array = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+
+        // Test getting the values
+        let result = run_end_array_values::<Int32Type>(&run_array);
+        assert!(result.is_ok());
+        let values_array = result.unwrap();
+        assert_eq!(values_array.data_type(), &DataType::Int32);
+    }
+}
