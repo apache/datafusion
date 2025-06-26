@@ -328,8 +328,7 @@ mod tests {
             .to_string();
         assert!(
             formatted.contains("file_type=parquet, predicate=id@0 = 1"),
-            "formatted:\n{}",
-            formatted
+            "formatted:\n{formatted}",
         );
         Ok(())
     }
