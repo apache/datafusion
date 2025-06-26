@@ -931,7 +931,9 @@ for the same input.</p></li>
 </section>
 <section id="adding-a-scalar-async-udf">
 <h2>Adding a Scalar Async UDF<a class="headerlink" href="#adding-a-scalar-async-udf" title="Link to this heading">¶</a></h2>
-<p>A Scalar Async UDF allows you to implement user-defined functions that support asynchronous execution, such as performing network or I/O operations within the UDF.</p>
+<p>A Scalar Async UDF allows you to implement user-defined functions that support
+asynchronous execution, such as performing network or I/O operations within the
+UDF.</p>
 <p>To add a Scalar Async UDF, you need to:</p>
 <ol class="arabic simple">
 <li><p>Implement the <code class="docutils literal notranslate"><span class="pre">AsyncScalarUDFImpl</span></code> trait to define your async function logic, signature, and types.</p></li>
@@ -943,14 +945,13 @@ for the same input.</p></li>
 <span class="k">use</span><span class="w"> </span><span class="n">arrow_schema</span><span class="p">::</span><span class="n">DataType</span><span class="p">;</span>
 <span class="k">use</span><span class="w"> </span><span class="n">async_trait</span><span class="p">::</span><span class="n">async_trait</span><span class="p">;</span>
 <span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">common</span><span class="p">::</span><span class="n">error</span><span class="p">::</span><span class="nb">Result</span><span class="p">;</span>
-<span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">common</span><span class="p">::</span><span class="n">internal_err</span><span class="p">;</span>
+<span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">common</span><span class="p">::{</span><span class="n">internal_err</span><span class="p">,</span><span class="w"> </span><span class="n">not_impl_err</span><span class="p">};</span>
 <span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">common</span><span class="p">::</span><span class="n">types</span><span class="p">::</span><span class="n">logical_string</span><span class="p">;</span>
 <span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">config</span><span class="p">::</span><span class="n">ConfigOptions</span><span class="p">;</span>
-<span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">logical_expr</span><span class="p">::</span><span class="n">async_udf</span><span class="p">::{</span>
-<span class="w">    </span><span class="n">AsyncScalarFunctionArgs</span><span class="p">,</span><span class="w"> </span><span class="n">AsyncScalarUDFImpl</span><span class="p">,</span>
-<span class="p">};</span>
+<span class="k">use</span><span class="w"> </span><span class="n">datafusion_expr</span><span class="p">::</span><span class="n">ScalarUDFImpl</span><span class="p">;</span>
+<span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">logical_expr</span><span class="p">::</span><span class="n">async_udf</span><span class="p">::</span><span class="n">AsyncScalarUDFImpl</span><span class="p">;</span>
 <span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">logical_expr</span><span class="p">::{</span>
-<span class="w">    </span><span class="n">ColumnarValue</span><span class="p">,</span><span class="w"> </span><span class="n">Signature</span><span class="p">,</span><span class="w"> </span><span class="n">TypeSignature</span><span class="p">,</span><span class="w"> </span><span class="n">TypeSignatureClass</span><span class="p">,</span><span class="w"> </span><span class="n">Volatility</span><span class="p">,</span>
+<span class="w">    </span><span class="n">ColumnarValue</span><span class="p">,</span><span class="w"> </span><span class="n">Signature</span><span class="p">,</span><span class="w"> </span><span class="n">TypeSignature</span><span class="p">,</span><span class="w"> </span><span class="n">TypeSignatureClass</span><span class="p">,</span><span class="w"> </span><span class="n">Volatility</span><span class="p">,</span><span class="w"> </span><span class="n">ScalarFunctionArgs</span>
 <span class="p">};</span>
 <span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">logical_expr_common</span><span class="p">::</span><span class="n">signature</span><span class="p">::</span><span class="n">Coercion</span><span class="p">;</span>
 <span class="k">use</span><span class="w"> </span><span class="n">log</span><span class="p">::</span><span class="n">trace</span><span class="p">;</span>
@@ -981,8 +982,9 @@ for the same input.</p></li>
 <span class="w">    </span><span class="p">}</span>
 <span class="p">}</span>
 
+<span class="sd">/// Implement the normal ScalarUDFImpl trait for AsyncUpper</span>
 <span class="cp">#[async_trait]</span>
-<span class="k">impl</span><span class="w"> </span><span class="n">AsyncScalarUDFImpl</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">AsyncUpper</span><span class="w"> </span><span class="p">{</span>
+<span class="k">impl</span><span class="w"> </span><span class="n">ScalarUDFImpl</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">AsyncUpper</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">as_any</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">dyn</span><span class="w"> </span><span class="n">Any</span><span class="w"> </span><span class="p">{</span>
 <span class="w">        </span><span class="bp">self</span>
 <span class="w">    </span><span class="p">}</span>
@@ -999,13 +1001,24 @@ for the same input.</p></li>
 <span class="w">        </span><span class="nb">Ok</span><span class="p">(</span><span class="n">DataType</span><span class="p">::</span><span class="n">Utf8</span><span class="p">)</span>
 <span class="w">    </span><span class="p">}</span>
 
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">invoke_with_args</span><span class="p">(</span>
+<span class="w">        </span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span>
+<span class="w">        </span><span class="n">_args</span><span class="p">:</span><span class="w"> </span><span class="nc">ScalarFunctionArgs</span><span class="p">,</span>
+<span class="w">    </span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="n">ColumnarValue</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">not_impl_err</span><span class="o">!</span><span class="p">(</span><span class="s">&quot;AsyncUpper can only be called from async contexts&quot;</span><span class="p">)</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+
+<span class="sd">/// The actual implementation of the async UDF</span>
+<span class="cp">#[async_trait]</span>
+<span class="k">impl</span><span class="w"> </span><span class="n">AsyncScalarUDFImpl</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">AsyncUpper</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">ideal_batch_size</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Option</span><span class="o">&lt;</span><span class="kt">usize</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
 <span class="w">        </span><span class="nb">Some</span><span class="p">(</span><span class="mi">10</span><span class="p">)</span>
 <span class="w">    </span><span class="p">}</span>
 
 <span class="w">    </span><span class="k">async</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">invoke_async_with_args</span><span class="p">(</span>
 <span class="w">        </span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span>
-<span class="w">        </span><span class="n">args</span><span class="p">:</span><span class="w"> </span><span class="nc">AsyncScalarFunctionArgs</span><span class="p">,</span>
+<span class="w">        </span><span class="n">args</span><span class="p">:</span><span class="w"> </span><span class="nc">ScalarFunctionArgs</span><span class="p">,</span>
 <span class="w">        </span><span class="n">_option</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">ConfigOptions</span><span class="p">,</span>
 <span class="w">    </span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="n">ArrayRef</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
 <span class="w">        </span><span class="n">trace</span><span class="o">!</span><span class="p">(</span><span class="s">&quot;Invoking async_upper with args: {:?}&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">args</span><span class="p">);</span>
