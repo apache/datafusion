@@ -34,7 +34,7 @@ use crate::error::Result;
 use crate::execution::context::{SessionConfig, SessionState};
 
 use arrow::datatypes::{DataType, Schema, SchemaRef};
-use datafusion_common::config::TableOptions;
+use datafusion_common::config::{ConfigFileDecryptionProperties, TableOptions};
 use datafusion_common::{
     DEFAULT_ARROW_EXTENSION, DEFAULT_AVRO_EXTENSION, DEFAULT_CSV_EXTENSION,
     DEFAULT_JSON_EXTENSION, DEFAULT_PARQUET_EXTENSION,
@@ -43,7 +43,6 @@ use datafusion_common::{
 use async_trait::async_trait;
 use datafusion_datasource_json::file_format::JsonFormat;
 use datafusion_expr::SortExpr;
-use parquet::encryption::decrypt::FileDecryptionProperties;
 
 /// Options that control the reading of CSV files.
 ///
@@ -254,7 +253,7 @@ pub struct ParquetReadOptions<'a> {
     /// Indicates how the file is sorted
     pub file_sort_order: Vec<Vec<SortExpr>>,
     /// Properties for decryption of Parquet files that use modular encryption
-    pub file_decryption_properties: Option<FileDecryptionProperties>,
+    pub file_decryption_properties: Option<ConfigFileDecryptionProperties>,
 }
 
 impl Default for ParquetReadOptions<'_> {
@@ -321,7 +320,7 @@ impl<'a> ParquetReadOptions<'a> {
     /// Configure file decryption properties for reading encrypted Parquet files
     pub fn file_decryption_properties(
         mut self,
-        file_decryption_properties: FileDecryptionProperties,
+        file_decryption_properties: ConfigFileDecryptionProperties,
     ) -> Self {
         self.file_decryption_properties = Some(file_decryption_properties);
         self
@@ -589,7 +588,7 @@ impl ReadOptions<'_> for ParquetReadOptions<'_> {
     ) -> ListingOptions {
         let mut options = table_options.parquet;
         if let Some(file_decryption_properties) = &self.file_decryption_properties {
-            options.crypto.file_decryption = Some(file_decryption_properties.into());
+            options.crypto.file_decryption = Some(file_decryption_properties.clone());
         }
         let mut file_format = ParquetFormat::new().with_options(options);
 
