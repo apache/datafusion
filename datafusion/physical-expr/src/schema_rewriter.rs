@@ -21,6 +21,7 @@ use std::sync::Arc;
 
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{FieldRef, Schema};
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
     exec_err,
     tree_node::{Transformed, TransformedResult, TreeNode},
@@ -29,6 +30,16 @@ use datafusion_common::{
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 
 use crate::expressions::{self, CastExpr, Column};
+pub trait PhysicalExprSchemaRewriteHook: Send + Sync + std::fmt::Debug {
+    /// Rewrite a physical expression to match the target schema
+    ///
+    /// This method should return a transformed expression that matches the target schema.
+    fn rewrite(
+        &self,
+        expr: Arc<dyn PhysicalExpr>,
+        physical_file_schema: &Schema,
+    ) -> Result<Transformed<Arc<dyn PhysicalExpr>>>;
+}
 
 /// Builder for rewriting physical expressions to match different schemas.
 ///
@@ -53,6 +64,7 @@ pub struct PhysicalExprSchemaRewriter<'a> {
     logical_file_schema: &'a Schema,
     partition_fields: Vec<FieldRef>,
     partition_values: Vec<ScalarValue>,
+    rewrite_hook: Option<Arc<dyn PhysicalExprSchemaRewriteHook>>,
 }
 
 impl<'a> PhysicalExprSchemaRewriter<'a> {
@@ -66,6 +78,7 @@ impl<'a> PhysicalExprSchemaRewriter<'a> {
             logical_file_schema,
             partition_fields: Vec::new(),
             partition_values: Vec::new(),
+            rewrite_hook: None,
         }
     }
 
@@ -83,6 +96,15 @@ impl<'a> PhysicalExprSchemaRewriter<'a> {
         self
     }
 
+    /// Add a hook to intercept expression rewrites
+    pub fn with_rewrite_hook(
+        mut self,
+        hook: Arc<dyn PhysicalExprSchemaRewriteHook>,
+    ) -> Self {
+        self.rewrite_hook = Some(hook);
+        self
+    }
+
     /// Rewrite the given physical expression to match the target schema
     ///
     /// This method applies the following transformations:
@@ -90,7 +112,27 @@ impl<'a> PhysicalExprSchemaRewriter<'a> {
     /// 2. Handles missing columns by inserting null literals
     /// 3. Casts columns when logical and physical schemas have different types
     pub fn rewrite(&self, expr: Arc<dyn PhysicalExpr>) -> Result<Arc<dyn PhysicalExpr>> {
-        expr.transform(|expr| self.rewrite_expr(expr)).data()
+        println!("Top level expression: {expr}");
+        expr.transform(|expr| {
+            println!("Rewriting expression: {expr}");
+            let transformed = if let Some(rewriter) = self.rewrite_hook.as_ref() {
+                // If a rewrite hook is provided, apply it first
+                let transformed =
+                    rewriter.rewrite(expr.clone(), &self.physical_file_schema)?;
+                Ok(transformed)
+                // if transformed.tnr == TreeNodeRecursion::Stop {
+                //     // If the hook indicates no further recursion, return the transformed expression
+                //     return Ok(transformed);
+                // } else {
+                //     transformed.transform_parent(|expr| self.rewrite_expr(expr))
+                // }
+            } else {
+                // Otherwise, rewrite the expression directly
+                self.rewrite_expr(expr.clone())
+            }?;
+            Ok(transformed)
+        })
+        .data()
     }
 
     fn rewrite_expr(

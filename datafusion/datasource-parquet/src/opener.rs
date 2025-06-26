@@ -33,6 +33,7 @@ use arrow::datatypes::{FieldRef, SchemaRef, TimeUnit};
 use arrow::error::ArrowError;
 use datafusion_common::{exec_err, DataFusionError, Result};
 use datafusion_datasource::PartitionedFile;
+use datafusion_physical_expr::schema_rewriter::PhysicalExprSchemaRewriteHook;
 use datafusion_physical_expr::simplifier::PhysicalExprSimplifier;
 use datafusion_physical_expr::PhysicalExprSchemaRewriter;
 use datafusion_physical_expr_common::physical_expr::{
@@ -92,6 +93,8 @@ pub(super) struct ParquetOpener {
     pub coerce_int96: Option<TimeUnit>,
     /// Optional parquet FileDecryptionProperties
     pub file_decryption_properties: Option<Arc<FileDecryptionProperties>>,
+    /// Rewrite expressions in the context of the file schema
+    pub predicate_rewrite_hook: Option<Arc<dyn PhysicalExprSchemaRewriteHook>>,
 }
 
 impl FileOpener for ParquetOpener {
@@ -131,6 +134,8 @@ impl FileOpener for ParquetOpener {
 
         let predicate_creation_errors = MetricBuilder::new(&self.metrics)
             .global_counter("num_predicate_creation_errors");
+
+        let predicate_rewrite_hook = self.predicate_rewrite_hook.clone();
 
         let mut enable_page_index = self.enable_page_index;
         let file_decryption_properties = self.file_decryption_properties.clone();
@@ -237,17 +242,20 @@ impl FileOpener for ParquetOpener {
             // This evaluates missing columns and inserts any necessary casts.
             let predicate = predicate
                 .map(|p| {
-                    PhysicalExprSchemaRewriter::new(
+                    let mut rewriter = PhysicalExprSchemaRewriter::new(
                         &physical_file_schema,
                         &logical_file_schema,
                     )
                     .with_partition_columns(
                         partition_fields.to_vec(),
                         file.partition_values,
-                    )
-                    .rewrite(p)
-                    .map_err(ArrowError::from)
-                    .map(|p| {
+                    );
+                    if let Some(predicate_rewrite_hook) = predicate_rewrite_hook.as_ref()
+                    {
+                        rewriter = rewriter
+                            .with_rewrite_hook(Arc::clone(predicate_rewrite_hook));
+                    };
+                    rewriter.rewrite(p).map_err(ArrowError::from).map(|p| {
                         // After rewriting to the file schema, further simplifications may be possible.
                         // For example, if `'a' = col_that_is_missing` becomes `'a' = NULL` that can then be simplified to `FALSE`
                         // and we can avoid doing any more work on the file (bloom filters, loading the page index, etc.).
@@ -258,6 +266,8 @@ impl FileOpener for ParquetOpener {
                 })
                 .transpose()?
                 .transpose()?;
+
+            println!("predicate: {predicate:?}");
 
             // Build predicates for this specific file
             let (pruning_predicate, page_pruning_predicate) = build_pruning_predicates(
@@ -631,6 +641,7 @@ mod test {
                 enable_row_group_stats_pruning: true,
                 coerce_int96: None,
                 file_decryption_properties: None,
+                predicate_rewrite_hook: None,
             }
         };
 
@@ -716,6 +727,7 @@ mod test {
                 enable_row_group_stats_pruning: true,
                 coerce_int96: None,
                 file_decryption_properties: None,
+                predicate_rewrite_hook: None,
             }
         };
 
@@ -817,6 +829,7 @@ mod test {
                 enable_row_group_stats_pruning: true,
                 coerce_int96: None,
                 file_decryption_properties: None,
+                predicate_rewrite_hook: None,
             }
         };
         let make_meta = || FileMeta {
@@ -928,6 +941,7 @@ mod test {
                 enable_row_group_stats_pruning: false, // note that this is false!
                 coerce_int96: None,
                 file_decryption_properties: None,
+                predicate_rewrite_hook: None,
             }
         };
 
@@ -1040,6 +1054,7 @@ mod test {
                 enable_row_group_stats_pruning: true,
                 coerce_int96: None,
                 file_decryption_properties: None,
+                predicate_rewrite_hook: None,
             }
         };
 
