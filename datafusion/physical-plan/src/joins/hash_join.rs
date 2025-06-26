@@ -683,7 +683,9 @@ impl DisplayAs for HashJoinExec {
                     .collect::<Vec<String>>()
                     .join(", ");
                 let dynamic_filter_display = match self.dynamic_filter.current() {
-                    Ok(current) if current != lit(true) => format!(", filter=[{current}]"),
+                    Ok(current) if current != lit(true) => {
+                        format!(", filter=[{current}]")
+                    }
                     _ => "".to_string(),
                 };
                 write!(
