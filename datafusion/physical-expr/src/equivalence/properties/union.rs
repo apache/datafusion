@@ -74,9 +74,14 @@ fn calculate_union_binary(
     orderings.add_satisfied_orderings(&rhs, &lhs)?;
     let orderings = orderings.build();
 
+    let eq_group = lhs.eq_group().intersect(rhs.eq_group());
+
     let mut eq_properties = EquivalenceProperties::new(lhs.schema);
-    eq_properties.add_constants(constants)?;
+        
+    eq_properties.add_constants(constants);
     eq_properties.add_orderings(orderings);
+    eq_properties.add_equivalence_group(eq_group);
+
     Ok(eq_properties)
 }
 

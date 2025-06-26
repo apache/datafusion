@@ -31,6 +31,7 @@ use datafusion_common::{HashMap, JoinType, Result, ScalarValue};
 use datafusion_physical_expr_common::physical_expr::format_physical_expr_list;
 
 use indexmap::{IndexMap, IndexSet};
+use itertools::Itertools;
 
 /// Represents whether a constant expression's value is uniform or varies across
 /// partitions. Has two variants:
@@ -470,6 +471,70 @@ impl EquivalenceGroup {
         }
         // Then, unify/bridge groups that have common expressions:
         self.bridge_classes() || change
+    }
+
+    /// Computes the intersection of two equivalence groups.
+    ///
+    /// This function finds all expressions that are equivalent in both groups by:
+    /// 1. Creating a mapping of expressions to their positions in the first group
+    /// 2. For each equivalence class in the second group:
+    ///    - Find all expressions that exist in both groups
+    ///    - Sort them by their position in the first group
+    ///    - Group consecutive expressions that belong to the same equivalence class in the first group
+    ///
+    /// Computational Complexity: O(NlogN) where N is the total number of expressions in both groups.
+    /// # Arguments
+    ///
+    /// * `other` - The other equivalence group to intersect with
+    ///
+    /// # Returns
+    ///
+    /// A new equivalence group containing only the expressions that are equivalent
+    /// in both input groups.
+    ///
+    /// # Example
+    ///
+    ///
+    /// Group1: [a, b, c]  // a=b=c
+    /// Group2: [b, c, d]  // b=c=d
+    ///
+    /// Result: [b, c]     // b=c in both groups
+    ///
+    pub fn intersect(&self, other: &Self) -> Self {
+        let mut new_classes = Vec::new();
+        for cls in other.classes.iter() {
+            let exprs = cls
+                .exprs
+                .iter()
+                .flat_map(|expr| {
+                    self.map
+                        .get(expr)
+                        .map(|cls_id| (expr, *cls_id))
+                })
+                .sorted_by_key(|(_, cls_id)| *cls_id)
+                .collect::<Vec<_>>();
+            let mut start = 0;
+            if exprs.len() <= 1 {
+                continue;
+            }
+            for i in 0..exprs.len() - 1 {
+                let cls_id = exprs[i].1;
+                let next_cls_id = exprs[i + 1].1;
+                if cls_id != next_cls_id && i > start {
+                    new_classes.push(EquivalenceClass::new(
+                        (start..=i).map(|idx| Arc::clone(exprs[idx].0))
+                    ));
+                    start = i + 1;
+                }
+            }
+            if exprs.len() > start + 1 {
+                new_classes.push(EquivalenceClass::new(
+                    (start..exprs.len())
+                        .map(|idx| Arc::clone(exprs[idx].0))
+                ));
+            }
+        }
+        Self::new(new_classes)
     }
 
     /// This utility function unifies/bridges classes that have common expressions.
@@ -1229,6 +1294,29 @@ mod tests {
 
         assert!(first_normalized.eq(&second_normalized));
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_eq_group_intersect() -> Result<()> {
+        let eq_group1 = EquivalenceGroup::new(vec![
+            EquivalenceClass::new(vec![lit(1), lit(2), lit(3)]),
+            EquivalenceClass::new(vec![lit(5), lit(6), lit(7)]),
+        ]);
+        let eq_group2 = EquivalenceGroup::new(vec![
+            EquivalenceClass::new(vec![lit(2), lit(3), lit(4)]),
+            EquivalenceClass::new(vec![lit(6), lit(7), lit(8)]),
+        ]);
+        let intersect = eq_group1.intersect(&eq_group2);
+
+        assert_eq!(intersect.len(), 2);
+        for cls in intersect.classes.iter() {
+            assert_eq!(cls.exprs.len(), 2);
+            assert!(
+                (cls.exprs.contains(&lit(2)) && cls.exprs.contains(&lit(3)))
+                    || (cls.exprs.contains(&lit(6)) && cls.exprs.contains(&lit(7)))
+            );
+        }
         Ok(())
     }
 }
