@@ -977,7 +977,10 @@ mod tests {
             false,
         )]));
         // One row should match, 2 pruned via page index, 1 pruned via filter pushdown
-        let filter = col("c1").eq(lit(ScalarValue::TimestampMillisecond(Some(1_000), Some("UTC".into()))));
+        let filter = col("c1").eq(lit(ScalarValue::TimestampMillisecond(
+            Some(1_000),
+            Some("UTC".into()),
+        )));
         let rt = RoundTrip::new()
             .with_predicate(filter)
             .with_pushdown_predicate()
@@ -1000,7 +1003,10 @@ mod tests {
         assert_eq!(get_value(&metrics, "pushdown_rows_pruned"), 1);
         // If we filter with a value that is completely out of the range of the data
         // we prune at the row group level.
-        let filter = col("c1").eq(lit(ScalarValue::TimestampMillisecond(Some(5_000), Some("UTC".into()))));
+        let filter = col("c1").eq(lit(ScalarValue::TimestampMillisecond(
+            Some(5_000),
+            Some("UTC".into()),
+        )));
         let rt = RoundTrip::new()
             .with_predicate(filter)
             .with_pushdown_predicate()
