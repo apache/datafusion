@@ -17,15 +17,12 @@
 
 //! [`CovarianceSample`]: covariance sample aggregations.
 
-use std::fmt::Debug;
-use std::mem::size_of_val;
-
+use arrow::datatypes::FieldRef;
 use arrow::{
     array::{ArrayRef, Float64Array, UInt64Array},
     compute::kernels::cast,
     datatypes::{DataType, Field},
 };
-
 use datafusion_common::{
     downcast_value, plan_err, unwrap_or_internal_err, DataFusionError, Result,
     ScalarValue,
@@ -38,6 +35,9 @@ use datafusion_expr::{
 };
 use datafusion_functions_aggregate_common::stats::StatsType;
 use datafusion_macros::user_doc;
+use std::fmt::Debug;
+use std::mem::size_of_val;
+use std::sync::Arc;
 
 make_udaf_expr_and_func!(
     CovarianceSample,
@@ -120,7 +120,7 @@ impl AggregateUDFImpl for CovarianceSample {
         Ok(DataType::Float64)
     }
 
-    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
+    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         let name = args.name;
         Ok(vec![
             Field::new(format_state_name(name, "count"), DataType::UInt64, true),
@@ -131,7 +131,10 @@ impl AggregateUDFImpl for CovarianceSample {
                 DataType::Float64,
                 true,
             ),
-        ])
+        ]
+        .into_iter()
+        .map(Arc::new)
+        .collect())
     }
 
     fn accumulator(&self, _acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
@@ -210,7 +213,7 @@ impl AggregateUDFImpl for CovariancePopulation {
         Ok(DataType::Float64)
     }
 
-    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
+    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         let name = args.name;
         Ok(vec![
             Field::new(format_state_name(name, "count"), DataType::UInt64, true),
@@ -221,7 +224,10 @@ impl AggregateUDFImpl for CovariancePopulation {
                 DataType::Float64,
                 true,
             ),
-        ])
+        ]
+        .into_iter()
+        .map(Arc::new)
+        .collect())
     }
 
     fn accumulator(&self, _acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {

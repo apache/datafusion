@@ -23,6 +23,8 @@ mod sp_repartition_fuzz_tests {
     use arrow::compute::{concat_batches, lexsort, SortColumn, SortOptions};
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 
+    use datafusion::datasource::memory::MemorySourceConfig;
+    use datafusion::datasource::source::DataSourceExec;
     use datafusion::physical_plan::{
         collect,
         metrics::{BaselineMetrics, ExecutionPlanMetricsSet},
@@ -34,19 +36,16 @@ mod sp_repartition_fuzz_tests {
     };
     use datafusion::prelude::SessionContext;
     use datafusion_common::Result;
-    use datafusion_execution::{
-        config::SessionConfig, memory_pool::MemoryConsumer, SendableRecordBatchStream,
+    use datafusion_execution::{config::SessionConfig, memory_pool::MemoryConsumer};
+    use datafusion_physical_expr::equivalence::{
+        EquivalenceClass, EquivalenceProperties,
     };
-    use datafusion_physical_expr::{
-        equivalence::{EquivalenceClass, EquivalenceProperties},
-        expressions::{col, Column},
-        ConstExpr, PhysicalExpr, PhysicalSortExpr,
-    };
+    use datafusion_physical_expr::expressions::{col, Column};
+    use datafusion_physical_expr::ConstExpr;
+    use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+    use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
     use test_utils::add_empty_batches;
 
-    use datafusion::datasource::memory::MemorySourceConfig;
-    use datafusion::datasource::source::DataSourceExec;
-    use datafusion_physical_expr_common::sort_expr::LexOrdering;
     use itertools::izip;
     use rand::{rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
 
@@ -80,9 +79,9 @@ mod sp_repartition_fuzz_tests {
 
         let mut eq_properties = EquivalenceProperties::new(test_schema.clone());
         // Define a and f are aliases
-        eq_properties.add_equal_conditions(col_a, col_f)?;
+        eq_properties.add_equal_conditions(Arc::clone(col_a), Arc::clone(col_f))?;
         // Column e has constant value.
-        eq_properties = eq_properties.with_constants([ConstExpr::from(col_e)]);
+        eq_properties.add_constants([ConstExpr::from(Arc::clone(col_e))])?;
 
         // Randomly order columns for sorting
         let mut rng = StdRng::seed_from_u64(seed);
@@ -94,18 +93,18 @@ mod sp_repartition_fuzz_tests {
         };
 
         while !remaining_exprs.is_empty() {
-            let n_sort_expr = rng.random_range(0..remaining_exprs.len() + 1);
+            let n_sort_expr = rng.random_range(1..remaining_exprs.len() + 1);
             remaining_exprs.shuffle(&mut rng);
 
-            let ordering = remaining_exprs
-                .drain(0..n_sort_expr)
-                .map(|expr| PhysicalSortExpr {
-                    expr: expr.clone(),
-                    options: options_asc,
-                })
-                .collect();
+            let ordering =
+                remaining_exprs
+                    .drain(0..n_sort_expr)
+                    .map(|expr| PhysicalSortExpr {
+                        expr: expr.clone(),
+                        options: options_asc,
+                    });
 
-            eq_properties.add_new_orderings([ordering]);
+            eq_properties.add_ordering(ordering);
         }
 
         Ok((test_schema, eq_properties))
@@ -151,7 +150,7 @@ mod sp_repartition_fuzz_tests {
 
         // Fill constant columns
         for constant in eq_properties.constants() {
-            let col = constant.expr().as_any().downcast_ref::<Column>().unwrap();
+            let col = constant.expr.as_any().downcast_ref::<Column>().unwrap();
             let (idx, _field) = schema.column_with_name(col.name()).unwrap();
             let arr =
                 Arc::new(UInt64Array::from_iter_values(vec![0; n_elem])) as ArrayRef;
@@ -227,21 +226,21 @@ mod sp_repartition_fuzz_tests {
             let table_data_with_properties =
                 generate_table_for_eq_properties(&eq_properties, N_ELEM, N_DISTINCT)?;
             let schema = table_data_with_properties.schema();
-            let streams: Vec<SendableRecordBatchStream> = (0..N_PARTITION)
+            let streams = (0..N_PARTITION)
                 .map(|_idx| {
                     let batch = table_data_with_properties.clone();
                     Box::pin(RecordBatchStreamAdapter::new(
                         schema.clone(),
                         futures::stream::once(async { Ok(batch) }),
-                    )) as SendableRecordBatchStream
+                    )) as _
                 })
                 .collect::<Vec<_>>();
 
-            // Returns concatenated version of the all available orderings
-            let exprs = eq_properties
-                .oeq_class()
-                .output_ordering()
-                .unwrap_or_default();
+            // Returns concatenated version of the all available orderings:
+            let Some(exprs) = eq_properties.oeq_class().output_ordering() else {
+                // We always should have an ordering due to the way we generate the schema:
+                unreachable!("No ordering found in eq_properties: {:?}", eq_properties);
+            };
 
             let context = SessionContext::new().task_ctx();
             let mem_reservation =
@@ -347,20 +346,16 @@ mod sp_repartition_fuzz_tests {
         let schema = input1[0].schema();
         let session_config = SessionConfig::new().with_batch_size(50);
         let ctx = SessionContext::new_with_config(session_config);
-        let mut sort_keys = LexOrdering::default();
-        for ordering_col in ["a", "b", "c"] {
-            sort_keys.push(PhysicalSortExpr {
-                expr: col(ordering_col, &schema).unwrap(),
-                options: SortOptions::default(),
-            })
-        }
+        let sort_keys = ["a", "b", "c"].map(|ordering_col| {
+            PhysicalSortExpr::new_default(col(ordering_col, &schema).unwrap())
+        });
 
         let concat_input_record = concat_batches(&schema, &input1).unwrap();
 
         let running_source = Arc::new(
-            MemorySourceConfig::try_new(&[input1.clone()], schema.clone(), None)
+            MemorySourceConfig::try_new(&[input1], schema.clone(), None)
                 .unwrap()
-                .try_with_sort_information(vec![sort_keys.clone()])
+                .try_with_sort_information(vec![sort_keys.clone().into()])
                 .unwrap(),
         );
         let running_source = Arc::new(DataSourceExec::new(running_source));
@@ -381,7 +376,7 @@ mod sp_repartition_fuzz_tests {
             sort_preserving_repartition_exec_hash(intermediate, hash_exprs.clone())
         };
 
-        let final_plan = sort_preserving_merge_exec(sort_keys.clone(), intermediate);
+        let final_plan = sort_preserving_merge_exec(sort_keys.into(), intermediate);
         let task_ctx = ctx.task_ctx();
 
         let collected_running = collect(final_plan, task_ctx.clone()).await.unwrap();
@@ -428,10 +423,9 @@ mod sp_repartition_fuzz_tests {
     }
 
     fn sort_preserving_merge_exec(
-        sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
+        sort_exprs: LexOrdering,
         input: Arc<dyn ExecutionPlan>,
     ) -> Arc<dyn ExecutionPlan> {
-        let sort_exprs = sort_exprs.into_iter().collect();
         Arc::new(SortPreservingMergeExec::new(sort_exprs, input))
     }
 

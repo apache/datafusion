@@ -20,12 +20,15 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use crate::execution_plan::{Boundedness, EmissionType};
+use crate::coop::cooperative;
+use crate::execution_plan::{Boundedness, EmissionType, SchedulingType};
 use crate::memory::MemoryStream;
-use crate::{common, DisplayAs, PlanProperties, SendableRecordBatchStream, Statistics};
-use crate::{DisplayFormatType, ExecutionPlan, Partitioning};
-use arrow::array::{ArrayRef, NullArray};
-use arrow::array::{RecordBatch, RecordBatchOptions};
+use crate::{
+    common, DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
+    SendableRecordBatchStream, Statistics,
+};
+
+use arrow::array::{ArrayRef, NullArray, RecordBatch, RecordBatchOptions};
 use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
 use datafusion_common::{internal_err, Result};
 use datafusion_execution::TaskContext;
@@ -99,6 +102,7 @@ impl PlaceholderRowExec {
             EmissionType::Incremental,
             Boundedness::Bounded,
         )
+        .with_scheduling_type(SchedulingType::Cooperative)
     }
 }
 
@@ -158,11 +162,8 @@ impl ExecutionPlan for PlaceholderRowExec {
             );
         }
 
-        Ok(Box::pin(MemoryStream::try_new(
-            self.data()?,
-            Arc::clone(&self.schema),
-            None,
-        )?))
+        let ms = MemoryStream::try_new(self.data()?, Arc::clone(&self.schema), None)?;
+        Ok(Box::pin(cooperative(ms)))
     }
 
     fn statistics(&self) -> Result<Statistics> {

@@ -25,17 +25,16 @@ use arrow_schema::SchemaRef;
 use datafusion::datasource::MemTable;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_common::{instant::Instant, Result};
+use datafusion_execution::disk_manager::DiskManagerBuilder;
 use datafusion_execution::memory_pool::{
     human_readable_size, MemoryPool, UnboundedMemoryPool,
 };
 use datafusion_expr::display_schema;
 use datafusion_physical_plan::spill::get_record_batch_memory_size;
+use itertools::Itertools;
 use std::time::Duration;
 
-use datafusion_execution::{
-    disk_manager::DiskManagerConfig, memory_pool::FairSpillPool,
-    runtime_env::RuntimeEnvBuilder,
-};
+use datafusion_execution::{memory_pool::FairSpillPool, runtime_env::RuntimeEnvBuilder};
 use rand::prelude::IndexedRandom;
 use rand::Rng;
 use rand::{rngs::StdRng, SeedableRng};
@@ -72,6 +71,43 @@ async fn sort_query_fuzzer_runner() {
         .with_test_generator(test_generator);
 
     fuzzer.run().await.unwrap();
+}
+
+/// Reproduce the bug with specific seeds from the
+/// [failing test case](https://github.com/apache/datafusion/issues/16452).
+#[tokio::test(flavor = "multi_thread")]
+async fn test_reproduce_sort_query_issue_16452() {
+    // Seeds from the failing test case
+    let init_seed = 10313160656544581998u64;
+    let query_seed = 15004039071976572201u64;
+    let config_seed_1 = 11807432710583113300u64;
+    let config_seed_2 = 759937414670321802u64;
+
+    let random_seed = 1u64; // Use a fixed seed to ensure consistent behavior
+
+    let mut test_generator = SortFuzzerTestGenerator::new(
+        2000,
+        3,
+        "sort_fuzz_table".to_string(),
+        get_supported_types_columns(random_seed),
+        false,
+        random_seed,
+    );
+
+    let mut results = vec![];
+
+    for config_seed in [config_seed_1, config_seed_2] {
+        let r = test_generator
+            .fuzzer_run(init_seed, query_seed, config_seed)
+            .await
+            .unwrap();
+
+        results.push(r);
+    }
+
+    for (lhs, rhs) in results.iter().tuple_windows() {
+        check_equality_of_batches(lhs, rhs).unwrap();
+    }
 }
 
 /// SortQueryFuzzer holds the runner configuration for executing sort query fuzz tests. The fuzzing details are managed inside `SortFuzzerTestGenerator`.
@@ -548,7 +584,7 @@ impl SortFuzzerTestGenerator {
 
         let runtime = RuntimeEnvBuilder::new()
             .with_memory_pool(memory_pool)
-            .with_disk_manager(DiskManagerConfig::NewOs)
+            .with_disk_manager_builder(DiskManagerBuilder::default())
             .build_arc()?;
 
         let ctx = SessionContext::new_with_config_rt(config, runtime);

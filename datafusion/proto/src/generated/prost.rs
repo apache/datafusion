@@ -369,8 +369,8 @@ pub struct JoinNode {
     pub left_join_key: ::prost::alloc::vec::Vec<LogicalExprNode>,
     #[prost(message, repeated, tag = "6")]
     pub right_join_key: ::prost::alloc::vec::Vec<LogicalExprNode>,
-    #[prost(bool, tag = "7")]
-    pub null_equals_null: bool,
+    #[prost(enumeration = "super::datafusion_common::NullEquality", tag = "7")]
+    pub null_equality: i32,
     #[prost(message, optional, tag = "8")]
     pub filter: ::core::option::Option<LogicalExprNode>,
 }
@@ -1048,7 +1048,7 @@ pub mod table_reference {
 pub struct PhysicalPlanNode {
     #[prost(
         oneof = "physical_plan_node::PhysicalPlanType",
-        tags = "1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31"
+        tags = "1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32"
     )]
     pub physical_plan_type: ::core::option::Option<physical_plan_node::PhysicalPlanType>,
 }
@@ -1118,6 +1118,8 @@ pub mod physical_plan_node {
         Unnest(::prost::alloc::boxed::Box<super::UnnestExecNode>),
         #[prost(message, tag = "31")]
         JsonScan(super::JsonScanExecNode),
+        #[prost(message, tag = "32")]
+        Cooperative(::prost::alloc::boxed::Box<super::CooperativeExecNode>),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1572,6 +1574,11 @@ pub struct AvroScanExecNode {
     pub base_conf: ::core::option::Option<FileScanExecConf>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct CooperativeExecNode {
+    #[prost(message, optional, boxed, tag = "1")]
+    pub input: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct HashJoinExecNode {
     #[prost(message, optional, boxed, tag = "1")]
     pub left: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
@@ -1583,8 +1590,8 @@ pub struct HashJoinExecNode {
     pub join_type: i32,
     #[prost(enumeration = "PartitionMode", tag = "6")]
     pub partition_mode: i32,
-    #[prost(bool, tag = "7")]
-    pub null_equals_null: bool,
+    #[prost(enumeration = "super::datafusion_common::NullEquality", tag = "7")]
+    pub null_equality: i32,
     #[prost(message, optional, tag = "8")]
     pub filter: ::core::option::Option<JoinFilter>,
     #[prost(uint32, repeated, tag = "9")]
@@ -1602,8 +1609,8 @@ pub struct SymmetricHashJoinExecNode {
     pub join_type: i32,
     #[prost(enumeration = "StreamPartitionMode", tag = "6")]
     pub partition_mode: i32,
-    #[prost(bool, tag = "7")]
-    pub null_equals_null: bool,
+    #[prost(enumeration = "super::datafusion_common::NullEquality", tag = "7")]
+    pub null_equality: i32,
     #[prost(message, optional, tag = "8")]
     pub filter: ::core::option::Option<JoinFilter>,
     #[prost(message, repeated, tag = "9")]

@@ -33,6 +33,7 @@ use datafusion_common::{internal_err, Result};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::EquivalenceProperties;
 
+use crate::execution_plan::SchedulingType;
 use log::trace;
 
 /// Execution plan for empty relation with produce_one_row=false
@@ -81,6 +82,7 @@ impl EmptyExec {
             EmissionType::Incremental,
             Boundedness::Bounded,
         )
+        .with_scheduling_type(SchedulingType::Cooperative)
     }
 }
 
@@ -154,9 +156,16 @@ impl ExecutionPlan for EmptyExec {
     }
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
-        if partition.is_some() {
-            return Ok(Statistics::new_unknown(&self.schema()));
+        if let Some(partition) = partition {
+            if partition >= self.partitions {
+                return internal_err!(
+                    "EmptyExec invalid partition {} (expected less than {})",
+                    partition,
+                    self.partitions
+                );
+            }
         }
+
         let batch = self
             .data()
             .expect("Create empty RecordBatch should not fail");

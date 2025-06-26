@@ -50,8 +50,8 @@ logical_plan
 06)----------Projection: orders.o_orderkey, orders.o_orderdate, orders.o_shippriority
 07)------------Inner Join: customer.c_custkey = orders.o_custkey
 08)--------------Projection: customer.c_custkey
-09)----------------Filter: customer.c_mktsegment = Utf8("BUILDING")
-10)------------------TableScan: customer projection=[c_custkey, c_mktsegment], partial_filters=[customer.c_mktsegment = Utf8("BUILDING")]
+09)----------------Filter: customer.c_mktsegment = Utf8View("BUILDING")
+10)------------------TableScan: customer projection=[c_custkey, c_mktsegment], partial_filters=[customer.c_mktsegment = Utf8View("BUILDING")]
 11)--------------Filter: orders.o_orderdate < Date32("1995-03-15")
 12)----------------TableScan: orders projection=[o_orderkey, o_custkey, o_orderdate, o_shippriority], partial_filters=[orders.o_orderdate < Date32("1995-03-15")]
 13)----------Projection: lineitem.l_orderkey, lineitem.l_extendedprice, lineitem.l_discount

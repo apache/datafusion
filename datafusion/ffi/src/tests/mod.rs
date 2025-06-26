@@ -29,6 +29,10 @@ use catalog::create_catalog_provider;
 
 use crate::{catalog_provider::FFI_CatalogProvider, udtf::FFI_TableFunction};
 
+use crate::udaf::FFI_AggregateUDF;
+
+use crate::udwf::FFI_WindowUDF;
+
 use super::{table_provider::FFI_TableProvider, udf::FFI_ScalarUDF};
 use arrow::array::RecordBatch;
 use async_provider::create_async_table_provider;
@@ -37,7 +41,10 @@ use datafusion::{
     common::record_batch,
 };
 use sync_provider::create_sync_table_provider;
-use udf_udaf_udwf::{create_ffi_abs_func, create_ffi_random_func, create_ffi_table_func};
+use udf_udaf_udwf::{
+    create_ffi_abs_func, create_ffi_random_func, create_ffi_rank_func,
+    create_ffi_stddev_func, create_ffi_sum_func, create_ffi_table_func,
+};
 
 mod async_provider;
 pub mod catalog;
@@ -64,6 +71,14 @@ pub struct ForeignLibraryModule {
     pub create_nullary_udf: extern "C" fn() -> FFI_ScalarUDF,
 
     pub create_table_function: extern "C" fn() -> FFI_TableFunction,
+
+    /// Create an aggregate UDAF using sum
+    pub create_sum_udaf: extern "C" fn() -> FFI_AggregateUDF,
+
+    /// Createa  grouping UDAF using stddev
+    pub create_stddev_udaf: extern "C" fn() -> FFI_AggregateUDF,
+
+    pub create_rank_udwf: extern "C" fn() -> FFI_WindowUDF,
 
     pub version: extern "C" fn() -> u64,
 }
@@ -112,6 +127,9 @@ pub fn get_foreign_library_module() -> ForeignLibraryModuleRef {
         create_scalar_udf: create_ffi_abs_func,
         create_nullary_udf: create_ffi_random_func,
         create_table_function: create_ffi_table_func,
+        create_sum_udaf: create_ffi_sum_func,
+        create_stddev_udaf: create_ffi_stddev_func,
+        create_rank_udwf: create_ffi_rank_func,
         version: super::version,
     }
     .leak_into_prefix()

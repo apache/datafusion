@@ -26,6 +26,7 @@ use datafusion::{
 use datafusion_catalog::{Session, TableProvider};
 use datafusion_expr::{dml::InsertOp, Expr, TableType};
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
+use datafusion_physical_plan::execution_plan::SchedulingType;
 use datafusion_physical_plan::{
     execution_plan::{Boundedness, EmissionType},
     DisplayAs, ExecutionPlan, PlanProperties,
@@ -132,7 +133,8 @@ impl TestInsertExec {
                 Partitioning::UnknownPartitioning(1),
                 EmissionType::Incremental,
                 Boundedness::Bounded,
-            ),
+            )
+            .with_scheduling_type(SchedulingType::Cooperative),
         }
     }
 }
