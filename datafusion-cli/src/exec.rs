@@ -231,20 +231,17 @@ pub(super) async fn exec_and_print(
         let adjusted =
             AdjustedPrintOptions::new(print_options.clone()).with_statement(&statement);
 
-        // Only clone the statement if it's a CreateExternalTable
-        let statement_for_retry = matches!(&statement, Statement::CreateExternalTable(_))
-            .then(|| statement.clone());
-
-        let plan = create_plan(ctx, statement, false).await?;
+        let plan = create_plan(ctx, statement.clone(), false).await?;
         let adjusted = adjusted.with_plan(&plan);
 
         let df = match ctx.execute_logical_plan(plan).await {
             Ok(df) => df,
             Err(DataFusionError::ObjectStore(Generic { store, source: _ }))
-                if "S3".eq_ignore_ascii_case(store) && statement_for_retry.is_some() =>
+                if "S3".eq_ignore_ascii_case(store)
+                    && matches!(&statement, Statement::CreateExternalTable(_)) =>
             {
                 warn!("S3 region is incorrect, auto-detecting the correct region (this may be slow). Consider updating your region configuration.");
-                let plan = create_plan(ctx, statement_for_retry.unwrap(), true).await?;
+                let plan = create_plan(ctx, statement, true).await?;
                 ctx.execute_logical_plan(plan).await?
             }
             Err(e) => return Err(e),
