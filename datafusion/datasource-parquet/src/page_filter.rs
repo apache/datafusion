@@ -279,6 +279,17 @@ impl PagePruningAccessPlanFilter {
     pub fn filter_number(&self) -> usize {
         self.predicates.len()
     }
+
+    /// Returns the columns needed to evaluate the page predicates
+    pub fn columns_needed(&self) -> Vec<usize> {
+        self.predicates.iter()
+            .filter_map(|pp| pp.required_columns().single_column())
+            .map(|column| {
+                // Get the index of the column in the parquet file
+                column.index()
+            })
+            .collect()
+    }
 }
 
 fn update_selection(
