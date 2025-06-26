@@ -2552,7 +2552,7 @@ _Alias of [current_date](#current_date)._
 - [array_join](#array_join)
 - [array_length](#array_length)
 - [array_max](#array_max)
-- [array_min](#array_max)
+- [array_min](#array_min)
 - [array_ndims](#array_ndims)
 - [array_pop_back](#array_pop_back)
 - [array_pop_front](#array_pop_front)
