@@ -506,11 +506,7 @@ impl EquivalenceGroup {
             let exprs = cls
                 .exprs
                 .iter()
-                .flat_map(|expr| {
-                    self.map
-                        .get(expr)
-                        .map(|cls_id| (expr, *cls_id))
-                })
+                .flat_map(|expr| self.map.get(expr).map(|cls_id| (expr, *cls_id)))
                 .sorted_by_key(|(_, cls_id)| *cls_id)
                 .collect::<Vec<_>>();
             let mut start = 0;
@@ -522,15 +518,14 @@ impl EquivalenceGroup {
                 let next_cls_id = exprs[i + 1].1;
                 if cls_id != next_cls_id && i > start {
                     new_classes.push(EquivalenceClass::new(
-                        (start..=i).map(|idx| Arc::clone(exprs[idx].0))
+                        (start..=i).map(|idx| Arc::clone(exprs[idx].0)),
                     ));
                     start = i + 1;
                 }
             }
             if exprs.len() > start + 1 {
                 new_classes.push(EquivalenceClass::new(
-                    (start..exprs.len())
-                        .map(|idx| Arc::clone(exprs[idx].0))
+                    (start..exprs.len()).map(|idx| Arc::clone(exprs[idx].0)),
                 ));
             }
         }
