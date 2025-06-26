@@ -520,7 +520,7 @@ config_namespace! {
         /// (reading) If true, filter expressions evaluated during the parquet decoding operation
         /// will be reordered heuristically to minimize the cost of evaluation. If false,
         /// the filters are applied in the same order as written in the query
-        pub reorder_filters: bool, default = false
+        pub reorder_filters: bool, default = true
 
         /// (reading) If true, parquet reader will read columns of `Utf8/Utf8Large` with `Utf8View`,
         /// and `Binary/BinaryLarge` with `BinaryView`.
