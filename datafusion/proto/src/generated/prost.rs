@@ -202,6 +202,8 @@ pub struct SortNode {
     /// Maximum number of highest/lowest rows to fetch; negative means no limit
     #[prost(int64, tag = "3")]
     pub fetch: i64,
+    #[prost(bool, tag = "4")]
+    pub preserve_partitioning: bool,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct RepartitionNode {

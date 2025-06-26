@@ -397,10 +397,19 @@ ORDER BY sum(value) + sum(value);
 2022-01-01T01:00:00 4
 2022-01-02T00:00:00 6
 
-## SORT BY  is not supported
-statement error DataFusion error: This feature is not implemented: SORT BY
+query IP rowsort
 select * from t SORT BY time;
+----
+1 2022-01-01T00:00:30
+2 2022-01-01T01:00:10
+3 2022-01-02T00:00:20
 
+query IP rowsort
+select * from t CLUSTER BY time;
+----
+1 2022-01-01T00:00:30
+2 2022-01-01T01:00:10
+3 2022-01-02T00:00:20
 
 # distinct on a column not in the select list should not work
 statement error DataFusion error: Error during planning: For SELECT DISTINCT, ORDER BY expressions t\.time must appear in select list
