@@ -2056,9 +2056,10 @@ config_namespace_with_hashmap! {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ConfigFileEncryptionProperties {
     /// Should the parquet footer be encrypted
+    /// default is true
     pub encrypt_footer: bool,
     /// Key to use for the parquet footer encoded in hex format
     pub footer_key_as_hex: String,
@@ -2069,7 +2070,22 @@ pub struct ConfigFileEncryptionProperties {
     /// AAD prefix string uniquely identifies the file and prevents file swapping
     pub aad_prefix_as_hex: String,
     /// If true, store the AAD prefix in the file
+    /// default is false
     pub store_aad_prefix: bool,
+}
+
+// Setup to match EncryptionPropertiesBuilder::new()
+impl Default for ConfigFileEncryptionProperties {
+    fn default() -> Self {
+        ConfigFileEncryptionProperties {
+            encrypt_footer: true,
+            footer_key_as_hex: String::new(),
+            footer_key_metadata_as_hex: String::new(),
+            column_encryption_properties: Default::default(),
+            aad_prefix_as_hex: String::new(),
+            store_aad_prefix: false,
+        }
+    }
 }
 
 config_namespace_with_hashmap! {
@@ -2238,6 +2254,7 @@ config_namespace_with_hashmap! {
     }
 }
 
+// Setup to match DecryptionPropertiesBuilder::new()
 impl Default for ConfigFileDecryptionProperties {
     fn default() -> Self {
         ConfigFileDecryptionProperties {
