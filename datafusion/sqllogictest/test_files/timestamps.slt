@@ -3455,3 +3455,32 @@ SELECT arrow_cast(CAST(one AS decimal(17,2)), 'Timestamp(Second, None)') AS a FR
 ----
 1970-01-01T00:00:01
 1970-01-01T00:00:01
+
+
+query P
+SELECT arrow_cast(CAST(1.123 AS decimal(17,3)), 'Timestamp(Nanosecond, None)') AS a UNION ALL
+SELECT arrow_cast(CAST(one AS decimal(17,3)), 'Timestamp(Nanosecond, None)') AS a FROM (VALUES (1.123)) t(one);
+----
+1970-01-01T00:00:00.000000001
+1970-01-01T00:00:00.000000001
+
+query P
+SELECT arrow_cast(CAST(1.123 AS decimal(17,3)), 'Timestamp(Microsecond, None)') AS a UNION ALL
+SELECT arrow_cast(CAST(one AS decimal(17,3)), 'Timestamp(Microsecond, None)') AS a FROM (VALUES (1.123)) t(one);
+----
+1970-01-01T00:00:00.000001
+1970-01-01T00:00:00.000001
+
+query P
+SELECT arrow_cast(CAST(1.123 AS decimal(17,3)), 'Timestamp(Millisecond, None)') AS a UNION ALL
+SELECT arrow_cast(CAST(one AS decimal(17,3)), 'Timestamp(Millisecond, None)') AS a FROM (VALUES (1.123)) t(one);
+----
+1970-01-01T00:00:00.001
+1970-01-01T00:00:00.001
+
+query P
+SELECT arrow_cast(CAST(1.123 AS decimal(17,3)), 'Timestamp(Second, None)') AS a UNION ALL
+SELECT arrow_cast(CAST(one AS decimal(17,3)), 'Timestamp(Second, None)') AS a FROM (VALUES (1.123)) t(one);
+----
+1970-01-01T00:00:01
+1970-01-01T00:00:01
