@@ -191,6 +191,7 @@ LOCATION '/mnt/nyctaxi/';
 ```
 
 ### Parquet Specific Options
+
 You can specify additional options for parquet files using the `OPTIONS` clause.
 For example, to read and write a parquet directory with encryption settings you could use:
 
@@ -204,11 +205,11 @@ STORED AS PARQUET LOCATION 'pq/' OPTIONS (
     -- encryption
     'format.crypto.file_encryption.encrypt_footer' 'true',
     'format.crypto.file_encryption.footer_key_as_hex' '30313233343536373839303132333435',  -- b"0123456789012345"
-    'format.crypto.file_encryption.column_key_as_hex::double_field' '31323334353637383930313233343530', -- b"1234567890123450" 
-    'format.crypto.file_encryption.column_key_as_hex::float_field' '31323334353637383930313233343531', -- b"1234567890123451" 
-    -- decryption 
-    'format.crypto.file_decryption.footer_key_as_hex' '30313233343536373839303132333435', -- b"0123456789012345" 
-    'format.crypto.file_decryption.column_key_as_hex::double_field' '31323334353637383930313233343530', -- b"1234567890123450" 
+    'format.crypto.file_encryption.column_key_as_hex::double_field' '31323334353637383930313233343530', -- b"1234567890123450"
+    'format.crypto.file_encryption.column_key_as_hex::float_field' '31323334353637383930313233343531', -- b"1234567890123451"
+    -- decryption
+    'format.crypto.file_decryption.footer_key_as_hex' '30313233343536373839303132333435', -- b"0123456789012345"
+    'format.crypto.file_decryption.column_key_as_hex::double_field' '31323334353637383930313233343530', -- b"1234567890123450"
     'format.crypto.file_decryption.column_key_as_hex::float_field' '31323334353637383930313233343531', -- b"1234567890123451"
 );
 ```
@@ -225,8 +226,9 @@ select encode('0123456789012345', 'hex');
 +----------------------------------------------+
 */
 ```
-For more details on the available options, refer to the Rust 
-[TableParquetOptions](https://docs.rs/datafusion/latest/datafusion/common/config/struct.TableParquetOptions.html) 
+
+For more details on the available options, refer to the Rust
+[TableParquetOptions](https://docs.rs/datafusion/latest/datafusion/common/config/struct.TableParquetOptions.html)
 documentation in DataFusion.
 
 ## CSV
