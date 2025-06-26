@@ -430,8 +430,6 @@ pub fn build_row_filter(
         .flatten()
         .collect();
 
-    println!("Filter candidates: {}", candidates.len());
-
     // no candidates
     if candidates.is_empty() {
         return Ok(None);
