@@ -375,10 +375,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     return plan_err!("WITHIN GROUP clause is required when calling ordered set aggregate function({})", fm.name());
                 }
 
-                if !fm.is_ordered_set_aggregate() && !within_group.is_empty() {
-                    return plan_err!("WITHIN GROUP clause is not permitted for non-ordered set aggregate function({})", fm.name());
-                }
-
                 if null_treatment.is_some() && !fm.supports_null_handling_clause() {
                     return plan_err!(
                         "[IGNORE | RESPECT] NULLS are not permitted for {}",
@@ -408,6 +404,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     }
                     (!within_group.is_empty()).then_some(within_group)
                 } else {
+                    let order_by = if !order_by.is_empty() {
+                        order_by
+                    } else {
+                        within_group
+                    };
                     let order_by = self.order_by_to_sort_expr(
                         order_by,
                         schema,
