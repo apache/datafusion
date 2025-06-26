@@ -228,18 +228,18 @@ unexpected_cfgs = { level = "warn", check-cfg = [
 unused_qualifications = "deny"
 
 
-## Temporary arrow-rs patch until 52.2.0 is released
-# https://github.com/apache/arrow-rs/issues/7394
+## Patch to use prototype result caching PR
+# https://github.com/apache/arrow-rs/pull/7760
 [patch.crates-io]
-arrow = { git = "https://github.com/apache/arrow-rs.git", rev = "2628c8cf025b28b74cab48b6ea0e3594fa9b37d2" }
-arrow-array = { git = "https://github.com/apache/arrow-rs.git", rev = "2628c8cf025b28b74cab48b6ea0e3594fa9b37d2" }
-arrow-buffer = { git = "https://github.com/apache/arrow-rs.git", rev = "2628c8cf025b28b74cab48b6ea0e3594fa9b37d2" }
-arrow-cast = { git = "https://github.com/apache/arrow-rs.git", rev = "2628c8cf025b28b74cab48b6ea0e3594fa9b37d2" }
-arrow-data = { git = "https://github.com/apache/arrow-rs.git", rev = "2628c8cf025b28b74cab48b6ea0e3594fa9b37d2" }
-arrow-ipc = { git = "https://github.com/apache/arrow-rs.git", rev = "2628c8cf025b28b74cab48b6ea0e3594fa9b37d2" }
-arrow-schema = { git = "https://github.com/apache/arrow-rs.git", rev = "2628c8cf025b28b74cab48b6ea0e3594fa9b37d2" }
-arrow-select = { git = "https://github.com/apache/arrow-rs.git", rev = "2628c8cf025b28b74cab48b6ea0e3594fa9b37d2" }
-arrow-string = { git = "https://github.com/apache/arrow-rs.git", rev = "2628c8cf025b28b74cab48b6ea0e3594fa9b37d2" }
-arrow-ord = { git = "https://github.com/apache/arrow-rs.git", rev = "2628c8cf025b28b74cab48b6ea0e3594fa9b37d2" }
-arrow-flight = { git = "https://github.com/apache/arrow-rs.git", rev = "2628c8cf025b28b74cab48b6ea0e3594fa9b37d2" }
-parquet = { git = "https://github.com/apache/arrow-rs.git", rev = "2628c8cf025b28b74cab48b6ea0e3594fa9b37d2" }
+arrow = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/cache_filter_result2" }
+arrow-array = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/cache_filter_result2" }
+arrow-buffer = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/cache_filter_result2" }
+arrow-cast = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/cache_filter_result2" }
+arrow-data = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/cache_filter_result2" }
+arrow-ipc = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/cache_filter_result2" }
+arrow-schema = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/cache_filter_result2" }
+arrow-select = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/cache_filter_result2" }
+arrow-string = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/cache_filter_result2" }
+arrow-ord = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/cache_filter_result2" }
+arrow-flight = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/cache_filter_result2" }
+parquet = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/cache_filter_result2" }
