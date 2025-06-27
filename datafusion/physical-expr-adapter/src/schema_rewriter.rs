@@ -360,11 +360,7 @@ impl<'a> PhysicalExprSchemaRewriter<'a> {
         let cast_expr: Arc<dyn PhysicalExpr> =
             match (physical_field.data_type(), logical_field.data_type()) {
                 (DataType::Struct(source_fields), DataType::Struct(target_fields)) => {
-                    build_struct_expr(
-                        Arc::new(column),
-                        source_fields,
-                        target_fields,
-                    )?
+                    build_struct_expr(Arc::new(column), source_fields, target_fields)?
                 }
                 _ => Arc::new(CastExpr::new(
                     Arc::new(column),
