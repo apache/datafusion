@@ -347,7 +347,9 @@ async fn main() {
 
 ## Adding a Scalar Async UDF
 
-A Scalar Async UDF allows you to implement user-defined functions that support asynchronous execution, such as performing network or I/O operations within the UDF.
+A Scalar Async UDF allows you to implement user-defined functions that support
+asynchronous execution, such as performing network or I/O operations within the
+UDF.
 
 To add a Scalar Async UDF, you need to:
 
@@ -361,14 +363,13 @@ use arrow::array::{ArrayIter, ArrayRef, AsArray, StringArray};
 use arrow_schema::DataType;
 use async_trait::async_trait;
 use datafusion::common::error::Result;
-use datafusion::common::internal_err;
+use datafusion::common::{internal_err, not_impl_err};
 use datafusion::common::types::logical_string;
 use datafusion::config::ConfigOptions;
-use datafusion::logical_expr::async_udf::{
-    AsyncScalarFunctionArgs, AsyncScalarUDFImpl,
-};
+use datafusion_expr::ScalarUDFImpl;
+use datafusion::logical_expr::async_udf::AsyncScalarUDFImpl;
 use datafusion::logical_expr::{
-    ColumnarValue, Signature, TypeSignature, TypeSignatureClass, Volatility,
+    ColumnarValue, Signature, TypeSignature, TypeSignatureClass, Volatility, ScalarFunctionArgs
 };
 use datafusion::logical_expr_common::signature::Coercion;
 use log::trace;
@@ -399,8 +400,9 @@ impl AsyncUpper {
     }
 }
 
+/// Implement the normal ScalarUDFImpl trait for AsyncUpper
 #[async_trait]
-impl AsyncScalarUDFImpl for AsyncUpper {
+impl ScalarUDFImpl for AsyncUpper {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -417,13 +419,24 @@ impl AsyncScalarUDFImpl for AsyncUpper {
         Ok(DataType::Utf8)
     }
 
+    fn invoke_with_args(
+        &self,
+        _args: ScalarFunctionArgs,
+    ) -> Result<ColumnarValue> {
+        not_impl_err!("AsyncUpper can only be called from async contexts")
+    }
+}
+
+/// The actual implementation of the async UDF
+#[async_trait]
+impl AsyncScalarUDFImpl for AsyncUpper {
     fn ideal_batch_size(&self) -> Option<usize> {
         Some(10)
     }
 
     async fn invoke_async_with_args(
         &self,
-        args: AsyncScalarFunctionArgs,
+        args: ScalarFunctionArgs,
         _option: &ConfigOptions,
     ) -> Result<ArrayRef> {
         trace!("Invoking async_upper with args: {:?}", args);
@@ -451,14 +464,13 @@ We can now transfer the async UDF into the normal scalar using `into_scalar_udf`
 # use arrow_schema::DataType;
 # use async_trait::async_trait;
 # use datafusion::common::error::Result;
-# use datafusion::common::internal_err;
+# use datafusion::common::{internal_err, not_impl_err};
 # use datafusion::common::types::logical_string;
 # use datafusion::config::ConfigOptions;
-# use datafusion::logical_expr::async_udf::{
-#     AsyncScalarFunctionArgs, AsyncScalarUDFImpl,
-# };
+# use datafusion_expr::ScalarUDFImpl;
+# use datafusion::logical_expr::async_udf::AsyncScalarUDFImpl;
 # use datafusion::logical_expr::{
-#     ColumnarValue, Signature, TypeSignature, TypeSignatureClass, Volatility,
+#     ColumnarValue, Signature, TypeSignature, TypeSignatureClass, Volatility, ScalarFunctionArgs
 # };
 # use datafusion::logical_expr_common::signature::Coercion;
 # use log::trace;
@@ -490,7 +502,7 @@ We can now transfer the async UDF into the normal scalar using `into_scalar_udf`
 # }
 #
 # #[async_trait]
-# impl AsyncScalarUDFImpl for AsyncUpper {
+# impl ScalarUDFImpl for AsyncUpper {
 #     fn as_any(&self) -> &dyn Any {
 #         self
 #     }
@@ -507,13 +519,23 @@ We can now transfer the async UDF into the normal scalar using `into_scalar_udf`
 #         Ok(DataType::Utf8)
 #     }
 #
+#     fn invoke_with_args(
+#        &self,
+#        _args: ScalarFunctionArgs,
+#     ) -> Result<ColumnarValue> {
+#         not_impl_err!("AsyncUpper can only be called from async contexts")
+#     }
+# }
+#
+# #[async_trait]
+# impl AsyncScalarUDFImpl for AsyncUpper {
 #     fn ideal_batch_size(&self) -> Option<usize> {
 #         Some(10)
 #     }
 #
 #     async fn invoke_async_with_args(
 #         &self,
-#         args: AsyncScalarFunctionArgs,
+#         args: ScalarFunctionArgs,
 #         _option: &ConfigOptions,
 #     ) -> Result<ArrayRef> {
 #         trace!("Invoking async_upper with args: {:?}", args);

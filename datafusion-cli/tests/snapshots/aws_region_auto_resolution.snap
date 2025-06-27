@@ -1,0 +1,29 @@
+---
+source: datafusion-cli/tests/cli_integration.rs
+info:
+  program: datafusion-cli
+  args: []
+  env:
+    AWS_ENDPOINT: ""
+    RUST_LOG: warn
+  stdin: "CREATE EXTERNAL TABLE hits\nSTORED AS PARQUET\nLOCATION 's3://clickhouse-public-datasets/hits_compatible/athena_partitioned/hits_1.parquet'\nOPTIONS(\n    'aws.region' 'us-east-1',\n    'aws.skip_signature' true\n);\n\nSELECT COUNT(*) FROM hits;\n"
+---
+success: true
+exit_code: 0
+----- stdout -----
+[CLI_VERSION]
+0 row(s) fetched. 
+[ELAPSED]
+
++----------+
+| count(*) |
++----------+
+| 1000000  |
++----------+
+1 row(s) fetched. 
+[ELAPSED]
+
+\q
+
+----- stderr -----
+[[TIME] WARN  datafusion_cli::exec] S3 region is incorrect, auto-detecting the correct region (this may be slow). Consider updating your region configuration.

@@ -42,6 +42,7 @@ members = [
     "datafusion/physical-expr",
     "datafusion/physical-expr-common",
     "datafusion/physical-optimizer",
+    "datafusion/pruning",
     "datafusion/physical-plan",
     "datafusion/proto",
     "datafusion/proto/gen",
@@ -139,6 +140,7 @@ datafusion-physical-optimizer = { path = "datafusion/physical-optimizer", versio
 datafusion-physical-plan = { path = "datafusion/physical-plan", version = "48.0.0" }
 datafusion-proto = { path = "datafusion/proto", version = "48.0.0" }
 datafusion-proto-common = { path = "datafusion/proto-common", version = "48.0.0" }
+datafusion-pruning = { path = "datafusion/pruning", version = "48.0.0" }
 datafusion-session = { path = "datafusion/session", version = "48.0.0" }
 datafusion-spark = { path = "datafusion/spark", version = "48.0.0" }
 datafusion-sql = { path = "datafusion/sql", version = "48.0.0" }
@@ -151,7 +153,7 @@ hashbrown = { version = "0.14.5", features = ["raw"] }
 indexmap = "2.9.0"
 itertools = "0.14"
 log = "^0.4"
-object_store = { version = "0.12.0", default-features = false }
+object_store = { version = "0.12.2", default-features = false }
 parking_lot = "0.12"
 parquet = { version = "55.1.0", default-features = false, features = [
     "arrow",
