@@ -1648,10 +1648,7 @@ pub fn build_join_schema(
     );
 
     let (schema1, schema2) = match join_type {
-        JoinType::Right
-        | JoinType::RightSemi
-        | JoinType::RightAnti
-        | JoinType::RightMark => (left, right),
+        JoinType::Right | JoinType::RightSemi | JoinType::RightAnti => (left, right),
         _ => (right, left),
     };
 
