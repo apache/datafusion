@@ -1773,6 +1773,7 @@ impl DataFrame {
     ///     "+---+---+---+"
     /// ];
     /// # assert_batches_sorted_eq!(expected, &result.collect().await?);
+    /// # Ok(())
     /// # }
     /// ```
     pub fn except_distinct(self, dataframe: DataFrame) -> Result<DataFrame> {
