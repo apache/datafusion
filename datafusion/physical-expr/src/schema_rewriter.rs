@@ -116,7 +116,7 @@ impl<'a> PhysicalExprSchemaRewriter<'a> {
             if let Some(rewriter) = self.rewrite_hook.as_ref() {
                 // If a rewrite hook is provided, apply it first
                 let transformed =
-                    rewriter.rewrite(Arc::clone(&expr), &self.physical_file_schema)?;
+                    rewriter.rewrite(Arc::clone(&expr), self.physical_file_schema)?;
                 if transformed.transformed {
                     // If the hook transformed the expression, return it
                     return Ok(transformed);
