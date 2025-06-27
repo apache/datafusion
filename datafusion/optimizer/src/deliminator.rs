@@ -350,16 +350,9 @@ fn child_join_type_can_be_deliminated(join_type: JoinType) -> bool {
 fn fetch_delim_scan(plan: &LogicalPlan) -> (Option<&LogicalPlan>, Option<&LogicalPlan>) {
     match plan {
         LogicalPlan::Filter(filter) => {
-            if let LogicalPlan::SubqueryAlias(alias) = filter.input.as_ref() {
-                if let LogicalPlan::DelimGet(_) = alias.input.as_ref() {
-                    return (Some(plan), Some(alias.input.as_ref()));
-                };
+            if let LogicalPlan::DelimGet(_) = filter.input.as_ref() {
+                return (Some(plan), Some(filter.input.as_ref()));
             };
-        }
-        LogicalPlan::SubqueryAlias(alias) => {
-            if let LogicalPlan::DelimGet(_) = alias.input.as_ref() {
-                return (None, Some(alias.input.as_ref()));
-            }
         }
         LogicalPlan::DelimGet(_) => {
             return (None, Some(plan));
