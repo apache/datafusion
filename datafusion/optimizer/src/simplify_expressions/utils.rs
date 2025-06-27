@@ -67,6 +67,7 @@ pub static POWS_OF_TEN: [i128; 38] = [
 
 /// returns true if `needle` is found in a chain of search_op
 /// expressions. Such as: (A AND B) AND C
+#[cfg_attr(feature = "recursive_protection", recursive::recursive)]
 fn expr_contains_inner(expr: &Expr, needle: &Expr, search_op: Operator) -> bool {
     match expr {
         Expr::BinaryExpr(BinaryExpr { left, op, right }) if *op == search_op => {
@@ -86,6 +87,7 @@ pub fn expr_contains(expr: &Expr, needle: &Expr, search_op: Operator) -> bool {
 /// expressions. Such as: A ^ (A ^ (B ^ A))
 pub fn delete_xor_in_complex_expr(expr: &Expr, needle: &Expr, is_left: bool) -> Expr {
     /// Deletes recursively 'needles' in a chain of xor expressions
+    #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
     fn recursive_delete_xor_in_expr(
         expr: &Expr,
         needle: &Expr,
@@ -266,6 +268,7 @@ pub fn as_bool_lit(expr: &Expr) -> Result<Option<bool>> {
 /// For Between, not (A between B and C) ===> (A not between B and C)
 ///     not (A not between B and C) ===> (A between B and C)
 /// For others, use Not clause
+#[cfg_attr(feature = "recursive_protection", recursive::recursive)]
 pub fn negate_clause(expr: Expr) -> Expr {
     match expr {
         Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
@@ -335,6 +338,7 @@ pub fn negate_clause(expr: Expr) -> Expr {
 /// For Negative:
 ///    ~(~A) ===> A
 /// For others, use Negative clause
+#[cfg_attr(feature = "recursive_protection", recursive::recursive)]
 pub fn distribute_negation(expr: Expr) -> Expr {
     match expr {
         Expr::BinaryExpr(BinaryExpr { left, op, right }) => {

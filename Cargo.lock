@@ -2444,6 +2444,7 @@ dependencies = [
  "paste",
  "petgraph 0.8.2",
  "rand 0.9.1",
+ "recursive",
  "rstest",
 ]
 
@@ -2675,6 +2676,7 @@ dependencies = [
  "object_store",
  "pbjson-types",
  "prost",
+ "recursive",
  "serde_json",
  "substrait",
  "tokio",

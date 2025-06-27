@@ -2101,6 +2101,7 @@ impl Normalizeable for Expr {
 }
 
 impl NormalizeEq for Expr {
+    #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
     fn normalize_eq(&self, other: &Self) -> bool {
         match (self, other) {
             (
