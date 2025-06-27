@@ -15,7 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{Array, ArrayRef, AsArray, Datum, Int64Array, StringArrayType};
+use arrow::array::{
+    Array, ArrayRef, AsArray, Datum, Int64Array, PrimitiveArray, StringArrayType,
+};
 use arrow::datatypes::{DataType, Int64Type};
 use arrow::datatypes::{
     DataType::Int64, DataType::LargeUtf8, DataType::Utf8, DataType::Utf8View,
@@ -208,20 +210,20 @@ pub fn regexp_instr(
     flags_array: Option<&dyn Datum>,
     subexpr_array: Option<&dyn Datum>,
 ) -> Result<ArrayRef, ArrowError> {
-    let (regex_array, is_regex_scalar) = regex_array.get();
-    let (start_array, is_start_scalar) = start_array.map_or((None, true), |start| {
+    let (regex_array, _is_regex_scalar) = regex_array.get();
+    let (start_array, _is_start_scalar) = start_array.map_or((None, true), |start| {
         let (start, is_start_scalar) = start.get();
         (Some(start), is_start_scalar)
     });
-    let (nth_array, is_nth_scalar) = nth_array.map_or((None, true), |nth| {
+    let (nth_array, _is_nth_scalar) = nth_array.map_or((None, true), |nth| {
         let (nth, is_nth_scalar) = nth.get();
         (Some(nth), is_nth_scalar)
     });
-    let (flags_array, is_flags_scalar) = flags_array.map_or((None, true), |flags| {
+    let (flags_array, _is_flags_scalar) = flags_array.map_or((None, true), |flags| {
         let (flags, is_flags_scalar) = flags.get();
         (Some(flags), is_flags_scalar)
     });
-    let (subexpr_array, is_subexpr_scalar) =
+    let (subexpr_array, _is_subexpr_scalar) =
         subexpr_array.map_or((None, true), |subexpr| {
             let (subexpr, is_subexpr_scalar) = subexpr.get();
             (Some(subexpr), is_subexpr_scalar)
@@ -231,80 +233,50 @@ pub fn regexp_instr(
         (Utf8, Utf8, None) => regexp_instr_inner(
             values.as_string::<i32>(),
             regex_array.as_string::<i32>(),
-            is_regex_scalar,
             start_array.map(|start| start.as_primitive::<Int64Type>()),
-            is_start_scalar,
             nth_array.map(|nth| nth.as_primitive::<Int64Type>()),
-            is_nth_scalar,
             None,
-            is_flags_scalar,
             subexpr_array.map(|subexpr| subexpr.as_primitive::<Int64Type>()),
-            is_subexpr_scalar,
         ),
         (Utf8, Utf8, Some(flags_array)) if *flags_array.data_type() == Utf8 => regexp_instr_inner(
             values.as_string::<i32>(),
             regex_array.as_string::<i32>(),
-            is_regex_scalar,
             start_array.map(|start| start.as_primitive::<Int64Type>()),
-            is_start_scalar,
             nth_array.map(|nth| nth.as_primitive::<Int64Type>()),
-            is_nth_scalar,
             Some(flags_array.as_string::<i32>()),
-            is_flags_scalar,
             subexpr_array.map(|subexpr| subexpr.as_primitive::<Int64Type>()),
-            is_subexpr_scalar,
         ),
         (LargeUtf8, LargeUtf8, None) => regexp_instr_inner(
             values.as_string::<i64>(),
             regex_array.as_string::<i64>(),
-            is_regex_scalar,
             start_array.map(|start| start.as_primitive::<Int64Type>()),
-            is_start_scalar,
             nth_array.map(|nth| nth.as_primitive::<Int64Type>()),
-            is_nth_scalar,
             None,
-            is_flags_scalar,
             subexpr_array.map(|subexpr| subexpr.as_primitive::<Int64Type>()),
-            is_subexpr_scalar,
         ),
         (LargeUtf8, LargeUtf8, Some(flags_array)) if *flags_array.data_type() == LargeUtf8 => regexp_instr_inner(
             values.as_string::<i64>(),
             regex_array.as_string::<i64>(),
-            is_regex_scalar,
             start_array.map(|start| start.as_primitive::<Int64Type>()),
-            is_start_scalar,
             nth_array.map(|nth| nth.as_primitive::<Int64Type>()),
-            is_nth_scalar,
             Some(flags_array.as_string::<i64>()),
-            is_flags_scalar,
             subexpr_array.map(|subexpr| subexpr.as_primitive::<Int64Type>()),
-            is_subexpr_scalar,
         ),
         (Utf8View, Utf8View, None) => regexp_instr_inner(
             values.as_string_view(),
             regex_array.as_string_view(),
-            is_regex_scalar,
             start_array.map(|start| start.as_primitive::<Int64Type>()),
-            is_start_scalar,
             nth_array.map(|nth| nth.as_primitive::<Int64Type>()),
-            is_nth_scalar,
             None,
-            is_flags_scalar,
             subexpr_array.map(|subexpr| subexpr.as_primitive::<Int64Type>()),
-            is_subexpr_scalar,
         ),
         (Utf8View, Utf8View, Some(flags_array)) if *flags_array.data_type() == Utf8View => regexp_instr_inner(
             values.as_string_view(),
             regex_array.as_string_view(),
-            is_regex_scalar,
             start_array.map(|start| start.as_primitive::<Int64Type>()),
-            is_start_scalar,
             nth_array.map(|nth| nth.as_primitive::<Int64Type>()),
-            is_nth_scalar,
             Some(flags_array.as_string_view()),
-            is_flags_scalar,
             subexpr_array.map(|subexpr| subexpr.as_primitive::<Int64Type>()),
-            is_subexpr_scalar,
         ),
         _ => Err(ArrowError::ComputeError(
             "regexp_instr() expected the input arrays to be of type Utf8, LargeUtf8, or Utf8View and the data types of the values, regex_array, and flags_array to match".to_string(),
@@ -312,142 +284,85 @@ pub fn regexp_instr(
     }
 }
 
-enum ScalarOrArray<T> {
-    Scalar(T),
-    Array(Vec<T>),
-}
-
-impl<T: Clone> ScalarOrArray<T> {
-    fn iter(&self, len: usize) -> Box<dyn Iterator<Item = T> + '_> {
-        match self {
-            ScalarOrArray::Scalar(val) => Box::new(std::iter::repeat_n(val.clone(), len)),
-            ScalarOrArray::Array(arr) => Box::new(arr.iter().cloned()),
-        }
-    }
-}
-
 #[allow(clippy::too_many_arguments)]
 pub fn regexp_instr_inner<'a, S>(
     values: S,
     regex_array: S,
-    is_regex_scalar: bool,
     start_array: Option<&Int64Array>,
-    is_start_scalar: bool,
     nth_array: Option<&Int64Array>,
-    is_nth_scalar: bool,
     flags_array: Option<S>,
-    is_flags_scalar: bool,
     subexp_array: Option<&Int64Array>,
-    is_subexp_scalar: bool,
 ) -> Result<ArrayRef, ArrowError>
 where
     S: StringArrayType<'a>,
 {
     let len = values.len();
 
-    let regex_input = if is_regex_scalar || regex_array.len() == 1 {
-        ScalarOrArray::Scalar(Some(regex_array.value(0)))
-    } else {
-        let regex_vec: Vec<Option<&str>> = regex_array.iter().collect();
-        ScalarOrArray::Array(regex_vec)
+    let default_start_array = PrimitiveArray::<Int64Type>::from(vec![1; len]);
+    let start_array = start_array.unwrap_or(&default_start_array);
+    let start_input: Vec<i64> = (0..start_array.len())
+        .map(|i| {
+            if start_array.is_null(i) {
+                0
+            } else {
+                start_array.value(i)
+            }
+        }) // handle nulls as 0
+        .collect();
+
+    let default_nth_array = PrimitiveArray::<Int64Type>::from(vec![1; len]);
+    let nth_array = nth_array.unwrap_or(&default_nth_array);
+    let nth_input: Vec<i64> = (0..nth_array.len())
+        .map(|i| {
+            if nth_array.is_null(i) {
+                0
+            } else {
+                nth_array.value(i)
+            }
+        }) // handle nulls as 0
+        .collect();
+
+    let flags_input = match flags_array {
+        Some(flags) => flags.iter().collect(),
+        None => vec![None; len],
     };
 
-    let start_input = if let Some(start) = start_array {
-        if is_start_scalar || start.len() == 1 {
-            ScalarOrArray::Scalar(start.value(0))
-        } else {
-            let start_vec: Vec<i64> = (0..start.len())
-                .map(|i| if start.is_null(i) { 0 } else { start.value(i) }) // handle nulls as 0
-                .collect();
-
-            ScalarOrArray::Array(start_vec)
-        }
-    } else if len == 1 {
-        ScalarOrArray::Scalar(1)
-    } else {
-        ScalarOrArray::Array(vec![1; len])
-    };
-
-    let nth_input = if let Some(nth) = nth_array {
-        if is_nth_scalar || nth.len() == 1 {
-            ScalarOrArray::Scalar(nth.value(0))
-        } else {
-            let nth_vec: Vec<i64> = (0..nth.len())
-                .map(|i| if nth.is_null(i) { 0 } else { nth.value(i) }) // handle nulls as 0
-                .collect();
-            ScalarOrArray::Array(nth_vec)
-        }
-    } else if len == 1 {
-        ScalarOrArray::Scalar(1)
-    }
-    // Default nth = 0
-    else {
-        ScalarOrArray::Array(vec![1; len])
-    };
-
-    let flags_input = if let Some(ref flags) = flags_array {
-        if is_flags_scalar || flags.len() == 1 {
-            ScalarOrArray::Scalar(flags.value(0))
-        } else {
-            let flags_vec: Vec<&str> = flags.iter().map(|v| v.unwrap_or("")).collect();
-            ScalarOrArray::Array(flags_vec)
-        }
-    } else if len == 1 {
-        ScalarOrArray::Scalar("")
-    }
-    // Default flags = ""
-    else {
-        ScalarOrArray::Array(vec![""; len])
-    };
-
-    let subexp_input = if let Some(subexp) = subexp_array {
-        if is_subexp_scalar || subexp.len() == 1 {
-            ScalarOrArray::Scalar(subexp.value(0))
-        } else {
-            let subexp_vec: Vec<i64> = (0..subexp.len())
-                .map(|i| {
-                    if subexp.is_null(i) {
-                        0
-                    } else {
-                        subexp.value(i)
-                    }
-                }) // handle nulls as 0
-                .collect();
-            ScalarOrArray::Array(subexp_vec)
-        }
-    } else if len == 1 {
-        ScalarOrArray::Scalar(0)
-    }
-    // Default subexp = 0
-    else {
-        ScalarOrArray::Array(vec![0; len])
-    };
+    let default_subexp_array = PrimitiveArray::<Int64Type>::from(vec![0; len]);
+    let subexp_array = subexp_array.unwrap_or(&default_subexp_array);
+    let subexp_input: Vec<i64> = (0..subexp_array.len())
+        .map(|i| {
+            if subexp_array.is_null(i) {
+                0
+            } else {
+                subexp_array.value(i)
+            }
+        }) // handle nulls as 0
+        .collect();
 
     let mut regex_cache = HashMap::new();
 
     let result: Result<Vec<Option<i64>>, ArrowError> = izip!(
         values.iter(),
-        regex_input.iter(len),
-        start_input.iter(len),
-        nth_input.iter(len),
-        flags_input.iter(len),
-        subexp_input.iter(len)
+        regex_array.iter(),
+        start_input.iter(),
+        nth_input.iter(),
+        flags_input.iter(),
+        subexp_input.iter()
     )
     .map(|(value, regex, start, nth, flags, subexp)| match regex {
         None => Ok(None),
-        Some("") => Ok(None),
+        Some("") => Ok(Some(0)),
         Some(regex) => get_index(
             value,
             regex,
-            start,
-            nth,
-            subexp,
-            Some(flags),
+            *start,
+            *nth,
+            *subexp,
+            *flags,
             &mut regex_cache,
         ),
     })
     .collect();
-
     Ok(Arc::new(Int64Array::from(result?)))
 }
 
@@ -468,8 +383,8 @@ where
         Some("") => return Ok(Some(0)),
         Some(value) => value,
     };
-
     let pattern = compile_and_cache_regex(pattern, flags, regex_cache)?;
+    // println!("get_index: value = {}, pattern = {}, start = {}, n = {}, subexpr = {}, flags = {:?}", value, pattern, start, n, subexpr, flags);
     if start < 1 {
         return Err(ArrowError::ComputeError(
             "regexp_instr() requires start to be 1-based".to_string(),
@@ -537,6 +452,7 @@ mod tests {
     use datafusion_expr::ScalarFunctionArgs;
     #[test]
     fn test_regexp_instr() {
+        test_case_sensitive_regexp_instr_nulls();
         test_case_sensitive_regexp_instr_scalar();
         test_case_sensitive_regexp_instr_scalar_start();
         test_case_sensitive_regexp_instr_scalar_nth();
@@ -555,7 +471,7 @@ mod tests {
     }
 
     fn regexp_instr_with_scalar_values(args: &[ScalarValue]) -> Result<ColumnarValue> {
-        let args_values = args
+        let args_values: Vec<ColumnarValue> = args
             .iter()
             .map(|sv| ColumnarValue::Scalar(sv.clone()))
             .collect();
@@ -575,6 +491,20 @@ mod tests {
         })
     }
 
+    fn test_case_sensitive_regexp_instr_nulls() {
+        let v = "";
+        let r = "";
+        let expected = 0;
+        let regex_sv = ScalarValue::Utf8(Some(r.to_string()));
+        let re = regexp_instr_with_scalar_values(&[v.to_string().into(), regex_sv]);
+        // let res_exp = re.unwrap();
+        match re {
+            Ok(ColumnarValue::Scalar(ScalarValue::Int64(v))) => {
+                assert_eq!(v, Some(expected), "regexp_instr scalar test failed");
+            }
+            _ => panic!("Unexpected result"),
+        }
+    }
     fn test_case_sensitive_regexp_instr_scalar() {
         let values = [
             "hello world",

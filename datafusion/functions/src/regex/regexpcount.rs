@@ -33,7 +33,6 @@ use regex::Regex;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-// Ensure the `compile_and_cache_regex` function is defined in the `regex` module or imported correctly.
 #[user_doc(
     doc_section(label = "Regular Expression Functions"),
     description = "Returns the number of matches that a [regular expression](https://docs.rs/regex/latest/regex/#syntax) has in a string.",
