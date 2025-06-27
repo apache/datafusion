@@ -36,6 +36,7 @@ use datafusion_common::pruning::{
     PruningStatistics,
 };
 use datafusion_common::{exec_err, Result};
+use datafusion_common::config::FileDecryptionProperties;
 use datafusion_datasource::PartitionedFile;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_optimizer::pruning::PruningPredicate;
@@ -47,8 +48,8 @@ use log::debug;
 use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
 use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::{ParquetRecordBatchStreamBuilder, ProjectionMask};
-use parquet::encryption::decrypt::FileDecryptionProperties;
 use parquet::file::metadata::ParquetMetaDataReader;
+
 
 /// Implements [`FileOpener`] for a parquet file
 pub(super) struct ParquetOpener {
@@ -210,6 +211,7 @@ impl FileOpener for ParquetOpener {
             // pruning predicates. Thus default to not requesting if from the
             // underlying reader.
             let mut options = ArrowReaderOptions::new().with_page_index(false);
+            #[cfg(feature = "parquet_encryption")]
             if let Some(fd_val) = file_decryption_properties {
                 options = options.with_file_decryption_properties((*fd_val).clone());
             }

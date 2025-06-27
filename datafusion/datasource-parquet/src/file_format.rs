@@ -38,7 +38,7 @@ use datafusion_datasource::write::demux::DemuxedStreamReceiver;
 
 use arrow::compute::sum;
 use arrow::datatypes::{DataType, Field, FieldRef};
-use datafusion_common::config::{ConfigField, ConfigFileType, TableParquetOptions};
+use datafusion_common::config::{ConfigField, FileDecryptionProperties, ConfigFileType, TableParquetOptions};
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
@@ -78,7 +78,7 @@ use parquet::arrow::arrow_writer::{
 use parquet::arrow::async_reader::MetadataFetch;
 use parquet::arrow::{parquet_to_arrow_schema, ArrowSchemaConverter, AsyncArrowWriter};
 use parquet::basic::Type;
-use parquet::encryption::decrypt::FileDecryptionProperties;
+
 use parquet::errors::ParquetError;
 use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader, RowGroupMetaData};
 use parquet::file::properties::{WriterProperties, WriterPropertiesBuilder};
@@ -87,6 +87,7 @@ use parquet::format::FileMetaData;
 use parquet::schema::types::SchemaDescriptor;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc::{self, Receiver, Sender};
+
 
 /// Initial writing buffer size. Note this is just a size hint for efficiency. It
 /// will grow beyond the set value if needed.
@@ -350,15 +351,17 @@ impl FileFormat for ParquetFormat {
             Some(time_unit) => Some(parse_coerce_int96_string(time_unit.as_str())?),
             None => None,
         };
-        let config_file_decryption_properties = &self.options.crypto.file_decryption;
+        #[cfg(feature = "parquet_encryption")]
         let file_decryption_properties: Option<FileDecryptionProperties> =
-            match config_file_decryption_properties {
+            match &self.options.crypto.file_decryption {
                 Some(cfd) => {
                     let fd: FileDecryptionProperties = cfd.clone().into();
                     Some(fd)
                 }
                 None => None,
             };
+        #[cfg(not(feature = "parquet_encryption"))]
+        let file_decryption_properties: Option<FileDecryptionProperties> = None;
         let mut schemas: Vec<_> = futures::stream::iter(objects)
             .map(|object| {
                 fetch_schema_with_location(
@@ -415,15 +418,17 @@ impl FileFormat for ParquetFormat {
         table_schema: SchemaRef,
         object: &ObjectMeta,
     ) -> Result<Statistics> {
-        let config_file_decryption_properties = &self.options.crypto.file_decryption;
+        #[cfg(feature = "parquet_encryption")]
         let file_decryption_properties: Option<FileDecryptionProperties> =
-            match config_file_decryption_properties {
+            match &self.options.crypto.file_decryption {
                 Some(cfd) => {
                     let fd: FileDecryptionProperties = cfd.clone().into();
                     Some(fd)
                 }
                 None => None,
             };
+        #[cfg(not(feature = "parquet_encryption"))]
+        let file_decryption_properties: Option<FileDecryptionProperties> = None;
         let stats = fetch_statistics(
             store.as_ref(),
             table_schema,
@@ -959,14 +964,20 @@ pub async fn fetch_parquet_metadata(
     store: &dyn ObjectStore,
     meta: &ObjectMeta,
     size_hint: Option<usize>,
+    #[allow(unused)]
     decryption_properties: Option<&FileDecryptionProperties>,
 ) -> Result<ParquetMetaData> {
     let file_size = meta.size;
     let fetch = ObjectStoreFetch::new(store, meta);
 
-    ParquetMetaDataReader::new()
-        .with_prefetch_hint(size_hint)
-        .with_decryption_properties(decryption_properties)
+    #[allow(unused_mut)]
+    let mut reader = ParquetMetaDataReader::new()
+        .with_prefetch_hint(size_hint);
+    
+    #[cfg(feature = "parquet_encryption")]
+    let reader = reader.with_decryption_properties(decryption_properties);
+
+    reader
         .load_and_finish(fetch, file_size)
         .await
         .map_err(DataFusionError::from)

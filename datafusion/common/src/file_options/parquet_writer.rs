@@ -95,11 +95,13 @@ impl TryFrom<&TableParquetOptions> for WriterPropertiesBuilder {
             global,
             column_specific_options,
             key_value_metadata,
+            #[allow(unused)]
             crypto,
         } = table_parquet_options;
 
         let mut builder = global.into_writer_properties_builder()?;
-
+        
+        #[cfg(feature = "parquet_encryption")]
         if let Some(file_encryption_properties) = &crypto.file_encryption {
             builder = builder.with_file_encryption_properties(
                 file_encryption_properties.clone().into(),
@@ -590,8 +592,11 @@ mod tests {
             HashMap::from([(COL_NAME.into(), configured_col_props)])
         };
 
+        #[cfg(feature = "parquet_encryption")]
         let fep: Option<ConfigFileEncryptionProperties> =
             props.file_encryption_properties().map(|fe| fe.into());
+        #[cfg(not(feature = "parquet_encryption"))]
+        let fep: Option<ConfigFileEncryptionProperties> = None;
 
         #[allow(deprecated)] // max_statistics_size
         TableParquetOptions {

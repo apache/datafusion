@@ -150,6 +150,7 @@ env_logger = "0.11"
 futures = "0.3"
 half = { version = "2.6.0", default-features = false }
 hashbrown = { version = "0.14.5", features = ["raw"] }
+hex = { version = "0.4.3" }
 indexmap = "2.9.0"
 itertools = "0.14"
 log = "^0.4"
@@ -159,7 +160,6 @@ parquet = { version = "55.1.0", default-features = false, features = [
     "arrow",
     "async",
     "object_store",
-    "encryption",
 ] }
 pbjson = { version = "0.7.0" }
 pbjson-types = "0.7"

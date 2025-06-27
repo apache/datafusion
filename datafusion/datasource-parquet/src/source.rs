@@ -475,12 +475,15 @@ impl FileSource for ParquetSource {
                 Arc::new(DefaultParquetFileReaderFactory::new(object_store)) as _
             });
 
+        #[cfg(feature = "parquet_encryption")]
         let file_decryption_properties = self
             .table_parquet_options()
             .crypto
             .file_decryption
             .as_ref()
             .map(|props| Arc::new(props.clone().into()));
+        #[cfg(not(feature = "parquet_encryption"))]
+        let file_decryption_properties = None;
 
         let coerce_int96 = self
             .table_parquet_options

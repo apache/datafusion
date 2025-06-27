@@ -29,12 +29,16 @@ use std::error::Error;
 use std::fmt::{self, Display};
 use std::str::FromStr;
 
-#[cfg(feature = "parquet")]
+#[cfg(feature = "parquet_encryption")]
 use hex;
-#[cfg(feature = "parquet")]
-use parquet::encryption::decrypt::FileDecryptionProperties;
-#[cfg(feature = "parquet")]
-use parquet::encryption::encrypt::FileEncryptionProperties;
+#[cfg(feature = "parquet_encryption")]
+pub use parquet::encryption::decrypt::FileDecryptionProperties;
+#[cfg(feature = "parquet_encryption")]
+pub use parquet::encryption::encrypt::FileEncryptionProperties;
+#[cfg(not(feature = "parquet_encryption"))]
+pub struct FileDecryptionProperties;
+#[cfg(not(feature = "parquet_encryption"))]
+pub struct FileEncryptionProperties;
 
 /// A macro that wraps a configuration struct and automatically derives
 /// [`Default`] and [`ConfigField`] for it, allowing it to be used
@@ -2148,7 +2152,7 @@ impl ConfigField for ConfigFileEncryptionProperties {
     }
 }
 
-#[cfg(feature = "parquet")]
+#[cfg(feature = "parquet_encryption")]
 impl From<ConfigFileEncryptionProperties> for FileEncryptionProperties {
     fn from(val: ConfigFileEncryptionProperties) -> Self {
         let mut fep = FileEncryptionProperties::builder(
@@ -2194,7 +2198,7 @@ impl From<ConfigFileEncryptionProperties> for FileEncryptionProperties {
     }
 }
 
-#[cfg(feature = "parquet")]
+#[cfg(feature = "parquet_encryption")]
 impl From<&FileEncryptionProperties> for ConfigFileEncryptionProperties {
     fn from(f: &FileEncryptionProperties) -> Self {
         let (column_names_vec, column_keys_vec, column_metas_vec) = f.column_keys();
@@ -2308,7 +2312,7 @@ impl ConfigField for ConfigFileDecryptionProperties {
     }
 }
 
-#[cfg(feature = "parquet")]
+#[cfg(feature = "parquet_encryption")]
 impl From<ConfigFileDecryptionProperties> for FileDecryptionProperties {
     fn from(val: ConfigFileDecryptionProperties) -> Self {
         let mut column_names: Vec<&str> = Vec::new();
@@ -2342,7 +2346,7 @@ impl From<ConfigFileDecryptionProperties> for FileDecryptionProperties {
     }
 }
 
-#[cfg(feature = "parquet")]
+#[cfg(feature = "parquet_encryption")]
 impl From<&FileDecryptionProperties> for ConfigFileDecryptionProperties {
     fn from(f: &FileDecryptionProperties) -> Self {
         let (column_names_vec, column_keys_vec) = f.column_keys();
@@ -2688,7 +2692,7 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "parquet")]
+    #[cfg(feature = "parquet_encryption")]
     #[test]
     fn parquet_table_encryption() {
         use crate::config::{
