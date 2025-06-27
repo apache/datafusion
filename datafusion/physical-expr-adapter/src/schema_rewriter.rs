@@ -397,6 +397,7 @@ mod tests {
     use datafusion_common::ScalarValue;
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{col, BinaryExpr};
+    use datafusion_physical_expr_common::physical_expr::fmt_sql;
     use std::sync::Arc;
 
     fn create_test_schema() -> (Schema, Schema) {
@@ -414,6 +415,10 @@ mod tests {
         (physical_schema, logical_schema)
     }
 
+    fn expression_to_sql(expr: &Arc<dyn PhysicalExpr>) -> String {
+        format!("{}", fmt_sql(expr.as_ref()))
+    }
+
     #[test]
     fn test_rewrite_column_with_type_cast() {
         let (physical_schema, logical_schema) = create_test_schema();
@@ -421,10 +426,13 @@ mod tests {
         let rewriter = PhysicalExprSchemaRewriter::new(&physical_schema, &logical_schema);
         let column_expr = Arc::new(Column::new("a", 0));
 
+        // Capture input expression
+        insta::assert_snapshot!(expression_to_sql(&(column_expr.clone() as Arc<dyn PhysicalExpr>)), @"a");
+
         let result = rewriter.rewrite(column_expr).unwrap();
 
-        // Should be wrapped in a cast expression
-        assert!(result.as_any().downcast_ref::<CastExpr>().is_some());
+        // Capture output expression
+        insta::assert_snapshot!(expression_to_sql(&result), @"CAST(a AS Int64)");
     }
 
     #[test]
@@ -564,7 +572,7 @@ mod tests {
 
     /// Test end-to-end struct evolution with simple field additions
     #[test]
-    fn test_evolved_schema_struct_field_addition() -> Result<()> {
+    fn test_evolved_schema_struct_field_addition() {
         // Physical schema: {user_info: {id: i32, name: string}}
         let physical_schema = Schema::new(vec![Field::new(
             "user_info",
@@ -597,33 +605,34 @@ mod tests {
 
         // Test that we can rewrite a column reference
         let column_expr = Arc::new(Column::new("user_info", 0));
-        let result = rewriter.rewrite(column_expr)?;
 
-        // Should be a struct function expression
-        assert!(result
-            .as_any()
-            .downcast_ref::<ScalarFunctionExpr>()
-            .is_some());
+        // Capture input expression
+        insta::assert_snapshot!(expression_to_sql(&(column_expr.clone() as Arc<dyn PhysicalExpr>)), @"user_info");
+
+        let result = rewriter.rewrite(column_expr).unwrap();
+
+        // Capture output expression
+        insta::assert_snapshot!(expression_to_sql(&result), @"struct(get_field(user_info, id), get_field(user_info, name), NULL)");
 
         // Test that we can rewrite a predicate on existing fields
         let predicate = Arc::new(BinaryExpr::new(
-            col("user_info", &logical_schema)?,
+            col("user_info", &logical_schema).unwrap(),
             Operator::IsNotDistinctFrom,
             expressions::lit(ScalarValue::Null),
         )) as Arc<dyn PhysicalExpr>;
 
-        let rewritten_predicate = rewriter.rewrite(predicate)?;
-        assert!(rewritten_predicate
-            .as_any()
-            .downcast_ref::<BinaryExpr>()
-            .is_some());
+        // Capture input predicate
+        insta::assert_snapshot!(expression_to_sql(&predicate), @"user_info IS NOT DISTINCT FROM NULL");
 
-        Ok(())
+        let rewritten_predicate = rewriter.rewrite(predicate).unwrap();
+
+        // Capture output predicate
+        insta::assert_snapshot!(expression_to_sql(&rewritten_predicate), @"struct(get_field(user_info, id), get_field(user_info, name), NULL) IS NOT DISTINCT FROM NULL");
     }
 
     /// Test end-to-end struct evolution with field type changes
     #[test]
-    fn test_evolved_schema_struct_field_type_evolution() -> Result<()> {
+    fn test_evolved_schema_struct_field_type_evolution() {
         // Physical schema: {event_data: {timestamp: i64, count: i32}}
         let physical_schema = Schema::new(vec![Field::new(
             "event_data",
@@ -659,20 +668,19 @@ mod tests {
 
         // Test column rewriting
         let column_expr = Arc::new(Column::new("event_data", 0));
-        let result = rewriter.rewrite(column_expr)?;
 
-        // Should be a struct function expression that handles the type conversions
-        assert!(result
-            .as_any()
-            .downcast_ref::<ScalarFunctionExpr>()
-            .is_some());
+        // Capture input expression
+        insta::assert_snapshot!(expression_to_sql(&(column_expr.clone() as Arc<dyn PhysicalExpr>)), @"event_data");
 
-        Ok(())
+        let result = rewriter.rewrite(column_expr).unwrap();
+
+        // Capture output expression
+        insta::assert_snapshot!(expression_to_sql(&result), @"struct(CAST(get_field(event_data, timestamp) AS Timestamp(Millisecond, None)), CAST(get_field(event_data, count) AS Int64))");
     }
 
     /// Test end-to-end struct evolution with nested structs
     #[test]
-    fn test_evolved_schema_nested_struct_evolution() -> Result<()> {
+    fn test_evolved_schema_nested_struct_evolution() {
         // Physical schema: {
         //   metadata: {
         //     user: {id: i32, name: string},
@@ -740,20 +748,19 @@ mod tests {
 
         // Test that we can handle deeply nested struct evolution
         let column_expr = Arc::new(Column::new("metadata", 0));
-        let result = rewriter.rewrite(column_expr)?;
 
-        // Should be a struct function expression
-        assert!(result
-            .as_any()
-            .downcast_ref::<ScalarFunctionExpr>()
-            .is_some());
+        // Capture input expression
+        insta::assert_snapshot!(expression_to_sql(&(column_expr.clone() as Arc<dyn PhysicalExpr>)), @"metadata");
 
-        Ok(())
+        let result = rewriter.rewrite(column_expr).unwrap();
+
+        // Capture output expression
+        insta::assert_snapshot!(expression_to_sql(&result), @"struct(struct(CAST(get_field(get_field(metadata, user), id) AS Int64), get_field(get_field(metadata, user), name), NULL), CAST(get_field(metadata, created_at) AS Timestamp(Millisecond, None)), NULL)");
     }
 
     /// Test end-to-end struct evolution with field removal (extra fields in source)
     #[test]
-    fn test_evolved_schema_struct_field_removal() -> Result<()> {
+    fn test_evolved_schema_struct_field_removal() {
         // Physical schema: {config: {debug_mode: bool, log_level: string, deprecated_flag: bool}}
         let physical_schema = Schema::new(vec![Field::new(
             "config",
@@ -786,20 +793,19 @@ mod tests {
 
         // Test that extra fields are properly ignored
         let column_expr = Arc::new(Column::new("config", 0));
-        let result = rewriter.rewrite(column_expr)?;
 
-        // Should be a struct function expression that ignores the deprecated field
-        assert!(result
-            .as_any()
-            .downcast_ref::<ScalarFunctionExpr>()
-            .is_some());
+        // Capture input expression
+        insta::assert_snapshot!(expression_to_sql(&(column_expr.clone() as Arc<dyn PhysicalExpr>)), @"config");
 
-        Ok(())
+        let result = rewriter.rewrite(column_expr).unwrap();
+
+        // Capture output expression
+        insta::assert_snapshot!(expression_to_sql(&result), @"struct(get_field(config, debug_mode), get_field(config, log_level))");
     }
 
     /// Test end-to-end struct evolution with mixed scenarios (realistic data evolution)
     #[test]
-    fn test_evolved_schema_complex_struct_evolution() -> Result<()> {
+    fn test_evolved_schema_complex_struct_evolution() {
         // Simulate a realistic data evolution scenario:
         // Physical schema represents an older version of the data
         let physical_schema = Schema::new(vec![
@@ -855,31 +861,41 @@ mod tests {
 
         // Test rewriting of simple field with type change
         let id_expr = Arc::new(Column::new("id", 0));
-        let id_result = rewriter.rewrite(id_expr)?;
-        assert!(id_result.as_any().downcast_ref::<CastExpr>().is_some());
+
+        // Capture input expression
+        insta::assert_snapshot!(expression_to_sql(&(id_expr.clone() as Arc<dyn PhysicalExpr>)), @"id");
+
+        let id_result = rewriter.rewrite(id_expr).unwrap();
+
+        // Capture output expression
+        insta::assert_snapshot!(expression_to_sql(&id_result), @"CAST(id AS Int64)");
 
         // Test rewriting of complex struct field
         let profile_expr = Arc::new(Column::new("profile", 1));
-        let profile_result = rewriter.rewrite(profile_expr)?;
-        assert!(profile_result
-            .as_any()
-            .downcast_ref::<ScalarFunctionExpr>()
-            .is_some());
+
+        // Capture input expression
+        insta::assert_snapshot!(expression_to_sql(&(profile_expr.clone() as Arc<dyn PhysicalExpr>)), @"profile");
+
+        let profile_result = rewriter.rewrite(profile_expr).unwrap();
+
+        // Capture output expression
+        insta::assert_snapshot!(expression_to_sql(&profile_result), @"struct(get_field(profile, username), CAST(get_field(profile, age) AS Int64), NULL, NULL)");
 
         // Test rewriting of missing field (should become null)
         let created_at_expr = Arc::new(Column::new("created_at", 2));
-        let created_at_result = rewriter.rewrite(created_at_expr)?;
-        assert!(created_at_result
-            .as_any()
-            .downcast_ref::<datafusion_physical_expr::expressions::Literal>()
-            .is_some());
 
-        Ok(())
+        // Capture input expression
+        insta::assert_snapshot!(expression_to_sql(&(created_at_expr.clone() as Arc<dyn PhysicalExpr>)), @"created_at");
+
+        let created_at_result = rewriter.rewrite(created_at_expr).unwrap();
+
+        // Capture output expression
+        insta::assert_snapshot!(expression_to_sql(&created_at_result), @"NULL");
     }
 
     /// Test that struct evolution works correctly with predicates
     #[test]
-    fn test_evolved_schema_struct_with_predicates() -> Result<()> {
+    fn test_evolved_schema_struct_with_predicates() {
         // Physical schema: {event: {type: string, data: {count: i32}}}
         let physical_schema = Schema::new(vec![Field::new(
             "event",
@@ -926,19 +942,17 @@ mod tests {
 
         // Create a complex predicate that references the struct
         let predicate = Arc::new(BinaryExpr::new(
-            col("event", &logical_schema)?,
+            col("event", &logical_schema).unwrap(),
             Operator::IsNotDistinctFrom,
             expressions::lit(ScalarValue::Null),
         )) as Arc<dyn PhysicalExpr>;
 
-        let rewritten_predicate = rewriter.rewrite(predicate)?;
+        // Capture input expression
+        insta::assert_snapshot!(expression_to_sql(&predicate), @"event IS NOT DISTINCT FROM NULL");
 
-        // The predicate should be successfully rewritten
-        assert!(rewritten_predicate
-            .as_any()
-            .downcast_ref::<BinaryExpr>()
-            .is_some());
+        let rewritten_predicate = rewriter.rewrite(predicate).unwrap();
 
-        Ok(())
+        // Capture output expression
+        insta::assert_snapshot!(expression_to_sql(&rewritten_predicate), @"struct(get_field(event, type), struct(CAST(get_field(get_field(event, data), count) AS Int64), NULL)) IS NOT DISTINCT FROM NULL");
     }
 }

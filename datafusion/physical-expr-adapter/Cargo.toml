@@ -27,3 +27,4 @@ itertools = { workspace = true }
 [dev-dependencies]
 datafusion-expr = { workspace = true }
 rstest = { workspace = true }
+insta = { workspace = true }

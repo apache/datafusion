@@ -2473,6 +2473,7 @@ dependencies = [
  "datafusion-functions",
  "datafusion-physical-expr",
  "datafusion-physical-expr-common",
+ "insta",
  "itertools 0.14.0",
  "rstest",
 ]
