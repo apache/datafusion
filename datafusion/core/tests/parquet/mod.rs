@@ -196,6 +196,8 @@ impl ContextWithParquet {
         unit: Unit,
         mut config: SessionConfig,
     ) -> Self {
+        // Use a single partition for deterministic results no matter how many CPUs the host has
+        config = config.with_target_partitions(1);
         let file = match unit {
             Unit::RowGroup(row_per_group) => {
                 config = config.with_parquet_bloom_filter_pruning(true);
