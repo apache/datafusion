@@ -404,6 +404,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     }
                     (!within_group.is_empty()).then_some(within_group)
                 } else {
+                    let order_by = if !order_by.is_empty() {
+                        order_by
+                    } else {
+                        within_group
+                    };
                     let order_by = self.order_by_to_sort_expr(
                         order_by,
                         schema,
