@@ -125,7 +125,6 @@ pub fn validate_struct_compatibility(
 /// # Returns
 /// A new struct expression matching the target field layout
 fn build_struct_expr(
-    rewriter: &PhysicalExprSchemaRewriter,
     source_expr: Arc<dyn PhysicalExpr>,
     source_fields: &[FieldRef],
     target_fields: &[FieldRef],
@@ -158,7 +157,6 @@ fn build_struct_expr(
                 ) => {
                     // For nested structs, recursively build the nested struct expression
                     build_struct_expr(
-                        rewriter,
                         get_field_expr,
                         nested_source_fields,
                         nested_target_fields,
@@ -367,7 +365,6 @@ impl<'a> PhysicalExprSchemaRewriter<'a> {
             match (physical_field.data_type(), logical_field.data_type()) {
                 (DataType::Struct(source_fields), DataType::Struct(target_fields)) => {
                     build_struct_expr(
-                        self,
                         Arc::new(column),
                         source_fields,
                         target_fields,
