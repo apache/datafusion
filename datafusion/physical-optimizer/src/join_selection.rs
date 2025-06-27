@@ -539,6 +539,7 @@ pub fn hash_join_swap_subrule(
                     | JoinType::Left
                     | JoinType::LeftSemi
                     | JoinType::LeftAnti
+                    | JoinType::LeftMark
             )
         {
             input = swap_join_according_to_unboundedness(hash_join)?;
@@ -549,10 +550,10 @@ pub fn hash_join_swap_subrule(
 
 /// This function swaps sides of a hash join to make it runnable even if one of
 /// its inputs are infinite. Note that this is not always possible; i.e.
-/// [`JoinType::Full`], [`JoinType::Right`], [`JoinType::RightAnti`] and
-/// [`JoinType::RightSemi`] can not run with an unbounded left side, even if
-/// we swap join sides. Therefore, we do not consider them here.
-/// This function is crate public as it is useful for downstream projects
+/// [`JoinType::Full`], [`JoinType::Right`], [`JoinType::RightAnti`],
+/// [`JoinType::RightSemi`], and [`JoinType::RightMark`] can not run with an
+/// unbounded left side, even if we swap join sides. Therefore, we do not consider
+/// them here. This function is crate public as it is useful for downstream projects
 /// to implement, or experiment with, their own join selection rules.
 pub(crate) fn swap_join_according_to_unboundedness(
     hash_join: &HashJoinExec,
@@ -562,7 +563,11 @@ pub(crate) fn swap_join_according_to_unboundedness(
     match (*partition_mode, *join_type) {
         (
             _,
-            JoinType::Right | JoinType::RightSemi | JoinType::RightAnti | JoinType::Full,
+            JoinType::Right
+            | JoinType::RightSemi
+            | JoinType::RightAnti
+            | JoinType::RightMark
+            | JoinType::Full,
         ) => internal_err!("{join_type} join cannot be swapped for unbounded input."),
         (PartitionMode::Partitioned, _) => {
             hash_join.swap_inputs(PartitionMode::Partitioned)

@@ -371,7 +371,7 @@ impl NestedLoopJoinExec {
             ),
         )?;
 
-        // For Semi/Anti joins, swap result will produce same output schema,
+        // For Semi/Anti/Mark joins, swap result will produce same output schema,
         // no need to wrap them into additional projection
         let plan: Arc<dyn ExecutionPlan> = if matches!(
             self.join_type(),
@@ -379,6 +379,8 @@ impl NestedLoopJoinExec {
                 | JoinType::RightSemi
                 | JoinType::LeftAnti
                 | JoinType::RightAnti
+                | JoinType::LeftMark
+                | JoinType::RightMark
         ) || self.projection.is_some()
         {
             Arc::new(new_join)

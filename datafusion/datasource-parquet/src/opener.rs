@@ -37,6 +37,7 @@ use datafusion_common::pruning::{
 };
 use datafusion_common::{exec_err, Result};
 use datafusion_datasource::PartitionedFile;
+use datafusion_physical_expr::PhysicalExprSchemaRewriter;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_optimizer::pruning::PruningPredicate;
 use datafusion_physical_plan::metrics::{Count, ExecutionPlanMetricsSet, MetricBuilder};
@@ -117,7 +118,6 @@ impl FileOpener for ParquetOpener {
 
         let projected_schema =
             SchemaRef::from(self.logical_file_schema.project(&self.projection)?);
-        let schema_adapter_factory = Arc::clone(&self.schema_adapter_factory);
         let schema_adapter = self
             .schema_adapter_factory
             .create(projected_schema, Arc::clone(&self.logical_file_schema));
@@ -169,7 +169,7 @@ impl FileOpener for ParquetOpener {
                 if let Some(pruning_predicate) = pruning_predicate {
                     // The partition column schema is the schema of the table - the schema of the file
                     let mut pruning = Box::new(PartitionPruningStatistics::try_new(
-                        vec![file.partition_values],
+                        vec![file.partition_values.clone()],
                         partition_fields.clone(),
                     )?)
                         as Box<dyn PruningStatistics>;
@@ -261,10 +261,27 @@ impl FileOpener for ParquetOpener {
                 }
             }
 
+            // Adapt the predicate to the physical file schema.
+            // This evaluates missing columns and inserts any necessary casts.
+            let predicate = predicate
+                .map(|p| {
+                    PhysicalExprSchemaRewriter::new(
+                        &physical_file_schema,
+                        &logical_file_schema,
+                    )
+                    .with_partition_columns(
+                        partition_fields.to_vec(),
+                        file.partition_values,
+                    )
+                    .rewrite(p)
+                    .map_err(ArrowError::from)
+                })
+                .transpose()?;
+
             // Build predicates for this specific file
             let (pruning_predicate, page_pruning_predicate) = build_pruning_predicates(
                 predicate.as_ref(),
-                &logical_file_schema,
+                &physical_file_schema,
                 &predicate_creation_errors,
             );
 
@@ -301,11 +318,9 @@ impl FileOpener for ParquetOpener {
                 let row_filter = row_filter::build_row_filter(
                     &predicate,
                     &physical_file_schema,
-                    &logical_file_schema,
                     builder.metadata(),
                     reorder_predicates,
                     &file_metrics,
-                    &schema_adapter_factory,
                 );
 
                 match row_filter {
@@ -888,6 +903,117 @@ mod test {
 
         // Should prune based on both partition value and file statistics
         let expr = col("part").eq(lit(2)).and(col("b").eq(lit(7.0)));
+        let predicate = logical2physical(&expr, &table_schema);
+        let opener = make_opener(predicate);
+        let stream = opener.open(make_meta(), file).unwrap().await.unwrap();
+        let (num_batches, num_rows) = count_batches_and_rows(stream).await;
+        assert_eq!(num_batches, 0);
+        assert_eq!(num_rows, 0);
+    }
+
+    #[tokio::test]
+    async fn test_prune_on_partition_value_and_data_value() {
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+
+        // Note: number 3 is missing!
+        let batch = record_batch!(("a", Int32, vec![Some(1), Some(2), Some(4)])).unwrap();
+        let data_size =
+            write_parquet(Arc::clone(&store), "part=1/file.parquet", batch.clone()).await;
+
+        let file_schema = batch.schema();
+        let mut file = PartitionedFile::new(
+            "part=1/file.parquet".to_string(),
+            u64::try_from(data_size).unwrap(),
+        );
+        file.partition_values = vec![ScalarValue::Int32(Some(1))];
+
+        let table_schema = Arc::new(Schema::new(vec![
+            Field::new("part", DataType::Int32, false),
+            Field::new("a", DataType::Int32, false),
+        ]));
+
+        let make_opener = |predicate| {
+            ParquetOpener {
+                partition_index: 0,
+                projection: Arc::new([0]),
+                batch_size: 1024,
+                limit: None,
+                predicate: Some(predicate),
+                logical_file_schema: file_schema.clone(),
+                metadata_size_hint: None,
+                metrics: ExecutionPlanMetricsSet::new(),
+                parquet_file_reader_factory: Arc::new(
+                    DefaultParquetFileReaderFactory::new(Arc::clone(&store)),
+                ),
+                partition_fields: vec![Arc::new(Field::new(
+                    "part",
+                    DataType::Int32,
+                    false,
+                ))],
+                pushdown_filters: true, // note that this is true!
+                reorder_filters: true,
+                enable_page_index: false,
+                enable_bloom_filter: false,
+                schema_adapter_factory: Arc::new(DefaultSchemaAdapterFactory),
+                enable_row_group_stats_pruning: false, // note that this is false!
+                coerce_int96: None,
+            }
+        };
+
+        let make_meta = || FileMeta {
+            object_meta: ObjectMeta {
+                location: Path::from("part=1/file.parquet"),
+                last_modified: Utc::now(),
+                size: u64::try_from(data_size).unwrap(),
+                e_tag: None,
+                version: None,
+            },
+            range: None,
+            extensions: None,
+            metadata_size_hint: None,
+        };
+
+        // Filter should match the partition value and data value
+        let expr = col("part").eq(lit(1)).or(col("a").eq(lit(1)));
+        let predicate = logical2physical(&expr, &table_schema);
+        let opener = make_opener(predicate);
+        let stream = opener
+            .open(make_meta(), file.clone())
+            .unwrap()
+            .await
+            .unwrap();
+        let (num_batches, num_rows) = count_batches_and_rows(stream).await;
+        assert_eq!(num_batches, 1);
+        assert_eq!(num_rows, 3);
+
+        // Filter should match the partition value but not the data value
+        let expr = col("part").eq(lit(1)).or(col("a").eq(lit(3)));
+        let predicate = logical2physical(&expr, &table_schema);
+        let opener = make_opener(predicate);
+        let stream = opener
+            .open(make_meta(), file.clone())
+            .unwrap()
+            .await
+            .unwrap();
+        let (num_batches, num_rows) = count_batches_and_rows(stream).await;
+        assert_eq!(num_batches, 1);
+        assert_eq!(num_rows, 3);
+
+        // Filter should not match the partition value but match the data value
+        let expr = col("part").eq(lit(2)).or(col("a").eq(lit(1)));
+        let predicate = logical2physical(&expr, &table_schema);
+        let opener = make_opener(predicate);
+        let stream = opener
+            .open(make_meta(), file.clone())
+            .unwrap()
+            .await
+            .unwrap();
+        let (num_batches, num_rows) = count_batches_and_rows(stream).await;
+        assert_eq!(num_batches, 1);
+        assert_eq!(num_rows, 1);
+
+        // Filter should not match the partition value or the data value
+        let expr = col("part").eq(lit(2)).or(col("a").eq(lit(3)));
         let predicate = logical2physical(&expr, &table_schema);
         let opener = make_opener(predicate);
         let stream = opener.open(make_meta(), file).unwrap().await.unwrap();

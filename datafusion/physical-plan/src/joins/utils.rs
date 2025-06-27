@@ -297,7 +297,10 @@ pub fn build_join_schema(
     };
 
     let (schema1, schema2) = match join_type {
-        JoinType::Right | JoinType::RightSemi | JoinType::RightAnti => (left, right),
+        JoinType::Right
+        | JoinType::RightSemi
+        | JoinType::RightAnti
+        | JoinType::RightMark => (left, right),
         _ => (right, left),
     };
 
@@ -1489,13 +1492,15 @@ pub(super) fn swap_join_projection(
     join_type: &JoinType,
 ) -> Option<Vec<usize>> {
     match join_type {
-        // For Anti/Semi join types, projection should remain unmodified,
+        // For Anti/Semi/Mark join types, projection should remain unmodified,
         // since these joins output schema remains the same after swap
         JoinType::LeftAnti
         | JoinType::LeftSemi
         | JoinType::RightAnti
-        | JoinType::RightSemi => projection.cloned(),
-
+        | JoinType::RightSemi
+        | JoinType::LeftMark
+        | JoinType::RightMark => projection.cloned(),
+        // For everything else we need to shift the column indices
         _ => projection.map(|p| {
             p.iter()
                 .map(|i| {

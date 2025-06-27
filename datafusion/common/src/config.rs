@@ -370,7 +370,7 @@ config_namespace! {
         ///
         /// Some functions, e.g. `EXTRACT(HOUR from SOME_TIME)`, shift the underlying datetime
         /// according to this time zone, and then extract the hour
-        pub time_zone: Option<String>, default = Some("+00:00".into())
+        pub time_zone: String, default = "+00:00".into()
 
         /// Parquet options
         pub parquet: ParquetOptions, default = Default::default()

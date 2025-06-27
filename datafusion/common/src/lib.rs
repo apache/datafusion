@@ -46,6 +46,7 @@ pub mod file_options;
 pub mod format;
 pub mod hash_utils;
 pub mod instant;
+pub mod nested_struct;
 mod null_equality;
 pub mod parsers;
 pub mod pruning;
