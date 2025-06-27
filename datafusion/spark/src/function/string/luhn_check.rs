@@ -107,7 +107,7 @@ impl ScalarUDFImpl for SparkLuhnCheck {
             ColumnarValue::Scalar(ScalarValue::Utf8(Some(s)))
             | ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(s)))
             | ColumnarValue::Scalar(ScalarValue::Utf8View(Some(s))) => Ok(
-                ColumnarValue::Scalar(ScalarValue::Boolean(Some(luhn_check_impl(&s)))),
+                ColumnarValue::Scalar(ScalarValue::Boolean(Some(luhn_check_impl(s)))),
             ),
             ColumnarValue::Scalar(ScalarValue::Utf8(None))
             | ColumnarValue::Scalar(ScalarValue::LargeUtf8(None))
@@ -139,7 +139,7 @@ fn luhn_check_impl(input: &str) -> bool {
 
         let mut val = digit as u32;
         if alt {
-            val = val * 2;
+            val *= 2;
             if val > 9 {
                 val -= 9;
             }
@@ -154,65 +154,40 @@ fn luhn_check_impl(input: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{ArrayRef, BooleanArray, StringArray, StringViewArray};
-    use arrow::datatypes::{DataType::Utf8, Field};
-    use datafusion_common::Result;
-    use datafusion_expr::ColumnarValue;
-    use std::sync::Arc;
+    use arrow::array::{ArrayRef, StringArray, StringViewArray};
+    use arrow::datatypes::DataType::Utf8;
+    use arrow::datatypes::Field;
 
-    fn check_array(input: ArrayRef, expected: ArrayRef) -> Result<()> {
+    fn test_luhn_check_array(input: ArrayRef, expected: ArrayRef) -> Result<()> {
         let func = SparkLuhnCheck::new();
+
+        let arg_field = Field::new("a", input.data_type().clone(), true).into();
         let args = ScalarFunctionArgs {
             number_rows: input.len(),
-            args: vec![ColumnarValue::Array(input.clone())],
-            arg_fields: vec![Arc::new(Field::new("a", input.data_type().clone(), true))],
-            return_field: Arc::new(Field::new("f", Utf8, true)),
+            args: vec![ColumnarValue::Array(input)],
+            arg_fields: vec![arg_field],
+            return_field: Field::new("f", Utf8, true).into(),
         };
 
-        match func.invoke_with_args(args)? {
-            ColumnarValue::Array(result) => assert_eq!(&result, &expected),
-            _ => panic!("Expected array output"),
-        }
-
-        Ok(())
-    }
-
-    fn check_scalar(input: ScalarValue, expected: ScalarValue) -> Result<()> {
-        let func = SparkLuhnCheck::new();
-        let args = ScalarFunctionArgs {
-            number_rows: 1,
-            args: vec![ColumnarValue::Scalar(input)],
-            arg_fields: vec![Arc::new(Field::new("f", Utf8, true))],
-            return_field: Arc::new(Field::new("f", Utf8, true)),
+        let result = match func.invoke_with_args(args)? {
+            ColumnarValue::Array(result) => result,
+            _ => unreachable!("luhn_check"),
         };
 
-        match func.invoke_with_args(args)? {
-            ColumnarValue::Scalar(actual) => assert_eq!(actual, expected),
-            _ => panic!("Expected scalar output"),
-        }
-
+        assert_eq!(&expected, &result);
         Ok(())
-    }
-
-    #[test]
-    fn test_luhn_check_basic() {
-        assert!(luhn_check_impl("79927398713"));
-        assert!(!luhn_check_impl("79927398714"));
-        assert!(!luhn_check_impl(" 7992 7398 713 "));
-        assert!(!luhn_check_impl("abc123"));
-        assert!(!luhn_check_impl(""));
     }
 
     #[test]
     fn test_array_utf8() -> Result<()> {
         let input = Arc::new(StringArray::from(vec![
-            Some("79927398713"),
-            Some("4417123456789113"),
-            Some("7992 7398 714"),
-            Some("79927398714"),
-            Some(""),
-            Some("abc123"),
-            None,
+            Some("79927398713"),      // valid
+            Some("4417123456789113"), // valid
+            Some("7992 7398 714"),    // invalid
+            Some("79927398714"),      // invalid
+            Some(""),                 // invalid
+            Some("abc123"),           // invalid
+            None,                     // null
         ])) as ArrayRef;
 
         let expected = Arc::new(BooleanArray::from(vec![
@@ -225,19 +200,19 @@ mod tests {
             None,
         ])) as ArrayRef;
 
-        check_array(input, expected)
+        test_luhn_check_array(input, expected)
     }
 
     #[test]
     fn test_array_utf8view() -> Result<()> {
         let input = Arc::new(StringViewArray::from(vec![
-            Some("79927398713"),
-            Some("4417123456789113"),
-            Some("7992 7398 714"),
-            Some("79927398714"),
-            Some(""),
-            Some("abc123"),
-            None,
+            Some("79927398713"),      // valid
+            Some("4417123456789113"), // valid
+            Some("7992 7398 714"),    // invalid
+            Some("79927398714"),      // invalid
+            Some(""),                 // invalid
+            Some("abc123"),           // invalid
+            None,                     // null
         ])) as ArrayRef;
 
         let expected = Arc::new(BooleanArray::from(vec![
@@ -250,24 +225,56 @@ mod tests {
             None,
         ])) as ArrayRef;
 
-        check_array(input, expected)
+        test_luhn_check_array(input, expected)
+    }
+
+    fn test_luhn_check_scalar_utf8(
+        input: ScalarValue,
+        expected: ScalarValue,
+    ) -> Result<()> {
+        let func = SparkLuhnCheck::new();
+
+        let result = func.invoke_with_args(ScalarFunctionArgs {
+            number_rows: 1,
+            args: vec![ColumnarValue::Scalar(input)],
+            arg_fields: vec![Field::new("a", Utf8, true).into()],
+            return_field: Field::new("f", Boolean, true).into(),
+        })?;
+
+        match result {
+            ColumnarValue::Scalar(actual) => {
+                assert_eq!(actual, expected);
+                Ok(())
+            }
+            ColumnarValue::Array(_) => {
+                panic!("Expected scalar output, but got array");
+            }
+        }
     }
 
     #[test]
-    fn test_scalar_utf8() -> Result<()> {
-        let cases = vec![
-            (Some("79927398713"), Some(true)),
-            (Some("79927398714"), Some(false)),
-            (Some("abc123"), Some(false)),
-            (Some(" 7992 7398 713 "), Some(false)),
-            (None::<&str>, None),
-        ];
+    fn test_scalar_utf8_variants() -> Result<()> {
+        test_luhn_check_scalar_utf8(
+            ScalarValue::Utf8(Some("79927398713".into())),
+            ScalarValue::Boolean(Some(true)),
+        )?;
 
-        for (input, expected) in cases {
-            let input_scalar = ScalarValue::Utf8(input.map(str::to_string));
-            let expected_scalar = ScalarValue::Boolean(expected);
-            check_scalar(input_scalar, expected_scalar)?;
-        }
+        test_luhn_check_scalar_utf8(
+            ScalarValue::Utf8(Some("79927398714".into())),
+            ScalarValue::Boolean(Some(false)),
+        )?;
+
+        test_luhn_check_scalar_utf8(
+            ScalarValue::Utf8(Some("abc123".into())),
+            ScalarValue::Boolean(Some(false)),
+        )?;
+
+        test_luhn_check_scalar_utf8(
+            ScalarValue::Utf8(Some(" 7992 7398 713 ".into())),
+            ScalarValue::Boolean(Some(false)),
+        )?;
+
+        test_luhn_check_scalar_utf8(ScalarValue::Utf8(None), ScalarValue::Boolean(None))?;
 
         Ok(())
     }
