@@ -312,3 +312,15 @@ SELECT range(1, t1.end) FROM range(3, 5) as t1(end)
 ----
 [1, 2, 3]
 [1, 2]
+
+# Table function as relation
+statement ok
+CREATE OR REPLACE TABLE json_table (c INT) AS VALUES (1), (2);
+
+query II
+SELECT c, f.*  FROM json_table, LATERAL generate_series(1,2) f;
+----
+1 1
+1 2
+2 1
+2 2
