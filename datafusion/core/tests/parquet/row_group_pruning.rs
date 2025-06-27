@@ -129,9 +129,9 @@ impl RowGroupPruningTest {
             "mismatched row_groups_pruned_statistics",
         );
         assert_eq!(
-            output.files_pruned_statistics(),
+            output.files_ranges_pruned_statistics(),
             self.expected_files_pruned_by_statistics,
-            "mismatched files_pruned_statistics",
+            "mismatched files_ranges_pruned_statistics",
         );
         assert_eq!(
             output.row_groups_matched_bloom_filter(),
