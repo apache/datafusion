@@ -2698,6 +2698,47 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn test_statistics_mapping_with_default_factory() -> Result<()> {
+        let ctx = SessionContext::new();
+
+        // Create a table without providing a custom schema adapter factory
+        // This should fall back to using DefaultSchemaAdapterFactory
+        let path = "table/file.json";
+        register_test_store(&ctx, &[(path, 10)]);
+
+        let format = JsonFormat::default();
+        let opt = ListingOptions::new(Arc::new(format)).with_collect_stat(false);
+        let schema = Schema::new(vec![Field::new("a", DataType::Boolean, false)]);
+        let table_path = ListingTableUrl::parse("test:///table/").unwrap();
+
+        let config = ListingTableConfig::new(table_path)
+            .with_listing_options(opt)
+            .with_schema(Arc::new(schema));
+        // Note: NOT calling .with_schema_adapter_factory() to test default behavior
+
+        let table = ListingTable::try_new(config)?;
+
+        // Verify that no custom schema adapter factory is set
+        assert!(table.schema_adapter_factory().is_none());
+
+        // The scan should work correctly with the default schema adapter
+        let scan_result = table.scan(&ctx.state(), None, &[], None).await;
+        assert!(
+            scan_result.is_ok(),
+            "Scan should succeed with default schema adapter"
+        );
+
+        // Verify that the default adapter handles basic schema compatibility
+        let (groups, _stats) = table.list_files_for_scan(&ctx.state(), &[], None).await?;
+        assert!(
+            !groups.is_empty(),
+            "Should list files successfully with default adapter"
+        );
+
+        Ok(())
+    }
+
     #[rstest]
     #[case(MapSchemaError::TypeIncompatible, "Cannot map incompatible types")]
     #[case(MapSchemaError::GeneralFailure, "Schema adapter mapping failed")]
