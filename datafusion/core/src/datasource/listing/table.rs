@@ -60,7 +60,7 @@ use std::{any::Any, collections::HashMap, str::FromStr, sync::Arc};
 pub enum SchemaSource {
     /// Schema is not yet set (initial state)
     #[default]
-    None,
+    Unset,
     /// Schema was inferred from first table_path
     Inferred,
     /// Schema was specified explicitly via with_schema
@@ -123,6 +123,15 @@ impl ListingTableConfig {
     /// If the schema is provided, it must contain only the fields in the file
     /// without the table partitioning columns.
     pub fn with_schema(self, schema: SchemaRef) -> Self {
+        // Note: We preserve existing options state, but downstream code may expect
+        // options to be set. Consider calling with_listing_options() or infer_options()
+        // before operations that require options to be present.
+        debug_assert!(
+            self.options.is_some() || cfg!(test),
+            "ListingTableConfig::with_schema called without options set. \
+             Consider calling with_listing_options() or infer_options() first to avoid panics in downstream code."
+        );
+
         Self {
             file_schema: Some(schema),
             schema_source: SchemaSource::Specified,
@@ -135,6 +144,15 @@ impl ListingTableConfig {
     /// If not provided, format and other options are inferred via
     /// [`Self::infer_options`].
     pub fn with_listing_options(self, listing_options: ListingOptions) -> Self {
+        // Note: This method properly sets options, but be aware that downstream
+        // methods like infer_schema() and try_new() require both schema and options
+        // to be set to function correctly.
+        debug_assert!(
+            self.table_paths.len() > 0 || cfg!(test),
+            "ListingTableConfig::with_listing_options called without table_paths set. \
+             Consider calling new() or new_with_multi_paths() first to establish table paths."
+        );
+
         Self {
             options: Some(listing_options),
             ..self
