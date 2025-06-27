@@ -52,13 +52,14 @@ use arrow::compute::kernels::{
 };
 use arrow::datatypes::{
     i256, ArrowDictionaryKeyType, ArrowNativeType, ArrowTimestampType, DataType,
-    Date32Type, Date64Type, Field, Float32Type, Int16Type, Int32Type, Int64Type,
-    Int8Type, IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit,
-    IntervalYearMonthType, TimeUnit, TimestampMicrosecondType, TimestampMillisecondType,
+    Date32Type, Field, Float32Type, Int16Type, Int32Type, Int64Type, Int8Type,
+    IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit, IntervalYearMonthType,
+    TimeUnit, TimestampMicrosecondType, TimestampMillisecondType,
     TimestampNanosecondType, TimestampSecondType, UInt16Type, UInt32Type, UInt64Type,
     UInt8Type, UnionFields, UnionMode, DECIMAL128_MAX_PRECISION,
 };
 use arrow::util::display::{array_value_to_string, ArrayFormatter, FormatOptions};
+use chrono::{Duration, NaiveDate};
 use half::f16;
 pub use struct_builder::ScalarStructBuilder;
 
@@ -3525,11 +3526,44 @@ impl ScalarValue {
             }
         }
     }
+
+    /// Compacts ([ScalarValue::compact]) the current [ScalarValue] and returns it.
+    pub fn compacted(mut self) -> Self {
+        self.compact();
+        self
+    }
 }
 
-pub fn copy_array_data(data: &ArrayData) -> ArrayData {
-    let mut copy = MutableArrayData::new(vec![&data], true, data.len());
-    copy.extend(0, 0, data.len());
+/// Compacts the data of an `ArrayData` into a new `ArrayData`.
+///
+/// This is useful when you want to minimize the memory footprint of an
+/// `ArrayData`. For example, the value returned by [`Array::slice`] still
+/// points at the same underlying data buffers as the original array, which may
+/// hold many more values. Calling `copy_array_data` on the sliced array will
+/// create a new, smaller, `ArrayData` that only contains the data for the
+/// sliced array.
+///
+/// # Example
+/// ```
+/// # use arrow::array::{make_array, Array, Int32Array};
+/// use datafusion_common::scalar::copy_array_data;
+/// let array = Int32Array::from_iter_values(0..8192);
+/// // Take only the first 2 elements
+/// let sliced_array = array.slice(0, 2);
+/// // The memory footprint of `sliced_array` is close to 8192 * 4 bytes
+/// assert_eq!(32864, sliced_array.get_array_memory_size());
+/// // however, we can copy the data to a new `ArrayData`
+/// let new_array = make_array(copy_array_data(&sliced_array.into_data()));
+/// // The memory footprint of `new_array` is now only 2 * 4 bytes
+/// // and overhead:
+/// assert_eq!(160, new_array.get_array_memory_size());
+/// ```
+///
+/// See also [`ScalarValue::compact`] which applies to `ScalarValue` instances
+/// as necessary.
+pub fn copy_array_data(src_data: &ArrayData) -> ArrayData {
+    let mut copy = MutableArrayData::new(vec![&src_data], true, src_data.len());
+    copy.extend(0, 0, src_data.len());
     copy.freeze()
 }
 
@@ -3783,12 +3817,28 @@ impl fmt::Display for ScalarValue {
             ScalarValue::List(arr) => fmt_list(arr.to_owned() as ArrayRef, f)?,
             ScalarValue::LargeList(arr) => fmt_list(arr.to_owned() as ArrayRef, f)?,
             ScalarValue::FixedSizeList(arr) => fmt_list(arr.to_owned() as ArrayRef, f)?,
-            ScalarValue::Date32(e) => {
-                format_option!(f, e.map(|v| Date32Type::to_naive_date(v).to_string()))?
-            }
-            ScalarValue::Date64(e) => {
-                format_option!(f, e.map(|v| Date64Type::to_naive_date(v).to_string()))?
-            }
+            ScalarValue::Date32(e) => format_option!(
+                f,
+                e.map(|v| {
+                    let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
+                    match epoch.checked_add_signed(Duration::try_days(v as i64).unwrap())
+                    {
+                        Some(date) => date.to_string(),
+                        None => "".to_string(),
+                    }
+                })
+            )?,
+            ScalarValue::Date64(e) => format_option!(
+                f,
+                e.map(|v| {
+                    let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
+                    match epoch.checked_add_signed(Duration::try_milliseconds(v).unwrap())
+                    {
+                        Some(date) => date.to_string(),
+                        None => "".to_string(),
+                    }
+                })
+            )?,
             ScalarValue::Time32Second(e) => format_option!(f, e)?,
             ScalarValue::Time32Millisecond(e) => format_option!(f, e)?,
             ScalarValue::Time64Microsecond(e) => format_option!(f, e)?,
@@ -4179,7 +4229,7 @@ mod tests {
 
     #[test]
     #[should_panic(
-        expected = "Error building ScalarValue::Struct. Expected array with exactly one element, found array with 4 elements"
+        expected = "InvalidArgumentError(\"Incorrect array length for StructArray field \\\"bool\\\", expected 1 got 4\")"
     )]
     fn test_scalar_value_from_for_struct_should_panic() {
         let _ = ScalarStructBuilder::new()
@@ -4940,6 +4990,40 @@ mod tests {
                     Some(3),
                 ])]),
             ));
+        assert_eq!(a.partial_cmp(&b), Some(Ordering::Greater));
+
+        let a = ScalarValue::LargeList(Arc::new(LargeListArray::from_iter_primitive::<
+            Int64Type,
+            _,
+            _,
+        >(vec![Some(vec![
+            None,
+            Some(2),
+            Some(3),
+        ])])));
+        let b = ScalarValue::LargeList(Arc::new(LargeListArray::from_iter_primitive::<
+            Int64Type,
+            _,
+            _,
+        >(vec![Some(vec![
+            Some(1),
+            Some(2),
+            Some(3),
+        ])])));
+        assert_eq!(a.partial_cmp(&b), Some(Ordering::Greater));
+
+        let a = ScalarValue::FixedSizeList(Arc::new(
+            FixedSizeListArray::from_iter_primitive::<Int64Type, _, _>(
+                vec![Some(vec![None, Some(2), Some(3)])],
+                3,
+            ),
+        ));
+        let b = ScalarValue::FixedSizeList(Arc::new(
+            FixedSizeListArray::from_iter_primitive::<Int64Type, _, _>(
+                vec![Some(vec![Some(1), Some(2), Some(3)])],
+                3,
+            ),
+        ));
         assert_eq!(a.partial_cmp(&b), Some(Ordering::Greater));
     }
 
@@ -7163,6 +7247,19 @@ mod tests {
     }
 
     #[test]
+    fn test_display_date64_large_values() {
+        assert_eq!(
+            format!("{}", ScalarValue::Date64(Some(790179464505))),
+            "1995-01-15"
+        );
+        // This used to panic, see https://github.com/apache/arrow-rs/issues/7728
+        assert_eq!(
+            format!("{}", ScalarValue::Date64(Some(-790179464505600000))),
+            ""
+        );
+    }
+
+    #[test]
     fn test_struct_display_null() {
         let fields = vec![Field::new("a", DataType::Int32, false)];
         let s = ScalarStructBuilder::new_null(fields);
@@ -7351,14 +7448,14 @@ mod tests {
     fn get_random_timestamps(sample_size: u64) -> Vec<ScalarValue> {
         let vector_size = sample_size;
         let mut timestamp = vec![];
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         for i in 0..vector_size {
-            let year = rng.gen_range(1995..=2050);
-            let month = rng.gen_range(1..=12);
-            let day = rng.gen_range(1..=28); // to exclude invalid dates
-            let hour = rng.gen_range(0..=23);
-            let minute = rng.gen_range(0..=59);
-            let second = rng.gen_range(0..=59);
+            let year = rng.random_range(1995..=2050);
+            let month = rng.random_range(1..=12);
+            let day = rng.random_range(1..=28); // to exclude invalid dates
+            let hour = rng.random_range(0..=23);
+            let minute = rng.random_range(0..=59);
+            let second = rng.random_range(0..=59);
             if i % 4 == 0 {
                 timestamp.push(ScalarValue::TimestampSecond(
                     Some(
@@ -7372,7 +7469,7 @@ mod tests {
                     None,
                 ))
             } else if i % 4 == 1 {
-                let millisec = rng.gen_range(0..=999);
+                let millisec = rng.random_range(0..=999);
                 timestamp.push(ScalarValue::TimestampMillisecond(
                     Some(
                         NaiveDate::from_ymd_opt(year, month, day)
@@ -7385,7 +7482,7 @@ mod tests {
                     None,
                 ))
             } else if i % 4 == 2 {
-                let microsec = rng.gen_range(0..=999_999);
+                let microsec = rng.random_range(0..=999_999);
                 timestamp.push(ScalarValue::TimestampMicrosecond(
                     Some(
                         NaiveDate::from_ymd_opt(year, month, day)
@@ -7398,7 +7495,7 @@ mod tests {
                     None,
                 ))
             } else if i % 4 == 3 {
-                let nanosec = rng.gen_range(0..=999_999_999);
+                let nanosec = rng.random_range(0..=999_999_999);
                 timestamp.push(ScalarValue::TimestampNanosecond(
                     Some(
                         NaiveDate::from_ymd_opt(year, month, day)
@@ -7422,27 +7519,27 @@ mod tests {
 
         let vector_size = sample_size;
         let mut intervals = vec![];
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         const SECS_IN_ONE_DAY: i32 = 86_400;
         const MICROSECS_IN_ONE_DAY: i64 = 86_400_000_000;
         for i in 0..vector_size {
             if i % 4 == 0 {
-                let days = rng.gen_range(0..5000);
+                let days = rng.random_range(0..5000);
                 // to not break second precision
-                let millis = rng.gen_range(0..SECS_IN_ONE_DAY) * 1000;
+                let millis = rng.random_range(0..SECS_IN_ONE_DAY) * 1000;
                 intervals.push(ScalarValue::new_interval_dt(days, millis));
             } else if i % 4 == 1 {
-                let days = rng.gen_range(0..5000);
-                let millisec = rng.gen_range(0..(MILLISECS_IN_ONE_DAY as i32));
+                let days = rng.random_range(0..5000);
+                let millisec = rng.random_range(0..(MILLISECS_IN_ONE_DAY as i32));
                 intervals.push(ScalarValue::new_interval_dt(days, millisec));
             } else if i % 4 == 2 {
-                let days = rng.gen_range(0..5000);
+                let days = rng.random_range(0..5000);
                 // to not break microsec precision
-                let nanosec = rng.gen_range(0..MICROSECS_IN_ONE_DAY) * 1000;
+                let nanosec = rng.random_range(0..MICROSECS_IN_ONE_DAY) * 1000;
                 intervals.push(ScalarValue::new_interval_mdn(0, days, nanosec));
             } else {
-                let days = rng.gen_range(0..5000);
-                let nanosec = rng.gen_range(0..NANOSECS_IN_ONE_DAY);
+                let days = rng.random_range(0..5000);
+                let nanosec = rng.random_range(0..NANOSECS_IN_ONE_DAY);
                 intervals.push(ScalarValue::new_interval_mdn(0, days, nanosec));
             }
         }

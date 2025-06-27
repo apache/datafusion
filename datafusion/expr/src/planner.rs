@@ -312,6 +312,7 @@ pub struct RawWindowExpr {
 
 /// Result of planning a raw expr with [`ExprPlanner`]
 #[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)]
 pub enum PlannerResult<T> {
     /// The raw expression was successfully planned as a new [`Expr`]
     Planned(Expr),

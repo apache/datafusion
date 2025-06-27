@@ -763,7 +763,7 @@ async fn simple_intersect() -> Result<()> {
         let expected_plan_str = format!(
             "Projection: count(Int64(1)) AS {syntax}\
         \n  Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]\
-        \n    Projection: \
+        \n    Projection:\
         \n      LeftSemi Join: data.a = data2.a\
         \n        Aggregate: groupBy=[[data.a]], aggr=[[]]\
         \n          TableScan: data projection=[a]\
@@ -780,7 +780,7 @@ async fn simple_intersect() -> Result<()> {
     async fn check_constant(sql_syntax: &str, plan_expr: &str) -> Result<()> {
         let expected_plan_str = format!(
             "Aggregate: groupBy=[[]], aggr=[[{plan_expr}]]\
-        \n  Projection: \
+        \n  Projection:\
         \n    LeftSemi Join: data.a = data2.a\
         \n      Aggregate: groupBy=[[data.a]], aggr=[[]]\
         \n        TableScan: data projection=[a]\
@@ -849,6 +849,22 @@ async fn aggregate_wo_projection_sorted_consume() -> Result<()> {
     @r#"
     Aggregate: groupBy=[[data.a]], aggr=[[count(data.a) ORDER BY [data.a DESC NULLS FIRST] AS countA]]
       TableScan: data projection=[a]
+    "#
+            );
+    Ok(())
+}
+
+#[tokio::test]
+async fn aggregate_identical_grouping_expressions() -> Result<()> {
+    let proto_plan =
+        read_json("tests/testdata/test_plans/aggregate_identical_grouping_expressions.substrait.json");
+
+    let plan = generate_plan_from_substrait(proto_plan).await?;
+    assert_snapshot!(
+    plan,
+    @r#"
+    Aggregate: groupBy=[[Int32(1) AS grouping_col_1, Int32(1) AS grouping_col_2]], aggr=[[]]
+      TableScan: data projection=[]
     "#
             );
     Ok(())
@@ -942,7 +958,7 @@ async fn simple_intersect_table_reuse() -> Result<()> {
         let expected_plan_str = format!(
             "Projection: count(Int64(1)) AS {syntax}\
         \n  Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]\
-        \n    Projection: \
+        \n    Projection:\
         \n      LeftSemi Join: left.a = right.a\
         \n        SubqueryAlias: left\
         \n          Aggregate: groupBy=[[data.a]], aggr=[[]]\
@@ -961,7 +977,7 @@ async fn simple_intersect_table_reuse() -> Result<()> {
     async fn check_constant(sql_syntax: &str, plan_expr: &str) -> Result<()> {
         let expected_plan_str = format!(
             "Aggregate: groupBy=[[]], aggr=[[{plan_expr}]]\
-        \n  Projection: \
+        \n  Projection:\
         \n    LeftSemi Join: left.a = right.a\
         \n      SubqueryAlias: left\
         \n        Aggregate: groupBy=[[data.a]], aggr=[[]]\

@@ -26,28 +26,28 @@ use crate::{
     object_storage::get_object_store,
     print_options::{MaxRows, PrintOptions},
 };
-use futures::StreamExt;
-use std::collections::HashMap;
-use std::fs::File;
-use std::io::prelude::*;
-use std::io::BufReader;
-
 use datafusion::common::instant::Instant;
 use datafusion::common::{plan_datafusion_err, plan_err};
 use datafusion::config::ConfigFileType;
 use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::error::{DataFusionError, Result};
+use datafusion::execution::memory_pool::MemoryConsumer;
 use datafusion::logical_expr::{DdlStatement, LogicalPlan};
 use datafusion::physical_plan::execution_plan::EmissionType;
+use datafusion::physical_plan::spill::get_record_batch_memory_size;
 use datafusion::physical_plan::{execute_stream, ExecutionPlanProperties};
 use datafusion::sql::parser::{DFParser, Statement};
-use datafusion::sql::sqlparser::dialect::dialect_from_str;
-
-use datafusion::execution::memory_pool::MemoryConsumer;
-use datafusion::physical_plan::spill::get_record_batch_memory_size;
 use datafusion::sql::sqlparser;
+use datafusion::sql::sqlparser::dialect::dialect_from_str;
+use futures::StreamExt;
+use log::warn;
+use object_store::Error::Generic;
 use rustyline::error::ReadlineError;
 use rustyline::Editor;
+use std::collections::HashMap;
+use std::fs::File;
+use std::io::prelude::*;
+use std::io::BufReader;
 use tokio::signal;
 
 /// run and execute SQL statements and commands, against a context with the given print options
@@ -231,10 +231,21 @@ pub(super) async fn exec_and_print(
         let adjusted =
             AdjustedPrintOptions::new(print_options.clone()).with_statement(&statement);
 
-        let plan = create_plan(ctx, statement).await?;
+        let plan = create_plan(ctx, statement.clone(), false).await?;
         let adjusted = adjusted.with_plan(&plan);
 
-        let df = ctx.execute_logical_plan(plan).await?;
+        let df = match ctx.execute_logical_plan(plan).await {
+            Ok(df) => df,
+            Err(DataFusionError::ObjectStore(Generic { store, source: _ }))
+                if "S3".eq_ignore_ascii_case(store)
+                    && matches!(&statement, Statement::CreateExternalTable(_)) =>
+            {
+                warn!("S3 region is incorrect, auto-detecting the correct region (this may be slow). Consider updating your region configuration.");
+                let plan = create_plan(ctx, statement, true).await?;
+                ctx.execute_logical_plan(plan).await?
+            }
+            Err(e) => return Err(e),
+        };
         let physical_plan = df.create_physical_plan().await?;
 
         // Track memory usage for the query result if it's bounded
@@ -348,6 +359,7 @@ fn config_file_type_from_str(ext: &str) -> Option<ConfigFileType> {
 async fn create_plan(
     ctx: &dyn CliSessionContext,
     statement: Statement,
+    resolve_region: bool,
 ) -> Result<LogicalPlan, DataFusionError> {
     let mut plan = ctx.session_state().statement_to_plan(statement).await?;
 
@@ -362,6 +374,7 @@ async fn create_plan(
             &cmd.location,
             &cmd.options,
             format,
+            resolve_region,
         )
         .await?;
     }
@@ -374,6 +387,7 @@ async fn create_plan(
             &copy_to.output_url,
             &copy_to.options,
             format,
+            false,
         )
         .await?;
     }
@@ -412,6 +426,7 @@ pub(crate) async fn register_object_store_and_config_extensions(
     location: &String,
     options: &HashMap<String, String>,
     format: Option<ConfigFileType>,
+    resolve_region: bool,
 ) -> Result<()> {
     // Parse the location URL to extract the scheme and other components
     let table_path = ListingTableUrl::parse(location)?;
@@ -433,8 +448,14 @@ pub(crate) async fn register_object_store_and_config_extensions(
     table_options.alter_with_string_hash_map(options)?;
 
     // Retrieve the appropriate object store based on the scheme, URL, and modified table options
-    let store =
-        get_object_store(&ctx.session_state(), scheme, url, &table_options).await?;
+    let store = get_object_store(
+        &ctx.session_state(),
+        scheme,
+        url,
+        &table_options,
+        resolve_region,
+    )
+    .await?;
 
     // Register the retrieved object store in the session context's runtime environment
     ctx.register_object_store(url, store);
@@ -462,6 +483,7 @@ mod tests {
                 &cmd.location,
                 &cmd.options,
                 format,
+                false,
             )
             .await?;
         } else {
@@ -488,6 +510,7 @@ mod tests {
                 &cmd.output_url,
                 &cmd.options,
                 format,
+                false,
             )
             .await?;
         } else {
@@ -534,7 +557,7 @@ mod tests {
             let statements = DFParser::parse_sql_with_dialect(&sql, dialect.as_ref())?;
             for statement in statements {
                 //Should not fail
-                let mut plan = create_plan(&ctx, statement).await?;
+                let mut plan = create_plan(&ctx, statement, false).await?;
                 if let LogicalPlan::Copy(copy_to) = &mut plan {
                     assert_eq!(copy_to.output_url, location);
                     assert_eq!(copy_to.file_type.get_ext(), "parquet".to_string());

@@ -35,22 +35,22 @@ query TT
 explain select b from t where b ~ '.*'
 ----
 logical_plan
-01)Filter: t.b IS NOT NULL
+01)Filter: t.b ~ Utf8View(".*")
 02)--TableScan: t projection=[b]
 physical_plan
 01)CoalesceBatchesExec: target_batch_size=8192
-02)--FilterExec: b@0 IS NOT NULL
+02)--FilterExec: b@0 ~ .*
 03)----DataSourceExec: partitions=1, partition_sizes=[1]
 
 query TT
 explain select b from t where b !~ '.*'
 ----
 logical_plan
-01)Filter: t.b = Utf8("")
+01)Filter: t.b !~ Utf8View(".*")
 02)--TableScan: t projection=[b]
 physical_plan
 01)CoalesceBatchesExec: target_batch_size=8192
-02)--FilterExec: b@0 = 
+02)--FilterExec: b@0 !~ .*
 03)----DataSourceExec: partitions=1, partition_sizes=[1]
 
 query T

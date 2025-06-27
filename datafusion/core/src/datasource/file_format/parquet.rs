@@ -27,7 +27,10 @@ pub(crate) mod test_util {
 
     use crate::test::object_store::local_unpartitioned_file;
 
-    /// Writes `batches` to a temporary parquet file
+    /// Writes each `batch` to at least one temporary parquet file
+    ///
+    /// For example, if `batches` contains 2 batches, the function will create
+    /// 2 temporary files, each containing the contents of one batch
     ///
     /// If multi_page is set to `true`, the parquet file(s) are written
     /// with 2 rows per data page (used to test page filtering and
@@ -52,7 +55,7 @@ pub(crate) mod test_util {
             }
         }
 
-        // we need the tmp files to be sorted as some tests rely on the how the returning files are ordered
+        // we need the tmp files to be sorted as some tests rely on the returned file ordering
         // https://github.com/apache/datafusion/pull/6629
         let tmp_files = {
             let mut tmp_files: Vec<_> = (0..batches.len())
@@ -104,10 +107,8 @@ pub(crate) mod test_util {
 mod tests {
 
     use std::fmt::{self, Display, Formatter};
-    use std::pin::Pin;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
-    use std::task::{Context, Poll};
     use std::time::Duration;
 
     use crate::datasource::file_format::parquet::test_util::store_parquet;
@@ -117,7 +118,7 @@ mod tests {
     use crate::prelude::{ParquetReadOptions, SessionConfig, SessionContext};
 
     use arrow::array::RecordBatch;
-    use arrow_schema::{Schema, SchemaRef};
+    use arrow_schema::Schema;
     use datafusion_catalog::Session;
     use datafusion_common::cast::{
         as_binary_array, as_binary_view_array, as_boolean_array, as_float32_array,
@@ -137,7 +138,7 @@ mod tests {
     };
     use datafusion_execution::object_store::ObjectStoreUrl;
     use datafusion_execution::runtime_env::RuntimeEnv;
-    use datafusion_execution::{RecordBatchStream, TaskContext};
+    use datafusion_execution::TaskContext;
     use datafusion_expr::dml::InsertOp;
     use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
     use datafusion_physical_plan::{collect, ExecutionPlan};
@@ -150,7 +151,7 @@ mod tests {
     use async_trait::async_trait;
     use datafusion_datasource::file_groups::FileGroup;
     use futures::stream::BoxStream;
-    use futures::{Stream, StreamExt};
+    use futures::StreamExt;
     use insta::assert_snapshot;
     use log::error;
     use object_store::local::LocalFileSystem;
@@ -165,6 +166,8 @@ mod tests {
     use parquet::file::page_index::index::Index;
     use parquet::format::FileMetaData;
     use tokio::fs::File;
+
+    use crate::test_util::bounded_stream;
 
     enum ForceViews {
         Yes,
@@ -1244,6 +1247,61 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_parquet_write_empty_file() -> Result<()> {
+        // Case 1. write to a single file
+        // Expect: an empty file created
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let path = format!("{}/empty.parquet", tmp_dir.path().to_string_lossy());
+
+        let ctx = SessionContext::new();
+
+        let df = ctx.sql("SELECT 1 limit 0").await?;
+
+        let cfg1 =
+            crate::dataframe::DataFrameWriteOptions::new().with_single_file_output(true);
+        let cfg2 = TableParquetOptions::default();
+
+        df.write_parquet(&path, cfg1, Some(cfg2)).await?;
+        assert!(std::path::Path::new(&path).exists());
+
+        // Case 2. write to a directory without partition columns
+        // Expect: under the directory, an empty file is created
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let path = format!("{}", tmp_dir.path().to_string_lossy());
+
+        let cfg1 =
+            crate::dataframe::DataFrameWriteOptions::new().with_single_file_output(true);
+        let cfg2 = TableParquetOptions::default();
+
+        let df = ctx.sql("SELECT 1 limit 0").await?;
+
+        df.write_parquet(&path, cfg1, Some(cfg2)).await?;
+        assert!(std::path::Path::new(&path).exists());
+
+        let files = std::fs::read_dir(&path).unwrap();
+        assert!(files.count() == 1);
+
+        // Case 3. write to a directory with partition columns
+        // Expect: No file is created
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let path = format!("{}", tmp_dir.path().to_string_lossy());
+
+        let df = ctx.sql("SELECT 1 as col1, 2 as col2 limit 0").await?;
+
+        let cfg1 = crate::dataframe::DataFrameWriteOptions::new()
+            .with_single_file_output(true)
+            .with_partition_by(vec!["col1".to_string()]);
+        let cfg2 = TableParquetOptions::default();
+
+        df.write_parquet(&path, cfg1, Some(cfg2)).await?;
+
+        assert!(std::path::Path::new(&path).exists());
+        let files = std::fs::read_dir(&path).unwrap();
+        assert!(files.count() == 0);
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn parquet_sink_write_insert_schema_into_metadata() -> Result<()> {
         // expected kv metadata without schema
         let expected_without = vec![
@@ -1658,44 +1716,5 @@ mod tests {
             .expect("should track for column-parallel writes");
 
         Ok(())
-    }
-
-    /// Creates an bounded stream for testing purposes.
-    fn bounded_stream(
-        batch: RecordBatch,
-        limit: usize,
-    ) -> datafusion_execution::SendableRecordBatchStream {
-        Box::pin(BoundedStream {
-            count: 0,
-            limit,
-            batch,
-        })
-    }
-
-    struct BoundedStream {
-        limit: usize,
-        count: usize,
-        batch: RecordBatch,
-    }
-
-    impl Stream for BoundedStream {
-        type Item = Result<RecordBatch>;
-
-        fn poll_next(
-            mut self: Pin<&mut Self>,
-            _cx: &mut Context<'_>,
-        ) -> Poll<Option<Self::Item>> {
-            if self.count >= self.limit {
-                return Poll::Ready(None);
-            }
-            self.count += 1;
-            Poll::Ready(Some(Ok(self.batch.clone())))
-        }
-    }
-
-    impl RecordBatchStream for BoundedStream {
-        fn schema(&self) -> SchemaRef {
-            self.batch.schema()
-        }
     }
 }

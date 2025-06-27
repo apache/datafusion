@@ -63,6 +63,7 @@ pub mod simplify;
 pub mod sort_properties {
     pub use datafusion_expr_common::sort_properties::*;
 }
+pub mod async_udf;
 pub mod statistics {
     pub use datafusion_expr_common::statistics::*;
 }
@@ -94,7 +95,9 @@ pub use function::{
     AccumulatorFactoryFunction, PartitionEvaluatorFactory, ReturnTypeFunction,
     ScalarFunctionImplementation, StateTypeFunction,
 };
-pub use literal::{lit, lit_timestamp_nano, Literal, TimestampLiteral};
+pub use literal::{
+    lit, lit_timestamp_nano, lit_with_metadata, Literal, TimestampLiteral,
+};
 pub use logical_plan::*;
 pub use partition_evaluator::PartitionEvaluator;
 pub use sqlparser;

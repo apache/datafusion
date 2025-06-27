@@ -56,8 +56,8 @@ use datafusion_common::tree_node::{
 use datafusion_common::{
     aggregate_functional_dependencies, internal_err, plan_err, Column, Constraints,
     DFSchema, DFSchemaRef, DataFusionError, Dependency, FunctionalDependence,
-    FunctionalDependencies, ParamValues, Result, ScalarValue, Spans, TableReference,
-    UnnestOptions,
+    FunctionalDependencies, NullEquality, ParamValues, Result, ScalarValue, Spans,
+    TableReference, UnnestOptions,
 };
 use indexmap::IndexSet;
 
@@ -556,7 +556,9 @@ impl LogicalPlan {
                 JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark => {
                     left.head_output_expr()
                 }
-                JoinType::RightSemi | JoinType::RightAnti => right.head_output_expr(),
+                JoinType::RightSemi | JoinType::RightAnti | JoinType::RightMark => {
+                    right.head_output_expr()
+                }
             },
             LogicalPlan::RecursiveQuery(RecursiveQuery { static_term, .. }) => {
                 static_term.head_output_expr()
@@ -630,12 +632,9 @@ impl LogicalPlan {
                 // todo it isn't clear why the schema is not recomputed here
                 Ok(LogicalPlan::Values(Values { schema, values }))
             }
-            LogicalPlan::Filter(Filter {
-                predicate,
-                input,
-                having,
-            }) => Filter::try_new_internal(predicate, input, having)
-                .map(LogicalPlan::Filter),
+            LogicalPlan::Filter(Filter { predicate, input }) => {
+                Filter::try_new(predicate, input).map(LogicalPlan::Filter)
+            }
             LogicalPlan::Repartition(_) => Ok(self),
             LogicalPlan::Window(Window {
                 input,
@@ -658,7 +657,7 @@ impl LogicalPlan {
                 join_constraint,
                 on,
                 schema: _,
-                null_equals_null,
+                null_equality,
             }) => {
                 let schema =
                     build_join_schema(left.schema(), right.schema(), &join_type)?;
@@ -679,7 +678,7 @@ impl LogicalPlan {
                     on: new_on,
                     filter,
                     schema: DFSchemaRef::new(schema),
-                    null_equals_null,
+                    null_equality,
                 }))
             }
             LogicalPlan::Subquery(_) => Ok(self),
@@ -897,7 +896,7 @@ impl LogicalPlan {
                 join_type,
                 join_constraint,
                 on,
-                null_equals_null,
+                null_equality,
                 ..
             }) => {
                 let (left, right) = self.only_two_inputs(inputs)?;
@@ -936,7 +935,7 @@ impl LogicalPlan {
                     on: new_on,
                     filter: filter_expr,
                     schema: DFSchemaRef::new(schema),
-                    null_equals_null: *null_equals_null,
+                    null_equality: *null_equality,
                 }))
             }
             LogicalPlan::Subquery(Subquery {
@@ -991,7 +990,7 @@ impl LogicalPlan {
                 Ok(LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(
                     CreateMemoryTable {
                         input: Arc::new(input),
-                        constraints: Constraints::empty(),
+                        constraints: Constraints::default(),
                         name: name.clone(),
                         if_not_exists: *if_not_exists,
                         or_replace: *or_replace,
@@ -1308,7 +1307,7 @@ impl LogicalPlan {
                 // Empty group_expr will return Some(1)
                 if group_expr
                     .iter()
-                    .all(|expr| matches!(expr, Expr::Literal(_)))
+                    .all(|expr| matches!(expr, Expr::Literal(_, _)))
                 {
                     Some(1)
                 } else {
@@ -1343,7 +1342,9 @@ impl LogicalPlan {
                 JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark => {
                     left.max_rows()
                 }
-                JoinType::RightSemi | JoinType::RightAnti => right.max_rows(),
+                JoinType::RightSemi | JoinType::RightAnti | JoinType::RightMark => {
+                    right.max_rows()
+                }
             },
             LogicalPlan::Repartition(Repartition { input, .. }) => input.max_rows(),
             LogicalPlan::Union(Union { inputs, .. }) => {
@@ -1458,7 +1459,7 @@ impl LogicalPlan {
                     let transformed_expr = e.transform_up(|e| {
                         if let Expr::Placeholder(Placeholder { id, .. }) = e {
                             let value = param_values.get_placeholders_with_values(&id)?;
-                            Ok(Transformed::yes(Expr::Literal(value)))
+                            Ok(Transformed::yes(Expr::Literal(value, None)))
                         } else {
                             Ok(Transformed::no(e))
                         }
@@ -1818,12 +1819,12 @@ impl LogicalPlan {
                         Ok(())
                     }
                     LogicalPlan::Projection(Projection { ref expr, .. }) => {
-                        write!(f, "Projection: ")?;
+                        write!(f, "Projection:")?;
                         for (i, expr_item) in expr.iter().enumerate() {
                             if i > 0 {
-                                write!(f, ", ")?;
+                                write!(f, ",")?;
                             }
-                            write!(f, "{expr_item}")?;
+                            write!(f, " {expr_item}")?;
                         }
                         Ok(())
                     }
@@ -2259,8 +2260,6 @@ pub struct Filter {
     pub predicate: Expr,
     /// The incoming logical plan
     pub input: Arc<LogicalPlan>,
-    /// The flag to indicate if the filter is a having clause
-    pub having: bool,
 }
 
 impl Filter {
@@ -2269,13 +2268,14 @@ impl Filter {
     /// Notes: as Aliases have no effect on the output of a filter operator,
     /// they are removed from the predicate expression.
     pub fn try_new(predicate: Expr, input: Arc<LogicalPlan>) -> Result<Self> {
-        Self::try_new_internal(predicate, input, false)
+        Self::try_new_internal(predicate, input)
     }
 
     /// Create a new filter operator for a having clause.
     /// This is similar to a filter, but its having flag is set to true.
+    #[deprecated(since = "48.0.0", note = "Use `try_new` instead")]
     pub fn try_new_with_having(predicate: Expr, input: Arc<LogicalPlan>) -> Result<Self> {
-        Self::try_new_internal(predicate, input, true)
+        Self::try_new_internal(predicate, input)
     }
 
     fn is_allowed_filter_type(data_type: &DataType) -> bool {
@@ -2289,11 +2289,7 @@ impl Filter {
         }
     }
 
-    fn try_new_internal(
-        predicate: Expr,
-        input: Arc<LogicalPlan>,
-        having: bool,
-    ) -> Result<Self> {
+    fn try_new_internal(predicate: Expr, input: Arc<LogicalPlan>) -> Result<Self> {
         // Filter predicates must return a boolean value so we try and validate that here.
         // Note that it is not always possible to resolve the predicate expression during plan
         // construction (such as with correlated subqueries) so we make a best effort here and
@@ -2309,7 +2305,6 @@ impl Filter {
         Ok(Self {
             predicate: predicate.unalias_nested().data,
             input,
-            having,
         })
     }
 
@@ -2431,18 +2426,23 @@ impl Window {
             .iter()
             .enumerate()
             .filter_map(|(idx, expr)| {
-                if let Expr::WindowFunction(WindowFunction {
+                let Expr::WindowFunction(window_fun) = expr else {
+                    return None;
+                };
+                let WindowFunction {
                     fun: WindowFunctionDefinition::WindowUDF(udwf),
                     params: WindowFunctionParams { partition_by, .. },
-                }) = expr
-                {
-                    // When there is no PARTITION BY, row number will be unique
-                    // across the entire table.
-                    if udwf.name() == "row_number" && partition_by.is_empty() {
-                        return Some(idx + input_len);
-                    }
+                } = window_fun.as_ref()
+                else {
+                    return None;
+                };
+                // When there is no PARTITION BY, row number will be unique
+                // across the entire table.
+                if udwf.name() == "row_number" && partition_by.is_empty() {
+                    Some(idx + input_len)
+                } else {
+                    None
                 }
-                None
             })
             .map(|idx| {
                 FunctionalDependence::new(vec![idx], vec![], false)
@@ -2702,7 +2702,9 @@ impl Union {
                 {
                     expr.push(Expr::Column(column));
                 } else {
-                    expr.push(Expr::Literal(ScalarValue::Null).alias(column.name()));
+                    expr.push(
+                        Expr::Literal(ScalarValue::Null, None).alias(column.name()),
+                    );
                 }
             }
             wrapped_inputs.push(Arc::new(LogicalPlan::Projection(
@@ -3228,7 +3230,7 @@ impl Limit {
     pub fn get_skip_type(&self) -> Result<SkipType> {
         match self.skip.as_deref() {
             Some(expr) => match *expr {
-                Expr::Literal(ScalarValue::Int64(s)) => {
+                Expr::Literal(ScalarValue::Int64(s), _) => {
                     // `skip = NULL` is equivalent to `skip = 0`
                     let s = s.unwrap_or(0);
                     if s >= 0 {
@@ -3248,14 +3250,16 @@ impl Limit {
     pub fn get_fetch_type(&self) -> Result<FetchType> {
         match self.fetch.as_deref() {
             Some(expr) => match *expr {
-                Expr::Literal(ScalarValue::Int64(Some(s))) => {
+                Expr::Literal(ScalarValue::Int64(Some(s)), _) => {
                     if s >= 0 {
                         Ok(FetchType::Literal(Some(s as usize)))
                     } else {
                         plan_err!("LIMIT must be >= 0, '{}' was provided", s)
                     }
                 }
-                Expr::Literal(ScalarValue::Int64(None)) => Ok(FetchType::Literal(None)),
+                Expr::Literal(ScalarValue::Int64(None), _) => {
+                    Ok(FetchType::Literal(None))
+                }
                 _ => Ok(FetchType::UnsupportedExpr),
             },
             None => Ok(FetchType::Literal(None)),
@@ -3704,8 +3708,8 @@ pub struct Join {
     pub join_constraint: JoinConstraint,
     /// The output schema, containing fields from the left and right inputs
     pub schema: DFSchemaRef,
-    /// If null_equals_null is true, null == null else null != null
-    pub null_equals_null: bool,
+    /// Defines the null equality for the join.
+    pub null_equality: NullEquality,
 }
 
 impl Join {
@@ -3722,7 +3726,7 @@ impl Join {
     /// * `filter` - Optional filter expression (for non-equijoin conditions)
     /// * `join_type` - Type of join (Inner, Left, Right, etc.)
     /// * `join_constraint` - Join constraint (On, Using)
-    /// * `null_equals_null` - Whether NULL = NULL in join comparisons
+    /// * `null_equality` - How to handle nulls in join comparisons
     ///
     /// # Returns
     ///
@@ -3734,7 +3738,7 @@ impl Join {
         filter: Option<Expr>,
         join_type: JoinType,
         join_constraint: JoinConstraint,
-        null_equals_null: bool,
+        null_equality: NullEquality,
     ) -> Result<Self> {
         let join_schema = build_join_schema(left.schema(), right.schema(), &join_type)?;
 
@@ -3746,7 +3750,7 @@ impl Join {
             join_type,
             join_constraint,
             schema: Arc::new(join_schema),
-            null_equals_null,
+            null_equality,
         })
     }
 
@@ -3779,7 +3783,7 @@ impl Join {
             join_type: original_join.join_type,
             join_constraint: original_join.join_constraint,
             schema: Arc::new(join_schema),
-            null_equals_null: original_join.null_equals_null,
+            null_equality: original_join.null_equality,
         })
     }
 }
@@ -3801,8 +3805,8 @@ impl PartialOrd for Join {
             pub join_type: &'a JoinType,
             /// Join constraint
             pub join_constraint: &'a JoinConstraint,
-            /// If null_equals_null is true, null == null else null != null
-            pub null_equals_null: &'a bool,
+            /// The null handling behavior for equalities
+            pub null_equality: &'a NullEquality,
         }
         let comparable_self = ComparableJoin {
             left: &self.left,
@@ -3811,7 +3815,7 @@ impl PartialOrd for Join {
             filter: &self.filter,
             join_type: &self.join_type,
             join_constraint: &self.join_constraint,
-            null_equals_null: &self.null_equals_null,
+            null_equality: &self.null_equality,
         };
         let comparable_other = ComparableJoin {
             left: &other.left,
@@ -3820,7 +3824,7 @@ impl PartialOrd for Join {
             filter: &other.filter,
             join_type: &other.join_type,
             join_constraint: &other.join_constraint,
-            null_equals_null: &other.null_equals_null,
+            null_equality: &other.null_equality,
         };
         comparable_self.partial_cmp(&comparable_other)
     }
@@ -4006,6 +4010,7 @@ mod tests {
         TransformedResult, TreeNodeRewriter, TreeNodeVisitor,
     };
     use datafusion_common::{not_impl_err, Constraint, ScalarValue};
+    use insta::{assert_debug_snapshot, assert_snapshot};
 
     use crate::test::function_stub::count;
 
@@ -4033,13 +4038,13 @@ mod tests {
     fn test_display_indent() -> Result<()> {
         let plan = display_plan()?;
 
-        let expected = "Projection: employee_csv.id\
-        \n  Filter: employee_csv.state IN (<subquery>)\
-        \n    Subquery:\
-        \n      TableScan: employee_csv projection=[state]\
-        \n    TableScan: employee_csv projection=[id, state]";
-
-        assert_eq!(expected, format!("{}", plan.display_indent()));
+        assert_snapshot!(plan.display_indent(), @r"
+        Projection: employee_csv.id
+          Filter: employee_csv.state IN (<subquery>)
+            Subquery:
+              TableScan: employee_csv projection=[state]
+            TableScan: employee_csv projection=[id, state]
+        ");
         Ok(())
     }
 
@@ -4047,13 +4052,13 @@ mod tests {
     fn test_display_indent_schema() -> Result<()> {
         let plan = display_plan()?;
 
-        let expected = "Projection: employee_csv.id [id:Int32]\
-        \n  Filter: employee_csv.state IN (<subquery>) [id:Int32, state:Utf8]\
-        \n    Subquery: [state:Utf8]\
-        \n      TableScan: employee_csv projection=[state] [state:Utf8]\
-        \n    TableScan: employee_csv projection=[id, state] [id:Int32, state:Utf8]";
-
-        assert_eq!(expected, format!("{}", plan.display_indent_schema()));
+        assert_snapshot!(plan.display_indent_schema(), @r"
+        Projection: employee_csv.id [id:Int32]
+          Filter: employee_csv.state IN (<subquery>) [id:Int32, state:Utf8]
+            Subquery: [state:Utf8]
+              TableScan: employee_csv projection=[state] [state:Utf8]
+            TableScan: employee_csv projection=[id, state] [id:Int32, state:Utf8]
+        ");
         Ok(())
     }
 
@@ -4068,12 +4073,12 @@ mod tests {
                 .project(vec![col("id"), exists(plan1).alias("exists")])?
                 .build();
 
-        let expected = "Projection: employee_csv.id, EXISTS (<subquery>) AS exists\
-        \n  Subquery:\
-        \n    TableScan: employee_csv projection=[state]\
-        \n  TableScan: employee_csv projection=[id, state]";
-
-        assert_eq!(expected, format!("{}", plan?.display_indent()));
+        assert_snapshot!(plan?.display_indent(), @r"
+        Projection: employee_csv.id, EXISTS (<subquery>) AS exists
+          Subquery:
+            TableScan: employee_csv projection=[state]
+          TableScan: employee_csv projection=[id, state]
+        ");
         Ok(())
     }
 
@@ -4081,46 +4086,42 @@ mod tests {
     fn test_display_graphviz() -> Result<()> {
         let plan = display_plan()?;
 
-        let expected_graphviz = r#"
-// Begin DataFusion GraphViz Plan,
-// display it online here: https://dreampuf.github.io/GraphvizOnline
-
-digraph {
-  subgraph cluster_1
-  {
-    graph[label="LogicalPlan"]
-    2[shape=box label="Projection: employee_csv.id"]
-    3[shape=box label="Filter: employee_csv.state IN (<subquery>)"]
-    2 -> 3 [arrowhead=none, arrowtail=normal, dir=back]
-    4[shape=box label="Subquery:"]
-    3 -> 4 [arrowhead=none, arrowtail=normal, dir=back]
-    5[shape=box label="TableScan: employee_csv projection=[state]"]
-    4 -> 5 [arrowhead=none, arrowtail=normal, dir=back]
-    6[shape=box label="TableScan: employee_csv projection=[id, state]"]
-    3 -> 6 [arrowhead=none, arrowtail=normal, dir=back]
-  }
-  subgraph cluster_7
-  {
-    graph[label="Detailed LogicalPlan"]
-    8[shape=box label="Projection: employee_csv.id\nSchema: [id:Int32]"]
-    9[shape=box label="Filter: employee_csv.state IN (<subquery>)\nSchema: [id:Int32, state:Utf8]"]
-    8 -> 9 [arrowhead=none, arrowtail=normal, dir=back]
-    10[shape=box label="Subquery:\nSchema: [state:Utf8]"]
-    9 -> 10 [arrowhead=none, arrowtail=normal, dir=back]
-    11[shape=box label="TableScan: employee_csv projection=[state]\nSchema: [state:Utf8]"]
-    10 -> 11 [arrowhead=none, arrowtail=normal, dir=back]
-    12[shape=box label="TableScan: employee_csv projection=[id, state]\nSchema: [id:Int32, state:Utf8]"]
-    9 -> 12 [arrowhead=none, arrowtail=normal, dir=back]
-  }
-}
-// End DataFusion GraphViz Plan
-"#;
-
         // just test for a few key lines in the output rather than the
         // whole thing to make test maintenance easier.
-        let graphviz = format!("{}", plan.display_graphviz());
+        assert_snapshot!(plan.display_graphviz(), @r#"
+        // Begin DataFusion GraphViz Plan,
+        // display it online here: https://dreampuf.github.io/GraphvizOnline
 
-        assert_eq!(expected_graphviz, graphviz);
+        digraph {
+          subgraph cluster_1
+          {
+            graph[label="LogicalPlan"]
+            2[shape=box label="Projection: employee_csv.id"]
+            3[shape=box label="Filter: employee_csv.state IN (<subquery>)"]
+            2 -> 3 [arrowhead=none, arrowtail=normal, dir=back]
+            4[shape=box label="Subquery:"]
+            3 -> 4 [arrowhead=none, arrowtail=normal, dir=back]
+            5[shape=box label="TableScan: employee_csv projection=[state]"]
+            4 -> 5 [arrowhead=none, arrowtail=normal, dir=back]
+            6[shape=box label="TableScan: employee_csv projection=[id, state]"]
+            3 -> 6 [arrowhead=none, arrowtail=normal, dir=back]
+          }
+          subgraph cluster_7
+          {
+            graph[label="Detailed LogicalPlan"]
+            8[shape=box label="Projection: employee_csv.id\nSchema: [id:Int32]"]
+            9[shape=box label="Filter: employee_csv.state IN (<subquery>)\nSchema: [id:Int32, state:Utf8]"]
+            8 -> 9 [arrowhead=none, arrowtail=normal, dir=back]
+            10[shape=box label="Subquery:\nSchema: [state:Utf8]"]
+            9 -> 10 [arrowhead=none, arrowtail=normal, dir=back]
+            11[shape=box label="TableScan: employee_csv projection=[state]\nSchema: [state:Utf8]"]
+            10 -> 11 [arrowhead=none, arrowtail=normal, dir=back]
+            12[shape=box label="TableScan: employee_csv projection=[id, state]\nSchema: [id:Int32, state:Utf8]"]
+            9 -> 12 [arrowhead=none, arrowtail=normal, dir=back]
+          }
+        }
+        // End DataFusion GraphViz Plan
+        "#);
         Ok(())
     }
 
@@ -4128,60 +4129,58 @@ digraph {
     fn test_display_pg_json() -> Result<()> {
         let plan = display_plan()?;
 
-        let expected_pg_json = r#"[
-  {
-    "Plan": {
-      "Expressions": [
-        "employee_csv.id"
-      ],
-      "Node Type": "Projection",
-      "Output": [
-        "id"
-      ],
-      "Plans": [
-        {
-          "Condition": "employee_csv.state IN (<subquery>)",
-          "Node Type": "Filter",
-          "Output": [
-            "id",
-            "state"
-          ],
-          "Plans": [
-            {
-              "Node Type": "Subquery",
+        assert_snapshot!(plan.display_pg_json(), @r#"
+        [
+          {
+            "Plan": {
+              "Expressions": [
+                "employee_csv.id"
+              ],
+              "Node Type": "Projection",
               "Output": [
-                "state"
+                "id"
               ],
               "Plans": [
                 {
-                  "Node Type": "TableScan",
+                  "Condition": "employee_csv.state IN (<subquery>)",
+                  "Node Type": "Filter",
                   "Output": [
+                    "id",
                     "state"
                   ],
-                  "Plans": [],
-                  "Relation Name": "employee_csv"
+                  "Plans": [
+                    {
+                      "Node Type": "Subquery",
+                      "Output": [
+                        "state"
+                      ],
+                      "Plans": [
+                        {
+                          "Node Type": "TableScan",
+                          "Output": [
+                            "state"
+                          ],
+                          "Plans": [],
+                          "Relation Name": "employee_csv"
+                        }
+                      ]
+                    },
+                    {
+                      "Node Type": "TableScan",
+                      "Output": [
+                        "id",
+                        "state"
+                      ],
+                      "Plans": [],
+                      "Relation Name": "employee_csv"
+                    }
+                  ]
                 }
               ]
-            },
-            {
-              "Node Type": "TableScan",
-              "Output": [
-                "id",
-                "state"
-              ],
-              "Plans": [],
-              "Relation Name": "employee_csv"
             }
-          ]
-        }
-      ]
-    }
-  }
-]"#;
-
-        let pg_json = format!("{}", plan.display_pg_json());
-
-        assert_eq!(expected_pg_json, pg_json);
+          }
+        ]
+        "#);
         Ok(())
     }
 
@@ -4230,17 +4229,16 @@ digraph {
         let res = plan.visit_with_subqueries(&mut visitor);
         assert!(res.is_ok());
 
-        assert_eq!(
-            visitor.strings,
-            vec![
-                "pre_visit Projection",
-                "pre_visit Filter",
-                "pre_visit TableScan",
-                "post_visit TableScan",
-                "post_visit Filter",
-                "post_visit Projection",
-            ]
-        );
+        assert_debug_snapshot!(visitor.strings, @r#"
+        [
+            "pre_visit Projection",
+            "pre_visit Filter",
+            "pre_visit TableScan",
+            "post_visit TableScan",
+            "post_visit Filter",
+            "post_visit Projection",
+        ]
+        "#);
     }
 
     #[derive(Debug, Default)]
@@ -4306,9 +4304,14 @@ digraph {
         let res = plan.visit_with_subqueries(&mut visitor);
         assert!(res.is_ok());
 
-        assert_eq!(
+        assert_debug_snapshot!(
             visitor.inner.strings,
-            vec!["pre_visit Projection", "pre_visit Filter"]
+            @r#"
+        [
+            "pre_visit Projection",
+            "pre_visit Filter",
+        ]
+        "#
         );
     }
 
@@ -4322,14 +4325,16 @@ digraph {
         let res = plan.visit_with_subqueries(&mut visitor);
         assert!(res.is_ok());
 
-        assert_eq!(
+        assert_debug_snapshot!(
             visitor.inner.strings,
-            vec![
-                "pre_visit Projection",
-                "pre_visit Filter",
-                "pre_visit TableScan",
-                "post_visit TableScan",
-            ]
+            @r#"
+        [
+            "pre_visit Projection",
+            "pre_visit Filter",
+            "pre_visit TableScan",
+            "post_visit TableScan",
+        ]
+        "#
         );
     }
 
@@ -4371,13 +4376,18 @@ digraph {
         };
         let plan = test_plan();
         let res = plan.visit_with_subqueries(&mut visitor).unwrap_err();
-        assert_eq!(
-            "This feature is not implemented: Error in pre_visit",
-            res.strip_backtrace()
+        assert_snapshot!(
+            res.strip_backtrace(),
+            @"This feature is not implemented: Error in pre_visit"
         );
-        assert_eq!(
+        assert_debug_snapshot!(
             visitor.inner.strings,
-            vec!["pre_visit Projection", "pre_visit Filter"]
+            @r#"
+        [
+            "pre_visit Projection",
+            "pre_visit Filter",
+        ]
+        "#
         );
     }
 
@@ -4389,18 +4399,20 @@ digraph {
         };
         let plan = test_plan();
         let res = plan.visit_with_subqueries(&mut visitor).unwrap_err();
-        assert_eq!(
-            "This feature is not implemented: Error in post_visit",
-            res.strip_backtrace()
+        assert_snapshot!(
+            res.strip_backtrace(),
+            @"This feature is not implemented: Error in post_visit"
         );
-        assert_eq!(
+        assert_debug_snapshot!(
             visitor.inner.strings,
-            vec![
-                "pre_visit Projection",
-                "pre_visit Filter",
-                "pre_visit TableScan",
-                "post_visit TableScan",
-            ]
+            @r#"
+        [
+            "pre_visit Projection",
+            "pre_visit Filter",
+            "pre_visit TableScan",
+            "post_visit TableScan",
+        ]
+        "#
         );
     }
 
@@ -4415,7 +4427,7 @@ digraph {
             })),
             empty_schema,
         );
-        assert_eq!(p.err().unwrap().strip_backtrace(), "Error during planning: Projection has mismatch between number of expressions (1) and number of fields in schema (0)");
+        assert_snapshot!(p.unwrap_err().strip_backtrace(), @"Error during planning: Projection has mismatch between number of expressions (1) and number of fields in schema (0)");
         Ok(())
     }
 
@@ -4535,7 +4547,7 @@ digraph {
         let col = schema.field_names()[0].clone();
 
         let filter = Filter::try_new(
-            Expr::Column(col.into()).eq(Expr::Literal(ScalarValue::Int32(Some(1)))),
+            Expr::Column(col.into()).eq(Expr::Literal(ScalarValue::Int32(Some(1)), None)),
             scan,
         )
         .unwrap();
@@ -4602,11 +4614,12 @@ digraph {
             .data()
             .unwrap();
 
-        let expected = "Explain\
-                        \n  Filter: foo = Boolean(true)\
-                        \n    TableScan: ?table?";
         let actual = format!("{}", plan.display_indent());
-        assert_eq!(expected.to_string(), actual)
+        assert_snapshot!(actual, @r"
+        Explain
+          Filter: foo = Boolean(true)
+            TableScan: ?table?
+        ")
     }
 
     #[test]
@@ -4661,12 +4674,14 @@ digraph {
                 skip: None,
                 fetch: Some(Box::new(Expr::Literal(
                     ScalarValue::new_ten(&DataType::UInt32).unwrap(),
+                    None,
                 ))),
                 input: Arc::clone(&input),
             }),
             LogicalPlan::Limit(Limit {
                 skip: Some(Box::new(Expr::Literal(
                     ScalarValue::new_ten(&DataType::UInt32).unwrap(),
+                    None,
                 ))),
                 fetch: None,
                 input: Arc::clone(&input),
@@ -4674,9 +4689,11 @@ digraph {
             LogicalPlan::Limit(Limit {
                 skip: Some(Box::new(Expr::Literal(
                     ScalarValue::new_one(&DataType::UInt32).unwrap(),
+                    None,
                 ))),
                 fetch: Some(Box::new(Expr::Literal(
                     ScalarValue::new_ten(&DataType::UInt32).unwrap(),
+                    None,
                 ))),
                 input,
             }),
@@ -4878,7 +4895,7 @@ digraph {
                 join_type: JoinType::Inner,
                 join_constraint: JoinConstraint::On,
                 schema: Arc::new(left_schema.join(&right_schema)?),
-                null_equals_null: false,
+                null_equality: NullEquality::NullEqualsNothing,
             }))
         }
 
@@ -4989,7 +5006,7 @@ digraph {
                 Some(col("t1.b").gt(col("t2.b"))),
                 join_type,
                 JoinConstraint::On,
-                false,
+                NullEquality::NullEqualsNothing,
             )?;
 
             match join_type {
@@ -5099,7 +5116,7 @@ digraph {
             assert_eq!(join.filter, Some(col("t1.b").gt(col("t2.b"))));
             assert_eq!(join.join_type, join_type);
             assert_eq!(join.join_constraint, JoinConstraint::On);
-            assert!(!join.null_equals_null);
+            assert_eq!(join.null_equality, NullEquality::NullEqualsNothing);
         }
 
         Ok(())
@@ -5134,7 +5151,7 @@ digraph {
                 None,
                 JoinType::Inner,
                 JoinConstraint::Using,
-                false,
+                NullEquality::NullEqualsNothing,
             )?;
 
             let fields = join.schema.fields();
@@ -5185,7 +5202,7 @@ digraph {
                 Some(col("t1.value").lt(col("t2.value"))), // Non-equi filter condition
                 JoinType::Inner,
                 JoinConstraint::On,
-                false,
+                NullEquality::NullEqualsNothing,
             )?;
 
             let fields = join.schema.fields();
@@ -5234,10 +5251,10 @@ digraph {
                 None,
                 JoinType::Inner,
                 JoinConstraint::On,
-                true,
+                NullEquality::NullEqualsNull,
             )?;
 
-            assert!(join.null_equals_null);
+            assert_eq!(join.null_equality, NullEquality::NullEqualsNull);
         }
 
         Ok(())
@@ -5276,7 +5293,7 @@ digraph {
                 Some(col("t1.value").gt(lit(5.0))),
                 join_type,
                 JoinConstraint::On,
-                false,
+                NullEquality::NullEqualsNothing,
             )?;
 
             let fields = join.schema.fields();
@@ -5315,7 +5332,7 @@ digraph {
             None,
             JoinType::Inner,
             JoinConstraint::Using,
-            false,
+            NullEquality::NullEqualsNothing,
         )?;
 
         assert_eq!(
