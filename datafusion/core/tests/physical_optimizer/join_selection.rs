@@ -371,6 +371,61 @@ async fn test_join_with_swap_semi() {
     }
 }
 
+#[tokio::test]
+async fn test_join_with_swap_mark() {
+    let join_types = [JoinType::LeftMark];
+    for join_type in join_types {
+        let (big, small) = create_big_and_small();
+
+        let join = HashJoinExec::try_new(
+            Arc::clone(&big),
+            Arc::clone(&small),
+            vec![(
+                Arc::new(Column::new_with_schema("big_col", &big.schema()).unwrap()),
+                Arc::new(Column::new_with_schema("small_col", &small.schema()).unwrap()),
+            )],
+            None,
+            &join_type,
+            None,
+            PartitionMode::Partitioned,
+            NullEquality::NullEqualsNothing,
+        )
+        .unwrap();
+
+        let original_schema = join.schema();
+
+        let optimized_join = JoinSelection::new()
+            .optimize(Arc::new(join), &ConfigOptions::new())
+            .unwrap();
+
+        let swapped_join = optimized_join
+            .as_any()
+            .downcast_ref::<HashJoinExec>()
+            .expect(
+                "A proj is not required to swap columns back to their original order",
+            );
+
+        assert_eq!(swapped_join.schema().fields().len(), 2);
+        assert_eq!(
+            swapped_join
+                .left()
+                .partition_statistics(None)
+                .unwrap()
+                .total_byte_size,
+            Precision::Inexact(8192)
+        );
+        assert_eq!(
+            swapped_join
+                .right()
+                .partition_statistics(None)
+                .unwrap()
+                .total_byte_size,
+            Precision::Inexact(2097152)
+        );
+        assert_eq!(original_schema, swapped_join.schema());
+    }
+}
+
 /// Compare the input plan with the plan after running the probe order optimizer.
 macro_rules! assert_optimized {
     ($EXPECTED_LINES: expr, $PLAN: expr) => {
@@ -577,8 +632,10 @@ async fn test_nl_join_with_swap(join_type: JoinType) {
     join_type,
     case::left_semi(JoinType::LeftSemi),
     case::left_anti(JoinType::LeftAnti),
+    case::left_mark(JoinType::LeftMark),
     case::right_semi(JoinType::RightSemi),
-    case::right_anti(JoinType::RightAnti)
+    case::right_anti(JoinType::RightAnti),
+    case::right_mark(JoinType::RightMark)
 )]
 #[tokio::test]
 async fn test_nl_join_with_swap_no_proj(join_type: JoinType) {
