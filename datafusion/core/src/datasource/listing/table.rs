@@ -60,7 +60,7 @@ use std::{any::Any, collections::HashMap, str::FromStr, sync::Arc};
 pub enum SchemaSource {
     /// Schema is not yet set (initial state)
     #[default]
-    None,
+    Unset,
     /// Schema was inferred from first table_path
     Inferred,
     /// Schema was specified explicitly via with_schema
@@ -1588,7 +1588,7 @@ mod tests {
 
         // Test default schema source
         let config = ListingTableConfig::new(table_path.clone());
-        assert_eq!(config.schema_source(), SchemaSource::None);
+        assert_eq!(config.schema_source(), SchemaSource::Unset);
 
         // Test schema source after setting a schema explicitly
         let provided_schema = create_test_schema();
@@ -1599,7 +1599,7 @@ mod tests {
         let format = CsvFormat::default();
         let options = ListingOptions::new(Arc::new(format));
         let config_with_options = config.with_listing_options(options.clone());
-        assert_eq!(config_with_options.schema_source(), SchemaSource::None);
+        assert_eq!(config_with_options.schema_source(), SchemaSource::Unset);
 
         let config_with_inferred = config_with_options.infer_schema(&ctx.state()).await?;
         assert_eq!(config_with_inferred.schema_source(), SchemaSource::Inferred);
