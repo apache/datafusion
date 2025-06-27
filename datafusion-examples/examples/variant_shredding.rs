@@ -322,13 +322,11 @@ impl ScalarUDFImpl for JsonGetStr {
         let values = json_array
             .iter()
             .map(|value| {
-                value
-                    .map(|v| {
-                        let json_value: serde_json::Value =
-                            serde_json::from_str(&v).unwrap_or_default();
-                        json_value.get(&key).map(|v| v.to_string())
-                    })
-                    .flatten()
+                value.and_then(|v| {
+                    let json_value: serde_json::Value =
+                        serde_json::from_str(v).unwrap_or_default();
+                    json_value.get(key).map(|v| v.to_string())
+                })
             })
             .collect::<StringArray>();
         Ok(ColumnarValue::Array(Arc::new(values)))
@@ -364,8 +362,7 @@ impl PhysicalExprSchemaRewriteHook for ShreddedVariantRewriter {
                         {
                             let column_name = column.name();
                             // Check if there's a flat column with underscore prefix
-                            let flat_column_name =
-                                format!("_{}.{}", column_name, field_name);
+                            let flat_column_name = format!("_{column_name}.{field_name}");
 
                             if let Ok(flat_field_index) =
                                 physical_file_schema.index_of(&flat_column_name)
