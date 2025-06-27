@@ -136,6 +136,7 @@ datafusion-functions-window-common = { path = "datafusion/functions-window-commo
 datafusion-macros = { path = "datafusion/macros", version = "48.0.0" }
 datafusion-optimizer = { path = "datafusion/optimizer", version = "48.0.0", default-features = false }
 datafusion-physical-expr = { path = "datafusion/physical-expr", version = "48.0.0", default-features = false }
+datafusion-physical-expr-adapter = { path = "datafusion/physical-expr-adapter", version = "48.0.0", default-features = false }
 datafusion-physical-expr-common = { path = "datafusion/physical-expr-common", version = "48.0.0", default-features = false }
 datafusion-physical-optimizer = { path = "datafusion/physical-optimizer", version = "48.0.0" }
 datafusion-physical-plan = { path = "datafusion/physical-plan", version = "48.0.0" }
