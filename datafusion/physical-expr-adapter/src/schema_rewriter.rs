@@ -152,14 +152,17 @@ fn build_struct_expr(
 
             // Handle field type conversion based on source and target types
             match (source_field.data_type(), target_field.data_type()) {
-                (DataType::Struct(nested_source_fields), DataType::Struct(nested_target_fields)) => {
+                (
+                    DataType::Struct(nested_source_fields),
+                    DataType::Struct(nested_target_fields),
+                ) => {
                     // For nested structs, recursively build the nested struct expression
                     build_struct_expr(
-                        rewriter, 
-                        get_field_expr, 
-                        nested_source_fields, 
-                        nested_target_fields, 
-                        target_field.name()
+                        rewriter,
+                        get_field_expr,
+                        nested_source_fields,
+                        nested_target_fields,
+                        target_field.name(),
                     )?
                 }
                 _ if source_field.data_type() == target_field.data_type() => {
@@ -395,8 +398,8 @@ mod tests {
     use super::*;
     use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
     use datafusion_common::ScalarValue;
-    use datafusion_physical_expr::expressions::{col, BinaryExpr};
     use datafusion_expr::Operator;
+    use datafusion_physical_expr::expressions::{col, BinaryExpr};
     use std::sync::Arc;
 
     fn create_test_schema() -> (Schema, Schema) {
@@ -594,23 +597,29 @@ mod tests {
         )]);
 
         let rewriter = PhysicalExprSchemaRewriter::new(&physical_schema, &logical_schema);
-        
+
         // Test that we can rewrite a column reference
         let column_expr = Arc::new(Column::new("user_info", 0));
         let result = rewriter.rewrite(column_expr)?;
-        
+
         // Should be a struct function expression
-        assert!(result.as_any().downcast_ref::<ScalarFunctionExpr>().is_some());
-        
+        assert!(result
+            .as_any()
+            .downcast_ref::<ScalarFunctionExpr>()
+            .is_some());
+
         // Test that we can rewrite a predicate on existing fields
         let predicate = Arc::new(BinaryExpr::new(
             col("user_info", &logical_schema)?,
             Operator::IsNotDistinctFrom,
             expressions::lit(ScalarValue::Null),
         )) as Arc<dyn PhysicalExpr>;
-        
+
         let rewritten_predicate = rewriter.rewrite(predicate)?;
-        assert!(rewritten_predicate.as_any().downcast_ref::<BinaryExpr>().is_some());
+        assert!(rewritten_predicate
+            .as_any()
+            .downcast_ref::<BinaryExpr>()
+            .is_some());
 
         Ok(())
     }
@@ -638,9 +647,9 @@ mod tests {
             DataType::Struct(
                 vec![
                     Field::new(
-                        "timestamp", 
-                        DataType::Timestamp(TimeUnit::Millisecond, None), 
-                        false
+                        "timestamp",
+                        DataType::Timestamp(TimeUnit::Millisecond, None),
+                        false,
                     ),
                     Field::new("count", DataType::Int64, true),
                 ]
@@ -650,13 +659,16 @@ mod tests {
         )]);
 
         let rewriter = PhysicalExprSchemaRewriter::new(&physical_schema, &logical_schema);
-        
+
         // Test column rewriting
         let column_expr = Arc::new(Column::new("event_data", 0));
         let result = rewriter.rewrite(column_expr)?;
-        
+
         // Should be a struct function expression that handles the type conversions
-        assert!(result.as_any().downcast_ref::<ScalarFunctionExpr>().is_some());
+        assert!(result
+            .as_any()
+            .downcast_ref::<ScalarFunctionExpr>()
+            .is_some());
 
         Ok(())
     }
@@ -707,7 +719,7 @@ mod tests {
                         "user",
                         DataType::Struct(
                             vec![
-                                Field::new("id", DataType::Int64, false),  // Type change
+                                Field::new("id", DataType::Int64, false), // Type change
                                 Field::new("name", DataType::Utf8, true),
                                 Field::new("email", DataType::Utf8, true), // New field
                             ]
@@ -716,9 +728,9 @@ mod tests {
                         false,
                     ),
                     Field::new(
-                        "created_at", 
-                        DataType::Timestamp(TimeUnit::Millisecond, None), 
-                        false
+                        "created_at",
+                        DataType::Timestamp(TimeUnit::Millisecond, None),
+                        false,
                     ), // Type change
                     Field::new("version", DataType::Int32, true), // New field
                 ]
@@ -728,13 +740,16 @@ mod tests {
         )]);
 
         let rewriter = PhysicalExprSchemaRewriter::new(&physical_schema, &logical_schema);
-        
+
         // Test that we can handle deeply nested struct evolution
         let column_expr = Arc::new(Column::new("metadata", 0));
         let result = rewriter.rewrite(column_expr)?;
-        
+
         // Should be a struct function expression
-        assert!(result.as_any().downcast_ref::<ScalarFunctionExpr>().is_some());
+        assert!(result
+            .as_any()
+            .downcast_ref::<ScalarFunctionExpr>()
+            .is_some());
 
         Ok(())
     }
@@ -771,13 +786,16 @@ mod tests {
         )]);
 
         let rewriter = PhysicalExprSchemaRewriter::new(&physical_schema, &logical_schema);
-        
+
         // Test that extra fields are properly ignored
         let column_expr = Arc::new(Column::new("config", 0));
         let result = rewriter.rewrite(column_expr)?;
-        
+
         // Should be a struct function expression that ignores the deprecated field
-        assert!(result.as_any().downcast_ref::<ScalarFunctionExpr>().is_some());
+        assert!(result
+            .as_any()
+            .downcast_ref::<ScalarFunctionExpr>()
+            .is_some());
 
         Ok(())
     }
@@ -829,25 +847,35 @@ mod tests {
                 ),
                 true,
             ),
-            Field::new("created_at", DataType::Timestamp(TimeUnit::Millisecond, None), true), // New field
+            Field::new(
+                "created_at",
+                DataType::Timestamp(TimeUnit::Millisecond, None),
+                true,
+            ), // New field
         ]);
 
         let rewriter = PhysicalExprSchemaRewriter::new(&physical_schema, &logical_schema);
-        
+
         // Test rewriting of simple field with type change
         let id_expr = Arc::new(Column::new("id", 0));
         let id_result = rewriter.rewrite(id_expr)?;
         assert!(id_result.as_any().downcast_ref::<CastExpr>().is_some());
-        
+
         // Test rewriting of complex struct field
         let profile_expr = Arc::new(Column::new("profile", 1));
         let profile_result = rewriter.rewrite(profile_expr)?;
-        assert!(profile_result.as_any().downcast_ref::<ScalarFunctionExpr>().is_some());
-        
+        assert!(profile_result
+            .as_any()
+            .downcast_ref::<ScalarFunctionExpr>()
+            .is_some());
+
         // Test rewriting of missing field (should become null)
         let created_at_expr = Arc::new(Column::new("created_at", 2));
         let created_at_result = rewriter.rewrite(created_at_expr)?;
-        assert!(created_at_result.as_any().downcast_ref::<datafusion_physical_expr::expressions::Literal>().is_some());
+        assert!(created_at_result
+            .as_any()
+            .downcast_ref::<datafusion_physical_expr::expressions::Literal>()
+            .is_some());
 
         Ok(())
     }
@@ -898,18 +926,21 @@ mod tests {
         )]);
 
         let rewriter = PhysicalExprSchemaRewriter::new(&physical_schema, &logical_schema);
-        
+
         // Create a complex predicate that references the struct
         let predicate = Arc::new(BinaryExpr::new(
             col("event", &logical_schema)?,
             Operator::IsNotDistinctFrom,
             expressions::lit(ScalarValue::Null),
         )) as Arc<dyn PhysicalExpr>;
-        
+
         let rewritten_predicate = rewriter.rewrite(predicate)?;
-        
+
         // The predicate should be successfully rewritten
-        assert!(rewritten_predicate.as_any().downcast_ref::<BinaryExpr>().is_some());
+        assert!(rewritten_predicate
+            .as_any()
+            .downcast_ref::<BinaryExpr>()
+            .is_some());
 
         Ok(())
     }
