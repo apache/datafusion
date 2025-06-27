@@ -1,0 +1,29 @@
+[package]
+name = "datafusion-physical-expr-adapter"
+description = "Physical expression schema adaptation utilities for DataFusion"
+keywords = ["datafusion", "query", "sql"]
+readme = "README.md"
+version = { workspace = true }
+edition = { workspace = true }
+homepage = { workspace = true }
+repository = { workspace = true }
+license = { workspace = true }
+authors = { workspace = true }
+rust-version = { workspace = true }
+
+[lib]
+name = "datafusion_physical_expr_adapter"
+path = "src/lib.rs"
+
+[dependencies]
+arrow = { workspace = true }
+datafusion-common = { workspace = true }
+datafusion-expr = { workspace = true }
+datafusion-functions = { workspace = true }
+datafusion-physical-expr = { workspace = true }
+datafusion-physical-expr-common = { workspace = true }
+itertools = { workspace = true }
+
+[dev-dependencies]
+datafusion-expr = { workspace = true }
+rstest = { workspace = true }
