@@ -22,7 +22,8 @@ use std::sync::Arc;
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, FieldRef, Schema};
 use datafusion_common::{
-    exec_err, plan_err,
+    exec_err,
+    nested_struct::validate_struct_compatibility,
     tree_node::{Transformed, TransformedResult, TreeNode},
     Result, ScalarValue,
 };
@@ -33,79 +34,6 @@ use datafusion_physical_expr::{
     ScalarFunctionExpr,
 };
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
-
-/// Validates compatibility between source and target struct fields for casting operations.
-///
-/// This function implements comprehensive struct compatibility checking by examining:
-/// - Field name matching between source and target structs  
-/// - Type castability for each matching field (including recursive struct validation)
-/// - Proper handling of missing fields (target fields not in source are allowed - filled with nulls)
-/// - Proper handling of extra fields (source fields not in target are allowed - ignored)
-///
-/// # Compatibility Rules
-/// - **Field Matching**: Fields are matched by name (case-sensitive)
-/// - **Missing Target Fields**: Allowed - will be filled with null values during casting
-/// - **Extra Source Fields**: Allowed - will be ignored during casting  
-/// - **Type Compatibility**: Each matching field must be castable using Arrow's type system
-/// - **Nested Structs**: Recursively validates nested struct compatibility
-///
-/// # Arguments
-/// * `source_fields` - Fields from the source struct type
-/// * `target_fields` - Fields from the target struct type
-///
-/// # Returns
-/// * `Ok(true)` if the structs are compatible for casting
-/// * `Err(DataFusionError)` with detailed error message if incompatible
-///
-/// # Examples
-/// ```text
-/// // Compatible: source has extra field, target has missing field
-/// // Source: {a: i32, b: string, c: f64}  
-/// // Target: {a: i64, d: bool}
-/// // Result: Ok(true) - 'a' can cast i32->i64, 'b','c' ignored, 'd' filled with nulls
-///
-/// // Incompatible: matching field has incompatible types
-/// // Source: {a: string}
-/// // Target: {a: binary}
-/// // Result: Err(...) - string cannot cast to binary
-/// ```
-pub fn validate_struct_compatibility(
-    source_fields: &[FieldRef],
-    target_fields: &[FieldRef],
-) -> Result<bool> {
-    // Check compatibility for each target field
-    for target_field in target_fields {
-        // Look for matching field in source by name
-        if let Some(source_field) = source_fields
-            .iter()
-            .find(|f| f.name() == target_field.name())
-        {
-            // Check if the matching field types are compatible
-            match (source_field.data_type(), target_field.data_type()) {
-                // Recursively validate nested structs
-                (DataType::Struct(source_nested), DataType::Struct(target_nested)) => {
-                    validate_struct_compatibility(source_nested, target_nested)?;
-                }
-                // For non-struct types, use the existing castability check
-                _ => {
-                    if !can_cast_types(source_field.data_type(), target_field.data_type())
-                    {
-                        return plan_err!(
-                            "Cannot cast struct field '{}' from type {:?} to type {:?}",
-                            target_field.name(),
-                            source_field.data_type(),
-                            target_field.data_type()
-                        );
-                    }
-                }
-            }
-        }
-        // Missing fields in source are OK - they'll be filled with nulls
-    }
-
-    // Extra fields in source are OK - they'll be ignored
-    Ok(true)
-}
 
 /// Build a struct expression by recursively extracting and rewriting fields from a source struct.
 ///
@@ -424,72 +352,6 @@ mod tests {
 
         // Capture output expression
         insta::assert_snapshot!(expression_to_sql(&result), @"CAST(a AS Int64)");
-    }
-
-    #[test]
-    fn test_validate_struct_compatibility_compatible() -> Result<()> {
-        // Source struct: {a: Int32, b: Utf8}
-        let source_fields = vec![
-            Arc::new(Field::new("a", DataType::Int32, true)),
-            Arc::new(Field::new("b", DataType::Utf8, true)),
-        ];
-
-        // Target struct: {a: Int64, c: Float64} (Int32 can cast to Int64, missing field c is OK)
-        let target_fields = vec![
-            Arc::new(Field::new("a", DataType::Int64, true)),
-            Arc::new(Field::new("c", DataType::Float64, true)),
-        ];
-
-        let result = validate_struct_compatibility(&source_fields, &target_fields)?;
-        assert!(result);
-        Ok(())
-    }
-
-    #[test]
-    fn test_validate_struct_compatibility_incompatible() {
-        // Source struct: {a: Binary}
-        let source_fields = vec![Arc::new(Field::new("a", DataType::Binary, true))];
-
-        // Target struct: {a: Int32} (Binary cannot cast to Int32)
-        let target_fields = vec![Arc::new(Field::new("a", DataType::Int32, true))];
-
-        let result = validate_struct_compatibility(&source_fields, &target_fields);
-        assert!(result.is_err());
-        let error_msg = result.unwrap_err().to_string();
-        assert!(error_msg.contains("Cannot cast struct field 'a'"));
-        assert!(error_msg.contains("Binary"));
-        assert!(error_msg.contains("Int32"));
-    }
-
-    #[test]
-    fn test_validate_struct_compatibility_nested_structs() -> Result<()> {
-        // Source nested struct: {info: {name: Utf8, age: Int32}}
-        let source_nested_fields = vec![
-            Arc::new(Field::new("name", DataType::Utf8, true)),
-            Arc::new(Field::new("age", DataType::Int32, true)),
-        ];
-        let source_fields = vec![Arc::new(Field::new(
-            "info",
-            DataType::Struct(source_nested_fields.into()),
-            true,
-        ))];
-
-        // Target nested struct: {info: {name: Utf8, age: Int64, location: Utf8}}
-        // (Int32 can cast to Int64, missing location field is OK)
-        let target_nested_fields = vec![
-            Arc::new(Field::new("name", DataType::Utf8, true)),
-            Arc::new(Field::new("age", DataType::Int64, true)),
-            Arc::new(Field::new("location", DataType::Utf8, true)),
-        ];
-        let target_fields = vec![Arc::new(Field::new(
-            "info",
-            DataType::Struct(target_nested_fields.into()),
-            true,
-        ))];
-
-        let result = validate_struct_compatibility(&source_fields, &target_fields)?;
-        assert!(result);
-        Ok(())
     }
 
     #[test]
