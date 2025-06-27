@@ -65,6 +65,7 @@ rustyline = "16.0"
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "sync", "parking_lot", "signal"] }
 url = { workspace = true }
 
+
 [dev-dependencies]
 assert_cmd = "2.0"
 ctor = { workspace = true }
@@ -72,3 +73,5 @@ insta = { workspace = true }
 insta-cmd = "0.6.0"
 predicates = "3.0"
 rstest = { workspace = true }
+testcontainers = { workspace = true }
+testcontainers-modules = { workspace = true, features = ["minio"] }

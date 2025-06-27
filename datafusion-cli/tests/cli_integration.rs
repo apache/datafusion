@@ -21,7 +21,12 @@ use rstest::rstest;
 
 use insta::{glob, Settings};
 use insta_cmd::{assert_cmd_snapshot, get_cargo_bin};
+use std::path::PathBuf;
 use std::{env, fs};
+use testcontainers::core::{ExecCommand, IntoContainerPort, Mount};
+use testcontainers::runners::AsyncRunner;
+use testcontainers::{ContainerAsync, Image, ImageExt};
+use testcontainers_modules::minio;
 
 fn cli() -> Command {
     Command::new(get_cargo_bin("datafusion-cli"))
@@ -33,6 +38,52 @@ fn make_settings() -> Settings {
     settings.add_filter(r"Elapsed .* seconds\.", "[ELAPSED]");
     settings.add_filter(r"DataFusion CLI v.*", "[CLI_VERSION]");
     settings
+}
+
+async fn setup_minio_container() -> ContainerAsync<minio::MinIO> {
+    let data_path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../datafusion/core/tests/data");
+
+    let absolute_data_path = data_path
+        .canonicalize()
+        .expect("Failed to get absolute path for test data");
+
+    let container = minio::MinIO::default()
+        .with_mapped_port(16433, 9000.tcp())
+        .with_env_var("MINIO_ROOT_USER", "TEST-DataFusionLogin")
+        .with_env_var("MINIO_ROOT_PASSWORD", "TEST-DataFusionPassword")
+        .with_mount(Mount::bind_mount(
+            absolute_data_path.to_str().unwrap(),
+            "/source",
+        ))
+        .start()
+        .await
+        .expect("Failed to start MinIO container");
+
+    for command in [
+        "mc ready local",
+        "mc alias set localminio http://localhost:9000 TEST-DataFusionLogin TEST-DataFusionPassword",
+        "mc mb localminio/data",
+        "mc cp -r /source/* localminio/data/"] {
+        let mut res = container.exec(
+            ExecCommand::new(["/bin/sh", "-c", command])
+        ).await.unwrap();
+
+        let status_code = res.exit_code().await.unwrap().unwrap_or(0); // todo: is this correct?
+        if status_code == 0 {
+            continue;
+        }
+
+        let stdout = res.stdout_to_vec().await.unwrap();
+        let stderr = res.stderr_to_vec().await.unwrap();
+
+        panic!("Command `{}` failed with status code: {:?}\nstdout: {}\nstderr: {}",
+               command, status_code, String::from_utf8_lossy(&stdout), String::from_utf8_lossy(&stderr));
+    }
+
+    // print stdout and stderr of the container
+
+    container
 }
 
 #[cfg(test)]
@@ -165,12 +216,20 @@ async fn test_cli() {
         return;
     }
 
+    let _container = setup_minio_container().await;
+
     let settings = make_settings();
     let _bound = settings.bind_to_scope();
 
     glob!("sql/integration/*.sql", |path| {
         let input = fs::read_to_string(path).unwrap();
-        assert_cmd_snapshot!(cli().pass_stdin(input))
+        assert_cmd_snapshot!(cli()
+            .env_clear()
+            .env("AWS_ACCESS_KEY_ID", "TEST-DataFusionLogin")
+            .env("AWS_SECRET_ACCESS_KEY", "TEST-DataFusionPassword")
+            .env("AWS_ENDPOINT", "http://localhost:16433")
+            .env("AWS_ALLOW_HTTP", "true")
+            .pass_stdin(input))
     });
 }
 
