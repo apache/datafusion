@@ -69,6 +69,23 @@ pub enum SchemaSource {
 
 /// Configuration for creating a [`ListingTable`]
 ///
+/// # Schema Evolution Support
+///
+/// This configuration supports schema evolution through the optional
+/// [`SchemaAdapterFactory`]. You might want to override the default factory when:
+///
+/// - **Reading files with evolving schemas**: When your data files have been written
+///   over time with different but compatible schemas (e.g., added columns, renamed fields)
+/// - **Type coercion requirements**: When you need custom logic for converting between
+///   different Arrow data types (e.g., Int32 ↔ Int64, Utf8 ↔ LargeUtf8)
+/// - **Column mapping**: When files have different column names or ordering than
+///   your expected table schema
+/// - **Backwards compatibility**: When newer table schemas need to read older file
+///   formats gracefully
+///
+/// If not specified, a [`DefaultSchemaAdapterFactory`] will be used, which handles
+/// basic schema compatibility cases.
+///
 ///
 #[derive(Debug, Clone, Default)]
 pub struct ListingTableConfig {
