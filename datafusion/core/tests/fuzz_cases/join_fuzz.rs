@@ -305,7 +305,6 @@ async fn test_left_mark_join_1k_filtered() {
     .await
 }
 
-// todo: add JoinTestType::HjSmj after Right mark SortMergeJoin support
 #[tokio::test]
 async fn test_right_mark_join_1k() {
     JoinFuzzTestCase::new(
@@ -314,7 +313,7 @@ async fn test_right_mark_join_1k() {
         JoinType::RightMark,
         None,
     )
-    .run_test(&[NljHj], false)
+    .run_test(&[HjSmj, NljHj], false)
     .await
 }
 
@@ -326,7 +325,7 @@ async fn test_right_mark_join_1k_filtered() {
         JoinType::RightMark,
         Some(Box::new(col_lt_col_filter)),
     )
-    .run_test(&[NljHj], false)
+    .run_test(&[HjSmj, NljHj], false)
     .await
 }
 

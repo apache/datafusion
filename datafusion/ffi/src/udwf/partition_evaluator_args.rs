@@ -75,17 +75,24 @@ impl TryFrom<PartitionEvaluatorArgs<'_>> for FFI_PartitionEvaluatorArgs {
             })
             .collect();
 
-        let max_column = required_columns.keys().max().unwrap_or(&0).to_owned();
-        let fields: Vec<_> = (0..max_column)
-            .map(|idx| match required_columns.get(&idx) {
-                Some((name, data_type)) => Field::new(*name, (*data_type).clone(), true),
-                None => Field::new(
-                    format!("ffi_partition_evaluator_col_{idx}"),
-                    DataType::Null,
-                    true,
-                ),
+        let max_column = required_columns.keys().max();
+        let fields: Vec<_> = max_column
+            .map(|max_column| {
+                (0..(max_column + 1))
+                    .map(|idx| match required_columns.get(&idx) {
+                        Some((name, data_type)) => {
+                            Field::new(*name, (*data_type).clone(), true)
+                        }
+                        None => Field::new(
+                            format!("ffi_partition_evaluator_col_{idx}"),
+                            DataType::Null,
+                            true,
+                        ),
+                    })
+                    .collect()
             })
-            .collect();
+            .unwrap_or_default();
+
         let schema = Arc::new(Schema::new(fields));
 
         let codec = DefaultPhysicalExtensionCodec {};

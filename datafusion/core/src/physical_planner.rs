@@ -779,9 +779,11 @@ impl DefaultPhysicalPlanner {
                 let runtime_expr =
                     self.create_physical_expr(predicate, input_dfschema, session_state)?;
 
+                let input_schema = input.schema();
                 let filter = match self.try_plan_async_exprs(
-                    input.schema().fields().len(),
+                    input_schema.fields().len(),
                     PlannedExprResult::Expr(vec![runtime_expr]),
+                    input_schema.as_arrow(),
                 )? {
                     PlanAsyncExpr::Sync(PlannedExprResult::Expr(runtime_expr)) => {
                         FilterExec::try_new(Arc::clone(&runtime_expr[0]), physical_input)?
@@ -2082,6 +2084,7 @@ impl DefaultPhysicalPlanner {
         match self.try_plan_async_exprs(
             num_input_columns,
             PlannedExprResult::ExprWithName(physical_exprs),
+            input_physical_schema.as_ref(),
         )? {
             PlanAsyncExpr::Sync(PlannedExprResult::ExprWithName(physical_exprs)) => Ok(
                 Arc::new(ProjectionExec::try_new(physical_exprs, input_exec)?),
@@ -2104,18 +2107,19 @@ impl DefaultPhysicalPlanner {
         &self,
         num_input_columns: usize,
         physical_expr: PlannedExprResult,
+        schema: &Schema,
     ) -> Result<PlanAsyncExpr> {
         let mut async_map = AsyncMapper::new(num_input_columns);
         match &physical_expr {
             PlannedExprResult::ExprWithName(exprs) => {
                 exprs
                     .iter()
-                    .try_for_each(|(expr, _)| async_map.find_references(expr))?;
+                    .try_for_each(|(expr, _)| async_map.find_references(expr, schema))?;
             }
             PlannedExprResult::Expr(exprs) => {
                 exprs
                     .iter()
-                    .try_for_each(|expr| async_map.find_references(expr))?;
+                    .try_for_each(|expr| async_map.find_references(expr, schema))?;
             }
         }
 

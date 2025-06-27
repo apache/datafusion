@@ -30,6 +30,7 @@ use arrow::{
 };
 // pub use for backwards compatibility
 pub use datafusion_common::pruning::PruningStatistics;
+use datafusion_physical_plan::metrics::Count;
 use log::{debug, trace};
 
 use datafusion_common::error::{DataFusionError, Result};
@@ -374,6 +375,30 @@ pub struct PruningPredicate {
     ///
     /// See [`PruningPredicate::literal_guarantees`] for more details.
     literal_guarantees: Vec<LiteralGuarantee>,
+}
+
+/// Build a pruning predicate from an optional predicate expression.
+/// If the predicate is None or the predicate cannot be converted to a pruning
+/// predicate, return None.
+/// If there is an error creating the pruning predicate it is recorded by incrementing
+/// the `predicate_creation_errors` counter.
+pub fn build_pruning_predicate(
+    predicate: Arc<dyn PhysicalExpr>,
+    file_schema: &SchemaRef,
+    predicate_creation_errors: &Count,
+) -> Option<Arc<PruningPredicate>> {
+    match PruningPredicate::try_new(predicate, Arc::clone(file_schema)) {
+        Ok(pruning_predicate) => {
+            if !pruning_predicate.always_true() {
+                return Some(Arc::new(pruning_predicate));
+            }
+        }
+        Err(e) => {
+            debug!("Could not create pruning predicate for: {e}");
+            predicate_creation_errors.add(1);
+        }
+    }
+    None
 }
 
 /// Rewrites predicates that [`PredicateRewriter`] can not handle, e.g. certain

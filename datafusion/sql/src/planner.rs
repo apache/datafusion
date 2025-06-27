@@ -616,7 +616,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     // Timestamp With Time Zone
                     // INPUT : [SQLDataType]   TimestampTz + [Config] Time Zone
                     // OUTPUT: [ArrowDataType] Timestamp<TimeUnit, Some(Time Zone)>
-                    self.context_provider.options().execution.time_zone.clone()
+                    Some(self.context_provider.options().execution.time_zone.clone())
                 } else {
                     // Timestamp Without Time zone
                     None

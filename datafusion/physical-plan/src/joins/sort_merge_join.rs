@@ -230,7 +230,6 @@ impl SortMergeJoinExec {
         // When output schema contains only the right side, probe side is right.
         // Otherwise probe side is the left side.
         match join_type {
-            // TODO: sort merge support for right mark (tracked here: https://github.com/apache/datafusion/issues/16226)
             JoinType::Right
             | JoinType::RightSemi
             | JoinType::RightAnti
@@ -1010,7 +1009,7 @@ fn get_corrected_filter_mask(
             corrected_mask.append_n(expected_size - corrected_mask.len(), false);
             Some(corrected_mask.finish())
         }
-        JoinType::LeftMark => {
+        JoinType::LeftMark | JoinType::RightMark => {
             for i in 0..row_indices_length {
                 let last_index =
                     last_index_for_row(i, row_indices, batch_ids, row_indices_length);
@@ -1160,6 +1159,7 @@ impl Stream for SortMergeJoinStream {
                                             JoinType::Left
                                                 | JoinType::LeftSemi
                                                 | JoinType::LeftMark
+                                                | JoinType::RightMark
                                                 | JoinType::Right
                                                 | JoinType::RightSemi
                                                 | JoinType::LeftAnti
@@ -1271,6 +1271,7 @@ impl Stream for SortMergeJoinStream {
                                         | JoinType::LeftAnti
                                         | JoinType::RightAnti
                                         | JoinType::LeftMark
+                                        | JoinType::RightMark
                                         | JoinType::Full
                                 )
                             {
@@ -1298,6 +1299,7 @@ impl Stream for SortMergeJoinStream {
                                     | JoinType::RightAnti
                                     | JoinType::Full
                                     | JoinType::LeftMark
+                                    | JoinType::RightMark
                             )
                         {
                             let record_batch = self.filter_joined_batch()?;
@@ -1623,6 +1625,7 @@ impl SortMergeJoinStream {
                         | JoinType::LeftAnti
                         | JoinType::RightAnti
                         | JoinType::LeftMark
+                        | JoinType::RightMark
                 ) {
                     join_streamed = !self.streamed_joined;
                 }
@@ -1630,9 +1633,15 @@ impl SortMergeJoinStream {
             Ordering::Equal => {
                 if matches!(
                     self.join_type,
-                    JoinType::LeftSemi | JoinType::LeftMark | JoinType::RightSemi
+                    JoinType::LeftSemi
+                        | JoinType::LeftMark
+                        | JoinType::RightSemi
+                        | JoinType::RightMark
                 ) {
-                    mark_row_as_match = matches!(self.join_type, JoinType::LeftMark);
+                    mark_row_as_match = matches!(
+                        self.join_type,
+                        JoinType::LeftMark | JoinType::RightMark
+                    );
                     // if the join filter is specified then its needed to output the streamed index
                     // only if it has not been emitted before
                     // the `join_filter_matched_idxs` keeps track on if streamed index has a successful
@@ -1847,31 +1856,32 @@ impl SortMergeJoinStream {
 
             // The row indices of joined buffered batch
             let right_indices: UInt64Array = chunk.buffered_indices.finish();
-            let mut right_columns = if matches!(self.join_type, JoinType::LeftMark) {
-                vec![Arc::new(is_not_null(&right_indices)?) as ArrayRef]
-            } else if matches!(
-                self.join_type,
-                JoinType::LeftSemi
-                    | JoinType::LeftAnti
-                    | JoinType::RightAnti
-                    | JoinType::RightSemi
-            ) {
-                vec![]
-            } else if let Some(buffered_idx) = chunk.buffered_batch_idx {
-                fetch_right_columns_by_idxs(
-                    &self.buffered_data,
-                    buffered_idx,
-                    &right_indices,
-                )?
-            } else {
-                // If buffered batch none, meaning it is null joined batch.
-                // We need to create null arrays for buffered columns to join with streamed rows.
-                create_unmatched_columns(
+            let mut right_columns =
+                if matches!(self.join_type, JoinType::LeftMark | JoinType::RightMark) {
+                    vec![Arc::new(is_not_null(&right_indices)?) as ArrayRef]
+                } else if matches!(
                     self.join_type,
-                    &self.buffered_schema,
-                    right_indices.len(),
-                )
-            };
+                    JoinType::LeftSemi
+                        | JoinType::LeftAnti
+                        | JoinType::RightAnti
+                        | JoinType::RightSemi
+                ) {
+                    vec![]
+                } else if let Some(buffered_idx) = chunk.buffered_batch_idx {
+                    fetch_right_columns_by_idxs(
+                        &self.buffered_data,
+                        buffered_idx,
+                        &right_indices,
+                    )?
+                } else {
+                    // If buffered batch none, meaning it is null joined batch.
+                    // We need to create null arrays for buffered columns to join with streamed rows.
+                    create_unmatched_columns(
+                        self.join_type,
+                        &self.buffered_schema,
+                        right_indices.len(),
+                    )
+                };
 
             // Prepare the columns we apply join filter on later.
             // Only for joined rows between streamed and buffered.
@@ -1890,7 +1900,7 @@ impl SortMergeJoinStream {
                         get_filter_column(&self.filter, &left_columns, &right_cols)
                     } else if matches!(
                         self.join_type,
-                        JoinType::RightAnti | JoinType::RightSemi
+                        JoinType::RightAnti | JoinType::RightSemi | JoinType::RightMark
                     ) {
                         let right_cols = fetch_right_columns_by_idxs(
                             &self.buffered_data,
@@ -1956,6 +1966,7 @@ impl SortMergeJoinStream {
                             | JoinType::LeftAnti
                             | JoinType::RightAnti
                             | JoinType::LeftMark
+                            | JoinType::RightMark
                             | JoinType::Full
                     ) {
                         self.staging_output_record_batches
@@ -2054,6 +2065,7 @@ impl SortMergeJoinStream {
                     | JoinType::LeftAnti
                     | JoinType::RightAnti
                     | JoinType::LeftMark
+                    | JoinType::RightMark
                     | JoinType::Full
             ))
         {
@@ -2115,7 +2127,7 @@ impl SortMergeJoinStream {
 
         if matches!(
             self.join_type,
-            JoinType::Left | JoinType::LeftMark | JoinType::Right
+            JoinType::Left | JoinType::LeftMark | JoinType::Right | JoinType::RightMark
         ) {
             let null_mask = compute::not(corrected_mask)?;
             let null_joined_batch = filter_record_batch(&record_batch, &null_mask)?;
@@ -2236,7 +2248,7 @@ fn create_unmatched_columns(
     schema: &SchemaRef,
     size: usize,
 ) -> Vec<ArrayRef> {
-    if matches!(join_type, JoinType::LeftMark) {
+    if matches!(join_type, JoinType::LeftMark | JoinType::RightMark) {
         vec![Arc::new(BooleanArray::from(vec![false; size])) as ArrayRef]
     } else {
         schema
@@ -3831,6 +3843,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn join_right_mark() -> Result<()> {
+        let left = build_table(
+            ("a1", &vec![1, 2, 2, 3]),
+            ("b1", &vec![4, 5, 5, 7]), // 7 does not exist on the right
+            ("c1", &vec![7, 8, 8, 9]),
+        );
+        let right = build_table(
+            ("a2", &vec![10, 20, 30, 40]),
+            ("b1", &vec![4, 4, 5, 6]), // 5 is double on the right
+            ("c2", &vec![60, 70, 80, 90]),
+        );
+        let on = vec![(
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+        )];
+
+        let (_, batches) = join_collect(left, right, on, RightMark).await?;
+        // The output order is important as SMJ preserves sortedness
+        assert_snapshot!(batches_to_string(&batches), @r#"
+            +----+----+----+-------+
+            | a2 | b1 | c2 | mark  |
+            +----+----+----+-------+
+            | 10 | 4  | 60 | true  |
+            | 20 | 4  | 70 | true  |
+            | 30 | 5  | 80 | true  |
+            | 40 | 6  | 90 | false |
+            +----+----+----+-------+
+            "#);
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn join_with_duplicated_column_names() -> Result<()> {
         let left = build_table(
             ("a", &vec![1, 2, 3]),
@@ -4158,7 +4202,7 @@ mod tests {
         let sort_options = vec![SortOptions::default(); on.len()];
 
         let join_types = vec![
-            Inner, Left, Right, RightSemi, Full, LeftSemi, LeftAnti, LeftMark,
+            Inner, Left, Right, RightSemi, Full, LeftSemi, LeftAnti, LeftMark, RightMark,
         ];
 
         // Disable DiskManager to prevent spilling
@@ -4240,7 +4284,7 @@ mod tests {
         let sort_options = vec![SortOptions::default(); on.len()];
 
         let join_types = vec![
-            Inner, Left, Right, RightSemi, Full, LeftSemi, LeftAnti, LeftMark,
+            Inner, Left, Right, RightSemi, Full, LeftSemi, LeftAnti, LeftMark, RightMark,
         ];
 
         // Disable DiskManager to prevent spilling
@@ -4300,7 +4344,7 @@ mod tests {
         let sort_options = vec![SortOptions::default(); on.len()];
 
         let join_types = [
-            Inner, Left, Right, RightSemi, Full, LeftSemi, LeftAnti, LeftMark,
+            Inner, Left, Right, RightSemi, Full, LeftSemi, LeftAnti, LeftMark, RightMark,
         ];
 
         // Enable DiskManager to allow spilling
@@ -4405,7 +4449,7 @@ mod tests {
         let sort_options = vec![SortOptions::default(); on.len()];
 
         let join_types = [
-            Inner, Left, Right, RightSemi, Full, LeftSemi, LeftAnti, LeftMark,
+            Inner, Left, Right, RightSemi, Full, LeftSemi, LeftAnti, LeftMark, RightMark,
         ];
 
         // Enable DiskManager to allow spilling

@@ -950,7 +950,7 @@ pub fn get_available_parallelism() -> usize {
         .get()
 }
 
-/// Converts a collection of function arguments into an fixed-size array of length N
+/// Converts a collection of function arguments into a fixed-size array of length N
 /// producing a reasonable error message in case of unexpected number of arguments.
 ///
 /// # Example

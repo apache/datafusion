@@ -40,6 +40,7 @@ use datafusion_expr::{
 };
 
 use crate::optimizer::ApplyOrder;
+use crate::simplify_expressions::simplify_predicates;
 use crate::utils::{has_all_column_refs, is_restrict_null_predicate};
 use crate::{OptimizerConfig, OptimizerRule};
 
@@ -778,6 +779,18 @@ impl OptimizerRule for PushDownFilter {
         let LogicalPlan::Filter(mut filter) = plan else {
             return Ok(Transformed::no(plan));
         };
+
+        let predicate = split_conjunction_owned(filter.predicate.clone());
+        let old_predicate_len = predicate.len();
+        let new_predicates = simplify_predicates(predicate)?;
+        if old_predicate_len != new_predicates.len() {
+            let Some(new_predicate) = conjunction(new_predicates) else {
+                // new_predicates is empty - remove the filter entirely
+                // Return the child plan without the filter
+                return Ok(Transformed::yes(Arc::unwrap_or_clone(filter.input)));
+            };
+            filter.predicate = new_predicate;
+        }
 
         match Arc::unwrap_or_clone(filter.input) {
             LogicalPlan::Filter(child_filter) => {

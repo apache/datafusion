@@ -609,7 +609,7 @@ pub fn find_aggregate_exprs<'a>(exprs: impl IntoIterator<Item = &'a Expr>) -> Ve
 
 /// Collect all deeply nested `Expr::WindowFunction`. They are returned in order of occurrence
 /// (depth first), with duplicates omitted.
-pub fn find_window_exprs(exprs: &[Expr]) -> Vec<Expr> {
+pub fn find_window_exprs<'a>(exprs: impl IntoIterator<Item = &'a Expr>) -> Vec<Expr> {
     find_exprs_in_exprs(exprs, &|nested_expr| {
         matches!(nested_expr, Expr::WindowFunction { .. })
     })

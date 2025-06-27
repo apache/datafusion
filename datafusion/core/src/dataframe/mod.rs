@@ -375,15 +375,12 @@ impl DataFrame {
         let expr_list: Vec<SelectExpr> =
             expr_list.into_iter().map(|e| e.into()).collect::<Vec<_>>();
 
-        let expressions = expr_list
-            .iter()
-            .filter_map(|e| match e {
-                SelectExpr::Expression(expr) => Some(expr.clone()),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
+        let expressions = expr_list.iter().filter_map(|e| match e {
+            SelectExpr::Expression(expr) => Some(expr),
+            _ => None,
+        });
 
-        let window_func_exprs = find_window_exprs(&expressions);
+        let window_func_exprs = find_window_exprs(expressions);
         let plan = if window_func_exprs.is_empty() {
             self.plan
         } else {
@@ -1923,7 +1920,7 @@ impl DataFrame {
     /// # }
     /// ```
     pub fn with_column(self, name: &str, expr: Expr) -> Result<DataFrame> {
-        let window_func_exprs = find_window_exprs(std::slice::from_ref(&expr));
+        let window_func_exprs = find_window_exprs([&expr]);
 
         let (window_fn_str, plan) = if window_func_exprs.is_empty() {
             (None, self.plan)

@@ -31,7 +31,7 @@ use arrow::{
 use datafusion_common::pruning::PruningStatistics;
 use datafusion_common::ScalarValue;
 use datafusion_physical_expr::{split_conjunction, PhysicalExpr};
-use datafusion_physical_optimizer::pruning::PruningPredicate;
+use datafusion_pruning::PruningPredicate;
 
 use log::{debug, trace};
 use parquet::arrow::arrow_reader::statistics::StatisticsConverter;

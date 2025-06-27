@@ -1,0 +1,234 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Test cases for predicate simplification feature
+# Basic redundant comparison simplification
+
+statement ok
+set datafusion.explain.logical_plan_only=true;
+
+statement ok
+CREATE TABLE test_data (
+    int_col INT,
+    float_col FLOAT,
+    str_col VARCHAR,
+    date_col DATE,
+    bool_col BOOLEAN
+);
+
+# x > 5 AND x > 6 should simplify to x > 6
+query TT
+EXPLAIN SELECT * FROM test_data WHERE int_col > 5 AND int_col > 6;
+----
+logical_plan
+01)Filter: test_data.int_col > Int32(6)
+02)--TableScan: test_data projection=[int_col, float_col, str_col, date_col, bool_col]
+
+# x > 5 AND x >= 6 should simplify to x >= 6
+query TT
+EXPLAIN SELECT * FROM test_data WHERE int_col > 5 AND int_col >= 6;
+----
+logical_plan
+01)Filter: test_data.int_col >= Int32(6)
+02)--TableScan: test_data projection=[int_col, float_col, str_col, date_col, bool_col]
+
+# x < 10 AND x <= 8 should simplify to x <= 8
+query TT
+EXPLAIN SELECT * FROM test_data WHERE int_col < 10 AND int_col <= 8;
+----
+logical_plan
+01)Filter: test_data.int_col <= Int32(8)
+02)--TableScan: test_data projection=[int_col, float_col, str_col, date_col, bool_col]
+
+# x > 5 AND x > 6 AND x > 7 should simplify to x > 7
+query TT
+EXPLAIN SELECT * FROM test_data WHERE int_col > 5 AND int_col > 6 AND int_col > 7;
+----
+logical_plan
+01)Filter: test_data.int_col > Int32(7)
+02)--TableScan: test_data projection=[int_col, float_col, str_col, date_col, bool_col]
+
+# x > 5 AND y < 10 AND x > 6 AND y < 8 should simplify to x > 6 AND y < 8
+query TT
+EXPLAIN SELECT * FROM test_data WHERE int_col > 5 AND float_col < 10 AND int_col > 6 AND float_col < 8;
+----
+logical_plan
+01)Filter: test_data.float_col < Float32(8) AND test_data.int_col > Int32(6)
+02)--TableScan: test_data projection=[int_col, float_col, str_col, date_col, bool_col]
+
+# x = 7 AND x = 7 should simplify to x = 7
+query TT
+EXPLAIN SELECT * FROM test_data WHERE int_col = 7 AND int_col = 7;
+----
+logical_plan
+01)Filter: test_data.int_col = Int32(7)
+02)--TableScan: test_data projection=[int_col, float_col, str_col, date_col, bool_col]
+
+# x = 7 AND x = 6 should simplify to false
+query TT
+EXPLAIN SELECT * FROM test_data WHERE int_col = 7 AND int_col = 6;
+----
+logical_plan EmptyRelation
+
+# TODO: x = 7 AND x < 2 should simplify to false
+query TT
+EXPLAIN SELECT * FROM test_data WHERE int_col = 7 AND int_col < 2;
+----
+logical_plan
+01)Filter: test_data.int_col = Int32(7) AND test_data.int_col < Int32(2)
+02)--TableScan: test_data projection=[int_col, float_col, str_col, date_col, bool_col]
+
+
+# TODO: x = 7 AND x > 5 should simplify to x = 7
+query TT
+EXPLAIN SELECT * FROM test_data WHERE int_col = 7 AND int_col > 5;
+----
+logical_plan
+01)Filter: test_data.int_col = Int32(7) AND test_data.int_col > Int32(5)
+02)--TableScan: test_data projection=[int_col, float_col, str_col, date_col, bool_col]
+
+# str_col > 'apple' AND str_col > 'banana' should simplify to str_col > 'banana'
+query TT
+EXPLAIN SELECT * FROM test_data WHERE str_col > 'apple' AND str_col > 'banana';
+----
+logical_plan
+01)Filter: test_data.str_col > Utf8View("banana")
+02)--TableScan: test_data projection=[int_col, float_col, str_col, date_col, bool_col]
+
+# date_col > '2023-01-01' AND date_col > '2023-02-01' should simplify to date_col > '2023-02-01'
+query TT
+EXPLAIN SELECT * FROM test_data WHERE date_col > '2023-01-01' AND date_col > '2023-02-01';
+----
+logical_plan
+01)Filter: test_data.date_col > Date32("2023-02-01")
+02)--TableScan: test_data projection=[int_col, float_col, str_col, date_col, bool_col]
+
+query TT
+EXPLAIN SELECT * FROM test_data WHERE bool_col = true AND bool_col = false;
+----
+logical_plan
+01)Filter: test_data.bool_col AND NOT test_data.bool_col
+02)--TableScan: test_data projection=[int_col, float_col, str_col, date_col, bool_col]
+
+
+# This shouldn't be simplified since they're different relationships
+query TT
+EXPLAIN SELECT * FROM test_data WHERE int_col > float_col AND int_col > 5;
+----
+logical_plan
+01)Filter: CAST(test_data.int_col AS Float32) > test_data.float_col AND test_data.int_col > Int32(5)
+02)--TableScan: test_data projection=[int_col, float_col, str_col, date_col, bool_col]
+
+# Should simplify the int_col predicates but preserve the others
+query TT
+EXPLAIN SELECT * FROM test_data
+WHERE int_col > 5
+  AND int_col > 10
+  AND str_col LIKE 'A%'
+  AND float_col BETWEEN 1 AND 100;
+----
+logical_plan
+01)Filter: test_data.str_col LIKE Utf8View("A%") AND test_data.float_col >= Float32(1) AND test_data.float_col <= Float32(100) AND test_data.int_col > Int32(10)
+02)--TableScan: test_data projection=[int_col, float_col, str_col, date_col, bool_col]
+
+statement ok
+CREATE TABLE test_data2 (
+    id INT,
+    value INT
+);
+
+query TT
+EXPLAIN SELECT t1.int_col, t2.value
+FROM test_data t1
+JOIN test_data2 t2 ON t1.int_col = t2.id
+WHERE t1.int_col > 5
+  AND t1.int_col > 10
+  AND t2.value < 100
+  AND t2.value < 50;
+----
+logical_plan
+01)Projection: t1.int_col, t2.value
+02)--Inner Join: t1.int_col = t2.id
+03)----SubqueryAlias: t1
+04)------Filter: test_data.int_col > Int32(10)
+05)--------TableScan: test_data projection=[int_col]
+06)----SubqueryAlias: t2
+07)------Filter: test_data2.value < Int32(50) AND test_data2.id > Int32(10)
+08)--------TableScan: test_data2 projection=[id, value]
+
+# Handling negated predicates
+# NOT (x < 10) AND NOT (x < 5) should simplify to NOT (x < 10)
+query TT
+EXPLAIN SELECT * FROM test_data WHERE NOT (int_col < 10) AND NOT (int_col < 5);
+----
+logical_plan
+01)Filter: test_data.int_col >= Int32(10)
+02)--TableScan: test_data projection=[int_col, float_col, str_col, date_col, bool_col]
+
+# x > 5 AND x < 10 should be preserved (can't be simplified)
+query TT
+EXPLAIN SELECT * FROM test_data WHERE int_col > 5 AND int_col < 10;
+----
+logical_plan
+01)Filter: test_data.int_col > Int32(5) AND test_data.int_col < Int32(10)
+02)--TableScan: test_data projection=[int_col, float_col, str_col, date_col, bool_col]
+
+# 5 < x AND 3 < x should simplify to 5 < x
+query TT
+EXPLAIN SELECT * FROM test_data WHERE 5 < int_col AND 3 < int_col;
+----
+logical_plan
+01)Filter: test_data.int_col > Int32(5)
+02)--TableScan: test_data projection=[int_col, float_col, str_col, date_col, bool_col]
+
+# CAST(x AS FLOAT) > 5.0 AND CAST(x AS FLOAT) > 6.0 should simplify
+query TT
+EXPLAIN SELECT * FROM test_data WHERE CAST(int_col AS FLOAT) > 5.0 AND CAST(int_col AS FLOAT) > 6.0;
+----
+logical_plan
+01)Filter: CAST(CAST(test_data.int_col AS Float32) AS Float64) > Float64(6)
+02)--TableScan: test_data projection=[int_col, float_col, str_col, date_col, bool_col]
+
+# x = 5 AND x = 6 (logically impossible)
+query TT
+EXPLAIN SELECT * FROM test_data WHERE int_col = 5 AND int_col = 6;
+----
+logical_plan EmptyRelation
+
+# (x > 5 OR y < 10) AND (x > 6 OR y < 8)
+# This is more complex but could still benefit from some simplification
+query TT
+EXPLAIN SELECT * FROM test_data
+WHERE (int_col > 5 OR float_col < 10)
+  AND (int_col > 6 OR float_col < 8);
+----
+logical_plan
+01)Filter: (test_data.int_col > Int32(5) OR test_data.float_col < Float32(10)) AND (test_data.int_col > Int32(6) OR test_data.float_col < Float32(8))
+02)--TableScan: test_data projection=[int_col, float_col, str_col, date_col, bool_col]
+
+# Combination of AND and OR with simplifiable predicates
+query TT
+EXPLAIN SELECT * FROM test_data
+WHERE (int_col > 5 AND int_col > 6)
+   OR (float_col < 10 AND float_col < 8);
+----
+logical_plan
+01)Filter: test_data.int_col > Int32(5) AND test_data.int_col > Int32(6) OR test_data.float_col < Float32(10) AND test_data.float_col < Float32(8)
+02)--TableScan: test_data projection=[int_col, float_col, str_col, date_col, bool_col]
+
+statement ok
+set datafusion.explain.logical_plan_only=false;

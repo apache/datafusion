@@ -366,6 +366,10 @@ impl RefCountedTempFile {
 
         Ok(())
     }
+
+    pub fn current_disk_usage(&self) -> u64 {
+        self.current_file_disk_usage
+    }
 }
 
 /// When the temporary file is dropped, subtract its disk usage from the disk manager's total

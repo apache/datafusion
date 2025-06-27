@@ -15,24 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`SimplifyExpressions`] simplifies expressions in the logical plan,
-//! [`ExprSimplifier`] simplifies individual `Expr`s.
+mod file_pruner;
+mod pruning_predicate;
 
-pub mod expr_simplifier;
-mod guarantees;
-mod inlist_simplifier;
-mod regex;
-pub mod simplify_exprs;
-mod simplify_predicates;
-mod unwrap_cast;
-mod utils;
-
-// backwards compatibility
-pub use datafusion_expr::simplify::{SimplifyContext, SimplifyInfo};
-
-pub use expr_simplifier::*;
-pub use simplify_exprs::*;
-pub use simplify_predicates::simplify_predicates;
-
-// Export for test in datafusion/core/tests/optimizer_integration.rs
-pub use guarantees::GuaranteeRewriter;
+pub use file_pruner::FilePruner;
+pub use pruning_predicate::{
+    build_pruning_predicate, PredicateRewriter, PruningPredicate, PruningStatistics,
+    RequiredColumns, UnhandledPredicateHook,
+};

@@ -20,15 +20,14 @@ use arrow::compute::kernels::cmp::eq;
 use arrow_schema::{DataType, Field, Schema};
 use async_trait::async_trait;
 use datafusion::common::error::Result;
-use datafusion::common::internal_err;
 use datafusion::common::types::{logical_int64, logical_string};
 use datafusion::common::utils::take_function_args;
+use datafusion::common::{internal_err, not_impl_err};
 use datafusion::config::ConfigOptions;
-use datafusion::logical_expr::async_udf::{
-    AsyncScalarFunctionArgs, AsyncScalarUDF, AsyncScalarUDFImpl,
-};
+use datafusion::logical_expr::async_udf::{AsyncScalarUDF, AsyncScalarUDFImpl};
 use datafusion::logical_expr::{
-    ColumnarValue, Signature, TypeSignature, TypeSignatureClass, Volatility,
+    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
+    TypeSignatureClass, Volatility,
 };
 use datafusion::logical_expr_common::signature::Coercion;
 use datafusion::physical_expr_common::datum::apply_cmp;
@@ -153,7 +152,7 @@ impl AsyncUpper {
 }
 
 #[async_trait]
-impl AsyncScalarUDFImpl for AsyncUpper {
+impl ScalarUDFImpl for AsyncUpper {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -170,13 +169,20 @@ impl AsyncScalarUDFImpl for AsyncUpper {
         Ok(DataType::Utf8)
     }
 
+    fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        not_impl_err!("AsyncUpper can only be called from async contexts")
+    }
+}
+
+#[async_trait]
+impl AsyncScalarUDFImpl for AsyncUpper {
     fn ideal_batch_size(&self) -> Option<usize> {
         Some(10)
     }
 
     async fn invoke_async_with_args(
         &self,
-        args: AsyncScalarFunctionArgs,
+        args: ScalarFunctionArgs,
         _option: &ConfigOptions,
     ) -> Result<ArrayRef> {
         trace!("Invoking async_upper with args: {:?}", args);
@@ -226,7 +232,7 @@ impl AsyncEqual {
 }
 
 #[async_trait]
-impl AsyncScalarUDFImpl for AsyncEqual {
+impl ScalarUDFImpl for AsyncEqual {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -243,9 +249,16 @@ impl AsyncScalarUDFImpl for AsyncEqual {
         Ok(DataType::Boolean)
     }
 
+    fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        not_impl_err!("AsyncEqual can only be called from async contexts")
+    }
+}
+
+#[async_trait]
+impl AsyncScalarUDFImpl for AsyncEqual {
     async fn invoke_async_with_args(
         &self,
-        args: AsyncScalarFunctionArgs,
+        args: ScalarFunctionArgs,
         _option: &ConfigOptions,
     ) -> Result<ArrayRef> {
         let [arg1, arg2] = take_function_args(self.name(), &args.args)?;

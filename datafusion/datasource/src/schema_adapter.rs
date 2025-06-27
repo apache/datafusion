@@ -20,13 +20,20 @@
 //! Adapter provides a method of translating the RecordBatches that come out of the
 //! physical format into how they should be used by DataFusion.  For instance, a schema
 //! can be stored external to a parquet file that maps parquet logical types to arrow types.
-
-use arrow::array::{new_null_array, RecordBatch, RecordBatchOptions};
-use arrow::compute::{can_cast_types, cast};
-use arrow::datatypes::{Field, Schema, SchemaRef};
-use datafusion_common::{plan_err, ColumnStatistics};
-use std::fmt::Debug;
-use std::sync::Arc;
+use arrow::{
+    array::{new_null_array, ArrayRef, RecordBatch, RecordBatchOptions},
+    compute::can_cast_types,
+    datatypes::{DataType, Field, Schema, SchemaRef},
+};
+use datafusion_common::{
+    nested_struct::{cast_column, validate_struct_compatibility},
+    plan_err, ColumnStatistics,
+};
+use std::{fmt::Debug, sync::Arc};
+/// Function used by [`SchemaMapping`] to adapt a column from the file schema to
+/// the table schema.
+pub type CastColumnFn =
+    dyn Fn(&ArrayRef, &Field) -> datafusion_common::Result<ArrayRef> + Send + Sync;
 
 /// Factory for creating [`SchemaAdapter`]
 ///
@@ -232,15 +239,22 @@ pub(crate) fn can_cast_field(
     file_field: &Field,
     table_field: &Field,
 ) -> datafusion_common::Result<bool> {
-    if can_cast_types(file_field.data_type(), table_field.data_type()) {
-        Ok(true)
-    } else {
-        plan_err!(
-            "Cannot cast file schema field {} of type {:?} to table schema field of type {:?}",
-            file_field.name(),
-            file_field.data_type(),
-            table_field.data_type()
-        )
+    match (file_field.data_type(), table_field.data_type()) {
+        (DataType::Struct(source_fields), DataType::Struct(target_fields)) => {
+            validate_struct_compatibility(source_fields, target_fields)
+        }
+        _ => {
+            if can_cast_types(file_field.data_type(), table_field.data_type()) {
+                Ok(true)
+            } else {
+                plan_err!(
+                    "Cannot cast file schema field {} of type {:?} to table schema field of type {:?}",
+                    file_field.name(),
+                    file_field.data_type(),
+                    table_field.data_type()
+                )
+            }
+        }
     }
 }
 
@@ -277,6 +291,7 @@ impl SchemaAdapter for DefaultSchemaAdapter {
             Arc::new(SchemaMapping::new(
                 Arc::clone(&self.projected_table_schema),
                 field_mappings,
+                Arc::new(|array: &ArrayRef, field: &Field| cast_column(array, field)),
             )),
             projection,
         ))
@@ -323,7 +338,6 @@ where
 /// `projected_table_schema` as it can only operate on the projected fields.
 ///
 /// [`map_batch`]: Self::map_batch
-#[derive(Debug)]
 pub struct SchemaMapping {
     /// The schema of the table. This is the expected schema after conversion
     /// and it should match the schema of the query result.
@@ -334,6 +348,19 @@ pub struct SchemaMapping {
     /// They are Options instead of just plain `usize`s because the table could
     /// have fields that don't exist in the file.
     field_mappings: Vec<Option<usize>>,
+    /// Function used to adapt a column from the file schema to the table schema
+    /// when it exists in both schemas
+    cast_column: Arc<CastColumnFn>,
+}
+
+impl Debug for SchemaMapping {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SchemaMapping")
+            .field("projected_table_schema", &self.projected_table_schema)
+            .field("field_mappings", &self.field_mappings)
+            .field("cast_column", &"<fn>")
+            .finish()
+    }
 }
 
 impl SchemaMapping {
@@ -343,10 +370,12 @@ impl SchemaMapping {
     pub fn new(
         projected_table_schema: SchemaRef,
         field_mappings: Vec<Option<usize>>,
+        cast_column: Arc<CastColumnFn>,
     ) -> Self {
         Self {
             projected_table_schema,
             field_mappings,
+            cast_column,
         }
     }
 }
@@ -373,9 +402,9 @@ impl SchemaMapper for SchemaMapping {
                     // If this field only exists in the table, and not in the file, then we know
                     // that it's null, so just return that.
                     || Ok(new_null_array(field.data_type(), batch_rows)),
-                    // However, if it does exist in both, then try to cast it to the correct output
-                    // type
-                    |batch_idx| cast(&batch_cols[batch_idx], field.data_type()),
+                    // However, if it does exist in both, use the cast_column function
+                    // to perform any necessary conversions
+                    |batch_idx| (self.cast_column)(&batch_cols[batch_idx], field),
                 )
             })
             .collect::<datafusion_common::Result<Vec<_>, _>>()?;
@@ -421,10 +450,14 @@ impl SchemaMapper for SchemaMapping {
 
 #[cfg(test)]
 mod tests {
-    use arrow::datatypes::{DataType, Field};
-    use datafusion_common::{stats::Precision, Statistics};
-
     use super::*;
+    use arrow::{
+        array::{Array, ArrayRef, StringBuilder, StructArray, TimestampMillisecondArray},
+        compute::cast,
+        datatypes::{DataType, Field, TimeUnit},
+        record_batch::RecordBatch,
+    };
+    use datafusion_common::{stats::Precision, Result, ScalarValue, Statistics};
 
     #[test]
     fn test_schema_mapping_map_statistics_basic() {
@@ -595,8 +628,11 @@ mod tests {
         let field_mappings = vec![Some(1), Some(0)];
 
         // Create SchemaMapping manually
-        let mapping =
-            SchemaMapping::new(Arc::clone(&projected_schema), field_mappings.clone());
+        let mapping = SchemaMapping::new(
+            Arc::clone(&projected_schema),
+            field_mappings.clone(),
+            Arc::new(|array: &ArrayRef, field: &Field| cast_column(array, field)),
+        );
 
         // Check that fields were set correctly
         assert_eq!(*mapping.projected_table_schema, *projected_schema);
@@ -699,5 +735,278 @@ mod tests {
         let c_array = mapped_batch.column(2);
         assert_eq!(c_array.len(), 2);
         assert_eq!(c_array.null_count(), 2);
+    }
+
+    #[test]
+    fn test_adapt_struct_with_added_nested_fields() -> Result<()> {
+        let (file_schema, table_schema) = create_test_schemas_with_nested_fields();
+        let batch = create_test_batch_with_struct_data(&file_schema)?;
+
+        let adapter = DefaultSchemaAdapter {
+            projected_table_schema: Arc::clone(&table_schema),
+        };
+        let (mapper, _) = adapter.map_schema(file_schema.as_ref())?;
+        let mapped_batch = mapper.map_batch(batch)?;
+
+        verify_adapted_batch_with_nested_fields(&mapped_batch, &table_schema)?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_map_column_statistics_struct() -> Result<()> {
+        let (file_schema, table_schema) = create_test_schemas_with_nested_fields();
+
+        let adapter = DefaultSchemaAdapter {
+            projected_table_schema: Arc::clone(&table_schema),
+        };
+        let (mapper, _) = adapter.map_schema(file_schema.as_ref())?;
+
+        let file_stats = vec![
+            create_test_column_statistics(
+                0,
+                100,
+                Some(ScalarValue::Int32(Some(1))),
+                Some(ScalarValue::Int32(Some(100))),
+                Some(ScalarValue::Int32(Some(5100))),
+            ),
+            create_test_column_statistics(10, 50, None, None, None),
+        ];
+
+        let table_stats = mapper.map_column_statistics(&file_stats)?;
+        assert_eq!(table_stats.len(), 1);
+        verify_column_statistics(
+            &table_stats[0],
+            Some(0),
+            Some(100),
+            Some(ScalarValue::Int32(Some(1))),
+            Some(ScalarValue::Int32(Some(100))),
+            Some(ScalarValue::Int32(Some(5100))),
+        );
+        let missing_stats = mapper.map_column_statistics(&[])?;
+        assert_eq!(missing_stats.len(), 1);
+        assert_eq!(missing_stats[0], ColumnStatistics::new_unknown());
+        Ok(())
+    }
+
+    fn create_test_schemas_with_nested_fields() -> (SchemaRef, SchemaRef) {
+        let file_schema = Arc::new(Schema::new(vec![Field::new(
+            "info",
+            DataType::Struct(
+                vec![
+                    Field::new("location", DataType::Utf8, true),
+                    Field::new(
+                        "timestamp_utc",
+                        DataType::Timestamp(TimeUnit::Millisecond, Some("UTC".into())),
+                        true,
+                    ),
+                ]
+                .into(),
+            ),
+            true,
+        )]));
+
+        let table_schema = Arc::new(Schema::new(vec![Field::new(
+            "info",
+            DataType::Struct(
+                vec![
+                    Field::new("location", DataType::Utf8, true),
+                    Field::new(
+                        "timestamp_utc",
+                        DataType::Timestamp(TimeUnit::Millisecond, Some("UTC".into())),
+                        true,
+                    ),
+                    Field::new(
+                        "reason",
+                        DataType::Struct(
+                            vec![
+                                Field::new("_level", DataType::Float64, true),
+                                Field::new(
+                                    "details",
+                                    DataType::Struct(
+                                        vec![
+                                            Field::new("rurl", DataType::Utf8, true),
+                                            Field::new("s", DataType::Float64, true),
+                                            Field::new("t", DataType::Utf8, true),
+                                        ]
+                                        .into(),
+                                    ),
+                                    true,
+                                ),
+                            ]
+                            .into(),
+                        ),
+                        true,
+                    ),
+                ]
+                .into(),
+            ),
+            true,
+        )]));
+
+        (file_schema, table_schema)
+    }
+
+    fn create_test_batch_with_struct_data(
+        file_schema: &SchemaRef,
+    ) -> Result<RecordBatch> {
+        let mut location_builder = StringBuilder::new();
+        location_builder.append_value("San Francisco");
+        location_builder.append_value("New York");
+
+        let timestamp_array = TimestampMillisecondArray::from(vec![
+            Some(1640995200000),
+            Some(1641081600000),
+        ]);
+
+        let timestamp_type =
+            DataType::Timestamp(TimeUnit::Millisecond, Some("UTC".into()));
+        let timestamp_array = cast(&timestamp_array, &timestamp_type)?;
+
+        let info_struct = StructArray::from(vec![
+            (
+                Arc::new(Field::new("location", DataType::Utf8, true)),
+                Arc::new(location_builder.finish()) as ArrayRef,
+            ),
+            (
+                Arc::new(Field::new("timestamp_utc", timestamp_type, true)),
+                timestamp_array,
+            ),
+        ]);
+
+        Ok(RecordBatch::try_new(
+            Arc::clone(file_schema),
+            vec![Arc::new(info_struct)],
+        )?)
+    }
+
+    fn verify_adapted_batch_with_nested_fields(
+        mapped_batch: &RecordBatch,
+        table_schema: &SchemaRef,
+    ) -> Result<()> {
+        assert_eq!(mapped_batch.schema(), *table_schema);
+        assert_eq!(mapped_batch.num_rows(), 2);
+
+        let info_col = mapped_batch.column(0);
+        let info_array = info_col
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .expect("Expected info column to be a StructArray");
+
+        verify_preserved_fields(info_array)?;
+        verify_reason_field_structure(info_array)?;
+        Ok(())
+    }
+
+    fn verify_preserved_fields(info_array: &StructArray) -> Result<()> {
+        let location_col = info_array
+            .column_by_name("location")
+            .expect("Expected location field in struct");
+        let location_array = location_col
+            .as_any()
+            .downcast_ref::<arrow::array::StringArray>()
+            .expect("Expected location to be a StringArray");
+        assert_eq!(location_array.value(0), "San Francisco");
+        assert_eq!(location_array.value(1), "New York");
+
+        let timestamp_col = info_array
+            .column_by_name("timestamp_utc")
+            .expect("Expected timestamp_utc field in struct");
+        let timestamp_array = timestamp_col
+            .as_any()
+            .downcast_ref::<TimestampMillisecondArray>()
+            .expect("Expected timestamp_utc to be a TimestampMillisecondArray");
+        assert_eq!(timestamp_array.value(0), 1640995200000);
+        assert_eq!(timestamp_array.value(1), 1641081600000);
+        Ok(())
+    }
+
+    fn verify_reason_field_structure(info_array: &StructArray) -> Result<()> {
+        let reason_col = info_array
+            .column_by_name("reason")
+            .expect("Expected reason field in struct");
+        let reason_array = reason_col
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .expect("Expected reason to be a StructArray");
+        assert_eq!(reason_array.fields().len(), 2);
+        assert!(reason_array.column_by_name("_level").is_some());
+        assert!(reason_array.column_by_name("details").is_some());
+
+        let details_col = reason_array
+            .column_by_name("details")
+            .expect("Expected details field in reason struct");
+        let details_array = details_col
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .expect("Expected details to be a StructArray");
+        assert_eq!(details_array.fields().len(), 3);
+        assert!(details_array.column_by_name("rurl").is_some());
+        assert!(details_array.column_by_name("s").is_some());
+        assert!(details_array.column_by_name("t").is_some());
+        for i in 0..2 {
+            assert!(reason_array.is_null(i), "reason field should be null");
+        }
+        Ok(())
+    }
+
+    fn verify_column_statistics(
+        stats: &ColumnStatistics,
+        expected_null_count: Option<usize>,
+        expected_distinct_count: Option<usize>,
+        expected_min: Option<ScalarValue>,
+        expected_max: Option<ScalarValue>,
+        expected_sum: Option<ScalarValue>,
+    ) {
+        if let Some(count) = expected_null_count {
+            assert_eq!(
+                stats.null_count,
+                Precision::Exact(count),
+                "Null count should match expected value"
+            );
+        }
+        if let Some(count) = expected_distinct_count {
+            assert_eq!(
+                stats.distinct_count,
+                Precision::Exact(count),
+                "Distinct count should match expected value"
+            );
+        }
+        if let Some(min) = expected_min {
+            assert_eq!(
+                stats.min_value,
+                Precision::Exact(min),
+                "Min value should match expected value"
+            );
+        }
+        if let Some(max) = expected_max {
+            assert_eq!(
+                stats.max_value,
+                Precision::Exact(max),
+                "Max value should match expected value"
+            );
+        }
+        if let Some(sum) = expected_sum {
+            assert_eq!(
+                stats.sum_value,
+                Precision::Exact(sum),
+                "Sum value should match expected value"
+            );
+        }
+    }
+
+    fn create_test_column_statistics(
+        null_count: usize,
+        distinct_count: usize,
+        min_value: Option<ScalarValue>,
+        max_value: Option<ScalarValue>,
+        sum_value: Option<ScalarValue>,
+    ) -> ColumnStatistics {
+        ColumnStatistics {
+            null_count: Precision::Exact(null_count),
+            distinct_count: Precision::Exact(distinct_count),
+            min_value: min_value.map_or_else(|| Precision::Absent, Precision::Exact),
+            max_value: max_value.map_or_else(|| Precision::Absent, Precision::Exact),
+            sum_value: sum_value.map_or_else(|| Precision::Absent, Precision::Exact),
+        }
     }
 }

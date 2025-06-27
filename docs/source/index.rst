@@ -116,7 +116,6 @@ To get started, see
    user-guide/expressions
    user-guide/sql/index
    user-guide/configs
-   user-guide/runtime_configs
    user-guide/explain-usage
    user-guide/faq
 
