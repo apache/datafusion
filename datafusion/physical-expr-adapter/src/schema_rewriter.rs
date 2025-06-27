@@ -116,11 +116,9 @@ pub fn validate_struct_compatibility(
 /// 4. Using StructFunc to combine all field expressions into the target struct
 ///
 /// # Arguments
-/// * `rewriter` - The schema rewriter instance for recursive rewriting
 /// * `source_expr` - The source struct expression
 /// * `source_fields` - Fields from the source struct type
-/// * `target_fields` - Fields from the target struct type  
-/// * `target_field_name` - Name of the target struct field (for error messages)
+/// * `target_fields` - Fields from the target struct type
 ///
 /// # Returns
 /// A new struct expression matching the target field layout
@@ -128,7 +126,6 @@ fn build_struct_expr(
     source_expr: Arc<dyn PhysicalExpr>,
     source_fields: &[FieldRef],
     target_fields: &[FieldRef],
-    _target_field_name: &str,
 ) -> Result<Arc<dyn PhysicalExpr>> {
     let mut field_exprs = Vec::new();
 
@@ -160,7 +157,6 @@ fn build_struct_expr(
                         get_field_expr,
                         nested_source_fields,
                         nested_target_fields,
-                        target_field.name(),
                     )?
                 }
                 _ if source_field.data_type() == target_field.data_type() => {
@@ -368,7 +364,6 @@ impl<'a> PhysicalExprSchemaRewriter<'a> {
                         Arc::new(column),
                         source_fields,
                         target_fields,
-                        logical_field.name(),
                     )?
                 }
                 _ => Arc::new(CastExpr::new(
