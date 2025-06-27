@@ -992,6 +992,14 @@ impl ListingTable {
     fn create_file_source_with_schema_adapter(&self) -> Result<Arc<dyn FileSource>> {
         let mut source = self.options.format.file_source();
         // Apply schema adapter to source if available
+        //
+        // NOTE: This may layer the ListingTable's schema adapter factory on top of any
+        // existing factory that the file source already has. The composition semantics are:
+        // 1. The file format's existing adapter (if any) handles format-specific schema mapping
+        // 2. Our adapter handles table-level schema evolution requirements
+        //
+        // This layering is intentional but may need adjustment if the underlying source
+        // already handles the same schema evolution cases we're trying to address.
         if let Some(factory) = &self.schema_adapter_factory {
             source = source.with_schema_adapter_factory(Arc::clone(factory))?;
         }
