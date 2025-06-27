@@ -25,6 +25,7 @@ use std::sync::Arc;
 
 make_udf_function!(ascii::SparkAscii, ascii);
 make_udf_function!(char::SparkChar, char);
+make_udf_function!(luhn_check::SparkLuhnCheck, luhn_check);
 
 pub mod expr_fn {
     use datafusion_functions::export_functions;
@@ -39,8 +40,13 @@ pub mod expr_fn {
         "Returns the ASCII character having the binary equivalent to col. If col is larger than 256 the result is equivalent to char(col % 256).",
         arg1
     ));
+    export_functions!((
+        luhn_check,
+        "Checks that a string of digits is valid according to the Luhn algorithm.",
+        arg1
+    ));
 }
 
 pub fn functions() -> Vec<Arc<ScalarUDF>> {
-    vec![ascii(), char()]
+    vec![ascii(), char(), luhn_check()]
 }

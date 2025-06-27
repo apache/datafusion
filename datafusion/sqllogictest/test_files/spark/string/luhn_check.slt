@@ -23,16 +23,34 @@
 
 ## Original Query: SELECT luhn_check('79927398713');
 ## PySpark 3.5.5 Result: {'luhn_check(79927398713)': True, 'typeof(luhn_check(79927398713))': 'boolean', 'typeof(79927398713)': 'string'}
-#query
-#SELECT luhn_check('79927398713'::string);
+query B
+SELECT luhn_check('79927398713'::string);
+----
+true
 
 ## Original Query: SELECT luhn_check('79927398714');
 ## PySpark 3.5.5 Result: {'luhn_check(79927398714)': False, 'typeof(luhn_check(79927398714))': 'boolean', 'typeof(79927398714)': 'string'}
-#query
-#SELECT luhn_check('79927398714'::string);
+query B
+SELECT luhn_check('79927398714'::string);
+----
+false
 
 ## Original Query: SELECT luhn_check('8112189876');
 ## PySpark 3.5.5 Result: {'luhn_check(8112189876)': True, 'typeof(luhn_check(8112189876))': 'boolean', 'typeof(8112189876)': 'string'}
-#query
-#SELECT luhn_check('8112189876'::string);
+query B
+SELECT luhn_check('8112189876'::string);
+----
+true
 
+query B
+SELECT luhn_check(a)
+FROM VALUES
+    ('12344'),
+    ('12345'),
+    ('1234 4'),
+    (NULL) AS t(a);
+----
+true
+false
+false
+NULL
