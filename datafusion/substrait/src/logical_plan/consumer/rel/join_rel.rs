@@ -65,7 +65,6 @@ pub async fn from_join_rel(
                 (left_cols, right_cols),
                 join_filter,
                 nulls_equal_nulls,
-                JoinKind::ComparisonJoin, // TODO
             )?
             .build()
         }
@@ -77,7 +76,6 @@ pub async fn from_join_rel(
                 (on.clone(), on),
                 None,
                 false,
-                JoinKind::ComparisonJoin,
             )?
             .build()
         }

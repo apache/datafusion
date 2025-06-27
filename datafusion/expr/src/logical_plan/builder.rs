@@ -964,7 +964,6 @@ impl LogicalPlanBuilder {
             join_keys,
             filter,
             false,
-            JoinKind::ComparisonJoin,
         )
     }
 
@@ -975,7 +974,7 @@ impl LogicalPlanBuilder {
         join_keys: (Vec<impl Into<Column>>, Vec<impl Into<Column>>),
         filter: Option<Expr>,
     ) -> Result<Self> {
-        self.join_detailed(
+        self.join_detailed_with_join_kind(
             right,
             join_type,
             join_keys,
@@ -1039,7 +1038,6 @@ impl LogicalPlanBuilder {
             (Vec::<Column>::new(), Vec::<Column>::new()),
             filter,
             false,
-            JoinKind::ComparisonJoin,
         )
     }
 
@@ -1071,6 +1069,24 @@ impl LogicalPlanBuilder {
     /// emitted. Otherwise rows where either or both join keys are `null` will be
     /// omitted.
     pub fn join_detailed(
+        self,
+        right: LogicalPlan,
+        join_type: JoinType,
+        join_keys: (Vec<impl Into<Column>>, Vec<impl Into<Column>>),
+        filter: Option<Expr>,
+        null_equals_null: bool,
+    ) -> Result<Self> {
+        self.join_detailed_with_join_kind(
+            right,
+            join_type,
+            join_keys,
+            filter,
+            null_equals_null,
+            JoinKind::ComparisonJoin,
+        )
+    }
+
+    pub fn join_detailed_with_join_kind(
         self,
         right: LogicalPlan,
         join_type: JoinType,
@@ -1428,7 +1444,6 @@ impl LogicalPlanBuilder {
                     join_keys,
                     None,
                     true,
-                    JoinKind::ComparisonJoin,
                 )?
                 .build()
         } else {
@@ -1440,7 +1455,6 @@ impl LogicalPlanBuilder {
                     join_keys,
                     None,
                     true,
-                    JoinKind::ComparisonJoin,
                 )?
                 .build()
         }
