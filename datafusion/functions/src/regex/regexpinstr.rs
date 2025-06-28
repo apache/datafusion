@@ -98,6 +98,9 @@ impl RegexpInstrFunc {
                     Exact(vec![Utf8View, Utf8View, Int64, Int64, Utf8View]),
                     Exact(vec![LargeUtf8, LargeUtf8, Int64, Int64, LargeUtf8]),
                     Exact(vec![Utf8, Utf8, Int64, Int64, Utf8]),
+                    Exact(vec![Utf8View, Utf8View, Int64, Int64, Utf8View, Int64]),
+                    Exact(vec![LargeUtf8, LargeUtf8, Int64, Int64, LargeUtf8, Int64]),
+                    Exact(vec![Utf8, Utf8, Int64, Int64, Utf8, Int64]),
                 ],
                 Volatility::Immutable,
             ),
@@ -301,25 +304,13 @@ where
     let default_start_array = PrimitiveArray::<Int64Type>::from(vec![1; len]);
     let start_array = start_array.unwrap_or(&default_start_array);
     let start_input: Vec<i64> = (0..start_array.len())
-        .map(|i| {
-            if start_array.is_null(i) {
-                0
-            } else {
-                start_array.value(i)
-            }
-        }) // handle nulls as 0
+        .map(|i| start_array.value(i)) // handle nulls as 0
         .collect();
 
     let default_nth_array = PrimitiveArray::<Int64Type>::from(vec![1; len]);
     let nth_array = nth_array.unwrap_or(&default_nth_array);
     let nth_input: Vec<i64> = (0..nth_array.len())
-        .map(|i| {
-            if nth_array.is_null(i) {
-                0
-            } else {
-                nth_array.value(i)
-            }
-        }) // handle nulls as 0
+        .map(|i| nth_array.value(i)) // handle nulls as 0
         .collect();
 
     let flags_input = match flags_array {
@@ -330,13 +321,7 @@ where
     let default_subexp_array = PrimitiveArray::<Int64Type>::from(vec![0; len]);
     let subexp_array = subexp_array.unwrap_or(&default_subexp_array);
     let subexp_input: Vec<i64> = (0..subexp_array.len())
-        .map(|i| {
-            if subexp_array.is_null(i) {
-                0
-            } else {
-                subexp_array.value(i)
-            }
-        }) // handle nulls as 0
+        .map(|i| subexp_array.value(i)) // handle nulls as 0
         .collect();
 
     let mut regex_cache = HashMap::new();
@@ -456,6 +441,7 @@ mod tests {
         test_case_sensitive_regexp_instr_scalar();
         test_case_sensitive_regexp_instr_scalar_start();
         test_case_sensitive_regexp_instr_scalar_nth();
+        test_case_sensitive_regexp_instr_scalar_subexp();
 
         test_case_sensitive_regexp_instr_array::<GenericStringArray<i32>>();
         test_case_sensitive_regexp_instr_array::<GenericStringArray<i64>>();
@@ -678,6 +664,94 @@ mod tests {
                     _ => panic!("Unexpected result"),
                 }
             });
+    }
+
+    fn test_case_sensitive_regexp_instr_scalar_subexp() {
+        let values = ["12 abc def ghi 34"];
+        let regex = ["(abc) (def) (ghi)"];
+        let start = [1];
+        let nth = [1];
+        let flags = ["i"];
+        let subexps = [2];
+        let expected: Vec<i64> = vec![8];
+
+        izip!(
+            values.iter(),
+            regex.iter(),
+            start.iter(),
+            nth.iter(),
+            flags.iter(),
+            subexps.iter()
+        )
+        .enumerate()
+        .for_each(|(pos, (&v, &r, &s, &n, &flag, &subexp))| {
+            // utf8
+            let v_sv = ScalarValue::Utf8(Some(v.to_string()));
+            let regex_sv = ScalarValue::Utf8(Some(r.to_string()));
+            let start_sv = ScalarValue::Int64(Some(s));
+            let nth_sv = ScalarValue::Int64(Some(n));
+            let flags_sv = ScalarValue::Utf8(Some(flag.to_string()));
+            let subexp_sv = ScalarValue::Int64(Some(subexp));
+            let expected = expected.get(pos).cloned();
+            let re = regexp_instr_with_scalar_values(&[
+                v_sv,
+                regex_sv,
+                start_sv.clone(),
+                nth_sv.clone(),
+                flags_sv,
+                subexp_sv.clone(),
+            ]);
+            match re {
+                Ok(ColumnarValue::Scalar(ScalarValue::Int64(v))) => {
+                    assert_eq!(v, expected, "regexp_instr scalar test failed");
+                }
+                _ => panic!("Unexpected result"),
+            }
+
+            // largeutf8
+            let v_sv = ScalarValue::LargeUtf8(Some(v.to_string()));
+            let regex_sv = ScalarValue::LargeUtf8(Some(r.to_string()));
+            let start_sv = ScalarValue::Int64(Some(s));
+            let nth_sv = ScalarValue::Int64(Some(n));
+            let flags_sv = ScalarValue::LargeUtf8(Some(flag.to_string()));
+            let subexp_sv = ScalarValue::Int64(Some(subexp));
+            let re = regexp_instr_with_scalar_values(&[
+                v_sv,
+                regex_sv,
+                start_sv.clone(),
+                nth_sv.clone(),
+                flags_sv,
+                subexp_sv.clone(),
+            ]);
+            match re {
+                Ok(ColumnarValue::Scalar(ScalarValue::Int64(v))) => {
+                    assert_eq!(v, expected, "regexp_instr scalar test failed");
+                }
+                _ => panic!("Unexpected result"),
+            }
+
+            // utf8view
+            let v_sv = ScalarValue::Utf8View(Some(v.to_string()));
+            let regex_sv = ScalarValue::Utf8View(Some(r.to_string()));
+            let start_sv = ScalarValue::Int64(Some(s));
+            let nth_sv = ScalarValue::Int64(Some(n));
+            let flags_sv = ScalarValue::Utf8View(Some(flag.to_string()));
+            let subexp_sv = ScalarValue::Int64(Some(subexp));
+            let re = regexp_instr_with_scalar_values(&[
+                v_sv,
+                regex_sv,
+                start_sv.clone(),
+                nth_sv.clone(),
+                flags_sv,
+                subexp_sv.clone(),
+            ]);
+            match re {
+                Ok(ColumnarValue::Scalar(ScalarValue::Int64(v))) => {
+                    assert_eq!(v, expected, "regexp_instr scalar test failed");
+                }
+                _ => panic!("Unexpected result"),
+            }
+        });
     }
 
     fn test_case_sensitive_regexp_instr_array<A>()

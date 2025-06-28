@@ -72,6 +72,15 @@ fn start(rng: &mut ThreadRng) -> Int64Array {
     Int64Array::from(data)
 }
 
+fn n(rng: &mut ThreadRng) -> Int64Array {
+    let mut data: Vec<i64> = vec![];
+    for _ in 0..1000 {
+        data.push(rng.gen_range(1..5));
+    }
+
+    Int64Array::from(data)
+}
+
 fn flags(rng: &mut ThreadRng) -> StringArray {
     let samples = [Some("i".to_string()), Some("im".to_string()), None];
     let mut sb = StringBuilder::new();
@@ -85,6 +94,15 @@ fn flags(rng: &mut ThreadRng) -> StringArray {
     }
 
     sb.finish()
+}
+
+fn subexp(rng: &mut ThreadRng) -> Int64Array {
+    let mut data: Vec<i64> = vec![];
+    for _ in 0..1000 {
+        data.push(rng.gen_range(1..5));
+    }
+
+    Int64Array::from(data)
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
@@ -133,7 +151,9 @@ fn criterion_benchmark(c: &mut Criterion) {
         let data = Arc::new(data(&mut rng)) as ArrayRef;
         let regex = Arc::new(regex(&mut rng)) as ArrayRef;
         let start = Arc::new(start(&mut rng)) as ArrayRef;
+        let n = Arc::new(n(&mut rng)) as ArrayRef;
         let flags = Arc::new(flags(&mut rng)) as ArrayRef;
+        let subexp = Arc::new(subexp(&mut rng)) as ArrayRef;
 
         b.iter(|| {
             black_box(
@@ -141,7 +161,9 @@ fn criterion_benchmark(c: &mut Criterion) {
                     Arc::clone(&data),
                     Arc::clone(&regex),
                     Arc::clone(&start),
+                    Arc::clone(&n),
                     Arc::clone(&flags),
+                    Arc::clone(&subexp),
                 ])
                 .expect("regexp_instr should work on utf8"),
             )

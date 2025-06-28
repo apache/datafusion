@@ -48,6 +48,19 @@ SELECT regexp_instr('ABCABCABCABC', 'Abc', 1, 2, 'i');
 ----
 4
 
+query I
+SELECT
+    regexp_instr(
+        'The quick brown fox jumps over the lazy dog.',
+        ' (quick) (brown) (fox)',
+        1,
+        1,
+        'i',
+        2   -- subexpression_number (2 for second group)
+    );
+----
+11
+
 statement error
 External error: query failed: DataFusion error: Arrow error: Compute error: regexp_instr() requires start to be 1 based
 SELECT regexp_instr('123123123123', '123', 0);
