@@ -95,9 +95,16 @@ impl TryFrom<&TableParquetOptions> for WriterPropertiesBuilder {
             global,
             column_specific_options,
             key_value_metadata,
+            crypto,
         } = table_parquet_options;
 
         let mut builder = global.into_writer_properties_builder()?;
+
+        if let Some(file_encryption_properties) = &crypto.file_encryption {
+            builder = builder.with_file_encryption_properties(
+                file_encryption_properties.clone().into(),
+            );
+        }
 
         // check that the arrow schema is present in the kv_metadata, if configured to do so
         if !global.skip_arrow_metadata
@@ -449,7 +456,10 @@ mod tests {
     };
     use std::collections::HashMap;
 
-    use crate::config::{ParquetColumnOptions, ParquetOptions};
+    use crate::config::{
+        ConfigFileEncryptionProperties, ParquetColumnOptions, ParquetEncryptionOptions,
+        ParquetOptions,
+    };
 
     use super::*;
 
@@ -580,6 +590,9 @@ mod tests {
             HashMap::from([(COL_NAME.into(), configured_col_props)])
         };
 
+        let fep: Option<ConfigFileEncryptionProperties> =
+            props.file_encryption_properties().map(|fe| fe.into());
+
         #[allow(deprecated)] // max_statistics_size
         TableParquetOptions {
             global: ParquetOptions {
@@ -627,6 +640,10 @@ mod tests {
             },
             column_specific_options,
             key_value_metadata,
+            crypto: ParquetEncryptionOptions {
+                file_encryption: fep,
+                file_decryption: None,
+            },
         }
     }
 
@@ -681,6 +698,7 @@ mod tests {
             )]
             .into(),
             key_value_metadata: [(key, value)].into(),
+            crypto: Default::default(),
         };
 
         let writer_props = WriterPropertiesBuilder::try_from(&table_parquet_opts)

@@ -60,11 +60,11 @@ pub async fn main() -> Result<()> {
         Options::Cancellation(opt) => opt.run().await,
         Options::Clickbench(opt) => opt.run().await,
         Options::H2o(opt) => opt.run().await,
-        Options::Imdb(opt) => opt.run().await,
+        Options::Imdb(opt) => Box::pin(opt.run()).await,
         Options::ParquetFilter(opt) => opt.run().await,
         Options::Sort(opt) => opt.run().await,
         Options::SortTpch(opt) => opt.run().await,
-        Options::Tpch(opt) => opt.run().await,
+        Options::Tpch(opt) => Box::pin(opt.run()).await,
         Options::TpchConvert(opt) => opt.run().await,
     }
 }
