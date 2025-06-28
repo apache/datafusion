@@ -578,6 +578,13 @@
     <a class="reference internal nav-link" href="#parquet">
      Parquet
     </a>
+    <ul class="nav section-nav flex-column">
+     <li class="toc-h3 nav-item toc-entry">
+      <a class="reference internal nav-link" href="#parquet-specific-options">
+       Parquet Specific Options
+      </a>
+     </li>
+    </ul>
    </li>
    <li class="toc-h2 nav-item toc-entry">
     <a class="reference internal nav-link" href="#csv">
@@ -811,6 +818,43 @@ parquet files and have compatible schemas</p>
 <span class="k">LOCATION</span><span class="w"> </span><span class="s1">&#39;/mnt/nyctaxi/&#39;</span><span class="p">;</span>
 </pre></div>
 </div>
+<section id="parquet-specific-options">
+<h3>Parquet Specific Options<a class="headerlink" href="#parquet-specific-options" title="Link to this heading">¶</a></h3>
+<p>You can specify additional options for parquet files using the <code class="docutils literal notranslate"><span class="pre">OPTIONS</span></code> clause.
+For example, to read and write a parquet directory with encryption settings you could use:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span><span class="w"> </span><span class="k">EXTERNAL</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">encrypted_parquet_table</span>
+<span class="p">(</span>
+<span class="n">double_field</span><span class="w"> </span><span class="n">double</span><span class="p">,</span>
+<span class="n">float_field</span><span class="w"> </span><span class="nb">float</span>
+<span class="p">)</span>
+<span class="n">STORED</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">PARQUET</span><span class="w"> </span><span class="k">LOCATION</span><span class="w"> </span><span class="s1">&#39;pq/&#39;</span><span class="w"> </span><span class="k">OPTIONS</span><span class="w"> </span><span class="p">(</span>
+<span class="w">    </span><span class="c1">-- encryption</span>
+<span class="w">    </span><span class="s1">&#39;format.crypto.file_encryption.encrypt_footer&#39;</span><span class="w"> </span><span class="s1">&#39;true&#39;</span><span class="p">,</span>
+<span class="w">    </span><span class="s1">&#39;format.crypto.file_encryption.footer_key_as_hex&#39;</span><span class="w"> </span><span class="s1">&#39;30313233343536373839303132333435&#39;</span><span class="p">,</span><span class="w">  </span><span class="c1">-- b&quot;0123456789012345&quot;</span>
+<span class="w">    </span><span class="s1">&#39;format.crypto.file_encryption.column_key_as_hex::double_field&#39;</span><span class="w"> </span><span class="s1">&#39;31323334353637383930313233343530&#39;</span><span class="p">,</span><span class="w"> </span><span class="c1">-- b&quot;1234567890123450&quot;</span>
+<span class="w">    </span><span class="s1">&#39;format.crypto.file_encryption.column_key_as_hex::float_field&#39;</span><span class="w"> </span><span class="s1">&#39;31323334353637383930313233343531&#39;</span><span class="p">,</span><span class="w"> </span><span class="c1">-- b&quot;1234567890123451&quot;</span>
+<span class="w">    </span><span class="c1">-- decryption</span>
+<span class="w">    </span><span class="s1">&#39;format.crypto.file_decryption.footer_key_as_hex&#39;</span><span class="w"> </span><span class="s1">&#39;30313233343536373839303132333435&#39;</span><span class="p">,</span><span class="w"> </span><span class="c1">-- b&quot;0123456789012345&quot;</span>
+<span class="w">    </span><span class="s1">&#39;format.crypto.file_decryption.column_key_as_hex::double_field&#39;</span><span class="w"> </span><span class="s1">&#39;31323334353637383930313233343530&#39;</span><span class="p">,</span><span class="w"> </span><span class="c1">-- b&quot;1234567890123450&quot;</span>
+<span class="w">    </span><span class="s1">&#39;format.crypto.file_decryption.column_key_as_hex::float_field&#39;</span><span class="w"> </span><span class="s1">&#39;31323334353637383930313233343531&#39;</span><span class="p">,</span><span class="w"> </span><span class="c1">-- b&quot;1234567890123451&quot;</span>
+<span class="p">);</span>
+</pre></div>
+</div>
+<p>Here the keys are specified in hexadecimal format because they are binary data. These can be encoded in SQL using:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">select</span><span class="w"> </span><span class="n">encode</span><span class="p">(</span><span class="s1">&#39;0123456789012345&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;hex&#39;</span><span class="p">);</span>
+<span class="cm">/*</span>
+<span class="cm">+----------------------------------------------+</span>
+<span class="cm">| encode(Utf8(&quot;0123456789012345&quot;),Utf8(&quot;hex&quot;)) |</span>
+<span class="cm">+----------------------------------------------+</span>
+<span class="cm">| 30313233343536373839303132333435             |</span>
+<span class="cm">+----------------------------------------------+</span>
+<span class="cm">*/</span>
+</pre></div>
+</div>
+<p>For more details on the available options, refer to the Rust
+<a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/common/config/struct.TableParquetOptions.html">TableParquetOptions</a>
+documentation in DataFusion.</p>
+</section>
 </section>
 <section id="csv">
 <h2>CSV<a class="headerlink" href="#csv" title="Link to this heading">¶</a></h2>
