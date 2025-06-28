@@ -19,11 +19,11 @@
 
 use crate::utils::make_scalar_function;
 use arrow::array::ArrayRef;
-use arrow::datatypes::DataType;
-use arrow::datatypes::DataType::List;
+use arrow::datatypes::DataType::{LargeList, List};
+use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::cast::as_list_array;
 use datafusion_common::utils::take_function_args;
-use datafusion_common::{exec_err, ScalarValue};
+use datafusion_common::{exec_err, internal_err, plan_err, ScalarValue};
 use datafusion_doc::Documentation;
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
@@ -92,10 +92,29 @@ impl ScalarUDFImpl for ArrayMin {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> datafusion_common::Result<DataType> {
-        match &arg_types[0] {
-            List(field) => Ok(field.data_type().clone()),
-            _ => exec_err!("Not reachable, data_type should be List"),
+    fn return_type(
+        &self,
+        _arg_types: &[DataType],
+    ) -> datafusion_common::Result<DataType> {
+        internal_err!("return_field_from_args should be used instead")
+    }
+
+    fn return_field_from_args(
+        &self,
+        args: datafusion_expr::ReturnFieldArgs,
+    ) -> datafusion_common::Result<FieldRef> {
+        let [array] = take_function_args(
+            self.name(),
+            args.arg_fields.iter().map(|f| f.data_type()),
+        )?;
+        match array {
+            List(field) | LargeList(field) => Ok(Field::new(
+                self.name(),
+                field.data_type().clone(),
+                field.is_nullable(),
+            )
+            .into()),
+            arg_type => plan_err!("{} does not support type {arg_type}", self.name()),
         }
     }
 

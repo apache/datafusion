@@ -1547,7 +1547,7 @@ select array_min(make_array(5, 3, 4, NULL, 6, NULL));
 ----
 3
 
-query I
+query ?
 select array_min(make_array(NULL, NULL));
 ----
 NULL
@@ -1611,7 +1611,7 @@ select array_min(arrow_cast(make_array(2, 1, 3), 'FixedSizeList(3, Int64)')), ar
 ----
 1 2
 
-query I
+query ?
 select array_min(make_array());
 ----
 NULL
