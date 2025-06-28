@@ -351,6 +351,43 @@ where
     Ok(Arc::new(Int64Array::from(result?)))
 }
 
+fn handle_subexp(
+    pattern: &Regex,
+    search_slice: &str,
+    subexpr: i64,
+    value: &str,
+    byte_start_offset: usize,
+) -> Result<Option<i64>, ArrowError> {
+    if let Some(captures) = pattern.captures(search_slice) {
+        if let Some(matched) = captures.get(subexpr as usize) {
+            // Convert byte offset relative to search_slice back to 1-based character offset
+            // relative to the original `value` string.
+            let start_char_offset =
+                value[..byte_start_offset + matched.start()].chars().count() as i64 + 1;
+            return Ok(Some(start_char_offset));
+        }
+    }
+    Ok(Some(0)) // Return 0 if the subexpression was not found
+}
+
+fn get_nth_match(
+    pattern: &Regex,
+    search_slice: &str,
+    n: i64,
+    byte_start_offset: usize,
+    value: &str,
+) -> Result<Option<i64>, ArrowError> {
+    if let Some(mat) = pattern.find_iter(search_slice).nth((n - 1) as usize) {
+        // Convert byte offset relative to search_slice back to 1-based character offset
+        // relative to the original `value` string.
+        let match_start_byte_offset = byte_start_offset + mat.start();
+        let match_start_char_offset =
+            value[..match_start_byte_offset].chars().count() as i64 + 1;
+        Ok(Some(match_start_char_offset))
+    } else {
+        Ok(Some(0)) // Return 0 if the N-th match was not found
+    }
+}
 fn get_index<'strings, 'cache>(
     value: Option<&str>,
     pattern: &'strings str,
@@ -368,7 +405,7 @@ where
         Some("") => return Ok(Some(0)),
         Some(value) => value,
     };
-    let pattern = compile_and_cache_regex(pattern, flags, regex_cache)?;
+    let pattern: &Regex = compile_and_cache_regex(pattern, flags, regex_cache)?;
     // println!("get_index: value = {}, pattern = {}, start = {}, n = {}, subexpr = {}, flags = {:?}", value, pattern, start, n, subexpr, flags);
     if start < 1 {
         return Err(ArrowError::ComputeError(
@@ -384,7 +421,7 @@ where
 
     // --- Simplified byte_start_offset calculation ---
     let total_chars = value.chars().count() as i64;
-    let byte_start_offset = if start > total_chars {
+    let byte_start_offset: usize = if start > total_chars {
         // If start is beyond the total characters, it means we start searching
         // after the string effectively. No matches possible.
         return Ok(Some(0));
@@ -402,30 +439,11 @@ where
 
     // Handle subexpression capturing first, as it takes precedence
     if subexpr > 0 {
-        if let Some(captures) = pattern.captures(search_slice) {
-            if let Some(matched) = captures.get(subexpr as usize) {
-                // Convert byte offset relative to search_slice back to 1-based character offset
-                // relative to the original `value` string.
-                let start_char_offset =
-                    value[..byte_start_offset + matched.start()].chars().count() as i64
-                        + 1;
-                return Ok(Some(start_char_offset));
-            }
-        }
-        return Ok(Some(0)); // Return 0 if the subexpression was not found
+        return handle_subexp(pattern, search_slice, subexpr, value, byte_start_offset);
     }
 
     // Use nth to get the N-th match (n is 1-based, nth is 0-based)
-    if let Some(mat) = pattern.find_iter(search_slice).nth((n - 1) as usize) {
-        // Convert byte offset relative to search_slice back to 1-based character offset
-        // relative to the original `value` string.
-        let match_start_byte_offset = byte_start_offset + mat.start();
-        let match_start_char_offset =
-            value[..match_start_byte_offset].chars().count() as i64 + 1;
-        Ok(Some(match_start_char_offset))
-    } else {
-        Ok(Some(0)) // Return 0 if the N-th match was not found
-    }
+    get_nth_match(pattern, search_slice, n, byte_start_offset, value)
 }
 
 #[cfg(test)]
