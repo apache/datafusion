@@ -201,7 +201,7 @@ async fn load_left_input(
             |(mut batches, metrics, mut reservation), batch| async {
                 let batch_size = batch.get_array_memory_size();
                 // Reserve memory for incoming batch
-                reservation.try_grow(batch_size)?;
+                reservation.try_grow_with_arrays(batch.columns())?;
                 // Update metrics
                 metrics.build_mem_used.add(batch_size);
                 metrics.build_input_batches.add(1);
