@@ -232,7 +232,7 @@ impl ListingTableConfig {
         // methods like infer_schema() and try_new() require both schema and options
         // to be set to function correctly.
         debug_assert!(
-            self.table_paths.len() > 0 || cfg!(test),
+            !self.table_paths.is_empty() || cfg!(test),
             "ListingTableConfig::with_listing_options called without table_paths set. \
              Consider calling new() or new_with_multi_paths() first to establish table paths."
         );
