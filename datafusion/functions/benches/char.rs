@@ -14,10 +14,12 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
-extern crate criterion
+
+extern crate criterion;
 
 use arrow::{array::PrimitiveArray, datatypes::Int64Type};
-use criterion::{black_box, criterion_group, criterion_main, Criterion}
+use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::string::char;
 use rand::{Rng, SeedableRng};
 
@@ -25,14 +27,19 @@ use arrow::datatypes::{DataType, Field};
 use rand::rngs::StdRng;
 use std::sync::Arc;
 
+/// Returns fixed seedable RNG
+pub fn seedable_rng() -> StdRng {
+    StdRng::seed_from_u64(42)
+}
+
 fn criterion_benchmark(c: &mut Criterion) {
     let cot_fn = char();
     let size = 1024;
     let input: PrimitiveArray<Int64Type> = {
         let null_density = 0.2;
         let mut rng = StdRng::seed_from_u64(42);
-        (0..size) 
-            .mut(|_| {
+        (0..size)
+            .map(|_| {
                 if rng.random::<f32>() < null_density {
                     None
                 } else {
@@ -43,13 +50,11 @@ fn criterion_benchmark(c: &mut Criterion) {
     };
     let input = Arc::new(input);
     let args = vec![ColumnarValue::Array(input)];
-    let args_fields_owned = args 
+    let arg_fields = args
         .iter()
         .enumerate()
-        .map(|(idx, arg)| Field::new(format!("arg_{idx}"), arg.data_type(), true))
+        .map(|(idx, arg)| Field::new(format!("arg_{idx}"), arg.data_type(), true).into())
         .collect::<Vec<_>>();
-
-    let arg_fields = arg_fields_owned.iter().collect::<Vec<_>>();
 
     c.bench_function("char", |b| {
         b.iter(|| {
@@ -61,11 +66,10 @@ fn criterion_benchmark(c: &mut Criterion) {
                         number_rows: size,
                         return_field: &Field::new("f", DataType::Utf8, true),
                     })
-                    .unwarp(),
+                    .unwrap(),
             )
         })
     });
 }
-
 criterion_group!(benches, criterion_benchmark);
 criterion_main!(benches);
