@@ -533,6 +533,14 @@ impl DefaultPhysicalPlanner {
                 let sink_format = file_type_to_format(file_type)?
                     .create(session_state, source_option_tuples)?;
 
+                // Determine extension based on format extension and compression
+                let file_extension = match sink_format.compression_type() {
+                    Some(compression_type) => sink_format
+                        .get_ext_with_compression(&compression_type)
+                        .unwrap_or_else(|_| sink_format.get_ext()),
+                    None => sink_format.get_ext(),
+                };
+
                 // Set file sink related options
                 let config = FileSinkConfig {
                     original_url,
@@ -543,7 +551,7 @@ impl DefaultPhysicalPlanner {
                     table_partition_cols,
                     insert_op: InsertOp::Append,
                     keep_partition_by_columns,
-                    file_extension: sink_format.get_ext(),
+                    file_extension,
                 };
 
                 sink_format

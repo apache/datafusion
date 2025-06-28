@@ -61,6 +61,9 @@ pub trait FileFormat: Send + Sync + fmt::Debug {
         _file_compression_type: &FileCompressionType,
     ) -> Result<String>;
 
+    /// Returns whether this instance uses compression if applicable
+    fn compression_type(&self) -> Option<FileCompressionType>;
+
     /// Infer the common schema of the provided objects. The objects will usually
     /// be analysed up to a given number of records or files (as specified in the
     /// format config) then give the estimated common schema. This might fail if
