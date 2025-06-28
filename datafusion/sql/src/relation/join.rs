@@ -142,7 +142,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                                         "Expected identifier in USING clause"
                                     )
                                 })
-                                .map(|ident| self.ident_normalizer.normalize(ident.clone()))
+                                .map(|ident| Column::from_name(self.ident_normalizer.normalize(ident.clone())))
                         }
                     })
                     .collect::<Result<Vec<_>>>()?;

@@ -198,6 +198,23 @@ impl PartitionedFile {
         self.statistics = Some(statistics);
         self
     }
+
+    /// Check if this file has any statistics.
+    /// This returns `true` if the file has any Exact or Inexact statistics
+    /// and `false` if all statistics are `Precision::Absent`.
+    pub fn has_statistics(&self) -> bool {
+        if let Some(stats) = &self.statistics {
+            stats.column_statistics.iter().any(|col_stats| {
+                col_stats.null_count != Precision::Absent
+                    || col_stats.max_value != Precision::Absent
+                    || col_stats.min_value != Precision::Absent
+                    || col_stats.sum_value != Precision::Absent
+                    || col_stats.distinct_count != Precision::Absent
+            })
+        } else {
+            false
+        }
+    }
 }
 
 impl From<ObjectMeta> for PartitionedFile {

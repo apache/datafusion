@@ -363,4 +363,70 @@ impl From<&FFI_SortOptions> for SortOptions {
 }
 
 #[cfg(test)]
-mod tests {}
+#[cfg(feature = "integration-tests")]
+mod tests {
+    use crate::tests::create_record_batch;
+    use crate::udwf::{FFI_WindowUDF, ForeignWindowUDF};
+    use arrow::array::{create_array, ArrayRef};
+    use datafusion::functions_window::lead_lag::{lag_udwf, WindowShift};
+    use datafusion::logical_expr::expr::Sort;
+    use datafusion::logical_expr::{col, ExprFunctionExt, WindowUDF, WindowUDFImpl};
+    use datafusion::prelude::SessionContext;
+    use std::sync::Arc;
+
+    fn create_test_foreign_udwf(
+        original_udwf: impl WindowUDFImpl + 'static,
+    ) -> datafusion::common::Result<WindowUDF> {
+        let original_udwf = Arc::new(WindowUDF::from(original_udwf));
+
+        let local_udwf: FFI_WindowUDF = Arc::clone(&original_udwf).into();
+
+        let foreign_udwf: ForeignWindowUDF = (&local_udwf).try_into()?;
+        Ok(foreign_udwf.into())
+    }
+
+    #[test]
+    fn test_round_trip_udwf() -> datafusion::common::Result<()> {
+        let original_udwf = lag_udwf();
+        let original_name = original_udwf.name().to_owned();
+
+        // Convert to FFI format
+        let local_udwf: FFI_WindowUDF = Arc::clone(&original_udwf).into();
+
+        // Convert back to native format
+        let foreign_udwf: ForeignWindowUDF = (&local_udwf).try_into()?;
+        let foreign_udwf: WindowUDF = foreign_udwf.into();
+
+        assert_eq!(original_name, foreign_udwf.name());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_lag_udwf() -> datafusion::common::Result<()> {
+        let udwf = create_test_foreign_udwf(WindowShift::lag())?;
+
+        let ctx = SessionContext::default();
+        let df = ctx.read_batch(create_record_batch(-5, 5))?;
+
+        let df = df.select(vec![
+            col("a"),
+            udwf.call(vec![col("a")])
+                .order_by(vec![Sort::new(col("a"), true, true)])
+                .build()
+                .unwrap()
+                .alias("lag_a"),
+        ])?;
+
+        df.clone().show().await?;
+
+        let result = df.collect().await?;
+        let expected =
+            create_array!(Int32, [None, Some(-5), Some(-4), Some(-3), Some(-2)])
+                as ArrayRef;
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].column(1), &expected);
+
+        Ok(())
+    }
+}

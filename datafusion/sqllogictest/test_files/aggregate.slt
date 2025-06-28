@@ -7040,3 +7040,16 @@ VALUES
 ) GROUP BY 1 ORDER BY 1;
 ----
 x 1
+
+query ?
+SELECT array_agg(a_varchar) WITHIN GROUP (ORDER BY a_varchar)
+FROM (VALUES ('a'), ('d'), ('c'), ('a')) t(a_varchar);
+----
+[a, a, c, d]
+
+query ?
+SELECT array_agg(DISTINCT a_varchar) WITHIN GROUP (ORDER BY a_varchar)
+FROM (VALUES ('a'), ('d'), ('c'), ('a')) t(a_varchar);
+----
+[a, c, d]
+

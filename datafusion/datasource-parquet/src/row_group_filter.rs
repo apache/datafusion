@@ -24,7 +24,7 @@ use arrow::datatypes::Schema;
 use datafusion_common::pruning::PruningStatistics;
 use datafusion_common::{Column, Result, ScalarValue};
 use datafusion_datasource::FileRange;
-use datafusion_physical_optimizer::pruning::PruningPredicate;
+use datafusion_pruning::PruningPredicate;
 use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
 use parquet::arrow::parquet_column;
 use parquet::basic::Type;

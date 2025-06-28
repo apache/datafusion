@@ -46,6 +46,7 @@ datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-functions = { workspace = true }
 datafusion-functions-aggregate = { workspace = true }
+datafusion-functions-aggregate-common = { workspace = true }
 datafusion-macros = { workspace = true }
 datafusion-physical-expr-common = { workspace = true }
 itertools = { workspace = true, features = ["use_std"] }

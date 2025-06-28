@@ -28,7 +28,7 @@ use datafusion_doc::Documentation;
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
-use datafusion_functions_aggregate::min_max;
+use datafusion_functions_aggregate_common::min_max::{max_batch, min_batch};
 use datafusion_macros::user_doc;
 use itertools::Itertools;
 use std::any::Any;
@@ -123,10 +123,8 @@ impl ScalarUDFImpl for ArrayMax {
 pub fn array_max_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     let [array] = take_function_args("array_max", args)?;
     match array.data_type() {
-        List(_) => array_min_max_helper(as_list_array(array)?, min_max::max_batch),
-        LargeList(_) => {
-            array_min_max_helper(as_large_list_array(array)?, min_max::max_batch)
-        }
+        List(_) => array_min_max_helper(as_list_array(array)?, max_batch),
+        LargeList(_) => array_min_max_helper(as_large_list_array(array)?, max_batch),
         arg_type => exec_err!("array_max does not support type: {arg_type}"),
     }
 }
@@ -207,10 +205,8 @@ impl ScalarUDFImpl for ArrayMin {
 pub fn array_min_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     let [array] = take_function_args("array_min", args)?;
     match array.data_type() {
-        List(_) => array_min_max_helper(as_list_array(array)?, min_max::min_batch),
-        LargeList(_) => {
-            array_min_max_helper(as_large_list_array(array)?, min_max::min_batch)
-        }
+        List(_) => array_min_max_helper(as_list_array(array)?, min_batch),
+        LargeList(_) => array_min_max_helper(as_large_list_array(array)?, min_batch),
         arg_type => exec_err!("array_min does not support type: {arg_type}"),
     }
 }

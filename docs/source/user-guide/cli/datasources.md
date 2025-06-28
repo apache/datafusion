@@ -190,6 +190,47 @@ STORED AS PARQUET
 LOCATION '/mnt/nyctaxi/';
 ```
 
+### Parquet Specific Options
+
+You can specify additional options for parquet files using the `OPTIONS` clause.
+For example, to read and write a parquet directory with encryption settings you could use:
+
+```sql
+CREATE EXTERNAL TABLE encrypted_parquet_table
+(
+double_field double,
+float_field float
+)
+STORED AS PARQUET LOCATION 'pq/' OPTIONS (
+    -- encryption
+    'format.crypto.file_encryption.encrypt_footer' 'true',
+    'format.crypto.file_encryption.footer_key_as_hex' '30313233343536373839303132333435',  -- b"0123456789012345"
+    'format.crypto.file_encryption.column_key_as_hex::double_field' '31323334353637383930313233343530', -- b"1234567890123450"
+    'format.crypto.file_encryption.column_key_as_hex::float_field' '31323334353637383930313233343531', -- b"1234567890123451"
+    -- decryption
+    'format.crypto.file_decryption.footer_key_as_hex' '30313233343536373839303132333435', -- b"0123456789012345"
+    'format.crypto.file_decryption.column_key_as_hex::double_field' '31323334353637383930313233343530', -- b"1234567890123450"
+    'format.crypto.file_decryption.column_key_as_hex::float_field' '31323334353637383930313233343531', -- b"1234567890123451"
+);
+```
+
+Here the keys are specified in hexadecimal format because they are binary data. These can be encoded in SQL using:
+
+```sql
+select encode('0123456789012345', 'hex');
+/*
++----------------------------------------------+
+| encode(Utf8("0123456789012345"),Utf8("hex")) |
++----------------------------------------------+
+| 30313233343536373839303132333435             |
++----------------------------------------------+
+*/
+```
+
+For more details on the available options, refer to the Rust
+[TableParquetOptions](https://docs.rs/datafusion/latest/datafusion/common/config/struct.TableParquetOptions.html)
+documentation in DataFusion.
+
 ## CSV
 
 DataFusion will infer the CSV schema automatically or you can provide it explicitly.

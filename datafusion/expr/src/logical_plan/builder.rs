@@ -970,11 +970,7 @@ impl LogicalPlanBuilder {
         )
     }
 
-    pub(crate) fn normalize(
-        plan: &LogicalPlan,
-        column: impl Into<Column>,
-    ) -> Result<Column> {
-        let column = column.into();
+    pub(crate) fn normalize(plan: &LogicalPlan, column: Column) -> Result<Column> {
         if column.relation.is_some() {
             // column is already normalized
             return Ok(column);
@@ -1127,7 +1123,7 @@ impl LogicalPlanBuilder {
         self,
         right: LogicalPlan,
         join_type: JoinType,
-        using_keys: Vec<impl Into<Column> + Clone>,
+        using_keys: Vec<Column>,
     ) -> Result<Self> {
         let left_keys: Vec<Column> = using_keys
             .clone()
@@ -1652,10 +1648,7 @@ pub fn build_join_schema(
     );
 
     let (schema1, schema2) = match join_type {
-        JoinType::Right
-        | JoinType::RightSemi
-        | JoinType::RightAnti
-        | JoinType::RightMark => (left, right),
+        JoinType::Right | JoinType::RightSemi | JoinType::RightAnti => (left, right),
         _ => (right, left),
     };
 
