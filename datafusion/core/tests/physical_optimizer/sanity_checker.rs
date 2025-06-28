@@ -423,7 +423,7 @@ async fn test_bounded_window_agg_sort_requirement() -> Result<()> {
     let sort = sort_exec(ordering.clone(), source);
     let bw = bounded_window_exec("c9", ordering, sort);
     assert_plan(bw.as_ref(), vec![
-        "BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
+        "BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(UInt64(NULL)), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
         "  SortExec: expr=[c9@0 ASC NULLS LAST], preserve_partitioning=[false]",
         "    DataSourceExec: partitions=1, partition_sizes=[0]"
     ]);
@@ -446,7 +446,7 @@ async fn test_bounded_window_agg_no_sort_requirement() -> Result<()> {
     )];
     let bw = bounded_window_exec("c9", sort_exprs, source);
     assert_plan(bw.as_ref(), vec![
-        "BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
+        "BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(UInt64(NULL)), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
         "  DataSourceExec: partitions=1, partition_sizes=[0]"
     ]);
     // Order requirement of the `BoundedWindowAggExec` is not satisfied. We expect to receive error during sanity check.

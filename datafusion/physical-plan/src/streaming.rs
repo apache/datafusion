@@ -22,8 +22,9 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use super::{DisplayAs, DisplayFormatType, PlanProperties};
+use crate::coop::make_cooperative;
 use crate::display::{display_orderings, ProjectSchemaDisplay};
-use crate::execution_plan::{Boundedness, EmissionType};
+use crate::execution_plan::{Boundedness, EmissionType, SchedulingType};
 use crate::limit::LimitStream;
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use crate::projection::{
@@ -168,6 +169,7 @@ impl StreamingTableExec {
             EmissionType::Incremental,
             boundedness,
         )
+        .with_scheduling_type(SchedulingType::Cooperative)
     }
 }
 
@@ -262,7 +264,7 @@ impl ExecutionPlan for StreamingTableExec {
         partition: usize,
         ctx: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        let stream = self.partitions[partition].execute(ctx);
+        let stream = self.partitions[partition].execute(Arc::clone(&ctx));
         let projected_stream = match self.projection.clone() {
             Some(projection) => Box::pin(RecordBatchStreamAdapter::new(
                 Arc::clone(&self.projected_schema),
@@ -272,16 +274,13 @@ impl ExecutionPlan for StreamingTableExec {
             )),
             None => stream,
         };
+        let stream = make_cooperative(projected_stream);
+
         Ok(match self.limit {
-            None => projected_stream,
+            None => stream,
             Some(fetch) => {
                 let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
-                Box::pin(LimitStream::new(
-                    projected_stream,
-                    0,
-                    Some(fetch),
-                    baseline_metrics,
-                ))
+                Box::pin(LimitStream::new(stream, 0, Some(fetch), baseline_metrics))
             }
         })
     }

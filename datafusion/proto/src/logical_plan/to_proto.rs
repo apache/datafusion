@@ -21,7 +21,7 @@
 
 use std::collections::HashMap;
 
-use datafusion_common::{TableReference, UnnestOptions};
+use datafusion_common::{NullEquality, TableReference, UnnestOptions};
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::expr::{
     self, AggregateFunctionParams, Alias, Between, BinaryExpr, Cast, GroupingSet, InList,
@@ -211,7 +211,10 @@ pub fn serialize_expr(
                     .map(|r| vec![r.into()])
                     .unwrap_or(vec![]),
                 alias: name.to_owned(),
-                metadata: metadata.to_owned().unwrap_or(HashMap::new()),
+                metadata: metadata
+                    .as_ref()
+                    .map(|m| m.to_hashmap())
+                    .unwrap_or(HashMap::new()),
             });
             protobuf::LogicalExprNode {
                 expr_type: Some(ExprType::Alias(alias)),
@@ -682,6 +685,7 @@ impl From<JoinType> for protobuf::JoinType {
             JoinType::LeftAnti => protobuf::JoinType::Leftanti,
             JoinType::RightAnti => protobuf::JoinType::Rightanti,
             JoinType::LeftMark => protobuf::JoinType::Leftmark,
+            JoinType::RightMark => protobuf::JoinType::Rightmark,
         }
     }
 }
@@ -691,6 +695,15 @@ impl From<JoinConstraint> for protobuf::JoinConstraint {
         match t {
             JoinConstraint::On => protobuf::JoinConstraint::On,
             JoinConstraint::Using => protobuf::JoinConstraint::Using,
+        }
+    }
+}
+
+impl From<NullEquality> for protobuf::NullEquality {
+    fn from(t: NullEquality) -> Self {
+        match t {
+            NullEquality::NullEqualsNothing => protobuf::NullEquality::NullEqualsNothing,
+            NullEquality::NullEqualsNull => protobuf::NullEquality::NullEqualsNull,
         }
     }
 }

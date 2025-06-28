@@ -627,7 +627,7 @@ fn multi_hash_joins() -> Result<()> {
                 test_config.run(&expected, top_join.clone(), &DISTRIB_DISTRIB_SORT)?;
                 test_config.run(&expected, top_join, &SORT_DISTRIB_DISTRIB)?;
             }
-            JoinType::RightSemi | JoinType::RightAnti => {}
+            JoinType::RightSemi | JoinType::RightAnti | JoinType::RightMark => {}
         }
 
         match join_type {
@@ -636,7 +636,8 @@ fn multi_hash_joins() -> Result<()> {
             | JoinType::Right
             | JoinType::Full
             | JoinType::RightSemi
-            | JoinType::RightAnti => {
+            | JoinType::RightAnti
+            | JoinType::RightMark => {
                 // This time we use (b1 == c) for top join
                 // Join on (b1 == c)
                 let top_join_on = vec![(

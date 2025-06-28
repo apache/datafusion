@@ -22,7 +22,8 @@ use crate::PhysicalOptimizerRule;
 use datafusion_common::{config::ConfigOptions, Result};
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_plan::filter_pushdown::{
-    ChildPushdownResult, FilterPushdownPropagation, PredicateSupport, PredicateSupports,
+    ChildPushdownResult, FilterPushdownPhase, FilterPushdownPropagation,
+    PredicateSupport, PredicateSupports,
 };
 use datafusion_physical_plan::{with_new_children_if_necessary, ExecutionPlan};
 
@@ -362,11 +363,31 @@ use itertools::izip;
 /// [`ProjectionExec`]: datafusion_physical_plan::projection::ProjectionExec
 /// [`AggregateExec`]: datafusion_physical_plan::aggregates::AggregateExec
 #[derive(Debug)]
-pub struct FilterPushdown {}
+pub struct FilterPushdown {
+    phase: FilterPushdownPhase,
+    name: String,
+}
 
 impl FilterPushdown {
+    fn new_with_phase(phase: FilterPushdownPhase) -> Self {
+        let name = match phase {
+            FilterPushdownPhase::Pre => "FilterPushdown",
+            FilterPushdownPhase::Post => "FilterPushdown(Post)",
+        }
+        .to_string();
+        Self { phase, name }
+    }
+
+    /// Create a new [`FilterPushdown`] optimizer rule that runs in the pre-optimization phase.
+    /// See [`FilterPushdownPhase`] for more details.
     pub fn new() -> Self {
-        Self {}
+        Self::new_with_phase(FilterPushdownPhase::Pre)
+    }
+
+    /// Create a new [`FilterPushdown`] optimizer rule that runs in the post-optimization phase.
+    /// See [`FilterPushdownPhase`] for more details.
+    pub fn new_post_optimization() -> Self {
+        Self::new_with_phase(FilterPushdownPhase::Post)
     }
 }
 
@@ -382,13 +403,15 @@ impl PhysicalOptimizerRule for FilterPushdown {
         plan: Arc<dyn ExecutionPlan>,
         config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(push_down_filters(Arc::clone(&plan), vec![], config)?
-            .updated_node
-            .unwrap_or(plan))
+        Ok(
+            push_down_filters(Arc::clone(&plan), vec![], config, self.phase)?
+                .updated_node
+                .unwrap_or(plan),
+        )
     }
 
     fn name(&self) -> &str {
-        "FilterPushdown"
+        &self.name
     }
 
     fn schema_check(&self) -> bool {
@@ -409,6 +432,7 @@ fn push_down_filters(
     node: Arc<dyn ExecutionPlan>,
     parent_predicates: Vec<Arc<dyn PhysicalExpr>>,
     config: &ConfigOptions,
+    phase: FilterPushdownPhase,
 ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
     // If the node has any child, these will be rewritten as supported or unsupported
     let mut parent_predicates_pushdown_states =
@@ -418,7 +442,7 @@ fn push_down_filters(
 
     let children = node.children();
     let filter_description =
-        node.gather_filters_for_pushdown(parent_predicates.clone(), config)?;
+        node.gather_filters_for_pushdown(phase, parent_predicates.clone(), config)?;
 
     for (child, parent_filters, self_filters) in izip!(
         children,
@@ -460,7 +484,7 @@ fn push_down_filters(
         }
 
         // Any filters that could not be pushed down to a child are marked as not-supported to our parents
-        let result = push_down_filters(Arc::clone(child), all_predicates, config)?;
+        let result = push_down_filters(Arc::clone(child), all_predicates, config, phase)?;
 
         if let Some(new_child) = result.updated_node {
             // If we have a filter pushdown result, we need to update our children
@@ -524,8 +548,11 @@ fn push_down_filters(
             })
             .collect(),
     );
-    // Check what the current node wants to do given the result of pushdown to it's children
+    // TODO: by calling `handle_child_pushdown_result` we are assuming that the
+    // `ExecutionPlan` implementation will not change the plan itself.
+    // Should we have a separate method for dynamic pushdown that does not allow modifying the plan?
     let mut res = updated_node.handle_child_pushdown_result(
+        phase,
         ChildPushdownResult {
             parent_filters: parent_pushdown_result,
             self_filters: self_filters_pushdown_supports,

@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use datafusion::assert_batches_eq;
 use datafusion::datasource::stream::{FileStreamProvider, StreamConfig, StreamTable};
 use datafusion::test_util::register_unbounded_file_with_ordering;
 
@@ -233,5 +234,52 @@ async fn join_change_in_planner_without_sort_not_allowed() -> Result<()> {
             assert_eq!(e.strip_backtrace(), "SanityCheckPlan\ncaused by\nError during planning: Join operation cannot operate on a non-prunable stream without enabling the 'allow_symmetric_joins_without_pruning' configuration flag")
         }
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn join_using_uppercase_column() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "UPPER",
+        DataType::UInt32,
+        false,
+    )]));
+    let tmp_dir = TempDir::new()?;
+    let file_path = tmp_dir.path().join("uppercase-column.csv");
+    let mut file = File::create(file_path.clone())?;
+    file.write_all("0".as_bytes())?;
+    drop(file);
+
+    let ctx = SessionContext::new();
+    ctx.register_csv(
+        "test",
+        file_path.to_str().unwrap(),
+        CsvReadOptions::new().schema(&schema).has_header(false),
+    )
+    .await?;
+
+    let dataframe = ctx
+        .sql(
+            r#"
+        SELECT test."UPPER" FROM "test"
+        INNER JOIN (
+            SELECT test."UPPER" FROM "test"
+        ) AS selection USING ("UPPER")
+        ;
+        "#,
+        )
+        .await?;
+
+    assert_batches_eq!(
+        [
+            "+-------+",
+            "| UPPER |",
+            "+-------+",
+            "| 0     |",
+            "+-------+",
+        ],
+        &dataframe.collect().await?
+    );
+
     Ok(())
 }

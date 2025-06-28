@@ -39,10 +39,10 @@ impl TreeNodeRewriter for ShortenInListSimplifier {
         // if expr is a single column reference:
         // expr IN (A, B, ...) --> (expr = A) OR (expr = B) OR (expr = C)
         if let Expr::InList(InList {
-            expr,
-            list,
+            ref expr,
+            ref list,
             negated,
-        }) = expr.clone()
+        }) = expr
         {
             if !list.is_empty()
                 && (
@@ -57,7 +57,7 @@ impl TreeNodeRewriter for ShortenInListSimplifier {
             {
                 let first_val = list[0].clone();
                 if negated {
-                    return Ok(Transformed::yes(list.into_iter().skip(1).fold(
+                    return Ok(Transformed::yes(list.iter().skip(1).cloned().fold(
                         (*expr.clone()).not_eq(first_val),
                         |acc, y| {
                             // Note that `A and B and C and D` is a left-deep tree structure
@@ -81,7 +81,7 @@ impl TreeNodeRewriter for ShortenInListSimplifier {
                         },
                     )));
                 } else {
-                    return Ok(Transformed::yes(list.into_iter().skip(1).fold(
+                    return Ok(Transformed::yes(list.iter().skip(1).cloned().fold(
                         (*expr.clone()).eq(first_val),
                         |acc, y| {
                             // Same reasoning as above
