@@ -23,13 +23,13 @@ use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_execution::runtime_env::RuntimeEnv;
 
-use datafusion_common::Result;
+use datafusion_common::{config::SpillCompression, Result};
 use datafusion_execution::disk_manager::RefCountedTempFile;
 use datafusion_execution::SendableRecordBatchStream;
 
-use crate::{common::spawn_buffered, metrics::SpillMetrics};
-
 use super::{in_progress_spill_file::InProgressSpillFile, SpillReaderStream};
+use crate::coop::cooperative;
+use crate::{common::spawn_buffered, metrics::SpillMetrics};
 
 /// The `SpillManager` is responsible for the following tasks:
 /// - Reading and writing `RecordBatch`es to raw files based on the provided configurations.
@@ -44,7 +44,8 @@ pub struct SpillManager {
     schema: SchemaRef,
     /// Number of batches to buffer in memory during disk reads
     batch_read_buffer_capacity: usize,
-    // TODO: Add general-purpose compression options
+    /// general-purpose compression options
+    pub(crate) compression: SpillCompression,
 }
 
 impl SpillManager {
@@ -54,7 +55,13 @@ impl SpillManager {
             metrics,
             schema,
             batch_read_buffer_capacity: 2,
+            compression: SpillCompression::default(),
         }
+    }
+
+    pub fn with_compression_type(mut self, spill_compression: SpillCompression) -> Self {
+        self.compression = spill_compression;
+        self
     }
 
     /// Creates a temporary file for in-progress operations, returning an error
@@ -125,10 +132,10 @@ impl SpillManager {
         &self,
         spill_file_path: RefCountedTempFile,
     ) -> Result<SendableRecordBatchStream> {
-        let stream = Box::pin(SpillReaderStream::new(
+        let stream = Box::pin(cooperative(SpillReaderStream::new(
             Arc::clone(&self.schema),
             spill_file_path,
-        ));
+        )));
 
         Ok(spawn_buffered(stream, self.batch_read_buffer_capacity))
     }

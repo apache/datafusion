@@ -15,10 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::path::Path;
-use std::path::PathBuf;
+use std::fs;
+use std::io::ErrorKind;
+use std::path::{Path, PathBuf};
 
-use crate::util::{BenchmarkRun, CommonOpt};
+use crate::util::{BenchmarkRun, CommonOpt, QueryResult};
 use datafusion::{
     error::{DataFusionError, Result},
     prelude::SessionContext,
@@ -56,12 +57,12 @@ pub struct RunOpt {
     )]
     path: PathBuf,
 
-    /// Path to queries.sql (single file)
+    /// Path to queries directory
     #[structopt(
         parse(from_os_str),
         short = "r",
         long = "queries-path",
-        default_value = "benchmarks/queries/clickbench/queries.sql"
+        default_value = "benchmarks/queries/clickbench/queries"
     )]
     queries_path: PathBuf,
 
@@ -70,49 +71,47 @@ pub struct RunOpt {
     output_path: Option<PathBuf>,
 }
 
-struct AllQueries {
-    queries: Vec<String>,
+/// Get the SQL file path
+pub fn get_query_path(query_dir: &Path, query: usize) -> PathBuf {
+    let mut query_path = query_dir.to_path_buf();
+    query_path.push(format!("q{query}.sql"));
+    query_path
 }
 
-impl AllQueries {
-    fn try_new(path: &Path) -> Result<Self> {
-        // ClickBench has all queries in a single file identified by line number
-        let all_queries = std::fs::read_to_string(path)
-            .map_err(|e| exec_datafusion_err!("Could not open {path:?}: {e}"))?;
-        Ok(Self {
-            queries: all_queries.lines().map(|s| s.to_string()).collect(),
-        })
-    }
-
-    /// Returns the text of query `query_id`
-    fn get_query(&self, query_id: usize) -> Result<&str> {
-        self.queries
-            .get(query_id)
-            .ok_or_else(|| {
-                let min_id = self.min_query_id();
-                let max_id = self.max_query_id();
-                exec_datafusion_err!(
-                    "Invalid query id {query_id}. Must be between {min_id} and {max_id}"
-                )
-            })
-            .map(|s| s.as_str())
-    }
-
-    fn min_query_id(&self) -> usize {
-        0
-    }
-
-    fn max_query_id(&self) -> usize {
-        self.queries.len() - 1
+/// Get the SQL statement from the specified query file
+pub fn get_query_sql(query_path: &Path) -> Result<Option<String>> {
+    if fs::exists(query_path)? {
+        Ok(Some(fs::read_to_string(query_path)?))
+    } else {
+        Ok(None)
     }
 }
+
 impl RunOpt {
     pub async fn run(self) -> Result<()> {
         println!("Running benchmarks with the following options: {self:?}");
-        let queries = AllQueries::try_new(self.queries_path.as_path())?;
+
+        let query_dir_metadata = fs::metadata(&self.queries_path).map_err(|e| {
+            if e.kind() == ErrorKind::NotFound {
+                exec_datafusion_err!(
+                    "Query path '{}' does not exist.",
+                    &self.queries_path.to_str().unwrap()
+                )
+            } else {
+                DataFusionError::External(Box::new(e))
+            }
+        })?;
+
+        if !query_dir_metadata.is_dir() {
+            return Err(exec_datafusion_err!(
+                "Query path '{}' is not a directory.",
+                &self.queries_path.to_str().unwrap()
+            ));
+        }
+
         let query_range = match self.query {
             Some(query_id) => query_id..=query_id,
-            None => queries.min_query_id()..=queries.max_query_id(),
+            None => 0..=usize::MAX,
         };
 
         // configure parquet options
@@ -128,34 +127,65 @@ impl RunOpt {
         let ctx = SessionContext::new_with_config_rt(config, rt_builder.build_arc()?);
         self.register_hits(&ctx).await?;
 
-        let iterations = self.common.iterations;
         let mut benchmark_run = BenchmarkRun::new();
         for query_id in query_range {
-            let mut millis = Vec::with_capacity(iterations);
+            let query_path = get_query_path(&self.queries_path, query_id);
+            let Some(sql) = get_query_sql(&query_path)? else {
+                if self.query.is_some() {
+                    return Err(exec_datafusion_err!(
+                        "Could not load query file '{}'.",
+                        &query_path.to_str().unwrap()
+                    ));
+                }
+                break;
+            };
             benchmark_run.start_new_case(&format!("Query {query_id}"));
-            let sql = queries.get_query(query_id)?;
-            println!("Q{query_id}: {sql}");
-
-            for i in 0..iterations {
-                let start = Instant::now();
-                let results = ctx.sql(sql).await?.collect().await?;
-                let elapsed = start.elapsed();
-                let ms = elapsed.as_secs_f64() * 1000.0;
-                millis.push(ms);
-                let row_count: usize = results.iter().map(|b| b.num_rows()).sum();
-                println!(
-                    "Query {query_id} iteration {i} took {ms:.1} ms and returned {row_count} rows"
-                );
-                benchmark_run.write_iter(elapsed, row_count);
+            let query_run = self.benchmark_query(&sql, query_id, &ctx).await;
+            match query_run {
+                Ok(query_results) => {
+                    for iter in query_results {
+                        benchmark_run.write_iter(iter.elapsed, iter.row_count);
+                    }
+                }
+                Err(e) => {
+                    benchmark_run.mark_failed();
+                    eprintln!("Query {query_id} failed: {e}");
+                }
             }
-            if self.common.debug {
-                ctx.sql(sql).await?.explain(false, false)?.show().await?;
-            }
-            let avg = millis.iter().sum::<f64>() / millis.len() as f64;
-            println!("Query {query_id} avg time: {avg:.2} ms");
         }
         benchmark_run.maybe_write_json(self.output_path.as_ref())?;
+        benchmark_run.maybe_print_failures();
         Ok(())
+    }
+
+    async fn benchmark_query(
+        &self,
+        sql: &str,
+        query_id: usize,
+        ctx: &SessionContext,
+    ) -> Result<Vec<QueryResult>> {
+        println!("Q{query_id}: {sql}");
+
+        let mut millis = Vec::with_capacity(self.iterations());
+        let mut query_results = vec![];
+        for i in 0..self.iterations() {
+            let start = Instant::now();
+            let results = ctx.sql(sql).await?.collect().await?;
+            let elapsed = start.elapsed();
+            let ms = elapsed.as_secs_f64() * 1000.0;
+            millis.push(ms);
+            let row_count: usize = results.iter().map(|b| b.num_rows()).sum();
+            println!(
+                "Query {query_id} iteration {i} took {ms:.1} ms and returned {row_count} rows"
+            );
+            query_results.push(QueryResult { elapsed, row_count })
+        }
+        if self.common.debug {
+            ctx.sql(sql).await?.explain(false, false)?.show().await?;
+        }
+        let avg = millis.iter().sum::<f64>() / millis.len() as f64;
+        println!("Query {query_id} avg time: {avg:.2} ms");
+        Ok(query_results)
     }
 
     /// Registers the `hits.parquet` as a table named `hits`
@@ -170,5 +200,9 @@ impl RunOpt {
                     Box::new(e),
                 )
             })
+    }
+
+    fn iterations(&self) -> usize {
+        self.common.iterations
     }
 }

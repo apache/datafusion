@@ -22,22 +22,21 @@ use std::fmt;
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use datafusion_physical_plan::metrics::MetricsSet;
-use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
-use datafusion_physical_plan::ExecutionPlanProperties;
-use datafusion_physical_plan::{
-    execute_input_stream, DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning,
-    PlanProperties, SendableRecordBatchStream,
-};
-
 use arrow::array::{ArrayRef, RecordBatch, UInt64Array};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::{internal_err, Result};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{Distribution, EquivalenceProperties};
-use datafusion_physical_expr_common::sort_expr::LexRequirement;
+use datafusion_physical_expr_common::sort_expr::{LexRequirement, OrderingRequirements};
+use datafusion_physical_plan::metrics::MetricsSet;
+use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
+use datafusion_physical_plan::{
+    execute_input_stream, DisplayAs, DisplayFormatType, ExecutionPlan,
+    ExecutionPlanProperties, Partitioning, PlanProperties, SendableRecordBatchStream,
+};
 
 use async_trait::async_trait;
+use datafusion_physical_plan::execution_plan::{EvaluationType, SchedulingType};
 use futures::StreamExt;
 
 /// `DataSink` implements writing streams of [`RecordBatch`]es to
@@ -143,6 +142,8 @@ impl DataSinkExec {
             input.pipeline_behavior(),
             input.boundedness(),
         )
+        .with_scheduling_type(SchedulingType::Cooperative)
+        .with_evaluation_type(EvaluationType::Eager)
     }
 }
 
@@ -184,10 +185,10 @@ impl ExecutionPlan for DataSinkExec {
         vec![Distribution::SinglePartition; self.children().len()]
     }
 
-    fn required_input_ordering(&self) -> Vec<Option<LexRequirement>> {
+    fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
         // The required input ordering is set externally (e.g. by a `ListingTable`).
-        // Otherwise, there is no specific requirement (i.e. `sort_expr` is `None`).
-        vec![self.sort_order.as_ref().cloned()]
+        // Otherwise, there is no specific requirement (i.e. `sort_order` is `None`).
+        vec![self.sort_order.as_ref().cloned().map(Into::into)]
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {

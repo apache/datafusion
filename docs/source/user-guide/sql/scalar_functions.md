@@ -2586,6 +2586,7 @@ _Alias of [current_date](#current_date)._
 - [array_join](#array_join)
 - [array_length](#array_length)
 - [array_max](#array_max)
+- [array_min](#array_min)
 - [array_ndims](#array_ndims)
 - [array_pop_back](#array_pop_back)
 - [array_pop_front](#array_pop_front)
@@ -3092,6 +3093,29 @@ array_max(array)
 
 - list_max
 
+### `array_min`
+
+Returns the minimum value in the array.
+
+```sql
+array_min(array)
+```
+
+#### Arguments
+
+- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+
+#### Example
+
+```sql
+> select array_min([3,1,4,2]);
++-----------------------------------------+
+| array_min(List([3,1,4,2]))              |
++-----------------------------------------+
+| 1                                       |
++-----------------------------------------+
+```
+
 ### `array_ndims`
 
 Returns the number of dimensions of the array.
@@ -3176,7 +3200,7 @@ array_pop_front(array)
 
 ### `array_position`
 
-Returns the position of the first occurrence of the specified element in the array.
+Returns the position of the first occurrence of the specified element in the array, or NULL if not found.
 
 ```sql
 array_position(array, element)
@@ -3187,7 +3211,7 @@ array_position(array, element, index)
 
 - **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
 - **element**: Element to search for position in the array.
-- **index**: Index at which to start searching.
+- **index**: Index at which to start searching (1-indexed).
 
 #### Example
 
@@ -4139,6 +4163,7 @@ select struct(a as field_a, b) from t;
 
 - [element_at](#element_at)
 - [map](#map)
+- [map_entries](#map_entries)
 - [map_extract](#map_extract)
 - [map_keys](#map_keys)
 - [map_values](#map_values)
@@ -4194,6 +4219,30 @@ SELECT MAKE_MAP(['POST', 'HEAD'], [41, 33]);
 SELECT MAKE_MAP(['key1', 'key2'], ['value1', null]);
 ----
 {key1: value1, key2: }
+```
+
+### `map_entries`
+
+Returns a list of all entries in the map.
+
+```sql
+map_entries(map)
+```
+
+#### Arguments
+
+- **map**: Map expression. Can be a constant, column, or function, and any combination of map operators.
+
+#### Example
+
+```sql
+SELECT map_entries(MAP {'a': 1, 'b': NULL, 'c': 3});
+----
+[{'key': a, 'value': 1}, {'key': b, 'value': NULL}, {'key': c, 'value': 3}]
+
+SELECT map_entries(map([100, 5], [42, 43]));
+----
+[{'key': 100, 'value': 42}, {'key': 5, 'value': 43}]
 ```
 
 ### `map_extract`

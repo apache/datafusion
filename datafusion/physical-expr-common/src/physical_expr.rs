@@ -25,9 +25,11 @@ use crate::utils::scatter;
 
 use arrow::array::BooleanArray;
 use arrow::compute::filter_record_batch;
-use arrow::datatypes::{DataType, Field, Schema};
+use arrow::datatypes::{DataType, Field, FieldRef, Schema};
 use arrow::record_batch::RecordBatch;
-use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_common::tree_node::{
+    Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
+};
 use datafusion_common::{internal_err, not_impl_err, Result, ScalarValue};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::interval_arithmetic::Interval;
@@ -81,12 +83,12 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + DynEq + DynHash {
     /// Evaluate an expression against a RecordBatch
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue>;
     /// The output field associated with this expression
-    fn return_field(&self, input_schema: &Schema) -> Result<Field> {
-        Ok(Field::new(
+    fn return_field(&self, input_schema: &Schema) -> Result<FieldRef> {
+        Ok(Arc::new(Field::new(
             format!("{self}"),
             self.data_type(input_schema)?,
             self.nullable(input_schema)?,
-        ))
+        )))
     }
     /// Evaluate an expression against a RecordBatch after first applying a
     /// validity array
@@ -345,6 +347,24 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + DynEq + DynHash {
         // This is a safe default behavior.
         Ok(None)
     }
+
+    /// Returns the generation of this `PhysicalExpr` for snapshotting purposes.
+    /// The generation is an arbitrary u64 that can be used to track changes
+    /// in the state of the `PhysicalExpr` over time without having to do an exhaustive comparison.
+    /// This is useful to avoid unecessary computation or serialization if there are no changes to the expression.
+    /// In particular, dynamic expressions that may change over time; this allows cheap checks for changes.
+    /// Static expressions that do not change over time should return 0, as does the default implementation.
+    /// You should not call this method directly as it does not handle recursion.
+    /// Instead use [`snapshot_generation`] to handle recursion and capture the
+    /// full state of the `PhysicalExpr`.
+    fn snapshot_generation(&self) -> u64 {
+        // By default, we return 0 to indicate that this PhysicalExpr does not
+        // have any dynamic references or state.
+        // Since the recursive algorithm XORs the generations of all children the overall
+        // generation will be 0 if no children have a non-zero generation, meaning that
+        // static expressions will always return 0.
+        0
+    }
 }
 
 /// [`PhysicalExpr`] can't be constrained by [`Eq`] directly because it must remain object
@@ -469,7 +489,7 @@ where
 /// # use std::fmt::Formatter;
 /// # use std::sync::Arc;
 /// # use arrow::array::RecordBatch;
-/// # use arrow::datatypes::{DataType, Field, Schema};
+/// # use arrow::datatypes::{DataType, Field, FieldRef, Schema};
 /// # use datafusion_common::Result;
 /// # use datafusion_expr_common::columnar_value::ColumnarValue;
 /// # use datafusion_physical_expr_common::physical_expr::{fmt_sql, DynEq, PhysicalExpr};
@@ -479,7 +499,7 @@ where
 /// # fn data_type(&self, input_schema: &Schema) -> Result<DataType> { unimplemented!() }
 /// # fn nullable(&self, input_schema: &Schema) -> Result<bool> { unimplemented!() }
 /// # fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> { unimplemented!() }
-/// # fn return_field(&self, input_schema: &Schema) -> Result<Field> { unimplemented!() }
+/// # fn return_field(&self, input_schema: &Schema) -> Result<FieldRef> { unimplemented!() }
 /// # fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>>{ unimplemented!() }
 /// # fn with_new_children(self: Arc<Self>, children: Vec<Arc<dyn PhysicalExpr>>) -> Result<Arc<dyn PhysicalExpr>> { unimplemented!() }
 /// # fn fmt_sql(&self, f: &mut Formatter<'_>) -> std::fmt::Result { write!(f, "CASE a > b THEN 1 ELSE 0 END") }
@@ -536,4 +556,32 @@ pub fn snapshot_physical_expr(
         }
     })
     .data()
+}
+
+/// Check the generation of this `PhysicalExpr`.
+/// Dynamic `PhysicalExpr`s may have a generation that is incremented
+/// every time the state of the `PhysicalExpr` changes.
+/// If the generation changes that means this `PhysicalExpr` or one of its children
+/// has changed since the last time it was evaluated.
+///
+/// This algorithm will not produce collisions as long as the structure of the
+/// `PhysicalExpr` does not change and no `PhysicalExpr` decrements its own generation.
+pub fn snapshot_generation(expr: &Arc<dyn PhysicalExpr>) -> u64 {
+    let mut generation = 0u64;
+    expr.apply(|e| {
+        // Add the current generation of the `PhysicalExpr` to our global generation.
+        generation = generation.wrapping_add(e.snapshot_generation());
+        Ok(TreeNodeRecursion::Continue)
+    })
+    .expect("this traversal is infallible");
+
+    generation
+}
+
+/// Check if the given `PhysicalExpr` is dynamic.
+/// Internally this calls [`snapshot_generation`] to check if the generation is non-zero,
+/// any dynamic `PhysicalExpr` should have a non-zero generation.
+pub fn is_dynamic_physical_expr(expr: &Arc<dyn PhysicalExpr>) -> bool {
+    // If the generation is non-zero, then this `PhysicalExpr` is dynamic.
+    snapshot_generation(expr) != 0
 }

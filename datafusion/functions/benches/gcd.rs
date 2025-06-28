@@ -30,9 +30,9 @@ use rand::Rng;
 use std::sync::Arc;
 
 fn generate_i64_array(n_rows: usize) -> ArrayRef {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let values = (0..n_rows)
-        .map(|_| rng.gen_range(0..1000))
+        .map(|_| rng.random_range(0..1000))
         .collect::<Vec<_>>();
     Arc::new(Int64Array::from(values)) as ArrayRef
 }
@@ -49,11 +49,11 @@ fn criterion_benchmark(c: &mut Criterion) {
                 udf.invoke_with_args(ScalarFunctionArgs {
                     args: vec![array_a.clone(), array_b.clone()],
                     arg_fields: vec![
-                        &Field::new("a", array_a.data_type(), true),
-                        &Field::new("b", array_b.data_type(), true),
+                        Field::new("a", array_a.data_type(), true).into(),
+                        Field::new("b", array_b.data_type(), true).into(),
                     ],
                     number_rows: 0,
-                    return_field: &Field::new("f", DataType::Int64, true),
+                    return_field: Field::new("f", DataType::Int64, true).into(),
                 })
                 .expect("date_bin should work on valid values"),
             )
@@ -69,11 +69,11 @@ fn criterion_benchmark(c: &mut Criterion) {
                 udf.invoke_with_args(ScalarFunctionArgs {
                     args: vec![array_a.clone(), scalar_b.clone()],
                     arg_fields: vec![
-                        &Field::new("a", array_a.data_type(), true),
-                        &Field::new("b", scalar_b.data_type(), true),
+                        Field::new("a", array_a.data_type(), true).into(),
+                        Field::new("b", scalar_b.data_type(), true).into(),
                     ],
                     number_rows: 0,
-                    return_field: &Field::new("f", DataType::Int64, true),
+                    return_field: Field::new("f", DataType::Int64, true).into(),
                 })
                 .expect("date_bin should work on valid values"),
             )
@@ -89,11 +89,11 @@ fn criterion_benchmark(c: &mut Criterion) {
                 udf.invoke_with_args(ScalarFunctionArgs {
                     args: vec![scalar_a.clone(), scalar_b.clone()],
                     arg_fields: vec![
-                        &Field::new("a", scalar_a.data_type(), true),
-                        &Field::new("b", scalar_b.data_type(), true),
+                        Field::new("a", scalar_a.data_type(), true).into(),
+                        Field::new("b", scalar_b.data_type(), true).into(),
                     ],
                     number_rows: 0,
-                    return_field: &Field::new("f", DataType::Int64, true),
+                    return_field: Field::new("f", DataType::Int64, true).into(),
                 })
                 .expect("date_bin should work on valid values"),
             )

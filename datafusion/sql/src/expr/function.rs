@@ -223,8 +223,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         } = function_args;
 
         if over.is_some() && !within_group.is_empty() {
-            return plan_err!("OVER and WITHIN GROUP clause are can not be used together. \
-                OVER is for window function, whereas WITHIN GROUP is for ordered set aggregate function");
+            return plan_err!("OVER and WITHIN GROUP clause cannot be used together. \
+                OVER is for window functions, whereas WITHIN GROUP is for ordered set aggregate functions");
         }
 
         // If function is a window function (it has an OVER clause),
@@ -361,7 +361,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     null_treatment,
                 } = window_expr;
 
-                return Expr::WindowFunction(expr::WindowFunction::new(func_def, args))
+                return Expr::from(expr::WindowFunction::new(func_def, args))
                     .partition_by(partition_by)
                     .order_by(order_by)
                     .window_frame(window_frame)
@@ -404,6 +404,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     }
                     (!within_group.is_empty()).then_some(within_group)
                 } else {
+                    let order_by = if !order_by.is_empty() {
+                        order_by
+                    } else {
+                        within_group
+                    };
                     let order_by = self.order_by_to_sort_expr(
                         order_by,
                         schema,

@@ -63,15 +63,14 @@ use std::hash::Hash;
 use std::task::{Context, Poll};
 use std::{any::Any, collections::BTreeMap, fmt, sync::Arc};
 
+use arrow::array::{Array, ArrayRef, StringViewArray};
 use arrow::{
-    array::{Int64Array, StringArray},
-    datatypes::SchemaRef,
-    record_batch::RecordBatch,
+    array::Int64Array, datatypes::SchemaRef, record_batch::RecordBatch,
     util::pretty::pretty_format_batches,
 };
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::{
-    common::cast::{as_int64_array, as_string_array},
+    common::cast::as_int64_array,
     common::{arrow_datafusion_err, internal_err, DFSchemaRef},
     error::{DataFusionError, Result},
     execution::{
@@ -100,6 +99,7 @@ use datafusion_optimizer::AnalyzerRule;
 use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 
 use async_trait::async_trait;
+use datafusion_common::cast::as_string_view_array;
 use futures::{Stream, StreamExt};
 
 /// Execute the specified sql and return the resulting record batches
@@ -796,22 +796,26 @@ fn accumulate_batch(
     k: &usize,
 ) -> BTreeMap<i64, String> {
     let num_rows = input_batch.num_rows();
-    // Assuming the input columns are
-    // column[0]: customer_id / UTF8
-    // column[1]: revenue: Int64
-    let customer_id =
-        as_string_array(input_batch.column(0)).expect("Column 0 is not customer_id");
 
+    // Assuming the input columns are
+    // column[0]: customer_id UTF8View
+    // column[1]: revenue: Int64
+
+    let customer_id_column = input_batch.column(0);
     let revenue = as_int64_array(input_batch.column(1)).unwrap();
 
     for row in 0..num_rows {
-        add_row(
-            &mut top_values,
-            customer_id.value(row),
-            revenue.value(row),
-            k,
-        );
+        let customer_id = match customer_id_column.data_type() {
+            arrow::datatypes::DataType::Utf8View => {
+                let array = as_string_view_array(customer_id_column).unwrap();
+                array.value(row)
+            }
+            _ => panic!("Unsupported customer_id type"),
+        };
+
+        add_row(&mut top_values, customer_id, revenue.value(row), k);
     }
+
     top_values
 }
 
@@ -843,11 +847,19 @@ impl Stream for TopKReader {
                     self.state.iter().rev().unzip();
 
                 let customer: Vec<&str> = customer.iter().map(|&s| &**s).collect();
+
+                let customer_array: ArrayRef = match schema.field(0).data_type() {
+                    arrow::datatypes::DataType::Utf8View => {
+                        Arc::new(StringViewArray::from(customer))
+                    }
+                    other => panic!("Unsupported customer_id output type: {other:?}"),
+                };
+
                 Poll::Ready(Some(
                     RecordBatch::try_new(
                         schema,
                         vec![
-                            Arc::new(StringArray::from(customer)),
+                            Arc::new(customer_array),
                             Arc::new(Int64Array::from(revenue)),
                         ],
                     )
@@ -900,11 +912,12 @@ impl MyAnalyzerRule {
             .map(|e| {
                 e.transform(|e| {
                     Ok(match e {
-                        Expr::Literal(ScalarValue::Int64(i)) => {
+                        Expr::Literal(ScalarValue::Int64(i), _) => {
                             // transform to UInt64
-                            Transformed::yes(Expr::Literal(ScalarValue::UInt64(
-                                i.map(|i| i as u64),
-                            )))
+                            Transformed::yes(Expr::Literal(
+                                ScalarValue::UInt64(i.map(|i| i as u64)),
+                                None,
+                            ))
                         }
                         _ => Transformed::no(e),
                     })
