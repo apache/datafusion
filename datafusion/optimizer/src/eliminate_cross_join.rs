@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use crate::join_key_set::JoinKeySet;
 use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::Result;
+use datafusion_common::{NullEquality, Result};
 use datafusion_expr::expr::{BinaryExpr, Expr};
 use datafusion_expr::logical_plan::{
     Filter, Join, JoinConstraint, JoinType, LogicalPlan, Projection,
@@ -89,7 +89,7 @@ impl OptimizerRule for EliminateCrossJoin {
         let mut possible_join_keys = JoinKeySet::new();
         let mut all_inputs: Vec<LogicalPlan> = vec![];
         let mut all_filters: Vec<Expr> = vec![];
-        let mut null_equals_null = false;
+        let mut null_equality = NullEquality::NullEqualsNothing;
 
         let parent_predicate = if let LogicalPlan::Filter(filter) = plan {
             // if input isn't a join that can potentially be rewritten
@@ -115,9 +115,9 @@ impl OptimizerRule for EliminateCrossJoin {
                 input, predicate, ..
             } = filter;
 
-            // Extract null_equals_null setting from the input join
+            // Extract null_equality setting from the input join
             if let LogicalPlan::Join(join) = input.as_ref() {
-                null_equals_null = join.null_equals_null;
+                null_equality = join.null_equality;
             }
 
             flatten_join_inputs(
@@ -133,7 +133,7 @@ impl OptimizerRule for EliminateCrossJoin {
             match plan {
                 LogicalPlan::Join(Join {
                     join_type: JoinType::Inner,
-                    null_equals_null: original_null_equals_null,
+                    null_equality: original_null_equality,
                     ..
                 }) => {
                     if !can_flatten_join_inputs(&plan) {
@@ -145,7 +145,7 @@ impl OptimizerRule for EliminateCrossJoin {
                         &mut all_inputs,
                         &mut all_filters,
                     )?;
-                    null_equals_null = original_null_equals_null;
+                    null_equality = original_null_equality;
                     None
                 }
                 _ => {
@@ -164,7 +164,7 @@ impl OptimizerRule for EliminateCrossJoin {
                 &mut all_inputs,
                 &possible_join_keys,
                 &mut all_join_keys,
-                null_equals_null,
+                null_equality,
             )?;
         }
 
@@ -302,7 +302,7 @@ fn find_inner_join(
     rights: &mut Vec<LogicalPlan>,
     possible_join_keys: &JoinKeySet,
     all_join_keys: &mut JoinKeySet,
-    null_equals_null: bool,
+    null_equality: NullEquality,
 ) -> Result<LogicalPlan> {
     for (i, right_input) in rights.iter().enumerate() {
         let mut join_keys = vec![];
@@ -341,7 +341,7 @@ fn find_inner_join(
                 on: join_keys,
                 filter: None,
                 schema: join_schema,
-                null_equals_null,
+                null_equality,
             }));
         }
     }
@@ -363,7 +363,7 @@ fn find_inner_join(
         filter: None,
         join_type: JoinType::Inner,
         join_constraint: JoinConstraint::On,
-        null_equals_null,
+        null_equality,
     }))
 }
 
@@ -1348,11 +1348,11 @@ mod tests {
     }
 
     #[test]
-    fn preserve_null_equals_null_setting() -> Result<()> {
+    fn preserve_null_equality_setting() -> Result<()> {
         let t1 = test_table_scan_with_name("t1")?;
         let t2 = test_table_scan_with_name("t2")?;
 
-        // Create an inner join with null_equals_null: true
+        // Create an inner join with NullEquality::NullEqualsNull
         let join_schema = Arc::new(build_join_schema(
             t1.schema(),
             t2.schema(),
@@ -1367,7 +1367,7 @@ mod tests {
             on: vec![],
             filter: None,
             schema: join_schema,
-            null_equals_null: true, // Set to true to test preservation
+            null_equality: NullEquality::NullEqualsNull, // Test preservation
         });
 
         // Apply filter that can create join conditions
@@ -1382,31 +1382,31 @@ mod tests {
         let rule = EliminateCrossJoin::new();
         let optimized_plan = rule.rewrite(plan, &OptimizerContext::new())?.data;
 
-        // Verify that null_equals_null is preserved in the optimized plan
-        fn check_null_equals_null_preserved(plan: &LogicalPlan) -> bool {
+        // Verify that null_equality is preserved in the optimized plan
+        fn check_null_equality_preserved(plan: &LogicalPlan) -> bool {
             match plan {
                 LogicalPlan::Join(join) => {
-                    // All joins in the optimized plan should preserve null_equals_null: true
-                    if !join.null_equals_null {
+                    // All joins in the optimized plan should preserve null equality
+                    if join.null_equality == NullEquality::NullEqualsNothing {
                         return false;
                     }
                     // Recursively check child plans
                     plan.inputs()
                         .iter()
-                        .all(|input| check_null_equals_null_preserved(input))
+                        .all(|input| check_null_equality_preserved(input))
                 }
                 _ => {
                     // Recursively check child plans for non-join nodes
                     plan.inputs()
                         .iter()
-                        .all(|input| check_null_equals_null_preserved(input))
+                        .all(|input| check_null_equality_preserved(input))
                 }
             }
         }
 
         assert!(
-            check_null_equals_null_preserved(&optimized_plan),
-            "null_equals_null setting should be preserved after optimization"
+            check_null_equality_preserved(&optimized_plan),
+            "null_equality setting should be preserved after optimization"
         );
 
         Ok(())

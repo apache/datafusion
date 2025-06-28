@@ -96,6 +96,7 @@ use datafusion_physical_plan::unnest::ListUnnest;
 use sqlparser::ast::NullTreatment;
 
 use async_trait::async_trait;
+use datafusion_physical_plan::async_func::{AsyncFuncExec, AsyncMapper};
 use futures::{StreamExt, TryStreamExt};
 use itertools::{multiunzip, Itertools};
 use log::{debug, trace};
@@ -777,12 +778,46 @@ impl DefaultPhysicalPlanner {
 
                 let runtime_expr =
                     self.create_physical_expr(predicate, input_dfschema, session_state)?;
+
+                let input_schema = input.schema();
+                let filter = match self.try_plan_async_exprs(
+                    input_schema.fields().len(),
+                    PlannedExprResult::Expr(vec![runtime_expr]),
+                    input_schema.as_arrow(),
+                )? {
+                    PlanAsyncExpr::Sync(PlannedExprResult::Expr(runtime_expr)) => {
+                        FilterExec::try_new(Arc::clone(&runtime_expr[0]), physical_input)?
+                    }
+                    PlanAsyncExpr::Async(
+                        async_map,
+                        PlannedExprResult::Expr(runtime_expr),
+                    ) => {
+                        let async_exec = AsyncFuncExec::try_new(
+                            async_map.async_exprs,
+                            physical_input,
+                        )?;
+                        FilterExec::try_new(
+                            Arc::clone(&runtime_expr[0]),
+                            Arc::new(async_exec),
+                        )?
+                        // project the output columns excluding the async functions
+                        // The async functions are always appended to the end of the schema.
+                        .with_projection(Some(
+                            (0..input.schema().fields().len()).collect(),
+                        ))?
+                    }
+                    _ => {
+                        return internal_err!(
+                            "Unexpected result from try_plan_async_exprs"
+                        )
+                    }
+                };
+
                 let selectivity = session_state
                     .config()
                     .options()
                     .optimizer
                     .default_filter_selectivity;
-                let filter = FilterExec::try_new(runtime_expr, physical_input)?;
                 Arc::new(filter.with_default_selectivity(selectivity)?)
             }
             LogicalPlan::Repartition(Repartition {
@@ -901,12 +936,10 @@ impl DefaultPhysicalPlanner {
                 on: keys,
                 filter,
                 join_type,
-                null_equals_null,
+                null_equality,
                 schema: join_schema,
                 ..
             }) => {
-                let null_equals_null = *null_equals_null;
-
                 let [physical_left, physical_right] = children.two()?;
 
                 // If join has expression equijoin keys, add physical projection.
@@ -1127,7 +1160,7 @@ impl DefaultPhysicalPlanner {
                         join_filter,
                         *join_type,
                         vec![SortOptions::default(); join_on_len],
-                        null_equals_null,
+                        *null_equality,
                     )?)
                 } else if session_state.config().target_partitions() > 1
                     && session_state.config().repartition_joins()
@@ -1141,7 +1174,7 @@ impl DefaultPhysicalPlanner {
                         join_type,
                         None,
                         PartitionMode::Auto,
-                        null_equals_null,
+                        *null_equality,
                     )?)
                 } else {
                     Arc::new(HashJoinExec::try_new(
@@ -1152,7 +1185,7 @@ impl DefaultPhysicalPlanner {
                         join_type,
                         None,
                         PartitionMode::CollectLeft,
-                        null_equals_null,
+                        *null_equality,
                     )?)
                 };
 
@@ -2046,11 +2079,89 @@ impl DefaultPhysicalPlanner {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        Ok(Arc::new(ProjectionExec::try_new(
-            physical_exprs,
-            input_exec,
-        )?))
+        let num_input_columns = input_exec.schema().fields().len();
+
+        match self.try_plan_async_exprs(
+            num_input_columns,
+            PlannedExprResult::ExprWithName(physical_exprs),
+            input_physical_schema.as_ref(),
+        )? {
+            PlanAsyncExpr::Sync(PlannedExprResult::ExprWithName(physical_exprs)) => Ok(
+                Arc::new(ProjectionExec::try_new(physical_exprs, input_exec)?),
+            ),
+            PlanAsyncExpr::Async(
+                async_map,
+                PlannedExprResult::ExprWithName(physical_exprs),
+            ) => {
+                let async_exec =
+                    AsyncFuncExec::try_new(async_map.async_exprs, input_exec)?;
+                let new_proj_exec =
+                    ProjectionExec::try_new(physical_exprs, Arc::new(async_exec))?;
+                Ok(Arc::new(new_proj_exec))
+            }
+            _ => internal_err!("Unexpected PlanAsyncExpressions variant"),
+        }
     }
+
+    fn try_plan_async_exprs(
+        &self,
+        num_input_columns: usize,
+        physical_expr: PlannedExprResult,
+        schema: &Schema,
+    ) -> Result<PlanAsyncExpr> {
+        let mut async_map = AsyncMapper::new(num_input_columns);
+        match &physical_expr {
+            PlannedExprResult::ExprWithName(exprs) => {
+                exprs
+                    .iter()
+                    .try_for_each(|(expr, _)| async_map.find_references(expr, schema))?;
+            }
+            PlannedExprResult::Expr(exprs) => {
+                exprs
+                    .iter()
+                    .try_for_each(|expr| async_map.find_references(expr, schema))?;
+            }
+        }
+
+        if async_map.is_empty() {
+            return Ok(PlanAsyncExpr::Sync(physical_expr));
+        }
+
+        let new_exprs = match physical_expr {
+            PlannedExprResult::ExprWithName(exprs) => PlannedExprResult::ExprWithName(
+                exprs
+                    .iter()
+                    .map(|(expr, column_name)| {
+                        let new_expr = Arc::clone(expr)
+                            .transform_up(|e| Ok(async_map.map_expr(e)))?;
+                        Ok((new_expr.data, column_name.to_string()))
+                    })
+                    .collect::<Result<_>>()?,
+            ),
+            PlannedExprResult::Expr(exprs) => PlannedExprResult::Expr(
+                exprs
+                    .iter()
+                    .map(|expr| {
+                        let new_expr = Arc::clone(expr)
+                            .transform_up(|e| Ok(async_map.map_expr(e)))?;
+                        Ok(new_expr.data)
+                    })
+                    .collect::<Result<_>>()?,
+            ),
+        };
+        // rewrite the projection's expressions in terms of the columns with the result of async evaluation
+        Ok(PlanAsyncExpr::Async(async_map, new_exprs))
+    }
+}
+
+enum PlannedExprResult {
+    ExprWithName(Vec<(Arc<dyn PhysicalExpr>, String)>),
+    Expr(Vec<Arc<dyn PhysicalExpr>>),
+}
+
+enum PlanAsyncExpr {
+    Sync(PlannedExprResult),
+    Async(AsyncMapper, PlannedExprResult),
 }
 
 fn tuple_err<T, R>(value: (Result<T>, Result<R>)) -> Result<(T, R)> {
@@ -2252,7 +2363,7 @@ mod tests {
         // verify that the plan correctly casts u8 to i64
         // the cast from u8 to i64 for literal will be simplified, and get lit(int64(5))
         // the cast here is implicit so has CastOptions with safe=true
-        let expected = r#"BinaryExpr { left: Column { name: "c7", index: 2 }, op: Lt, right: Literal { value: Int64(5), field: Field { name: "5", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }, fail_on_overflow: false }"#;
+        let expected = r#"BinaryExpr { left: Column { name: "c7", index: 2 }, op: Lt, right: Literal { value: Int64(5), field: Field { name: "lit", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }, fail_on_overflow: false }"#;
 
         assert!(format!("{exec_plan:?}").contains(expected));
         Ok(())
@@ -2278,7 +2389,7 @@ mod tests {
             &session_state,
         );
 
-        let expected = r#"Ok(PhysicalGroupBy { expr: [(Column { name: "c1", index: 0 }, "c1"), (Column { name: "c2", index: 1 }, "c2"), (Column { name: "c3", index: 2 }, "c3")], null_expr: [(Literal { value: Utf8(NULL), field: Field { name: "NULL", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} } }, "c1"), (Literal { value: Int64(NULL), field: Field { name: "NULL", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} } }, "c2"), (Literal { value: Int64(NULL), field: Field { name: "NULL", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} } }, "c3")], groups: [[false, false, false], [true, false, false], [false, true, false], [false, false, true], [true, true, false], [true, false, true], [false, true, true], [true, true, true]] })"#;
+        let expected = r#"Ok(PhysicalGroupBy { expr: [(Column { name: "c1", index: 0 }, "c1"), (Column { name: "c2", index: 1 }, "c2"), (Column { name: "c3", index: 2 }, "c3")], null_expr: [(Literal { value: Utf8(NULL), field: Field { name: "lit", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} } }, "c1"), (Literal { value: Int64(NULL), field: Field { name: "lit", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} } }, "c2"), (Literal { value: Int64(NULL), field: Field { name: "lit", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} } }, "c3")], groups: [[false, false, false], [true, false, false], [false, true, false], [false, false, true], [true, true, false], [true, false, true], [false, true, true], [true, true, true]] })"#;
 
         assert_eq!(format!("{cube:?}"), expected);
 
@@ -2305,7 +2416,7 @@ mod tests {
             &session_state,
         );
 
-        let expected = r#"Ok(PhysicalGroupBy { expr: [(Column { name: "c1", index: 0 }, "c1"), (Column { name: "c2", index: 1 }, "c2"), (Column { name: "c3", index: 2 }, "c3")], null_expr: [(Literal { value: Utf8(NULL), field: Field { name: "NULL", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} } }, "c1"), (Literal { value: Int64(NULL), field: Field { name: "NULL", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} } }, "c2"), (Literal { value: Int64(NULL), field: Field { name: "NULL", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} } }, "c3")], groups: [[true, true, true], [false, true, true], [false, false, true], [false, false, false]] })"#;
+        let expected = r#"Ok(PhysicalGroupBy { expr: [(Column { name: "c1", index: 0 }, "c1"), (Column { name: "c2", index: 1 }, "c2"), (Column { name: "c3", index: 2 }, "c3")], null_expr: [(Literal { value: Utf8(NULL), field: Field { name: "lit", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} } }, "c1"), (Literal { value: Int64(NULL), field: Field { name: "lit", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} } }, "c2"), (Literal { value: Int64(NULL), field: Field { name: "lit", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} } }, "c3")], groups: [[true, true, true], [false, true, true], [false, false, true], [false, false, false]] })"#;
 
         assert_eq!(format!("{rollup:?}"), expected);
 
@@ -2489,7 +2600,7 @@ mod tests {
         let execution_plan = plan(&logical_plan).await?;
         // verify that the plan correctly adds cast from Int64(1) to Utf8, and the const will be evaluated.
 
-        let expected = "expr: [(BinaryExpr { left: BinaryExpr { left: Column { name: \"c1\", index: 0 }, op: Eq, right: Literal { value: Utf8(\"a\"), field: Field { name: \"a\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }, fail_on_overflow: false }, op: Or, right: BinaryExpr { left: Column { name: \"c1\", index: 0 }, op: Eq, right: Literal { value: Utf8(\"1\"), field: Field { name: \"1\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }, fail_on_overflow: false }, fail_on_overflow: false }";
+        let expected = "expr: [(BinaryExpr { left: BinaryExpr { left: Column { name: \"c1\", index: 0 }, op: Eq, right: Literal { value: Utf8(\"a\"), field: Field { name: \"lit\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }, fail_on_overflow: false }, op: Or, right: BinaryExpr { left: Column { name: \"c1\", index: 0 }, op: Eq, right: Literal { value: Utf8(\"1\"), field: Field { name: \"lit\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }, fail_on_overflow: false }, fail_on_overflow: false }";
 
         let actual = format!("{execution_plan:?}");
         assert!(actual.contains(expected), "{}", actual);

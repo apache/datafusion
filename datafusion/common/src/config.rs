@@ -17,6 +17,8 @@
 
 //! Runtime configuration, via [`ConfigOptions`]
 
+use arrow_ipc::CompressionType;
+
 use crate::error::_config_err;
 use crate::parsers::CompressionTypeVariant;
 use crate::utils::get_available_parallelism;
@@ -259,10 +261,10 @@ config_namespace! {
         /// string length and thus DataFusion can not enforce such limits.
         pub support_varchar_with_length: bool, default = true
 
-       /// If true, `VARCHAR` is mapped to `Utf8View` during SQL planning.
-       /// If false, `VARCHAR` is mapped to `Utf8`  during SQL planning.
-       /// Default is false.
-        pub map_varchar_to_utf8view: bool, default = true
+        /// If true, string types (VARCHAR, CHAR, Text, and String) are mapped to `Utf8View` during SQL planning.
+        /// If false, they are mapped to `Utf8`.
+        /// Default is true.
+        pub map_string_types_to_utf8view: bool, default = true
 
         /// When set to true, the source locations relative to the original SQL
         /// query (i.e. [`Span`](https://docs.rs/sqlparser/latest/sqlparser/tokenizer/struct.Span.html)) will be collected
@@ -271,6 +273,61 @@ config_namespace! {
 
         /// Specifies the recursion depth limit when parsing complex SQL Queries
         pub recursion_limit: usize, default = 50
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum SpillCompression {
+    Zstd,
+    Lz4Frame,
+    #[default]
+    Uncompressed,
+}
+
+impl FromStr for SpillCompression {
+    type Err = DataFusionError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_ascii_lowercase().as_str() {
+            "zstd" => Ok(Self::Zstd),
+            "lz4_frame" => Ok(Self::Lz4Frame),
+            "uncompressed" | "" => Ok(Self::Uncompressed),
+            other => Err(DataFusionError::Configuration(format!(
+                "Invalid Spill file compression type: {other}. Expected one of: zstd, lz4_frame, uncompressed"
+            ))),
+        }
+    }
+}
+
+impl ConfigField for SpillCompression {
+    fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
+        v.some(key, self, description)
+    }
+
+    fn set(&mut self, _: &str, value: &str) -> Result<()> {
+        *self = SpillCompression::from_str(value)?;
+        Ok(())
+    }
+}
+
+impl Display for SpillCompression {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let str = match self {
+            Self::Zstd => "zstd",
+            Self::Lz4Frame => "lz4_frame",
+            Self::Uncompressed => "uncompressed",
+        };
+        write!(f, "{str}")
+    }
+}
+
+impl From<SpillCompression> for Option<CompressionType> {
+    fn from(c: SpillCompression) -> Self {
+        match c {
+            SpillCompression::Zstd => Some(CompressionType::ZSTD),
+            SpillCompression::Lz4Frame => Some(CompressionType::LZ4_FRAME),
+            SpillCompression::Uncompressed => None,
+        }
     }
 }
 
@@ -294,8 +351,8 @@ config_namespace! {
 
         /// Should DataFusion collect statistics when first creating a table.
         /// Has no effect after the table is created. Applies to the default
-        /// `ListingTableProvider` in DataFusion. Defaults to false.
-        pub collect_statistics: bool, default = false
+        /// `ListingTableProvider` in DataFusion. Defaults to true.
+        pub collect_statistics: bool, default = true
 
         /// Number of partitions for query execution. Increasing partitions can increase
         /// concurrency.
@@ -307,7 +364,7 @@ config_namespace! {
         ///
         /// Some functions, e.g. `EXTRACT(HOUR from SOME_TIME)`, shift the underlying datetime
         /// according to this time zone, and then extract the hour
-        pub time_zone: Option<String>, default = Some("+00:00".into())
+        pub time_zone: String, default = "+00:00".into()
 
         /// Parquet options
         pub parquet: ParquetOptions, default = Default::default()
@@ -329,6 +386,16 @@ config_namespace! {
         /// This is used to workaround bugs in the planner that are now caught by
         /// the new schema verification step.
         pub skip_physical_aggregate_schema_check: bool, default = false
+
+        /// Sets the compression codec used when spilling data to disk.
+        ///
+        /// Since datafusion writes spill files using the Arrow IPC Stream format,
+        /// only codecs supported by the Arrow IPC Stream Writer are allowed.
+        /// Valid values are: uncompressed, lz4_frame, zstd.
+        /// Note: lz4_frame offers faster (de)compression, but typically results in
+        /// larger spill files. In contrast, zstd achieves
+        /// higher compression ratios at the cost of slower (de)compression speed.
+        pub spill_compression: SpillCompression, default = SpillCompression::Uncompressed
 
         /// Specifies the reserved memory for each spillable sort operation to
         /// facilitate an in-memory merge.
@@ -614,6 +681,13 @@ config_namespace! {
         /// during aggregations, if possible
         pub enable_topk_aggregation: bool, default = true
 
+        /// When set to true attempts to push down dynamic filters generated by operators into the file scan phase.
+        /// For example, for a query such as `SELECT * FROM t ORDER BY timestamp DESC LIMIT 10`, the optimizer
+        /// will attempt to push down the current top 10 timestamps that the TopK operator references into the file scans.
+        /// This means that if we already have 10 timestamps in the year 2025
+        /// any files that only have timestamps in the year 2024 can be skipped / pruned at various stages in the scan.
+        pub enable_dynamic_filter_pushdown: bool, default = true
+
         /// When set to true, the optimizer will insert filters before a join between
         /// a nullable and non-nullable column to filter out nulls on the nullable side. This
         /// filter can add additional overhead when the file format does not fully support
@@ -722,15 +796,6 @@ config_namespace! {
         /// then the output will be coerced to a non-view.
         /// Coerces `Utf8View` to `LargeUtf8`, and `BinaryView` to `LargeBinary`.
         pub expand_views_at_output: bool, default = false
-
-        /// When DataFusion detects that a plan might not be promply cancellable
-        /// due to the presence of tight-looping operators, it will attempt to
-        /// mitigate this by inserting explicit yielding (in as few places as
-        /// possible to avoid performance degradation). This value represents the
-        /// yielding period (in batches) at such explicit yielding points. The
-        /// default value is 64. If set to 0, no DataFusion will not perform
-        /// any explicit yielding.
-        pub yield_period: usize, default = 64
     }
 }
 
@@ -1183,7 +1248,10 @@ impl<F: ConfigField + Default> ConfigField for Option<F> {
     }
 }
 
-fn default_transform<T>(input: &str) -> Result<T>
+/// Default transformation to parse a [`ConfigField`] for a string.
+///
+/// This uses [`FromStr`] to parse the data.
+pub fn default_config_transform<T>(input: &str) -> Result<T>
 where
     T: FromStr,
     <T as FromStr>::Err: Sync + Send + Error + 'static,
@@ -1200,19 +1268,45 @@ where
     })
 }
 
+/// Macro that generates [`ConfigField`] for a given type.
+///
+/// # Usage
+/// This always requires [`Display`] to be implemented for the given type.
+///
+/// There are two ways to invoke this macro. The first one uses
+/// [`default_config_transform`]/[`FromStr`] to parse the data:
+///
+/// ```ignore
+/// config_field(MyType);
+/// ```
+///
+/// Note that the parsing error MUST implement [`std::error::Error`]!
+///
+/// Or you can specify how you want to parse an [`str`] into the type:
+///
+/// ```ignore
+/// fn parse_it(s: &str) -> Result<MyType> {
+///     ...
+/// }
+///
+/// config_field(
+///     MyType,
+///     value => parse_it(value)
+/// );
+/// ```
 #[macro_export]
 macro_rules! config_field {
     ($t:ty) => {
-        config_field!($t, value => default_transform(value)?);
+        config_field!($t, value => $crate::config::default_config_transform(value)?);
     };
 
     ($t:ty, $arg:ident => $transform:expr) => {
-        impl ConfigField for $t {
-            fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
+        impl $crate::config::ConfigField for $t {
+            fn visit<V: $crate::config::Visit>(&self, v: &mut V, key: &str, description: &'static str) {
                 v.some(key, self, description)
             }
 
-            fn set(&mut self, _: &str, $arg: &str) -> Result<()> {
+            fn set(&mut self, _: &str, $arg: &str) -> $crate::error::Result<()> {
                 *self = $transform;
                 Ok(())
             }
@@ -1221,7 +1315,7 @@ macro_rules! config_field {
 }
 
 config_field!(String);
-config_field!(bool, value => default_transform(value.to_lowercase().as_str())?);
+config_field!(bool, value => default_config_transform(value.to_lowercase().as_str())?);
 config_field!(usize);
 config_field!(f64);
 config_field!(u64);

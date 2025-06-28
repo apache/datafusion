@@ -369,8 +369,8 @@ pub struct JoinNode {
     pub left_join_key: ::prost::alloc::vec::Vec<LogicalExprNode>,
     #[prost(message, repeated, tag = "6")]
     pub right_join_key: ::prost::alloc::vec::Vec<LogicalExprNode>,
-    #[prost(bool, tag = "7")]
-    pub null_equals_null: bool,
+    #[prost(enumeration = "super::datafusion_common::NullEquality", tag = "7")]
+    pub null_equality: i32,
     #[prost(message, optional, tag = "8")]
     pub filter: ::core::option::Option<LogicalExprNode>,
 }
@@ -1119,7 +1119,7 @@ pub mod physical_plan_node {
         #[prost(message, tag = "31")]
         JsonScan(super::JsonScanExecNode),
         #[prost(message, tag = "32")]
-        YieldStream(::prost::alloc::boxed::Box<super::YieldStreamExecNode>),
+        Cooperative(::prost::alloc::boxed::Box<super::CooperativeExecNode>),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1574,11 +1574,9 @@ pub struct AvroScanExecNode {
     pub base_conf: ::core::option::Option<FileScanExecConf>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct YieldStreamExecNode {
+pub struct CooperativeExecNode {
     #[prost(message, optional, boxed, tag = "1")]
     pub input: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
-    #[prost(uint32, tag = "2")]
-    pub frequency: u32,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct HashJoinExecNode {
@@ -1592,8 +1590,8 @@ pub struct HashJoinExecNode {
     pub join_type: i32,
     #[prost(enumeration = "PartitionMode", tag = "6")]
     pub partition_mode: i32,
-    #[prost(bool, tag = "7")]
-    pub null_equals_null: bool,
+    #[prost(enumeration = "super::datafusion_common::NullEquality", tag = "7")]
+    pub null_equality: i32,
     #[prost(message, optional, tag = "8")]
     pub filter: ::core::option::Option<JoinFilter>,
     #[prost(uint32, repeated, tag = "9")]
@@ -1611,8 +1609,8 @@ pub struct SymmetricHashJoinExecNode {
     pub join_type: i32,
     #[prost(enumeration = "StreamPartitionMode", tag = "6")]
     pub partition_mode: i32,
-    #[prost(bool, tag = "7")]
-    pub null_equals_null: bool,
+    #[prost(enumeration = "super::datafusion_common::NullEquality", tag = "7")]
+    pub null_equality: i32,
     #[prost(message, optional, tag = "8")]
     pub filter: ::core::option::Option<JoinFilter>,
     #[prost(message, repeated, tag = "9")]

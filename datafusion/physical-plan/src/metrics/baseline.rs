@@ -45,7 +45,7 @@ use datafusion_common::Result;
 /// ```
 #[derive(Debug, Clone)]
 pub struct BaselineMetrics {
-    /// end_time is set when `ExecutionMetrics::done()` is called
+    /// end_time is set when `BaselineMetrics::done()` is called
     end_time: Timestamp,
 
     /// amount of time the operator was actively trying to use the CPU
@@ -151,7 +151,7 @@ pub struct SpillMetrics {
     /// count of spills during the execution of the operator
     pub spill_file_count: Count,
 
-    /// total spilled bytes during the execution of the operator
+    /// total bytes actually written to disk during the execution of the operator
     pub spilled_bytes: Count,
 
     /// total spilled rows during the execution of the operator

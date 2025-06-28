@@ -33,6 +33,7 @@ mod tests {
     use arrow_schema::{DataType, Field, Schema, SchemaRef};
     use datafusion_catalog::Session;
     use datafusion_common::cast::as_string_array;
+    use datafusion_common::config::CsvOptions;
     use datafusion_common::internal_err;
     use datafusion_common::stats::Precision;
     use datafusion_common::test_util::{arrow_test_data, batches_to_string};
@@ -791,6 +792,62 @@ mod tests {
             ++
             ++
         "###);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_csv_write_empty_file() -> Result<()> {
+        // Case 1. write to a single file
+        // Expect: an empty file created
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let path = format!("{}/empty.csv", tmp_dir.path().to_string_lossy());
+
+        let ctx = SessionContext::new();
+
+        let df = ctx.sql("SELECT 1 limit 0").await?;
+
+        let cfg1 =
+            crate::dataframe::DataFrameWriteOptions::new().with_single_file_output(true);
+        let cfg2 = CsvOptions::default().with_has_header(true);
+
+        df.write_csv(&path, cfg1, Some(cfg2)).await?;
+        assert!(std::path::Path::new(&path).exists());
+
+        // Case 2. write to a directory without partition columns
+        // Expect: under the directory, an empty file is created
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let path = format!("{}", tmp_dir.path().to_string_lossy());
+
+        let cfg1 =
+            crate::dataframe::DataFrameWriteOptions::new().with_single_file_output(true);
+        let cfg2 = CsvOptions::default().with_has_header(true);
+
+        let df = ctx.sql("SELECT 1 limit 0").await?;
+
+        df.write_csv(&path, cfg1, Some(cfg2)).await?;
+        assert!(std::path::Path::new(&path).exists());
+
+        let files = std::fs::read_dir(&path).unwrap();
+        assert!(files.count() == 1);
+
+        // Case 3. write to a directory with partition columns
+        // Expect: No file is created
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let path = format!("{}", tmp_dir.path().to_string_lossy());
+
+        let df = ctx.sql("SELECT 1 as col1, 2 as col2 limit 0").await?;
+
+        let cfg1 = crate::dataframe::DataFrameWriteOptions::new()
+            .with_single_file_output(true)
+            .with_partition_by(vec!["col1".to_string()]);
+        let cfg2 = CsvOptions::default().with_has_header(true);
+
+        df.write_csv(&path, cfg1, Some(cfg2)).await?;
+
+        assert!(std::path::Path::new(&path).exists());
+        let files = std::fs::read_dir(&path).unwrap();
+        assert!(files.count() == 0);
 
         Ok(())
     }
