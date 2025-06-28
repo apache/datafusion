@@ -55,14 +55,7 @@ use datafusion_common::{
     DataFusionError, ParamValues, ScalarValue, SchemaError, UnnestOptions,
 };
 use datafusion_expr::select_expr::SelectExpr;
-use datafusion_expr::{
-    case,
-    dml::InsertOp,
-    expr::{Alias, ScalarFunction},
-    is_null, lit,
-    utils::COUNT_STAR_EXPANSION,
-    SortExpr, TableProviderFilterPushDown, UNNAMED_TABLE,
-};
+use datafusion_expr::{case, dml::InsertOp, expr::{Alias, ScalarFunction}, is_null, lit, utils::COUNT_STAR_EXPANSION, ExplainFormat, SortExpr, TableProviderFilterPushDown, UNNAMED_TABLE};
 use datafusion_functions::core::coalesce;
 use datafusion_functions_aggregate::expr_fn::{
     avg, count, max, median, min, stddev, sum,
@@ -1602,6 +1595,8 @@ impl DataFrame {
     /// Return a DataFrame with the explanation of its plan so far.
     ///
     /// if `analyze` is specified, runs the plan and reports metrics
+    /// if `verbose` is true, prints out additional details.
+    /// The default format is [`ExplainFormat::Indent`].
     ///
     /// ```
     /// # use datafusion::prelude::*;
@@ -1615,11 +1610,24 @@ impl DataFrame {
     /// # }
     /// ```
     pub fn explain(self, verbose: bool, analyze: bool) -> Result<DataFrame> {
+        // Keep the API not changed, the default for this API will use ExplainFormat::Indent
+        self.explain_option_format(verbose, analyze, ExplainFormat::Indent)
+    }
+
+    /// Return a DataFrame with the explanation of its plan so far.
+    ///
+    /// if `analyze` is specified, runs the plan and reports metrics
+    /// if `verbose` is true, prints out additional details.
+    /// The `explain_format` parameter allows to specify the format of the explanation,
+    /// Details format info: see [`ExplainFormat`].
+    ///
+    /// ```
+    pub fn explain_option_format(self, verbose: bool, analyze: bool, explain_format: ExplainFormat) -> Result<DataFrame> {
         if matches!(self.plan, LogicalPlan::Explain(_)) {
             return plan_err!("Nested EXPLAINs are not supported");
         }
         let plan = LogicalPlanBuilder::from(self.plan)
-            .explain(verbose, analyze)?
+            .explain_option_format(verbose, analyze, explain_format)?
             .build()?;
         Ok(DataFrame {
             session_state: self.session_state,

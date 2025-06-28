@@ -1259,6 +1259,11 @@ impl LogicalPlanBuilder {
     ///
     /// if `verbose` is true, prints out additional details.
     pub fn explain(self, verbose: bool, analyze: bool) -> Result<Self> {
+        // Keep the format default to Indent
+        self.explain_option_format(verbose, analyze, ExplainFormat::Indent)
+    }
+
+    pub fn explain_option_format(self, verbose: bool, analyze: bool, explain_format: ExplainFormat) -> Result<Self> {
         let schema = LogicalPlan::explain_schema();
         let schema = schema.to_dfschema_ref()?;
 
@@ -1275,7 +1280,7 @@ impl LogicalPlanBuilder {
             Ok(Self::new(LogicalPlan::Explain(Explain {
                 verbose,
                 plan: self.plan,
-                explain_format: ExplainFormat::Indent,
+                explain_format,
                 stringified_plans,
                 schema,
                 logical_optimization_succeeded: false,
