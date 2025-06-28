@@ -109,8 +109,6 @@ impl JoinType {
                 | JoinType::RightSemi
                 | JoinType::LeftAnti
                 | JoinType::RightAnti
-                | JoinType::LeftMark
-                | JoinType::RightMark
         )
     }
 }
