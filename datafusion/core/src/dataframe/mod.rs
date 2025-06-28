@@ -1627,8 +1627,6 @@ impl DataFrame {
     /// if `verbose` is true, prints out additional details.
     /// The `explain_format` parameter allows to specify the format of the explanation,
     /// Details format info: see [`ExplainFormat`].
-    ///
-    /// ```
     pub fn explain_option_format(
         self,
         verbose: bool,
