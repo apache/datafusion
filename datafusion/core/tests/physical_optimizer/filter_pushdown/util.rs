@@ -29,6 +29,7 @@ use datafusion_datasource::{
 use datafusion_physical_expr::conjunction;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_plan::filter_pushdown::FilterPushdownPhase;
 use datafusion_physical_plan::{
     displayable,
     filter::FilterExec,
@@ -57,7 +58,11 @@ pub struct TestOpener {
 }
 
 impl FileOpener for TestOpener {
-    fn open(&self, _file_meta: FileMeta) -> Result<FileOpenFuture> {
+    fn open(
+        &self,
+        _file_meta: FileMeta,
+        _file: PartitionedFile,
+    ) -> Result<FileOpenFuture> {
         let mut batches = self.batches.clone();
         if let Some(batch_size) = self.batch_size {
             let batch = concat_batches(&batches[0].schema(), &batches)?;
@@ -267,6 +272,11 @@ impl TestScanBuilder {
         self
     }
 
+    pub fn with_batches(mut self, batches: Vec<RecordBatch>) -> Self {
+        self.batches = batches;
+        self
+    }
+
     pub fn build(self) -> Arc<dyn ExecutionPlan> {
         let source = Arc::new(TestSource::new(self.support, self.batches));
         let base_config = FileScanConfigBuilder::new(
@@ -274,7 +284,7 @@ impl TestScanBuilder {
             Arc::clone(&self.schema),
             source,
         )
-        .with_file(PartitionedFile::new("test.paqruet", 123))
+        .with_file(PartitionedFile::new("test.parquet", 123))
         .build();
         DataSourceExec::from_data_source(base_config)
     }
@@ -422,6 +432,15 @@ fn format_lines(s: &str) -> Vec<String> {
     s.trim().split('\n').map(|s| s.to_string()).collect()
 }
 
+pub fn format_plan_for_test(plan: &Arc<dyn ExecutionPlan>) -> String {
+    let mut out = String::new();
+    for line in format_execution_plan(plan) {
+        out.push_str(&format!("  - {line}\n"));
+    }
+    out.push('\n');
+    out
+}
+
 #[derive(Debug)]
 pub(crate) struct TestNode {
     inject_filter: bool,
@@ -492,6 +511,7 @@ impl ExecutionPlan for TestNode {
 
     fn gather_filters_for_pushdown(
         &self,
+        _phase: FilterPushdownPhase,
         parent_filters: Vec<Arc<dyn PhysicalExpr>>,
         _config: &ConfigOptions,
     ) -> Result<FilterDescription> {
@@ -502,6 +522,7 @@ impl ExecutionPlan for TestNode {
 
     fn handle_child_pushdown_result(
         &self,
+        _phase: FilterPushdownPhase,
         child_pushdown_result: ChildPushdownResult,
         _config: &ConfigOptions,
     ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {

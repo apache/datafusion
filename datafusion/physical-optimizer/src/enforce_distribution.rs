@@ -295,7 +295,7 @@ pub fn adjust_input_keys_ordering(
         join_type,
         projection,
         mode,
-        null_equals_null,
+        null_equality,
         ..
     }) = plan.as_any().downcast_ref::<HashJoinExec>()
     {
@@ -314,7 +314,7 @@ pub fn adjust_input_keys_ordering(
                         // TODO: although projection is not used in the join here, because projection pushdown is after enforce_distribution. Maybe we need to handle it later. Same as filter.
                         projection.clone(),
                         PartitionMode::Partitioned,
-                        *null_equals_null,
+                        *null_equality,
                     )
                     .map(|e| Arc::new(e) as _)
                 };
@@ -334,7 +334,7 @@ pub fn adjust_input_keys_ordering(
                         left.schema().fields().len(),
                     )
                     .unwrap_or_default(),
-                    JoinType::RightSemi | JoinType::RightAnti => {
+                    JoinType::RightSemi | JoinType::RightAnti | JoinType::RightMark => {
                         requirements.data.clone()
                     }
                     JoinType::Left
@@ -364,7 +364,7 @@ pub fn adjust_input_keys_ordering(
         filter,
         join_type,
         sort_options,
-        null_equals_null,
+        null_equality,
         ..
     }) = plan.as_any().downcast_ref::<SortMergeJoinExec>()
     {
@@ -379,7 +379,7 @@ pub fn adjust_input_keys_ordering(
                 filter.clone(),
                 *join_type,
                 new_conditions.1,
-                *null_equals_null,
+                *null_equality,
             )
             .map(|e| Arc::new(e) as _)
         };
@@ -616,7 +616,7 @@ pub fn reorder_join_keys_to_inputs(
         join_type,
         projection,
         mode,
-        null_equals_null,
+        null_equality,
         ..
     }) = plan_any.downcast_ref::<HashJoinExec>()
     {
@@ -642,7 +642,7 @@ pub fn reorder_join_keys_to_inputs(
                     join_type,
                     projection.clone(),
                     PartitionMode::Partitioned,
-                    *null_equals_null,
+                    *null_equality,
                 )?));
             }
         }
@@ -653,7 +653,7 @@ pub fn reorder_join_keys_to_inputs(
         filter,
         join_type,
         sort_options,
-        null_equals_null,
+        null_equality,
         ..
     }) = plan_any.downcast_ref::<SortMergeJoinExec>()
     {
@@ -681,7 +681,7 @@ pub fn reorder_join_keys_to_inputs(
                     filter.clone(),
                     *join_type,
                     new_sort_options,
-                    *null_equals_null,
+                    *null_equality,
                 )
                 .map(|smj| Arc::new(smj) as _);
             }

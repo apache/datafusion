@@ -64,6 +64,7 @@ use datafusion::physical_plan::aggregates::{AggregateExec, PhysicalGroupBy};
 use datafusion::physical_plan::analyze::AnalyzeExec;
 use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
+use datafusion::physical_plan::coop::CooperativeExec;
 use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::explain::ExplainExec;
 use datafusion::physical_plan::expressions::PhysicalSortExpr;
@@ -309,7 +310,6 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                 runtime,
                 extension_codec,
             ),
-
             #[cfg_attr(not(feature = "parquet"), allow(unused_variables))]
             PhysicalPlanType::ParquetSink(sink) => self
                 .try_into_parquet_sink_physical_plan(
@@ -324,6 +324,13 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                 runtime,
                 extension_codec,
             ),
+            PhysicalPlanType::Cooperative(cooperative) => self
+                .try_into_cooperative_physical_plan(
+                    cooperative,
+                    registry,
+                    runtime,
+                    extension_codec,
+                ),
         }
     }
 
@@ -508,6 +515,13 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
 
         if let Some(exec) = plan.downcast_ref::<UnnestExec>() {
             return protobuf::PhysicalPlanNode::try_from_unnest_exec(
+                exec,
+                extension_codec,
+            );
+        }
+
+        if let Some(exec) = plan.downcast_ref::<CooperativeExec>() {
+            return protobuf::PhysicalPlanNode::try_from_cooperative_exec(
                 exec,
                 extension_codec,
             );
@@ -1138,6 +1152,13 @@ impl protobuf::PhysicalPlanNode {
                     hashjoin.join_type
                 ))
             })?;
+        let null_equality = protobuf::NullEquality::try_from(hashjoin.null_equality)
+            .map_err(|_| {
+                proto_error(format!(
+                    "Received a HashJoinNode message with unknown NullEquality {}",
+                    hashjoin.null_equality
+                ))
+            })?;
         let filter = hashjoin
             .filter
             .as_ref()
@@ -1206,7 +1227,7 @@ impl protobuf::PhysicalPlanNode {
             &join_type.into(),
             projection,
             partition_mode,
-            hashjoin.null_equals_null,
+            null_equality.into(),
         )?))
     }
 
@@ -1247,6 +1268,13 @@ impl protobuf::PhysicalPlanNode {
                 proto_error(format!(
                     "Received a SymmetricHashJoin message with unknown JoinType {}",
                     sym_join.join_type
+                ))
+            })?;
+        let null_equality = protobuf::NullEquality::try_from(sym_join.null_equality)
+            .map_err(|_| {
+                proto_error(format!(
+                    "Received a SymmetricHashJoin message with unknown NullEquality {}",
+                    sym_join.null_equality
                 ))
             })?;
         let filter = sym_join
@@ -1325,7 +1353,7 @@ impl protobuf::PhysicalPlanNode {
             on,
             filter,
             &join_type.into(),
-            sym_join.null_equals_null,
+            null_equality.into(),
             left_sort_exprs,
             right_sort_exprs,
             partition_mode,
@@ -1766,6 +1794,18 @@ impl protobuf::PhysicalPlanNode {
         )))
     }
 
+    fn try_into_cooperative_physical_plan(
+        &self,
+        field_stream: &protobuf::CooperativeExecNode,
+        registry: &dyn FunctionRegistry,
+        runtime: &RuntimeEnv,
+        extension_codec: &dyn PhysicalExtensionCodec,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let input =
+            into_physical_plan(&field_stream.input, registry, runtime, extension_codec)?;
+        Ok(Arc::new(CooperativeExec::new(input)))
+    }
+
     fn try_from_explain_exec(
         exec: &ExplainExec,
         _extension_codec: &dyn PhysicalExtensionCodec,
@@ -1921,6 +1961,7 @@ impl protobuf::PhysicalPlanNode {
             })
             .collect::<Result<_>>()?;
         let join_type: protobuf::JoinType = exec.join_type().to_owned().into();
+        let null_equality: protobuf::NullEquality = exec.null_equality().into();
         let filter = exec
             .filter()
             .as_ref()
@@ -1961,7 +2002,7 @@ impl protobuf::PhysicalPlanNode {
                     on,
                     join_type: join_type.into(),
                     partition_mode: partition_mode.into(),
-                    null_equals_null: exec.null_equals_null(),
+                    null_equality: null_equality.into(),
                     filter,
                     projection: exec.projection.as_ref().map_or_else(Vec::new, |v| {
                         v.iter().map(|x| *x as u32).collect::<Vec<u32>>()
@@ -1996,6 +2037,7 @@ impl protobuf::PhysicalPlanNode {
             })
             .collect::<Result<_>>()?;
         let join_type: protobuf::JoinType = exec.join_type().to_owned().into();
+        let null_equality: protobuf::NullEquality = exec.null_equality().into();
         let filter = exec
             .filter()
             .as_ref()
@@ -2079,7 +2121,7 @@ impl protobuf::PhysicalPlanNode {
                     on,
                     join_type: join_type.into(),
                     partition_mode: partition_mode.into(),
-                    null_equals_null: exec.null_equals_null(),
+                    null_equality: null_equality.into(),
                     left_sort_exprs,
                     right_sort_exprs,
                     filter,
@@ -2741,6 +2783,24 @@ impl protobuf::PhysicalPlanNode {
                         .map(|c| *c as _)
                         .collect(),
                     options: Some(exec.options().into()),
+                },
+            ))),
+        })
+    }
+
+    fn try_from_cooperative_exec(
+        exec: &CooperativeExec,
+        extension_codec: &dyn PhysicalExtensionCodec,
+    ) -> Result<Self> {
+        let input = protobuf::PhysicalPlanNode::try_from_physical_plan(
+            exec.input().to_owned(),
+            extension_codec,
+        )?;
+
+        Ok(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(PhysicalPlanType::Cooperative(Box::new(
+                protobuf::CooperativeExecNode {
+                    input: Some(Box::new(input)),
                 },
             ))),
         })

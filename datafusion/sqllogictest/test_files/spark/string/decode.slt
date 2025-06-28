@@ -1,0 +1,43 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# This file was originally created by a porting script from:
+#   https://github.com/lakehq/sail/tree/43b6ed8221de5c4c4adbedbb267ae1351158b43c/crates/sail-spark-connect/tests/gold_data/function
+# This file is part of the implementation of the datafusion-spark function library.
+# For more information, please see:
+#   https://github.com/apache/datafusion/issues/15914
+
+## Original Query: SELECT decode(2, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle', 'Non domestic');
+## PySpark 3.5.5 Result: {'decode(2, 1, Southlake, 2, San Francisco, 3, New Jersey, 4, Seattle, Non domestic)': 'San Francisco', 'typeof(decode(2, 1, Southlake, 2, San Francisco, 3, New Jersey, 4, Seattle, Non domestic))': 'string', 'typeof(2)': 'int', 'typeof(1)': 'int', 'typeof(Southlake)': 'string', 'typeof(San Francisco)': 'string', 'typeof(3)': 'int', 'typeof(New Jersey)': 'string', 'typeof(4)': 'int', 'typeof(Seattle)': 'string', 'typeof(Non domestic)': 'string'}
+#query
+#SELECT decode(2::int, 1::int, 'Southlake'::string, 'San Francisco'::string, 3::int, 'New Jersey'::string, 4::int, 'Seattle'::string, 'Non domestic'::string);
+
+## Original Query: SELECT decode(6, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle');
+## PySpark 3.5.5 Result: {'decode(6, 1, Southlake, 2, San Francisco, 3, New Jersey, 4, Seattle)': None, 'typeof(decode(6, 1, Southlake, 2, San Francisco, 3, New Jersey, 4, Seattle))': 'string', 'typeof(6)': 'int', 'typeof(1)': 'int', 'typeof(Southlake)': 'string', 'typeof(2)': 'int', 'typeof(San Francisco)': 'string', 'typeof(3)': 'int', 'typeof(New Jersey)': 'string', 'typeof(4)': 'int', 'typeof(Seattle)': 'string'}
+#query
+#SELECT decode(6::int, 1::int, 'Southlake'::string, 2::int, 'San Francisco'::string, 3::int, 'New Jersey'::string, 4::int, 'Seattle'::string);
+
+## Original Query: SELECT decode(6, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle', 'Non domestic');
+## PySpark 3.5.5 Result: {'decode(6, 1, Southlake, 2, San Francisco, 3, New Jersey, 4, Seattle, Non domestic)': 'Non domestic', 'typeof(decode(6, 1, Southlake, 2, San Francisco, 3, New Jersey, 4, Seattle, Non domestic))': 'string', 'typeof(6)': 'int', 'typeof(1)': 'int', 'typeof(Southlake)': 'string', 'typeof(2)': 'int', 'typeof(San Francisco)': 'string', 'typeof(3)': 'int', 'typeof(New Jersey)': 'string', 'typeof(4)': 'int', 'typeof(Seattle)': 'string', 'typeof(Non domestic)': 'string'}
+#query
+#SELECT decode(6::int, 1::int, 'Southlake'::string, 2::int, 'San Francisco'::string, 3::int, 'New Jersey'::string, 4::int, 'Seattle'::string, 'Non domestic'::string);
+
+## Original Query: SELECT decode(null, 6, 'Spark', NULL, 'SQL', 4, 'rocks');
+## PySpark 3.5.5 Result: {'decode(NULL, 6, Spark, NULL, SQL, 4, rocks)': 'SQL', 'typeof(decode(NULL, 6, Spark, NULL, SQL, 4, rocks))': 'string', 'typeof(NULL)': 'void', 'typeof(6)': 'int', 'typeof(Spark)': 'string', 'typeof(SQL)': 'string', 'typeof(4)': 'int', 'typeof(rocks)': 'string'}
+#query
+#SELECT decode(NULL::void, 6::int, 'Spark'::string, 'SQL'::string, 4::int, 'rocks'::string);
+

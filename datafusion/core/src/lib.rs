@@ -39,7 +39,8 @@
 //! [DataFusion] is an extensible query engine written in Rust that
 //! uses [Apache Arrow] as its in-memory format. DataFusion's target users are
 //! developers building fast and feature rich database and analytic systems,
-//! customized to particular workloads. See [use cases] for examples.
+//! customized to particular workloads. Please see the [DataFusion website] for
+//! additional documentation, [use cases] and examples.
 //!
 //! "Out of the box," DataFusion offers [SQL] and [`Dataframe`] APIs,
 //! excellent [performance], built-in support for CSV, Parquet, JSON, and Avro,
@@ -53,6 +54,7 @@
 //! See the [Architecture] section below for more details.
 //!
 //! [DataFusion]: https://datafusion.apache.org/
+//! [DataFusion website]: https://datafusion.apache.org
 //! [Apache Arrow]: https://arrow.apache.org
 //! [use cases]: https://datafusion.apache.org/user-guide/introduction.html#use-cases
 //! [SQL]: https://datafusion.apache.org/user-guide/sql/index.html
@@ -498,9 +500,20 @@
 //! While preparing for execution, DataFusion tries to create this many distinct
 //! `async` [`Stream`]s for each [`ExecutionPlan`].
 //! The [`Stream`]s for certain [`ExecutionPlan`]s, such as [`RepartitionExec`]
-//! and [`CoalescePartitionsExec`], spawn [Tokio] [`task`]s, that are run by
+//! and [`CoalescePartitionsExec`], spawn [Tokio] [`task`]s, that run on
 //! threads managed by the [`Runtime`].
 //! Many DataFusion [`Stream`]s perform CPU intensive processing.
+//!
+//! ### Cooperative Scheduling
+//!
+//! DataFusion uses cooperative scheduling, which means that each [`Stream`]
+//! is responsible for yielding control back to the [`Runtime`] after
+//! some amount of work is done. Please see the [`coop`] module documentation
+//! for more details.
+//!
+//! [`coop`]: datafusion_physical_plan::coop
+//!
+//! ### Network I/O and CPU intensive tasks
 //!
 //! Using `async` for CPU intensive tasks makes it easy for [`TableProvider`]s
 //! to perform network I/O using standard Rust `async` during execution.
@@ -510,17 +523,20 @@
 //! initial development and processing local files, but it can lead to problems
 //! under load and/or when reading from network sources such as AWS S3.
 //!
+//! ### Optimizing Latency: Throttled CPU / IO under Highly Concurrent Load
+//!
 //! If your system does not fully utilize either the CPU or network bandwidth
 //! during execution, or you see significantly higher tail (e.g. p99) latencies
 //! responding to network requests, **it is likely you need to use a different
-//! [`Runtime`] for CPU intensive DataFusion plans**. This effect can be especially
-//! pronounced when running several queries concurrently.
+//! [`Runtime`] for DataFusion plans**. The [thread_pools example]
+//! has  an example of how to do so.
 //!
-//! As shown in the following figure, using the same [`Runtime`] for both CPU
-//! intensive processing and network requests can introduce significant
-//! delays in responding to those network requests. Delays in processing network
-//! requests can and does lead network flow control to throttle the available
-//! bandwidth in response.
+//! As shown below, using the same [`Runtime`] for both CPU intensive processing
+//! and network requests can introduce significant delays in responding to
+//! those network requests. Delays in processing network requests can and does
+//! lead network flow control to throttle the available bandwidth in response.
+//! This effect can be especially pronounced when running multiple queries
+//! concurrently.
 //!
 //! ```text
 //!                                                                          Legend
@@ -602,6 +618,7 @@
 //!
 //! [Tokio]:  https://tokio.rs
 //! [`Runtime`]: tokio::runtime::Runtime
+//! [thread_pools example]: https://github.com/apache/datafusion/tree/main/datafusion-examples/examples/thread_pools.rs
 //! [`task`]: tokio::task
 //! [Using Rustlang’s Async Tokio Runtime for CPU-Bound Tasks]: https://thenewstack.io/using-rustlangs-async-tokio-runtime-for-cpu-bound-tasks/
 //! [`RepartitionExec`]: physical_plan::repartition::RepartitionExec
@@ -888,12 +905,6 @@ doc_comment::doctest!(
 
 #[cfg(doctest)]
 doc_comment::doctest!(
-    "../../../docs/source/user-guide/runtime_configs.md",
-    user_guide_runtime_configs
-);
-
-#[cfg(doctest)]
-doc_comment::doctest!(
     "../../../docs/source/user-guide/crate-configuration.md",
     user_guide_crate_configuration
 );
@@ -1047,8 +1058,14 @@ doc_comment::doctest!(
 
 #[cfg(doctest)]
 doc_comment::doctest!(
-    "../../../docs/source/library-user-guide/adding-udfs.md",
-    library_user_guide_adding_udfs
+    "../../../docs/source/library-user-guide/functions/adding-udfs.md",
+    library_user_guide_functions_adding_udfs
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/library-user-guide/functions/spark.md",
+    library_user_guide_functions_spark
 );
 
 #[cfg(doctest)]

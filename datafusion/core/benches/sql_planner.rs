@@ -30,9 +30,6 @@ use datafusion::datasource::MemTable;
 use datafusion::execution::context::SessionContext;
 use datafusion_common::ScalarValue;
 use datafusion_expr::col;
-use itertools::Itertools;
-use std::fs::File;
-use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 use std::sync::Arc;
 use test_utils::tpcds::tpcds_schemas;
@@ -466,17 +463,20 @@ fn criterion_benchmark(c: &mut Criterion) {
     // });
 
     // -- clickbench --
-
-    let queries_file =
-        File::open(format!("{benchmarks_path}queries/clickbench/queries.sql")).unwrap();
-    let extended_file =
-        File::open(format!("{benchmarks_path}queries/clickbench/extended.sql")).unwrap();
-
-    let clickbench_queries: Vec<String> = BufReader::new(queries_file)
-        .lines()
-        .chain(BufReader::new(extended_file).lines())
-        .map(|l| l.expect("Could not parse line"))
-        .collect_vec();
+    let clickbench_queries = (0..=42)
+        .map(|q| {
+            std::fs::read_to_string(format!(
+                "{benchmarks_path}queries/clickbench/queries/q{q}.sql"
+            ))
+            .unwrap()
+        })
+        .chain((0..=7).map(|q| {
+            std::fs::read_to_string(format!(
+                "{benchmarks_path}queries/clickbench/extended/q{q}.sql"
+            ))
+            .unwrap()
+        }))
+        .collect::<Vec<_>>();
 
     let clickbench_ctx = register_clickbench_hits_table(&rt);
 

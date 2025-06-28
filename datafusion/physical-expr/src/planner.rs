@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::ScalarFunctionExpr;
@@ -29,7 +28,9 @@ use datafusion_common::{
     exec_err, not_impl_err, plan_err, DFSchema, Result, ScalarValue, ToDFSchema,
 };
 use datafusion_expr::execution_props::ExecutionProps;
-use datafusion_expr::expr::{Alias, Cast, InList, Placeholder, ScalarFunction};
+use datafusion_expr::expr::{
+    Alias, Cast, FieldMetadata, InList, Placeholder, ScalarFunction,
+};
 use datafusion_expr::var_provider::is_system_variables;
 use datafusion_expr::var_provider::VarType;
 use datafusion_expr::{
@@ -114,22 +115,10 @@ pub fn create_physical_expr(
     match e {
         Expr::Alias(Alias { expr, metadata, .. }) => {
             if let Expr::Literal(v, prior_metadata) = expr.as_ref() {
-                let mut new_metadata = prior_metadata
-                    .as_ref()
-                    .map(|m| {
-                        m.iter()
-                            .map(|(k, v)| (k.clone(), v.clone()))
-                            .collect::<HashMap<String, String>>()
-                    })
-                    .unwrap_or_default();
-                if let Some(metadata) = metadata {
-                    new_metadata.extend(metadata.clone());
-                }
-                let new_metadata = match new_metadata.is_empty() {
-                    true => None,
-                    false => Some(new_metadata),
-                };
-
+                let new_metadata = FieldMetadata::merge_options(
+                    prior_metadata.as_ref(),
+                    metadata.as_ref(),
+                );
                 Ok(Arc::new(Literal::new_with_metadata(
                     v.clone(),
                     new_metadata,
@@ -144,9 +133,7 @@ pub fn create_physical_expr(
         }
         Expr::Literal(value, metadata) => Ok(Arc::new(Literal::new_with_metadata(
             value.clone(),
-            metadata
-                .as_ref()
-                .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect()),
+            metadata.clone(),
         ))),
         Expr::ScalarVariable(_, variable_names) => {
             if is_system_variables(variable_names) {

@@ -22,7 +22,9 @@ use std::fmt;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
-use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
+use datafusion_physical_plan::execution_plan::{
+    Boundedness, EmissionType, SchedulingType,
+};
 use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::{
@@ -36,7 +38,7 @@ use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::filter_pushdown::{
-    ChildPushdownResult, FilterPushdownPropagation,
+    ChildPushdownResult, FilterPushdownPhase, FilterPushdownPropagation,
 };
 
 /// A source of data, typically a list of files or memory
@@ -143,6 +145,9 @@ pub trait DataSource: Send + Sync + Debug {
 
     fn output_partitioning(&self) -> Partitioning;
     fn eq_properties(&self) -> EquivalenceProperties;
+    fn scheduling_type(&self) -> SchedulingType {
+        SchedulingType::NonCooperative
+    }
     fn statistics(&self) -> Result<Statistics>;
     /// Return a copy of this DataSource with a new fetch limit
     fn with_fetch(&self, _limit: Option<usize>) -> Option<Arc<dyn DataSource>>;
@@ -256,7 +261,7 @@ impl ExecutionPlan for DataSourceExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        self.data_source.open(partition, context)
+        self.data_source.open(partition, Arc::clone(&context))
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
@@ -305,6 +310,7 @@ impl ExecutionPlan for DataSourceExec {
 
     fn handle_child_pushdown_result(
         &self,
+        _phase: FilterPushdownPhase,
         child_pushdown_result: ChildPushdownResult,
         config: &ConfigOptions,
     ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
@@ -337,6 +343,7 @@ impl DataSourceExec {
         Arc::new(Self::new(Arc::new(data_source)))
     }
 
+    // Default constructor for `DataSourceExec`, setting the `cooperative` flag to `true`.
     pub fn new(data_source: Arc<dyn DataSource>) -> Self {
         let cache = Self::compute_properties(Arc::clone(&data_source));
         Self { data_source, cache }
@@ -372,6 +379,7 @@ impl DataSourceExec {
             EmissionType::Incremental,
             Boundedness::Bounded,
         )
+        .with_scheduling_type(data_source.scheduling_type())
     }
 
     /// Downcast the `DataSourceExec`'s `data_source` to a specific file source

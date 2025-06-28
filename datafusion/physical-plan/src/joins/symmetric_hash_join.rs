@@ -67,7 +67,9 @@ use arrow::datatypes::{ArrowNativeType, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::utils::bisect;
-use datafusion_common::{internal_err, plan_err, HashSet, JoinSide, JoinType, Result};
+use datafusion_common::{
+    internal_err, plan_err, HashSet, JoinSide, JoinType, NullEquality, Result,
+};
 use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_execution::TaskContext;
 use datafusion_expr::interval_arithmetic::Interval;
@@ -185,8 +187,8 @@ pub struct SymmetricHashJoinExec {
     metrics: ExecutionPlanMetricsSet,
     /// Information of index and left / right placement of columns
     column_indices: Vec<ColumnIndex>,
-    /// If null_equals_null is true, null == null else null != null
-    pub(crate) null_equals_null: bool,
+    /// Defines the null equality for the join.
+    pub(crate) null_equality: NullEquality,
     /// Left side sort expression(s)
     pub(crate) left_sort_exprs: Option<LexOrdering>,
     /// Right side sort expression(s)
@@ -211,7 +213,7 @@ impl SymmetricHashJoinExec {
         on: JoinOn,
         filter: Option<JoinFilter>,
         join_type: &JoinType,
-        null_equals_null: bool,
+        null_equality: NullEquality,
         left_sort_exprs: Option<LexOrdering>,
         right_sort_exprs: Option<LexOrdering>,
         mode: StreamJoinPartitionMode,
@@ -246,7 +248,7 @@ impl SymmetricHashJoinExec {
             random_state,
             metrics: ExecutionPlanMetricsSet::new(),
             column_indices,
-            null_equals_null,
+            null_equality,
             left_sort_exprs,
             right_sort_exprs,
             mode,
@@ -310,9 +312,9 @@ impl SymmetricHashJoinExec {
         &self.join_type
     }
 
-    /// Get null_equals_null
-    pub fn null_equals_null(&self) -> bool {
-        self.null_equals_null
+    /// Get null_equality
+    pub fn null_equality(&self) -> NullEquality {
+        self.null_equality
     }
 
     /// Get partition mode
@@ -456,7 +458,7 @@ impl ExecutionPlan for SymmetricHashJoinExec {
             self.on.clone(),
             self.filter.clone(),
             &self.join_type,
-            self.null_equals_null,
+            self.null_equality,
             self.left_sort_exprs.clone(),
             self.right_sort_exprs.clone(),
             self.mode,
@@ -545,7 +547,7 @@ impl ExecutionPlan for SymmetricHashJoinExec {
                 graph,
                 left_sorted_filter_expr,
                 right_sorted_filter_expr,
-                null_equals_null: self.null_equals_null,
+                null_equality: self.null_equality,
                 state: SHJStreamState::PullRight,
                 reservation,
                 batch_transformer: BatchSplitter::new(batch_size),
@@ -565,7 +567,7 @@ impl ExecutionPlan for SymmetricHashJoinExec {
                 graph,
                 left_sorted_filter_expr,
                 right_sorted_filter_expr,
-                null_equals_null: self.null_equals_null,
+                null_equality: self.null_equality,
                 state: SHJStreamState::PullRight,
                 reservation,
                 batch_transformer: NoopBatchTransformer::new(),
@@ -637,7 +639,7 @@ impl ExecutionPlan for SymmetricHashJoinExec {
             new_on,
             new_filter,
             self.join_type(),
-            self.null_equals_null(),
+            self.null_equality(),
             self.right().output_ordering().cloned(),
             self.left().output_ordering().cloned(),
             self.partition_mode(),
@@ -671,8 +673,8 @@ struct SymmetricHashJoinStream<T> {
     right_sorted_filter_expr: Option<SortedFilterExpr>,
     /// Random state used for hashing initialization
     random_state: RandomState,
-    /// If null_equals_null is true, null == null else null != null
-    null_equals_null: bool,
+    /// Defines the null equality for the join.
+    null_equality: NullEquality,
     /// Metrics
     metrics: StreamJoinMetrics,
     /// Memory reservation
@@ -770,7 +772,11 @@ fn need_to_produce_result_in_final(build_side: JoinSide, join_type: JoinType) ->
     } else {
         matches!(
             join_type,
-            JoinType::Right | JoinType::RightAnti | JoinType::Full | JoinType::RightSemi
+            JoinType::Right
+                | JoinType::RightAnti
+                | JoinType::Full
+                | JoinType::RightSemi
+                | JoinType::RightMark
         )
     }
 }
@@ -804,7 +810,36 @@ where
 {
     // Store the result in a tuple
     let result = match (build_side, join_type) {
+        // For a mark join we “mark” each build‐side row with a dummy 0 in the probe‐side index
+        // if it ever matched. For example, if
+        //
+        // prune_length = 5
+        // deleted_offset = 0
+        // visited_rows = {1, 3}
+        //
+        // then we produce:
+        //
+        // build_indices = [0, 1, 2, 3, 4]
+        // probe_indices = [None, Some(0), None, Some(0), None]
+        //
+        // Example: for each build row i in [0..5):
+        //   – We always output its own index i in `build_indices`
+        //   – We output `Some(0)` in `probe_indices[i]` if row i was ever visited, else `None`
         (JoinSide::Left, JoinType::LeftMark) => {
+            let build_indices = (0..prune_length)
+                .map(L::Native::from_usize)
+                .collect::<PrimitiveArray<L>>();
+            let probe_indices = (0..prune_length)
+                .map(|idx| {
+                    // For mark join we output a dummy index 0 to indicate the row had a match
+                    visited_rows
+                        .contains(&(idx + deleted_offset))
+                        .then_some(R::Native::from_usize(0).unwrap())
+                })
+                .collect();
+            (build_indices, probe_indices)
+        }
+        (JoinSide::Right, JoinType::RightMark) => {
             let build_indices = (0..prune_length)
                 .map(L::Native::from_usize)
                 .collect::<PrimitiveArray<L>>();
@@ -916,7 +951,7 @@ pub(crate) fn build_side_determined_results(
 /// * `probe_batch` - The second record batch to be joined.
 /// * `column_indices` - An array of columns to be selected for the result of the join.
 /// * `random_state` - The random state for the join.
-/// * `null_equals_null` - A boolean indicating whether NULL values should be treated as equal when joining.
+/// * `null_equality` - Indicates whether NULL values should be treated as equal when joining.
 ///
 /// # Returns
 ///
@@ -932,7 +967,7 @@ pub(crate) fn join_with_probe_batch(
     probe_batch: &RecordBatch,
     column_indices: &[ColumnIndex],
     random_state: &RandomState,
-    null_equals_null: bool,
+    null_equality: NullEquality,
 ) -> Result<Option<RecordBatch>> {
     if build_hash_joiner.input_buffer.num_rows() == 0 || probe_batch.num_rows() == 0 {
         return Ok(None);
@@ -944,7 +979,7 @@ pub(crate) fn join_with_probe_batch(
         &build_hash_joiner.on,
         &probe_hash_joiner.on,
         random_state,
-        null_equals_null,
+        null_equality,
         &mut build_hash_joiner.hashes_buffer,
         Some(build_hash_joiner.deleted_offset),
     )?;
@@ -1010,7 +1045,7 @@ pub(crate) fn join_with_probe_batch(
 /// * `build_on` - An array of columns on which the join will be performed. The columns are from the build side of the join.
 /// * `probe_on` - An array of columns on which the join will be performed. The columns are from the probe side of the join.
 /// * `random_state` - The random state for the join.
-/// * `null_equals_null` - A boolean indicating whether NULL values should be treated as equal when joining.
+/// * `null_equality` - Indicates whether NULL values should be treated as equal when joining.
 /// * `hashes_buffer` - Buffer used for probe side keys hash calculation.
 /// * `deleted_offset` - deleted offset for build side data.
 ///
@@ -1026,7 +1061,7 @@ fn lookup_join_hashmap(
     build_on: &[PhysicalExprRef],
     probe_on: &[PhysicalExprRef],
     random_state: &RandomState,
-    null_equals_null: bool,
+    null_equality: NullEquality,
     hashes_buffer: &mut Vec<u64>,
     deleted_offset: Option<usize>,
 ) -> Result<(UInt64Array, UInt32Array)> {
@@ -1087,7 +1122,7 @@ fn lookup_join_hashmap(
         &probe_indices,
         &build_join_values,
         &keys_values,
-        null_equals_null,
+        null_equality,
     )?;
 
     Ok((build_indices, probe_indices))
@@ -1584,7 +1619,7 @@ impl<T: BatchTransformer> SymmetricHashJoinStream<T> {
         size += size_of_val(&self.left_sorted_filter_expr);
         size += size_of_val(&self.right_sorted_filter_expr);
         size += size_of_val(&self.random_state);
-        size += size_of_val(&self.null_equals_null);
+        size += size_of_val(&self.null_equality);
         size += size_of_val(&self.metrics);
         size
     }
@@ -1639,7 +1674,7 @@ impl<T: BatchTransformer> SymmetricHashJoinStream<T> {
             &probe_batch,
             &self.column_indices,
             &self.random_state,
-            self.null_equals_null,
+            self.null_equality,
         )?;
         // Increment the offset for the probe hash joiner:
         probe_hash_joiner.offset += probe_batch.num_rows();
@@ -1795,12 +1830,18 @@ mod tests {
             on.clone(),
             filter.clone(),
             &join_type,
-            false,
+            NullEquality::NullEqualsNothing,
             Arc::clone(&task_ctx),
         )
         .await?;
         let second_batches = partitioned_hash_join_with_filter(
-            left, right, on, filter, &join_type, false, task_ctx,
+            left,
+            right,
+            on,
+            filter,
+            &join_type,
+            NullEquality::NullEqualsNothing,
+            task_ctx,
         )
         .await?;
         compare_batches(&first_batches, &second_batches);

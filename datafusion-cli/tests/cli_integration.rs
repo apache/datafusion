@@ -209,3 +209,36 @@ SELECT * FROM CARS limit 1;
 
     assert_cmd_snapshot!(cli().env_clear().pass_stdin(input));
 }
+
+#[tokio::test]
+async fn test_aws_region_auto_resolution() {
+    if env::var("TEST_STORAGE_INTEGRATION").is_err() {
+        eprintln!("Skipping external storages integration tests");
+        return;
+    }
+
+    let mut settings = make_settings();
+    settings.add_filter(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", "[TIME]");
+    let _bound = settings.bind_to_scope();
+
+    let bucket = "s3://clickhouse-public-datasets/hits_compatible/athena_partitioned/hits_1.parquet";
+    let region = "us-east-1";
+
+    let input = format!(
+        r#"CREATE EXTERNAL TABLE hits
+STORED AS PARQUET
+LOCATION '{bucket}'
+OPTIONS(
+    'aws.region' '{region}',
+    'aws.skip_signature' true
+);
+
+SELECT COUNT(*) FROM hits;
+"#
+    );
+
+    assert_cmd_snapshot!(cli()
+        .env("RUST_LOG", "warn")
+        .env_remove("AWS_ENDPOINT")
+        .pass_stdin(input));
+}
