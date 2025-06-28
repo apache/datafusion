@@ -1263,7 +1263,12 @@ impl LogicalPlanBuilder {
         self.explain_option_format(verbose, analyze, ExplainFormat::Indent)
     }
 
-    pub fn explain_option_format(self, verbose: bool, analyze: bool, explain_format: ExplainFormat) -> Result<Self> {
+    pub fn explain_option_format(
+        self,
+        verbose: bool,
+        analyze: bool,
+        explain_format: ExplainFormat,
+    ) -> Result<Self> {
         let schema = LogicalPlan::explain_schema();
         let schema = schema.to_dfschema_ref()?;
 

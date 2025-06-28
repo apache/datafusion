@@ -55,7 +55,14 @@ use datafusion_common::{
     DataFusionError, ParamValues, ScalarValue, SchemaError, UnnestOptions,
 };
 use datafusion_expr::select_expr::SelectExpr;
-use datafusion_expr::{case, dml::InsertOp, expr::{Alias, ScalarFunction}, is_null, lit, utils::COUNT_STAR_EXPANSION, ExplainFormat, SortExpr, TableProviderFilterPushDown, UNNAMED_TABLE};
+use datafusion_expr::{
+    case,
+    dml::InsertOp,
+    expr::{Alias, ScalarFunction},
+    is_null, lit,
+    utils::COUNT_STAR_EXPANSION,
+    ExplainFormat, SortExpr, TableProviderFilterPushDown, UNNAMED_TABLE,
+};
 use datafusion_functions::core::coalesce;
 use datafusion_functions_aggregate::expr_fn::{
     avg, count, max, median, min, stddev, sum,
@@ -1622,7 +1629,12 @@ impl DataFrame {
     /// Details format info: see [`ExplainFormat`].
     ///
     /// ```
-    pub fn explain_option_format(self, verbose: bool, analyze: bool, explain_format: ExplainFormat) -> Result<DataFrame> {
+    pub fn explain_option_format(
+        self,
+        verbose: bool,
+        analyze: bool,
+        explain_format: ExplainFormat,
+    ) -> Result<DataFrame> {
         if matches!(self.plan, LogicalPlan::Explain(_)) {
             return plan_err!("Nested EXPLAINs are not supported");
         }
