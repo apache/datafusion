@@ -16,7 +16,6 @@
 // under the License.
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
-use crate::unparser::ast::QueryBuilder;
 use datafusion_common::{plan_err, DFSchema, Diagnostic, Result, Span, Spans};
 use datafusion_expr::expr::{Exists, InSubquery};
 use datafusion_expr::{Expr, LogicalPlan, Subquery};
@@ -50,7 +49,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     pub(super) fn parse_in_subquery(
         &self,
         expr: SQLExpr,
-        subquery: SetExpr,
+        subquery: Query,
         negated: bool,
         input_schema: &DFSchema,
         planner_context: &mut PlannerContext,
@@ -59,7 +58,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             planner_context.set_outer_query_schema(Some(input_schema.clone().into()));
 
         let mut spans = Spans::new();
-        if let SetExpr::Select(select) = &subquery {
+        if let SetExpr::Select(select) = &subquery.body.as_ref() {
             for item in &select.projection {
                 if let SelectItem::UnnamedExpr(SQLExpr::Identifier(ident)) = item {
                     if let Some(span) = Span::try_from_sqlparser_span(ident.span) {
@@ -69,8 +68,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             }
         }
 
-        let query = QueryBuilder::default().body(Box::new(subquery)).build()?;
-        let sub_plan = self.query_to_plan(query, planner_context)?;
+        let sub_plan = self.query_to_plan(subquery, planner_context)?;
         let outer_ref_columns = sub_plan.all_out_ref_exprs();
         planner_context.set_outer_query_schema(old_outer_query_schema);
 

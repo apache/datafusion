@@ -378,7 +378,7 @@ impl Unparser<'_> {
                 };
                 Ok(ast::Expr::InSubquery {
                     expr: inexpr,
-                    subquery: sub_query.body,
+                    subquery: sub_query,
                     negated: insubq.negated,
                 })
             }
