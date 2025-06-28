@@ -1733,7 +1733,7 @@ mod tests {
         assert_snapshot!(
             optimized_plan.clone(),
             @r"
-        Left Join: test.a = test2.c1
+        Left Join(ComparisonJoin): test.a = test2.c1
           TableScan: test projection=[a, b]
           TableScan: test2 projection=[c1]
         "
@@ -1788,7 +1788,7 @@ mod tests {
             optimized_plan.clone(),
             @r"
         Projection: test.a, test.b
-          Left Join: test.a = test2.c1
+          Left Join(ComparisonJoin): test.a = test2.c1
             TableScan: test projection=[a, b]
             TableScan: test2 projection=[c1]
         "

@@ -20,8 +20,9 @@ use crate::optimizer::Optimizer;
 use crate::{OptimizerContext, OptimizerRule};
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::{assert_contains, Result};
+use datafusion_common::{assert_contains, Column, DFSchema, Result};
 use datafusion_expr::{logical_plan::table_scan, LogicalPlan, LogicalPlanBuilder};
+use std::collections::HashMap as StdHashMap;
 use std::sync::Arc;
 
 pub mod user_defined;
@@ -43,6 +44,22 @@ pub fn test_table_scan_with_name(name: &str) -> Result<LogicalPlan> {
 /// some tests share a common table
 pub fn test_table_scan() -> Result<LogicalPlan> {
     test_table_scan_with_name("test")
+}
+
+pub fn test_delim_scan_with_name(
+    _name: &str,
+    table_index: usize,
+    fields: Vec<Field>,
+) -> Result<LogicalPlan> {
+    let schema = DFSchema::from_unqualified_fields(fields.into(), StdHashMap::new())?;
+
+    LogicalPlanBuilder::delim_get(
+        table_index,
+        &vec![DataType::UInt32],
+        vec![Column::from_name("b")],
+        Arc::new(schema),
+    )
+    .build()
 }
 
 /// Create a table with the given name and column definitions.
