@@ -25,8 +25,8 @@ use arrow::array::ArrayRef;
 use arrow::datatypes::{
     DataType, Decimal128Type, Decimal256Type, DurationMicrosecondType,
     DurationMillisecondType, DurationNanosecondType, DurationSecondType, Float16Type,
-    Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, IntervalType,
-    UInt16Type, UInt32Type, UInt64Type, UInt8Type,
+    Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, UInt16Type,
+    UInt32Type, UInt64Type, UInt8Type,
 };
 use datafusion_common::stats::Precision;
 use datafusion_common::{
@@ -1413,7 +1413,8 @@ mod tests {
             IntervalMonthDayNanoArray, IntervalYearMonthArray, StringArray,
         },
         datatypes::{
-            IntervalDayTimeType, IntervalMonthDayNanoType, IntervalYearMonthType,
+            IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit,
+            IntervalYearMonthType,
         },
     };
     use std::sync::Arc;
