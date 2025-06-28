@@ -95,6 +95,7 @@ pub enum SchemaSource {
 /// # use arrow::datatypes::{Schema, Field, DataType, SchemaRef};
 /// #
 /// # // Custom schema adapter for handling schema evolution
+/// # #[derive(Debug)]
 /// # struct EvolutionSchemaAdapterFactory;
 /// # impl SchemaAdapterFactory for EvolutionSchemaAdapterFactory {
 /// #     fn create(&self, projected_table_schema: SchemaRef, file_schema: SchemaRef) -> Box<dyn SchemaAdapter> {
@@ -179,10 +180,11 @@ impl ListingTableConfig {
     /// # Example: Specifying Table Schema
     /// ```rust
     /// # use std::sync::Arc;
-    /// # use datafusion::datasource::listing::ListingTableConfig;
+    /// # use datafusion::datasource::listing::{ListingTableConfig, ListingOptions, ListingTableUrl};
+    /// # use datafusion::datasource::file_format::parquet::ParquetFormat;
     /// # use arrow::datatypes::{Schema, Field, DataType};
-    /// # let table_paths = vec![];
-    /// # let listing_options = unimplemented!();
+    /// # let table_paths = ListingTableUrl::parse("file:///path/to/data").unwrap();
+    /// # let listing_options = ListingOptions::new(Arc::new(ParquetFormat::default()));
     /// let schema = Arc::new(Schema::new(vec![
     ///     Field::new("id", DataType::Int64, false),
     ///     Field::new("name", DataType::Utf8, true),
@@ -217,9 +219,9 @@ impl ListingTableConfig {
     /// # Example: Configuring Parquet Files with Custom Options
     /// ```rust
     /// # use std::sync::Arc;
-    /// # use datafusion::datasource::listing::{ListingTableConfig, ListingOptions};
+    /// # use datafusion::datasource::listing::{ListingTableConfig, ListingOptions, ListingTableUrl};
     /// # use datafusion::datasource::file_format::parquet::ParquetFormat;
-    /// # let table_paths = vec![];
+    /// # let table_paths = ListingTableUrl::parse("file:///path/to/data").unwrap();
     /// let options = ListingOptions::new(Arc::new(ParquetFormat::default()))
     ///     .with_file_extension(".parquet")
     ///     .with_collect_stat(true);
@@ -421,15 +423,21 @@ impl ListingTableConfig {
     /// # Example: Custom Schema Adapter for Type Coercion
     /// ```rust
     /// # use std::sync::Arc;
-    /// # use datafusion::datasource::listing::ListingTableConfig;
+    /// # use datafusion::datasource::listing::{ListingTableConfig, ListingOptions, ListingTableUrl};
     /// # use datafusion::datasource::schema_adapter::{SchemaAdapterFactory, SchemaAdapter};
-    /// # use arrow::datatypes::SchemaRef;
+    /// # use datafusion::datasource::file_format::parquet::ParquetFormat;
+    /// # use arrow::datatypes::{SchemaRef, Schema, Field, DataType};
+    /// #
+    /// # #[derive(Debug)]
     /// # struct MySchemaAdapterFactory;
     /// # impl SchemaAdapterFactory for MySchemaAdapterFactory {
     /// #     fn create(&self, _projected_table_schema: SchemaRef, _file_schema: SchemaRef) -> Box<dyn SchemaAdapter> {
     /// #         unimplemented!()
     /// #     }
     /// # }
+    /// # let table_paths = ListingTableUrl::parse("file:///path/to/data").unwrap();
+    /// # let listing_options = ListingOptions::new(Arc::new(ParquetFormat::default()));
+    /// # let table_schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)]));
     /// let config = ListingTableConfig::new(table_paths)
     ///     .with_listing_options(listing_options)
     ///     .with_schema(table_schema)
@@ -1048,15 +1056,21 @@ impl ListingTable {
     /// # Example: Adding Schema Evolution Support
     /// ```rust
     /// # use std::sync::Arc;
-    /// # use datafusion::datasource::listing::ListingTable;
+    /// # use datafusion::datasource::listing::{ListingTable, ListingTableConfig, ListingOptions, ListingTableUrl};
     /// # use datafusion::datasource::schema_adapter::{SchemaAdapterFactory, SchemaAdapter};
-    /// # use arrow::datatypes::SchemaRef;
+    /// # use datafusion::datasource::file_format::parquet::ParquetFormat;
+    /// # use arrow::datatypes::{SchemaRef, Schema, Field, DataType};
+    /// # #[derive(Debug)]
     /// # struct EvolutionAdapterFactory;
     /// # impl SchemaAdapterFactory for EvolutionAdapterFactory {
     /// #     fn create(&self, _projected_table_schema: SchemaRef, _file_schema: SchemaRef) -> Box<dyn SchemaAdapter> {
     /// #         unimplemented!()
     /// #     }
     /// # }
+    /// # let table_path = ListingTableUrl::parse("file:///path/to/data").unwrap();
+    /// # let options = ListingOptions::new(Arc::new(ParquetFormat::default()));
+    /// # let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)]));
+    /// # let config = ListingTableConfig::new(table_path).with_listing_options(options).with_schema(schema);
     /// # let table = ListingTable::try_new(config).unwrap();
     /// let table_with_evolution = table
     ///     .with_schema_adapter_factory(Arc::new(EvolutionAdapterFactory));
