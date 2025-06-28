@@ -376,7 +376,6 @@ mod tests {
         round_trip_type(DataType::Time32(TimeUnit::Millisecond))?;
         round_trip_type(DataType::Time64(TimeUnit::Microsecond))?;
         round_trip_type(DataType::Time64(TimeUnit::Nanosecond))?;
-        round_trip_type(DataType::Date64)?;
         round_trip_type(DataType::Date32)?;
         round_trip_type(DataType::Date64)?;
         round_trip_type(DataType::Binary)?;
