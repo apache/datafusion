@@ -86,10 +86,7 @@ async fn test_reproduce_sort_query_issue_16452() {
         "sort_fuzz_table".to_string(),
         vec![
             ColumnDescr::new("u64", DataType::UInt64),
-            ColumnDescr::new(
-                "u32",
-                DataType::UInt32,
-            ),
+            ColumnDescr::new("u32", DataType::UInt32),
         ],
         false,
         random_seed,
