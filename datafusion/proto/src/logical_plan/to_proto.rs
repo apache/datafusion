@@ -374,10 +374,7 @@ pub fn serialize_expr(
                             Some(e) => Some(Box::new(serialize_expr(e.as_ref(), codec)?)),
                             None => None,
                         },
-                        order_by: match order_by {
-                            Some(e) => serialize_sorts(e, codec)?,
-                            None => vec![],
-                        },
+                        order_by: serialize_sorts(order_by, codec)?,
                         fun_definition: (!buf.is_empty()).then_some(buf),
                     },
                 ))),

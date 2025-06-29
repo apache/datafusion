@@ -28,7 +28,7 @@ use crate::expr_fn::binary_expr;
 use crate::function::WindowFunctionSimplification;
 use crate::logical_plan::Subquery;
 use crate::Volatility;
-use crate::{udaf, ExprSchemable, Operator, Signature, WindowFrame, WindowUDF};
+use crate::{ExprSchemable, Operator, Signature, WindowFrame, WindowUDF};
 
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::cse::{HashNode, NormalizeEq, Normalizeable};
@@ -994,7 +994,7 @@ pub struct AggregateFunctionParams {
     /// Optional filter
     pub filter: Option<Box<Expr>>,
     /// Optional ordering
-    pub order_by: Option<Vec<Sort>>,
+    pub order_by: Vec<Sort>,
     pub null_treatment: Option<NullTreatment>,
 }
 
@@ -1005,7 +1005,7 @@ impl AggregateFunction {
         args: Vec<Expr>,
         distinct: bool,
         filter: Option<Box<Expr>>,
-        order_by: Option<Vec<Sort>>,
+        order_by: Vec<Sort>,
         null_treatment: Option<NullTreatment>,
     ) -> Self {
         Self {
@@ -1179,22 +1179,22 @@ impl Exists {
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct AggregateUDF {
     /// The function
-    pub fun: Arc<udaf::AggregateUDF>,
+    pub fun: Arc<crate::AggregateUDF>,
     /// List of expressions to feed to the functions as arguments
     pub args: Vec<Expr>,
     /// Optional filter
     pub filter: Option<Box<Expr>>,
     /// Optional ORDER BY applied prior to aggregating
-    pub order_by: Option<Vec<Expr>>,
+    pub order_by: Vec<Sort>,
 }
 
 impl AggregateUDF {
     /// Create a new AggregateUDF expression
     pub fn new(
-        fun: Arc<udaf::AggregateUDF>,
+        fun: Arc<crate::AggregateUDF>,
         args: Vec<Expr>,
         filter: Option<Box<Expr>>,
-        order_by: Option<Vec<Expr>>,
+        order_by: Vec<Sort>,
     ) -> Self {
         Self {
             fun,
@@ -2303,18 +2303,15 @@ impl NormalizeEq for Expr {
                         (None, None) => true,
                         _ => false,
                     }
-                    && match (self_order_by, other_order_by) {
-                        (Some(self_order_by), Some(other_order_by)) => self_order_by
-                            .iter()
-                            .zip(other_order_by.iter())
-                            .all(|(a, b)| {
-                                a.asc == b.asc
-                                    && a.nulls_first == b.nulls_first
-                                    && a.expr.normalize_eq(&b.expr)
-                            }),
-                        (None, None) => true,
-                        _ => false,
-                    }
+                    && self_order_by
+                        .iter()
+                        .zip(other_order_by.iter())
+                        .all(|(a, b)| {
+                            a.asc == b.asc
+                                && a.nulls_first == b.nulls_first
+                                && a.expr.normalize_eq(&b.expr)
+                        })
+                    && self_order_by.len() == other_order_by.len()
             }
             (Expr::WindowFunction(left), Expr::WindowFunction(other)) => {
                 let WindowFunction {

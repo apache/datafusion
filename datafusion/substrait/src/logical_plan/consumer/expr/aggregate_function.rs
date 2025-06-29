@@ -30,7 +30,7 @@ pub async fn from_substrait_agg_func(
     f: &AggregateFunction,
     input_schema: &DFSchema,
     filter: Option<Box<Expr>>,
-    order_by: Option<Vec<SortExpr>>,
+    order_by: Vec<SortExpr>,
     distinct: bool,
 ) -> datafusion::common::Result<Arc<Expr>> {
     let Some(fn_signature) = consumer

@@ -1651,13 +1651,14 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                 == NullTreatment::IgnoreNulls;
 
             let (agg_expr, filter, order_bys) = {
-                let order_bys = match order_by {
-                    Some(exprs) => create_physical_sort_exprs(
-                        exprs,
+                let order_bys = if !order_by.is_empty() {
+                    create_physical_sort_exprs(
+                        &order_by,
                         logical_input_schema,
                         execution_props,
-                    )?,
-                    None => vec![],
+                    )?
+                } else {
+                    vec![]
                 };
 
                 let agg_expr =

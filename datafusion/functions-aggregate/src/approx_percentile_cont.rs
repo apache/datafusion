@@ -69,7 +69,7 @@ pub fn approx_percentile_cont(
         args,
         false,
         None,
-        Some(vec![order_by]),
+        vec![order_by],
         None,
     ))
 }

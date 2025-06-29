@@ -55,8 +55,8 @@ create_func!(FirstValue, first_value_udaf);
 create_func!(LastValue, last_value_udaf);
 
 /// Returns the first value in a group of values.
-pub fn first_value(expression: Expr, order_by: Option<Vec<SortExpr>>) -> Expr {
-    if let Some(order_by) = order_by {
+pub fn first_value(expression: Expr, order_by: Vec<SortExpr>) -> Expr {
+    if !order_by.is_empty() {
         first_value_udaf()
             .call(vec![expression])
             .order_by(order_by)
@@ -69,8 +69,8 @@ pub fn first_value(expression: Expr, order_by: Option<Vec<SortExpr>>) -> Expr {
 }
 
 /// Returns the last value in a group of values.
-pub fn last_value(expression: Expr, order_by: Option<Vec<SortExpr>>) -> Expr {
-    if let Some(order_by) = order_by {
+pub fn last_value(expression: Expr, order_by: Vec<SortExpr>) -> Expr {
+    if !order_by.is_empty() {
         last_value_udaf()
             .call(vec![expression])
             .order_by(order_by)
