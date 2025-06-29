@@ -559,7 +559,8 @@ impl<T: BatchTransformer> CrossJoinStream<T> {
                     handle_state!(ready!(self.fetch_probe_batch(cx)))
                 }
                 CrossJoinStreamState::BuildBatches(_) => {
-                    handle_state!(self.build_batches())
+                    let poll = handle_state!(self.build_batches());
+                    self.join_metrics.baseline.record_poll(poll)
                 }
             };
         }
@@ -632,7 +633,6 @@ impl<T: BatchTransformer> CrossJoinStream<T> {
                     }
 
                     self.join_metrics.output_batches.add(1);
-                    self.join_metrics.output_rows.add(batch.num_rows());
                     return Ok(StatefulStreamResult::Ready(Some(batch)));
                 }
             }
