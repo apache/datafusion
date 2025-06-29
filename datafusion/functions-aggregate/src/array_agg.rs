@@ -341,12 +341,20 @@ impl Accumulator for ArrayAggAccumulator {
             Some(values) => {
                 // Make sure we don't insert empty lists
                 if !values.is_empty() {
-                    self.values.push(values);
+                    // The ArrayRef might be holding a reference to its original input buffer, so
+                    // storing it here directly copied/compacted avoids over accounting memory
+                    // not used here.
+                    self.values
+                        .push(make_array(copy_array_data(&values.to_data())));
                 }
             }
             None => {
                 for arr in list_arr.iter().flatten() {
-                    self.values.push(arr);
+                    // The ArrayRef might be holding a reference to its original input buffer, so
+                    // storing it here directly copied/compacted avoids over accounting memory
+                    // not used here.
+                    self.values
+                        .push(make_array(copy_array_data(&arr.to_data())));
                 }
             }
         }
@@ -728,7 +736,7 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
 mod tests {
     use super::*;
     use arrow::array::{ListBuilder, StringBuilder};
-    use arrow::datatypes::{FieldRef, Schema};
+    use arrow::datatypes::{FieldRef, Schema, UInt64Type};
     use datafusion_common::cast::as_generic_string_array;
     use datafusion_common::internal_err;
     use datafusion_physical_expr::expressions::Column;
@@ -991,6 +999,34 @@ mod tests {
 
         let result = print_nulls(str_arr(acc1.evaluate()?)?);
         assert_eq!(result, vec!["NULL"]);
+        Ok(())
+    }
+
+    #[test]
+    fn does_not_over_account_memory_for_merge() -> Result<()> {
+        let (mut acc1, mut acc2) = ArrayAggAccumulatorBuilder::string().build_two()?;
+
+        let a1 = ListArray::from_iter_primitive::<UInt64Type, _, _>(vec![
+            Some(vec![Some(0), Some(1), Some(2)]),
+            Some(vec![Some(3)]),
+            None,
+            Some(vec![Some(4)]),
+        ]);
+        let a2 = ListArray::from_iter_primitive::<UInt64Type, _, _>(vec![
+            Some(vec![Some(0), Some(1), Some(2)]),
+            Some(vec![Some(3)]),
+            None,
+            Some(vec![Some(4)]),
+        ]);
+
+        acc1.merge_batch(&[Arc::new(a1.slice(0, 1))])?;
+        acc2.merge_batch(&[Arc::new(a2.slice(0, 1))])?;
+
+        acc1 = merge(acc1, acc2)?;
+
+        // without compaction, the size is 16812.
+        assert_eq!(acc1.size(), 556);
+
         Ok(())
     }
 
