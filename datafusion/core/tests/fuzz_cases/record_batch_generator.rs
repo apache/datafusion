@@ -34,6 +34,7 @@ use arrow_schema::{
     DECIMAL256_MAX_SCALE,
 };
 use datafusion_common::{arrow_datafusion_err, DataFusionError, Result};
+use itertools::Itertools;
 use rand::{rng, rngs::StdRng, Rng, SeedableRng};
 use test_utils::array_gen::{
     BinaryArrayGenerator, BooleanArrayGenerator, DecimalArrayGenerator,
@@ -283,7 +284,13 @@ impl RecordBatchGenerator {
     }
 
     pub fn generate(&mut self) -> Result<RecordBatch> {
-        let num_rows = self.rng.random_range(self.min_rows_num..=self.max_rows_num);
+        let range = self.min_rows_num..=self.max_rows_num;
+        let num_rows = if range.try_len().unwrap() > 0 {
+            self.rng.random_range(range)
+        } else {
+            // If the range is empty, we return self.min_rows_num
+            self.min_rows_num
+        };
         let array_gen_rng = StdRng::from_seed(self.rng.random());
         let mut batch_gen_rng = StdRng::from_seed(self.rng.random());
         let columns = self.columns.clone();

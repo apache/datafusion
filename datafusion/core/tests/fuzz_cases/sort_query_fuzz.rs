@@ -75,19 +75,18 @@ async fn sort_query_fuzzer_runner() {
 
 /// Reproduce the bug with specific seeds from the
 /// [failing test case](https://github.com/apache/datafusion/issues/16452).
-#[tokio::test(flavor = "multi_thread")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 128)]
 async fn test_reproduce_sort_query_issue_16452() {
     // Seeds from the failing test case
     let init_seed = 10313160656544581998u64;
     let query_seed = 15004039071976572201u64;
     let config_seed_1 = 11807432710583113300u64;
-    let config_seed_2 = 759937414670321802u64;
 
     let random_seed = 1u64; // Use a fixed seed to ensure consistent behavior
 
     let mut test_generator = SortFuzzerTestGenerator::new(
         2000,
-        3,
+        128,
         "sort_fuzz_table".to_string(),
         get_supported_types_columns(random_seed),
         false,
@@ -96,7 +95,7 @@ async fn test_reproduce_sort_query_issue_16452() {
 
     let mut results = vec![];
 
-    for config_seed in [config_seed_1, config_seed_2] {
+    for config_seed in [config_seed_1, config_seed_1] {
         let r = test_generator
             .fuzzer_run(init_seed, query_seed, config_seed)
             .await
@@ -572,7 +571,7 @@ impl SortFuzzerTestGenerator {
 
         let config = SessionConfig::new()
             .with_target_partitions(num_partitions)
-            .with_batch_size(init_state.approx_batch_num_rows / 2)
+            .with_batch_size(std::cmp::max(init_state.approx_batch_num_rows / 2, 1))
             .with_sort_spill_reservation_bytes(sort_spill_reservation_bytes)
             .with_sort_in_place_threshold_bytes(sort_in_place_threshold_bytes);
 
