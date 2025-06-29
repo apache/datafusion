@@ -141,8 +141,8 @@ impl Distribution {
     ///   Iterate through the bins while maintaining a cumulative count.
     ///   Identify the bin that contains the median (where cumulative count exceeds half the total).
     ///   Within that bin, assume a uniform distribution and interpolate the position of the median:
-    ///     Use the left edge of the bin, bin width, and relative position of the median within the bin.
-    ///     This approach estimates the median based on the assumption of uniform distribution within each bin.
+    ///   Use the left edge of the bin, bin width, and relative position of the median within the bin.
+    ///   This approach estimates the median based on the assumption of uniform distribution within each bin.
     pub fn median(&self) -> Result<ScalarValue> {
         match &self {
             Uniform(u) => u.median(),
