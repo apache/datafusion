@@ -109,10 +109,10 @@ impl Distribution {
     /// - A [`Generic`] distribution _may_ have it explicitly, or this information
     ///   may be absent.
     /// - A [`Sampled`] distribution mean uses this formula:
-    /// For each bin, calculate the midpoint: (left_edge + right_edge) / 2
-    /// Multiply each midpoint by the corresponding count
-    /// Sum all of these weighted midpoints
-    /// Divide the result by the total number of counts
+    ///   For each bin, calculate the midpoint: (left_edge + right_edge) / 2.
+    ///   Multiply each midpoint by the corresponding count.
+    ///   Sum all of these weighted midpoints.
+    ///   Divide the result by the total number of counts.
     pub fn mean(&self) -> Result<ScalarValue> {
         match &self {
             Uniform(u) => u.mean(),
@@ -137,12 +137,12 @@ impl Distribution {
     /// - A [`Generic`] distribution _may_ have it explicitly, or this information
     ///   may be absent.
     /// - A [`Sampled`] distribution median uses this formula:
-    /// Compute the total number of values across all bins.
-    /// Iterate through the bins while maintaining a cumulative count.
-    /// Identify the bin that contains the median (where cumulative count exceeds half the total).
-    /// Within that bin, assume a uniform distribution and interpolate the position of the median:
+    ///   Compute the total number of values across all bins.
+    ///   Iterate through the bins while maintaining a cumulative count.
+    ///   Identify the bin that contains the median (where cumulative count exceeds half the total).
+    ///   Within that bin, assume a uniform distribution and interpolate the position of the median:
     ///     Use the left edge of the bin, bin width, and relative position of the median within the bin.
-    /// This approach estimates the median based on the assumption of uniform distribution within each bin.
+    ///     This approach estimates the median based on the assumption of uniform distribution within each bin.
     pub fn median(&self) -> Result<ScalarValue> {
         match &self {
             Uniform(u) => u.median(),
@@ -166,11 +166,11 @@ impl Distribution {
     /// - A [`Generic`] distribution _may_ have it explicitly, or this information
     ///   may be absent.
     /// - A [`Sampled`] distribution variance uses this formula:
-    /// For each bin, compute its midpoint (average of left and right edges).
-    /// Compute the weighted mean by summing each midpoint multiplied by its count, divided by the total count.
-    /// For each bin, compute the squared difference between the midpoint and the mean.
-    /// Multiply each squared difference by its count (weight).
-    /// Sum these weighted squared differences and divide by the total count minus one (sample variance).
+    ///   For each bin, compute its midpoint (average of left and right edges).
+    ///   Compute the weighted mean by summing each midpoint multiplied by its count, divided by the total count.
+    ///   For each bin, compute the squared difference between the midpoint and the mean.
+    ///   Multiply each squared difference by its count (weight).
+    ///   Sum these weighted squared differences and divide by the total count minus one (sample variance).
     pub fn variance(&self) -> Result<ScalarValue> {
         match &self {
             Uniform(u) => u.variance(),
@@ -625,7 +625,7 @@ impl SampledDistribution {
         }
 
         let bins_dts: Vec<&ScalarValue> = bins.iter().collect();
-        if let Err(_) = Distribution::target_type(&bins_dts) {
+        if Distribution::target_type(&bins_dts).is_err() {
             return internal_err!(
                 "Tried to construct an invalid `SampledDistribution` instance."
             );
@@ -710,7 +710,7 @@ impl SampledDistribution {
             .bins
             .windows(2)
             .map(|pair| {
-                let Some(left) = pair.get(0) else {
+                let Some(left) = pair.first() else {
                     return internal_err!("`SampledDistribution` instance is invalid.");
                 };
                 let Some(right) = pair.get(1) else {
