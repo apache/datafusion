@@ -646,7 +646,7 @@ impl Unparser<'_> {
             }
             _ => {
                 internal_err!(
-                    "get_field expects first argument to be column, but received: {:?}",
+                    "get_field expects first argument to be column or scalar function, but received: {:?}",
                     &args[0]
                 )
             }
