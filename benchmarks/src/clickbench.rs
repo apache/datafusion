@@ -20,6 +20,7 @@ use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 use crate::util::{BenchmarkRun, CommonOpt, QueryResult};
+use datafusion::logical_expr::{ExplainFormat, ExplainOption};
 use datafusion::{
     error::{DataFusionError, Result},
     prelude::SessionContext,
@@ -181,7 +182,13 @@ impl RunOpt {
             query_results.push(QueryResult { elapsed, row_count })
         }
         if self.common.debug {
-            ctx.sql(sql).await?.explain(false, false)?.show().await?;
+            ctx.sql(sql)
+                .await?
+                .explain_with_options(
+                    ExplainOption::default().with_format(ExplainFormat::Tree),
+                )?
+                .show()
+                .await?;
         }
         let avg = millis.iter().sum::<f64>() / millis.len() as f64;
         println!("Query {query_id} avg time: {avg:.2} ms");
