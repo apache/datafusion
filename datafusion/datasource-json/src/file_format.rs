@@ -185,6 +185,10 @@ impl FileFormat for JsonFormat {
         Ok(format!("{}{}", ext, file_compression_type.get_ext()))
     }
 
+    fn compression_type(&self) -> Option<FileCompressionType> {
+        Some(self.options.compression.into())
+    }
+
     async fn infer_schema(
         &self,
         _state: &dyn Session,

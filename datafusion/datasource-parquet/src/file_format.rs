@@ -340,6 +340,10 @@ impl FileFormat for ParquetFormat {
         }
     }
 
+    fn compression_type(&self) -> Option<FileCompressionType> {
+        None
+    }
+
     async fn infer_schema(
         &self,
         state: &dyn Session,

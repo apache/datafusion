@@ -59,6 +59,7 @@ use tempfile::tempdir;
 /// * [query_to_date]: execute queries against parquet files
 #[tokio::main]
 async fn main() -> Result<()> {
+    env_logger::init();
     // The SessionContext is the main high level API for interacting with DataFusion
     let ctx = SessionContext::new();
     read_parquet(&ctx).await?;

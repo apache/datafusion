@@ -81,6 +81,10 @@ impl FileFormat for TSVFileFormat {
         }
     }
 
+    fn compression_type(&self) -> Option<FileCompressionType> {
+        None
+    }
+
     async fn infer_schema(
         &self,
         state: &dyn Session,
