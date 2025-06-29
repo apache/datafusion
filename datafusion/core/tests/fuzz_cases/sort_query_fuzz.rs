@@ -31,7 +31,6 @@ use datafusion_execution::memory_pool::{
 };
 use datafusion_expr::display_schema;
 use datafusion_physical_plan::spill::get_record_batch_memory_size;
-use itertools::Itertools;
 use std::time::Duration;
 
 use datafusion_execution::{memory_pool::FairSpillPool, runtime_env::RuntimeEnvBuilder};
@@ -79,13 +78,9 @@ async fn sort_query_fuzzer_runner() {
 async fn test_reproduce_sort_query_issue_16452() {
     // Seeds from the failing test case
     let init_seed = 10313160656544581998u64;
-    let query_seed = 15004039071976572201u64;
-    let config_seed_1 = 1;
-
     let random_seed = 1u64; // Use a fixed seed to ensure consistent behavior
-
     let mut test_generator = SortFuzzerTestGenerator::new(
-        2000,
+        512,
         128,
         "sort_fuzz_table".to_string(),
         vec![
@@ -99,19 +94,42 @@ async fn test_reproduce_sort_query_issue_16452() {
         random_seed,
     );
 
-    let mut results = vec![];
+    test_generator.init_partitioned_staggered_batches(init_seed);
+    let schema = test_generator
+        .dataset_state
+        .as_ref()
+        .unwrap()
+        .schema
+        .clone();
+    let data = test_generator
+        .dataset_state
+        .as_ref()
+        .unwrap()
+        .partitioned_staggered_batches
+        .clone();
 
-    for config_seed in [config_seed_1, config_seed_1] {
-        let r = test_generator
-            .fuzzer_run(init_seed, query_seed, config_seed)
-            .await
-            .unwrap();
+    let query = "SELECT * FROM sort_fuzz_table ORDER BY interval_month_day_nano NULLS FIRST LIMIT 1";
+    let config = SessionConfig::new()
+        .with_target_partitions(128)
+        .with_batch_size(1);
+    let ctx = SessionContext::new_with_config(config);
+    let provider = Arc::new(MemTable::try_new(schema.clone(), data.clone()).unwrap());
+    ctx.register_table("sort_fuzz_table", provider).unwrap();
 
-        results.push(r);
-    }
-
-    for (lhs, rhs) in results.iter().tuple_windows() {
-        check_equality_of_batches(lhs, rhs).unwrap();
+    let mut previous_results = None;
+    for _ in 0..1024 {
+        let r = ctx.sql(query).await.unwrap().collect().await.unwrap();
+        match &mut previous_results {
+            None => {
+                // Store the first run as the expected result
+                previous_results = Some(r.clone());
+            }
+            Some(prev) => {
+                // Check that the results are consistent with the previous run
+                check_equality_of_batches(prev, &r).unwrap();
+                *prev = r; // Update the previous results
+            }
+        }
     }
 }
 
