@@ -576,10 +576,7 @@ pub fn parse_expr(
                 parse_exprs(&pb.args, registry, codec)?,
                 pb.distinct,
                 parse_optional_expr(pb.filter.as_deref(), registry, codec)?.map(Box::new),
-                match pb.order_by.len() {
-                    0 => None,
-                    _ => Some(parse_sorts(&pb.order_by, registry, codec)?),
-                },
+                parse_sorts(&pb.order_by, registry, codec)?,
                 None,
             )))
         }

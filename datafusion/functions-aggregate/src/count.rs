@@ -73,7 +73,7 @@ pub fn count_distinct(expr: Expr) -> Expr {
         vec![expr],
         true,
         None,
-        None,
+        vec![],
         None,
     ))
 }

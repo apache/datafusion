@@ -406,21 +406,20 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                             .chain(args)
                             .collect::<Vec<_>>();
                     }
-                    (!within_group.is_empty()).then_some(within_group)
+                    within_group
                 } else {
                     let order_by = if !order_by.is_empty() {
                         order_by
                     } else {
                         within_group
                     };
-                    let order_by = self.order_by_to_sort_expr(
+                    self.order_by_to_sort_expr(
                         order_by,
                         schema,
                         planner_context,
                         true,
                         None,
-                    )?;
-                    (!order_by.is_empty()).then_some(order_by)
+                    )?
                 };
 
                 let filter: Option<Box<Expr>> = filter

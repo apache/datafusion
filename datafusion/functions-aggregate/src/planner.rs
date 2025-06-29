@@ -103,7 +103,7 @@ impl ExprPlanner for AggregateFunctionPlanner {
                 vec![Expr::Literal(COUNT_STAR_EXPANSION, None)],
                 distinct,
                 filter,
-                order_by,
+                order_by.into_iter().map(|s| s.into()).collect(),
                 null_treatment,
             ));
 

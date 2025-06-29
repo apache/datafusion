@@ -60,7 +60,7 @@ pub fn sum(expr: Expr) -> Expr {
         vec![expr],
         false,
         None,
-        None,
+        vec![],
         None,
     ))
 }
@@ -73,7 +73,7 @@ pub fn count(expr: Expr) -> Expr {
         vec![expr],
         false,
         None,
-        None,
+        vec![],
         None,
     ))
 }
@@ -86,7 +86,7 @@ pub fn avg(expr: Expr) -> Expr {
         vec![expr],
         false,
         None,
-        None,
+        vec![],
         None,
     ))
 }
@@ -282,7 +282,7 @@ pub fn min(expr: Expr) -> Expr {
         vec![expr],
         false,
         None,
-        None,
+        vec![],
         None,
     ))
 }
@@ -363,7 +363,7 @@ pub fn max(expr: Expr) -> Expr {
         vec![expr],
         false,
         None,
-        None,
+        vec![],
         None,
     ))
 }
