@@ -1,0 +1,22 @@
+[config]
+
+# Allow breaking changes in internal modules
+[[allow_breaking]]
+path_prefix = "datafusion::internal"
+reason = "Internal APIs have no stability guarantees"
+
+[[allow_breaking]]
+path_prefix = "datafusion::physical_plan::metrics"
+reason = "Metrics APIs are considered unstable"
+
+# Allow specific deprecation patterns
+[[allow_breaking]]
+type = "function_missing"
+path_contains = "_deprecated"
+reason = "Deprecated functions can be removed"
+
+# Allow trait implementation changes for internal traits
+[[allow_breaking]]
+type = "trait_impl_missing"
+path_prefix = "datafusion::physical_plan::internal"
+reason = "Internal trait implementations can change"
