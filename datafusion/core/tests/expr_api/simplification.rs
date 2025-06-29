@@ -313,7 +313,7 @@ fn select_date_plus_interval() -> Result<()> {
     assert_snapshot!(
         actual,
         @r###"
-    Projection: Date32("2021-01-09") AS to_timestamp(Utf8("2020-09-08T12:05:00+00:00")) + IntervalDayTime("IntervalDayTime { days: 123, milliseconds: 0 }")
+    Projection: Date32("2021-01-09") AS (to_timestamp(Utf8("2020-09-08T12:05:00+00:00")) + IntervalDayTime("IntervalDayTime { days: 123, milliseconds: 0 }"))
       TableScan: test
     "###
     );

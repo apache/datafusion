@@ -181,10 +181,10 @@ query TT
 explain SELECT column1, column1 = X'000102' FROM t
 ----
 logical_plan
-01)Projection: t.column1, t.column1 = FixedSizeBinary(3, "0,1,2") AS t.column1 = Binary("0,1,2")
+01)Projection: t.column1, t.column1 = FixedSizeBinary(3, "0,1,2") AS (t.column1 = Binary("0,1,2"))
 02)--TableScan: t projection=[column1]
 physical_plan
-01)ProjectionExec: expr=[column1@0 as column1, column1@0 = 000102 as t.column1 = Binary("0,1,2")]
+01)ProjectionExec: expr=[column1@0 as column1, column1@0 = 000102 as (t.column1 = Binary("0,1,2"))]
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 statement ok

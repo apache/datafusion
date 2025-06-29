@@ -486,7 +486,7 @@ async fn aggregate_case() -> Result<()> {
     assert_snapshot!(
     plan,
     @r#"
-    Aggregate: groupBy=[[]], aggr=[[sum(CASE WHEN data.a > Int64(0) THEN Int64(1) ELSE Int64(NULL) END) AS sum(CASE WHEN data.a > Int64(0) THEN Int64(1) ELSE NULL END)]]
+    Aggregate: groupBy=[[]], aggr=[[sum(CASE WHEN data.a > Int64(0) THEN Int64(1) ELSE Int64(NULL) END) AS sum(CASE WHEN (data.a > Int64(0)) THEN Int64(1) ELSE NULL END)]]
       TableScan: data projection=[a]
     "#
     );
@@ -800,7 +800,7 @@ async fn simple_intersect() -> Result<()> {
     check_constant("count(2)", "count(Int64(2))").await?;
     check_constant(
         "count(1 + 2)",
-        "count(Int64(3)) AS count(Int64(1) + Int64(2))",
+        "count(Int64(3)) AS count((Int64(1) + Int64(2)))",
     )
     .await?;
     Ok(())
@@ -999,7 +999,7 @@ async fn simple_intersect_table_reuse() -> Result<()> {
     check_constant("count(2)", "count(Int64(2))").await?;
     check_constant(
         "count(1 + 2)",
-        "count(Int64(3)) AS count(Int64(1) + Int64(2))",
+        "count(Int64(3)) AS count((Int64(1) + Int64(2)))",
     )
     .await?;
 
@@ -1209,7 +1209,7 @@ async fn duplicate_column() -> Result<()> {
     assert_snapshot!(
     plan,
     @r#"
-    Projection: data.a + Int64(1) AS sum_a, data.a + Int64(1) AS data.a + Int64(1)__temp__0 AS sum_a_2
+    Projection: (data.a + Int64(1)) AS sum_a, (data.a + Int64(1)) AS (data.a + Int64(1))__temp__0 AS sum_a_2
       Projection: data.a + Int64(1)
         TableScan: data projection=[a]
     "#
