@@ -18,6 +18,7 @@
 //! [`NestedLoopJoinExec`]: joins without equijoin (equality predicates).
 
 use std::any::Any;
+use std::cmp::min;
 use std::fmt::Formatter;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -26,7 +27,7 @@ use std::task::Poll;
 use super::utils::{
     asymmetric_join_output_partitioning, get_final_indices_from_shared_bitmap,
     need_produce_result_in_final, reorder_output_after_swap, swap_join_projection,
-    BatchSplitter, BatchTransformer, NoopBatchTransformer, StatefulStreamResult,
+    BatchSplitter, BatchTransformer, StatefulStreamResult,
 };
 use crate::common::can_project;
 use crate::execution_plan::{boundedness_from_children, EmissionType};
@@ -47,10 +48,11 @@ use crate::{
     SendableRecordBatchStream,
 };
 
-use arrow::array::{BooleanBufferBuilder, UInt32Array, UInt64Array};
+use arrow::array::{BooleanBufferBuilder, PrimitiveArray, UInt32Array, UInt64Array};
 use arrow::compute::concat_batches;
-use arrow::datatypes::{Schema, SchemaRef};
+use arrow::datatypes::{Schema, SchemaRef, UInt32Type, UInt64Type};
 use arrow::record_batch::RecordBatch;
+use datafusion_common::instant::Instant;
 use datafusion_common::{
     exec_datafusion_err, internal_err, project_schema, JoinSide, Result, Statistics,
 };
@@ -510,8 +512,6 @@ impl ExecutionPlan for NestedLoopJoinExec {
         })?;
 
         let batch_size = context.session_config().batch_size();
-        let enforce_batch_size_in_joins =
-            context.session_config().enforce_batch_size_in_joins();
 
         let outer_table = self.right.execute(partition, context)?;
 
@@ -530,37 +530,22 @@ impl ExecutionPlan for NestedLoopJoinExec {
             None => self.column_indices.clone(),
         };
 
-        if enforce_batch_size_in_joins {
-            Ok(Box::pin(NestedLoopJoinStream {
-                schema: self.schema(),
-                filter: self.filter.clone(),
-                join_type: self.join_type,
-                outer_table,
-                inner_table,
-                column_indices: column_indices_after_projection,
-                join_metrics,
-                indices_cache,
-                right_side_ordered,
-                state: NestedLoopJoinStreamState::WaitBuildSide,
-                batch_transformer: BatchSplitter::new(batch_size),
-                left_data: None,
-            }))
-        } else {
-            Ok(Box::pin(NestedLoopJoinStream {
-                schema: self.schema(),
-                filter: self.filter.clone(),
-                join_type: self.join_type,
-                outer_table,
-                inner_table,
-                column_indices: column_indices_after_projection,
-                join_metrics,
-                indices_cache,
-                right_side_ordered,
-                state: NestedLoopJoinStreamState::WaitBuildSide,
-                batch_transformer: NoopBatchTransformer::new(),
-                left_data: None,
-            }))
-        }
+        Ok(Box::pin(NestedLoopJoinStream {
+            schema: self.schema(),
+            filter: self.filter.clone(),
+            join_type: self.join_type,
+            outer_table,
+            inner_table,
+            column_indices: column_indices_after_projection,
+            join_metrics,
+            indices_cache,
+            right_side_ordered,
+            state: NestedLoopJoinStreamState::WaitBuildSide,
+            batch_transformer: BatchSplitter::new(batch_size),
+            left_data: None,
+            join_result_status: None,
+            intermediate_batch_size: batch_size,
+        }))
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
@@ -689,6 +674,8 @@ enum NestedLoopJoinStreamState {
     ProcessProbeBatch(RecordBatch),
     /// Indicates that probe-side has been fully processed
     ExhaustedProbeSide,
+    /// Output unmatched build-side rows
+    OutputUnmatchedBuildRows(RecordBatch), // RecordBatch::new_empty(self.outer_table.schema())
     /// Indicates that NestedLoopJoinStream execution is completed
     Completed,
 }
@@ -729,10 +716,26 @@ struct NestedLoopJoinStream<T> {
     right_side_ordered: bool,
     /// Current state of the stream
     state: NestedLoopJoinStreamState,
+    #[allow(dead_code)]
+    // TODO: remove this field ??
     /// Transforms the output batch before returning.
     batch_transformer: T,
     /// Result of the left data future
     left_data: Option<Arc<JoinLeftData>>,
+
+    // Tracks progress when building join result batches incrementally
+    // Contains (build_indices, probe_indices, processed_count) where:
+    // - build_indices: row indices from build-side table (left table)
+    // - probe_indices: row indices from probe-side table (right table)
+    // - processed_count: number of index pairs already processed into output batches
+    // We have completed join result for indices [0..processed_count)
+    join_result_status: Option<(
+        PrimitiveArray<UInt64Type>,
+        PrimitiveArray<UInt32Type>,
+        usize,
+    )>,
+
+    intermediate_batch_size: usize,
 }
 
 /// Creates a Cartesian product of two input batches, preserving the order of the right batch,
@@ -755,6 +758,7 @@ fn build_join_indices(
     right_batch: &RecordBatch,
     filter: Option<&JoinFilter>,
     indices_cache: &mut (UInt64Array, UInt32Array),
+    max_intermediate_batch_size: usize,
 ) -> Result<(UInt64Array, UInt32Array)> {
     let left_row_count = left_batch.num_rows();
     let right_row_count = right_batch.num_rows();
@@ -805,6 +809,7 @@ fn build_join_indices(
             right_indices,
             filter,
             JoinSide::Left,
+            Some(max_intermediate_batch_size),
         )
     } else {
         Ok((left_indices, right_indices))
@@ -828,11 +833,125 @@ impl<T: BatchTransformer> NestedLoopJoinStream<T> {
                     handle_state!(self.process_probe_batch())
                 }
                 NestedLoopJoinStreamState::ExhaustedProbeSide => {
-                    handle_state!(self.process_unmatched_build_batch())
+                    handle_state!(self.prepare_unmatched_output_indices())
+                }
+                NestedLoopJoinStreamState::OutputUnmatchedBuildRows(_) => {
+                    handle_state!(self.build_unmatched_output())
                 }
                 NestedLoopJoinStreamState::Completed => Poll::Ready(None),
             };
         }
+    }
+
+    fn get_next_join_result(&mut self) -> Result<Option<RecordBatch>> {
+        let (left_indices, right_indices, start) =
+            self.join_result_status.as_mut().ok_or_else(|| {
+                datafusion_common::_internal_datafusion_err!(
+                    "should have join_result_status"
+                )
+            })?;
+
+        let left_batch = self
+            .left_data
+            .as_ref()
+            .ok_or_else(|| {
+                datafusion_common::_internal_datafusion_err!("should have left_batch")
+            })?
+            .batch();
+
+        let right_batch = match &self.state {
+            NestedLoopJoinStreamState::ProcessProbeBatch(record_batch) => record_batch,
+            NestedLoopJoinStreamState::OutputUnmatchedBuildRows(record_batch) => {
+                record_batch
+            }
+            _ => {
+                return internal_err!(
+                    "state should be ProcessProbeBatch or OutputUnmatchBatch"
+                )
+            }
+        };
+
+        let current_start = *start;
+
+        if left_indices.is_empty() && right_indices.is_empty() && current_start == 0 {
+            let res = build_batch_from_indices(
+                &self.schema,
+                left_batch,
+                right_batch,
+                left_indices,
+                right_indices,
+                &self.column_indices,
+                JoinSide::Left,
+            )?;
+            *start = 1;
+            return Ok(Some(res));
+        }
+
+        if matches!(self.join_type, JoinType::RightSemi | JoinType::RightAnti) {
+            // in this case left_indices.num_rows() == 0
+            let end = min(
+                current_start + self.intermediate_batch_size,
+                right_indices.len(),
+            );
+
+            if current_start >= end {
+                return Ok(None);
+            }
+
+            let res = Some(build_batch_from_indices(
+                &self.schema,
+                left_batch,
+                right_batch,
+                left_indices,
+                &right_indices.slice(current_start, end - current_start),
+                &self.column_indices,
+                JoinSide::Left,
+            )?);
+
+            *start = end;
+            return Ok(res);
+        }
+
+        if current_start >= left_indices.len() {
+            return Ok(None);
+        }
+
+        let end = min(
+            current_start + self.intermediate_batch_size,
+            left_indices.len(),
+        );
+
+        let left_indices = &left_indices.slice(current_start, end - current_start);
+        let right_indices = &right_indices.slice(current_start, end - current_start);
+
+        // Switch around the build side and probe side for `JoinType::RightMark`
+        // because in a RightMark join, we want to mark rows on the right table
+        // by looking for matches in the left.
+        let res = if self.join_type == JoinType::RightMark {
+            build_batch_from_indices(
+                &self.schema,
+                right_batch,
+                left_batch,
+                left_indices,
+                right_indices,
+                &self.column_indices,
+                JoinSide::Right,
+            )
+        } else {
+            build_batch_from_indices(
+                &self.schema,
+                left_batch,
+                right_batch,
+                left_indices,
+                right_indices,
+                &self.column_indices,
+                JoinSide::Left,
+            )
+        }?;
+
+        *start = end;
+
+        Ok(Some(res))
     }
 
     fn collect_build_side(
@@ -883,44 +1002,66 @@ impl<T: BatchTransformer> NestedLoopJoinStream<T> {
         let visited_left_side = left_data.bitmap();
         let batch = self.state.try_as_process_probe_batch()?;
 
-        match self.batch_transformer.next() {
-            None => {
-                // Setting up timer & updating input metrics
-                self.join_metrics.input_batches.add(1);
-                self.join_metrics.input_rows.add(batch.num_rows());
-                let timer = self.join_metrics.join_time.timer();
+        if self.join_result_status.is_none() {
+            self.join_metrics.input_batches.add(1);
+            self.join_metrics.input_rows.add(batch.num_rows());
+            let _timer = self.join_metrics.join_time.timer();
 
-                let result = join_left_and_right_batch(
-                    left_data.batch(),
-                    batch,
-                    self.join_type,
-                    self.filter.as_ref(),
-                    &self.column_indices,
-                    &self.schema,
-                    visited_left_side,
-                    &mut self.indices_cache,
-                    self.right_side_ordered,
-                );
-                timer.done();
+            let (left_side_indices, right_side_indices) = join_left_and_right_batch(
+                left_data.batch(),
+                batch,
+                self.join_type,
+                self.filter.as_ref(),
+                visited_left_side,
+                &mut self.indices_cache,
+                self.right_side_ordered,
+                self.intermediate_batch_size,
+            )?;
+            self.join_result_status = Some((left_side_indices, right_side_indices, 0))
+        }
 
-                self.batch_transformer.set_batch(result?);
-                Ok(StatefulStreamResult::Continue)
-            }
-            Some((batch, last)) => {
-                if last {
-                    self.state = NestedLoopJoinStreamState::FetchProbeBatch;
-                }
+        let start = Instant::now();
+        let join_result = self.get_next_join_result()?;
+        self.join_metrics.join_time.add_elapsed(start);
 
+        match join_result {
+            Some(res) => {
                 self.join_metrics.output_batches.add(1);
-                self.join_metrics.output_rows.add(batch.num_rows());
-                Ok(StatefulStreamResult::Ready(Some(batch)))
+                self.join_metrics.output_rows.add(res.num_rows());
+
+                Ok(StatefulStreamResult::Ready(Some(res)))
+            }
+            None => {
+                self.state = NestedLoopJoinStreamState::FetchProbeBatch;
+                self.join_result_status = None;
+                Ok(StatefulStreamResult::Continue)
             }
         }
     }
 
-    /// Processes unmatched build-side rows for certain join types and produces
-    /// output batch, updates state to `Completed`.
-    fn process_unmatched_build_batch(
+    fn build_unmatched_output(
+        &mut self,
+    ) -> Result<StatefulStreamResult<Option<RecordBatch>>> {
+        if matches!(
+            self.state,
+            NestedLoopJoinStreamState::OutputUnmatchedBuildRows(_)
+        ) {
+            let start = Instant::now();
+            let res = self.get_next_join_result()?;
+            self.join_metrics.join_time.add_elapsed(start);
+            match res {
+                Some(res) => Ok(StatefulStreamResult::Ready(Some(res))),
+                None => {
+                    self.state = NestedLoopJoinStreamState::Completed;
+                    Ok(StatefulStreamResult::Ready(None))
+                }
+            }
+        } else {
+            internal_err!("state should be OutputUnmatchBatch")
+        }
+    }
+
+    fn prepare_unmatched_output_indices(
         &mut self,
     ) -> Result<StatefulStreamResult<Option<RecordBatch>>> {
         let Some(left_data) = self.left_data.clone() else {
@@ -941,29 +1082,17 @@ impl<T: BatchTransformer> NestedLoopJoinStream<T> {
             };
 
             // Only setting up timer, input is exhausted
-            let timer = self.join_metrics.join_time.timer();
+            let _timer = self.join_metrics.join_time.timer();
             // use the global left bitmap to produce the left indices and right indices
             let (left_side, right_side) =
                 get_final_indices_from_shared_bitmap(visited_left_side, self.join_type);
-            let empty_right_batch = RecordBatch::new_empty(self.outer_table.schema());
-            // use the left and right indices to produce the batch result
-            let result = build_batch_from_indices(
-                &self.schema,
-                left_data.batch(),
-                &empty_right_batch,
-                &left_side,
-                &right_side,
-                &self.column_indices,
-                JoinSide::Left,
+
+            self.join_result_status = Some((left_side, right_side, 0));
+            self.state = NestedLoopJoinStreamState::OutputUnmatchedBuildRows(
+                RecordBatch::new_empty(self.outer_table.schema()),
             );
-            self.state = NestedLoopJoinStreamState::Completed;
 
-            // Recording time
-            if result.is_ok() {
-                timer.done();
-            }
-
-            Ok(StatefulStreamResult::Ready(Some(result?)))
+            Ok(StatefulStreamResult::Continue)
         } else {
             // end of the join loop
             self.state = NestedLoopJoinStreamState::Completed;
@@ -978,20 +1107,23 @@ fn join_left_and_right_batch(
     right_batch: &RecordBatch,
     join_type: JoinType,
     filter: Option<&JoinFilter>,
-    column_indices: &[ColumnIndex],
-    schema: &Schema,
     visited_left_side: &SharedBitmapBuilder,
     indices_cache: &mut (UInt64Array, UInt32Array),
     right_side_ordered: bool,
-) -> Result<RecordBatch> {
-    let (left_side, right_side) =
-        build_join_indices(left_batch, right_batch, filter, indices_cache).map_err(
-            |e| {
-                exec_datafusion_err!(
-                    "Fail to build join indices in NestedLoopJoinExec, error: {e}"
-                )
-            },
-        )?;
+    max_intermediate_batch_size: usize,
+) -> Result<(PrimitiveArray<UInt64Type>, PrimitiveArray<UInt32Type>)> {
+    let (left_side, right_side) = build_join_indices(
+        left_batch,
+        right_batch,
+        filter,
+        indices_cache,
+        max_intermediate_batch_size,
+    )
+    .map_err(|e| {
+        exec_datafusion_err!(
+            "Fail to build join indices in NestedLoopJoinExec, error: {e}"
+        )
+    })?;
 
     // set the left bitmap
     // and only full join need the left bitmap
@@ -1010,30 +1142,7 @@ fn join_left_and_right_batch(
         right_side_ordered,
     )?;
 
-    // Switch around the build side and probe side for `JoinType::RightMark`
-    // because in a RightMark join, we want to mark rows on the right table
-    // by looking for matches in the left.
-    if join_type == JoinType::RightMark {
-        build_batch_from_indices(
-            schema,
-            right_batch,
-            left_batch,
-            &left_side,
-            &right_side,
-            column_indices,
-            JoinSide::Right,
-        )
-    } else {
-        build_batch_from_indices(
-            schema,
-            left_batch,
-            right_batch,
-            &left_side,
-            &right_side,
-            column_indices,
-            JoinSide::Left,
-        )
-    }
+    Ok((left_side, right_side))
 }
 
 impl<T: BatchTransformer + Unpin + Send> Stream for NestedLoopJoinStream<T> {
@@ -1215,6 +1324,9 @@ pub(crate) mod tests {
             batches.extend(
                 more_batches
                     .into_iter()
+                    .inspect(|b| {
+                        assert!(b.num_rows() <= context.session_config().batch_size())
+                    })
                     .filter(|b| b.num_rows() > 0)
                     .collect::<Vec<_>>(),
             );
@@ -1222,9 +1334,15 @@ pub(crate) mod tests {
         Ok((columns, batches))
     }
 
+    fn new_task_ctx() -> Arc<TaskContext> {
+        let base = TaskContext::default();
+        // limit max size of intermediate batch used in nlj to 1
+        let cfg = base.session_config().clone().with_batch_size(1);
+        Arc::new(base.with_session_config(cfg))
+    }
     #[tokio::test]
     async fn join_inner_with_filter() -> Result<()> {
-        let task_ctx = Arc::new(TaskContext::default());
+        let task_ctx = new_task_ctx();
         let left = build_left_table();
         let right = build_right_table();
         let filter = prepare_join_filter();
@@ -1236,6 +1354,7 @@ pub(crate) mod tests {
             task_ctx,
         )
         .await?;
+
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
         assert_snapshot!(batches_to_sort_string(&batches), @r#"
             +----+----+----+----+----+----+
@@ -1250,7 +1369,7 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn join_left_with_filter() -> Result<()> {
-        let task_ctx = Arc::new(TaskContext::default());
+        let task_ctx = new_task_ctx();
         let left = build_left_table();
         let right = build_right_table();
 
@@ -1279,7 +1398,7 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn join_right_with_filter() -> Result<()> {
-        let task_ctx = Arc::new(TaskContext::default());
+        let task_ctx = new_task_ctx();
         let left = build_left_table();
         let right = build_right_table();
 
@@ -1308,7 +1427,7 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn join_full_with_filter() -> Result<()> {
-        let task_ctx = Arc::new(TaskContext::default());
+        let task_ctx = new_task_ctx();
         let left = build_left_table();
         let right = build_right_table();
 
@@ -1339,7 +1458,7 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn join_left_semi_with_filter() -> Result<()> {
-        let task_ctx = Arc::new(TaskContext::default());
+        let task_ctx = new_task_ctx();
         let left = build_left_table();
         let right = build_right_table();
 
@@ -1366,7 +1485,7 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn join_left_anti_with_filter() -> Result<()> {
-        let task_ctx = Arc::new(TaskContext::default());
+        let task_ctx = new_task_ctx();
         let left = build_left_table();
         let right = build_right_table();
 
@@ -1394,7 +1513,7 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn join_right_semi_with_filter() -> Result<()> {
-        let task_ctx = Arc::new(TaskContext::default());
+        let task_ctx = new_task_ctx();
         let left = build_left_table();
         let right = build_right_table();
 
@@ -1421,7 +1540,7 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn join_right_anti_with_filter() -> Result<()> {
-        let task_ctx = Arc::new(TaskContext::default());
+        let task_ctx = new_task_ctx();
         let left = build_left_table();
         let right = build_right_table();
 
@@ -1449,7 +1568,7 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn join_left_mark_with_filter() -> Result<()> {
-        let task_ctx = Arc::new(TaskContext::default());
+        let task_ctx = new_task_ctx();
         let left = build_left_table();
         let right = build_right_table();
 
@@ -1478,7 +1597,7 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn join_right_mark_with_filter() -> Result<()> {
-        let task_ctx = Arc::new(TaskContext::default());
+        let task_ctx = new_task_ctx();
         let left = build_left_table();
         let right = build_right_table();
 
@@ -1683,7 +1802,7 @@ pub(crate) mod tests {
         }
 
         let batches = nested_loop_join
-            .execute(0, Arc::new(TaskContext::default()))?
+            .execute(0, new_task_ctx())?
             .try_collect::<Vec<_>>()
             .await?;
 
