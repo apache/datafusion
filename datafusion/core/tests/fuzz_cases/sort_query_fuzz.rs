@@ -20,8 +20,7 @@
 use std::cmp::min;
 use std::sync::Arc;
 
-use arrow::array::RecordBatch;
-use arrow::util::pretty::pretty_format_batches;
+use arrow::array::{record_batch, RecordBatch};
 use arrow_schema::{DataType, SchemaRef};
 use datafusion::datasource::MemTable;
 use datafusion::prelude::{SessionConfig, SessionContext};
@@ -75,53 +74,30 @@ async fn sort_query_fuzzer_runner() {
 
 /// Reproduce the bug with specific seeds from the
 /// [failing test case](https://github.com/apache/datafusion/issues/16452).
-#[tokio::test(flavor = "multi_thread", worker_threads = 128)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_reproduce_sort_query_issue_16452() {
-    // Seeds from the failing test case
-    let init_seed = 10313160656544581998u64;
-    let random_seed = 1u64;
-    let mut test_generator = SortFuzzerTestGenerator::new(
-        256,
-        128,
-        "sort_fuzz_table".to_string(),
-        vec![
-            ColumnDescr::new("u64", DataType::UInt64),
-            ColumnDescr::new("u32", DataType::UInt32),
-        ],
-        false,
-        random_seed,
-    );
+    let schema = Arc::new(arrow_schema::Schema::new(vec![
+        arrow_schema::Field::new("u64", DataType::UInt64, true),
+        arrow_schema::Field::new("u32", DataType::UInt32, true),
+    ]));
 
-    test_generator.init_partitioned_staggered_batches(init_seed);
-    let schema = test_generator
-        .dataset_state
-        .as_ref()
-        .unwrap()
-        .schema
-        .clone();
-    let data = test_generator
-        .dataset_state
-        .as_ref()
-        .unwrap()
-        .partitioned_staggered_batches
-        .clone();
-
-    let flat_data = data
-        .iter()
-        .flat_map(|partition| partition.iter().cloned())
-        .collect::<Vec<_>>();
-    println!("data: {}", pretty_format_batches(&flat_data).unwrap());
+    // build the data manually to reproduce the bug
+    let data = vec![
+        vec![record_batch!(("u64", UInt64, [1]), ("u32", UInt32, [2])).unwrap()],
+        vec![record_batch!(("u64", UInt64, [2]), ("u32", UInt32, [2])).unwrap()],
+    ];
 
     let query = "SELECT * FROM sort_fuzz_table ORDER BY u32 NULLS FIRST LIMIT 1";
     let config = SessionConfig::new()
-        .with_target_partitions(128)
+        .with_target_partitions(2)
         .with_batch_size(1);
     let ctx = SessionContext::new_with_config(config);
     let provider = Arc::new(MemTable::try_new(schema.clone(), data.clone()).unwrap());
     ctx.register_table("sort_fuzz_table", provider).unwrap();
 
+    // Failure usually happens afer ~500 iterations, add a generous number of runs to make sure it reproduces
     let mut previous_results = None;
-    for iteration in 0..2056 {
+    for iteration in 0..4096 {
         println!("Iteration {iteration}");
         let r = ctx.sql(query).await.unwrap().collect().await.unwrap();
         match &mut previous_results {
