@@ -350,6 +350,12 @@ impl From<GenericError> for DataFusionError {
     }
 }
 
+impl From<JoinError> for DataFusionError {
+    fn from(e: JoinError) -> Self {
+        DataFusionError::ExecutionJoin(e)
+    }
+}
+
 impl Display for DataFusionError {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         let error_prefix = self.error_prefix();

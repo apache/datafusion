@@ -21,10 +21,6 @@ use std::any::Any;
 use std::sync::Arc;
 
 use super::{DisplayAs, ExecutionPlanProperties, PlanProperties};
-use crate::aggregates::{
-    no_grouping::AggregateStream, row_hash::GroupedHashAggregateStream,
-    topk_stream::GroupedTopKAggregateStream,
-};
 use crate::execution_plan::{CardinalityEffect, EmissionType};
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::windows::get_ordered_partition_by_indices;
@@ -358,21 +354,10 @@ impl PartialEq for PhysicalGroupBy {
     }
 }
 
-#[allow(clippy::large_enum_variant)]
 enum StreamType {
-    AggregateStream(AggregateStream),
-    GroupedHash(GroupedHashAggregateStream),
-    GroupedPriorityQueue(GroupedTopKAggregateStream),
-}
-
-impl From<StreamType> for SendableRecordBatchStream {
-    fn from(stream: StreamType) -> Self {
-        match stream {
-            StreamType::AggregateStream(stream) => Box::pin(stream),
-            StreamType::GroupedHash(stream) => Box::pin(stream),
-            StreamType::GroupedPriorityQueue(stream) => Box::pin(stream),
-        }
-    }
+    AggregateStream(SendableRecordBatchStream),
+    GroupedHash(SendableRecordBatchStream),
+    GroupedPriorityQueue(SendableRecordBatchStream),
 }
 
 /// Hash aggregate execution plan
@@ -608,7 +593,7 @@ impl AggregateExec {
     ) -> Result<StreamType> {
         // no group by at all
         if self.group_by.expr.is_empty() {
-            return Ok(StreamType::AggregateStream(AggregateStream::new(
+            return Ok(StreamType::AggregateStream(no_grouping::aggregate_stream(
                 self, context, partition,
             )?));
         }
@@ -617,13 +602,13 @@ impl AggregateExec {
         if let Some(limit) = self.limit {
             if !self.is_unordered_unfiltered_group_by_distinct() {
                 return Ok(StreamType::GroupedPriorityQueue(
-                    GroupedTopKAggregateStream::new(self, context, partition, limit)?,
+                    topk_stream::aggregate_stream(self, context, partition, limit)?,
                 ));
             }
         }
 
         // grouping by something else and we need to just materialize all results
-        Ok(StreamType::GroupedHash(GroupedHashAggregateStream::new(
+        Ok(StreamType::GroupedHash(row_hash::aggregate_stream(
             self, context, partition,
         )?))
     }
@@ -998,8 +983,11 @@ impl ExecutionPlan for AggregateExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        self.execute_typed(partition, context)
-            .map(|stream| stream.into())
+        match self.execute_typed(partition, context)? {
+            StreamType::AggregateStream(s) => Ok(s),
+            StreamType::GroupedHash(s) => Ok(s),
+            StreamType::GroupedPriorityQueue(s) => Ok(s),
+        }
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
@@ -1274,7 +1262,7 @@ pub fn create_accumulators(
 /// final value (mode = Final, FinalPartitioned and Single) or states (mode = Partial)
 pub fn finalize_aggregation(
     accumulators: &mut [AccumulatorItem],
-    mode: &AggregateMode,
+    mode: AggregateMode,
 ) -> Result<Vec<ArrayRef>> {
     match mode {
         AggregateMode::Partial => {
@@ -2105,20 +2093,20 @@ mod tests {
             let stream = partial_aggregate.execute_typed(0, Arc::clone(&task_ctx))?;
 
             // ensure that we really got the version we wanted
-            match version {
-                0 => {
-                    assert!(matches!(stream, StreamType::AggregateStream(_)));
+            let stream = match stream {
+                StreamType::AggregateStream(s) => {
+                    assert_eq!(version, 0);
+                    s
                 }
-                1 => {
-                    assert!(matches!(stream, StreamType::GroupedHash(_)));
+                StreamType::GroupedHash(s) => {
+                    assert!(version == 1 || version == 2);
+                    s
                 }
-                2 => {
-                    assert!(matches!(stream, StreamType::GroupedHash(_)));
+                StreamType::GroupedPriorityQueue(_) => {
+                    panic!("Unexpected GroupedPriorityQueue stream type");
                 }
-                _ => panic!("Unknown version: {version}"),
-            }
+            };
 
-            let stream: SendableRecordBatchStream = stream.into();
             let err = collect(stream).await.unwrap_err();
 
             // error root cause traversal is a bit complicated, see #4172.
