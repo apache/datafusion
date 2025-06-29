@@ -710,13 +710,21 @@ impl Unparser<'_> {
     }
 
     pub fn col_to_sql(&self, col: &Column) -> Result<ast::Expr> {
+        // Replace the column name if the dialect has an override
+        let col_name =
+            if let Some(rewritten_name) = self.dialect.col_alias_overrides(&col.name)? {
+                rewritten_name
+            } else {
+                col.name.to_string()
+            };
+
         if let Some(table_ref) = &col.relation {
             let mut id = if self.dialect.full_qualified_col() {
                 table_ref.to_vec()
             } else {
                 vec![table_ref.table().to_string()]
             };
-            id.push(col.name.to_string());
+            id.push(col_name);
             return Ok(ast::Expr::CompoundIdentifier(
                 id.iter()
                     .map(|i| self.new_ident_quoted_if_needs(i.to_string()))
@@ -724,7 +732,7 @@ impl Unparser<'_> {
             ));
         }
         Ok(ast::Expr::Identifier(
-            self.new_ident_quoted_if_needs(col.name.to_string()),
+            self.new_ident_quoted_if_needs(col_name),
         ))
     }
 

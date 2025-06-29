@@ -20,10 +20,10 @@
 use std::any::Any;
 use std::sync::{Arc, Mutex};
 
-use crate::execution_plan::{Boundedness, EmissionType};
+use crate::coop::cooperative;
+use crate::execution_plan::{Boundedness, EmissionType, SchedulingType};
 use crate::memory::MemoryStream;
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
-use crate::yield_stream::wrap_yield_stream;
 use crate::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
     SendableRecordBatchStream, Statistics,
@@ -57,7 +57,7 @@ impl ReservedBatches {
 /// See <https://wiki.postgresql.org/wiki/CTEReadme#How_Recursion_Works>
 /// This table serves as a mirror or buffer between each iteration of a recursive query.
 #[derive(Debug)]
-pub(super) struct WorkTable {
+pub struct WorkTable {
     batches: Mutex<Option<ReservedBatches>>,
 }
 
@@ -107,8 +107,6 @@ pub struct WorkTableExec {
     metrics: ExecutionPlanMetricsSet,
     /// Cache holding plan properties like equivalences, output partitioning etc.
     cache: PlanProperties,
-    /// Indicates whether to enable cooperative yielding mode.
-    cooperative: bool,
 }
 
 impl WorkTableExec {
@@ -121,7 +119,6 @@ impl WorkTableExec {
             metrics: ExecutionPlanMetricsSet::new(),
             work_table: Arc::new(WorkTable::new()),
             cache,
-            cooperative: true,
         }
     }
 
@@ -135,17 +132,6 @@ impl WorkTableExec {
         Arc::clone(&self.schema)
     }
 
-    pub(super) fn with_work_table(&self, work_table: Arc<WorkTable>) -> Self {
-        Self {
-            name: self.name.clone(),
-            schema: Arc::clone(&self.schema),
-            metrics: ExecutionPlanMetricsSet::new(),
-            work_table,
-            cache: self.cache.clone(),
-            cooperative: self.cooperative,
-        }
-    }
-
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn compute_properties(schema: SchemaRef) -> PlanProperties {
         PlanProperties::new(
@@ -154,6 +140,7 @@ impl WorkTableExec {
             EmissionType::Incremental,
             Boundedness::Bounded,
         )
+        .with_scheduling_type(SchedulingType::Cooperative)
     }
 }
 
@@ -187,16 +174,16 @@ impl ExecutionPlan for WorkTableExec {
         &self.cache
     }
 
-    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
-        vec![]
-    }
-
     fn maintains_input_order(&self) -> Vec<bool> {
         vec![false]
     }
 
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {
         vec![false]
+    }
+
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        vec![]
     }
 
     fn with_new_children(
@@ -210,7 +197,7 @@ impl ExecutionPlan for WorkTableExec {
     fn execute(
         &self,
         partition: usize,
-        context: Arc<TaskContext>,
+        _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         // WorkTable streams must be the plan base.
         if partition != 0 {
@@ -220,12 +207,10 @@ impl ExecutionPlan for WorkTableExec {
         }
         let batch = self.work_table.take()?;
 
-        let stream = Box::pin(
+        let stream =
             MemoryStream::try_new(batch.batches, Arc::clone(&self.schema), None)?
-                .with_reservation(batch.reservation),
-        );
-        // Cooperatively yield if asked to do so:
-        Ok(wrap_yield_stream(stream, &context, self.cooperative))
+                .with_reservation(batch.reservation);
+        Ok(Box::pin(cooperative(stream)))
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
@@ -240,8 +225,27 @@ impl ExecutionPlan for WorkTableExec {
         Ok(Statistics::new_unknown(&self.schema()))
     }
 
-    fn with_cooperative_yields(self: Arc<Self>) -> Option<Arc<dyn ExecutionPlan>> {
-        self.cooperative.then_some(self)
+    /// Injects run-time state into this `WorkTableExec`.
+    ///
+    /// The only state this node currently understands is an [`Arc<WorkTable>`].
+    /// If `state` can be down-cast to that type, a new `WorkTableExec` backed
+    /// by the provided work table is returned.  Otherwise `None` is returned
+    /// so that callers can attempt to propagate the state further down the
+    /// execution plan tree.
+    fn with_new_state(
+        &self,
+        state: Arc<dyn Any + Send + Sync>,
+    ) -> Option<Arc<dyn ExecutionPlan>> {
+        // Down-cast to the expected state type; propagate `None` on failure
+        let work_table = state.downcast::<WorkTable>().ok()?;
+
+        Some(Arc::new(Self {
+            name: self.name.clone(),
+            schema: Arc::clone(&self.schema),
+            metrics: ExecutionPlanMetricsSet::new(),
+            work_table,
+            cache: self.cache.clone(),
+        }))
     }
 }
 

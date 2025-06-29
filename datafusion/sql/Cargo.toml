@@ -43,6 +43,10 @@ unicode_expressions = []
 unparser = []
 recursive_protection = ["dep:recursive"]
 
+# Note the sql planner should not depend directly on the datafusion-function packages
+# so that it can be used in a standalone manner with other function implementations.
+#
+# They are used for testing purposes only, so they are in the dev-dependencies section.
 [dependencies]
 arrow = { workspace = true }
 bigdecimal = { workspace = true }
@@ -56,6 +60,7 @@ sqlparser = { workspace = true }
 
 [dev-dependencies]
 ctor = { workspace = true }
+# please do not move these dependencies to the main dependencies section
 datafusion-functions = { workspace = true, default-features = true }
 datafusion-functions-aggregate = { workspace = true }
 datafusion-functions-nested = { workspace = true }

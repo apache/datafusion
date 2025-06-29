@@ -17,6 +17,7 @@
 
 //! [`ScalarUDF`]: Scalar User Defined Functions
 
+use crate::async_udf::AsyncScalarUDF;
 use crate::expr::schema_name_from_exprs_comma_separated_without_space;
 use crate::simplify::{ExprSimplifyResult, SimplifyInfo};
 use crate::sort_properties::{ExprProperties, SortProperties};
@@ -280,6 +281,11 @@ impl ScalarUDF {
     pub fn documentation(&self) -> Option<&Documentation> {
         self.inner.documentation()
     }
+
+    /// Return true if this function is an async function
+    pub fn as_async(&self) -> Option<&AsyncScalarUDF> {
+        self.inner().as_any().downcast_ref::<AsyncScalarUDF>()
+    }
 }
 
 impl<F> From<F> for ScalarUDF
@@ -293,6 +299,7 @@ where
 
 /// Arguments passed to [`ScalarUDFImpl::invoke_with_args`] when invoking a
 /// scalar function.
+#[derive(Debug, Clone)]
 pub struct ScalarFunctionArgs {
     /// The evaluated arguments to the function
     pub args: Vec<ColumnarValue>,
