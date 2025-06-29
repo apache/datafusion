@@ -61,7 +61,7 @@ use datafusion_expr::{
     expr::{Alias, ScalarFunction},
     is_null, lit,
     utils::COUNT_STAR_EXPANSION,
-    ExplainFormat, SortExpr, TableProviderFilterPushDown, UNNAMED_TABLE,
+    ExplainOption, SortExpr, TableProviderFilterPushDown, UNNAMED_TABLE,
 };
 use datafusion_functions::core::coalesce;
 use datafusion_functions_aggregate::expr_fn::{
@@ -1617,27 +1617,38 @@ impl DataFrame {
     /// # }
     /// ```
     pub fn explain(self, verbose: bool, analyze: bool) -> Result<DataFrame> {
-        // Keep the API not changed, the default for this API will use ExplainFormat::Indent
-        self.explain_option_format(verbose, analyze, ExplainFormat::Indent)
+        // Set the default format to Indent to keep the previous behavior
+        let opts = ExplainOption::default()
+            .with_verbose(verbose)
+            .with_analyze(analyze);
+        self.explain_with_options(opts)
     }
 
     /// Return a DataFrame with the explanation of its plan so far.
     ///
-    /// if `analyze` is specified, runs the plan and reports metrics
-    /// if `verbose` is true, prints out additional details.
-    /// The `explain_format` parameter allows to specify the format of the explanation,
-    /// Details format info: see [`ExplainFormat`].
-    pub fn explain_option_format(
+    /// `opt` is used to specify the options for the explain operation.
+    /// Details of the options can be found in [`ExplainOption`].
+    /// ```
+    /// # use datafusion::prelude::*;
+    /// # use datafusion::error::Result;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// use datafusion_expr::{Explain, ExplainOption};
+    /// let ctx = SessionContext::new();
+    /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
+    /// let batches = df.limit(0, Some(100))?.explain_with_options(ExplainOption::default().with_verbose(false).with_analyze(false))?.collect().await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn explain_with_options(
         self,
-        verbose: bool,
-        analyze: bool,
-        explain_format: ExplainFormat,
+        explain_option: ExplainOption,
     ) -> Result<DataFrame> {
         if matches!(self.plan, LogicalPlan::Explain(_)) {
             return plan_err!("Nested EXPLAINs are not supported");
         }
         let plan = LogicalPlanBuilder::from(self.plan)
-            .explain_option_format(verbose, analyze, explain_format)?
+            .explain_option_format(explain_option)?
             .build()?;
         Ok(DataFrame {
             session_state: self.session_state,

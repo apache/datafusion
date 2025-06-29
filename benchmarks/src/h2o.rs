@@ -21,7 +21,7 @@
 //! - [Extended window function benchmark](https://duckdb.org/2024/06/26/benchmarks-over-time.html#window-functions-benchmark)
 
 use crate::util::{BenchmarkRun, CommonOpt};
-use datafusion::logical_expr::ExplainFormat;
+use datafusion::logical_expr::{ExplainFormat, ExplainOption};
 use datafusion::{error::Result, prelude::SessionContext};
 use datafusion_common::{
     exec_datafusion_err, instant::Instant, internal_err, DataFusionError,
@@ -135,7 +135,9 @@ impl RunOpt {
             if self.common.debug {
                 ctx.sql(sql)
                     .await?
-                    .explain_option_format(false, false, ExplainFormat::Tree)?
+                    .explain_with_options(
+                        ExplainOption::default().with_format(ExplainFormat::Tree),
+                    )?
                     .show()
                     .await?;
             }

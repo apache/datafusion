@@ -20,7 +20,7 @@ use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 use crate::util::{BenchmarkRun, CommonOpt, QueryResult};
-use datafusion::logical_expr::ExplainFormat;
+use datafusion::logical_expr::{ExplainFormat, ExplainOption};
 use datafusion::{
     error::{DataFusionError, Result},
     prelude::SessionContext,
@@ -184,7 +184,9 @@ impl RunOpt {
         if self.common.debug {
             ctx.sql(sql)
                 .await?
-                .explain_option_format(false, false, ExplainFormat::Tree)?
+                .explain_with_options(
+                    ExplainOption::default().with_format(ExplainFormat::Tree),
+                )?
                 .show()
                 .await?;
         }
