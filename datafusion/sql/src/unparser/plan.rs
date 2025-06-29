@@ -113,6 +113,7 @@ impl Unparser<'_> {
             | LogicalPlan::Limit(_)
             | LogicalPlan::Statement(_)
             | LogicalPlan::Values(_)
+            | LogicalPlan::Sample(_)
             | LogicalPlan::Distinct(_) => self.select_to_sql_statement(&plan),
             LogicalPlan::Dml(_) => self.dml_to_sql(&plan),
             LogicalPlan::Extension(extension) => {
