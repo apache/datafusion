@@ -21,7 +21,8 @@ use std::cmp::min;
 use std::sync::Arc;
 
 use arrow::array::RecordBatch;
-use arrow_schema::{DataType, IntervalUnit, SchemaRef};
+use arrow::util::pretty::pretty_format_batches;
+use arrow_schema::{DataType, SchemaRef};
 use datafusion::datasource::MemTable;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_common::{instant::Instant, Result};
@@ -78,16 +79,16 @@ async fn sort_query_fuzzer_runner() {
 async fn test_reproduce_sort_query_issue_16452() {
     // Seeds from the failing test case
     let init_seed = 10313160656544581998u64;
-    let random_seed = 1u64; // Use a fixed seed to ensure consistent behavior
+    let random_seed = 1u64;
     let mut test_generator = SortFuzzerTestGenerator::new(
-        512,
+        256,
         128,
         "sort_fuzz_table".to_string(),
         vec![
             ColumnDescr::new("u64", DataType::UInt64),
             ColumnDescr::new(
-                "interval_month_day_nano",
-                DataType::Interval(IntervalUnit::MonthDayNano),
+                "u32",
+                DataType::UInt32,
             ),
         ],
         false,
@@ -108,7 +109,13 @@ async fn test_reproduce_sort_query_issue_16452() {
         .partitioned_staggered_batches
         .clone();
 
-    let query = "SELECT * FROM sort_fuzz_table ORDER BY interval_month_day_nano NULLS FIRST LIMIT 1";
+    let flat_data = data
+        .iter()
+        .flat_map(|partition| partition.iter().cloned())
+        .collect::<Vec<_>>();
+    println!("data: {}", pretty_format_batches(&flat_data).unwrap());
+
+    let query = "SELECT * FROM sort_fuzz_table ORDER BY u32 NULLS FIRST LIMIT 1";
     let config = SessionConfig::new()
         .with_target_partitions(128)
         .with_batch_size(1);
@@ -117,7 +124,8 @@ async fn test_reproduce_sort_query_issue_16452() {
     ctx.register_table("sort_fuzz_table", provider).unwrap();
 
     let mut previous_results = None;
-    for _ in 0..1024 {
+    for iteration in 0..2056 {
+        println!("Iteration {iteration}");
         let r = ctx.sql(query).await.unwrap().collect().await.unwrap();
         match &mut previous_results {
             None => {
