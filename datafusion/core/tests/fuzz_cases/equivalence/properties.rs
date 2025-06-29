@@ -49,6 +49,7 @@ fn test_find_longest_permutation_random() -> Result<()> {
             Arc::clone(&test_fun),
             vec![col_a],
             &test_schema,
+            "UTC".to_string(),
         )?) as _;
 
         let a_plus_b = Arc::new(BinaryExpr::new(

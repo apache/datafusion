@@ -25,6 +25,7 @@ use arrow_schema::{Fields, Schema, SchemaRef};
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::{internal_err, Result};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
+use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_physical_expr::async_scalar_function::AsyncFuncExpr;
 use datafusion_physical_expr::equivalence::ProjectionMapping;
 use datafusion_physical_expr::expressions::Column;
@@ -246,6 +247,7 @@ impl AsyncMapper {
         &mut self,
         physical_expr: &Arc<dyn PhysicalExpr>,
         schema: &Schema,
+        execution_props: &ExecutionProps,
     ) -> Result<()> {
         // recursively look for references to async functions
         physical_expr.apply(|expr| {
@@ -258,6 +260,7 @@ impl AsyncMapper {
                         next_name,
                         Arc::clone(expr),
                         schema,
+                        execution_props.query_execution_time_zone.clone(),
                     )?));
                 }
             }

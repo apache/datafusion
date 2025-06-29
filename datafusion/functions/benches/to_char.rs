@@ -99,6 +99,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         ],
                         number_rows: batch_len,
                         return_field: Field::new("f", DataType::Utf8, true).into(),
+                        execution_time_zone: "UTC".to_string(),
                     })
                     .expect("to_char should work on valid values"),
             )
@@ -124,6 +125,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         ],
                         number_rows: batch_len,
                         return_field: Field::new("f", DataType::Utf8, true).into(),
+                        execution_time_zone: "UTC".to_string(),
                     })
                     .expect("to_char should work on valid values"),
             )
@@ -155,6 +157,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         ],
                         number_rows: 1,
                         return_field: Field::new("f", DataType::Utf8, true).into(),
+                        execution_time_zone: "UTC".to_string(),
                     })
                     .expect("to_char should work on valid values"),
             )

@@ -39,6 +39,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                     arg_fields: vec![Field::new("a", DataType::Int32, false).into()],
                     number_rows: batch_len,
                     return_field: Field::new("f", DataType::Utf8, true).into(),
+                    execution_time_zone: "UTC".to_string(),
                 })
                 .unwrap(),
             )
@@ -56,6 +57,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                     arg_fields: vec![Field::new("a", DataType::Int64, false).into()],
                     number_rows: batch_len,
                     return_field: Field::new("f", DataType::Utf8, true).into(),
+                    execution_time_zone: "UTC".to_string(),
                 })
                 .unwrap(),
             )

@@ -185,6 +185,7 @@ mod tests {
             arg_fields,
             number_rows,
             return_field: Field::new("f", DataType::Date32, true).into(),
+            execution_time_zone: "UTC".to_string(),
         };
         ToDateFunc::new().invoke_with_args(args)
     }

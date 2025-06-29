@@ -689,6 +689,7 @@ mod tests {
             test_fun,
             vec![Arc::clone(col_c)],
             &schema,
+            "UTC".to_string(),
         )?) as PhysicalExprRef;
 
         let option_asc = SortOptions {

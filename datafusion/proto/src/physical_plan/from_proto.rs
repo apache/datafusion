@@ -369,6 +369,7 @@ pub fn parse_physical_expr(
                     scalar_fun_def,
                     args,
                     Field::new("f", convert_required!(e.return_type)?, true).into(),
+                    "UTC".to_string(), // TODO should this come from configuration?
                 )
                 .with_nullable(e.nullable),
             )

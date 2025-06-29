@@ -984,6 +984,7 @@ fn roundtrip_scalar_udf() -> Result<()> {
         fun_def,
         vec![col("a", &schema)?],
         Field::new("f", DataType::Int64, true).into(),
+        "UTC".to_string(),
     );
 
     let project =
@@ -1112,6 +1113,7 @@ fn roundtrip_scalar_udf_extension_codec() -> Result<()> {
         Arc::new(ScalarUDF::from(MyRegexUdf::new(".*".to_string()))),
         vec![col("text", &schema)?],
         Field::new("f", DataType::Int64, true).into(),
+        "UTC".to_string(),
     ));
 
     let filter = Arc::new(FilterExec::try_new(
@@ -1214,6 +1216,7 @@ fn roundtrip_aggregate_udf_extension_codec() -> Result<()> {
         Arc::new(ScalarUDF::from(MyRegexUdf::new(".*".to_string()))),
         vec![col("text", &schema)?],
         Field::new("f", DataType::Int64, true).into(),
+        "UTC".to_string(),
     ));
 
     let udaf = Arc::new(AggregateUDF::from(MyAggregateUDF::new(

@@ -54,6 +54,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                     ],
                     number_rows: 0,
                     return_field: Field::new("f", DataType::Int64, true).into(),
+                    execution_time_zone: "UTC".to_string(),
                 })
                 .expect("date_bin should work on valid values"),
             )
@@ -74,6 +75,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                     ],
                     number_rows: 0,
                     return_field: Field::new("f", DataType::Int64, true).into(),
+                    execution_time_zone: "UTC".to_string(),
                 })
                 .expect("date_bin should work on valid values"),
             )
@@ -94,6 +96,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                     ],
                     number_rows: 0,
                     return_field: Field::new("f", DataType::Int64, true).into(),
+                    execution_time_zone: "UTC".to_string(),
                 })
                 .expect("date_bin should work on valid values"),
             )

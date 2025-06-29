@@ -67,11 +67,12 @@ pub mod test {
                     let return_field = return_field.unwrap();
                     assert_eq!(return_field.data_type(), &$EXPECTED_DATA_TYPE);
 
-                    let result = func.invoke_with_args(datafusion_expr::ScalarFunctionArgs{
+                    let result = func.invoke_with_args(datafusion_expr::ScalarFunctionArgs {
                         args: $ARGS,
                         number_rows: cardinality,
-                        return_field,
                         arg_fields: arg_fields.clone(),
+                        return_field,
+                        execution_time_zone: "UTC".to_string(),
                     });
                     assert_eq!(result.is_ok(), true, "function returned an error: {}", result.unwrap_err());
 
@@ -96,11 +97,12 @@ pub mod test {
                         let return_field = return_field.unwrap();
 
                         // invoke is expected error - cannot use .expect_err() due to Debug not being implemented
-                        match func.invoke_with_args(datafusion_expr::ScalarFunctionArgs{
+                        match func.invoke_with_args(datafusion_expr::ScalarFunctionArgs {
                             args: $ARGS,
                             number_rows: cardinality,
-                            return_field,
                             arg_fields,
+                            return_field,
+                            execution_time_zone: "UTC".to_string(),
                         }) {
                             Ok(_) => assert!(false, "expected error"),
                             Err(error) => {

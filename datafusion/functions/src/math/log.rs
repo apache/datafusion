@@ -281,6 +281,7 @@ mod tests {
             arg_fields,
             number_rows: 4,
             return_field: Field::new("f", DataType::Float64, true).into(),
+            execution_time_zone: "UTC".to_string(),
         };
         let _ = LogFunc::new().invoke_with_args(args);
     }
@@ -295,6 +296,7 @@ mod tests {
             arg_fields: vec![arg_field],
             number_rows: 1,
             return_field: Field::new("f", DataType::Float64, true).into(),
+            execution_time_zone: "UTC".to_string(),
         };
 
         let result = LogFunc::new().invoke_with_args(args);
@@ -311,6 +313,7 @@ mod tests {
             arg_fields: vec![arg_field],
             number_rows: 1,
             return_field: Field::new("f", DataType::Float32, true).into(),
+            execution_time_zone: "UTC".to_string(),
         };
         let result = LogFunc::new()
             .invoke_with_args(args)
@@ -340,6 +343,7 @@ mod tests {
             arg_fields: vec![arg_field],
             number_rows: 1,
             return_field: Field::new("f", DataType::Float64, true).into(),
+            execution_time_zone: "UTC".to_string(),
         };
         let result = LogFunc::new()
             .invoke_with_args(args)
@@ -373,6 +377,7 @@ mod tests {
             arg_fields,
             number_rows: 1,
             return_field: Field::new("f", DataType::Float32, true).into(),
+            execution_time_zone: "UTC".to_string(),
         };
         let result = LogFunc::new()
             .invoke_with_args(args)
@@ -406,6 +411,7 @@ mod tests {
             arg_fields,
             number_rows: 1,
             return_field: Field::new("f", DataType::Float64, true).into(),
+            execution_time_zone: "UTC".to_string(),
         };
         let result = LogFunc::new()
             .invoke_with_args(args)
@@ -437,6 +443,7 @@ mod tests {
             arg_fields: vec![arg_field],
             number_rows: 4,
             return_field: Field::new("f", DataType::Float64, true).into(),
+            execution_time_zone: "UTC".to_string(),
         };
         let result = LogFunc::new()
             .invoke_with_args(args)
@@ -471,6 +478,7 @@ mod tests {
             arg_fields: vec![arg_field],
             number_rows: 4,
             return_field: Field::new("f", DataType::Float32, true).into(),
+            execution_time_zone: "UTC".to_string(),
         };
         let result = LogFunc::new()
             .invoke_with_args(args)
@@ -511,6 +519,7 @@ mod tests {
             arg_fields,
             number_rows: 4,
             return_field: Field::new("f", DataType::Float64, true).into(),
+            execution_time_zone: "UTC".to_string(),
         };
         let result = LogFunc::new()
             .invoke_with_args(args)
@@ -551,6 +560,7 @@ mod tests {
             arg_fields,
             number_rows: 4,
             return_field: Field::new("f", DataType::Float32, true).into(),
+            execution_time_zone: "UTC".to_string(),
         };
         let result = LogFunc::new()
             .invoke_with_args(args)

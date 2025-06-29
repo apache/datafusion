@@ -213,6 +213,7 @@ mod tests {
             arg_fields,
             number_rows: 4,
             return_field: Field::new("f", DataType::Float64, true).into(),
+            execution_time_zone: "UTC".to_string(),
         };
         let result = PowerFunc::new()
             .invoke_with_args(args)
@@ -248,6 +249,7 @@ mod tests {
             arg_fields,
             number_rows: 4,
             return_field: Field::new("f", DataType::Int64, true).into(),
+            execution_time_zone: "UTC".to_string(),
         };
         let result = PowerFunc::new()
             .invoke_with_args(args)

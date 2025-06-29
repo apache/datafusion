@@ -33,6 +33,7 @@ use std::sync::Arc;
 #[derive(Clone, Debug)]
 pub struct ExecutionProps {
     pub query_execution_start_time: DateTime<Utc>,
+    pub query_execution_time_zone: String,
     /// Alias generator used by subquery optimizer rules
     pub alias_generator: Arc<AliasGenerator>,
     /// Providers for scalar variables
@@ -52,6 +53,9 @@ impl ExecutionProps {
             // Set this to a fixed sentinel to make it obvious if this is
             // not being updated / propagated correctly
             query_execution_start_time: Utc.timestamp_nanos(0),
+            // Set this to a fixed sentinel to make it obvious if this is
+            // not being updated / propagated correctly
+            query_execution_time_zone: "unknown".to_string(),
             alias_generator: Arc::new(AliasGenerator::new()),
             var_providers: None,
         }
@@ -61,15 +65,18 @@ impl ExecutionProps {
     pub fn with_query_execution_start_time(
         mut self,
         query_execution_start_time: DateTime<Utc>,
+        query_execution_time_zone: String,
     ) -> Self {
         self.query_execution_start_time = query_execution_start_time;
+        self.query_execution_time_zone = query_execution_time_zone;
         self
     }
 
     /// Marks the execution of query started timestamp.
     /// This also instantiates a new alias generator.
-    pub fn start_execution(&mut self) -> &Self {
+    pub fn start_execution(&mut self, query_execution_time_zone: String) -> &Self {
         self.query_execution_start_time = Utc::now();
+        self.query_execution_time_zone = query_execution_time_zone;
         self.alias_generator = Arc::new(AliasGenerator::new());
         &*self
     }

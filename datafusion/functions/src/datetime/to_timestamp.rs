@@ -1019,6 +1019,7 @@ mod tests {
                     arg_fields: vec![arg_field],
                     number_rows: 4,
                     return_field: Field::new("f", rt, true).into(),
+                    execution_time_zone: "UTC".to_string(),
                 };
                 let res = udf
                     .invoke_with_args(args)
@@ -1068,6 +1069,7 @@ mod tests {
                     arg_fields: vec![arg_field],
                     number_rows: 5,
                     return_field: Field::new("f", rt, true).into(),
+                    execution_time_zone: "UTC".to_string(),
                 };
                 let res = udf
                     .invoke_with_args(args)

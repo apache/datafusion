@@ -39,6 +39,7 @@ pub struct AsyncFuncExpr {
     pub func: Arc<dyn PhysicalExpr>,
     /// The field that this function will return
     return_field: FieldRef,
+    execution_time_zone: String,
 }
 
 impl Display for AsyncFuncExpr {
@@ -66,6 +67,7 @@ impl AsyncFuncExpr {
         name: impl Into<String>,
         func: Arc<dyn PhysicalExpr>,
         schema: &Schema,
+        execution_time_zone: String,
     ) -> Result<Self> {
         let Some(_) = func.as_any().downcast_ref::<ScalarFunctionExpr>() else {
             return internal_err!(
@@ -79,6 +81,7 @@ impl AsyncFuncExpr {
             name: name.into(),
             func,
             return_field,
+            execution_time_zone,
         })
     }
 
@@ -168,6 +171,7 @@ impl AsyncFuncExpr {
                                 arg_fields: arg_fields.clone(),
                                 number_rows: current_batch.num_rows(),
                                 return_field: Arc::clone(&self.return_field),
+                                execution_time_zone: self.execution_time_zone.clone(),
                             },
                             option,
                         )
@@ -189,6 +193,7 @@ impl AsyncFuncExpr {
                             arg_fields,
                             number_rows: batch.num_rows(),
                             return_field: Arc::clone(&self.return_field),
+                            execution_time_zone: self.execution_time_zone.clone(),
                         },
                         option,
                     )
@@ -241,6 +246,7 @@ impl PhysicalExpr for AsyncFuncExpr {
             name: self.name.clone(),
             func: new_func,
             return_field: Arc::clone(&self.return_field),
+            execution_time_zone: self.execution_time_zone.clone(),
         }))
     }
 

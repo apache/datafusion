@@ -133,7 +133,7 @@ fn test_evaluate_with_start_time(
     date_time: &DateTime<Utc>,
 ) {
     let execution_props =
-        ExecutionProps::new().with_query_execution_start_time(*date_time);
+        ExecutionProps::new().with_query_execution_start_time(*date_time, "UTC".into());
 
     let info: MyInfo = MyInfo {
         schema: schema(),

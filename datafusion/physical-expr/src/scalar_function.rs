@@ -54,6 +54,7 @@ pub struct ScalarFunctionExpr {
     name: String,
     args: Vec<Arc<dyn PhysicalExpr>>,
     return_field: FieldRef,
+    execution_time_zone: String,
 }
 
 impl Debug for ScalarFunctionExpr {
@@ -74,12 +75,14 @@ impl ScalarFunctionExpr {
         fun: Arc<ScalarUDF>,
         args: Vec<Arc<dyn PhysicalExpr>>,
         return_field: FieldRef,
+        execution_time_zone: String,
     ) -> Self {
         Self {
             fun,
             name: name.to_owned(),
             args,
             return_field,
+            execution_time_zone,
         }
     }
 
@@ -88,6 +91,7 @@ impl ScalarFunctionExpr {
         fun: Arc<ScalarUDF>,
         args: Vec<Arc<dyn PhysicalExpr>>,
         schema: &Schema,
+        execution_time_zone: String,
     ) -> Result<Self> {
         let name = fun.name().to_string();
         let arg_fields = args
@@ -120,6 +124,7 @@ impl ScalarFunctionExpr {
             name,
             args,
             return_field,
+            execution_time_zone,
         })
     }
 
@@ -202,6 +207,7 @@ impl PhysicalExpr for ScalarFunctionExpr {
             arg_fields,
             number_rows: batch.num_rows(),
             return_field: Arc::clone(&self.return_field),
+            execution_time_zone: self.execution_time_zone.clone(),
         })?;
 
         if let ColumnarValue::Array(array) = &output {
@@ -238,6 +244,7 @@ impl PhysicalExpr for ScalarFunctionExpr {
             Arc::clone(&self.fun),
             children,
             Arc::clone(&self.return_field),
+            self.execution_time_zone.clone(),
         )))
     }
 

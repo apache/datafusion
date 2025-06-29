@@ -483,6 +483,7 @@ mod tests {
                     arg_fields,
                     number_rows: cardinality,
                     return_field: Field::new("f", return_type, true).into(),
+                    execution_time_zone: "UTC".to_string(),
                 });
                 assert!(result.is_ok());
 

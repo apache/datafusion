@@ -545,6 +545,7 @@ mod tests {
                 arg_fields: vec![arg_field],
                 number_rows: 1,
                 return_field: Field::new("f", expected.data_type(), true).into(),
+                execution_time_zone: "UTC".to_string(),
             })
             .unwrap();
         match res {
@@ -615,6 +616,7 @@ mod tests {
                     true,
                 )
                 .into(),
+                execution_time_zone: "UTC".to_string(),
             };
             let result = ToLocalTimeFunc::new().invoke_with_args(args).unwrap();
             if let ColumnarValue::Array(result) = result {

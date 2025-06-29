@@ -112,6 +112,7 @@ fn invoke_pad_with_args(
         arg_fields,
         number_rows,
         return_field: Field::new("f", DataType::Utf8, true).into(),
+        execution_time_zone: "UTC".to_string(),
     };
 
     if left_pad {

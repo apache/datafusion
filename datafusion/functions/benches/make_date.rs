@@ -78,6 +78,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         arg_fields: arg_fields.clone(),
                         number_rows: batch_len,
                         return_field: Arc::clone(&return_field),
+                        execution_time_zone: "UTC".to_string(),
                     })
                     .expect("make_date should work on valid values"),
             )
@@ -105,6 +106,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         arg_fields: arg_fields.clone(),
                         number_rows: batch_len,
                         return_field: Arc::clone(&return_field),
+                        execution_time_zone: "UTC".to_string(),
                     })
                     .expect("make_date should work on valid values"),
             )
@@ -132,6 +134,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         arg_fields: arg_fields.clone(),
                         number_rows: batch_len,
                         return_field: Arc::clone(&return_field),
+                        execution_time_zone: "UTC".to_string(),
                     })
                     .expect("make_date should work on valid values"),
             )
@@ -157,6 +160,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         arg_fields: arg_fields.clone(),
                         number_rows: 1,
                         return_field: Arc::clone(&return_field),
+                        execution_time_zone: "UTC".to_string(),
                     })
                     .expect("make_date should work on valid values"),
             )

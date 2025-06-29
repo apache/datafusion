@@ -743,6 +743,7 @@ mod tests {
                     true,
                 )
                 .into(),
+                execution_time_zone: "UTC".to_string(),
             };
             let result = DateTruncFunc::new().invoke_with_args(args).unwrap();
             if let ColumnarValue::Array(result) = result {
@@ -915,6 +916,7 @@ mod tests {
                     true,
                 )
                 .into(),
+                execution_time_zone: "UTC".to_string(),
             };
             let result = DateTruncFunc::new().invoke_with_args(args).unwrap();
             if let ColumnarValue::Array(result) = result {

@@ -390,16 +390,19 @@ mod tests {
             Arc::clone(&test_fun),
             vec![Arc::clone(col_a)],
             &test_schema,
+            "UTC".to_string(),
         )?) as PhysicalExprRef;
         let floor_f = Arc::new(ScalarFunctionExpr::try_new(
             Arc::clone(&test_fun),
             vec![Arc::clone(col_f)],
             &test_schema,
+            "UTC".to_string(),
         )?) as PhysicalExprRef;
         let exp_a = Arc::new(ScalarFunctionExpr::try_new(
             Arc::clone(&test_fun),
             vec![Arc::clone(col_a)],
             &test_schema,
+            "UTC".to_string(),
         )?) as PhysicalExprRef;
 
         let a_plus_b = Arc::new(BinaryExpr::new(

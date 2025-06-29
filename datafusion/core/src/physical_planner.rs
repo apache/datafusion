@@ -784,6 +784,7 @@ impl DefaultPhysicalPlanner {
                     input_schema.fields().len(),
                     PlannedExprResult::Expr(vec![runtime_expr]),
                     input_schema.as_arrow(),
+                    session_state.execution_props(),
                 )? {
                     PlanAsyncExpr::Sync(PlannedExprResult::Expr(runtime_expr)) => {
                         FilterExec::try_new(Arc::clone(&runtime_expr[0]), physical_input)?
@@ -2085,6 +2086,7 @@ impl DefaultPhysicalPlanner {
             num_input_columns,
             PlannedExprResult::ExprWithName(physical_exprs),
             input_physical_schema.as_ref(),
+            session_state.execution_props(),
         )? {
             PlanAsyncExpr::Sync(PlannedExprResult::ExprWithName(physical_exprs)) => Ok(
                 Arc::new(ProjectionExec::try_new(physical_exprs, input_exec)?),
@@ -2108,18 +2110,19 @@ impl DefaultPhysicalPlanner {
         num_input_columns: usize,
         physical_expr: PlannedExprResult,
         schema: &Schema,
+        execution_props: &ExecutionProps,
     ) -> Result<PlanAsyncExpr> {
         let mut async_map = AsyncMapper::new(num_input_columns);
         match &physical_expr {
             PlannedExprResult::ExprWithName(exprs) => {
-                exprs
-                    .iter()
-                    .try_for_each(|(expr, _)| async_map.find_references(expr, schema))?;
+                exprs.iter().try_for_each(|(expr, _)| {
+                    async_map.find_references(expr, schema, execution_props)
+                })?;
             }
             PlannedExprResult::Expr(exprs) => {
-                exprs
-                    .iter()
-                    .try_for_each(|expr| async_map.find_references(expr, schema))?;
+                exprs.iter().try_for_each(|expr| {
+                    async_map.find_references(expr, schema, execution_props)
+                })?;
             }
         }
 

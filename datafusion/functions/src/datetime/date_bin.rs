@@ -528,6 +528,7 @@ mod tests {
             arg_fields,
             number_rows,
             return_field: Arc::clone(return_field),
+            execution_time_zone: "UTC".to_string(),
         };
         DateBinFunc::new().invoke_with_args(args)
     }

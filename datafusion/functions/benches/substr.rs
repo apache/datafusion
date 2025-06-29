@@ -112,6 +112,7 @@ fn invoke_substr_with_args(
         arg_fields,
         number_rows,
         return_field: Field::new("f", DataType::Utf8View, true).into(),
+        execution_time_zone: "UTC".to_string(),
     })
 }
 
