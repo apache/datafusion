@@ -1603,7 +1603,7 @@ impl DataFrame {
     ///
     /// if `analyze` is specified, runs the plan and reports metrics
     /// if `verbose` is true, prints out additional details.
-    /// The default format is [`ExplainFormat::Indent`].
+    /// The default format is Indent format.
     ///
     /// ```
     /// # use datafusion::prelude::*;
