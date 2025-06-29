@@ -1370,6 +1370,7 @@ mod tests {
             filter: None,
             schema: join_schema,
             null_equality: NullEquality::NullEqualsNull, // Test preservation
+            join_kind: JoinKind::ComparisonJoin,
         });
 
         // Apply filter that can create join conditions
