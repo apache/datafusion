@@ -49,6 +49,7 @@ use crate::{
 
 use super::dml::InsertOp;
 use super::plan::{ColumnUnnestList, ExplainFormat, JoinKind};
+use super::CorrelatedColumnInfo;
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
 use datafusion_common::display::ToStringifiedPlan;
@@ -399,18 +400,10 @@ impl LogicalPlanBuilder {
         Self::scan_with_filters(table_name, table_source, projection, vec![])
     }
 
-    pub fn delim_get(
-        table_index: usize,
-        delim_types: &[DataType],
-        columns: Vec<Column>,
-        schema: DFSchemaRef,
-    ) -> Self {
-        Self::new(LogicalPlan::DelimGet(DelimGet::try_new(
-            table_index,
-            columns,
-            delim_types,
-            schema,
-        )))
+    pub fn delim_get(correlated_columns: &Vec<CorrelatedColumnInfo>) -> Result<Self> {
+        Ok(Self::new(LogicalPlan::DelimGet(DelimGet::try_new(
+            correlated_columns,
+        )?)))
     }
 
     /// Create a [CopyTo] for copying the contents of this builder to the specified file(s)
@@ -906,7 +899,7 @@ impl LogicalPlanBuilder {
     pub fn dependent_join(
         self,
         right: LogicalPlan,
-        correlated_columns: Vec<(usize, Column, DataType)>,
+        correlated_columns: Vec<CorrelatedColumnInfo>,
         subquery_expr: Option<Expr>,
         subquery_depth: usize,
         subquery_name: String,

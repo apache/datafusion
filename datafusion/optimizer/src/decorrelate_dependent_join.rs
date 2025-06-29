@@ -19,18 +19,17 @@
 
 use crate::rewrite_dependent_join::DependentJoinRewriter;
 use crate::{ApplyOrder, OptimizerConfig, OptimizerRule};
-use std::collections::HashMap as StdHashMap;
 use std::ops::Deref;
 use std::sync::Arc;
 
-use arrow::datatypes::{DataType, Field};
+use arrow::datatypes::DataType;
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
-use datafusion_common::{internal_err, Column, DFSchema, Result};
+use datafusion_common::{internal_err, Column, Result};
 use datafusion_expr::expr::{self, Exists, InSubquery};
 use datafusion_expr::utils::conjunction;
 use datafusion_expr::{
-    binary_expr, col, lit, not, when, Aggregate, BinaryExpr, DependentJoin, Expr,
-    JoinType, LogicalPlan, LogicalPlanBuilder, Operator, Projection,
+    binary_expr, col, lit, not, when, Aggregate, BinaryExpr, CorrelatedColumnInfo,
+    DependentJoin, Expr, JoinType, LogicalPlan, LogicalPlanBuilder, Operator, Projection,
 };
 
 use indexmap::{IndexMap, IndexSet};
@@ -51,11 +50,6 @@ struct Unnesting {
     info: Arc<UnnestingInfo>,
 }
 
-#[derive(Clone, Debug, Eq, PartialOrd, PartialEq, Hash)]
-struct CorrelatedColumnInfo {
-    col: Column,
-    data_type: DataType,
-}
 #[derive(Clone, Debug)]
 pub struct DependentJoinDecorrelator {
     // immutable, defined when this object is constructed
@@ -121,37 +115,37 @@ fn natural_join(
 
 impl DependentJoinDecorrelator {
     fn init(&mut self, dependent_join_node: &DependentJoin) {
-        let correlated_columns_of_current_level = dependent_join_node
+        self.domains = dependent_join_node
             .correlated_columns
             .iter()
-            .map(|(_, col, data_type)| CorrelatedColumnInfo {
-                col: col.clone(),
-                data_type: data_type.clone(),
-            });
-
-        self.domains = correlated_columns_of_current_level.unique().collect();
+            .cloned()
+            .collect();
         self.delim_types = self
             .domains
             .iter()
             .map(|CorrelatedColumnInfo { data_type, .. }| data_type.clone())
             .collect();
 
-        dependent_join_node.correlated_columns.iter().for_each(
-            |(depth, col, data_type)| {
-                let cols = self.correlated_map.entry(*depth).or_default();
+        dependent_join_node
+            .correlated_columns
+            .iter()
+            .for_each(|info| {
+                let cols = self.correlated_map.entry(info.depth).or_default();
                 let to_insert = CorrelatedColumnInfo {
-                    col: col.clone(),
-                    data_type: data_type.clone(),
+                    col: info.col.clone(),
+                    data_type: info.data_type.clone(),
+                    depth: info.depth,
                 };
                 if !cols.contains(&to_insert) {
                     cols.push(CorrelatedColumnInfo {
-                        col: col.clone(),
-                        data_type: data_type.clone(),
+                        col: info.col.clone(),
+                        data_type: info.data_type.clone(),
+                        depth: info.depth,
                     });
                 }
-            },
-        );
+            });
     }
+
     fn new_root() -> Self {
         Self {
             domains: IndexSet::new(),
@@ -164,23 +158,26 @@ impl DependentJoinDecorrelator {
             depth: 0,
         }
     }
+
     fn new(
-        correlated_columns: &Vec<(usize, Column, DataType)>,
+        correlated_columns: &Vec<CorrelatedColumnInfo>,
         parent_correlated_columns: &IndexMap<usize, Vec<CorrelatedColumnInfo>>,
         is_initial: bool,
         any_join: bool,
         delim_scan_id: usize,
         depth: usize,
     ) -> Self {
-        let correlated_columns_of_current_level =
-            correlated_columns
-                .iter()
-                .map(|(_, col, data_type)| CorrelatedColumnInfo {
-                    col: col.clone(),
-                    data_type: data_type.clone(),
-                });
+        // let correlated_columns_of_current_level =
+        //     correlated_columns
+        //         .iter()
+        //         .map(|(_, col, data_type)| CorrelatedColumnInfo {
+        //             col: col.clone(),
+        //             data_type: data_type.clone(),
+        //         });
 
-        let domains: IndexSet<_> = correlated_columns_of_current_level
+        let domains: IndexSet<_> = correlated_columns
+            .iter()
+            .cloned()
             .chain(
                 parent_correlated_columns
                     .iter()
@@ -197,21 +194,21 @@ impl DependentJoinDecorrelator {
         let mut merged_correlated_map = parent_correlated_columns.clone();
         merged_correlated_map.retain(|columns_depth, _| *columns_depth >= depth);
 
-        correlated_columns
-            .iter()
-            .for_each(|(depth, col, data_type)| {
-                let cols = merged_correlated_map.entry(*depth).or_default();
-                let to_insert = CorrelatedColumnInfo {
-                    col: col.clone(),
-                    data_type: data_type.clone(),
-                };
-                if !cols.contains(&to_insert) {
-                    cols.push(CorrelatedColumnInfo {
-                        col: col.clone(),
-                        data_type: data_type.clone(),
-                    });
-                }
-            });
+        correlated_columns.iter().for_each(|info| {
+            let cols = merged_correlated_map.entry(info.depth).or_default();
+            let to_insert = CorrelatedColumnInfo {
+                col: info.col.clone(),
+                data_type: info.data_type.clone(),
+                depth: info.depth,
+            };
+            if !cols.contains(&to_insert) {
+                cols.push(CorrelatedColumnInfo {
+                    col: info.col.clone(),
+                    data_type: info.data_type.clone(),
+                    depth: info.depth,
+                });
+            }
+        });
 
         Self {
             domains,
@@ -423,12 +420,7 @@ impl DependentJoinDecorrelator {
             }
         }
 
-        for col in node
-            .correlated_columns
-            .iter()
-            .map(|(_, col, _)| col)
-            .unique()
-        {
+        for col in node.correlated_columns.iter().map(|info| info.col.clone()).unique() {
             let raw_name = col.flat_name().replace('.', "_");
             join_conditions.push(binary_expr(
                 Expr::Column(col.clone()),
@@ -474,6 +466,7 @@ impl DependentJoinDecorrelator {
                             let cmp_col = CorrelatedColumnInfo {
                                 col: outer_col.clone(),
                                 data_type: data_type.clone(),
+                                depth: 0,
                             };
                             if domains.contains(&cmp_col) {
                                 return Ok(Transformed::yes(col(
@@ -506,6 +499,7 @@ impl DependentJoinDecorrelator {
                         let cmp_col = CorrelatedColumnInfo {
                             col: outer_col.clone(),
                             data_type: data_type.clone(),
+                            depth: 0,
                         };
                         if domains.contains(&cmp_col) {
                             return Ok(Transformed::yes(col(
@@ -534,31 +528,24 @@ impl DependentJoinDecorrelator {
         self.delim_scan_id += 1;
         let id = self.delim_scan_id;
         let delim_scan_relation_name = format!("delim_scan_{id}");
-        let fields = self
-            .domains
-            .iter()
-            .map(|c| {
-                let field_name = c.col.flat_name().replace('.', "_");
-                Field::new(field_name, c.data_type.clone(), true)
-            })
-            .collect();
-        let schema = DFSchema::from_unqualified_fields(fields, StdHashMap::new())?;
-        Ok((
-            LogicalPlanBuilder::delim_get(
-                self.delim_scan_id,
-                &self.delim_types,
-                self.domains
-                    .iter()
-                    .map(|c| c.col.clone())
-                    .unique()
-                    .collect(),
-                schema.into(),
-            )
-            .alias(&delim_scan_relation_name)?
-            .build()?,
-            delim_scan_relation_name,
-        ))
+        let delim_get = LogicalPlanBuilder::delim_get(
+            &self
+                .domains
+                .iter()
+                .cloned()
+                .collect(),
+        )?
+        .alias(&delim_scan_relation_name)?
+        .build()?;
+        // TODO: remove alias and replace it with table_name
+        let _table_name = if let LogicalPlan::DelimGet(delim_get) = &delim_get {
+            delim_get.table_name.clone().to_string()
+        } else {
+            "empty table".to_string()
+        };
+        Ok((delim_get, delim_scan_relation_name))
     }
+
     fn rewrite_expr_from_replacement_map(
         replacement: &IndexMap<String, Expr>,
         plan: LogicalPlan,
@@ -625,7 +612,7 @@ impl DependentJoinDecorrelator {
         if !*has_correlated_expr_ref {
             match node {
                 LogicalPlan::Projection(old_proj) => {
-                    let mut proj = old_proj.clone();
+                    let proj = old_proj.clone();
                     // TODO: define logical plan for delim scan
                     let (delim_scan, delim_scan_relation_name) =
                         self.build_delim_scan()?;
@@ -639,12 +626,13 @@ impl DependentJoinDecorrelator {
                         )?
                         .build()?;
 
-                    for domain_col in self.domains.iter() {
-                        proj.expr.push(col(Self::rewrite_into_delim_column(
-                            &delim_scan_relation_name,
-                            &domain_col.col,
-                        )));
-                    }
+                    // TODO: Temporarily comment it out for now, waiting for rewrite_outer_ref_columns
+                    // for domain_col in self.domains.iter() {
+                    //     proj.expr.push(col(Self::rewrite_into_delim_column(
+                    //         &delim_scan_relation_name,
+                    //         &domain_col.col,
+                    //     )));
+                    // }
 
                     let proj = Projection::try_new(proj.expr, cross_join.into())?;
 
@@ -677,7 +665,7 @@ impl DependentJoinDecorrelator {
         }
         match node {
             LogicalPlan::Projection(old_proj) => {
-                let mut proj = old_proj.clone();
+                let proj = old_proj.clone();
                 // for (auto &expr : plan->expressions) {
                 // 	parent_propagate_null_values &= expr->PropagatesNullValues();
                 // }
@@ -688,12 +676,13 @@ impl DependentJoinDecorrelator {
                     parent_propagate_nulls,
                     lateral_depth,
                 )?;
-                for domain_col in self.domains.iter() {
-                    proj.expr.push(col(Self::rewrite_into_delim_column(
-                        &self.delim_scan_relation_name(),
-                        &domain_col.col,
-                    )));
-                }
+                // TODO: Temporarily comment it out for now, waiting for rewrite_outer_ref_columns.
+                // for domain_col in self.domains.iter() {
+                //     proj.expr.push(col(Self::rewrite_into_delim_column(
+                //         &self.delim_scan_relation_name(),
+                //         &domain_col.col,
+                //     )));
+                // }
                 let proj = Projection::try_new(proj.expr, new_input.into())?;
                 return Self::rewrite_outer_ref_columns(
                     LogicalPlan::Projection(proj),
@@ -746,7 +735,7 @@ impl DependentJoinDecorrelator {
                     false,
                 )?;
 
-                let (agg_expr, mut group_expr, input) = match new_plan {
+                let (agg_expr, group_expr, input) = match new_plan {
                     LogicalPlan::Aggregate(Aggregate {
                         aggr_expr,
                         group_expr,
@@ -763,15 +752,16 @@ impl DependentJoinDecorrelator {
                 // let new_group_count = if perform_delim { self.domains.len() } else { 1 };
                 // TODO: support grouping set
                 // select count(*)
-                let mut extra_group_columns = vec![];
-                for c in self.domains.iter() {
-                    let delim_col = Self::rewrite_into_delim_column(
-                        &delim_scan_under_agg_rela,
-                        &c.col,
-                    );
-                    group_expr.push(col(delim_col.clone()));
-                    extra_group_columns.push(delim_col);
-                }
+                // let mut extra_group_columns = vec![];
+                // TODO: Temporarily comment it out for now, waiting for rewrite_outer_ref_columns.
+                // for c in self.domains.iter() {
+                //     let delim_col = Self::rewrite_into_delim_column(
+                //         &delim_scan_under_agg_rela,
+                //         &c.col,
+                //     );
+                //     group_expr.push(col(delim_col.clone()));
+                //     extra_group_columns.push(delim_col);
+                // }
                 // perform a join of this agg (group by correlated columns added)
                 // with the same delimScan of the set same of correlated columns
                 // for now ungorup_join is always true
@@ -783,13 +773,13 @@ impl DependentJoinDecorrelator {
                         join_type = JoinType::Left;
                     }
 
-                    let mut delim_conditions = vec![];
-                    for (lhs, rhs) in extra_group_columns
-                        .iter()
-                        .zip(delim_scan_above_agg.schema().columns().iter())
-                    {
-                        delim_conditions.push((lhs.clone(), rhs.clone()));
-                    }
+                    let delim_conditions = vec![];
+                    // for (lhs, rhs) in extra_group_columns
+                    //     .iter()
+                    //     .zip(delim_scan_above_agg.schema().columns().iter())
+                    // {
+                    //     delim_conditions.push((lhs.clone(), rhs.clone()));
+                    // }
 
                     for agg_expr in agg_expr.iter() {
                         match agg_expr {
