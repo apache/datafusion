@@ -576,7 +576,7 @@ impl SortFuzzerTestGenerator {
 
         let config = SessionConfig::new()
             .with_target_partitions(num_partitions)
-            .with_batch_size(std::cmp::max(init_state.approx_batch_num_rows / 2, 1))
+            .with_batch_size(init_state.approx_batch_num_rows / 2)
             .with_sort_spill_reservation_bytes(sort_spill_reservation_bytes)
             .with_sort_in_place_threshold_bytes(sort_in_place_threshold_bytes);
 
