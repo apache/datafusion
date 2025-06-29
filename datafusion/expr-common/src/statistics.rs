@@ -44,7 +44,7 @@ pub enum Distribution {
     Sampled(SampledDistribution),
 }
 
-use Distribution::{Bernoulli, Exponential, Gaussian, Generic, Uniform, Sampled};
+use Distribution::{Bernoulli, Exponential, Gaussian, Generic, Sampled, Uniform};
 
 impl Distribution {
     /// Constructs a new [`Uniform`] distribution from the given [`Interval`].
@@ -85,12 +85,9 @@ impl Distribution {
         GenericDistribution::try_new(mean, median, variance, range).map(Generic)
     }
 
-    /// Constructs a new [`Sampled`] distribution from the given bins 
+    /// Constructs a new [`Sampled`] distribution from the given bins
     /// and counts after validating the given parameters.
-    pub fn new_sampled(
-        bins: Vec<ScalarValue>,
-        counts: Vec<u64>,
-    ) -> Result<Self> {
+    pub fn new_sampled(bins: Vec<ScalarValue>, counts: Vec<u64>) -> Result<Self> {
         SampledDistribution::try_new(bins, counts).map(Sampled)
     }
 
@@ -308,7 +305,7 @@ pub struct GenericDistribution {
 }
 
 /// Sampled distribution stores a histogram. It contains bin edges and
-/// number of items per each bin. 
+/// number of items per each bin.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SampledDistribution {
     bins: Vec<ScalarValue>,
@@ -616,21 +613,22 @@ impl GenericDistribution {
 }
 
 impl SampledDistribution {
-    fn try_new(
-        bins: Vec<ScalarValue>, 
-        counts: Vec<u64>,
-    ) -> Result<Self> {
+    fn try_new(bins: Vec<ScalarValue>, counts: Vec<u64>) -> Result<Self> {
         if bins.len() < 2 {
             return internal_err!("Tried to construct an invalid `SampledDistribution` instance. Must have at least 2 bins.");
         }
 
         if counts.len() != bins.len() - 1 {
-            return internal_err!("Tried to construct an invalid `SampledDistribution` instance.");
+            return internal_err!(
+                "Tried to construct an invalid `SampledDistribution` instance."
+            );
         }
 
         let bins_dts: Vec<&ScalarValue> = bins.iter().collect();
         if let Err(_) = Distribution::target_type(&bins_dts) {
-            return internal_err!("Tried to construct an invalid `SampledDistribution` instance.");
+            return internal_err!(
+                "Tried to construct an invalid `SampledDistribution` instance."
+            );
         }
 
         Ok(Self { bins, counts })
@@ -638,7 +636,8 @@ impl SampledDistribution {
 
     pub fn data_type(&self) -> DataType {
         let bins: Vec<&ScalarValue> = self.bins.iter().collect();
-        Distribution::target_type(&bins).expect("`SampledDistribution` instance must have same data types")
+        Distribution::target_type(&bins)
+            .expect("`SampledDistribution` instance must have same data types")
     }
 
     pub fn mean(&self) -> Result<ScalarValue> {
@@ -655,7 +654,7 @@ impl SampledDistribution {
             };
             let bin_center = left.add(right)?.div(&two)?;
             let Some(count) = self.counts.get(i) else {
-                return internal_err!("`SampledDistribution` instance is invalid.");      
+                return internal_err!("`SampledDistribution` instance is invalid.");
             };
             let count = ScalarValue::from(*count).cast_to(&dt)?;
             total_bins = total_bins.add(bin_center.mul(&count)?)?;
@@ -682,17 +681,19 @@ impl SampledDistribution {
 
             if cumulative >= median_index {
                 let Some(left) = self.bins.get(i) else {
-                    return internal_err!("`SampledDistribution` instance is invalid.");    
+                    return internal_err!("`SampledDistribution` instance is invalid.");
                 };
                 let Some(right) = self.bins.get(i + 1) else {
-                    return internal_err!("`SampledDistribution` instance is invalid.");  
+                    return internal_err!("`SampledDistribution` instance is invalid.");
                 };
 
                 let bin_width = right.sub(left)?;
                 if count_val == ScalarValue::new_zero(&dt)? {
                     count_val = ScalarValue::try_new_null(&dt)?;
                 }
-                let offset = (median_index.sub(prev_cumulative)?).div(count_val)?.mul(bin_width)?;
+                let offset = (median_index.sub(prev_cumulative)?)
+                    .div(count_val)?
+                    .mul(bin_width)?;
                 return left.add(offset);
             }
         }
@@ -710,10 +711,10 @@ impl SampledDistribution {
             .windows(2)
             .map(|pair| {
                 let Some(left) = pair.get(0) else {
-                    return internal_err!("`SampledDistribution` instance is invalid.");  
+                    return internal_err!("`SampledDistribution` instance is invalid.");
                 };
                 let Some(right) = pair.get(1) else {
-                    return internal_err!("`SampledDistribution` instance is invalid.");  
+                    return internal_err!("`SampledDistribution` instance is invalid.");
                 };
                 (left.add(right))?.div(&two)
             })
@@ -740,7 +741,7 @@ impl SampledDistribution {
                 squared.mul(&count_val)
             })
             .try_fold(ScalarValue::new_zero(&dt)?, |acc, val| acc.add(val?))?;
-        
+
         let one = ScalarValue::new_one(&dt)?;
         let denom = total_counts.sub(one)?;
         variance.div(denom)
@@ -748,10 +749,10 @@ impl SampledDistribution {
 
     pub fn range(&self) -> Result<Interval> {
         let Some(lower) = self.bins.first() else {
-            return internal_err!("`SampledDistribution` instance is invalid.");     
+            return internal_err!("`SampledDistribution` instance is invalid.");
         };
         let Some(upper) = self.bins.last() else {
-            return internal_err!("`SampledDistribution` instance is invalid.");  
+            return internal_err!("`SampledDistribution` instance is invalid.");
         };
         Interval::try_new(lower.clone(), upper.clone())
     }
@@ -1301,21 +1302,25 @@ mod tests {
         // This array collects test cases of the form (distribution, validity).
         let exponentials = vec![
             (
-                Distribution::new_sampled(
-                    vec![ScalarValue::UInt64(Some(42))], 
-                    vec![42]),
+                Distribution::new_sampled(vec![ScalarValue::UInt64(Some(42))], vec![42]),
                 false,
             ),
             (
                 Distribution::new_sampled(
-                    vec![ScalarValue::UInt64(Some(1)), ScalarValue::UInt64(Some(42))], 
-                    vec![42]),
+                    vec![ScalarValue::UInt64(Some(1)), ScalarValue::UInt64(Some(42))],
+                    vec![42],
+                ),
                 true,
             ),
             (
                 Distribution::new_sampled(
-                    vec![ScalarValue::UInt64(Some(1)), ScalarValue::UInt64(Some(2)), ScalarValue::UInt64(Some(2))], 
-                    vec![1, 2]),
+                    vec![
+                        ScalarValue::UInt64(Some(1)),
+                        ScalarValue::UInt64(Some(2)),
+                        ScalarValue::UInt64(Some(2)),
+                    ],
+                    vec![1, 2],
+                ),
                 true,
             ),
         ];
