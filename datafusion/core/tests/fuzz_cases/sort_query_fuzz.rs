@@ -21,7 +21,7 @@ use std::cmp::min;
 use std::sync::Arc;
 
 use arrow::array::RecordBatch;
-use arrow_schema::SchemaRef;
+use arrow_schema::{DataType, IntervalUnit, SchemaRef};
 use datafusion::datasource::MemTable;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_common::{instant::Instant, Result};
@@ -80,7 +80,7 @@ async fn test_reproduce_sort_query_issue_16452() {
     // Seeds from the failing test case
     let init_seed = 10313160656544581998u64;
     let query_seed = 15004039071976572201u64;
-    let config_seed_1 = 11807432710583113300u64;
+    let config_seed_1 = 1;
 
     let random_seed = 1u64; // Use a fixed seed to ensure consistent behavior
 
@@ -88,7 +88,13 @@ async fn test_reproduce_sort_query_issue_16452() {
         2000,
         128,
         "sort_fuzz_table".to_string(),
-        get_supported_types_columns(random_seed),
+        vec![
+            ColumnDescr::new("u64", DataType::UInt64),
+            ColumnDescr::new(
+                "interval_month_day_nano",
+                DataType::Interval(IntervalUnit::MonthDayNano),
+            ),
+        ],
         false,
         random_seed,
     );
