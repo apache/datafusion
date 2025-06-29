@@ -27,8 +27,8 @@ use datafusion_expr::{
     CreateMemoryTable, DdlStatement, Distinct, Expr, LogicalPlan, LogicalPlanBuilder,
 };
 use sqlparser::ast::{
-    Expr as SQLExpr, Ident, Offset as SQLOffset, OrderBy, OrderByExpr, OrderByKind,
-    Query, SelectInto, SetExpr,
+    Expr as SQLExpr, Ident, LimitClause, OrderBy, OrderByExpr, OrderByKind, Query,
+    SelectInto, SetExpr,
 };
 use sqlparser::tokenizer::Span;
 
@@ -54,8 +54,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 let select_into = select.into.take();
                 let plan =
                     self.select_to_plan(*select, query.order_by, planner_context)?;
-                let plan =
-                    self.limit(plan, query.offset, query.limit, planner_context)?;
+                let plan = self.limit(plan, query.limit_clause, planner_context)?;
                 // Process the `SELECT INTO` after `LIMIT`.
                 self.select_into(plan, select_into)
             }
@@ -77,7 +76,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     None,
                 )?;
                 let plan = self.order_by(plan, order_by_rex)?;
-                self.limit(plan, query.offset, query.limit, planner_context)
+                self.limit(plan, query.limit_clause, planner_context)
             }
         }
     }
@@ -86,23 +85,53 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     fn limit(
         &self,
         input: LogicalPlan,
-        skip: Option<SQLOffset>,
-        fetch: Option<SQLExpr>,
+        limit_clause: Option<LimitClause>,
         planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
+        let Some(limit_clause) = limit_clause else {
+            return Ok(input);
+        };
+
+        let empty_schema = DFSchema::empty();
+
+        let (skip, fetch, limit_by_exprs) = match limit_clause {
+            LimitClause::LimitOffset {
+                limit,
+                offset,
+                limit_by,
+            } => {
+                let skip = offset
+                    .map(|o| self.sql_to_expr(o.value, &empty_schema, planner_context))
+                    .transpose()?;
+
+                let fetch = limit
+                    .map(|e| self.sql_to_expr(e, &empty_schema, planner_context))
+                    .transpose()?;
+
+                let limit_by_exprs = limit_by
+                    .into_iter()
+                    .map(|e| self.sql_to_expr(e, &empty_schema, planner_context))
+                    .collect::<Result<Vec<_>>>()?;
+
+                (skip, fetch, limit_by_exprs)
+            }
+            LimitClause::OffsetCommaLimit { offset, limit } => {
+                let skip =
+                    Some(self.sql_to_expr(offset, &empty_schema, planner_context)?);
+                let fetch =
+                    Some(self.sql_to_expr(limit, &empty_schema, planner_context)?);
+                (skip, fetch, vec![])
+            }
+        };
+
+        if !limit_by_exprs.is_empty() {
+            return not_impl_err!("LIMIT BY clause is not supported yet");
+        }
+
         if skip.is_none() && fetch.is_none() {
             return Ok(input);
         }
 
-        // skip and fetch expressions are not allowed to reference columns from the input plan
-        let empty_schema = DFSchema::empty();
-
-        let skip = skip
-            .map(|o| self.sql_to_expr(o.value, &empty_schema, planner_context))
-            .transpose()?;
-        let fetch = fetch
-            .map(|e| self.sql_to_expr(e, &empty_schema, planner_context))
-            .transpose()?;
         LogicalPlanBuilder::from(input)
             .limit_by_expr(skip, fetch)?
             .build()
