@@ -33,7 +33,7 @@ use datafusion_common::{internal_err, plan_err, Result};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::ExprProperties;
 use datafusion_expr::statistics::Distribution::{
-    self, Bernoulli, Exponential, Gaussian, Generic, Uniform,
+    self, Bernoulli, Exponential, Gaussian, Generic, Uniform, Sampled
 };
 use datafusion_expr::{
     type_coercion::{is_interval, is_null, is_signed_numeric, is_timestamp},
@@ -152,9 +152,9 @@ impl PhysicalExpr for NegativeExpr {
                 g.mean().arithmetic_negate()?,
                 g.variance().clone(),
             ),
-            Bernoulli(_) => {
+            Bernoulli(_) | Sampled(_) => {
                 internal_err!("NegativeExpr cannot operate on Boolean datatypes")
-            }
+            },
             Generic(u) => Distribution::new_generic(
                 u.mean().arithmetic_negate()?,
                 u.median().arithmetic_negate()?,
