@@ -135,7 +135,7 @@ impl TableProviderFactory for ListingTableFactory {
                         Some(compression) => {
                             match options.format.get_ext_with_compression(&compression) {
                                 // Use glob based on `FileFormat` extension
-                                Ok(ext) => format!("*.{}", ext),
+                                Ok(ext) => format!("*.{ext}"),
                                 // Fallback to `file_type`, if not supported by `FileFormat`
                                 Err(_) => format!("*.{}", cmd.file_type.to_lowercase()),
                             }
