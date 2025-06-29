@@ -87,7 +87,7 @@ async fn test_reproduce_sort_query_issue_16452() {
         vec![record_batch!(("u64", UInt64, [2]), ("u32", UInt32, [2])).unwrap()],
     ];
 
-    let query = "SELECT * FROM sort_fuzz_table ORDER BY u32 NULLS FIRST LIMIT 1";
+    let query = "SELECT * FROM sort_fuzz_table ORDER BY u32 LIMIT 1";
     let config = SessionConfig::new()
         .with_target_partitions(2)
         .with_batch_size(1);
