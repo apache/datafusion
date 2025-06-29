@@ -2611,6 +2611,15 @@ fn test_struct_expr() {
         statement,
         @r#"SELECT test."metadata".product FROM (SELECT {product: struct({"name": 'Product Name'})} AS "metadata") AS test WHERE (test."metadata".product = 'Product Name')"#
     );
+
+    let statement = generate_round_trip_statement(
+        GenericDialect {},
+        r#"WITH test AS (SELECT STRUCT(STRUCT(STRUCT('Product Name' as name)) as product) AS metadata) SELECT metadata.product FROM test WHERE metadata['product']['name']  = 'Product Name'"#,
+    );
+    assert_snapshot!(
+        statement,
+        @r#"SELECT test."metadata".product FROM (SELECT {product: struct({"name": 'Product Name'})} AS "metadata") AS test WHERE (test."metadata".product = 'Product Name')"#
+    );
 }
 
 #[test]
