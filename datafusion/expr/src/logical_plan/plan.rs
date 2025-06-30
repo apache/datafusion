@@ -293,48 +293,120 @@ pub enum LogicalPlan {
     DelimGet(DelimGet),
 }
 
+#[derive(Clone, Debug, Eq, PartialOrd, Hash)]
+pub struct CorrelatedColumnInfo {
+    pub col: Column,
+    pub data_type: DataType,
+    pub depth: usize,
+}
+
+impl PartialEq for CorrelatedColumnInfo {
+    fn eq(&self, other: &Self) -> bool {
+        self.col == other.col && self.data_type == other.data_type
+    }
+}
+
 #[derive(Debug, Clone, Eq)]
 pub struct DelimGet {
+    // TODO: is it necessary to alias?
+    pub table_name: TableReference,
+    pub columns: Vec<Column>,
     /// The schema description of the output
     pub projected_schema: DFSchemaRef,
-    pub columns: Vec<Column>,
-    pub table_index: usize,
-    pub delim_types: Vec<DataType>,
+    // TODO: add more variables as needed.
 }
 
 impl DelimGet {
-    pub fn try_new(
-        table_index: usize,
-        columns: Vec<Column>,
-        delim_types: &[DataType],
-        projected_schema: DFSchemaRef,
-    ) -> Self {
-        Self {
-            columns,
-            projected_schema,
-            table_index,
-            delim_types: delim_types.to_owned(),
+    pub fn try_new(correlated_columns: &Vec<CorrelatedColumnInfo>) -> Result<Self> {
+        if correlated_columns.is_empty() {
+            // return plan_err!("failed to construct DelimGet: empty correlated columns");
+            // TODO: revisit if dummy dependent join is nesessary.
+            return Ok(Self {
+                table_name: TableReference::bare("empty scan"),
+                columns: vec![],
+                projected_schema: Arc::new(DFSchema::empty()),
+            });
         }
+
+        let correlated_columns: Vec<CorrelatedColumnInfo> = correlated_columns
+            .into_iter()
+            .map(|info| {
+                // Add "_d" suffix to the relation name
+                let col = if let Some(ref relation) = info.col.relation {
+                    let new_relation =
+                        Some(TableReference::bare(format!("{}_d", relation)));
+                    Column::new(new_relation, info.col.name.clone())
+                } else {
+                    info.col.clone()
+                };
+
+                CorrelatedColumnInfo {
+                    col,
+                    data_type: info.data_type.clone(),
+                    depth: info.depth,
+                }
+            })
+            .collect();
+
+        // Extract the first table reference to validate all columns come from the same table
+        let first_table_ref = correlated_columns[0].col.relation.clone();
+
+        // Validate all columns come from the same table
+        for column_info in &correlated_columns {
+            if column_info.col.relation != first_table_ref {
+                // TODO: add delim union support
+                // return internal_err!(
+                //     "DelimGet requires all columns to be from the same table, found mixed table references"
+                // );
+            }
+        }
+
+        let table_name = first_table_ref.ok_or_else(|| {
+            DataFusionError::Plan(
+                "DelimGet requires all columns to have a table reference".to_string(),
+            )
+        })?;
+
+        // Collect both table references and fields together
+        let qualified_fields: Vec<(Option<TableReference>, Arc<Field>)> =
+            correlated_columns
+                .iter()
+                .map(|c| {
+                    let field = Field::new(c.col.name.clone(), c.data_type.clone(), true);
+                    (c.col.relation.clone(), Arc::new(field))
+                })
+                .collect();
+
+        let columns: Vec<Column> =
+            correlated_columns.iter().map(|c| c.col.clone()).collect();
+
+        let schema = DFSchema::new_with_metadata(qualified_fields, HashMap::new())?;
+
+        Ok(DelimGet {
+            table_name,
+            columns,
+            projected_schema: Arc::new(schema),
+        })
     }
 }
 
 impl PartialEq for DelimGet {
     fn eq(&self, other: &Self) -> bool {
-        self.table_index == other.table_index && self.delim_types == other.delim_types
+        self.table_name == other.table_name && self.columns == other.columns
     }
 }
 
 impl Hash for DelimGet {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.table_index.hash(state);
-        self.delim_types.hash(state);
+        self.table_name.hash(state);
+        self.columns.hash(state);
     }
 }
 
 impl PartialOrd for DelimGet {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        match self.table_index.partial_cmp(&other.table_index) {
-            Some(Ordering::Equal) => self.delim_types.partial_cmp(&other.delim_types),
+        match self.table_name.partial_cmp(&other.table_name) {
+            Some(Ordering::Equal) => self.columns.partial_cmp(&other.columns),
             cmp => cmp,
         }
     }
@@ -349,7 +421,7 @@ pub struct DependentJoin {
     // because RHS may reference columns provided somewhere from the above parent dependent join.
     // Depths of each correlated_columns should always be gte current dependent join
     // subquery_depth
-    pub correlated_columns: Vec<(usize, Column, DataType)>,
+    pub correlated_columns: Vec<CorrelatedColumnInfo>,
     // the upper expr that containing the subquery expr
     // i.e for predicates: where outer = scalar_sq + 1
     // correlated exprs are `scalar_sq + 1`
@@ -370,7 +442,7 @@ impl Display for DependentJoin {
         let correlated_str = self
             .correlated_columns
             .iter()
-            .map(|(level, col, _)| format!("{col} lvl {level}"))
+            .map(|info| format!("{0} lvl {1}", info.col, info.depth))
             .collect::<Vec<String>>()
             .join(", ");
         let lateral_join_info =
@@ -397,7 +469,7 @@ impl PartialOrd for DependentJoin {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         #[derive(PartialEq, PartialOrd)]
         struct ComparableJoin<'a> {
-            correlated_columns: &'a Vec<(usize, Column, DataType)>,
+            correlated_columns: &'a Vec<CorrelatedColumnInfo>,
             // the upper expr that containing the subquery expr
             // i.e for predicates: where outer = scalar_sq + 1
             // correlated exprs are `scalar_sq + 1`
@@ -5089,6 +5161,7 @@ mod tests {
                 join_constraint: JoinConstraint::On,
                 schema: Arc::new(left_schema.join(&right_schema)?),
                 null_equality: NullEquality::NullEqualsNothing,
+                join_kind: JoinKind::ComparisonJoin,
             }))
         }
 
