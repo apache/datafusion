@@ -2605,20 +2605,20 @@ fn test_not_ilike_filter_with_escape() {
 fn test_struct_expr() {
     let statement = generate_round_trip_statement(
         GenericDialect {},
-        r#"WITH test AS (SELECT STRUCT(STRUCT(STRUCT('Product Name' as name)) as product) AS metadata) SELECT metadata.product FROM test WHERE metadata.product.name  = 'Product Name'"#,
+        r#"WITH test AS (SELECT STRUCT(STRUCT('Product Name' as name) as product) AS metadata) SELECT metadata.product FROM test WHERE metadata.product.name  = 'Product Name'"#,
     );
     assert_snapshot!(
         statement,
-        @r#"SELECT test."metadata".product FROM (SELECT {product: struct({"name": 'Product Name'})} AS "metadata") AS test WHERE (test."metadata".product = 'Product Name')"#
+        @r#"SELECT test."metadata".product FROM (SELECT {product: {"name": 'Product Name'}} AS "metadata") AS test WHERE (test."metadata".product."name" = 'Product Name')"#
     );
 
     let statement = generate_round_trip_statement(
         GenericDialect {},
-        r#"WITH test AS (SELECT STRUCT(STRUCT(STRUCT('Product Name' as name)) as product) AS metadata) SELECT metadata.product FROM test WHERE metadata['product']['name']  = 'Product Name'"#,
+        r#"WITH test AS (SELECT STRUCT(STRUCT('Product Name' as name) as product) AS metadata) SELECT metadata.product FROM test WHERE metadata['product']['name']  = 'Product Name'"#,
     );
     assert_snapshot!(
         statement,
-        @r#"SELECT test."metadata".product FROM (SELECT {product: struct({"name": 'Product Name'})} AS "metadata") AS test WHERE (test."metadata".product = 'Product Name')"#
+        @r#"SELECT test."metadata".product FROM (SELECT {product: {"name": 'Product Name'}} AS "metadata") AS test WHERE (test."metadata".product."name" = 'Product Name')"#
     );
 }
 
@@ -2630,6 +2630,30 @@ fn test_struct_expr2() {
     );
     assert_snapshot!(
         statement,
-        @r#"SELECT ({product: {"name": 'Product Name'}} = 'Product Name')"#
+        @r#"SELECT ({product: {"name": 'Product Name'}}.product."name" = 'Product Name')"#
+    );
+}
+
+#[test]
+fn test_struct_expr3() {
+    let statement = generate_round_trip_statement(
+        GenericDialect {},
+        r#"WITH
+                test AS (
+                    SELECT
+                        STRUCT (
+                            STRUCT (
+                                STRUCT ('Product Name' as name) as product
+                            ) AS metadata
+                        ) AS c1
+                )
+            SELECT
+                c1.metadata.product.name
+            FROM
+                test"#,
+    );
+    assert_snapshot!(
+        statement,
+        @r#"SELECT test.c1."metadata".product."name" FROM (SELECT {"metadata": {product: {"name": 'Product Name'}}} AS c1) AS test"#
     );
 }

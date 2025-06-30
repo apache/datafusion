@@ -617,20 +617,6 @@ impl Unparser<'_> {
     }
 
     fn get_field_to_sql(&self, args: &[Expr]) -> Result<ast::Expr> {
-        if args.len() != 2 {
-            return internal_err!("get_field must have exactly 2 arguments");
-        }
-
-        let field = match &args[1] {
-            Expr::Literal(lit, _) => self.new_ident_quoted_if_needs(lit.to_string()),
-            _ => {
-                return internal_err!(
-                "get_field expects second argument to be a string, but received: {:?}",
-                &args[0]
-            )
-            }
-        };
-
         match &args[0] {
             Expr::Column(col) => {
                 let mut id = match self.col_to_sql(col)? {
@@ -638,11 +624,40 @@ impl Unparser<'_> {
                     ast::Expr::CompoundIdentifier(idents) => idents,
                     other => return internal_err!("expected col_to_sql to return an Identifier or CompoundIdentifier, but received: {:?}", other),
                 };
-                id.push(field);
+                for arg in args.iter().skip(1) {
+                    let field = match arg {
+                        Expr::Literal(lit, _) => self.new_ident_quoted_if_needs(lit.to_string()),
+                        _ => {
+                            return internal_err!(
+                                "get_field expects arguments except the first one to be a string, but received: {:?}",
+                                &arg
+                            )
+                        }
+                    };
+                    id.push(field);
+                }
                 Ok(ast::Expr::CompoundIdentifier(id))
             }
             Expr::ScalarFunction(struct_expr) => {
-                self.scalar_function_to_sql(struct_expr.func.name(), &struct_expr.args)
+                let root = self
+                    .scalar_function_to_sql(struct_expr.func.name(), &struct_expr.args)?;
+                let mut access_chain = vec![];
+                for arg in args.iter().skip(1) {
+                    let field = match arg {
+                        Expr::Literal(lit, _) => self.new_ident_quoted_if_needs(lit.to_string()),
+                        _ => {
+                            return internal_err!(
+                                "get_field expects arguments except the first one to be a string, but received: {:?}",
+                                &arg
+                            )
+                        }
+                    };
+                    access_chain.push(ast::AccessExpr::Dot(ast::Expr::Identifier(field)));
+                }
+                Ok(ast::Expr::CompoundFieldAccess {
+                    root: Box::new(root),
+                    access_chain,
+                })
             }
             _ => {
                 internal_err!(
