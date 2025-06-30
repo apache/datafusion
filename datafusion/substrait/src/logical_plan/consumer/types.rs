@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use super::utils::{next_struct_field_name, DEFAULT_TIMEZONE};
+use super::utils::{from_substrait_precision, next_struct_field_name, DEFAULT_TIMEZONE};
 use super::SubstraitConsumer;
 #[allow(deprecated)]
 use crate::variation_const::{
@@ -27,7 +27,8 @@ use crate::variation_const::{
     INTERVAL_MONTH_DAY_NANO_TYPE_REF, INTERVAL_YEAR_MONTH_TYPE_REF,
     LARGE_CONTAINER_TYPE_VARIATION_REF, TIMESTAMP_MICRO_TYPE_VARIATION_REF,
     TIMESTAMP_MILLI_TYPE_VARIATION_REF, TIMESTAMP_NANO_TYPE_VARIATION_REF,
-    TIMESTAMP_SECOND_TYPE_VARIATION_REF, UNSIGNED_INTEGER_TYPE_VARIATION_REF,
+    TIMESTAMP_SECOND_TYPE_VARIATION_REF, TIME_32_TYPE_VARIATION_REF,
+    TIME_64_TYPE_VARIATION_REF, UNSIGNED_INTEGER_TYPE_VARIATION_REF,
     VIEW_CONTAINER_TYPE_VARIATION_REF,
 };
 use datafusion::arrow::datatypes::{
@@ -107,28 +108,23 @@ pub fn from_substrait_type(
                 }
             }
             r#type::Kind::PrecisionTimestamp(pts) => {
-                let unit = match pts.precision {
-                    0 => Ok(TimeUnit::Second),
-                    3 => Ok(TimeUnit::Millisecond),
-                    6 => Ok(TimeUnit::Microsecond),
-                    9 => Ok(TimeUnit::Nanosecond),
-                    p => not_impl_err!(
-                        "Unsupported Substrait precision {p} for PrecisionTimestamp"
-                    ),
-                }?;
+                let unit = from_substrait_precision(pts.precision, "PrecisionTimestamp")?;
                 Ok(DataType::Timestamp(unit, None))
             }
             r#type::Kind::PrecisionTimestampTz(pts) => {
-                let unit = match pts.precision {
-                    0 => Ok(TimeUnit::Second),
-                    3 => Ok(TimeUnit::Millisecond),
-                    6 => Ok(TimeUnit::Microsecond),
-                    9 => Ok(TimeUnit::Nanosecond),
-                    p => not_impl_err!(
-                        "Unsupported Substrait precision {p} for PrecisionTimestampTz"
-                    ),
-                }?;
+                let unit =
+                    from_substrait_precision(pts.precision, "PrecisionTimestampTz")?;
                 Ok(DataType::Timestamp(unit, Some(DEFAULT_TIMEZONE.into())))
+            }
+            r#type::Kind::PrecisionTime(pt) => {
+                let time_unit = from_substrait_precision(pt.precision, "PrecisionTime")?;
+                match pt.type_variation_reference {
+                    TIME_32_TYPE_VARIATION_REF => Ok(DataType::Time32(time_unit)),
+                    TIME_64_TYPE_VARIATION_REF => Ok(DataType::Time64(time_unit)),
+                    v => not_impl_err!(
+                        "Unsupported Substrait type variation {v} of type {s_kind:?}"
+                    ),
+                }
             }
             r#type::Kind::Date(date) => match date.type_variation_reference {
                 DATE_32_TYPE_VARIATION_REF => Ok(DataType::Date32),
@@ -220,14 +216,9 @@ pub fn from_substrait_type(
                 }
                 DURATION_INTERVAL_DAY_TYPE_VARIATION_REF => {
                     let duration_unit = match i.precision {
-                        Some(0) => Ok(TimeUnit::Second),
-                        Some(3) => Ok(TimeUnit::Millisecond),
-                        Some(6) => Ok(TimeUnit::Microsecond),
-                        Some(9) => Ok(TimeUnit::Nanosecond),
-                        p => {
-                            not_impl_err!(
-                                "Unsupported Substrait precision {p:?} for Duration"
-                            )
+                        Some(p) => from_substrait_precision(p, "Duration"),
+                        None => {
+                            not_impl_err!("Missing Substrait precision for Duration")
                         }
                     }?;
                     Ok(DataType::Duration(duration_unit))
