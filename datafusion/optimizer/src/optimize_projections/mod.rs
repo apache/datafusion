@@ -29,7 +29,6 @@ use datafusion_common::{
     HashMap, JoinType, Result,
 };
 use datafusion_expr::expr::Alias;
-use datafusion_expr::Unnest;
 use datafusion_expr::{
     logical_plan::LogicalPlan, Aggregate, Distinct, Expr, Projection, TableScan, Window,
 };
@@ -294,7 +293,7 @@ fn optimize_projections(
                 })
                 .collect::<Result<_>>()?
         }
-        LogicalPlan::Limit(_) => {
+        LogicalPlan::Limit(_) | LogicalPlan::Unnest(_) => {
             // Pass index requirements from the parent as well as column indices
             // that appear in this plan's expressions to its child. These operators
             // do not benefit from "small" inputs, so the projection_beneficial
@@ -374,13 +373,6 @@ fn optimize_projections(
             return internal_err!(
                 "OptimizeProjection: should have handled in the match statement above"
             );
-        }
-        LogicalPlan::Unnest(Unnest {
-            dependency_indices, ..
-        }) => {
-            vec![RequiredIndices::new_from_indices(
-                dependency_indices.clone(),
-            )]
         }
     };
 
