@@ -25,6 +25,7 @@ use criterion::{
     criterion_group, criterion_main, BatchSize, BenchmarkGroup, BenchmarkId, Criterion,
 };
 use datafusion_common::config::SpillCompression;
+use datafusion_common::instant::Instant;
 use datafusion_execution::memory_pool::human_readable_size;
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_physical_plan::common::collect;
@@ -527,7 +528,9 @@ fn benchmark_spill_batches_for_all_codec(
             )
         });
 
-        // Run Spilling Read & Write once more to read file size
+        // Run Spilling Read & Write once more to read file size & calculate bandwidth
+        let start = Instant::now();
+
         let spill_file = spill_manager
             .spill_record_batch_and_finish(
                 &batches,
@@ -536,19 +539,35 @@ fn benchmark_spill_batches_for_all_codec(
             .unwrap()
             .unwrap();
 
+        // calculate write_throughput (includes both compression and I/O time) based on in memory batch size
+        let write_time = start.elapsed();
+        let write_throughput = (mem_bytes as u128 / write_time.as_millis().max(1)) * 1000;
+
+        // calculate compression ratio
         let disk_bytes = std::fs::metadata(spill_file.path())
             .expect("metadata read fail")
             .len() as usize;
-
         let ratio = mem_bytes as f64 / disk_bytes.max(1) as f64;
 
+        // calculate read_throughput (includes both compression and I/O time) based on in memory batch size
+        let rt = Runtime::new().unwrap();
+        let start = Instant::now();
+        rt.block_on(async {
+            let stream = spill_manager.read_spill_as_stream(spill_file).unwrap();
+            let _ = collect(stream).await.unwrap();
+        });
+        let read_time = start.elapsed();
+        let read_throughput = (mem_bytes as u128 / read_time.as_millis().max(1)) * 1000;
+
         println!(
-            "[{} | {:?}] mem: {}| disk: {}| compression ratio: {:.3}x",
+            "[{} | {:?}] mem: {}| disk: {}| compression ratio: {:.3}x| throughput: (w) {}/s (r) {}/s",
             batch_label,
             compression,
             human_readable_size(mem_bytes),
             human_readable_size(disk_bytes),
-            ratio
+            ratio,
+            human_readable_size(write_throughput as usize),
+            human_readable_size(read_throughput as usize),
         );
     }
 }
