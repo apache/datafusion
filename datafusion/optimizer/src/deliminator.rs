@@ -249,7 +249,7 @@ fn remove_join_with_delim_scan(
         if let Some(filter) = &join.filter {
             let conditions = split_conjunction(filter);
 
-            if conditions.len() != delim_scan.delim_types.len() {
+            if conditions.len() != delim_scan.columns.len() {
                 // Joining with delim scan adds new information.
                 return Ok(false);
             }
@@ -713,10 +713,11 @@ impl TreeNodeRewriter for ColumnRewriter {
 mod tests {
     use std::sync::Arc;
 
-    use arrow::datatypes::{DataType as ArrowDataType, Field};
+    use arrow::datatypes::DataType as ArrowDataType ;
     use datafusion_common::{Column, Result};
-    use datafusion_expr::{col, lit, Expr, JoinType, LogicalPlanBuilder};
+    use datafusion_expr::{col, lit, CorrelatedColumnInfo, Expr, JoinType, LogicalPlanBuilder};
     use datafusion_functions_aggregate::count::count;
+    use datafusion_sql::TableReference;
     use insta::assert_snapshot;
 
     use crate::deliminator::Deliminator;
@@ -772,11 +773,11 @@ mod tests {
         let get_t3 = test_table_scan_with_name("t3")?;
 
         // Create schema for DelimGet2
-        let delim_get2 = test_delim_scan_with_name(
-            "delim_get2",
-            2,
-            vec![Field::new("d", ArrowDataType::UInt32, true)],
-        )?;
+        let delim_get2 = test_delim_scan_with_name(vec![CorrelatedColumnInfo {
+            col: Column::new(Some(TableReference::bare("delim_get2")), "d"),
+            data_type: ArrowDataType::UInt32,
+            depth: 0,
+        }])?;
 
         // Create right branch starting with t1
         let t1_projection = LogicalPlanBuilder::from(get_t1)
@@ -808,11 +809,11 @@ mod tests {
             .build()?;
 
         // Create DelimGet1 for middle join
-        let delim_get1 = test_delim_scan_with_name(
-            "delim_get1",
-            1,
-            vec![Field::new("a", ArrowDataType::UInt32, true)],
-        )?;
+        let delim_get1 = test_delim_scan_with_name(vec![CorrelatedColumnInfo {
+            col: Column::new(Some(TableReference::bare("delim_get1")), "a"),
+            data_type: ArrowDataType::UInt32,
+            depth: 0,
+        }])?;
 
         // Join DelimGet1 with aggregate
         let middle_join = LogicalPlanBuilder::from(delim_get1)

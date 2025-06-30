@@ -31,7 +31,8 @@ use datafusion_common::{
     internal_datafusion_err, internal_err, not_impl_err, Column, HashMap, Result,
 };
 use datafusion_expr::{
-    col, lit, Aggregate, Expr, Filter, Join, LogicalPlan, LogicalPlanBuilder, Projection,
+    col, lit, Aggregate, CorrelatedColumnInfo, Expr, Filter, Join, LogicalPlan,
+    LogicalPlanBuilder, Projection,
 };
 
 use indexmap::map::Entry;
@@ -136,7 +137,11 @@ impl DependentJoinRewriter {
 
             let correlated_columns = column_accesses
                 .iter()
-                .map(|ac| (ac.subquery_depth, ac.col.clone(), ac.data_type.clone()))
+                .map(|ac| CorrelatedColumnInfo {
+                    col: ac.col.clone(),
+                    data_type: ac.data_type.clone(),
+                    depth: ac.subquery_depth,
+                })
                 .unique()
                 .collect();
 
@@ -282,7 +287,11 @@ impl DependentJoinRewriter {
             ))?;
         let correlated_columns = column_accesses
             .iter()
-            .map(|ac| (ac.subquery_depth, ac.col.clone(), ac.data_type.clone()))
+            .map(|ac| CorrelatedColumnInfo {
+                col: ac.col.clone(),
+                data_type: ac.data_type.clone(),
+                depth: ac.subquery_depth,
+            })
             .unique()
             .collect();
 
