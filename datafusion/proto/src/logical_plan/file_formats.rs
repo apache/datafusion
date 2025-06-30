@@ -576,6 +576,7 @@ impl From<&TableParquetOptionsProto> for TableParquetOptions {
                 .iter()
                 .map(|(k, v)| (k.clone(), Some(v.clone())))
                 .collect(),
+            crypto: Default::default(),
         }
     }
 }
