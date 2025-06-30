@@ -743,7 +743,7 @@
 types of UDFs.</p>
 <section id="adding-a-scalar-udf">
 <h2>Adding a Scalar UDF<a class="headerlink" href="#adding-a-scalar-udf" title="Link to this heading">¶</a></h2>
-<p>A Scalar UDF is a function that takes a row of data and returns a single value. In order for good performance
+<p>A Scalar UDF is a function that takes a row of data and returns a single value. To achieve good performance,
 such functions are “vectorized” in DataFusion, meaning they get one or more Arrow Arrays as input and produce
 an Arrow Array with the same number of rows as output.</p>
 <p>To create a Scalar UDF, you</p>
@@ -753,8 +753,8 @@ and how to calculate the results.</p></li>
 <li><p>Create a <code class="docutils literal notranslate"><span class="pre">ScalarUDF</span></code> and register it with <code class="docutils literal notranslate"><span class="pre">SessionContext::register_udf</span></code> so it can be invoked by name.</p></li>
 </ol>
 <p>In the following example, we will add a function takes a single i64 and returns a single i64 with 1 added to it:</p>
-<p>For brevity, we’ll skipped some error handling, but e.g. you may want to check that <code class="docutils literal notranslate"><span class="pre">args.len()</span></code> is the expected number
-of arguments.</p>
+<p>For brevity, we’ll skip some error handling.
+For production code, you may want to check, for example, that <code class="docutils literal notranslate"><span class="pre">args.len()</span></code> matches the expected number of arguments.</p>
 <section id="adding-by-impl-scalarudfimpl">
 <h3>Adding by <code class="docutils literal notranslate"><span class="pre">impl</span> <span class="pre">ScalarUDFImpl</span></code><a class="headerlink" href="#adding-by-impl-scalarudfimpl" title="Link to this heading">¶</a></h3>
 <p>This a lower level API with more functionality but is more complex, also documented in <a class="reference external" href="https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udf.rs"><code class="docutils literal notranslate"><span class="pre">advanced_udf.rs</span></code></a>.</p>
