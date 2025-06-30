@@ -382,6 +382,10 @@ fn optimize_projections(
                 dependency_indices.clone(),
             )]
         }
+        LogicalPlan::DependentJoin(..) => {
+            return Ok(Transformed::no(plan));
+        }
+        LogicalPlan::DelimGet(_) => todo!(),
     };
 
     // Required indices are currently ordered (child0, child1, ...)
@@ -1730,7 +1734,7 @@ mod tests {
         assert_snapshot!(
             optimized_plan.clone(),
             @r"
-        Left Join: test.a = test2.c1
+        Left Join(ComparisonJoin): test.a = test2.c1
           TableScan: test projection=[a, b]
           TableScan: test2 projection=[c1]
         "
@@ -1785,7 +1789,7 @@ mod tests {
             optimized_plan.clone(),
             @r"
         Projection: test.a, test.b
-          Left Join: test.a = test2.c1
+          Left Join(ComparisonJoin): test.a = test2.c1
             TableScan: test projection=[a, b]
             TableScan: test2 projection=[c1]
         "

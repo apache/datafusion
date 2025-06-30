@@ -287,6 +287,147 @@ pub enum LogicalPlan {
     Unnest(Unnest),
     /// A variadic query (e.g. "Recursive CTEs")
     RecursiveQuery(RecursiveQuery),
+    /// A node type that only exist during subquery decorrelation
+    /// TODO: maybe we can avoid creating new type of LogicalPlan for this usecase
+    DependentJoin(DependentJoin),
+    DelimGet(DelimGet),
+}
+
+#[derive(Debug, Clone, Eq)]
+pub struct DelimGet {
+    /// The schema description of the output
+    pub projected_schema: DFSchemaRef,
+    pub columns: Vec<Column>,
+    pub table_index: usize,
+    pub delim_types: Vec<DataType>,
+}
+
+impl DelimGet {
+    pub fn try_new(
+        table_index: usize,
+        columns: Vec<Column>,
+        delim_types: &[DataType],
+        projected_schema: DFSchemaRef,
+    ) -> Self {
+        Self {
+            columns,
+            projected_schema,
+            table_index,
+            delim_types: delim_types.to_owned(),
+        }
+    }
+}
+
+impl PartialEq for DelimGet {
+    fn eq(&self, other: &Self) -> bool {
+        self.table_index == other.table_index && self.delim_types == other.delim_types
+    }
+}
+
+impl Hash for DelimGet {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.table_index.hash(state);
+        self.delim_types.hash(state);
+    }
+}
+
+impl PartialOrd for DelimGet {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match self.table_index.partial_cmp(&other.table_index) {
+            Some(Ordering::Equal) => self.delim_types.partial_cmp(&other.delim_types),
+            cmp => cmp,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct DependentJoin {
+    pub schema: DFSchemaRef,
+    // All combinations of (subquery depth,Column and its DataType) on the RHS (and its descendant)
+    // which points to a column on the LHS of this dependent join
+    // Note that not all outer_refs from the RHS are mentioned in this vectors
+    // because RHS may reference columns provided somewhere from the above parent dependent join.
+    // Depths of each correlated_columns should always be gte current dependent join
+    // subquery_depth
+    pub correlated_columns: Vec<(usize, Column, DataType)>,
+    // the upper expr that containing the subquery expr
+    // i.e for predicates: where outer = scalar_sq + 1
+    // correlated exprs are `scalar_sq + 1`
+    pub subquery_expr: Option<Expr>,
+    // begins with depth = 1
+    pub subquery_depth: usize,
+    pub left: Arc<LogicalPlan>,
+    // dependent side accessing columns from left hand side (and maybe columns)
+    // belong to the parent dependent join node in case of recursion)
+    pub right: Arc<LogicalPlan>,
+    pub subquery_name: String,
+
+    pub lateral_join_condition: Option<(JoinType, Expr)>,
+}
+
+impl Display for DependentJoin {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        let correlated_str = self
+            .correlated_columns
+            .iter()
+            .map(|(level, col, _)| format!("{col} lvl {level}"))
+            .collect::<Vec<String>>()
+            .join(", ");
+        let lateral_join_info =
+            if let Some((join_type, join_expr)) = &self.lateral_join_condition {
+                format!(" lateral {join_type} join with {join_expr}")
+            } else {
+                "".to_string()
+            };
+        let subquery_expr_str = if let Some(expr) = &self.subquery_expr {
+            format!(" with expr {expr}")
+        } else {
+            "".to_string()
+        };
+        write!(
+            f,
+            "DependentJoin on [{correlated_str}]{subquery_expr_str}\
+                        {lateral_join_info} depth {0}",
+            self.subquery_depth,
+        )
+    }
+}
+
+impl PartialOrd for DependentJoin {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        #[derive(PartialEq, PartialOrd)]
+        struct ComparableJoin<'a> {
+            correlated_columns: &'a Vec<(usize, Column, DataType)>,
+            // the upper expr that containing the subquery expr
+            // i.e for predicates: where outer = scalar_sq + 1
+            // correlated exprs are `scalar_sq + 1`
+            subquery_expr: &'a Option<Expr>,
+
+            depth: &'a usize,
+            left: &'a Arc<LogicalPlan>,
+            // dependent side accessing columns from left hand side (and maybe columns)
+            // belong to the parent dependent join node in case of recursion)
+            right: &'a Arc<LogicalPlan>,
+            lateral_join_condition: &'a Option<(JoinType, Expr)>,
+        }
+        let comparable_self = ComparableJoin {
+            left: &self.left,
+            right: &self.right,
+            correlated_columns: &self.correlated_columns,
+            subquery_expr: &self.subquery_expr,
+            depth: &self.subquery_depth,
+            lateral_join_condition: &self.lateral_join_condition,
+        };
+        let comparable_other = ComparableJoin {
+            left: &other.left,
+            right: &other.right,
+            correlated_columns: &other.correlated_columns,
+            subquery_expr: &other.subquery_expr,
+            depth: &other.subquery_depth,
+            lateral_join_condition: &other.lateral_join_condition,
+        };
+        comparable_self.partial_cmp(&comparable_other)
+    }
 }
 
 impl Default for LogicalPlan {
@@ -318,6 +459,7 @@ impl LogicalPlan {
     /// Get a reference to the logical plan's schema
     pub fn schema(&self) -> &DFSchemaRef {
         match self {
+            LogicalPlan::DependentJoin(DependentJoin { schema, .. }) => schema,
             LogicalPlan::EmptyRelation(EmptyRelation { schema, .. }) => schema,
             LogicalPlan::Values(Values { schema, .. }) => schema,
             LogicalPlan::TableScan(TableScan {
@@ -351,6 +493,9 @@ impl LogicalPlan {
                 // we take the schema of the static term as the schema of the entire recursive query
                 static_term.schema()
             }
+            LogicalPlan::DelimGet(DelimGet {
+                projected_schema, ..
+            }) => projected_schema,
         }
     }
 
@@ -452,6 +597,9 @@ impl LogicalPlan {
             LogicalPlan::Aggregate(Aggregate { input, .. }) => vec![input],
             LogicalPlan::Sort(Sort { input, .. }) => vec![input],
             LogicalPlan::Join(Join { left, right, .. }) => vec![left, right],
+            LogicalPlan::DependentJoin(DependentJoin { left, right, .. }) => {
+                vec![left, right]
+            }
             LogicalPlan::Limit(Limit { input, .. }) => vec![input],
             LogicalPlan::Subquery(Subquery { subquery, .. }) => vec![subquery],
             LogicalPlan::SubqueryAlias(SubqueryAlias { input, .. }) => vec![input],
@@ -478,7 +626,8 @@ impl LogicalPlan {
             LogicalPlan::TableScan { .. }
             | LogicalPlan::EmptyRelation { .. }
             | LogicalPlan::Values { .. }
-            | LogicalPlan::DescribeTable(_) => vec![],
+            | LogicalPlan::DescribeTable(_)
+            | LogicalPlan::DelimGet(_) => vec![],
         }
     }
 
@@ -540,6 +689,7 @@ impl LogicalPlan {
             | LogicalPlan::Limit(Limit { input, .. })
             | LogicalPlan::Repartition(Repartition { input, .. })
             | LogicalPlan::Window(Window { input, .. }) => input.head_output_expr(),
+            LogicalPlan::DependentJoin(..) => todo!(),
             LogicalPlan::Join(Join {
                 left,
                 right,
@@ -592,6 +742,7 @@ impl LogicalPlan {
             | LogicalPlan::Ddl(_)
             | LogicalPlan::DescribeTable(_)
             | LogicalPlan::Unnest(_) => Ok(None),
+            LogicalPlan::DelimGet(_) => todo!(),
         }
     }
 
@@ -649,6 +800,7 @@ impl LogicalPlan {
             }) => Aggregate::try_new(input, group_expr, aggr_expr)
                 .map(LogicalPlan::Aggregate),
             LogicalPlan::Sort(_) => Ok(self),
+            LogicalPlan::DependentJoin(_) => todo!(),
             LogicalPlan::Join(Join {
                 left,
                 right,
@@ -658,6 +810,7 @@ impl LogicalPlan {
                 on,
                 schema: _,
                 null_equality,
+                join_kind,
             }) => {
                 let schema =
                     build_join_schema(left.schema(), right.schema(), &join_type)?;
@@ -679,6 +832,7 @@ impl LogicalPlan {
                     filter,
                     schema: DFSchemaRef::new(schema),
                     null_equality,
+                    join_kind,
                 }))
             }
             LogicalPlan::Subquery(_) => Ok(self),
@@ -748,6 +902,7 @@ impl LogicalPlan {
                 // Update schema with unnested column type.
                 unnest_with_options(Arc::unwrap_or_clone(input), exec_columns, options)
             }
+            LogicalPlan::DelimGet(_) => todo!(),
         }
     }
 
@@ -897,6 +1052,7 @@ impl LogicalPlan {
                 join_constraint,
                 on,
                 null_equality,
+                join_kind,
                 ..
             }) => {
                 let (left, right) = self.only_two_inputs(inputs)?;
@@ -936,6 +1092,7 @@ impl LogicalPlan {
                     filter: filter_expr,
                     schema: DFSchemaRef::new(schema),
                     null_equality: *null_equality,
+                    join_kind: *join_kind,
                 }))
             }
             LogicalPlan::Subquery(Subquery {
@@ -1140,6 +1297,8 @@ impl LogicalPlan {
                     unnest_with_options(input, columns.clone(), options.clone())?;
                 Ok(new_plan)
             }
+            LogicalPlan::DependentJoin(_) => todo!(),
+            LogicalPlan::DelimGet(_) => todo!(),
         }
     }
 
@@ -1292,6 +1451,7 @@ impl LogicalPlan {
     /// If `Some(n)` then the plan can return at most `n` rows but may return fewer.
     pub fn max_rows(self: &LogicalPlan) -> Option<usize> {
         match self {
+            LogicalPlan::DependentJoin(DependentJoin { left, .. }) => left.max_rows(),
             LogicalPlan::Projection(Projection { input, .. }) => input.max_rows(),
             LogicalPlan::Filter(filter) => {
                 if filter.is_scalar() {
@@ -1375,6 +1535,7 @@ impl LogicalPlan {
             | LogicalPlan::DescribeTable(_)
             | LogicalPlan::Statement(_)
             | LogicalPlan::Extension(_) => None,
+            LogicalPlan::DelimGet(_) => todo!(),
         }
     }
 
@@ -1818,6 +1979,16 @@ impl LogicalPlan {
 
                         Ok(())
                     }
+                    LogicalPlan::DelimGet(DelimGet{columns,..}) => {
+                        write!(f, "DelimGet:")?; // TODO
+                        for (i, expr_item) in columns.iter().enumerate() {
+                            if i > 0 {
+                                write!(f, ",")?;
+                            }
+                            write!(f, " {expr_item}")?;
+                        }
+                        Ok(())
+                    }
                     LogicalPlan::Projection(Projection { ref expr, .. }) => {
                         write!(f, "Projection:")?;
                         for (i, expr_item) in expr.iter().enumerate() {
@@ -1886,11 +2057,16 @@ impl LogicalPlan {
 
                         Ok(())
                     }
+
+                    LogicalPlan::DependentJoin(dependent_join) => {
+                        Display::fmt(dependent_join, f)
+                    },
                     LogicalPlan::Join(Join {
                         on: ref keys,
                         filter,
                         join_constraint,
                         join_type,
+                        join_kind,
                         ..
                     }) => {
                         let join_expr: Vec<String> =
@@ -1904,12 +2080,18 @@ impl LogicalPlan {
                         } else {
                             join_type.to_string()
                         };
+                        let join_kind = if matches!(join_kind, JoinKind::ComparisonJoin) {
+                            "ComparisonJoin"
+                        } else {
+                            "DelimJoin"
+                        };
                         match join_constraint {
                             JoinConstraint::On => {
                                 write!(
                                     f,
-                                    "{} Join: {}{}",
+                                    "{} Join({}): {}{}",
                                     join_type,
+                                    join_kind,
                                     join_expr.join(", "),
                                     filter_expr
                                 )
@@ -3691,6 +3873,12 @@ pub struct Sort {
     pub fetch: Option<usize>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Hash)]
+pub enum JoinKind {
+    ComparisonJoin,
+    DelimJoin,
+}
+
 /// Join two logical plans on one or more join columns
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Join {
@@ -3710,6 +3898,9 @@ pub struct Join {
     pub schema: DFSchemaRef,
     /// Defines the null equality for the join.
     pub null_equality: NullEquality,
+    /// Join generated by decorrelation is DelimJoin kind.
+    // TODO: maybe it's better to add a new join logical plan? but i't almost the same.
+    pub join_kind: JoinKind,
 }
 
 impl Join {
@@ -3751,6 +3942,7 @@ impl Join {
             join_constraint,
             schema: Arc::new(join_schema),
             null_equality,
+            join_kind: JoinKind::ComparisonJoin,
         })
     }
 
@@ -3784,6 +3976,7 @@ impl Join {
             join_constraint: original_join.join_constraint,
             schema: Arc::new(join_schema),
             null_equality: original_join.null_equality,
+            join_kind: JoinKind::ComparisonJoin,
         })
     }
 }
