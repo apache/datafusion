@@ -90,6 +90,7 @@ fn csv_exec_sorted(
 /// `$EXPECTED_OPTIMIZED_PLAN_LINES`: optimized plan
 /// `$PLAN`: the plan to optimized
 /// `REPARTITION_SORTS`: Flag to set `config.options.optimizer.repartition_sorts` option.
+///
 macro_rules! assert_optimized {
     ($EXPECTED_PLAN_LINES: expr, $EXPECTED_OPTIMIZED_PLAN_LINES: expr, $PLAN: expr, $REPARTITION_SORTS: expr) => {
         let mut config = ConfigOptions::new();
