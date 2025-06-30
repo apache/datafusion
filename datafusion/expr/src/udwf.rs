@@ -313,6 +313,14 @@ pub trait WindowUDFImpl: Debug + Send + Sync {
     /// Returns this function's name
     fn name(&self) -> &str;
 
+    /// Returns any aliases (alternate names) for this function.
+    ///
+    /// Note: `aliases` should only include names other than [`Self::name`].
+    /// Defaults to `[]` (no aliases)
+    fn aliases(&self) -> &[String] {
+        &[]
+    }
+
     /// Returns the function's [`Signature`] for information about what input
     /// types are accepted and the function's Volatility.
     fn signature(&self) -> &Signature;
@@ -327,14 +335,6 @@ pub trait WindowUDFImpl: Debug + Send + Sync {
         &self,
         partition_evaluator_args: PartitionEvaluatorArgs,
     ) -> Result<Box<dyn PartitionEvaluator>>;
-
-    /// Returns any aliases (alternate names) for this function.
-    ///
-    /// Note: `aliases` should only include names other than [`Self::name`].
-    /// Defaults to `[]` (no aliases)
-    fn aliases(&self) -> &[String] {
-        &[]
-    }
 
     /// Optionally apply per-UDWF simplification / rewrite rules.
     ///
