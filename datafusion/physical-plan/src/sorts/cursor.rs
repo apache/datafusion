@@ -288,6 +288,64 @@ impl CursorArray for StringViewArray {
     }
 }
 
+/// Todo use arrow-rs side api after: https://github.com/apache/arrow-rs/pull/7748 released
+/// Builds a 128-bit composite key for an inline value:
+///
+/// - High 96 bits: the inline data in big-endian byte order (for correct lexicographical sorting).
+/// - Low  32 bits: the length in big-endian byte order, acting as a tiebreaker so shorter strings
+///   (or those with fewer meaningful bytes) always numerically sort before longer ones.
+///
+/// This function extracts the length and the 12-byte inline string data from the raw
+/// little-endian `u128` representation, converts them to big-endian ordering, and packs them
+/// into a single `u128` value suitable for fast, branchless comparisons.
+///
+/// ### Why include length?
+///
+/// A pure 96-bit content comparison can’t distinguish between two values whose inline bytes
+/// compare equal—either because one is a true prefix of the other or because zero-padding
+/// hides extra bytes. By tucking the 32-bit length into the lower bits, a single `u128` compare
+/// handles both content and length in one go.
+///
+/// Example: comparing "bar" (3 bytes) vs "bar\0" (4 bytes)
+///
+/// | String     | Bytes 0–4 (length LE) | Bytes 4–16 (data + padding)    |
+/// |------------|-----------------------|---------------------------------|
+/// | `"bar"`   | `03 00 00 00`         | `62 61 72` + 9 × `00`           |
+/// | `"bar\0"`| `04 00 00 00`         | `62 61 72 00` + 8 × `00`        |
+///
+/// Both inline parts become `62 61 72 00…00`, so they tie on content. The length field
+/// then differentiates:
+///
+/// ```text
+/// key("bar")   = 0x0000000000000000000062617200000003
+/// key("bar\0") = 0x0000000000000000000062617200000004
+/// ⇒ key("bar") < key("bar\0")
+/// ```
+#[inline(always)]
+pub fn inline_key_fast(raw: u128) -> u128 {
+    // Convert the raw u128 (little-endian) into bytes for manipulation
+    let raw_bytes = raw.to_le_bytes();
+
+    // Extract the length (first 4 bytes), convert to big-endian u32, and promote to u128
+    let len_le = &raw_bytes[0..4];
+    let len_be = u32::from_le_bytes(len_le.try_into().unwrap()).to_be() as u128;
+
+    // Extract the inline string bytes (next 12 bytes), place them into the lower 12 bytes of a 16-byte array,
+    // padding the upper 4 bytes with zero to form a little-endian u128 value
+    let mut inline_bytes = [0u8; 16];
+    inline_bytes[4..16].copy_from_slice(&raw_bytes[4..16]);
+
+    // Convert to big-endian to ensure correct lexical ordering
+    let inline_u128 = u128::from_le_bytes(inline_bytes).to_be();
+
+    // Shift right by 32 bits to discard the zero padding (upper 4 bytes),
+    // so that the inline string occupies the high 96 bits
+    let inline_part = inline_u128 >> 32;
+
+    // Combine the inline string part (high 96 bits) and length (low 32 bits) into the final key
+    (inline_part << 32) | len_be
+}
+
 impl CursorValues for StringViewArray {
     fn len(&self) -> usize {
         self.views().len()
@@ -311,6 +369,10 @@ impl CursorValues for StringViewArray {
             return false;
         }
 
+        if l_len == 0 && r_len == 0 {
+            return true; // Both are empty strings, so they are equal
+        }
+
         unsafe { GenericByteViewArray::compare_unchecked(l, l_idx, r, r_idx).is_eq() }
     }
 
@@ -326,10 +388,14 @@ impl CursorValues for StringViewArray {
         }
 
         let l_len = *l_view as u32;
-
         let r_len = *r_view as u32;
+
         if l_len != r_len {
             return false;
+        }
+
+        if l_len == 0 && r_len == 0 {
+            return true; // Both are empty strings, so they are equal
         }
 
         unsafe {
@@ -345,11 +411,19 @@ impl CursorValues for StringViewArray {
         if l.data_buffers().is_empty() && r.data_buffers().is_empty() {
             let l_view = unsafe { l.views().get_unchecked(l_idx) };
             let r_view = unsafe { r.views().get_unchecked(r_idx) };
-            let l_len = *l_view as u32;
-            let r_len = *r_view as u32;
-            let l_data = unsafe { StringViewArray::inline_value(l_view, l_len as usize) };
-            let r_data = unsafe { StringViewArray::inline_value(r_view, r_len as usize) };
-            return l_data.cmp(r_data);
+            return inline_key_fast(*l_view).cmp(&inline_key_fast(*r_view));
+        }
+
+        let l_view = unsafe { l.views().get_unchecked(l_idx) };
+        let r_view = unsafe { r.views().get_unchecked(r_idx) };
+        let l_len = *l_view as u32;
+        let r_len = *r_view as u32;
+        if l_len == 0 && r_len == 0 {
+            return Ordering::Equal; // Both are empty strings, so they are equal
+        } else if l_len == 0 {
+            return Ordering::Less; // Empty string is less than any non-empty string
+        } else if r_len == 0 {
+            return Ordering::Greater; // Non-empty string is greater than empty string
         }
 
         unsafe { GenericByteViewArray::compare_unchecked(l, l_idx, r, r_idx) }
