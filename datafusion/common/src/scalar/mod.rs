@@ -1849,10 +1849,6 @@ impl ScalarValue {
     /// Returns an error if the iterator is empty or if the
     /// [`ScalarValue`]s are not all the same type
     ///
-    /// # Panics
-    ///
-    /// Panics if `self` is a dictionary with invalid key type
-    ///
     /// # Example
     /// ```
     /// use datafusion_common::ScalarValue;
