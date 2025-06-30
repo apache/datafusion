@@ -128,7 +128,10 @@ fn bench_spill_io(c: &mut Criterion) {
 
 // Generate `num_batches` RecordBatches mimicking TPC-H Q2's partial aggregate result:
 // GROUP BY ps_partkey -> MIN(ps_supplycost)
-fn create_q2_like_batches(num_batches: usize) -> (Arc<Schema>, Vec<RecordBatch>) {
+fn create_q2_like_batches(
+    num_batches: usize,
+    num_rows: usize,
+) -> (Arc<Schema>, Vec<RecordBatch>) {
     // use fixed seed
     let seed = 2;
     let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
@@ -147,7 +150,7 @@ fn create_q2_like_batches(num_batches: usize) -> (Arc<Schema>, Vec<RecordBatch>)
             .with_precision_and_scale(15, 2)
             .unwrap();
 
-        for _ in 0..8192 {
+        for _ in 0..num_rows {
             // Occasionally skip a few partkey values to simulate sparsity
             let jump = if rng.random_bool(0.05) {
                 rng.random_range(2..10)
@@ -179,7 +182,10 @@ fn create_q2_like_batches(num_batches: usize) -> (Arc<Schema>, Vec<RecordBatch>)
 
 /// Generate `num_batches` RecordBatches mimicking TPC-H Q16's partial aggregate result:
 /// GROUP BY (p_brand, p_type, p_size) -> COUNT(DISTINCT ps_suppkey)
-pub fn create_q16_like_batches(num_batches: usize) -> (Arc<Schema>, Vec<RecordBatch>) {
+pub fn create_q16_like_batches(
+    num_batches: usize,
+    num_rows: usize,
+) -> (Arc<Schema>, Vec<RecordBatch>) {
     let seed = 16;
     let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
     let mut batches = Vec::with_capacity(num_batches);
@@ -211,7 +217,7 @@ pub fn create_q16_like_batches(num_batches: usize) -> (Arc<Schema>, Vec<RecordBa
         let mut size_builder = Int32Builder::new();
         let mut count_builder = Int64Builder::new();
 
-        for _ in 0..8192 {
+        for _ in 0..num_rows {
             let brand = brands[rng.random_range(0..brands.len())];
             let ptype = types[rng.random_range(0..types.len())];
             let size = sizes[rng.random_range(0..sizes.len())];
@@ -242,7 +248,10 @@ pub fn create_q16_like_batches(num_batches: usize) -> (Arc<Schema>, Vec<RecordBa
 
 // Generate `num_batches` RecordBatches mimicking TPC-H Q20's partial aggregate result:
 // GROUP BY (l_partkey, l_suppkey) -> SUM(l_quantity)
-fn create_q20_like_batches(num_batches: usize) -> (Arc<Schema>, Vec<RecordBatch>) {
+fn create_q20_like_batches(
+    num_batches: usize,
+    num_rows: usize,
+) -> (Arc<Schema>, Vec<RecordBatch>) {
     let seed = 20;
     let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
     let mut batches = Vec::with_capacity(num_batches);
@@ -262,7 +271,7 @@ fn create_q20_like_batches(num_batches: usize) -> (Arc<Schema>, Vec<RecordBatch>
             .with_precision_and_scale(25, 2)
             .unwrap();
 
-        for _ in 0..8192 {
+        for _ in 0..num_rows {
             // Occasionally skip a few partkey values to simulate sparsity
             let partkey_jump = if rng.random_bool(0.03) {
                 rng.random_range(2..6)
@@ -297,7 +306,10 @@ fn create_q20_like_batches(num_batches: usize) -> (Arc<Schema>, Vec<RecordBatch>
 
 /// Genereate `num_batches` wide RecordBatches resembling sort-tpch Q10 for benchmarking.
 /// This includes multiple numeric, date, and Utf8View columns (15 total).
-pub fn create_wide_batches(num_batches: usize) -> (Arc<Schema>, Vec<RecordBatch>) {
+pub fn create_wide_batches(
+    num_batches: usize,
+    num_rows: usize,
+) -> (Arc<Schema>, Vec<RecordBatch>) {
     let seed = 10;
     let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
     let mut batches = Vec::with_capacity(num_batches);
@@ -350,8 +362,8 @@ pub fn create_wide_batches(num_batches: usize) -> (Arc<Schema>, Vec<RecordBatch>
         let instructs = ["DELIVER IN PERSON", "COLLECT COD", "NONE"];
         let modes = ["TRUCK", "MAIL", "SHIP", "RAIL", "AIR"];
 
-        for i in 0..8192 {
-            linenum.append_value(i % 7);
+        for i in 0..num_rows {
+            linenum.append_value((i % 7) as i32);
             suppkey.append_value(rng.random_range(0..100_000));
             orderkey.append_value(1_000_000 + i as i64);
             partkey.append_value(rng.random_range(0..200_000));
@@ -365,9 +377,9 @@ pub fn create_wide_batches(num_batches: usize) -> (Arc<Schema>, Vec<RecordBatch>
             linestatus.append_value(statuses[rng.random_range(0..statuses.len())]);
 
             let base_date = 10_000;
-            shipdate.append_value(base_date + (i % 1000));
-            commitdate.append_value(base_date + (i % 1000) + 1);
-            receiptdate.append_value(base_date + (i % 1000) + 2);
+            shipdate.append_value(base_date + (i % 1000) as i32);
+            commitdate.append_value(base_date + (i % 1000) as i32 + 1);
+            receiptdate.append_value(base_date + (i % 1000) as i32 + 2);
 
             shipinstruct.append_value(instructs[rng.random_range(0..instructs.len())]);
             shipmode.append_value(modes[rng.random_range(0..modes.len())]);
@@ -403,7 +415,12 @@ pub fn create_wide_batches(num_batches: usize) -> (Arc<Schema>, Vec<RecordBatch>
 // using realistic input data inspired by TPC-H aggregate spill scenarios.
 //
 // This function prepares synthetic RecordBatches that mimic the schema and distribution
-// of intermediate aggregate results from representative TPC-H queries (Q2, Q16, Q20) and sort-tpch Q10
+// of intermediate aggregate results from representative TPC-H queries (Q2, Q16, Q20) and sort-tpch Q10.
+// The schemas of these batches are:
+//      Q2 [Int64, Decimal128]
+//      Q16 [Utf8, Utf8, Int32, Int64]
+//      Q20 [Int64, Int64, Decimal128]
+//      sort-tpch Q10 (wide batch) [Int32, Int64 * 3, Decimal128 * 4, Date * 3, Utf8 * 4]
 // For each dataset:
 // - It evaluates spill performance under different compression codecs (e.g., Uncompressed, Zstd, LZ4).
 // - It measures end-to-end spill write + read performance using Criterion.
@@ -420,11 +437,12 @@ fn bench_spill_compression(c: &mut Criterion) {
         SpillCompression::Lz4Frame,
     ];
 
-    // Modify this value to change data volume. Note that each batch contains 8192 rows.
+    // Modify these values to change data volume. Note that each batch contains `num_rows` rows.
     let num_batches = 50;
+    let num_rows = 8192;
 
     // Q2 [Int64, Decimal128]
-    let (schema, batches) = create_q2_like_batches(50);
+    let (schema, batches) = create_q2_like_batches(num_batches, num_rows);
     benchmark_spill_batches_for_all_codec(
         &mut group,
         "q2",
@@ -435,7 +453,7 @@ fn bench_spill_compression(c: &mut Criterion) {
         schema,
     );
     // Q16 [Utf8, Utf8, Int32, Int64]
-    let (schema, batches) = create_q16_like_batches(50);
+    let (schema, batches) = create_q16_like_batches(num_batches, num_rows);
     benchmark_spill_batches_for_all_codec(
         &mut group,
         "q16",
@@ -446,7 +464,7 @@ fn bench_spill_compression(c: &mut Criterion) {
         schema,
     );
     // Q20 [Int64, Int64, Decimal128]
-    let (schema, batches) = create_q20_like_batches(50);
+    let (schema, batches) = create_q20_like_batches(num_batches, num_rows);
     benchmark_spill_batches_for_all_codec(
         &mut group,
         "q20",
@@ -456,8 +474,8 @@ fn bench_spill_compression(c: &mut Criterion) {
         env.clone(),
         schema,
     );
-    // wide [Int32, Int64 * 3, Decimal128 * 4, Date * 3, Utf8 * 4]
-    let (schema, batches) = create_wide_batches(num_batches);
+    // sort-tpch Q10 (wide batch) [Int32, Int64 * 3, Decimal128 * 4, Date * 3, Utf8 * 4]
+    let (schema, batches) = create_wide_batches(num_batches, num_rows);
     benchmark_spill_batches_for_all_codec(
         &mut group,
         "wide",
