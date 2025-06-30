@@ -1175,7 +1175,7 @@ impl Exists {
 
 /// User Defined Aggregate Function
 ///
-/// See [`udaf::AggregateUDF`] for more information.
+/// See [`crate::udaf::AggregateUDF`] for more information.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct AggregateUDF {
     /// The function
