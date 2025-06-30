@@ -1442,7 +1442,7 @@ mod tests {
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::memory_pool::FairSpillPool;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
-    use datafusion_functions_aggregate::array_agg::array_agg_udaf;
+    use datafusion_expr::test::function_stub::max_udaf;
     use datafusion_functions_aggregate::average::avg_udaf;
     use datafusion_functions_aggregate::count::count_udaf;
     use datafusion_functions_aggregate::first_last::{first_value_udaf, last_value_udaf};
@@ -2428,13 +2428,16 @@ mod tests {
         let mut aggr_exprs = order_by_exprs
             .into_iter()
             .map(|order_by_expr| {
-                AggregateExprBuilder::new(array_agg_udaf(), vec![Arc::clone(col_a)])
-                    .alias("a")
-                    .order_by(order_by_expr)
-                    .schema(Arc::clone(&test_schema))
-                    .build()
-                    .map(Arc::new)
-                    .unwrap()
+                AggregateExprBuilder::new(
+                    max_udaf(), // any UDAF not using Beneficial order sensitivity
+                    vec![Arc::clone(col_a)],
+                )
+                .alias("a")
+                .order_by(order_by_expr)
+                .schema(Arc::clone(&test_schema))
+                .build()
+                .map(Arc::new)
+                .unwrap()
             })
             .collect::<Vec<_>>();
         let group_by = PhysicalGroupBy::new_single(vec![]);
