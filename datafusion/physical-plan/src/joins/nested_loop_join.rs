@@ -282,6 +282,7 @@ impl NestedLoopJoinExec {
                 | JoinType::LeftAnti
                 | JoinType::LeftMark
                 | JoinType::Full => EmissionType::Both,
+                JoinType::LeftSingle => unimplemented!()
             }
         } else {
             right.pipeline_behavior()

@@ -720,7 +720,8 @@ fn split_join_requirements(
         | JoinType::Right
         | JoinType::Full
         | JoinType::LeftMark
-        | JoinType::RightMark => {
+        | JoinType::RightMark
+        | JoinType::LeftSingle => {
             // Decrease right side indices by `left_len` so that they point to valid
             // positions within the right child:
             indices.split_off(left_len)

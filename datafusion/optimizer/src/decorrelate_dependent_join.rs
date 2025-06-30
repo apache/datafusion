@@ -316,7 +316,7 @@ impl DependentJoinDecorrelator {
                     // That works similar to left outer join
                     // But having extra check that only for each entry on the LHS
                     // only at most 1 parter on the RHS matches
-                    join_type = JoinType::Left;
+                    join_type = JoinType::LeftSingle;
 
                     // The reason we does not make this as a condition inside the delim join
                     // is because the evaluation of scalar_subquery expr may be needed

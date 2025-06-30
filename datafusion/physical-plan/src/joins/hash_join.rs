@@ -562,7 +562,8 @@ impl HashJoinExec {
                 JoinType::Left
                 | JoinType::LeftAnti
                 | JoinType::LeftMark
-                | JoinType::Full => EmissionType::Both,
+                | JoinType::Full
+                | JoinType::LeftSingle => EmissionType::Both,
             }
         } else {
             right.pipeline_behavior()

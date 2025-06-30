@@ -72,6 +72,8 @@ pub enum JoinType {
     /// Same logic as the LeftMark Join above, however it returns a record for each record from the
     /// right input.
     RightMark,
+
+    LeftSingle,
 }
 
 impl JoinType {
@@ -94,6 +96,7 @@ impl JoinType {
             JoinType::RightAnti => JoinType::LeftAnti,
             JoinType::LeftMark => JoinType::RightMark,
             JoinType::RightMark => JoinType::LeftMark,
+            JoinType::LeftSingle => unreachable!(), // TODO: add right single support
         }
     }
 
@@ -126,6 +129,7 @@ impl Display for JoinType {
             JoinType::RightAnti => "RightAnti",
             JoinType::LeftMark => "LeftMark",
             JoinType::RightMark => "RightMark",
+            JoinType::LeftSingle => "LeftSingle",
         };
         write!(f, "{join_type}")
     }
@@ -147,6 +151,7 @@ impl FromStr for JoinType {
             "RIGHTANTI" => Ok(JoinType::RightAnti),
             "LEFTMARK" => Ok(JoinType::LeftMark),
             "RIGHTMARK" => Ok(JoinType::RightMark),
+            "LEFtSINGLE" => Ok(JoinType::LeftSingle),
             _ => _not_impl_err!("The join type {s} does not exist or is not implemented"),
         }
     }

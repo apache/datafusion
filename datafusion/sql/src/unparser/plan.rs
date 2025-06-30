@@ -779,7 +779,8 @@ impl Unparser<'_> {
                     JoinType::Inner
                     | JoinType::Left
                     | JoinType::Right
-                    | JoinType::Full => {
+                    | JoinType::Full
+                    | JoinType::LeftSingle => {
                         let Ok(Some(relation)) = right_relation.build() else {
                             return internal_err!("Failed to build right relation");
                         };
@@ -1271,8 +1272,8 @@ impl Unparser<'_> {
             JoinType::LeftSemi => ast::JoinOperator::LeftSemi(constraint),
             JoinType::RightAnti => ast::JoinOperator::RightAnti(constraint),
             JoinType::RightSemi => ast::JoinOperator::RightSemi(constraint),
-            JoinType::LeftMark | JoinType::RightMark => {
-                unimplemented!("Unparsing of Mark join type")
+            JoinType::LeftMark | JoinType::RightMark | JoinType::LeftSingle => {
+                unimplemented!("Unparsing of {} join type", join_type)
             }
         })
     }

@@ -341,7 +341,8 @@ pub fn adjust_input_keys_ordering(
                     | JoinType::LeftSemi
                     | JoinType::LeftAnti
                     | JoinType::Full
-                    | JoinType::LeftMark => vec![],
+                    | JoinType::LeftMark
+                    | JoinType::LeftSingle => vec![],
                 };
             }
             PartitionMode::Auto => {
