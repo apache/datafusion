@@ -107,12 +107,7 @@ impl TryFrom<&TableParquetOptions> for WriterPropertiesBuilder {
                 file_encryption_properties.clone().into(),
             );
         }
-
-        if let Some(file_encryption_properties) = &crypto.file_encryption {
-            builder = builder.with_file_encryption_properties(
-                file_encryption_properties.clone().into(),
-            );
-        }
+        
 
         // check that the arrow schema is present in the kv_metadata, if configured to do so
         if !global.skip_arrow_metadata
