@@ -153,6 +153,10 @@ impl TestOutput {
         self.metric_value("row_groups_pruned_statistics")
     }
 
+    fn files_ranges_pruned_statistics(&self) -> Option<usize> {
+        self.metric_value("files_ranges_pruned_statistics")
+    }
+
     /// The number of row_groups matched by bloom filter or statistics
     fn row_groups_matched(&self) -> Option<usize> {
         self.row_groups_matched_bloom_filter()
@@ -193,6 +197,8 @@ impl ContextWithParquet {
         unit: Unit,
         mut config: SessionConfig,
     ) -> Self {
+        // Use a single partition for deterministic results no matter how many CPUs the host has
+        config = config.with_target_partitions(1);
         let file = match unit {
             Unit::RowGroup(row_per_group) => {
                 config = config.with_parquet_bloom_filter_pruning(true);

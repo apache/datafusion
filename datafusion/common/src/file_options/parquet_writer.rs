@@ -100,8 +100,14 @@ impl TryFrom<&TableParquetOptions> for WriterPropertiesBuilder {
         } = table_parquet_options;
 
         let mut builder = global.into_writer_properties_builder()?;
-        
+
         #[cfg(feature = "parquet_encryption")]
+        if let Some(file_encryption_properties) = &crypto.file_encryption {
+            builder = builder.with_file_encryption_properties(
+                file_encryption_properties.clone().into(),
+            );
+        }
+
         if let Some(file_encryption_properties) = &crypto.file_encryption {
             builder = builder.with_file_encryption_properties(
                 file_encryption_properties.clone().into(),
