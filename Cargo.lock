@@ -2652,6 +2652,7 @@ dependencies = [
  "chrono",
  "datafusion",
  "datafusion-functions-aggregate",
+ "futures",
  "insta",
  "itertools 0.14.0",
  "object_store",
