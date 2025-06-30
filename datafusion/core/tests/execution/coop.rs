@@ -254,6 +254,8 @@ async fn agg_grouped_topk_yields(
 
 #[rstest]
 #[tokio::test]
+// A test that mocks the behavior of `SpillManager::read_spill_as_stream` without file access
+// to verify that a cooperative stream would properly yields in a spill file read scenario
 async fn spill_reader_stream_yield() -> Result<(), Box<dyn Error>> {
     use arrow::compute::concat_batches;
     use datafusion_physical_plan::common::spawn_buffered;
