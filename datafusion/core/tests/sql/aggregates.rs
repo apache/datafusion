@@ -52,7 +52,7 @@ async fn csv_query_array_agg_distinct() -> Result<()> {
 
     // workaround lack of Ord of ScalarValue
     let cmp = |a: &ScalarValue, b: &ScalarValue| {
-        a.partial_cmp(b).expect("Can compare ScalarValues")
+        a.try_cmp(b).expect("Can compare ScalarValues")
     };
     scalars.sort_by(cmp);
     assert_eq!(

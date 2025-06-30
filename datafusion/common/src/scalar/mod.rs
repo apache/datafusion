@@ -32,7 +32,6 @@ use std::mem::{size_of, size_of_val};
 use std::str::FromStr;
 use std::sync::Arc;
 
-use crate::arrow_datafusion_err;
 use crate::cast::{
     as_decimal128_array, as_decimal256_array, as_dictionary_array,
     as_fixed_size_binary_array, as_fixed_size_list_array,
@@ -41,6 +40,7 @@ use crate::error::{DataFusionError, Result, _exec_err, _internal_err, _not_impl_
 use crate::format::DEFAULT_CAST_OPTIONS;
 use crate::hash_utils::create_hashes;
 use crate::utils::SingleRowListArrayBuilder;
+use crate::{_internal_datafusion_err, arrow_datafusion_err};
 use arrow::array::{
     types::{IntervalDayTime, IntervalMonthDayNano},
     *,
@@ -3343,6 +3343,14 @@ impl ScalarValue {
         arr1 == &right
     }
 
+    /// Compare `self` with `other` and return an `Ordering`.
+    /// Returns `Err` if the values cannot be compared, e.g., they have incompatible data types.
+    pub fn try_cmp(&self, other: &Self) -> Result<Ordering> {
+        self.partial_cmp(other).ok_or_else(|| {
+            _internal_datafusion_err!("Uncomparable values: {self:?}, {other:?}")
+        })
+    }
+
     /// Estimate size if bytes including `Self`. For values with internal containers such as `String`
     /// includes the allocated size (`capacity`) rather than the current length (`len`)
     pub fn size(&self) -> usize {
@@ -4759,6 +4767,32 @@ mod tests {
         let expect = timestamp.add(&interval)?;
         assert_eq!(result, expect);
         Ok(())
+    }
+
+    #[test]
+    fn test_try_cmp() {
+        assert_eq!(
+            ScalarValue::try_cmp(
+                &ScalarValue::Int32(Some(1)),
+                &ScalarValue::Int32(Some(2))
+            )
+            .unwrap(),
+            Ordering::Less
+        );
+        assert_eq!(
+            ScalarValue::try_cmp(&ScalarValue::Int32(None), &ScalarValue::Int32(Some(2)))
+                .unwrap(),
+            Ordering::Less
+        );
+        assert_starts_with(
+            ScalarValue::try_cmp(
+                &ScalarValue::Int32(Some(1)),
+                &ScalarValue::Int64(Some(2)),
+            )
+            .unwrap_err()
+            .message(),
+            "Uncomparable values: Int32(1), Int64(2)",
+        );
     }
 
     #[test]
@@ -7668,5 +7702,16 @@ mod tests {
             .unwrap(),
         ];
         assert!(scalars.iter().all(|s| s.is_null()));
+    }
+
+    // `err.to_string()` depends on backtrace being present (may have backtrace appended)
+    // `err.strip_backtrace()` also depends on backtrace being present (may have "This was likely caused by ..." stripped)
+    fn assert_starts_with(actual: impl AsRef<str>, expected_prefix: impl AsRef<str>) {
+        let actual = actual.as_ref();
+        let expected_prefix = expected_prefix.as_ref();
+        assert!(
+            actual.starts_with(expected_prefix),
+            "Expected '{actual}' to start with '{expected_prefix}'"
+        );
     }
 }

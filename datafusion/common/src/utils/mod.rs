@@ -22,7 +22,7 @@ pub mod memory;
 pub mod proxy;
 pub mod string_utils;
 
-use crate::error::{_exec_datafusion_err, _internal_datafusion_err, _internal_err};
+use crate::error::{_exec_datafusion_err, _internal_err};
 use crate::{DataFusionError, Result, ScalarValue};
 use arrow::array::{
     cast::AsArray, Array, ArrayRef, FixedSizeListArray, LargeListArray, ListArray,
@@ -120,14 +120,13 @@ pub fn compare_rows(
         let result = match (lhs.is_null(), rhs.is_null(), sort_options.nulls_first) {
             (true, false, false) | (false, true, true) => Ordering::Greater,
             (true, false, true) | (false, true, false) => Ordering::Less,
-            (false, false, _) => if sort_options.descending {
-                rhs.partial_cmp(lhs)
-            } else {
-                lhs.partial_cmp(rhs)
+            (false, false, _) => {
+                if sort_options.descending {
+                    rhs.try_cmp(lhs)?
+                } else {
+                    lhs.try_cmp(rhs)?
+                }
             }
-            .ok_or_else(|| {
-                _internal_datafusion_err!("Column array shouldn't be empty")
-            })?,
             (true, true, _) => continue,
         };
         if result != Ordering::Equal {
