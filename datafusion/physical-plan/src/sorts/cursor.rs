@@ -288,7 +288,7 @@ impl CursorArray for StringViewArray {
     }
 }
 
-/// Todo use arrow-rs side api after: https://github.com/apache/arrow-rs/pull/7748 released
+/// Todo use arrow-rs side api after: <https://github.com/apache/arrow-rs/pull/7748> released
 /// Builds a 128-bit composite key for an inline value:
 ///
 /// - High 96 bits: the inline data in big-endian byte order (for correct lexicographical sorting).
@@ -412,18 +412,6 @@ impl CursorValues for StringViewArray {
             let l_view = unsafe { l.views().get_unchecked(l_idx) };
             let r_view = unsafe { r.views().get_unchecked(r_idx) };
             return inline_key_fast(*l_view).cmp(&inline_key_fast(*r_view));
-        }
-
-        let l_view = unsafe { l.views().get_unchecked(l_idx) };
-        let r_view = unsafe { r.views().get_unchecked(r_idx) };
-        let l_len = *l_view as u32;
-        let r_len = *r_view as u32;
-        if l_len == 0 && r_len == 0 {
-            return Ordering::Equal; // Both are empty strings, so they are equal
-        } else if l_len == 0 {
-            return Ordering::Less; // Empty string is less than any non-empty string
-        } else if r_len == 0 {
-            return Ordering::Greater; // Non-empty string is greater than empty string
         }
 
         unsafe { GenericByteViewArray::compare_unchecked(l, l_idx, r, r_idx) }
