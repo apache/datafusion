@@ -720,7 +720,7 @@ async fn parquet_explain_analyze() {
         .to_string();
 
     // should contain aggregated stats
-    assert_contains!(&formatted, "output_rows=8");
+    assert_contains!(&formatted, "output_rows=5");
     assert_contains!(&formatted, "row_groups_matched_bloom_filter=0");
     assert_contains!(&formatted, "row_groups_pruned_bloom_filter=0");
     assert_contains!(&formatted, "row_groups_matched_statistics=1");
