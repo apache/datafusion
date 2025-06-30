@@ -86,10 +86,10 @@ fn csv_exec_sorted(
 /// Runs the sort enforcement optimizer and asserts the plan
 /// against the original and expected plans
 ///
+/// `$EXPECTED_PLAN_LINES`: input plan
+/// `$EXPECTED_OPTIMIZED_PLAN_LINES`: optimized plan
 /// `$PLAN`: the plan to optimized
-/// `$REPARTITION_SORTS`: Flag to set `config.options.optimizer.repartition_sorts` option.
-/// `$EXPECTED_PLAN_COMBINED`: The expected combined plan string with the original and optimized plans.
-///
+/// `REPARTITION_SORTS`: Flag to set `config.options.optimizer.repartition_sorts` option.
 macro_rules! assert_optimized {
     ($EXPECTED_PLAN_LINES: expr, $EXPECTED_OPTIMIZED_PLAN_LINES: expr, $PLAN: expr, $REPARTITION_SORTS: expr) => {
         let mut config = ConfigOptions::new();
@@ -139,7 +139,6 @@ macro_rules! assert_optimized {
             check_integrity(pushdown_sorts(sort_pushdown)?)?;
             // TODO: End state payloads will be checked here.
         }
-
 
         let physical_plan = $PLAN;
         let formatted = displayable(physical_plan.as_ref()).indent(true).to_string();
