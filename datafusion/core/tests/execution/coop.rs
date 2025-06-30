@@ -254,8 +254,9 @@ async fn agg_grouped_topk_yields(
 
 #[rstest]
 #[tokio::test]
+// A test that mocks the behavior of `SpillManager::read_spill_as_stream` without file access
+// to verify that a cooperative stream would properly yields in a spill file read scenario
 async fn spill_reader_stream_yield() -> Result<(), Box<dyn Error>> {
-    use arrow::compute::concat_batches;
     use datafusion_physical_plan::common::spawn_buffered;
 
     // A mock stream that always returns `Poll::Ready(Some(...))` immediately
@@ -272,8 +273,9 @@ async fn spill_reader_stream_yield() -> Result<(), Box<dyn Error>> {
 
     let consumer_stream = futures::stream::poll_fn(move |cx| {
         let mut collected = vec![];
-        // To make sure that inner stream is polled multiple times, loop forever if inner (producer) stream returns Ready
-        loop {
+        // To make sure that inner stream is polled multiple times, loop until the buffer is full
+        // Ideally, the stream will yield before the loop ends
+        for _ in 0..buffer_capacity {
             match mock_stream.as_mut().poll_next(cx) {
                 Poll::Ready(Some(Ok(batch))) => {
                     collected.push(batch);
@@ -293,10 +295,7 @@ async fn spill_reader_stream_yield() -> Result<(), Box<dyn Error>> {
         }
 
         // This should be unreachable since the stream is canceled
-        let combined = concat_batches(&mock_stream.schema(), &collected)
-            .expect("Failed to concat batches");
-
-        Poll::Ready(Some(Ok(combined)))
+        unreachable!("Expected the stream to be canceled, but it continued polling");
     });
 
     let consumer_record_batch_stream =
