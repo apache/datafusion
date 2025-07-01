@@ -15,40 +15,83 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Example: embedding and using a custom “distinct values” index in Parquet files
+//! Embedding and using a custom “distinct values” index in Parquet files
 //!
-//! This example shows how to build and leverage a file‑level distinct‑values index
-//! for pruning in DataFusion’s Parquet scans.
+//! This example shows how to build a lightweight, application‑specific index
+//! directly in Parquet metadata to achieve efficient file‑level pruning without
+//! modifying the Parquet format. The Parquet files can still be read by any
+//! standard Parquet reader, which will simply ignore the extra index data.
 //!
 //! Steps:
 //! 1. Compute the distinct values for a target column and serialize them into bytes.
 //! 2. Write each Parquet file with:
 //!    - regular data pages for your column
-//!    - the magic marker `IDX1` and a little‑endian length, to identify our custom index format
-//!    - the serialized distinct‑values bytes
-//!    - footer key/value metadata entries (`distinct_index_offset` and `distinct_index_length`)
+//!    - the serialized distinct values
+//!    - footer key/value metadata entries to locate the index.
 //! 3. Read back each file’s footer metadata to locate and deserialize the index.
 //! 4. Build a `DistinctIndexTable` (a custom `TableProvider`) that scans footers
 //!    into a map of filename → `HashSet<String>` of distinct values.
 //! 5. In `scan()`, prune out any Parquet files whose distinct set doesn’t match the
 //!    `category = 'X'` filter, then only read data from the remaining files.
 //!
-//! This technique embeds a lightweight, application‑specific index directly in Parquet
-//! metadata to achieve efficient file‑level pruning without modifying the Parquet format.
+//! Note this approach is more efficient than adding the entire index to
+//! the metadata itself. By writing the custom index after the data pages,
+//! we only read it if/when needed.
 //!
-//! And it's very efficient, since we don't add any additional info to the metadata, we write the custom index
-//! after the data pages, and we only read it when needed.
+//! This diagram illustrates the final Parquet file layout:
 //!
-//! **Compatibility note: why other Parquet readers simply skip over our extra index blob**
+//! ```text
+//!         ┌──────────────────────┐
+//!         │┌───────────────────┐ │
+//!         ││     DataPage      │ │      Standard Parquet
+//!         │└───────────────────┘ │      Data pages
+//!         │┌───────────────────┐ │
+//!         ││     DataPage      │ │
+//!         │└───────────────────┘ │
+//!         │        ...           │
+//!         │                      │
+//!         │┌───────────────────┐ │
+//!         ││     DataPage      │ │
+//!         │└───────────────────┘ │
+//!         │┏━━━━━━━━━━━━━━━━━━━┓ │
+//!         │┃                   ┃ │        key/value metadata
+//!         │┃   Special Index   ┃◀┼────    that points to the
+//!         │┃                   ┃ │     │  custom index blob
+//!         │┗━━━━━━━━━━━━━━━━━━━┛ │
+//!         │┏───────────────────┓ │
+//!         │┃ Page Index Offset ┃◀┼────    little‑endian u64
+//!         │┗───────────────────┛ │     │  sitting after the custom index
+//!         │╔═══════════════════╗ │     │
+//!         │║                   ║ │
+//!         │║  Parquet Footer   ║ │     │  thrift‑encoded
+//!         │║                   ║ ┼──────  ParquetMetadata
+//!         │║                   ║ │
+//!         │╚═══════════════════╝ │
+//!         └──────────────────────┘
+//!
+//!               Parquet File
+//! ```
+//!
+//! **How can other Parquet readers simply skip over our extra index blob?**
 //!
 //! Any standard Parquet reader will:
-//! 1. Seek to the end of the file and read the last 8 bytes (a 4‑byte little‑endian footer length followed by the `PAR1` magic).
-//! 2. Seek backwards by that length to parse only the Thrift‑encoded footer metadata (including key/value pairs).
 //!
-//! Since our custom index bytes are appended *before* the footer (and we do not alter Parquet’s metadata schema), readers
-//! never scan from the file start or “overflow” into our blob. They will encounter two unknown keys
-//! (`distinct_index_offset` and `distinct_index_length`) in the footer metadata, ignore them (or expose as extra metadata),
-//! and will not attempt to read or deserialize the raw index bytes.
+//! 1. Seek to the end of the file and read the last 8 bytes (a 4‑byte
+//!    little‑endian footer length followed by the `PAR1` magic).
+//!
+//! 2. Seek backwards by that length to parse the Thrift‑encoded footer
+//!    metadata (including key/value pairs).
+//!
+//! 3. Read additional data such as data pages based on the metadata.
+//!
+//! Since our custom index bytes are appended *before* the footer (and we do
+//! not alter Parquet’s metadata schema), readers never scan from the file
+//! start or “overflow” into our blob. They will encounter two unknown keys
+//! (`distinct_index_offset` and `distinct_index_length`) in the footer metadata,
+//! ignore them (or expose as extra metadata), and will not attempt to read
+//! or deserialize the raw index bytes.
+//!
+//!
 
 use arrow::array::{ArrayRef, StringArray};
 use arrow::record_batch::RecordBatch;
@@ -74,46 +117,6 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tempfile::TempDir;
-
-///
-/// Example creating the Parquet file that
-/// contains specialized indexes and a page‑index offset
-///
-/// Note: the page index offset will after the custom index, which
-/// is originally after the data pages.
-///
-/// ```text
-///         ┌──────────────────────┐
-///         │┌───────────────────┐ │
-///         ││     DataPage      │ │      Standard Parquet
-///         │└───────────────────┘ │      Data pages
-///         │┌───────────────────┐ │
-///         ││     DataPage      │ │
-///         │└───────────────────┘ │
-///         │        ...           │
-///         │                      │
-///         │┌───────────────────┐ │
-///         ││     DataPage      │ │
-///         │└───────────────────┘ │
-///         │┏━━━━━━━━━━━━━━━━━━━┓ │
-///         │┃                   ┃ │        key/value metadata
-///         │┃   Special Index   ┃◀┼────    that points to the
-///         │┃                   ┃ │     │  custom index blob
-///         │┗━━━━━━━━━━━━━━━━━━━┛ │
-///         │┏───────────────────┓ │
-///         │┃ Page Index Offset ┃◀┼────    little‑endian u64
-///         │┗───────────────────┛ │     │  sitting after the custom index
-///         │╔═══════════════════╗ │     │
-///         │║                   ║ │
-///         │║  Parquet Footer   ║ │     │  thrift‑encoded
-///         │║                   ║ ┼──────  ParquetMetadata
-///         │║                   ║ │
-///         │╚═══════════════════╝ │
-///         └──────────────────────┘
-///
-///               Parquet File
-/// ```
-/// DistinctIndexTable is a custom TableProvider that reads Parquet files
 
 #[derive(Debug, Clone)]
 struct DistinctIndex {
@@ -176,6 +179,7 @@ impl DistinctIndex {
     }
 }
 
+/// DistinctIndexTable is a custom TableProvider that reads Parquet files
 #[derive(Debug)]
 struct DistinctIndexTable {
     schema: SchemaRef,
