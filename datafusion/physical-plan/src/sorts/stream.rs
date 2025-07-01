@@ -151,7 +151,7 @@ impl RowCursorStream {
 
         let rows = Arc::new(rows);
 
-        self.rows[stream_idx][1] = Some(rows.clone());
+        self.rows[stream_idx][1] = Some(Arc::clone(&rows));
 
         // swap the curent with the previous one, so that the next poll can reuse the Rows from the previous poll
         let [a, b] = &mut self.rows[stream_idx];
