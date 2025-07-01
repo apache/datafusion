@@ -227,6 +227,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 OVER is for window functions, whereas WITHIN GROUP is for ordered set aggregate functions");
         }
 
+        if !order_by.is_empty() && !within_group.is_empty() {
+            return plan_err!("ORDER BY and WITHIN GROUP clauses cannot be used together in the same aggregate function");
+        }
+
         // If function is a window function (it has an OVER clause),
         // it shouldn't have ordering requirement as function argument
         // required ordering should be defined in OVER clause.
