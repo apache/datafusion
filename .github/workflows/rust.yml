@@ -297,9 +297,6 @@ jobs:
         run: cargo test --profile ci -p datafusion-cli  --lib --tests --bins
       - name: Verify Working Directory Clean
         run: git diff --exit-code
-      - name: Minio Output
-        if: ${{ !cancelled() }}
-        run: docker logs minio-container
 
 
   linux-test-example:
