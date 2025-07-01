@@ -17,8 +17,8 @@
 
 pub use crate::display::{DefaultDisplay, DisplayAs, DisplayFormatType, VerboseDisplay};
 use crate::filter_pushdown::{
-    ChildPushdownResult, FilterDescription, FilterPushdownPhase,
-    FilterPushdownPropagation,
+    ChildFilterDescription, ChildPushdownResult, FilterDescription, FilterPushdownPhase,
+    FilterPushdownPropagation, PredicateSupport, PredicateSupports,
 };
 pub use crate::metrics::Metric;
 pub use crate::ordering::InputOrderMode;
@@ -520,10 +520,19 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
         parent_filters: Vec<Arc<dyn PhysicalExpr>>,
         _config: &ConfigOptions,
     ) -> Result<FilterDescription> {
-        Ok(
-            FilterDescription::new_with_child_count(self.children().len())
-                .all_parent_filters_unsupported(parent_filters),
-        )
+        // Default implementation: mark all filters as unsupported for all children
+        let mut desc = FilterDescription::new();
+        for _child in self.children() {
+            let child_filters = parent_filters
+                .iter()
+                .map(|f| PredicateSupport::Unsupported(Arc::clone(f)))
+                .collect();
+            desc = desc.with_child(ChildFilterDescription {
+                parent_filters: PredicateSupports::new(child_filters),
+                self_filters: vec![],
+            });
+        }
+        Ok(desc)
     }
 
     /// Handle the result of a child pushdown.

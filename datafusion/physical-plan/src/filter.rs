@@ -16,7 +16,6 @@
 // under the License.
 
 use std::any::Any;
-use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{ready, Context, Poll};
@@ -28,8 +27,8 @@ use super::{
 use crate::common::can_project;
 use crate::execution_plan::CardinalityEffect;
 use crate::filter_pushdown::{
-    ChildPushdownResult, FilterDescription, FilterPushdownPhase,
-    FilterPushdownPropagation,
+    ChildFilterDescription, ChildPushdownResult, FilterDescription, FilterPushdownPhase,
+    FilterPushdownPropagation, PredicateSupport, PredicateSupports,
 };
 use crate::projection::{
     make_with_child, try_embed_projection, update_expr, EmbeddedProjection,
@@ -46,9 +45,6 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::stats::Precision;
-use datafusion_common::tree_node::{
-    Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
-};
 use datafusion_common::{
     internal_err, plan_err, project_schema, DataFusionError, Result, ScalarValue,
 };
@@ -65,7 +61,6 @@ use datafusion_physical_expr::{
 
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use futures::stream::{Stream, StreamExt};
-use itertools::Itertools;
 use log::trace;
 
 const FILTER_EXEC_DEFAULT_SELECTIVITY: u8 = 20;
@@ -455,56 +450,29 @@ impl ExecutionPlan for FilterExec {
         _config: &ConfigOptions,
     ) -> Result<FilterDescription> {
         if !matches!(phase, FilterPushdownPhase::Pre) {
-            return Ok(FilterDescription::new_with_child_count(1)
-                .all_parent_filters_supported(parent_filters));
-        }
-        let self_filter = split_conjunction(&self.predicate)
-            .into_iter()
-            .cloned()
-            .collect_vec();
-
-        let parent_filters = if let Some(projection_indices) = self.projection.as_ref() {
-            // We need to invert the projection on any referenced columns in the filter
-            // Create a mapping from the output columns to the input columns (the inverse of the projection)
-            let inverse_projection = projection_indices
-                .iter()
-                .enumerate()
-                .map(|(i, &p)| (p, i))
-                .collect::<HashMap<_, _>>();
-            parent_filters
+            // For non-pre phase, filters pass through unchanged
+            let filter_supports = parent_filters
                 .into_iter()
-                .map(|f| {
-                    f.transform_up(|expr| {
-                        let mut res =
-                            if let Some(col) = expr.as_any().downcast_ref::<Column>() {
-                                let index = col.index();
-                                let index_in_input_schema =
-                                    inverse_projection.get(&index).ok_or_else(|| {
-                                        DataFusionError::Internal(format!(
-                                            "Column {index} not found in projection"
-                                        ))
-                                    })?;
-                                Transformed::yes(Arc::new(Column::new(
-                                    col.name(),
-                                    *index_in_input_schema,
-                                )) as _)
-                            } else {
-                                Transformed::no(expr)
-                            };
-                        // Columns can only exist in the leaves, no need to try all nodes
-                        res.tnr = TreeNodeRecursion::Jump;
-                        Ok(res)
-                    })
-                    .data()
-                })
-                .collect::<Result<Vec<_>>>()?
-        } else {
-            parent_filters
-        };
+                .map(PredicateSupport::Supported)
+                .collect();
+            return Ok(FilterDescription::new().with_child(ChildFilterDescription {
+                parent_filters: PredicateSupports::new(filter_supports),
+                self_filters: vec![],
+            }));
+        }
 
-        Ok(FilterDescription::new_with_child_count(1)
-            .all_parent_filters_supported(parent_filters)
-            .with_self_filters_for_children(vec![self_filter]))
+        let child = ChildFilterDescription::from_child(
+            parent_filters,
+            &self.input(),
+        )?
+        .with_self_filters(
+            split_conjunction(&self.predicate)
+                .into_iter()
+                .cloned()
+                .collect(),
+        );
+
+        Ok(FilterDescription::new().with_child(child))
     }
 
     fn handle_child_pushdown_result(
@@ -577,8 +545,15 @@ impl ExecutionPlan for FilterExec {
             };
             Some(Arc::new(new) as _)
         };
+        // Mark all parent filters as supported since we absorbed them
+        let supported_filters = child_pushdown_result
+            .parent_filters
+            .into_iter()
+            .map(|f| PredicateSupport::Supported(f.into_inner()))
+            .collect();
+        
         Ok(FilterPushdownPropagation {
-            filters: child_pushdown_result.parent_filters.make_supported(),
+            filters: PredicateSupports::new(supported_filters),
             updated_node,
         })
     }
