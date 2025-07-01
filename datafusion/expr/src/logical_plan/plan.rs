@@ -3095,6 +3095,47 @@ impl FromStr for ExplainFormat {
     }
 }
 
+/// Options for EXPLAIN
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ExplainOption {
+    /// Include detailed debug info
+    pub verbose: bool,
+    /// Actually execute the plan and report metrics
+    pub analyze: bool,
+    /// Output syntax/format
+    pub format: ExplainFormat,
+}
+
+impl Default for ExplainOption {
+    fn default() -> Self {
+        ExplainOption {
+            verbose: false,
+            analyze: false,
+            format: ExplainFormat::Indent,
+        }
+    }
+}
+
+impl ExplainOption {
+    /// Builder‐style setter for `verbose`
+    pub fn with_verbose(mut self, verbose: bool) -> Self {
+        self.verbose = verbose;
+        self
+    }
+
+    /// Builder‐style setter for `analyze`
+    pub fn with_analyze(mut self, analyze: bool) -> Self {
+        self.analyze = analyze;
+        self
+    }
+
+    /// Builder‐style setter for `format`
+    pub fn with_format(mut self, format: ExplainFormat) -> Self {
+        self.format = format;
+        self
+    }
+}
+
 /// Produces a relation with string representations of
 /// various parts of the plan
 ///
