@@ -3061,11 +3061,6 @@ impl ScalarValue {
     ) -> Result<Self> {
         let scalar_array = match (self, target_type) {
             (
-                ScalarValue::Float64(Some(float_ts)),
-                DataType::Timestamp(TimeUnit::Nanosecond, None),
-            ) => ScalarValue::Int64(Some((float_ts * 1_000_000_000_f64).trunc() as i64))
-                .to_array()?,
-            (
                 ScalarValue::Decimal128(Some(decimal_value), _, scale),
                 DataType::Timestamp(time_unit, None),
             ) => {
