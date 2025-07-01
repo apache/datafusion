@@ -45,4 +45,3 @@
 ## PySpark 3.5.5 Result: {"try_divide(INTERVAL '2' MONTH, 2)": 1, "typeof(try_divide(INTERVAL '2' MONTH, 2))": 'interval year to month', "typeof(INTERVAL '2' MONTH)": 'interval month', 'typeof(2)': 'int'}
 #query
 #SELECT try_divide(INTERVAL '2' MONTH::interval month, 2::int);
-

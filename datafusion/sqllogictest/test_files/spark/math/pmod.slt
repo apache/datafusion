@@ -30,4 +30,3 @@
 ## PySpark 3.5.5 Result: {'pmod(10, 3)': 1, 'typeof(pmod(10, 3))': 'int', 'typeof(10)': 'int', 'typeof(3)': 'int'}
 #query
 #SELECT pmod(10::int, 3::int);
-

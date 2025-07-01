@@ -25,4 +25,3 @@
 ## PySpark 3.5.5 Result: {'current_user()': 'r', 'typeof(current_user())': 'string'}
 #query
 #SELECT user();
-

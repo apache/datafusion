@@ -25,4 +25,3 @@
 ## PySpark 3.5.5 Result: {'negative(1)': -1, 'typeof(negative(1))': 'int', 'typeof(1)': 'int'}
 #query
 #SELECT negative(1::int);
-

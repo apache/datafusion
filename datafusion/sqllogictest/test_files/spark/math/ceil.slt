@@ -40,4 +40,3 @@
 ## PySpark 3.5.5 Result: {'CEIL(5)': 5, 'typeof(CEIL(5))': 'bigint', 'typeof(5)': 'int'}
 #query
 #SELECT ceil(5::int);
-

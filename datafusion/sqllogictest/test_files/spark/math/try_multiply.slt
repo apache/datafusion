@@ -35,4 +35,3 @@
 ## PySpark 3.5.5 Result: {"try_multiply(INTERVAL '2' YEAR, 3)": 72, "typeof(try_multiply(INTERVAL '2' YEAR, 3))": 'interval year to month', "typeof(INTERVAL '2' YEAR)": 'interval year', 'typeof(3)': 'int'}
 #query
 #SELECT try_multiply(INTERVAL '2' YEAR::interval year, 3::int);
-

@@ -25,4 +25,3 @@
 ## PySpark 3.5.5 Result: {'month(2016-07-30)': 7, 'typeof(month(2016-07-30))': 'int', 'typeof(2016-07-30)': 'string'}
 #query
 #SELECT month('2016-07-30'::string);
-

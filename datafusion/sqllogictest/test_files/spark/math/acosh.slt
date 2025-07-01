@@ -30,4 +30,3 @@
 ## PySpark 3.5.5 Result: {'ACOSH(1)': 0.0, 'typeof(ACOSH(1))': 'double', 'typeof(1)': 'int'}
 #query
 #SELECT acosh(1::int);
-

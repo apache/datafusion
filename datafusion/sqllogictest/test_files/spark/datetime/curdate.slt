@@ -25,4 +25,3 @@
 ## PySpark 3.5.5 Result: {'current_date()': datetime.date(2025, 6, 14), 'typeof(current_date())': 'date'}
 #query
 #SELECT curdate();
-

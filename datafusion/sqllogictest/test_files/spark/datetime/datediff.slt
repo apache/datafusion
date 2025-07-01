@@ -30,4 +30,3 @@
 ## PySpark 3.5.5 Result: {'datediff(2009-07-31, 2009-07-30)': 1, 'typeof(datediff(2009-07-31, 2009-07-30))': 'int', 'typeof(2009-07-31)': 'string', 'typeof(2009-07-30)': 'string'}
 #query
 #SELECT datediff('2009-07-31'::string, '2009-07-30'::string);
-
