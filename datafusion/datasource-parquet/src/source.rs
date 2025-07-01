@@ -343,9 +343,7 @@ impl ParquetSource {
     }
 
     /// If true, the predicate will be used during the parquet scan.
-    /// Defaults to false
-    ///
-    /// [`Expr`]: datafusion_expr::Expr
+    /// Defaults to false.
     pub fn with_pushdown_filters(mut self, pushdown_filters: bool) -> Self {
         self.table_parquet_options.global.pushdown_filters = pushdown_filters;
         self
@@ -625,7 +623,13 @@ impl FileSource for ParquetSource {
         let Some(file_schema) = self.file_schema.clone() else {
             return Ok(FilterPushdownPropagation::unsupported(filters));
         };
-        // Can we push down the filters themselves into the scan or only use stats pruning?
+        // Determine if based on configs we should push filters down.
+        // If either the table / scan itself or the config has pushdown enabled,
+        // we will push down the filters.
+        // If both are disabled, we will not push down the filters.
+        // By default they are both disabled.
+        // Regardless of pushdown, we will update the predicate to include the filters
+        // because even if scan pushdown is disabled we can still use the filters for stats pruning.
         let config_pushdown_enabled = config.execution.parquet.pushdown_filters;
         let table_pushdown_enabled = self.pushdown_filters();
         let pushdown_filters = table_pushdown_enabled || config_pushdown_enabled;
@@ -647,6 +651,7 @@ impl FileSource for ParquetSource {
             None => conjunction(allowed_filters.iter().cloned()),
         };
         source.predicate = Some(predicate);
+        source = source.with_pushdown_filters(pushdown_filters);
         let source = Arc::new(source);
         // If pushdown_filters is false we tell our parents that they still have to handle the filters,
         // even if we updated the predicate to include the filters (they will only be used for stats pruning).
