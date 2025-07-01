@@ -27,7 +27,7 @@ use std::task::Poll;
 use super::utils::{
     asymmetric_join_output_partitioning, get_final_indices_from_shared_bitmap,
     need_produce_result_in_final, reorder_output_after_swap, swap_join_projection,
-    BatchSplitter, BatchTransformer, StatefulStreamResult,
+    StatefulStreamResult,
 };
 use crate::common::can_project;
 use crate::execution_plan::{boundedness_from_children, EmissionType};
@@ -541,7 +541,6 @@ impl ExecutionPlan for NestedLoopJoinExec {
             indices_cache,
             right_side_ordered,
             state: NestedLoopJoinStreamState::WaitBuildSide,
-            batch_transformer: BatchSplitter::new(batch_size),
             left_data: None,
             join_result_status: None,
             intermediate_batch_size: batch_size,
@@ -693,7 +692,7 @@ impl NestedLoopJoinStreamState {
 }
 
 /// A stream that issues [RecordBatch]es as they arrive from the right  of the join.
-struct NestedLoopJoinStream<T> {
+struct NestedLoopJoinStream {
     /// Input schema
     schema: Arc<Schema>,
     /// join filter
@@ -716,10 +715,6 @@ struct NestedLoopJoinStream<T> {
     right_side_ordered: bool,
     /// Current state of the stream
     state: NestedLoopJoinStreamState,
-    #[allow(dead_code)]
-    // TODO: remove this field ??
-    /// Transforms the output batch before returning.
-    batch_transformer: T,
     /// Result of the left data future
     left_data: Option<Arc<JoinLeftData>>,
 
@@ -816,7 +811,7 @@ fn build_join_indices(
     }
 }
 
-impl<T: BatchTransformer> NestedLoopJoinStream<T> {
+impl NestedLoopJoinStream {
     fn poll_next_impl(
         &mut self,
         cx: &mut std::task::Context<'_>,
@@ -847,7 +842,7 @@ impl<T: BatchTransformer> NestedLoopJoinStream<T> {
         let (left_indices, right_indices, start) =
             self.join_result_status.as_mut().ok_or_else(|| {
                 datafusion_common::_internal_datafusion_err!(
-                    "should have join_result_status"
+                    "get_next_join_result called without initializing join_result_status"
                 )
             })?;
 
@@ -981,6 +976,9 @@ impl<T: BatchTransformer> NestedLoopJoinStream<T> {
                 self.state = NestedLoopJoinStreamState::ExhaustedProbeSide;
             }
             Some(Ok(right_batch)) => {
+                self.join_metrics.input_batches.add(1);
+                self.join_metrics.input_rows.add(right_batch.num_rows());
+
                 self.state = NestedLoopJoinStreamState::ProcessProbeBatch(right_batch);
             }
             Some(Err(err)) => return Poll::Ready(Err(err)),
@@ -1002,11 +1000,10 @@ impl<T: BatchTransformer> NestedLoopJoinStream<T> {
         let visited_left_side = left_data.bitmap();
         let batch = self.state.try_as_process_probe_batch()?;
 
-        if self.join_result_status.is_none() {
-            self.join_metrics.input_batches.add(1);
-            self.join_metrics.input_rows.add(batch.num_rows());
-            let _timer = self.join_metrics.join_time.timer();
+        let binding = self.join_metrics.join_time.clone();
+        let _timer = binding.timer();
 
+        if self.join_result_status.is_none() {
             let (left_side_indices, right_side_indices) = join_left_and_right_batch(
                 left_data.batch(),
                 batch,
@@ -1020,9 +1017,7 @@ impl<T: BatchTransformer> NestedLoopJoinStream<T> {
             self.join_result_status = Some((left_side_indices, right_side_indices, 0))
         }
 
-        let start = Instant::now();
         let join_result = self.get_next_join_result()?;
-        self.join_metrics.join_time.add_elapsed(start);
 
         match join_result {
             Some(res) => {
@@ -1145,7 +1140,7 @@ fn join_left_and_right_batch(
     Ok((left_side, right_side))
 }
 
-impl<T: BatchTransformer + Unpin + Send> Stream for NestedLoopJoinStream<T> {
+impl Stream for NestedLoopJoinStream {
     type Item = Result<RecordBatch>;
 
     fn poll_next(
@@ -1156,7 +1151,7 @@ impl<T: BatchTransformer + Unpin + Send> Stream for NestedLoopJoinStream<T> {
     }
 }
 
-impl<T: BatchTransformer + Unpin + Send> RecordBatchStream for NestedLoopJoinStream<T> {
+impl RecordBatchStream for NestedLoopJoinStream {
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
     }
@@ -1187,6 +1182,7 @@ pub(crate) mod tests {
     use datafusion_physical_expr::{Partitioning, PhysicalExpr};
     use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 
+    use insta::allow_duplicates;
     use insta::assert_snapshot;
     use rstest::rstest;
 
@@ -1334,15 +1330,18 @@ pub(crate) mod tests {
         Ok((columns, batches))
     }
 
-    fn new_task_ctx() -> Arc<TaskContext> {
+    fn new_task_ctx(batch_size: usize) -> Arc<TaskContext> {
         let base = TaskContext::default();
         // limit max size of intermediate batch used in nlj to 1
-        let cfg = base.session_config().clone().with_batch_size(1);
+        let cfg = base.session_config().clone().with_batch_size(batch_size);
         Arc::new(base.with_session_config(cfg))
     }
+
+    #[rstest]
     #[tokio::test]
-    async fn join_inner_with_filter() -> Result<()> {
-        let task_ctx = new_task_ctx();
+    async fn join_inner_with_filter(#[values(1, 2, 16)] batch_size: usize) -> Result<()> {
+        let task_ctx = new_task_ctx(batch_size);
+        dbg!(&batch_size);
         let left = build_left_table();
         let right = build_right_table();
         let filter = prepare_join_filter();
@@ -1356,20 +1355,21 @@ pub(crate) mod tests {
         .await?;
 
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
-        assert_snapshot!(batches_to_sort_string(&batches), @r#"
+        allow_duplicates!(assert_snapshot!(batches_to_sort_string(&batches), @r#"
             +----+----+----+----+----+----+
             | a1 | b1 | c1 | a2 | b2 | c2 |
             +----+----+----+----+----+----+
             | 5  | 5  | 50 | 2  | 2  | 80 |
             +----+----+----+----+----+----+
-            "#);
+            "#));
 
         Ok(())
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn join_left_with_filter() -> Result<()> {
-        let task_ctx = new_task_ctx();
+    async fn join_left_with_filter(#[values(1, 2, 16)] batch_size: usize) -> Result<()> {
+        let task_ctx = new_task_ctx(batch_size);
         let left = build_left_table();
         let right = build_right_table();
 
@@ -1383,7 +1383,7 @@ pub(crate) mod tests {
         )
         .await?;
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
-        assert_snapshot!(batches_to_sort_string(&batches), @r#"
+        allow_duplicates!(assert_snapshot!(batches_to_sort_string(&batches), @r#"
             +----+----+-----+----+----+----+
             | a1 | b1 | c1  | a2 | b2 | c2 |
             +----+----+-----+----+----+----+
@@ -1391,14 +1391,15 @@ pub(crate) mod tests {
             | 5  | 5  | 50  | 2  | 2  | 80 |
             | 9  | 8  | 90  |    |    |    |
             +----+----+-----+----+----+----+
-            "#);
+            "#));
 
         Ok(())
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn join_right_with_filter() -> Result<()> {
-        let task_ctx = new_task_ctx();
+    async fn join_right_with_filter(#[values(1, 2, 16)] batch_size: usize) -> Result<()> {
+        let task_ctx = new_task_ctx(batch_size);
         let left = build_left_table();
         let right = build_right_table();
 
@@ -1412,7 +1413,7 @@ pub(crate) mod tests {
         )
         .await?;
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
-        assert_snapshot!(batches_to_sort_string(&batches), @r#"
+        allow_duplicates!(assert_snapshot!(batches_to_sort_string(&batches), @r#"
             +----+----+----+----+----+-----+
             | a1 | b1 | c1 | a2 | b2 | c2  |
             +----+----+----+----+----+-----+
@@ -1420,14 +1421,15 @@ pub(crate) mod tests {
             |    |    |    | 12 | 10 | 40  |
             | 5  | 5  | 50 | 2  | 2  | 80  |
             +----+----+----+----+----+-----+
-            "#);
+            "#));
 
         Ok(())
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn join_full_with_filter() -> Result<()> {
-        let task_ctx = new_task_ctx();
+    async fn join_full_with_filter(#[values(1, 2, 16)] batch_size: usize) -> Result<()> {
+        let task_ctx = new_task_ctx(batch_size);
         let left = build_left_table();
         let right = build_right_table();
 
@@ -1441,7 +1443,7 @@ pub(crate) mod tests {
         )
         .await?;
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
-        assert_snapshot!(batches_to_sort_string(&batches), @r#"
+        allow_duplicates!(assert_snapshot!(batches_to_sort_string(&batches), @r#"
             +----+----+-----+----+----+-----+
             | a1 | b1 | c1  | a2 | b2 | c2  |
             +----+----+-----+----+----+-----+
@@ -1451,14 +1453,17 @@ pub(crate) mod tests {
             | 5  | 5  | 50  | 2  | 2  | 80  |
             | 9  | 8  | 90  |    |    |     |
             +----+----+-----+----+----+-----+
-            "#);
+            "#));
 
         Ok(())
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn join_left_semi_with_filter() -> Result<()> {
-        let task_ctx = new_task_ctx();
+    async fn join_left_semi_with_filter(
+        #[values(1, 2, 16)] batch_size: usize,
+    ) -> Result<()> {
+        let task_ctx = new_task_ctx(batch_size);
         let left = build_left_table();
         let right = build_right_table();
 
@@ -1472,20 +1477,23 @@ pub(crate) mod tests {
         )
         .await?;
         assert_eq!(columns, vec!["a1", "b1", "c1"]);
-        assert_snapshot!(batches_to_sort_string(&batches), @r#"
+        allow_duplicates!(assert_snapshot!(batches_to_sort_string(&batches), @r#"
             +----+----+----+
             | a1 | b1 | c1 |
             +----+----+----+
             | 5  | 5  | 50 |
             +----+----+----+
-            "#);
+            "#));
 
         Ok(())
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn join_left_anti_with_filter() -> Result<()> {
-        let task_ctx = new_task_ctx();
+    async fn join_left_anti_with_filter(
+        #[values(1, 2, 16)] batch_size: usize,
+    ) -> Result<()> {
+        let task_ctx = new_task_ctx(batch_size);
         let left = build_left_table();
         let right = build_right_table();
 
@@ -1499,21 +1507,24 @@ pub(crate) mod tests {
         )
         .await?;
         assert_eq!(columns, vec!["a1", "b1", "c1"]);
-        assert_snapshot!(batches_to_sort_string(&batches), @r#"
+        allow_duplicates!(assert_snapshot!(batches_to_sort_string(&batches), @r#"
             +----+----+-----+
             | a1 | b1 | c1  |
             +----+----+-----+
             | 11 | 8  | 110 |
             | 9  | 8  | 90  |
             +----+----+-----+
-            "#);
+            "#));
 
         Ok(())
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn join_right_semi_with_filter() -> Result<()> {
-        let task_ctx = new_task_ctx();
+    async fn join_right_semi_with_filter(
+        #[values(1, 2, 16)] batch_size: usize,
+    ) -> Result<()> {
+        let task_ctx = new_task_ctx(batch_size);
         let left = build_left_table();
         let right = build_right_table();
 
@@ -1527,20 +1538,23 @@ pub(crate) mod tests {
         )
         .await?;
         assert_eq!(columns, vec!["a2", "b2", "c2"]);
-        assert_snapshot!(batches_to_sort_string(&batches), @r#"
+        allow_duplicates!(assert_snapshot!(batches_to_sort_string(&batches), @r#"
             +----+----+----+
             | a2 | b2 | c2 |
             +----+----+----+
             | 2  | 2  | 80 |
             +----+----+----+
-            "#);
+            "#));
 
         Ok(())
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn join_right_anti_with_filter() -> Result<()> {
-        let task_ctx = new_task_ctx();
+    async fn join_right_anti_with_filter(
+        #[values(1, 2, 16)] batch_size: usize,
+    ) -> Result<()> {
+        let task_ctx = new_task_ctx(batch_size);
         let left = build_left_table();
         let right = build_right_table();
 
@@ -1554,21 +1568,24 @@ pub(crate) mod tests {
         )
         .await?;
         assert_eq!(columns, vec!["a2", "b2", "c2"]);
-        assert_snapshot!(batches_to_sort_string(&batches), @r#"
+        allow_duplicates!(assert_snapshot!(batches_to_sort_string(&batches), @r#"
             +----+----+-----+
             | a2 | b2 | c2  |
             +----+----+-----+
             | 10 | 10 | 100 |
             | 12 | 10 | 40  |
             +----+----+-----+
-            "#);
+            "#));
 
         Ok(())
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn join_left_mark_with_filter() -> Result<()> {
-        let task_ctx = new_task_ctx();
+    async fn join_left_mark_with_filter(
+        #[values(1, 2, 16)] batch_size: usize,
+    ) -> Result<()> {
+        let task_ctx = new_task_ctx(batch_size);
         let left = build_left_table();
         let right = build_right_table();
 
@@ -1582,7 +1599,7 @@ pub(crate) mod tests {
         )
         .await?;
         assert_eq!(columns, vec!["a1", "b1", "c1", "mark"]);
-        assert_snapshot!(batches_to_sort_string(&batches), @r#"
+        allow_duplicates!(assert_snapshot!(batches_to_sort_string(&batches), @r#"
             +----+----+-----+-------+
             | a1 | b1 | c1  | mark  |
             +----+----+-----+-------+
@@ -1590,14 +1607,17 @@ pub(crate) mod tests {
             | 5  | 5  | 50  | true  |
             | 9  | 8  | 90  | false |
             +----+----+-----+-------+
-            "#);
+            "#));
 
         Ok(())
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn join_right_mark_with_filter() -> Result<()> {
-        let task_ctx = new_task_ctx();
+    async fn join_right_mark_with_filter(
+        #[values(1, 2, 16)] batch_size: usize,
+    ) -> Result<()> {
+        let task_ctx = new_task_ctx(batch_size);
         let left = build_left_table();
         let right = build_right_table();
 
@@ -1612,7 +1632,7 @@ pub(crate) mod tests {
         .await?;
         assert_eq!(columns, vec!["a2", "b2", "c2", "mark"]);
 
-        assert_snapshot!(batches_to_sort_string(&batches), @r#"
+        allow_duplicates!(assert_snapshot!(batches_to_sort_string(&batches), @r#"
             +----+----+-----+-------+
             | a2 | b2 | c2  | mark  |
             +----+----+-----+-------+
@@ -1620,7 +1640,7 @@ pub(crate) mod tests {
             | 12 | 10 | 40  | false |
             | 2  | 2  | 80  | true  |
             +----+----+-----+-------+
-            "#);
+            "#));
 
         Ok(())
     }
@@ -1752,6 +1772,7 @@ pub(crate) mod tests {
         join_type: JoinType,
         #[values(1, 100, 1000)] left_batch_size: usize,
         #[values(1, 100, 1000)] right_batch_size: usize,
+        #[values(2, 10000)] batch_size: usize,
     ) -> Result<()> {
         let left_columns = generate_columns(3, 1000);
         let left = build_table(
@@ -1801,8 +1822,9 @@ pub(crate) mod tests {
             assert_eq!(right.options, join.options);
         }
 
+        let task_ctx = new_task_ctx(batch_size);
         let batches = nested_loop_join
-            .execute(0, new_task_ctx())?
+            .execute(0, task_ctx)?
             .try_collect::<Vec<_>>()
             .await?;
 
