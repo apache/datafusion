@@ -78,6 +78,8 @@ impl FusedStreams {
 
 /// A [`PartitionedStream`] that wraps a set of [`SendableRecordBatchStream`]
 /// and computes [`RowValues`] based on the provided [`PhysicalSortExpr`]
+/// Note: for optimal performance, keep only the final RowValues in memory
+/// before pulling the next batch. This will allow reuse of allocations.
 #[derive(Debug)]
 pub struct RowCursorStream {
     /// Converter to convert output of physical expressions
@@ -139,7 +141,7 @@ impl RowCursorStream {
 
         // At this point, ownership should be unique
         let mut rows = Arc::try_unwrap(self.rows[stream_idx][1].take().unwrap())
-            .expect("unique ownership of rows");
+            .unwrap_or_else(|_| self.converter.empty_rows(0, 0));
 
         rows.clear();
 
