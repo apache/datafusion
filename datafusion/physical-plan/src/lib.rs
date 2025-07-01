@@ -47,6 +47,7 @@ pub use crate::execution_plan::{
 };
 pub use crate::metrics::Metric;
 pub use crate::ordering::InputOrderMode;
+pub use crate::sample::SampleExec;
 pub use crate::stream::EmptyRecordBatchStream;
 pub use crate::topk::TopK;
 pub use crate::visitor::{accept, visit_execution_plan, ExecutionPlanVisitor};
@@ -80,6 +81,7 @@ pub mod placeholder_row;
 pub mod projection;
 pub mod recursive_query;
 pub mod repartition;
+pub mod sample;
 pub mod sorts;
 pub mod spill;
 pub mod stream;
