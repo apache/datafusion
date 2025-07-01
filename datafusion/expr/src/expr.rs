@@ -1185,7 +1185,7 @@ pub struct AggregateUDF {
     /// Optional filter
     pub filter: Option<Box<Expr>>,
     /// Optional ORDER BY applied prior to aggregating
-    pub order_by: Vec<Sort>,
+    pub order_by: Vec<Expr>,
 }
 
 impl AggregateUDF {
@@ -1194,7 +1194,7 @@ impl AggregateUDF {
         fun: Arc<crate::AggregateUDF>,
         args: Vec<Expr>,
         filter: Option<Box<Expr>>,
-        order_by: Vec<Sort>,
+        order_by: Vec<Expr>,
     ) -> Self {
         Self {
             fun,
