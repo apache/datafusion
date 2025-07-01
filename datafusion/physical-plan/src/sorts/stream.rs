@@ -140,7 +140,7 @@ impl RowCursorStream {
             .map(|expr| expr.evaluate(batch)?.into_array(batch.num_rows()))
             .collect::<Result<Vec<_>>>()?;
 
-        // At this point, ownership should be unique
+        // At this point, ownership should of this Rows should be unique
         let mut rows = Arc::try_unwrap(self.rows[stream_idx][1].take().unwrap())
             .unwrap_or_else(|_| self.converter.empty_rows(0, 0));
 
@@ -153,6 +153,7 @@ impl RowCursorStream {
 
         self.rows[stream_idx][1] = Some(rows.clone());
 
+        // swap the curent with the previous one, so that the next poll can reuse the Rows from the previous poll
         let [a, b] = &mut self.rows[stream_idx];
         std::mem::swap(a, b);
 
