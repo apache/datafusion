@@ -19,7 +19,7 @@ use super::super::conversion::*;
 use super::error::{DFSqlLogicTestError, Result};
 use crate::engines::output::DFColumnType;
 use arrow::array::{Array, AsArray};
-use arrow::datatypes::Fields;
+use arrow::datatypes::{Fields, Schema};
 use arrow::util::display::ArrayFormatter;
 use arrow::{array, array::ArrayRef, datatypes::DataType, record_batch::RecordBatch};
 use datafusion::common::DataFusionError;
@@ -29,43 +29,39 @@ use std::sync::LazyLock;
 
 /// Converts `batches` to a result as expected by sqllogictest.
 pub fn convert_batches(
+    schema: &Schema,
     batches: Vec<RecordBatch>,
     is_spark_path: bool,
 ) -> Result<Vec<Vec<String>>> {
-    if batches.is_empty() {
-        Ok(vec![])
-    } else {
-        let schema = batches[0].schema();
-        let mut rows = vec![];
-        for batch in batches {
-            // Verify schema
-            if !schema.contains(&batch.schema()) {
-                return Err(DFSqlLogicTestError::DataFusion(DataFusionError::Internal(
-                    format!(
-                        "Schema mismatch. Previously had\n{:#?}\n\nGot:\n{:#?}",
-                        &schema,
-                        batch.schema()
-                    ),
-                )));
-            }
-
-            // Convert a single batch to a `Vec<Vec<String>>` for comparison, flatten expanded rows, and normalize each.
-            let new_rows = (0..batch.num_rows())
-                .map(|row| {
-                    batch
-                        .columns()
-                        .iter()
-                        .map(|col| cell_to_string(col, row, is_spark_path))
-                        .collect::<Result<Vec<String>>>()
-                })
-                .collect::<Result<Vec<Vec<String>>>>()?
-                .into_iter()
-                .flat_map(expand_row)
-                .map(normalize_paths);
-            rows.extend(new_rows);
+    let mut rows = vec![];
+    for batch in batches {
+        // Verify schema
+        if !schema.contains(&batch.schema()) {
+            return Err(DFSqlLogicTestError::DataFusion(DataFusionError::Internal(
+                format!(
+                    "Schema mismatch. Previously had\n{:#?}\n\nGot:\n{:#?}",
+                    &schema,
+                    batch.schema()
+                ),
+            )));
         }
-        Ok(rows)
+
+        // Convert a single batch to a `Vec<Vec<String>>` for comparison, flatten expanded rows, and normalize each.
+        let new_rows = (0..batch.num_rows())
+            .map(|row| {
+                batch
+                    .columns()
+                    .iter()
+                    .map(|col| cell_to_string(col, row, is_spark_path))
+                    .collect::<Result<Vec<String>>>()
+            })
+            .collect::<Result<Vec<Vec<String>>>>()?
+            .into_iter()
+            .flat_map(expand_row)
+            .map(normalize_paths);
+        rows.extend(new_rows);
     }
+    Ok(rows)
 }
 
 /// special case rows that have newlines in them (like explain plans)
