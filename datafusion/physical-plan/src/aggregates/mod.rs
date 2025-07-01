@@ -52,6 +52,7 @@ use datafusion_physical_expr_common::sort_expr::{
     LexOrdering, LexRequirement, OrderingRequirements, PhysicalSortRequirement,
 };
 
+use datafusion_expr::utils::AggregateOrderSensitivity;
 use itertools::Itertools;
 
 pub(crate) mod group_values;
@@ -1071,13 +1072,25 @@ fn get_aggregate_expr_req(
     aggr_expr: &AggregateFunctionExpr,
     group_by: &PhysicalGroupBy,
     agg_mode: &AggregateMode,
+    include_soft_requirement: bool,
 ) -> Option<LexOrdering> {
-    // If the aggregation function is ordering requirement is not absolutely
-    // necessary, or the aggregation is performing a "second stage" calculation,
-    // then ignore the ordering requirement.
-    if !aggr_expr.order_sensitivity().hard_requires() || !agg_mode.is_first_stage() {
+    // If the aggregation is performing a "second stage" calculation,
+    // then ignore the ordering requirement. Ordering requirement applies
+    // only to the aggregation input data.
+    if !agg_mode.is_first_stage() {
         return None;
     }
+
+    match aggr_expr.order_sensitivity() {
+        AggregateOrderSensitivity::Insensitive => return None,
+        AggregateOrderSensitivity::HardRequirement => {}
+        AggregateOrderSensitivity::Beneficial => {
+            if !include_soft_requirement {
+                return None;
+            }
+        }
+    }
+
     let mut sort_exprs = aggr_expr.order_bys().to_vec();
     // In non-first stage modes, we accumulate data (using `merge_batch`) from
     // different partitions (i.e. merge partial results). During this merge, we
@@ -1142,60 +1155,73 @@ pub fn get_finer_aggregate_exprs_requirement(
     agg_mode: &AggregateMode,
 ) -> Result<Vec<PhysicalSortRequirement>> {
     let mut requirement = None;
-    for aggr_expr in aggr_exprs.iter_mut() {
-        let Some(aggr_req) = get_aggregate_expr_req(aggr_expr, group_by, agg_mode)
-            .and_then(|o| eq_properties.normalize_sort_exprs(o))
-        else {
-            // There is no aggregate ordering requirement, or it is trivially
-            // satisfied -- we can skip this expression.
-            continue;
-        };
-        // If the common requirement is finer than the current expression's,
-        // we can skip this expression. If the latter is finer than the former,
-        // adopt it if it is satisfied by the equivalence properties. Otherwise,
-        // defer the analysis to the reverse expression.
-        let forward_finer = determine_finer(&requirement, &aggr_req);
-        if let Some(finer) = forward_finer {
-            if !finer {
-                continue;
-            } else if eq_properties.ordering_satisfy(aggr_req.clone())? {
-                requirement = Some(aggr_req);
-                continue;
-            }
-        }
-        if let Some(reverse_aggr_expr) = aggr_expr.reverse_expr() {
-            let Some(rev_aggr_req) =
-                get_aggregate_expr_req(&reverse_aggr_expr, group_by, agg_mode)
-                    .and_then(|o| eq_properties.normalize_sort_exprs(o))
-            else {
-                // The reverse requirement is trivially satisfied -- just reverse
-                // the expression and continue with the next one:
-                *aggr_expr = Arc::new(reverse_aggr_expr);
+
+    for include_soft_requirement in [false, true] {
+        for aggr_expr in aggr_exprs.iter_mut() {
+            let Some(aggr_req) = get_aggregate_expr_req(
+                aggr_expr,
+                group_by,
+                agg_mode,
+                include_soft_requirement,
+            )
+            .and_then(|o| eq_properties.normalize_sort_exprs(o)) else {
+                // There is no aggregate ordering requirement, or it is trivially
+                // satisfied -- we can skip this expression.
                 continue;
             };
-            // If the common requirement is finer than the reverse expression's,
-            // just reverse it and continue the loop with the next aggregate
-            // expression. If the latter is finer than the former, adopt it if
-            // it is satisfied by the equivalence properties. Otherwise, adopt
-            // the forward expression.
-            if let Some(finer) = determine_finer(&requirement, &rev_aggr_req) {
+            // If the common requirement is finer than the current expression's,
+            // we can skip this expression. If the latter is finer than the former,
+            // adopt it if it is satisfied by the equivalence properties. Otherwise,
+            // defer the analysis to the reverse expression.
+            let forward_finer = determine_finer(&requirement, &aggr_req);
+            if let Some(finer) = forward_finer {
                 if !finer {
-                    *aggr_expr = Arc::new(reverse_aggr_expr);
-                } else if eq_properties.ordering_satisfy(rev_aggr_req.clone())? {
-                    *aggr_expr = Arc::new(reverse_aggr_expr);
-                    requirement = Some(rev_aggr_req);
-                } else {
+                    continue;
+                } else if eq_properties.ordering_satisfy(aggr_req.clone())? {
                     requirement = Some(aggr_req);
+                    continue;
                 }
-            } else if forward_finer.is_some() {
-                requirement = Some(aggr_req);
-            } else {
-                // Neither the existing requirement nor the current aggregate
-                // requirement satisfy the other (forward or reverse), this
-                // means they are conflicting.
-                return not_impl_err!(
-                    "Conflicting ordering requirements in aggregate functions is not supported"
-                );
+            }
+            if let Some(reverse_aggr_expr) = aggr_expr.reverse_expr() {
+                let Some(rev_aggr_req) = get_aggregate_expr_req(
+                    &reverse_aggr_expr,
+                    group_by,
+                    agg_mode,
+                    include_soft_requirement,
+                )
+                .and_then(|o| eq_properties.normalize_sort_exprs(o)) else {
+                    // The reverse requirement is trivially satisfied -- just reverse
+                    // the expression and continue with the next one:
+                    *aggr_expr = Arc::new(reverse_aggr_expr);
+                    continue;
+                };
+                // If the common requirement is finer than the reverse expression's,
+                // just reverse it and continue the loop with the next aggregate
+                // expression. If the latter is finer than the former, adopt it if
+                // it is satisfied by the equivalence properties. Otherwise, adopt
+                // the forward expression.
+                if let Some(finer) = determine_finer(&requirement, &rev_aggr_req) {
+                    if !finer {
+                        *aggr_expr = Arc::new(reverse_aggr_expr);
+                    } else if eq_properties.ordering_satisfy(rev_aggr_req.clone())? {
+                        *aggr_expr = Arc::new(reverse_aggr_expr);
+                        requirement = Some(rev_aggr_req);
+                    } else {
+                        requirement = Some(aggr_req);
+                    }
+                } else if forward_finer.is_some() {
+                    requirement = Some(aggr_req);
+                } else {
+                    // Neither the existing requirement nor the current aggregate
+                    // requirement satisfy the other (forward or reverse), this
+                    // means they are conflicting. This is a problem only for hard
+                    // requirements. Unsatisfied soft requirements can be ignored.
+                    if !include_soft_requirement {
+                        return not_impl_err!(
+                            "Conflicting ordering requirements in aggregate functions is not supported"
+                        );
+                    }
+                }
             }
         }
     }

@@ -2019,13 +2019,14 @@ physical_plan
 04)------AggregateExec: mode=FinalPartitioned, gby=[col0@0 as col0, col1@1 as col1, col2@2 as col2], aggr=[last_value(r.col1) ORDER BY [r.col0 ASC NULLS LAST]]
 05)--------CoalesceBatchesExec: target_batch_size=8192
 06)----------RepartitionExec: partitioning=Hash([col0@0, col1@1, col2@2], 4), input_partitions=4
-07)------------AggregateExec: mode=Partial, gby=[col0@0 as col0, col1@1 as col1, col2@2 as col2], aggr=[last_value(r.col1) ORDER BY [r.col0 ASC NULLS LAST]]
-08)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-09)----------------ProjectionExec: expr=[col0@2 as col0, col1@3 as col1, col2@4 as col2, col0@0 as col0, col1@1 as col1]
-10)------------------CoalesceBatchesExec: target_batch_size=8192
-11)--------------------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(col0@0, col0@0)]
-12)----------------------DataSourceExec: partitions=1, partition_sizes=[3]
-13)----------------------DataSourceExec: partitions=1, partition_sizes=[3]
+07)------------AggregateExec: mode=Partial, gby=[col0@0 as col0, col1@1 as col1, col2@2 as col2], aggr=[last_value(r.col1) ORDER BY [r.col0 ASC NULLS LAST]], ordering_mode=PartiallySorted([0])
+08)--------------SortExec: expr=[col0@3 ASC NULLS LAST], preserve_partitioning=[true]
+09)----------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+10)------------------ProjectionExec: expr=[col0@2 as col0, col1@3 as col1, col2@4 as col2, col0@0 as col0, col1@1 as col1]
+11)--------------------CoalesceBatchesExec: target_batch_size=8192
+12)----------------------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(col0@0, col0@0)]
+13)------------------------DataSourceExec: partitions=1, partition_sizes=[3]
+14)------------------------DataSourceExec: partitions=1, partition_sizes=[3]
 
 # Columns in the table are a,b,c,d. Source is DataSourceExec which is ordered by
 # a,b,c column. Column a has cardinality 2, column b has cardinality 4.
@@ -2288,7 +2289,8 @@ logical_plan
 02)--TableScan: annotated_data_infinite2 projection=[a, b, d]
 physical_plan
 01)AggregateExec: mode=Single, gby=[a@0 as a, b@1 as b], aggr=[array_agg(annotated_data_infinite2.d) ORDER BY [annotated_data_infinite2.d ASC NULLS LAST]], ordering_mode=Sorted
-02)--StreamingTableExec: partition_sizes=1, projection=[a, b, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST]
+02)--PartialSortExec: expr=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST, d@2 ASC NULLS LAST], common_prefix_length=[2]
+03)----StreamingTableExec: partition_sizes=1, projection=[a, b, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST]
 
 # as can be seen in the result below d is indeed ordered.
 query II?
@@ -2459,7 +2461,8 @@ logical_plan
 physical_plan
 01)ProjectionExec: expr=[country@0 as country, array_agg(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST]@1 as amounts]
 02)--AggregateExec: mode=Single, gby=[country@0 as country], aggr=[array_agg(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST]]
-03)----DataSourceExec: partitions=1, partition_sizes=[1]
+03)----SortExec: expr=[amount@1 ASC NULLS LAST], preserve_partitioning=[false]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
 
 
 query T?
@@ -2488,7 +2491,8 @@ logical_plan
 physical_plan
 01)ProjectionExec: expr=[country@0 as country, array_agg(s.amount) ORDER BY [s.amount DESC NULLS FIRST]@1 as amounts, sum(s.amount)@2 as sum1]
 02)--AggregateExec: mode=Single, gby=[country@0 as country], aggr=[array_agg(s.amount) ORDER BY [s.amount DESC NULLS FIRST], sum(s.amount)]
-03)----DataSourceExec: partitions=1, partition_sizes=[1]
+03)----SortExec: expr=[amount@1 DESC], preserve_partitioning=[false]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query T?R rowsort
 SELECT s.country, ARRAY_AGG(s.amount ORDER BY s.amount DESC) AS amounts,
@@ -2510,9 +2514,9 @@ SELECT ARRAY_AGG(s.amount ORDER BY s.amount DESC) AS amounts,
   FROM sales_global AS s
   GROUP BY s.country
 ----
-[80.0, 30.0] [30.0, 80.0] [30.0, 80.0]
 [200.0, 50.0] [50.0, 200.0] [50.0, 200.0]
 [100.0, 75.0] [75.0, 100.0] [75.0, 100.0]
+[80.0, 30.0] [30.0, 80.0] [30.0, 80.0]
 
 # test_ordering_sensitive_aggregation4
 # If aggregators can work with bounded memory (Sorted or PartiallySorted mode), we should append requirement to
@@ -2536,7 +2540,7 @@ logical_plan
 physical_plan
 01)ProjectionExec: expr=[country@0 as country, array_agg(s.amount) ORDER BY [s.amount DESC NULLS FIRST]@1 as amounts, sum(s.amount)@2 as sum1]
 02)--AggregateExec: mode=Single, gby=[country@0 as country], aggr=[array_agg(s.amount) ORDER BY [s.amount DESC NULLS FIRST], sum(s.amount)], ordering_mode=Sorted
-03)----SortExec: TopK(fetch=10), expr=[country@0 ASC NULLS LAST], preserve_partitioning=[false]
+03)----SortExec: TopK(fetch=10), expr=[country@0 ASC NULLS LAST, amount@1 DESC], preserve_partitioning=[false]
 04)------DataSourceExec: partitions=1, partition_sizes=[1]
 
 
@@ -2574,7 +2578,7 @@ logical_plan
 physical_plan
 01)ProjectionExec: expr=[country@0 as country, zip_code@1 as zip_code, array_agg(s.amount) ORDER BY [s.amount DESC NULLS FIRST]@2 as amounts, sum(s.amount)@3 as sum1]
 02)--AggregateExec: mode=Single, gby=[country@1 as country, zip_code@0 as zip_code], aggr=[array_agg(s.amount) ORDER BY [s.amount DESC NULLS FIRST], sum(s.amount)], ordering_mode=PartiallySorted([0])
-03)----SortExec: TopK(fetch=10), expr=[country@1 ASC NULLS LAST], preserve_partitioning=[false]
+03)----SortExec: TopK(fetch=10), expr=[country@1 ASC NULLS LAST, amount@2 DESC], preserve_partitioning=[false]
 04)------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query TI?R rowsort
@@ -2647,7 +2651,7 @@ logical_plan
 physical_plan
 01)ProjectionExec: expr=[country@0 as country, array_agg(s.amount) ORDER BY [s.country DESC NULLS FIRST, s.amount DESC NULLS FIRST]@1 as amounts, sum(s.amount)@2 as sum1]
 02)--AggregateExec: mode=Single, gby=[country@0 as country], aggr=[array_agg(s.amount) ORDER BY [s.country DESC NULLS FIRST, s.amount DESC NULLS FIRST], sum(s.amount)], ordering_mode=Sorted
-03)----SortExec: TopK(fetch=10), expr=[country@0 ASC NULLS LAST], preserve_partitioning=[false]
+03)----SortExec: TopK(fetch=10), expr=[country@0 ASC NULLS LAST, amount@1 DESC], preserve_partitioning=[false]
 04)------DataSourceExec: partitions=1, partition_sizes=[1]
 
 
@@ -2741,21 +2745,20 @@ logical_plan
 01)Projection: sales_global.country, array_agg(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST] AS amounts, first_value(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST] AS fv1, last_value(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST] AS fv2
 02)--Aggregate: groupBy=[[sales_global.country]], aggr=[[array_agg(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST], first_value(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST], last_value(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST]]]
 03)----TableScan: sales_global projection=[country, amount]
-physical_plan
-01)ProjectionExec: expr=[country@0 as country, array_agg(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST]@1 as amounts, first_value(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST]@2 as fv1, last_value(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST]@3 as fv2]
-02)--AggregateExec: mode=Single, gby=[country@0 as country], aggr=[array_agg(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST], first_value(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST], last_value(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST]]
-03)----DataSourceExec: partitions=1, partition_sizes=[1]
+physical_plan_error
+01)Internal error: Input field name last_value(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST] does not match with the projection expression first_value(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST].
+02)This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker
 
-query T?RR rowsort
+query error
 SELECT country, ARRAY_AGG(amount ORDER BY amount DESC) AS amounts,
   FIRST_VALUE(amount ORDER BY amount ASC) AS fv1,
   LAST_VALUE(amount ORDER BY amount DESC) AS fv2
   FROM sales_global
   GROUP BY country
 ----
-FRA [200.0, 50.0] 50 50
-GRC [80.0, 30.0] 30 30
-TUR [100.0, 75.0] 75 75
+DataFusion error: Internal error: Input field name last_value(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST] does not match with the projection expression first_value(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST].
+This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker
+
 
 # test_reverse_aggregate_expr2
 # Some of the Aggregators can be reversed, by this way we can still run aggregators without re-ordering
@@ -2771,21 +2774,20 @@ logical_plan
 01)Projection: sales_global.country, array_agg(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST] AS amounts, first_value(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST] AS fv1, last_value(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST] AS fv2
 02)--Aggregate: groupBy=[[sales_global.country]], aggr=[[array_agg(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST], first_value(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST], last_value(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST]]]
 03)----TableScan: sales_global projection=[country, amount]
-physical_plan
-01)ProjectionExec: expr=[country@0 as country, array_agg(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST]@1 as amounts, first_value(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST]@2 as fv1, last_value(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST]@3 as fv2]
-02)--AggregateExec: mode=Single, gby=[country@0 as country], aggr=[array_agg(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST], first_value(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST], last_value(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST]]
-03)----DataSourceExec: partitions=1, partition_sizes=[1]
+physical_plan_error
+01)Internal error: Input field name first_value(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST] does not match with the projection expression last_value(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST].
+02)This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker
 
-query T?RR
+query error
 SELECT country, ARRAY_AGG(amount ORDER BY amount ASC) AS amounts,
   FIRST_VALUE(amount ORDER BY amount ASC) AS fv1,
   LAST_VALUE(amount ORDER BY amount DESC) AS fv2
   FROM sales_global
   GROUP BY country
 ----
-GRC [30.0, 80.0] 30 30
-FRA [50.0, 200.0] 50 50
-TUR [75.0, 100.0] 75 75
+DataFusion error: Internal error: Input field name first_value(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST] does not match with the projection expression last_value(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST].
+This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker
+
 
 # test_reverse_aggregate_expr3
 # Some of the Aggregators can be reversed, by this way we can still run aggregators without re-ordering
@@ -2802,21 +2804,20 @@ logical_plan
 01)Projection: sales_global.country, first_value(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST] AS fv1, last_value(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST] AS fv2, array_agg(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST] AS amounts
 02)--Aggregate: groupBy=[[sales_global.country]], aggr=[[first_value(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST], last_value(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST], array_agg(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST]]]
 03)----TableScan: sales_global projection=[country, amount]
-physical_plan
-01)ProjectionExec: expr=[country@0 as country, first_value(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST]@1 as fv1, last_value(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST]@2 as fv2, array_agg(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST]@3 as amounts]
-02)--AggregateExec: mode=Single, gby=[country@0 as country], aggr=[first_value(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST], last_value(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST], array_agg(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST]]
-03)----DataSourceExec: partitions=1, partition_sizes=[1]
+physical_plan_error
+01)Internal error: Input field name first_value(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST] does not match with the projection expression last_value(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST].
+02)This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker
 
-query TRR?
+query error
 SELECT country, FIRST_VALUE(amount ORDER BY amount ASC) AS fv1,
   LAST_VALUE(amount ORDER BY amount DESC) AS fv2,
   ARRAY_AGG(amount ORDER BY amount ASC) AS amounts
   FROM sales_global
   GROUP BY country
 ----
-GRC 30 30 [30.0, 80.0]
-FRA 50 50 [50.0, 200.0]
-TUR 75 75 [75.0, 100.0]
+DataFusion error: Internal error: Input field name first_value(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST] does not match with the projection expression last_value(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST].
+This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker
+
 
 # test_reverse_aggregate_expr4
 # Ordering requirement by the ordering insensitive aggregators shouldn't have effect on
@@ -2834,7 +2835,8 @@ logical_plan
 physical_plan
 01)ProjectionExec: expr=[country@0 as country, sum(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST]@1 as sum1, array_agg(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST]@2 as amounts]
 02)--AggregateExec: mode=Single, gby=[country@0 as country], aggr=[sum(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST], array_agg(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST]]
-03)----DataSourceExec: partitions=1, partition_sizes=[1]
+03)----SortExec: expr=[amount@2 ASC NULLS LAST], preserve_partitioning=[false]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query TR?
 SELECT country, SUM(amount ORDER BY ts DESC) AS sum1,
@@ -2867,7 +2869,8 @@ logical_plan
 physical_plan
 01)ProjectionExec: expr=[country@0 as country, first_value(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST]@1 as fv1, last_value(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST]@2 as lv1, sum(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST]@3 as sum1]
 02)--AggregateExec: mode=Single, gby=[country@0 as country], aggr=[first_value(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST], last_value(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST], sum(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST]]
-03)----DataSourceExec: partitions=1, partition_sizes=[1]
+03)----SortExec: expr=[ts@1 DESC], preserve_partitioning=[false]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query TRRR rowsort
 SELECT country, FIRST_VALUE(amount ORDER BY ts DESC) as fv1,
@@ -2900,7 +2903,8 @@ logical_plan
 physical_plan
 01)ProjectionExec: expr=[country@0 as country, first_value(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST]@1 as fv1, last_value(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST]@2 as lv1, sum(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST]@3 as sum1]
 02)--AggregateExec: mode=Single, gby=[country@0 as country], aggr=[first_value(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST], last_value(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST], sum(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST]]
-03)----DataSourceExec: partitions=1, partition_sizes=[1]
+03)----SortExec: expr=[ts@1 DESC], preserve_partitioning=[false]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query TRRR rowsort
 SELECT country, FIRST_VALUE(amount ORDER BY ts DESC) as fv1,
@@ -2936,11 +2940,12 @@ physical_plan
 01)SortExec: expr=[sn@2 ASC NULLS LAST], preserve_partitioning=[false]
 02)--ProjectionExec: expr=[zip_code@1 as zip_code, country@2 as country, sn@0 as sn, ts@3 as ts, currency@4 as currency, last_value(e.amount) ORDER BY [e.sn ASC NULLS LAST]@5 as last_rate]
 03)----AggregateExec: mode=Single, gby=[sn@2 as sn, zip_code@0 as zip_code, country@1 as country, ts@3 as ts, currency@4 as currency], aggr=[last_value(e.amount) ORDER BY [e.sn ASC NULLS LAST]]
-04)------ProjectionExec: expr=[zip_code@2 as zip_code, country@3 as country, sn@4 as sn, ts@5 as ts, currency@6 as currency, sn@0 as sn, amount@1 as amount]
-05)--------CoalesceBatchesExec: target_batch_size=8192
-06)----------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(currency@2, currency@4)], filter=ts@0 >= ts@1, projection=[sn@0, amount@3, zip_code@4, country@5, sn@6, ts@7, currency@8]
-07)------------DataSourceExec: partitions=1, partition_sizes=[1]
-08)------------DataSourceExec: partitions=1, partition_sizes=[1]
+04)------SortExec: expr=[sn@5 ASC NULLS LAST], preserve_partitioning=[false]
+05)--------ProjectionExec: expr=[zip_code@2 as zip_code, country@3 as country, sn@4 as sn, ts@5 as ts, currency@6 as currency, sn@0 as sn, amount@1 as amount]
+06)----------CoalesceBatchesExec: target_batch_size=8192
+07)------------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(currency@2, currency@4)], filter=ts@0 >= ts@1, projection=[sn@0, amount@3, zip_code@4, country@5, sn@6, ts@7, currency@8]
+08)--------------DataSourceExec: partitions=1, partition_sizes=[1]
+09)--------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query ITIPTR rowsort
 SELECT s.zip_code, s.country, s.sn, s.ts, s.currency, LAST_VALUE(e.amount ORDER BY e.sn) AS last_rate
@@ -2985,7 +2990,8 @@ physical_plan
 06)----------RepartitionExec: partitioning=Hash([country@0], 8), input_partitions=8
 07)------------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
 08)--------------AggregateExec: mode=Partial, gby=[country@0 as country], aggr=[first_value(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST], last_value(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST]]
-09)----------------DataSourceExec: partitions=1, partition_sizes=[1]
+09)----------------SortExec: expr=[ts@1 ASC NULLS LAST], preserve_partitioning=[false]
+10)------------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query TRR
 SELECT country, FIRST_VALUE(amount ORDER BY ts ASC) AS fv1,
@@ -3012,28 +3018,21 @@ logical_plan
 02)--Projection: sales_global.country, first_value(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST] AS fv1, last_value(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST] AS fv2
 03)----Aggregate: groupBy=[[sales_global.country]], aggr=[[first_value(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST], last_value(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST]]]
 04)------TableScan: sales_global projection=[country, ts, amount]
-physical_plan
-01)SortPreservingMergeExec: [country@0 ASC NULLS LAST]
-02)--SortExec: expr=[country@0 ASC NULLS LAST], preserve_partitioning=[true]
-03)----ProjectionExec: expr=[country@0 as country, first_value(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST]@1 as fv1, last_value(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST]@2 as fv2]
-04)------AggregateExec: mode=FinalPartitioned, gby=[country@0 as country], aggr=[first_value(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST], last_value(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST]]
-05)--------CoalesceBatchesExec: target_batch_size=8192
-06)----------RepartitionExec: partitioning=Hash([country@0], 8), input_partitions=8
-07)------------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
-08)--------------AggregateExec: mode=Partial, gby=[country@0 as country], aggr=[first_value(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST], last_value(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST]]
-09)----------------DataSourceExec: partitions=1, partition_sizes=[1]
+physical_plan_error
+01)Internal error: Input field name first_value(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST] does not match with the projection expression last_value(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST].
+02)This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker
 
 
-query TRR
+query error
 SELECT country, FIRST_VALUE(amount ORDER BY ts ASC) AS fv1,
   LAST_VALUE(amount ORDER BY ts DESC) AS fv2
   FROM sales_global
   GROUP BY country
   ORDER BY country
 ----
-FRA 50 50
-GRC 30 30
-TUR 75 75
+DataFusion error: Internal error: Input field name first_value(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST] does not match with the projection expression last_value(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST].
+This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker
+
 
 # make sure that batch size is small. So that query below runs in multi partitions
 # row number of the sales_global is 5. Hence we choose batch size 4 to make is smaller.
@@ -3056,8 +3055,9 @@ physical_plan
 02)--AggregateExec: mode=Final, gby=[], aggr=[first_value(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST], last_value(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST]]
 03)----CoalescePartitionsExec
 04)------AggregateExec: mode=Partial, gby=[], aggr=[first_value(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST], last_value(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST]]
-05)--------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
-06)----------DataSourceExec: partitions=1, partition_sizes=[1]
+05)--------SortExec: expr=[ts@0 ASC NULLS LAST], preserve_partitioning=[true]
+06)----------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+07)------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query RR
 SELECT FIRST_VALUE(amount ORDER BY ts ASC) AS fv1,
@@ -3077,20 +3077,18 @@ logical_plan
 01)Projection: first_value(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST] AS fv1, last_value(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST] AS fv2
 02)--Aggregate: groupBy=[[]], aggr=[[first_value(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST], last_value(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST]]]
 03)----TableScan: sales_global projection=[ts, amount]
-physical_plan
-01)ProjectionExec: expr=[first_value(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST]@0 as fv1, last_value(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST]@1 as fv2]
-02)--AggregateExec: mode=Final, gby=[], aggr=[first_value(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST], last_value(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST]]
-03)----CoalescePartitionsExec
-04)------AggregateExec: mode=Partial, gby=[], aggr=[first_value(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST], last_value(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST]]
-05)--------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
-06)----------DataSourceExec: partitions=1, partition_sizes=[1]
+physical_plan_error
+01)Internal error: Input field name first_value(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST] does not match with the projection expression last_value(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST].
+02)This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker
 
-query RR
+query error
 SELECT FIRST_VALUE(amount ORDER BY ts ASC) AS fv1,
   LAST_VALUE(amount ORDER BY ts DESC) AS fv2
   FROM sales_global
 ----
-30 30
+DataFusion error: Internal error: Input field name first_value(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST] does not match with the projection expression last_value(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST].
+This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker
+
 
 # ARRAY_AGG should work in multiple partitions
 query TT
@@ -3106,8 +3104,9 @@ physical_plan
 02)--AggregateExec: mode=Final, gby=[], aggr=[array_agg(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST]]
 03)----CoalescePartitionsExec
 04)------AggregateExec: mode=Partial, gby=[], aggr=[array_agg(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST]]
-05)--------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
-06)----------DataSourceExec: partitions=1, partition_sizes=[1]
+05)--------SortExec: expr=[ts@0 ASC NULLS LAST], preserve_partitioning=[true]
+06)----------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+07)------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query ?
 SELECT ARRAY_AGG(amount ORDER BY ts ASC) AS array_agg1
@@ -3129,8 +3128,9 @@ physical_plan
 02)--AggregateExec: mode=Final, gby=[], aggr=[array_agg(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST]]
 03)----CoalescePartitionsExec
 04)------AggregateExec: mode=Partial, gby=[], aggr=[array_agg(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST]]
-05)--------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
-06)----------DataSourceExec: partitions=1, partition_sizes=[1]
+05)--------SortExec: expr=[ts@0 DESC], preserve_partitioning=[true]
+06)----------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+07)------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query ?
 SELECT ARRAY_AGG(amount ORDER BY ts DESC) AS array_agg1
@@ -3152,8 +3152,9 @@ physical_plan
 02)--AggregateExec: mode=Final, gby=[], aggr=[array_agg(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST]]
 03)----CoalescePartitionsExec
 04)------AggregateExec: mode=Partial, gby=[], aggr=[array_agg(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST]]
-05)--------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
-06)----------DataSourceExec: partitions=1, partition_sizes=[1]
+05)--------SortExec: expr=[amount@0 ASC NULLS LAST], preserve_partitioning=[true]
+06)----------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+07)------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query ?
 SELECT ARRAY_AGG(amount ORDER BY amount ASC) AS array_agg1
@@ -3181,8 +3182,9 @@ physical_plan
 05)--------CoalesceBatchesExec: target_batch_size=4
 06)----------RepartitionExec: partitioning=Hash([country@0], 8), input_partitions=8
 07)------------AggregateExec: mode=Partial, gby=[country@0 as country], aggr=[array_agg(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST]]
-08)--------------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
-09)----------------DataSourceExec: partitions=1, partition_sizes=[1]
+08)--------------SortExec: expr=[amount@1 ASC NULLS LAST], preserve_partitioning=[true]
+09)----------------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+10)------------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query T?
 SELECT country, ARRAY_AGG(amount ORDER BY amount ASC) AS array_agg1
@@ -3208,18 +3210,11 @@ logical_plan
 02)--Projection: sales_global.country, array_agg(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST] AS amounts, first_value(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST] AS fv1, last_value(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST] AS fv2
 03)----Aggregate: groupBy=[[sales_global.country]], aggr=[[array_agg(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST], first_value(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST], last_value(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST]]]
 04)------TableScan: sales_global projection=[country, amount]
-physical_plan
-01)SortPreservingMergeExec: [country@0 ASC NULLS LAST]
-02)--SortExec: expr=[country@0 ASC NULLS LAST], preserve_partitioning=[true]
-03)----ProjectionExec: expr=[country@0 as country, array_agg(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST]@1 as amounts, first_value(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST]@2 as fv1, last_value(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST]@3 as fv2]
-04)------AggregateExec: mode=FinalPartitioned, gby=[country@0 as country], aggr=[array_agg(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST], first_value(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST], last_value(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST]]
-05)--------CoalesceBatchesExec: target_batch_size=4
-06)----------RepartitionExec: partitioning=Hash([country@0], 8), input_partitions=8
-07)------------AggregateExec: mode=Partial, gby=[country@0 as country], aggr=[array_agg(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST], first_value(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST], last_value(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST]]
-08)--------------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
-09)----------------DataSourceExec: partitions=1, partition_sizes=[1]
+physical_plan_error
+01)Internal error: Input field name last_value(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST] does not match with the projection expression first_value(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST].
+02)This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker
 
-query T?RR
+query error
 SELECT country, ARRAY_AGG(amount ORDER BY amount DESC) AS amounts,
   FIRST_VALUE(amount ORDER BY amount ASC) AS fv1,
   LAST_VALUE(amount ORDER BY amount DESC) AS fv2
@@ -3227,9 +3222,9 @@ SELECT country, ARRAY_AGG(amount ORDER BY amount DESC) AS amounts,
   GROUP BY country
   ORDER BY country
 ----
-FRA [200.0, 50.0] 50 50
-GRC [80.0, 30.0] 30 30
-TUR [100.0, 75.0] 75 75
+DataFusion error: Internal error: Input field name last_value(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST] does not match with the projection expression first_value(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST].
+This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker
+
 
 # make sure that query below runs in multi partitions
 statement ok
@@ -3875,17 +3870,15 @@ GROUP BY d;
 0 4
 0 9
 
-query III rowsort
+query error
 SELECT d, FIRST_VALUE(c ORDER BY a DESC, c DESC) as first_a,
   LAST_VALUE(c ORDER BY c DESC) as last_c
 FROM multiple_ordered_table
 GROUP BY d;
 ----
-0 95 0
-1 90 4
-2 97 1
-3 99 15
-4 98 9
+DataFusion error: Internal error: Input field name last_value(multiple_ordered_table.c) ORDER BY [multiple_ordered_table.a DESC NULLS FIRST, multiple_ordered_table.c ASC NULLS LAST] does not match with the projection expression first_value(multiple_ordered_table.c) ORDER BY [multiple_ordered_table.a DESC NULLS FIRST, multiple_ordered_table.c DESC NULLS FIRST].
+This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker
+
 
 query TT
 EXPLAIN SELECT c
