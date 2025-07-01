@@ -21,7 +21,7 @@ use insta::assert_snapshot;
 use std::sync::Arc;
 
 use crate::physical_optimizer::test_utils::{
-    build_group_by, mock_data, parquet_exec_with_sort, plan_matches_expected, schema,
+    build_group_by, get_optimized_plan, mock_data, parquet_exec_with_sort, schema,
     TestAggregate,
 };
 
@@ -40,7 +40,7 @@ use datafusion_physical_plan::{
     ExecutionPlan,
 };
 
-async fn assert_results_match_expected(plan: Arc<dyn ExecutionPlan>) -> Result<String> {
+async fn run_plan_and_format(plan: Arc<dyn ExecutionPlan>) -> Result<String> {
     let cfg = SessionConfig::new().with_target_partitions(1);
     let ctx = SessionContext::new_with_config(cfg);
     let batches = collect(plan, ctx.task_ctx()).await?;
@@ -75,7 +75,7 @@ async fn test_partial_final() -> Result<()> {
         4, // fetch
     );
     let plan: Arc<dyn ExecutionPlan> = Arc::new(limit_exec);
-    let formatted = plan_matches_expected(&plan)?;
+    let formatted = get_optimized_plan(&plan)?;
     let actual = formatted.trim();
     assert_snapshot!(
         actual,
@@ -86,7 +86,7 @@ async fn test_partial_final() -> Result<()> {
           DataSourceExec: partitions=1, partition_sizes=[1]
     "
     );
-    let expected = assert_results_match_expected(plan).await?;
+    let expected = run_plan_and_format(plan).await?;
     let actual = expected.trim();
     assert_snapshot!(
         actual,
@@ -125,7 +125,7 @@ async fn test_single_local() -> Result<()> {
     );
     // expected to push the limit to the AggregateExec
     let plan: Arc<dyn ExecutionPlan> = Arc::new(limit_exec);
-    let formatted = plan_matches_expected(&plan)?;
+    let formatted = get_optimized_plan(&plan)?;
     let actual = formatted.trim();
     assert_snapshot!(
         actual,
@@ -135,7 +135,7 @@ async fn test_single_local() -> Result<()> {
         DataSourceExec: partitions=1, partition_sizes=[1]
     "
     );
-    let expected = assert_results_match_expected(plan).await?;
+    let expected = run_plan_and_format(plan).await?;
     let actual = expected.trim();
     assert_snapshot!(
         actual,
@@ -174,7 +174,7 @@ async fn test_single_global() -> Result<()> {
     );
     // expected to push the skip+fetch limit to the AggregateExec
     let plan: Arc<dyn ExecutionPlan> = Arc::new(limit_exec);
-    let formatted = plan_matches_expected(&plan)?;
+    let formatted = get_optimized_plan(&plan)?;
     let actual = formatted.trim();
     assert_snapshot!(
         actual,
@@ -184,7 +184,7 @@ async fn test_single_global() -> Result<()> {
         DataSourceExec: partitions=1, partition_sizes=[1]
     "
     );
-    let expected = assert_results_match_expected(plan).await?;
+    let expected = run_plan_and_format(plan).await?;
     let actual = expected.trim();
     assert_snapshot!(
         actual,
@@ -229,7 +229,7 @@ async fn test_distinct_cols_different_than_group_by_cols() -> Result<()> {
     );
     // expected to push the limit to the outer AggregateExec only
     let plan: Arc<dyn ExecutionPlan> = Arc::new(limit_exec);
-    let formatted = plan_matches_expected(&plan)?;
+    let formatted = get_optimized_plan(&plan)?;
     let actual = formatted.trim();
     assert_snapshot!(
         actual,
@@ -240,7 +240,7 @@ async fn test_distinct_cols_different_than_group_by_cols() -> Result<()> {
           DataSourceExec: partitions=1, partition_sizes=[1]
     "
     );
-    let expected = assert_results_match_expected(plan).await?;
+    let expected = run_plan_and_format(plan).await?;
     let actual = expected.trim();
     assert_snapshot!(
         actual,
@@ -284,7 +284,7 @@ fn test_has_order_by() -> Result<()> {
     );
     // expected not to push the limit to the AggregateExec
     let plan: Arc<dyn ExecutionPlan> = Arc::new(limit_exec);
-    let formatted = plan_matches_expected(&plan)?;
+    let formatted = get_optimized_plan(&plan)?;
     let actual = formatted.trim();
     assert_snapshot!(
         actual,
@@ -317,7 +317,7 @@ fn test_no_group_by() -> Result<()> {
     );
     // expected not to push the limit to the AggregateExec
     let plan: Arc<dyn ExecutionPlan> = Arc::new(limit_exec);
-    let formatted = plan_matches_expected(&plan)?;
+    let formatted = get_optimized_plan(&plan)?;
     let actual = formatted.trim();
     assert_snapshot!(
         actual,
@@ -351,7 +351,7 @@ fn test_has_aggregate_expression() -> Result<()> {
     );
     // expected not to push the limit to the AggregateExec
     let plan: Arc<dyn ExecutionPlan> = Arc::new(limit_exec);
-    let formatted = plan_matches_expected(&plan)?;
+    let formatted = get_optimized_plan(&plan)?;
     let actual = formatted.trim();
     assert_snapshot!(
         actual,
@@ -393,7 +393,7 @@ fn test_has_filter() -> Result<()> {
     // expected not to push the limit to the AggregateExec
     // TODO(msirek): open an issue for `filter_expr` of `AggregateExec` not printing out
     let plan: Arc<dyn ExecutionPlan> = Arc::new(limit_exec);
-    let formatted = plan_matches_expected(&plan)?;
+    let formatted = get_optimized_plan(&plan)?;
     let actual = formatted.trim();
     assert_snapshot!(
         actual,

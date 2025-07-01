@@ -622,7 +622,7 @@ pub fn build_group_by(input_schema: &SchemaRef, columns: Vec<String>) -> Physica
     PhysicalGroupBy::new_single(group_by_expr.clone())
 }
 
-pub fn plan_matches_expected(plan: &Arc<dyn ExecutionPlan>) -> Result<String> {
+pub fn get_optimized_plan(plan: &Arc<dyn ExecutionPlan>) -> Result<String> {
     let config = ConfigOptions::new();
 
     let optimized =

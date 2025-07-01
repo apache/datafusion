@@ -45,8 +45,6 @@ use datafusion_physical_plan::ExecutionPlan;
 /// Runs the CombinePartialFinalAggregate optimizer and asserts the plan against the expected
 macro_rules! assert_optimized {
     ($PLAN: expr, @ $EXPECTED_LINES: literal $(,)?) => {
-        // let expected_lines: Vec<&str> = $EXPECTED_LINES.iter().map(|s| *s).collect();
-
         // run optimizer
         let optimizer = CombinePartialFinalAggregate {};
         let config = ConfigOptions::new();
