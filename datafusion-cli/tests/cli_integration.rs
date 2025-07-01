@@ -22,8 +22,9 @@ use rstest::rstest;
 use insta::{glob, Settings};
 use insta_cmd::{assert_cmd_snapshot, get_cargo_bin};
 use std::path::PathBuf;
+use std::time::Duration;
 use std::{env, fs};
-use testcontainers::core::{ExecCommand, IntoContainerPort, Mount};
+use testcontainers::core::{CmdWaitFor, ExecCommand, IntoContainerPort, Mount};
 use testcontainers::runners::AsyncRunner;
 use testcontainers::{ContainerAsync, Image, ImageExt};
 use testcontainers_modules::minio;
@@ -41,6 +42,9 @@ fn make_settings() -> Settings {
 }
 
 async fn setup_minio_container() -> ContainerAsync<minio::MinIO> {
+    const MINIO_ROOT_USER: &str = "TEST-DataFusionLogin";
+    const MINIO_ROOT_PASSWORD: &str = "TEST-DataFusionPassword";
+
     let data_path =
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../datafusion/core/tests/data");
 
@@ -49,9 +53,8 @@ async fn setup_minio_container() -> ContainerAsync<minio::MinIO> {
         .expect("Failed to get absolute path for test data");
 
     let container = minio::MinIO::default()
-        .with_mapped_port(16433, 9000.tcp())
-        .with_env_var("MINIO_ROOT_USER", "TEST-DataFusionLogin")
-        .with_env_var("MINIO_ROOT_PASSWORD", "TEST-DataFusionPassword")
+        .with_env_var("MINIO_ROOT_USER", MINIO_ROOT_USER)
+        .with_env_var("MINIO_ROOT_PASSWORD", MINIO_ROOT_PASSWORD)
         .with_mount(Mount::bind_mount(
             absolute_data_path.to_str().unwrap(),
             "/source",
@@ -60,28 +63,41 @@ async fn setup_minio_container() -> ContainerAsync<minio::MinIO> {
         .await
         .expect("Failed to start MinIO container");
 
-    for command in [
-        "mc ready local",
-        "mc alias set localminio http://localhost:9000 TEST-DataFusionLogin TEST-DataFusionPassword",
-        "mc mb localminio/data",
-        "mc cp -r /source/* localminio/data/"] {
-        let mut res = container.exec(
-            ExecCommand::new(["/bin/sh", "-c", command])
-        ).await.unwrap();
+    // We wait for MinIO to be healthy and preprare test files. We do it via CLI to avoid s3 dependency
+    let commands = [
+        ExecCommand::new(["/usr/bin/mc", "ready", "local"]),
+        ExecCommand::new([
+            "/usr/bin/mc",
+            "alias",
+            "set",
+            "localminio",
+            "http://localhost:9000",
+            MINIO_ROOT_USER,
+            MINIO_ROOT_PASSWORD,
+        ]),
+        ExecCommand::new(["/usr/bin/mc", "mb", "localminio/data"]),
+        ExecCommand::new(["/usr/bin/mc", "cp", "-r", "/source/", "localminio/data/"]),
+    ];
 
-        let status_code = res.exit_code().await.unwrap().unwrap_or(0); // todo: is this correct?
-        if status_code == 0 {
-            continue;
+    for command in commands {
+        let command =
+            command.with_cmd_ready_condition(CmdWaitFor::Exit { code: Some(0) });
+
+        let cmd_ref = format!("{:?}", command);
+
+        if let Err(e) = container.exec(command).await {
+            let stdout = container.stdout_to_vec().await.unwrap_or_default();
+            let stderr = container.stderr_to_vec().await.unwrap_or_default();
+
+            panic!(
+                "Failed to execute command: {}\nError: {}\nStdout: {:?}\nStderr: {:?}",
+                cmd_ref,
+                e,
+                String::from_utf8_lossy(&stdout),
+                String::from_utf8_lossy(&stderr)
+            );
         }
-
-        let stdout = res.stdout_to_vec().await.unwrap();
-        let stderr = res.stderr_to_vec().await.unwrap();
-
-        panic!("Command `{}` failed with status code: {:?}\nstdout: {}\nstderr: {}",
-               command, status_code, String::from_utf8_lossy(&stdout), String::from_utf8_lossy(&stderr));
     }
-
-    // print stdout and stderr of the container
 
     container
 }
@@ -216,10 +232,12 @@ async fn test_cli() {
         return;
     }
 
-    let _container = setup_minio_container().await;
+    let container = setup_minio_container().await;
 
     let settings = make_settings();
     let _bound = settings.bind_to_scope();
+
+    let port = container.get_host_port_ipv4(9000).await.unwrap();
 
     glob!("sql/integration/*.sql", |path| {
         let input = fs::read_to_string(path).unwrap();
@@ -227,7 +245,7 @@ async fn test_cli() {
             .env_clear()
             .env("AWS_ACCESS_KEY_ID", "TEST-DataFusionLogin")
             .env("AWS_SECRET_ACCESS_KEY", "TEST-DataFusionPassword")
-            .env("AWS_ENDPOINT", "http://localhost:16433")
+            .env("AWS_ENDPOINT", format!("http://localhost:{port}"))
             .env("AWS_ALLOW_HTTP", "true")
             .pass_stdin(input))
     });
@@ -245,20 +263,17 @@ async fn test_aws_options() {
     let settings = make_settings();
     let _bound = settings.bind_to_scope();
 
-    let access_key_id =
-        env::var("AWS_ACCESS_KEY_ID").expect("AWS_ACCESS_KEY_ID is not set");
-    let secret_access_key =
-        env::var("AWS_SECRET_ACCESS_KEY").expect("AWS_SECRET_ACCESS_KEY is not set");
-    let endpoint_url = env::var("AWS_ENDPOINT").expect("AWS_ENDPOINT is not set");
+    let container = setup_minio_container().await;
+    let port = container.get_host_port_ipv4(9000).await.unwrap();
 
     let input = format!(
         r#"CREATE EXTERNAL TABLE CARS
 STORED AS CSV
 LOCATION 's3://data/cars.csv'
 OPTIONS(
-    'aws.access_key_id' '{access_key_id}',
-    'aws.secret_access_key' '{secret_access_key}',
-    'aws.endpoint' '{endpoint_url}',
+    'aws.access_key_id' 'TEST-DataFusionLogin',
+    'aws.secret_access_key' 'TEST-DataFusionPassword',
+    'aws.endpoint' 'http://localhost:{port}',
     'aws.allow_http' 'true'
 );
 
