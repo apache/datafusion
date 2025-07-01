@@ -38,7 +38,9 @@ use datafusion_datasource::write::demux::DemuxedStreamReceiver;
 
 use arrow::compute::sum;
 use arrow::datatypes::{DataType, Field, FieldRef};
-use datafusion_common::config::{ConfigField, FileDecryptionProperties, ConfigFileType, TableParquetOptions};
+use datafusion_common::config::{
+    ConfigField, ConfigFileType, FileDecryptionProperties, TableParquetOptions,
+};
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
@@ -87,7 +89,6 @@ use parquet::format::FileMetaData;
 use parquet::schema::types::SchemaDescriptor;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc::{self, Receiver, Sender};
-
 
 /// Initial writing buffer size. Note this is just a size hint for efficiency. It
 /// will grow beyond the set value if needed.
@@ -964,15 +965,13 @@ pub async fn fetch_parquet_metadata(
     store: &dyn ObjectStore,
     meta: &ObjectMeta,
     size_hint: Option<usize>,
-    #[allow(unused)]
-    decryption_properties: Option<&FileDecryptionProperties>,
+    #[allow(unused)] decryption_properties: Option<&FileDecryptionProperties>,
 ) -> Result<ParquetMetaData> {
     let file_size = meta.size;
     let fetch = ObjectStoreFetch::new(store, meta);
 
     #[allow(unused_mut)]
-    let mut reader = ParquetMetaDataReader::new()
-        .with_prefetch_hint(size_hint);
+    let mut reader = ParquetMetaDataReader::new().with_prefetch_hint(size_hint);
 
     #[cfg(feature = "parquet_encryption")]
     let reader = reader.with_decryption_properties(decryption_properties);

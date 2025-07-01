@@ -41,7 +41,9 @@ name = "datafusion_common"
 avro = ["apache-avro"]
 backtrace = []
 parquet_encryption = [
-    "parquet", "parquet/encryption", "dep:hex",
+    "parquet",
+    "parquet/encryption",
+    "dep:hex",
 ]
 pyarrow = ["pyo3", "arrow/pyarrow", "parquet"]
 force_hash_collisions = []

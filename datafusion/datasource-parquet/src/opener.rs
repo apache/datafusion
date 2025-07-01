@@ -31,8 +31,8 @@ use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
 
 use arrow::datatypes::{FieldRef, SchemaRef, TimeUnit};
 use arrow::error::ArrowError;
-use datafusion_common::{exec_err, DataFusionError, Result};
 use datafusion_common::config::FileDecryptionProperties;
+use datafusion_common::{exec_err, DataFusionError, Result};
 use datafusion_datasource::PartitionedFile;
 use datafusion_physical_expr::PhysicalExprSchemaRewriter;
 use datafusion_physical_expr_common::physical_expr::{
@@ -47,7 +47,6 @@ use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
 use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::{ParquetRecordBatchStreamBuilder, ProjectionMask};
 use parquet::file::metadata::ParquetMetaDataReader;
-
 
 /// Implements [`FileOpener`] for a parquet file
 pub(super) struct ParquetOpener {

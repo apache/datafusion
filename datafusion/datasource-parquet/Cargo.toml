@@ -69,5 +69,6 @@ path = "src/mod.rs"
 
 [features]
 parquet_encryption = [
-    "parquet/encryption", "dep:hex",
+    "parquet/encryption",
+    "dep:hex",
 ]
