@@ -286,18 +286,6 @@ jobs:
           fetch-depth: 1
       - name: Setup Rust toolchain
         run: rustup toolchain install stable
-      - name: Setup Minio - S3-compatible storage
-        run: |
-          docker run -d --name minio-container \
-            -p 9000:9000 \
-            -e MINIO_ROOT_USER=TEST-DataFusionLogin -e MINIO_ROOT_PASSWORD=TEST-DataFusionPassword \
-            -v $(pwd)/datafusion/core/tests/data:/source quay.io/minio/minio \
-            server /data
-          docker exec minio-container /bin/sh -c "\
-            mc ready local
-            mc alias set localminio http://localhost:9000 TEST-DataFusionLogin TEST-DataFusionPassword && \
-            mc mb localminio/data && \
-            mc cp -r /source/* localminio/data"
       - name: Run tests (excluding doctests)
         env:
           RUST_BACKTRACE: 1

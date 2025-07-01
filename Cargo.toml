@@ -173,10 +173,10 @@ rstest = "0.25.0"
 serde_json = "1"
 sqlparser = { version = "0.55.0", default-features = false, features = ["std", "visitor"] }
 tempfile = "3"
+testcontainers = { version = "0.24", features = ["default"] }
+testcontainers-modules = { version = "0.12" }
 tokio = { version = "1.45", features = ["macros", "rt", "sync"] }
 url = "2.5.4"
-testcontainers = { version = "0.24", features = ["default"] }
-testcontainers-modules = { version = "0.12"}
 
 [profile.release]
 codegen-units = 1
