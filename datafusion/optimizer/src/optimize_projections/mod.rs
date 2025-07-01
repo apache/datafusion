@@ -1827,7 +1827,7 @@ mod tests {
         let table2_scan = scan_empty(Some("test2"), &schema, None)?.build()?;
 
         let plan = LogicalPlanBuilder::from(table_scan)
-            .join_using(table2_scan, JoinType::Left, vec!["a"])?
+            .join_using(table2_scan, JoinType::Left, vec!["a".into()])?
             .project(vec![col("a"), col("b")])?
             .build()?;
 

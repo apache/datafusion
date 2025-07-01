@@ -475,6 +475,13 @@ impl FileSource for ParquetSource {
                 Arc::new(DefaultParquetFileReaderFactory::new(object_store)) as _
             });
 
+        let file_decryption_properties = self
+            .table_parquet_options()
+            .crypto
+            .file_decryption
+            .as_ref()
+            .map(|props| Arc::new(props.clone().into()));
+
         let coerce_int96 = self
             .table_parquet_options
             .global
@@ -502,6 +509,7 @@ impl FileSource for ParquetSource {
             enable_row_group_stats_pruning: self.table_parquet_options.global.pruning,
             schema_adapter_factory,
             coerce_int96,
+            file_decryption_properties,
         })
     }
 
