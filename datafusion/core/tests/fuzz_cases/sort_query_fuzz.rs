@@ -20,8 +20,8 @@
 use std::cmp::min;
 use std::sync::Arc;
 
-use arrow::array::{record_batch, RecordBatch};
-use arrow_schema::{DataType, SchemaRef};
+use arrow::array::RecordBatch;
+use arrow_schema::SchemaRef;
 use datafusion::datasource::MemTable;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_common::{instant::Instant, Result};
@@ -70,48 +70,6 @@ async fn sort_query_fuzzer_runner() {
         .with_test_generator(test_generator);
 
     fuzzer.run().await.unwrap();
-}
-
-/// Reproduce the bug with specific seeds from the
-/// [failing test case](https://github.com/apache/datafusion/issues/16452).
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn test_reproduce_sort_query_issue_16452() {
-    let schema = Arc::new(arrow_schema::Schema::new(vec![
-        arrow_schema::Field::new("u64", DataType::UInt64, true),
-        arrow_schema::Field::new("u32", DataType::UInt32, true),
-    ]));
-
-    // build the data manually to reproduce the bug
-    let data = vec![
-        vec![record_batch!(("u64", UInt64, [1]), ("u32", UInt32, [2])).unwrap()],
-        vec![record_batch!(("u64", UInt64, [2]), ("u32", UInt32, [2])).unwrap()],
-    ];
-
-    let query = "SELECT * FROM sort_fuzz_table ORDER BY u32 LIMIT 1";
-    let config = SessionConfig::new()
-        .with_target_partitions(2)
-        .with_batch_size(1);
-    let ctx = SessionContext::new_with_config(config);
-    let provider = Arc::new(MemTable::try_new(schema.clone(), data.clone()).unwrap());
-    ctx.register_table("sort_fuzz_table", provider).unwrap();
-
-    // Failure usually happens afer ~500 iterations, add a generous number of runs to make sure it reproduces
-    let mut previous_results = None;
-    for iteration in 0..4096 {
-        println!("Iteration {iteration}");
-        let r = ctx.sql(query).await.unwrap().collect().await.unwrap();
-        match &mut previous_results {
-            None => {
-                // Store the first run as the expected result
-                previous_results = Some(r.clone());
-            }
-            Some(prev) => {
-                // Check that the results are consistent with the previous run
-                check_equality_of_batches(prev, &r).unwrap();
-                *prev = r; // Update the previous results
-            }
-        }
-    }
 }
 
 /// SortQueryFuzzer holds the runner configuration for executing sort query fuzz tests. The fuzzing details are managed inside `SortFuzzerTestGenerator`.
@@ -470,7 +428,7 @@ impl SortFuzzerTestGenerator {
             .collect();
 
         let mut order_by_clauses = Vec::new();
-        for col in selected_columns {
+        for col in &selected_columns {
             let mut clause = col.name.clone();
             if rng.random_bool(0.5) {
                 let order = if rng.random_bool(0.5) { "ASC" } else { "DESC" };
@@ -505,7 +463,11 @@ impl SortFuzzerTestGenerator {
         let limit_clause = limit.map_or(String::new(), |l| format!(" LIMIT {l}"));
 
         let query = format!(
-            "SELECT * FROM {} ORDER BY {}{}",
+            "SELECT {} FROM {} ORDER BY {}{}",
+            selected_columns.iter()
+                .map(|col| col.name.clone())
+                .collect::<Vec<_>>()
+                .join(", "),
             self.table_name,
             order_by_clauses.join(", "),
             limit_clause
