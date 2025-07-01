@@ -600,11 +600,11 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     ///   supports filter pushdown but does not modify it, simply transmitting
     ///   the children's pushdown results back up to its parent.
     /// - [`FilterPushdownPropagation::with_filters`]: Allows adding filters
-    ///  to the propagation result, indicating which filters are supported by
-    ///  the current node.
+    ///   to the propagation result, indicating which filters are supported by
+    ///   the current node.
     /// - [`FilterPushdownPropagation::with_updated_node`]: Allows updating the
-    /// current node in the propagation result, used if the node
-    /// has modified its plan based on the pushdown results.
+    ///   current node in the propagation result, used if the node
+    ///   has modified its plan based on the pushdown results.
     ///
     /// **Filter Pushdown Phases:**
     /// There are two different phases in filter pushdown (`Pre` and others),
