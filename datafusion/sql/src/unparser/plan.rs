@@ -1213,9 +1213,18 @@ impl Unparser<'_> {
             Expr::Alias(Alias { expr, name, .. }) => {
                 let inner = self.expr_to_sql(expr)?;
 
+                // Determine the alias name to use
+                let col_name = if let Some(rewritten_name) =
+                    self.dialect.col_alias_overrides(name)?
+                {
+                    rewritten_name.to_string()
+                } else {
+                    name.to_string()
+                };
+
                 Ok(ast::SelectItem::ExprWithAlias {
                     expr: inner,
-                    alias: self.new_ident_quoted_if_needs(name.to_string()),
+                    alias: self.new_ident_quoted_if_needs(col_name),
                 })
             }
             _ => {

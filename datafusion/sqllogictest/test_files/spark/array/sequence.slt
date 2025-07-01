@@ -30,4 +30,3 @@
 ## PySpark 3.5.5 Result: {'sequence(5, 1)': [5, 4, 3, 2, 1], 'typeof(sequence(5, 1))': 'array<int>', 'typeof(5)': 'int', 'typeof(1)': 'int'}
 #query
 #SELECT sequence(5::int, 1::int);
-
