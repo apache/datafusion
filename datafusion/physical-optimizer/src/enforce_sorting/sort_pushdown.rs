@@ -663,7 +663,7 @@ fn handle_custom_pushdown(
 }
 
 // For hash join we only maintain the input order for the right child
-// for join types: Inner, Right, RightSemi
+// for join type: Inner, Right, RightSemi, RightAnti
 fn handle_hash_join(
     plan: &HashJoinExec,
     parent_required: OrderingRequirements,
