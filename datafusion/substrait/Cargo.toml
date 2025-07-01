@@ -35,10 +35,12 @@ async-recursion = "1.0"
 async-trait = { workspace = true }
 chrono = { workspace = true }
 datafusion = { workspace = true }
+futures = { workspace = true }
 itertools = { workspace = true }
 object_store = { workspace = true }
 pbjson-types = { workspace = true }
 prost = { workspace = true }
+recursive = { workspace = true, optional = true }
 substrait = { version = "0.57", features = ["serde"] }
 url = { workspace = true }
 tokio = { workspace = true, features = ["fs"] }
@@ -54,6 +56,7 @@ insta = { workspace = true }
 default = ["physical"]
 physical = ["datafusion/parquet"]
 protoc = ["substrait/protoc"]
+recursive_protection = ["dep:recursive", "datafusion/recursive_protection"]
 
 [package.metadata.docs.rs]
 # Use default features ("physical") for docs, plus "protoc". "protoc" is needed

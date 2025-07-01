@@ -445,6 +445,7 @@ fn can_pullup_over_aggregation(expr: &Expr) -> bool {
     }
 }
 
+#[cfg_attr(feature = "recursive_protection", recursive::recursive)]
 fn collect_local_correlated_cols(
     plan: &LogicalPlan,
     all_cols_map: &HashMap<LogicalPlan, BTreeSet<Column>>,

@@ -55,6 +55,7 @@ impl OptimizerRule for DecorrelatePredicateSubquery {
         true
     }
 
+    #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
     fn rewrite(
         &self,
         plan: LogicalPlan,

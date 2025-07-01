@@ -2458,6 +2458,7 @@ dependencies = [
  "paste",
  "petgraph 0.8.2",
  "rand 0.9.1",
+ "recursive",
  "rstest",
 ]
 
@@ -2686,11 +2687,13 @@ dependencies = [
  "chrono",
  "datafusion",
  "datafusion-functions-aggregate",
+ "futures",
  "insta",
  "itertools 0.14.0",
  "object_store",
  "pbjson-types",
  "prost",
+ "recursive",
  "serde_json",
  "substrait",
  "tokio",

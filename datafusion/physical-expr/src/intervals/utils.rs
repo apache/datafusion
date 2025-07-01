@@ -35,6 +35,7 @@ use datafusion_expr::Operator;
 /// We do not support every type of [`Operator`]s either. Over time, this check
 /// will relax as more types of `PhysicalExpr`s and `Operator`s are supported.
 /// Currently, [`CastExpr`], [`NegativeExpr`], [`BinaryExpr`], [`Column`] and [`Literal`] are supported.
+#[cfg_attr(feature = "recursive_protection", recursive::recursive)]
 pub fn check_support(expr: &Arc<dyn PhysicalExpr>, schema: &SchemaRef) -> bool {
     let expr_any = expr.as_any();
     if let Some(binary_expr) = expr_any.downcast_ref::<BinaryExpr>() {

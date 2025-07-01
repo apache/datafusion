@@ -691,6 +691,7 @@ pub fn reorder_join_keys_to_inputs(
 }
 
 /// Reorder the current join keys ordering based on either left partition or right partition
+#[cfg_attr(feature = "recursive_protection", recursive::recursive)]
 fn reorder_current_join_keys(
     join_keys: JoinKeyPairs,
     left_partition: Option<&Partitioning>,
@@ -1011,6 +1012,7 @@ fn remove_dist_changing_operators(
 /// "    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2",
 /// "      DataSourceExec: file_groups={2 groups: \[\[x], \[y]]}, projection=\[a, b, c, d, e], output_ordering=\[a@0 ASC], file_type=parquet",
 /// ```
+#[cfg_attr(feature = "recursive_protection", recursive::recursive)]
 pub fn replace_order_preserving_variants(
     mut context: DistributionContext,
 ) -> Result<DistributionContext> {
