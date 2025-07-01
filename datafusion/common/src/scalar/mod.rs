@@ -3341,7 +3341,7 @@ impl ScalarValue {
 
     /// Compare `self` with `other` and return an `Ordering`.
     ///
-    /// This is the same as [`PartialCmp`] except that it returns
+    /// This is the same as [`PartialOrd`] except that it returns
     /// `Err` if the values cannot be compared, e.g., they have incompatible data types.
     pub fn try_cmp(&self, other: &Self) -> Result<Ordering> {
         self.partial_cmp(other).ok_or_else(|| {
