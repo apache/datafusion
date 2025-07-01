@@ -464,7 +464,8 @@ impl SortFuzzerTestGenerator {
 
         let query = format!(
             "SELECT {} FROM {} ORDER BY {}{}",
-            selected_columns.iter()
+            selected_columns
+                .iter()
                 .map(|col| col.name.clone())
                 .collect::<Vec<_>>()
                 .join(", "),
