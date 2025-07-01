@@ -24,7 +24,9 @@ use std::sync::Arc;
 
 use arrow::datatypes::DataType;
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
-use datafusion_common::{internal_err, Column, Result};
+use datafusion_common::{
+    internal_datafusion_err, internal_err, Column, DFSchema, Result,
+};
 use datafusion_expr::expr::{self, Exists, InSubquery};
 use datafusion_expr::utils::conjunction;
 use datafusion_expr::{
@@ -54,13 +56,15 @@ struct Unnesting {
 pub struct DependentJoinDecorrelator {
     // immutable, defined when this object is constructed
     domains: IndexSet<CorrelatedColumnInfo>,
+    // for each domain column, the corresponding column in delim_get
+    correlated_column_to_delim_column: IndexMap<Column, Column>,
     pub delim_types: Vec<DataType>,
     is_initial: bool,
 
     // top-most subquery DecorrelateDependentJoin has depth 1 and so on
     depth: usize,
     // hashmap of correlated column by depth
-    correlated_map: IndexMap<usize, Vec<CorrelatedColumnInfo>>,
+    correlated_columns_by_depth: IndexMap<usize, Vec<CorrelatedColumnInfo>>,
     // check if we have to replace any COUNT aggregates into "CASE WHEN X IS NULL THEN 0 ELSE COUNT END"
     // store a mapping between a expr and its original index in the loglan output
     replacement_map: IndexMap<String, Expr>,
@@ -115,11 +119,27 @@ fn natural_join(
 
 impl DependentJoinDecorrelator {
     fn init(&mut self, dependent_join_node: &DependentJoin) {
-        self.domains = dependent_join_node
+        // TODO: it's better if dependent join node store all outer ref in the RHS
+        let all_outer_refs = dependent_join_node.right.all_out_ref_exprs();
+        let correlated_columns_of_current_level = dependent_join_node
             .correlated_columns
             .iter()
-            .cloned()
-            .collect();
+            .filter(|d| {
+                if self.depth != d.depth {
+                    return false;
+                }
+                all_outer_refs.contains(&Expr::OuterReferenceColumn(
+                    d.data_type.clone(),
+                    d.col.clone(),
+                ))
+            })
+            .map(|info| CorrelatedColumnInfo {
+                col: info.col.clone(),
+                data_type: info.data_type.clone(),
+                depth: self.depth,
+            });
+
+        self.domains = correlated_columns_of_current_level.unique().collect();
         self.delim_types = self
             .domains
             .iter()
@@ -130,7 +150,10 @@ impl DependentJoinDecorrelator {
             .correlated_columns
             .iter()
             .for_each(|info| {
-                let cols = self.correlated_map.entry(info.depth).or_default();
+                let cols = self
+                    .correlated_columns_by_depth
+                    .entry(info.depth)
+                    .or_default();
                 let to_insert = CorrelatedColumnInfo {
                     col: info.col.clone(),
                     data_type: info.data_type.clone(),
@@ -149,9 +172,10 @@ impl DependentJoinDecorrelator {
     fn new_root() -> Self {
         Self {
             domains: IndexSet::new(),
+            correlated_column_to_delim_column: IndexMap::new(),
             delim_types: vec![],
             is_initial: true,
-            correlated_map: IndexMap::new(),
+            correlated_columns_by_depth: IndexMap::new(),
             replacement_map: IndexMap::new(),
             any_join: true,
             delim_scan_id: 0,
@@ -160,30 +184,42 @@ impl DependentJoinDecorrelator {
     }
 
     fn new(
-        correlated_columns: &Vec<CorrelatedColumnInfo>,
-        parent_correlated_columns: &IndexMap<usize, Vec<CorrelatedColumnInfo>>,
+        node: &DependentJoin,
+        // correlated_columns: &Vec<(usize, Column, DataType)>,
+        correlated_columns_by_depth: &mut IndexMap<usize, Vec<CorrelatedColumnInfo>>,
         is_initial: bool,
         any_join: bool,
         delim_scan_id: usize,
         depth: usize,
     ) -> Self {
-        // let correlated_columns_of_current_level =
-        //     correlated_columns
-        //         .iter()
-        //         .map(|(_, col, data_type)| CorrelatedColumnInfo {
-        //             col: col.clone(),
-        //             data_type: data_type.clone(),
-        //         });
+        let current_lvl_domains = node.correlated_columns.iter().filter_map(|info| {
+            if depth == info.depth {
+                Some(CorrelatedColumnInfo {
+                    col: info.col.clone(),
+                    data_type: info.data_type.clone(),
+                    depth,
+                })
+            } else {
+                None
+            }
+        });
 
-        let domains: IndexSet<_> = correlated_columns
-            .iter()
-            .cloned()
-            .chain(
-                parent_correlated_columns
-                    .iter()
-                    .map(|(_, correlated_columns)| correlated_columns.clone())
-                    .flatten(),
-            )
+        // TODO: it's better if dependentjoin node store all outer ref on RHS itself
+        let all_outer_ref = node.right.all_out_ref_exprs();
+
+        let domains_from_parent = correlated_columns_by_depth
+            .swap_remove(&depth)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|d| {
+                all_outer_ref.contains(&Expr::OuterReferenceColumn(
+                    d.data_type.clone(),
+                    d.col.clone(),
+                ))
+            });
+
+        let domains: IndexSet<_> = current_lvl_domains
+            .chain(domains_from_parent)
             .unique()
             .collect();
 
@@ -191,30 +227,30 @@ impl DependentJoinDecorrelator {
             .iter()
             .map(|CorrelatedColumnInfo { data_type, .. }| data_type.clone())
             .collect();
-        let mut merged_correlated_map = parent_correlated_columns.clone();
-        merged_correlated_map.retain(|columns_depth, _| *columns_depth >= depth);
+        let mut new_correlated_columns_by_depth = correlated_columns_by_depth.clone();
+        new_correlated_columns_by_depth
+            .retain(|columns_depth, _| *columns_depth >= depth);
 
-        correlated_columns.iter().for_each(|info| {
-            let cols = merged_correlated_map.entry(info.depth).or_default();
+        node.correlated_columns.iter().for_each(|info| {
+            let cols = new_correlated_columns_by_depth
+                .entry(info.depth)
+                .or_default();
             let to_insert = CorrelatedColumnInfo {
                 col: info.col.clone(),
                 data_type: info.data_type.clone(),
-                depth: info.depth,
+                depth,
             };
             if !cols.contains(&to_insert) {
-                cols.push(CorrelatedColumnInfo {
-                    col: info.col.clone(),
-                    data_type: info.data_type.clone(),
-                    depth: info.depth,
-                });
+                cols.push(to_insert);
             }
         });
 
         Self {
             domains,
+            correlated_column_to_delim_column: IndexMap::new(),
             delim_types,
             is_initial,
-            correlated_map: merged_correlated_map,
+            correlated_columns_by_depth: new_correlated_columns_by_depth,
             replacement_map: IndexMap::new(),
             any_join,
             delim_scan_id,
@@ -256,7 +292,13 @@ impl DependentJoinDecorrelator {
             // because after DecorrelateDependentJoin at parent level
             // this correlated_columns list are not mutated yet
             let new_left = if node.correlated_columns.is_empty() {
-                self.pushdown_independent(left)?
+                // self.decorrelate_plan(left.clone())?
+                // TODO: fix me
+                self.push_down_dependent_join(
+                    left,
+                    parent_propagate_nulls,
+                    lateral_depth,
+                )?
             } else {
                 self.push_down_dependent_join(
                     left,
@@ -283,8 +325,8 @@ impl DependentJoinDecorrelator {
         let _propagate_null_values = true;
 
         let mut decorrelator = DependentJoinDecorrelator::new(
-            &correlated_columns,
-            &self.correlated_map,
+            node,
+            &mut self.correlated_columns_by_depth,
             false,
             false,
             self.delim_scan_id,
@@ -330,7 +372,7 @@ impl DependentJoinDecorrelator {
         let new_plan = Self::rewrite_outer_ref_columns(
             builder.build()?,
             &self.domains,
-            decorrelator.delim_scan_relation_name(),
+            &self.correlated_column_to_delim_column,
             true,
         )?;
 
@@ -420,7 +462,12 @@ impl DependentJoinDecorrelator {
             }
         }
 
-        for col in node.correlated_columns.iter().map(|info| info.col.clone()).unique() {
+        for col in node
+            .correlated_columns
+            .iter()
+            .map(|info| info.col.clone())
+            .unique()
+        {
             let raw_name = col.flat_name().replace('.', "_");
             join_conditions.push(binary_expr(
                 Expr::Column(col.clone()),
@@ -455,7 +502,7 @@ impl DependentJoinDecorrelator {
     fn rewrite_outer_ref_columns(
         plan: LogicalPlan,
         domains: &IndexSet<CorrelatedColumnInfo>,
-        delim_scan_relation_name: String,
+        correlated_map: &IndexMap<Column, Column>,
         recursive: bool,
     ) -> Result<LogicalPlan> {
         if !recursive {
@@ -469,11 +516,14 @@ impl DependentJoinDecorrelator {
                                 depth: 0,
                             };
                             if domains.contains(&cmp_col) {
-                                return Ok(Transformed::yes(col(
-                                    Self::rewrite_into_delim_column(
-                                        &delim_scan_relation_name,
-                                        outer_col,
+                                let delim_col = correlated_map.get(&cmp_col.col).ok_or(
+                                    internal_datafusion_err!(
+                                        "correlated map does not have entry for {}",
+                                        cmp_col.col
                                     ),
+                                )?;
+                                return Ok(Transformed::yes(Expr::Column(
+                                    delim_col.clone(),
                                 )));
                             }
                         }
@@ -502,12 +552,13 @@ impl DependentJoinDecorrelator {
                             depth: 0,
                         };
                         if domains.contains(&cmp_col) {
-                            return Ok(Transformed::yes(col(
-                                Self::rewrite_into_delim_column(
-                                    &delim_scan_relation_name,
-                                    outer_col,
+                            let delim_col = correlated_map.get(&cmp_col.col).ok_or(
+                                internal_datafusion_err!(
+                                    "correlated map does not have entry for {}",
+                                    cmp_col.col
                                 ),
-                            )));
+                            )?;
+                            return Ok(Transformed::yes(Expr::Column(delim_col.clone())));
                         }
                     }
                     Ok(Transformed::no(e))
@@ -520,29 +571,43 @@ impl DependentJoinDecorrelator {
     fn delim_scan_relation_name(&self) -> String {
         format!("delim_scan_{}", self.delim_scan_id)
     }
-    fn rewrite_into_delim_column(delim_relation: &String, original: &Column) -> Column {
-        let field_name = original.flat_name().replace('.', "_");
-        return Column::from(format!("{delim_relation}.{field_name}"));
+    fn rewrite_into_delim_column(
+        correlated_map: &IndexMap<Column, Column>,
+        original: &Column,
+    ) -> Result<Column> {
+        correlated_map
+            .get(original)
+            .ok_or(internal_datafusion_err!(
+                "correlated map does not have entry for {}",
+                original
+            ))
+            .cloned()
     }
     fn build_delim_scan(&mut self) -> Result<(LogicalPlan, String)> {
         self.delim_scan_id += 1;
         let id = self.delim_scan_id;
         let delim_scan_relation_name = format!("delim_scan_{id}");
-        let delim_get = LogicalPlanBuilder::delim_get(
-            &self
-                .domains
-                .iter()
-                .cloned()
-                .collect(),
-        )?
-        .alias(&delim_scan_relation_name)?
-        .build()?;
+        self.domains.iter().for_each(|c| {
+            let field_name = c.col.flat_name().replace('.', "_");
+            self.correlated_column_to_delim_column.insert(
+                c.col.clone(),
+                Column::from_qualified_name(format!(
+                    "{}.{field_name}",
+                    delim_scan_relation_name
+                )),
+            );
+        });
+        let delim_get =
+            LogicalPlanBuilder::delim_get(&self.domains.iter().cloned().collect())?
+                .alias(&delim_scan_relation_name)?
+                .build()?;
         // TODO: remove alias and replace it with table_name
         let _table_name = if let LogicalPlan::DelimGet(delim_get) = &delim_get {
             delim_get.table_name.clone().to_string()
         } else {
             "empty table".to_string()
         };
+        println!("built delim scan {delim_get} {delim_scan_relation_name}");
         Ok((delim_get, delim_scan_relation_name))
     }
 
@@ -612,7 +677,7 @@ impl DependentJoinDecorrelator {
         if !*has_correlated_expr_ref {
             match node {
                 LogicalPlan::Projection(old_proj) => {
-                    let proj = old_proj.clone();
+                    let mut proj = old_proj.clone();
                     // TODO: define logical plan for delim scan
                     let (delim_scan, delim_scan_relation_name) =
                         self.build_delim_scan()?;
@@ -626,20 +691,19 @@ impl DependentJoinDecorrelator {
                         )?
                         .build()?;
 
-                    // TODO: Temporarily comment it out for now, waiting for rewrite_outer_ref_columns
-                    // for domain_col in self.domains.iter() {
-                    //     proj.expr.push(col(Self::rewrite_into_delim_column(
-                    //         &delim_scan_relation_name,
-                    //         &domain_col.col,
-                    //     )));
-                    // }
+                    for domain_col in self.domains.iter() {
+                        proj.expr.push(col(Self::rewrite_into_delim_column(
+                            &self.correlated_column_to_delim_column,
+                            &domain_col.col,
+                        )?));
+                    }
 
                     let proj = Projection::try_new(proj.expr, cross_join.into())?;
 
                     return Self::rewrite_outer_ref_columns(
                         LogicalPlan::Projection(proj),
                         &self.domains,
-                        delim_scan_relation_name,
+                        &self.correlated_column_to_delim_column,
                         false,
                     );
                 }
@@ -665,7 +729,7 @@ impl DependentJoinDecorrelator {
         }
         match node {
             LogicalPlan::Projection(old_proj) => {
-                let proj = old_proj.clone();
+                let mut proj = old_proj.clone();
                 // for (auto &expr : plan->expressions) {
                 // 	parent_propagate_null_values &= expr->PropagatesNullValues();
                 // }
@@ -676,18 +740,19 @@ impl DependentJoinDecorrelator {
                     parent_propagate_nulls,
                     lateral_depth,
                 )?;
-                // TODO: Temporarily comment it out for now, waiting for rewrite_outer_ref_columns.
-                // for domain_col in self.domains.iter() {
-                //     proj.expr.push(col(Self::rewrite_into_delim_column(
-                //         &self.delim_scan_relation_name(),
-                //         &domain_col.col,
-                //     )));
-                // }
+                for domain_col in self.domains.iter() {
+                    proj.expr.push(col(Self::rewrite_into_delim_column(
+                        &self.correlated_column_to_delim_column,
+                        &domain_col.col,
+                    )?));
+                }
+                println!("debugging {}", new_input);
+                println!("domains {:?}", self.domains);
                 let proj = Projection::try_new(proj.expr, new_input.into())?;
                 return Self::rewrite_outer_ref_columns(
                     LogicalPlan::Projection(proj),
                     &self.domains,
-                    self.delim_scan_relation_name(),
+                    &self.correlated_column_to_delim_column,
                     false,
                 );
             }
@@ -703,7 +768,7 @@ impl DependentJoinDecorrelator {
                 let new_plan = Self::rewrite_outer_ref_columns(
                     LogicalPlan::Filter(filter),
                     &self.domains,
-                    self.delim_scan_relation_name(),
+                    &self.correlated_column_to_delim_column,
                     false,
                 )?;
 
@@ -731,11 +796,11 @@ impl DependentJoinDecorrelator {
                 let new_plan = Self::rewrite_outer_ref_columns(
                     LogicalPlan::Aggregate(new_agg),
                     &self.domains,
-                    delim_scan_under_agg_rela.clone(),
+                    &self.correlated_column_to_delim_column,
                     false,
                 )?;
 
-                let (agg_expr, group_expr, input) = match new_plan {
+                let (agg_expr, mut group_expr, input) = match new_plan {
                     LogicalPlan::Aggregate(Aggregate {
                         aggr_expr,
                         group_expr,
@@ -752,16 +817,15 @@ impl DependentJoinDecorrelator {
                 // let new_group_count = if perform_delim { self.domains.len() } else { 1 };
                 // TODO: support grouping set
                 // select count(*)
-                // let mut extra_group_columns = vec![];
-                // TODO: Temporarily comment it out for now, waiting for rewrite_outer_ref_columns.
-                // for c in self.domains.iter() {
-                //     let delim_col = Self::rewrite_into_delim_column(
-                //         &delim_scan_under_agg_rela,
-                //         &c.col,
-                //     );
-                //     group_expr.push(col(delim_col.clone()));
-                //     extra_group_columns.push(delim_col);
-                // }
+                let mut extra_group_columns = vec![];
+                for c in self.domains.iter() {
+                    let delim_col = Self::rewrite_into_delim_column(
+                        &self.correlated_column_to_delim_column,
+                        &c.col,
+                    )?;
+                    group_expr.push(col(delim_col.clone()));
+                    extra_group_columns.push(delim_col);
+                }
                 // perform a join of this agg (group by correlated columns added)
                 // with the same delimScan of the set same of correlated columns
                 // for now ungorup_join is always true
@@ -899,7 +963,6 @@ impl OptimizerRule for DecorrelateDependentJoin {
             DependentJoinRewriter::new(Arc::clone(config.alias_generator()));
         let rewrite_result = transformer.rewrite_subqueries_into_dependent_joins(plan)?;
         if rewrite_result.transformed {
-            println!("dependent join plan {}", rewrite_result.data);
             let mut decorrelator = DependentJoinDecorrelator::new_root();
             return Ok(Transformed::yes(
                 decorrelator.decorrelate_plan(rewrite_result.data)?,
@@ -933,7 +996,8 @@ mod tests {
         exists, expr_fn::col, in_subquery, lit, out_ref_col, scalar_subquery, Expr,
         LogicalPlan, LogicalPlanBuilder,
     };
-    use datafusion_functions_aggregate::count::count;
+    use datafusion_functions_aggregate::expr_fn;
+    use datafusion_functions_aggregate::{count::count, sum::sum};
     use std::sync::Arc;
     fn print_graphviz(plan: &LogicalPlan) {
         let rule: Arc<dyn OptimizerRule + Send + Sync> =
@@ -958,6 +1022,163 @@ mod tests {
                 @ $expected,
             )?;
         }};
+    }
+    #[test]
+    fn todo() -> Result<()> {
+        let outer_table = test_table_scan_with_name("outer_table")?;
+        let inner_table_lv1 = test_table_scan_with_name("inner_table_lv1")?;
+
+        let inner_table_lv2 = test_table_scan_with_name("inner_table_lv2")?;
+        let scalar_sq_level2 = Arc::new(
+            LogicalPlanBuilder::from(inner_table_lv2)
+                .filter(
+                    col("inner_table_lv2.a")
+                        .eq(out_ref_col(ArrowDataType::UInt32, "outer_table.a")),
+                )?
+                .aggregate(Vec::<Expr>::new(), vec![count(col("inner_table_lv2.a"))])?
+                .build()?,
+        );
+        let scalar_sq_level1 = Arc::new(
+            LogicalPlanBuilder::from(inner_table_lv1.clone())
+                .filter(
+                    col("inner_table_lv1.c")
+                        .eq(out_ref_col(ArrowDataType::UInt32, "outer_table.c"))
+                        .and(scalar_subquery(scalar_sq_level2).eq(lit(1))),
+                )?
+                .aggregate(Vec::<Expr>::new(), vec![count(col("inner_table_lv1.a"))])?
+                .build()?,
+        );
+
+        let plan = LogicalPlanBuilder::from(outer_table.clone())
+            .filter(scalar_subquery(scalar_sq_level1).eq(col("outer_table.a")))?
+            .build()?;
+        print_graphviz(&plan);
+
+        // Projection: outer_table.a, outer_table.b, outer_table.c
+        //   Filter: outer_table.a > Int32(1) AND __scalar_sq_2.output = outer_table.a
+        //     DependentJoin on [outer_table.a lvl 2, outer_table.c lvl 1] with expr (<subquery>) depth 1
+        //       TableScan: outer_table
+        //       Aggregate: groupBy=[[]], aggr=[[count(inner_table_lv1.a)]]
+        //         Projection: inner_table_lv1.a, inner_table_lv1.b, inner_table_lv1.c
+        //           Filter: inner_table_lv1.c = outer_ref(outer_table.c) AND __scalar_sq_1.output = Int32(1)
+        //             DependentJoin on [inner_table_lv1.b lvl 2] with expr (<subquery>) depth 2
+        //               TableScan: inner_table_lv1
+        //               Aggregate: groupBy=[[]], aggr=[[count(inner_table_lv2.a)]]
+        //                 Filter: inner_table_lv2.a = outer_ref(outer_table.a) AND inner_table_lv2.b = outer_ref(inner_table_lv1.b)
+        //                   TableScan: inner_table_lv2
+        assert_decorrelate!(plan, @r"
+        Projection: outer_table.a, outer_table.b, outer_table.c [a:UInt32, b:UInt32, c:UInt32]
+          Filter: __scalar_sq_2.output = outer_table.a [a:UInt32, b:UInt32, c:UInt32, count(inner_table_lv1.a):Int64;N, outer_table_c:UInt32;N, outer_table_c:UInt32;N, __scalar_sq_2.output:Int64;N]
+            Projection: outer_table.a, outer_table.b, outer_table.c, count(inner_table_lv1.a), delim_scan_2.outer_table_c, delim_scan_1.outer_table_c, count(inner_table_lv1.a) AS __scalar_sq_2.output [a:UInt32, b:UInt32, c:UInt32, count(inner_table_lv1.a):Int64;N, outer_table_c:UInt32;N, outer_table_c:UInt32;N, __scalar_sq_2.output:Int64;N]
+              Left Join(ComparisonJoin):  Filter: outer_table.a IS NOT DISTINCT FROM delim_scan_4.outer_table_a AND outer_table.c IS NOT DISTINCT FROM delim_scan_4.outer_table_c [a:UInt32, b:UInt32, c:UInt32, count(inner_table_lv1.a):Int64;N, outer_table_c:UInt32;N, outer_table_c:UInt32;N]
+                TableScan: outer_table [a:UInt32, b:UInt32, c:UInt32]
+                Inner Join(DelimJoin):  Filter: Boolean(true) [count(inner_table_lv1.a):Int64, outer_table_c:UInt32;N, outer_table_c:UInt32;N]
+                  Projection: CASE WHEN count(inner_table_lv1.a) IS NULL THEN Int32(0) ELSE count(inner_table_lv1.a) END, delim_scan_2.outer_table_c [count(inner_table_lv1.a):Int64, outer_table_c:UInt32;N]
+                    Aggregate: groupBy=[[delim_scan_2.outer_table_c]], aggr=[[count(inner_table_lv1.a)]] [outer_table_c:UInt32;N, count(inner_table_lv1.a):Int64]
+                      Projection: inner_table_lv1.a, inner_table_lv1.b, inner_table_lv1.c, delim_scan_2.outer_table_c [a:UInt32, b:UInt32, c:UInt32, outer_table_c:UInt32;N]
+                        Filter: inner_table_lv1.c = delim_scan_2.outer_table_c AND __scalar_sq_1.output = Int32(1) [a:UInt32, b:UInt32, c:UInt32, outer_table_c:UInt32;N, count(inner_table_lv2.a):Int64;N, outer_table_a:UInt32;N, outer_table_a:UInt32;N, __scalar_sq_1.output:Int64;N]
+                          Projection: inner_table_lv1.a, inner_table_lv1.b, inner_table_lv1.c, delim_scan_2.outer_table_c, count(inner_table_lv2.a), delim_scan_4.outer_table_a, delim_scan_3.outer_table_a, count(inner_table_lv2.a) AS __scalar_sq_1.output [a:UInt32, b:UInt32, c:UInt32, outer_table_c:UInt32;N, count(inner_table_lv2.a):Int64;N, outer_table_a:UInt32;N, outer_table_a:UInt32;N, __scalar_sq_1.output:Int64;N]
+                            Left Join(ComparisonJoin):  Filter: Boolean(true) [a:UInt32, b:UInt32, c:UInt32, outer_table_c:UInt32;N, count(inner_table_lv2.a):Int64;N, outer_table_a:UInt32;N, outer_table_a:UInt32;N]
+                              Inner Join(DelimJoin):  Filter: Boolean(true) [a:UInt32, b:UInt32, c:UInt32, outer_table_c:UInt32;N]
+                                TableScan: inner_table_lv1 [a:UInt32, b:UInt32, c:UInt32]
+                                SubqueryAlias: delim_scan_2 [outer_table_c:UInt32;N]
+                                  DelimGet: outer_table.c [outer_table_c:UInt32;N]
+                              Inner Join(DelimJoin):  Filter: Boolean(true) [count(inner_table_lv2.a):Int64, outer_table_a:UInt32;N, outer_table_a:UInt32;N]
+                                Projection: CASE WHEN count(inner_table_lv2.a) IS NULL THEN Int32(0) ELSE count(inner_table_lv2.a) END, delim_scan_4.outer_table_a [count(inner_table_lv2.a):Int64, outer_table_a:UInt32;N]
+                                  Aggregate: groupBy=[[delim_scan_4.outer_table_a]], aggr=[[count(inner_table_lv2.a)]] [outer_table_a:UInt32;N, count(inner_table_lv2.a):Int64]
+                                    Filter: inner_table_lv2.a = delim_scan_4.outer_table_a [a:UInt32, b:UInt32, c:UInt32, outer_table_a:UInt32;N]
+                                      Inner Join(DelimJoin):  Filter: Boolean(true) [a:UInt32, b:UInt32, c:UInt32, outer_table_a:UInt32;N]
+                                        TableScan: inner_table_lv2 [a:UInt32, b:UInt32, c:UInt32]
+                                        SubqueryAlias: delim_scan_4 [outer_table_a:UInt32;N]
+                                          DelimGet: outer_table.a [outer_table_a:UInt32;N]
+                                SubqueryAlias: delim_scan_3 [outer_table_a:UInt32;N]
+                                  DelimGet: outer_table.a [outer_table_a:UInt32;N]
+                  SubqueryAlias: delim_scan_1 [outer_table_c:UInt32;N]
+                    DelimGet: outer_table.c [outer_table_c:UInt32;N]
+        ");
+        Ok(())
+    }
+    #[test]
+    fn paper() -> Result<()> {
+        let outer_table = test_table_scan_with_name("T1")?;
+        let inner_table_lv1 = test_table_scan_with_name("T2")?;
+
+        let inner_table_lv2 = test_table_scan_with_name("T3")?;
+        let scalar_sq_level2 = Arc::new(
+            LogicalPlanBuilder::from(inner_table_lv2)
+                .filter(
+                    col("T3.b")
+                        .eq(out_ref_col(ArrowDataType::UInt32, "T2.b"))
+                        .and(col("T3.a").eq(out_ref_col(ArrowDataType::UInt32, "T1.a"))),
+                )?
+                .aggregate(Vec::<Expr>::new(), vec![sum(col("T3.a"))])?
+                .build()?,
+        );
+        let scalar_sq_level1 = Arc::new(
+            LogicalPlanBuilder::from(inner_table_lv1.clone())
+                .filter(
+                    col("T2.a")
+                        .eq(out_ref_col(ArrowDataType::UInt32, "T1.a"))
+                        .and(scalar_subquery(scalar_sq_level2).gt(lit(300000))),
+                )?
+                .aggregate(Vec::<Expr>::new(), vec![count(col("T2.a"))])?
+                .build()?,
+        );
+
+        let plan = LogicalPlanBuilder::from(outer_table.clone())
+            .filter(
+                col("T1.c")
+                    .eq(lit(123))
+                    .and(scalar_subquery(scalar_sq_level1).gt(lit(5))),
+            )?
+            .build()?;
+        print_graphviz(&plan);
+
+        // Projection: outer_table.a, outer_table.b, outer_table.c
+        //   Filter: outer_table.a > Int32(1) AND __scalar_sq_2.output = outer_table.a
+        //     DependentJoin on [outer_table.a lvl 2, outer_table.c lvl 1] with expr (<subquery>) depth 1
+        //       TableScan: outer_table
+        //       Aggregate: groupBy=[[]], aggr=[[count(inner_table_lv1.a)]]
+        //         Projection: inner_table_lv1.a, inner_table_lv1.b, inner_table_lv1.c
+        //           Filter: inner_table_lv1.c = outer_ref(outer_table.c) AND __scalar_sq_1.output = Int32(1)
+        //             DependentJoin on [inner_table_lv1.b lvl 2] with expr (<subquery>) depth 2
+        //               TableScan: inner_table_lv1
+        //               Aggregate: groupBy=[[]], aggr=[[count(inner_table_lv2.a)]]
+        //                 Filter: inner_table_lv2.a = outer_ref(outer_table.a) AND inner_table_lv2.b = outer_ref(inner_table_lv1.b)
+        //                   TableScan: inner_table_lv2
+        assert_decorrelate!(plan, @r"
+        Projection: t1.a, t1.b, t1.c [a:UInt32, b:UInt32, c:UInt32]
+          Filter: t1.c = Int32(123) AND __scalar_sq_2.output > Int32(5) [a:UInt32, b:UInt32, c:UInt32, CASE WHEN count(t2.a) IS NULL THEN Int32(0) ELSE count(t2.a) END:Int32;N, t1_a:UInt32;N, __scalar_sq_2.output:Int32;N]
+            Projection: t1.a, t1.b, t1.c, CASE WHEN count(t2.a) IS NULL THEN Int32(0) ELSE count(t2.a) END, delim_scan_2.t1_a, CASE WHEN count(t2.a) IS NULL THEN Int32(0) ELSE count(t2.a) END AS __scalar_sq_2.output [a:UInt32, b:UInt32, c:UInt32, CASE WHEN count(t2.a) IS NULL THEN Int32(0) ELSE count(t2.a) END:Int32;N, t1_a:UInt32;N, __scalar_sq_2.output:Int32;N]
+              Left Join(ComparisonJoin):  Filter: t1.a IS NOT DISTINCT FROM delim_scan_4.t1_a [a:UInt32, b:UInt32, c:UInt32, CASE WHEN count(t2.a) IS NULL THEN Int32(0) ELSE count(t2.a) END:Int32;N, t1_a:UInt32;N]
+                TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]
+                Projection: CASE WHEN count(t2.a) IS NULL THEN Int32(0) ELSE count(t2.a) END, delim_scan_2.t1_a [CASE WHEN count(t2.a) IS NULL THEN Int32(0) ELSE count(t2.a) END:Int32, t1_a:UInt32;N]
+                  Inner Join(DelimJoin):  Filter: delim_scan_2.t1_a IS NOT DISTINCT FROM delim_scan_1.t1_a [count(t2.a):Int64, t1_a:UInt32;N, t1_a:UInt32;N]
+                    Projection: CASE WHEN count(t2.a) IS NULL THEN Int32(0) ELSE count(t2.a) END, delim_scan_2.t1_a [count(t2.a):Int64, t1_a:UInt32;N]
+                      Aggregate: groupBy=[[delim_scan_2.t1_a]], aggr=[[count(t2.a)]] [t1_a:UInt32;N, count(t2.a):Int64]
+                        Projection: t2.a, t2.b, t2.c, delim_scan_2.t1_a [a:UInt32, b:UInt32, c:UInt32, t1_a:UInt32;N]
+                          Filter: t2.a = delim_scan_2.t1_a AND __scalar_sq_1.output > Int32(300000) [a:UInt32, b:UInt32, c:UInt32, t1_a:UInt32;N, sum(t3.a):UInt64;N, t1_a:UInt32;N, t2_b:UInt32;N, __scalar_sq_1.output:UInt64;N]
+                            Projection: t2.a, t2.b, t2.c, delim_scan_2.t1_a, sum(t3.a), delim_scan_4.t1_a, delim_scan_4.t2_b, sum(t3.a) AS __scalar_sq_1.output [a:UInt32, b:UInt32, c:UInt32, t1_a:UInt32;N, sum(t3.a):UInt64;N, t1_a:UInt32;N, t2_b:UInt32;N, __scalar_sq_1.output:UInt64;N]
+                              Left Join(ComparisonJoin):  Filter: t2.b IS NOT DISTINCT FROM delim_scan_4.t2_b [a:UInt32, b:UInt32, c:UInt32, t1_a:UInt32;N, sum(t3.a):UInt64;N, t1_a:UInt32;N, t2_b:UInt32;N]
+                                Inner Join(DelimJoin):  Filter: Boolean(true) [a:UInt32, b:UInt32, c:UInt32, t1_a:UInt32;N]
+                                  TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]
+                                  SubqueryAlias: delim_scan_2 [t1_a:UInt32;N]
+                                    DelimGet: t1.a [t1_a:UInt32;N]
+                                Projection: sum(t3.a), delim_scan_4.t1_a, delim_scan_4.t2_b [sum(t3.a):UInt64;N, t1_a:UInt32;N, t2_b:UInt32;N]
+                                  Inner Join(DelimJoin):  Filter: delim_scan_4.t2_b IS NOT DISTINCT FROM delim_scan_3.t2_b AND delim_scan_4.t1_a IS NOT DISTINCT FROM delim_scan_3.t1_a [sum(t3.a):UInt64;N, t1_a:UInt32;N, t2_b:UInt32;N, t2_b:UInt32;N, t1_a:UInt32;N]
+                                    Projection: sum(t3.a), delim_scan_4.t1_a, delim_scan_4.t2_b [sum(t3.a):UInt64;N, t1_a:UInt32;N, t2_b:UInt32;N]
+                                      Aggregate: groupBy=[[delim_scan_4.t2_b, delim_scan_4.t1_a]], aggr=[[sum(t3.a)]] [t2_b:UInt32;N, t1_a:UInt32;N, sum(t3.a):UInt64;N]
+                                        Filter: t3.b = delim_scan_4.t2_b AND t3.a = delim_scan_4.t1_a [a:UInt32, b:UInt32, c:UInt32, t2_b:UInt32;N, t1_a:UInt32;N]
+                                          Inner Join(DelimJoin):  Filter: Boolean(true) [a:UInt32, b:UInt32, c:UInt32, t2_b:UInt32;N, t1_a:UInt32;N]
+                                            TableScan: t3 [a:UInt32, b:UInt32, c:UInt32]
+                                            SubqueryAlias: delim_scan_4 [t2_b:UInt32;N, t1_a:UInt32;N]
+                                              DelimGet: t2.b, t1.a [t2_b:UInt32;N, t1_a:UInt32;N]
+                                    SubqueryAlias: delim_scan_3 [t2_b:UInt32;N, t1_a:UInt32;N]
+                                      DelimGet: t2.b, t1.a [t2_b:UInt32;N, t1_a:UInt32;N]
+                    SubqueryAlias: delim_scan_1 [t1_a:UInt32;N]
+                      DelimGet: t1.a [t1_a:UInt32;N]
+        ");
+        Ok(())
     }
 
     #[test]
@@ -1014,35 +1235,35 @@ mod tests {
         //                   TableScan: inner_table_lv2
         assert_decorrelate!(plan, @r"
         Projection: outer_table.a, outer_table.b, outer_table.c [a:UInt32, b:UInt32, c:UInt32]
-          Filter: outer_table.a > Int32(1) AND __scalar_sq_2.output = outer_table.a [a:UInt32, b:UInt32, c:UInt32, CASE WHEN count(inner_table_lv1.a) IS NULL THEN Int32(0) ELSE count(inner_table_lv1.a) END:Int32;N, outer_table_c:UInt32;N, outer_table_a:UInt32;N, __scalar_sq_2.output:Int32;N]
-            Projection: outer_table.a, outer_table.b, outer_table.c, CASE WHEN count(inner_table_lv1.a) IS NULL THEN Int32(0) ELSE count(inner_table_lv1.a) END, delim_scan_4.outer_table_c, delim_scan_4.outer_table_a, CASE WHEN count(inner_table_lv1.a) IS NULL THEN Int32(0) ELSE count(inner_table_lv1.a) END AS __scalar_sq_2.output [a:UInt32, b:UInt32, c:UInt32, CASE WHEN count(inner_table_lv1.a) IS NULL THEN Int32(0) ELSE count(inner_table_lv1.a) END:Int32;N, outer_table_c:UInt32;N, outer_table_a:UInt32;N, __scalar_sq_2.output:Int32;N]
-              Left Join(ComparisonJoin):  Filter: outer_table.a IS NOT DISTINCT FROM delim_scan_4.outer_table_a AND outer_table.c IS NOT DISTINCT FROM delim_scan_4.outer_table_c [a:UInt32, b:UInt32, c:UInt32, CASE WHEN count(inner_table_lv1.a) IS NULL THEN Int32(0) ELSE count(inner_table_lv1.a) END:Int32;N, outer_table_c:UInt32;N, outer_table_a:UInt32;N]
+          Filter: outer_table.a > Int32(1) AND __scalar_sq_2.output = outer_table.a [a:UInt32, b:UInt32, c:UInt32, CASE WHEN count(inner_table_lv1.a) IS NULL THEN Int32(0) ELSE count(inner_table_lv1.a) END:Int32;N, outer_table_c:UInt32;N, __scalar_sq_2.output:Int32;N]
+            Projection: outer_table.a, outer_table.b, outer_table.c, CASE WHEN count(inner_table_lv1.a) IS NULL THEN Int32(0) ELSE count(inner_table_lv1.a) END, delim_scan_2.outer_table_c, CASE WHEN count(inner_table_lv1.a) IS NULL THEN Int32(0) ELSE count(inner_table_lv1.a) END AS __scalar_sq_2.output [a:UInt32, b:UInt32, c:UInt32, CASE WHEN count(inner_table_lv1.a) IS NULL THEN Int32(0) ELSE count(inner_table_lv1.a) END:Int32;N, outer_table_c:UInt32;N, __scalar_sq_2.output:Int32;N]
+              Left Join(ComparisonJoin):  Filter: outer_table.a IS NOT DISTINCT FROM delim_scan_4.outer_table_a AND outer_table.c IS NOT DISTINCT FROM delim_scan_4.outer_table_c [a:UInt32, b:UInt32, c:UInt32, CASE WHEN count(inner_table_lv1.a) IS NULL THEN Int32(0) ELSE count(inner_table_lv1.a) END:Int32;N, outer_table_c:UInt32;N]
                 TableScan: outer_table [a:UInt32, b:UInt32, c:UInt32]
-                Projection: CASE WHEN count(inner_table_lv1.a) IS NULL THEN Int32(0) ELSE count(inner_table_lv1.a) END, delim_scan_4.outer_table_c, delim_scan_4.outer_table_a [CASE WHEN count(inner_table_lv1.a) IS NULL THEN Int32(0) ELSE count(inner_table_lv1.a) END:Int32, outer_table_c:UInt32;N, outer_table_a:UInt32;N]
-                  Inner Join(DelimJoin):  Filter: delim_scan_4.outer_table_a IS NOT DISTINCT FROM delim_scan_1.outer_table_a AND delim_scan_4.outer_table_c IS NOT DISTINCT FROM delim_scan_1.outer_table_c [count(inner_table_lv1.a):Int64, outer_table_c:UInt32;N, outer_table_a:UInt32;N, outer_table_a:UInt32;N, outer_table_c:UInt32;N]
-                    Projection: CASE WHEN count(inner_table_lv1.a) IS NULL THEN Int32(0) ELSE count(inner_table_lv1.a) END, delim_scan_4.outer_table_c, delim_scan_4.outer_table_a [count(inner_table_lv1.a):Int64, outer_table_c:UInt32;N, outer_table_a:UInt32;N]
-                      Aggregate: groupBy=[[delim_scan_4.outer_table_a, delim_scan_4.outer_table_c]], aggr=[[count(inner_table_lv1.a)]] [outer_table_a:UInt32;N, outer_table_c:UInt32;N, count(inner_table_lv1.a):Int64]
-                        Projection: inner_table_lv1.a, inner_table_lv1.b, inner_table_lv1.c, delim_scan_4.outer_table_a, delim_scan_4.outer_table_c [a:UInt32, b:UInt32, c:UInt32, outer_table_a:UInt32;N, outer_table_c:UInt32;N]
-                          Filter: inner_table_lv1.c = delim_scan_4.outer_table_c AND __scalar_sq_1.output = Int32(1) [a:UInt32, b:UInt32, c:UInt32, outer_table_a:UInt32;N, outer_table_c:UInt32;N, CASE WHEN count(inner_table_lv2.a) IS NULL THEN Int32(0) ELSE count(inner_table_lv2.a) END:Int32;N, outer_table_c:UInt32;N, outer_table_a:UInt32;N, inner_table_lv1_b:UInt32;N, __scalar_sq_1.output:Int32;N]
-                            Projection: inner_table_lv1.a, inner_table_lv1.b, inner_table_lv1.c, delim_scan_2.outer_table_a, delim_scan_2.outer_table_c, CASE WHEN count(inner_table_lv2.a) IS NULL THEN Int32(0) ELSE count(inner_table_lv2.a) END, delim_scan_4.outer_table_c, delim_scan_4.outer_table_a, delim_scan_4.inner_table_lv1_b, CASE WHEN count(inner_table_lv2.a) IS NULL THEN Int32(0) ELSE count(inner_table_lv2.a) END AS __scalar_sq_1.output [a:UInt32, b:UInt32, c:UInt32, outer_table_a:UInt32;N, outer_table_c:UInt32;N, CASE WHEN count(inner_table_lv2.a) IS NULL THEN Int32(0) ELSE count(inner_table_lv2.a) END:Int32;N, outer_table_c:UInt32;N, outer_table_a:UInt32;N, inner_table_lv1_b:UInt32;N, __scalar_sq_1.output:Int32;N]
-                              Left Join(ComparisonJoin):  Filter: inner_table_lv1.b IS NOT DISTINCT FROM delim_scan_4.inner_table_lv1_b [a:UInt32, b:UInt32, c:UInt32, outer_table_a:UInt32;N, outer_table_c:UInt32;N, CASE WHEN count(inner_table_lv2.a) IS NULL THEN Int32(0) ELSE count(inner_table_lv2.a) END:Int32;N, outer_table_c:UInt32;N, outer_table_a:UInt32;N, inner_table_lv1_b:UInt32;N]
-                                Inner Join(DelimJoin):  Filter: Boolean(true) [a:UInt32, b:UInt32, c:UInt32, outer_table_a:UInt32;N, outer_table_c:UInt32;N]
+                Projection: CASE WHEN count(inner_table_lv1.a) IS NULL THEN Int32(0) ELSE count(inner_table_lv1.a) END, delim_scan_2.outer_table_c [CASE WHEN count(inner_table_lv1.a) IS NULL THEN Int32(0) ELSE count(inner_table_lv1.a) END:Int32, outer_table_c:UInt32;N]
+                  Inner Join(DelimJoin):  Filter: delim_scan_2.outer_table_c IS NOT DISTINCT FROM delim_scan_1.outer_table_c [count(inner_table_lv1.a):Int64, outer_table_c:UInt32;N, outer_table_c:UInt32;N]
+                    Projection: CASE WHEN count(inner_table_lv1.a) IS NULL THEN Int32(0) ELSE count(inner_table_lv1.a) END, delim_scan_2.outer_table_c [count(inner_table_lv1.a):Int64, outer_table_c:UInt32;N]
+                      Aggregate: groupBy=[[delim_scan_2.outer_table_c]], aggr=[[count(inner_table_lv1.a)]] [outer_table_c:UInt32;N, count(inner_table_lv1.a):Int64]
+                        Projection: inner_table_lv1.a, inner_table_lv1.b, inner_table_lv1.c, delim_scan_2.outer_table_c [a:UInt32, b:UInt32, c:UInt32, outer_table_c:UInt32;N]
+                          Filter: inner_table_lv1.c = delim_scan_2.outer_table_c AND __scalar_sq_1.output = Int32(1) [a:UInt32, b:UInt32, c:UInt32, outer_table_c:UInt32;N, CASE WHEN count(inner_table_lv2.a) IS NULL THEN Int32(0) ELSE count(inner_table_lv2.a) END:Int32;N, outer_table_a:UInt32;N, inner_table_lv1_b:UInt32;N, __scalar_sq_1.output:Int32;N]
+                            Projection: inner_table_lv1.a, inner_table_lv1.b, inner_table_lv1.c, delim_scan_2.outer_table_c, CASE WHEN count(inner_table_lv2.a) IS NULL THEN Int32(0) ELSE count(inner_table_lv2.a) END, delim_scan_4.outer_table_a, delim_scan_4.inner_table_lv1_b, CASE WHEN count(inner_table_lv2.a) IS NULL THEN Int32(0) ELSE count(inner_table_lv2.a) END AS __scalar_sq_1.output [a:UInt32, b:UInt32, c:UInt32, outer_table_c:UInt32;N, CASE WHEN count(inner_table_lv2.a) IS NULL THEN Int32(0) ELSE count(inner_table_lv2.a) END:Int32;N, outer_table_a:UInt32;N, inner_table_lv1_b:UInt32;N, __scalar_sq_1.output:Int32;N]
+                              Left Join(ComparisonJoin):  Filter: inner_table_lv1.b IS NOT DISTINCT FROM delim_scan_4.inner_table_lv1_b [a:UInt32, b:UInt32, c:UInt32, outer_table_c:UInt32;N, CASE WHEN count(inner_table_lv2.a) IS NULL THEN Int32(0) ELSE count(inner_table_lv2.a) END:Int32;N, outer_table_a:UInt32;N, inner_table_lv1_b:UInt32;N]
+                                Inner Join(DelimJoin):  Filter: Boolean(true) [a:UInt32, b:UInt32, c:UInt32, outer_table_c:UInt32;N]
                                   TableScan: inner_table_lv1 [a:UInt32, b:UInt32, c:UInt32]
-                                  SubqueryAlias: delim_scan_2 [outer_table_a:UInt32;N, outer_table_c:UInt32;N]
-                                    DelimGet: outer_table.a, outer_table.c [outer_table_a:UInt32;N, outer_table_c:UInt32;N]
-                                Projection: CASE WHEN count(inner_table_lv2.a) IS NULL THEN Int32(0) ELSE count(inner_table_lv2.a) END, delim_scan_4.outer_table_c, delim_scan_4.outer_table_a, delim_scan_4.inner_table_lv1_b [CASE WHEN count(inner_table_lv2.a) IS NULL THEN Int32(0) ELSE count(inner_table_lv2.a) END:Int32, outer_table_c:UInt32;N, outer_table_a:UInt32;N, inner_table_lv1_b:UInt32;N]
-                                  Inner Join(DelimJoin):  Filter: delim_scan_4.inner_table_lv1_b IS NOT DISTINCT FROM delim_scan_3.inner_table_lv1_b AND delim_scan_4.outer_table_a IS NOT DISTINCT FROM delim_scan_3.outer_table_a AND delim_scan_4.outer_table_c IS NOT DISTINCT FROM delim_scan_3.outer_table_c [count(inner_table_lv2.a):Int64, outer_table_c:UInt32;N, outer_table_a:UInt32;N, inner_table_lv1_b:UInt32;N, inner_table_lv1_b:UInt32;N, outer_table_a:UInt32;N, outer_table_c:UInt32;N]
-                                    Projection: CASE WHEN count(inner_table_lv2.a) IS NULL THEN Int32(0) ELSE count(inner_table_lv2.a) END, delim_scan_4.outer_table_c, delim_scan_4.outer_table_a, delim_scan_4.inner_table_lv1_b [count(inner_table_lv2.a):Int64, outer_table_c:UInt32;N, outer_table_a:UInt32;N, inner_table_lv1_b:UInt32;N]
-                                      Aggregate: groupBy=[[delim_scan_4.inner_table_lv1_b, delim_scan_4.outer_table_a, delim_scan_4.outer_table_c]], aggr=[[count(inner_table_lv2.a)]] [inner_table_lv1_b:UInt32;N, outer_table_a:UInt32;N, outer_table_c:UInt32;N, count(inner_table_lv2.a):Int64]
-                                        Filter: inner_table_lv2.a = delim_scan_4.outer_table_a AND inner_table_lv2.b = delim_scan_4.inner_table_lv1_b [a:UInt32, b:UInt32, c:UInt32, inner_table_lv1_b:UInt32;N, outer_table_a:UInt32;N, outer_table_c:UInt32;N]
-                                          Inner Join(DelimJoin):  Filter: Boolean(true) [a:UInt32, b:UInt32, c:UInt32, inner_table_lv1_b:UInt32;N, outer_table_a:UInt32;N, outer_table_c:UInt32;N]
+                                  SubqueryAlias: delim_scan_2 [outer_table_c:UInt32;N]
+                                    DelimGet: outer_table.c [outer_table_c:UInt32;N]
+                                Projection: CASE WHEN count(inner_table_lv2.a) IS NULL THEN Int32(0) ELSE count(inner_table_lv2.a) END, delim_scan_4.outer_table_a, delim_scan_4.inner_table_lv1_b [CASE WHEN count(inner_table_lv2.a) IS NULL THEN Int32(0) ELSE count(inner_table_lv2.a) END:Int32, outer_table_a:UInt32;N, inner_table_lv1_b:UInt32;N]
+                                  Inner Join(DelimJoin):  Filter: delim_scan_4.inner_table_lv1_b IS NOT DISTINCT FROM delim_scan_3.inner_table_lv1_b AND delim_scan_4.outer_table_a IS NOT DISTINCT FROM delim_scan_3.outer_table_a [count(inner_table_lv2.a):Int64, outer_table_a:UInt32;N, inner_table_lv1_b:UInt32;N, inner_table_lv1_b:UInt32;N, outer_table_a:UInt32;N]
+                                    Projection: CASE WHEN count(inner_table_lv2.a) IS NULL THEN Int32(0) ELSE count(inner_table_lv2.a) END, delim_scan_4.outer_table_a, delim_scan_4.inner_table_lv1_b [count(inner_table_lv2.a):Int64, outer_table_a:UInt32;N, inner_table_lv1_b:UInt32;N]
+                                      Aggregate: groupBy=[[delim_scan_4.inner_table_lv1_b, delim_scan_4.outer_table_a]], aggr=[[count(inner_table_lv2.a)]] [inner_table_lv1_b:UInt32;N, outer_table_a:UInt32;N, count(inner_table_lv2.a):Int64]
+                                        Filter: inner_table_lv2.a = delim_scan_4.outer_table_a AND inner_table_lv2.b = delim_scan_4.inner_table_lv1_b [a:UInt32, b:UInt32, c:UInt32, inner_table_lv1_b:UInt32;N, outer_table_a:UInt32;N]
+                                          Inner Join(DelimJoin):  Filter: Boolean(true) [a:UInt32, b:UInt32, c:UInt32, inner_table_lv1_b:UInt32;N, outer_table_a:UInt32;N]
                                             TableScan: inner_table_lv2 [a:UInt32, b:UInt32, c:UInt32]
-                                            SubqueryAlias: delim_scan_4 [inner_table_lv1_b:UInt32;N, outer_table_a:UInt32;N, outer_table_c:UInt32;N]
-                                              DelimGet: inner_table_lv1.b, outer_table.a, outer_table.c [inner_table_lv1_b:UInt32;N, outer_table_a:UInt32;N, outer_table_c:UInt32;N]
-                                    SubqueryAlias: delim_scan_3 [inner_table_lv1_b:UInt32;N, outer_table_a:UInt32;N, outer_table_c:UInt32;N]
-                                      DelimGet: inner_table_lv1.b, outer_table.a, outer_table.c [inner_table_lv1_b:UInt32;N, outer_table_a:UInt32;N, outer_table_c:UInt32;N]
-                    SubqueryAlias: delim_scan_1 [outer_table_a:UInt32;N, outer_table_c:UInt32;N]
-                      DelimGet: outer_table.a, outer_table.c [outer_table_a:UInt32;N, outer_table_c:UInt32;N]
+                                            SubqueryAlias: delim_scan_4 [inner_table_lv1_b:UInt32;N, outer_table_a:UInt32;N]
+                                              DelimGet: inner_table_lv1.b, outer_table.a [inner_table_lv1_b:UInt32;N, outer_table_a:UInt32;N]
+                                    SubqueryAlias: delim_scan_3 [inner_table_lv1_b:UInt32;N, outer_table_a:UInt32;N]
+                                      DelimGet: inner_table_lv1.b, outer_table.a [inner_table_lv1_b:UInt32;N, outer_table_a:UInt32;N]
+                    SubqueryAlias: delim_scan_1 [outer_table_c:UInt32;N]
+                      DelimGet: outer_table.c [outer_table_c:UInt32;N]
         ");
         Ok(())
     }
