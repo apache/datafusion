@@ -29,6 +29,10 @@ use crate::PhysicalExpr;
 pub mod unwrap_cast;
 
 /// Simplifies physical expressions by applying various optimizations
+///
+/// This can be useful after adapting expressions from a table schema
+/// to a file schema. For example, casts added to match the types may
+/// potentially be unwrapped.
 pub struct PhysicalExprSimplifier<'a> {
     schema: &'a Schema,
 }

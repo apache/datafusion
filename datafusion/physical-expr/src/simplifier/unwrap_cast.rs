@@ -69,13 +69,15 @@ fn try_unwrap_cast_binary(
         extract_cast_info(binary.left()),
         binary.right().as_any().downcast_ref::<Literal>(),
     ) {
-        if let Some(unwrapped) = try_unwrap_cast_comparison(
-            Arc::clone(inner_expr),
-            literal.value(),
-            *binary.op(),
-            schema,
-        )? {
-            return Ok(Some(unwrapped));
+        if binary.op().supports_propagation() {
+            if let Some(unwrapped) = try_unwrap_cast_comparison(
+                Arc::clone(inner_expr),
+                literal.value(),
+                *binary.op(),
+                schema,
+            )? {
+                return Ok(Some(unwrapped));
+            }
         }
     }
 
@@ -85,22 +87,29 @@ fn try_unwrap_cast_binary(
         extract_cast_info(binary.right()),
     ) {
         // For literal op cast(expr), we need to swap the operator
-        let swapped_op = swap_operator(*binary.op());
-        if let Some(unwrapped) = try_unwrap_cast_comparison(
-            Arc::clone(inner_expr),
-            literal.value(),
-            swapped_op,
-            schema,
-        )? {
-            // unwrapped is already the correct expression: inner_expr swapped_op casted_literal
-            return Ok(Some(unwrapped));
+        if let Some(swapped_op) = binary.op().swap() {
+            if binary.op().supports_propagation() {
+                if let Some(unwrapped) = try_unwrap_cast_comparison(
+                    Arc::clone(inner_expr),
+                    literal.value(),
+                    swapped_op,
+                    schema,
+                )? {
+                    return Ok(Some(unwrapped));
+                }
+            }
         }
+        // If the operator cannot be swapped, we skip this optimization case
+        // but don't prevent other optimizations
     }
 
     Ok(None)
 }
 
 /// Extract cast information from a physical expression
+///
+/// If the expression is a CAST(expr, datatype) or TRY_CAST(expr, datatype),
+/// returns Some((inner_expr, target_datatype)). Otherwise returns None.
 fn extract_cast_info(
     expr: &Arc<dyn PhysicalExpr>,
 ) -> Option<(&Arc<dyn PhysicalExpr>, &DataType)> {
@@ -131,20 +140,6 @@ fn try_unwrap_cast_comparison(
     }
 
     Ok(None)
-}
-
-/// Swap comparison operators for right-side cast unwrapping
-fn swap_operator(op: Operator) -> Operator {
-    match op {
-        Operator::Lt => Operator::Gt,
-        Operator::LtEq => Operator::GtEq,
-        Operator::Gt => Operator::Lt,
-        Operator::GtEq => Operator::LtEq,
-        // Symmetric operators remain the same
-        Operator::Eq | Operator::NotEq => op,
-        // Other operators are not swappable
-        _ => op,
-    }
 }
 
 #[cfg(test)]
@@ -190,7 +185,7 @@ mod tests {
         // Create: cast(c1 as INT64) > INT64(10)
         let column_expr = col("c1", &schema).unwrap();
         let cast_expr = Arc::new(CastExpr::new(column_expr, DataType::Int64, None));
-        let literal_expr = lit(ScalarValue::Int64(Some(10)));
+        let literal_expr = lit(10i64);
         let binary_expr =
             Arc::new(BinaryExpr::new(cast_expr, Operator::Gt, literal_expr));
 
@@ -223,7 +218,7 @@ mod tests {
         // Create: INT64(10) < cast(c1 as INT64)
         let column_expr = col("c1", &schema).unwrap();
         let cast_expr = Arc::new(CastExpr::new(column_expr, DataType::Int64, None));
-        let literal_expr = lit(ScalarValue::Int64(Some(10)));
+        let literal_expr = lit(10i64);
         let binary_expr =
             Arc::new(BinaryExpr::new(literal_expr, Operator::Lt, cast_expr));
 
@@ -248,7 +243,7 @@ mod tests {
         // Create: cast(f1 as FLOAT64) > FLOAT64(10.5)
         let column_expr = col("f1", &schema).unwrap();
         let cast_expr = Arc::new(CastExpr::new(column_expr, DataType::Float64, None));
-        let literal_expr = lit(ScalarValue::Float64(Some(10.5)));
+        let literal_expr = lit(10.5f64);
         let binary_expr =
             Arc::new(BinaryExpr::new(cast_expr, Operator::Gt, literal_expr));
 
@@ -271,16 +266,6 @@ mod tests {
         let binary_ref = binary_expr.as_any().downcast_ref::<BinaryExpr>().unwrap();
 
         assert!(is_binary_expr_with_cast_and_literal(binary_ref));
-    }
-
-    #[test]
-    fn test_swap_operator() {
-        assert_eq!(swap_operator(Operator::Lt), Operator::Gt);
-        assert_eq!(swap_operator(Operator::LtEq), Operator::GtEq);
-        assert_eq!(swap_operator(Operator::Gt), Operator::Lt);
-        assert_eq!(swap_operator(Operator::GtEq), Operator::LtEq);
-        assert_eq!(swap_operator(Operator::Eq), Operator::Eq);
-        assert_eq!(swap_operator(Operator::NotEq), Operator::NotEq);
     }
 
     #[test]
@@ -350,7 +335,7 @@ mod tests {
             // Create: INT64(100) op cast(int_col as INT64)
             let column_expr = col("int_col", &schema).unwrap();
             let cast_expr = Arc::new(CastExpr::new(column_expr, DataType::Int64, None));
-            let literal_expr = lit(ScalarValue::Int64(Some(100)));
+            let literal_expr = lit(100i64);
             let binary_expr =
                 Arc::new(BinaryExpr::new(literal_expr, original_op, cast_expr));
 
@@ -493,11 +478,11 @@ mod tests {
             DataType::Int64,
             None,
         ));
-        let lit1 = lit(ScalarValue::Int64(Some(10)));
+        let lit1 = lit(10i64);
         let compare1 = Arc::new(BinaryExpr::new(cast1, Operator::Gt, lit1));
 
         let cast2 = Arc::new(CastExpr::new(column_expr, DataType::Int64, None));
-        let lit2 = lit(ScalarValue::Int64(Some(20)));
+        let lit2 = lit(20i64);
         let compare2 = Arc::new(BinaryExpr::new(cast2, Operator::Lt, lit2));
 
         let and_expr = Arc::new(BinaryExpr::new(compare1, Operator::And, compare2));
@@ -536,7 +521,7 @@ mod tests {
         // Create: try_cast(c1 as INT64) <= INT64(100)
         let column_expr = col("c1", &schema).unwrap();
         let try_cast_expr = Arc::new(TryCastExpr::new(column_expr, DataType::Int64));
-        let literal_expr = lit(ScalarValue::Int64(Some(100)));
+        let literal_expr = lit(100i64);
         let binary_expr =
             Arc::new(BinaryExpr::new(try_cast_expr, Operator::LtEq, literal_expr));
 
@@ -562,6 +547,46 @@ mod tests {
     }
 
     #[test]
+    fn test_non_swappable_operator() {
+        // Test case with an operator that cannot be swapped
+        let schema = Schema::new(vec![Field::new("int_col", DataType::Int32, false)]);
+
+        // Create: INT64(10) + cast(int_col as INT64)
+        // The Plus operator cannot be swapped, so this should not be transformed
+        let column_expr = col("int_col", &schema).unwrap();
+        let cast_expr = Arc::new(CastExpr::new(column_expr, DataType::Int64, None));
+        let literal_expr = lit(10i64);
+        let binary_expr =
+            Arc::new(BinaryExpr::new(literal_expr, Operator::Plus, cast_expr));
+
+        // Apply unwrap cast optimization
+        let result = unwrap_cast_in_comparison(binary_expr, &schema).unwrap();
+
+        // Should NOT be transformed because Plus cannot be swapped
+        assert!(!result.transformed);
+    }
+
+    #[test]
+    fn test_cast_that_cannot_be_unwrapped_overflow() {
+        // Test case where the literal value would overflow the target type
+        let schema = Schema::new(vec![Field::new("small_int", DataType::Int8, false)]);
+
+        // Create: cast(small_int as INT64) > INT64(1000)
+        // This should NOT be unwrapped because 1000 cannot fit in Int8 (max value is 127)
+        let column_expr = col("small_int", &schema).unwrap();
+        let cast_expr = Arc::new(CastExpr::new(column_expr, DataType::Int64, None));
+        let literal_expr = lit(ScalarValue::Int64(Some(1000))); // Value too large for Int8
+        let binary_expr =
+            Arc::new(BinaryExpr::new(cast_expr, Operator::Gt, literal_expr));
+
+        // Apply unwrap cast optimization
+        let result = unwrap_cast_in_comparison(binary_expr, &schema).unwrap();
+
+        // Should NOT be transformed due to overflow
+        assert!(!result.transformed);
+    }
+
+    #[test]
     fn test_complex_nested_expression() {
         let schema = test_schema();
 
@@ -569,12 +594,12 @@ mod tests {
         // (cast(c1 as INT64) > INT64(10)) AND (cast(c2 as INT32) = INT32(20))
         let c1_expr = col("c1", &schema).unwrap();
         let c1_cast = Arc::new(CastExpr::new(c1_expr, DataType::Int64, None));
-        let c1_literal = lit(ScalarValue::Int64(Some(10)));
+        let c1_literal = lit(10i64);
         let c1_binary = Arc::new(BinaryExpr::new(c1_cast, Operator::Gt, c1_literal));
 
         let c2_expr = col("c2", &schema).unwrap();
         let c2_cast = Arc::new(CastExpr::new(c2_expr, DataType::Int32, None));
-        let c2_literal = lit(ScalarValue::Int32(Some(20)));
+        let c2_literal = lit(20i32);
         let c2_binary = Arc::new(BinaryExpr::new(c2_cast, Operator::Eq, c2_literal));
 
         // Create AND expression

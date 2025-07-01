@@ -235,6 +235,9 @@ impl FileOpener for ParquetOpener {
                     .rewrite(p)
                     .map_err(ArrowError::from)
                     .map(|p| {
+                        // After rewriting to the file schema, further simplifications may be possible.
+                        // For example, if `'a' = col_that_is_missing` becomes `'a' = NULL` that can then be simplified to `FALSE`
+                        // and we can avoid doing any more work on the file (bloom filters, loading the page index, etc.).
                         PhysicalExprSimplifier::new(&physical_file_schema)
                             .simplify(p)
                             .map_err(ArrowError::from)
