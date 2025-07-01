@@ -180,85 +180,109 @@ SELECT TIMESTAMPTZ '2000-01-01T01:01:01'
 ## cast tests
 ##########
 
-query PPPBB
-SELECT *, t1 = t2, t1 = t3
+query BPPPPPP
+SELECT t1 = t2 AND t1 = t3 AND t1 = t4 AND t1 = t5 AND t1 = t6, *
 FROM (SELECT
-    (SELECT CAST(CAST(1 AS double) AS timestamp(0))) AS t1,
-    (SELECT CAST(CAST(one AS double) AS timestamp(0)) FROM (SELECT 1 AS one)) AS t2,
-    (SELECT CAST(CAST(one AS double) AS timestamp(0)) FROM (VALUES (1)) t(one)) AS t3
+    (SELECT CAST(CAST(1 AS float) AS timestamp(0))) AS t1,
+    (SELECT CAST(CAST(one AS float) AS timestamp(0)) FROM (SELECT 1 AS one)) AS t2,
+    (SELECT CAST(CAST(one AS float) AS timestamp(0)) FROM (VALUES (1)) t(one)) AS t3,
+    (SELECT CAST(CAST(1 AS double) AS timestamp(0))) AS t4,
+    (SELECT CAST(CAST(one AS double) AS timestamp(0)) FROM (SELECT 1 AS one)) AS t5,
+    (SELECT CAST(CAST(one AS double) AS timestamp(0)) FROM (VALUES (1)) t(one)) AS t6
 )
 ----
-1970-01-01T00:00:01 1970-01-01T00:00:01 1970-01-01T00:00:01 true true
+true 1970-01-01T00:00:01 1970-01-01T00:00:01 1970-01-01T00:00:01 1970-01-01T00:00:01 1970-01-01T00:00:01 1970-01-01T00:00:01
 
-query PPPBB
-SELECT *, t1 = t2, t1 = t3
+query BPPPPPP
+SELECT t1 = t2 AND t1 = t3 AND t1 = t4 AND t1 = t5 AND t1 = t6, *
 FROM (SELECT
-    (SELECT CAST(CAST(1 AS double) AS timestamp(3))) AS t1,
-    (SELECT CAST(CAST(one AS double) AS timestamp(3)) FROM (SELECT 1 AS one)) AS t2,
-    (SELECT CAST(CAST(one AS double) AS timestamp(3)) FROM (VALUES (1)) t(one)) AS t3
+    (SELECT CAST(CAST(1 AS float) AS timestamp(3))) AS t1,
+    (SELECT CAST(CAST(one AS float) AS timestamp(3)) FROM (SELECT 1 AS one)) AS t2,
+    (SELECT CAST(CAST(one AS float) AS timestamp(3)) FROM (VALUES (1)) t(one)) AS t3,
+    (SELECT CAST(CAST(1 AS double) AS timestamp(3))) AS t4,
+    (SELECT CAST(CAST(one AS double) AS timestamp(3)) FROM (SELECT 1 AS one)) AS t5,
+    (SELECT CAST(CAST(one AS double) AS timestamp(3)) FROM (VALUES (1)) t(one)) AS t6
 )
 ----
-1970-01-01T00:00:00.001 1970-01-01T00:00:00.001 1970-01-01T00:00:00.001 true true
+true 1970-01-01T00:00:00.001 1970-01-01T00:00:00.001 1970-01-01T00:00:00.001 1970-01-01T00:00:00.001 1970-01-01T00:00:00.001 1970-01-01T00:00:00.001
 
-query PPPBB
-SELECT *, t1 = t2, t1 = t3
+query BPPPPPP
+SELECT t1 = t2 AND t1 = t3 AND t1 = t4 AND t1 = t5 AND t1 = t6, *
 FROM (SELECT
-    (SELECT CAST(CAST(1 AS double) AS timestamp(6))) AS t1,
-    (SELECT CAST(CAST(one AS double) AS timestamp(6)) FROM (SELECT 1 AS one)) AS t2,
-    (SELECT CAST(CAST(one AS double) AS timestamp(6)) FROM (VALUES (1)) t(one)) AS t3
+    (SELECT CAST(CAST(1 AS float) AS timestamp(6))) AS t1,
+    (SELECT CAST(CAST(one AS float) AS timestamp(6)) FROM (SELECT 1 AS one)) AS t2,
+    (SELECT CAST(CAST(one AS float) AS timestamp(6)) FROM (VALUES (1)) t(one)) AS t3,
+    (SELECT CAST(CAST(1 AS double) AS timestamp(6))) AS t4,
+    (SELECT CAST(CAST(one AS double) AS timestamp(6)) FROM (SELECT 1 AS one)) AS t5,
+    (SELECT CAST(CAST(one AS double) AS timestamp(6)) FROM (VALUES (1)) t(one)) AS t6
 )
 ----
-1970-01-01T00:00:00.000001 1970-01-01T00:00:00.000001 1970-01-01T00:00:00.000001 true true
+true 1970-01-01T00:00:00.000001 1970-01-01T00:00:00.000001 1970-01-01T00:00:00.000001 1970-01-01T00:00:00.000001 1970-01-01T00:00:00.000001 1970-01-01T00:00:00.000001
 
-query PPPBB
-SELECT *, t1 = t2, t1 = t3
+query BPPPPPP
+SELECT t1 = t2 AND t1 = t3 AND t1 = t4 AND t1 = t5 AND t1 = t6, *
 FROM (SELECT
-    (SELECT CAST(CAST(1 AS double) AS timestamp(9))) AS t1,
-    (SELECT CAST(CAST(one AS double) AS timestamp(9)) FROM (SELECT 1 AS one)) AS t2,
-    (SELECT CAST(CAST(one AS double) AS timestamp(9)) FROM (VALUES (1)) t(one)) AS t3
+    (SELECT CAST(CAST(1 AS float) AS timestamp(9))) AS t1,
+    (SELECT CAST(CAST(one AS float) AS timestamp(9)) FROM (SELECT 1 AS one)) AS t2,
+    (SELECT CAST(CAST(one AS float) AS timestamp(9)) FROM (VALUES (1)) t(one)) AS t3,
+    (SELECT CAST(CAST(1 AS double) AS timestamp(9))) AS t4,
+    (SELECT CAST(CAST(one AS double) AS timestamp(9)) FROM (SELECT 1 AS one)) AS t5,
+    (SELECT CAST(CAST(one AS double) AS timestamp(9)) FROM (VALUES (1)) t(one)) AS t6
 )
 ----
-1970-01-01T00:00:00.000000001 1970-01-01T00:00:00.000000001 1970-01-01T00:00:00.000000001 true true
+true 1970-01-01T00:00:00.000000001 1970-01-01T00:00:00.000000001 1970-01-01T00:00:00.000000001 1970-01-01T00:00:00.000000001 1970-01-01T00:00:00.000000001 1970-01-01T00:00:00.000000001
 
-query PPPBB
-SELECT *, t1 = t2, t1 = t3
+query BPPPPPP
+SELECT t1 = t2 AND t1 = t3 AND t1 = t4 AND t1 = t5 AND t1 = t6, *
 FROM (SELECT
-    (SELECT CAST(CAST(1.125 AS double) AS timestamp(0))) AS t1,
-    (SELECT CAST(CAST(one_and_a_bit AS double) AS timestamp(0)) FROM (SELECT 1.125 AS one_and_a_bit)) AS t2,
-    (SELECT CAST(CAST(one_and_a_bit AS double) AS timestamp(0)) FROM (VALUES (1.125)) t(one_and_a_bit)) AS t3
+    (SELECT CAST(CAST(1.125 AS float) AS timestamp(0))) AS t1,
+    (SELECT CAST(CAST(one_and_a_bit AS float) AS timestamp(0)) FROM (SELECT 1.125 AS one_and_a_bit)) AS t2,
+    (SELECT CAST(CAST(one_and_a_bit AS float) AS timestamp(0)) FROM (VALUES (1.125)) t(one_and_a_bit)) AS t3,
+    (SELECT CAST(CAST(1.125 AS double) AS timestamp(0))) AS t4,
+    (SELECT CAST(CAST(one_and_a_bit AS double) AS timestamp(0)) FROM (SELECT 1.125 AS one_and_a_bit)) AS t5,
+    (SELECT CAST(CAST(one_and_a_bit AS double) AS timestamp(0)) FROM (VALUES (1.125)) t(one_and_a_bit)) AS t6
 )
 ----
-1970-01-01T00:00:01 1970-01-01T00:00:01 1970-01-01T00:00:01 true true
+true 1970-01-01T00:00:01 1970-01-01T00:00:01 1970-01-01T00:00:01 1970-01-01T00:00:01 1970-01-01T00:00:01 1970-01-01T00:00:01
 
-query PPPBB
-SELECT *, t1 = t2, t1 = t3
+query BPPPPPP
+SELECT t1 = t2 AND t1 = t3 AND t1 = t4 AND t1 = t5 AND t1 = t6, *
 FROM (SELECT
-    (SELECT CAST(CAST(1.125 AS double) AS timestamp(3))) AS t1,
-    (SELECT CAST(CAST(one_and_a_bit AS double) AS timestamp(3)) FROM (SELECT 1.125 AS one_and_a_bit)) AS t2,
-    (SELECT CAST(CAST(one_and_a_bit AS double) AS timestamp(3)) FROM (VALUES (1.125)) t(one_and_a_bit)) AS t3
+    (SELECT CAST(CAST(1.125 AS float) AS timestamp(3))) AS t1,
+    (SELECT CAST(CAST(one_and_a_bit AS float) AS timestamp(3)) FROM (SELECT 1.125 AS one_and_a_bit)) AS t2,
+    (SELECT CAST(CAST(one_and_a_bit AS float) AS timestamp(3)) FROM (VALUES (1.125)) t(one_and_a_bit)) AS t3,
+    (SELECT CAST(CAST(1.125 AS double) AS timestamp(3))) AS t4,
+    (SELECT CAST(CAST(one_and_a_bit AS double) AS timestamp(3)) FROM (SELECT 1.125 AS one_and_a_bit)) AS t5,
+    (SELECT CAST(CAST(one_and_a_bit AS double) AS timestamp(3)) FROM (VALUES (1.125)) t(one_and_a_bit)) AS t6
 )
 ----
-1970-01-01T00:00:00.001 1970-01-01T00:00:00.001 1970-01-01T00:00:00.001 true true
+true 1970-01-01T00:00:00.001 1970-01-01T00:00:00.001 1970-01-01T00:00:00.001 1970-01-01T00:00:00.001 1970-01-01T00:00:00.001 1970-01-01T00:00:00.001
 
-query PPPBB
-SELECT *, t1 = t2, t1 = t3
+query BPPPPPP
+SELECT t1 = t2 AND t1 = t3 AND t1 = t4 AND t1 = t5 AND t1 = t6, *
 FROM (SELECT
-    (SELECT CAST(CAST(1.125 AS double) AS timestamp(6))) AS t1,
-    (SELECT CAST(CAST(one_and_a_bit AS double) AS timestamp(6)) FROM (SELECT 1.125 AS one_and_a_bit)) AS t2,
-    (SELECT CAST(CAST(one_and_a_bit AS double) AS timestamp(6)) FROM (VALUES (1.125)) t(one_and_a_bit)) AS t3
+    (SELECT CAST(CAST(1.125 AS float) AS timestamp(6))) AS t1,
+    (SELECT CAST(CAST(one_and_a_bit AS float) AS timestamp(6)) FROM (SELECT 1.125 AS one_and_a_bit)) AS t2,
+    (SELECT CAST(CAST(one_and_a_bit AS float) AS timestamp(6)) FROM (VALUES (1.125)) t(one_and_a_bit)) AS t3,
+    (SELECT CAST(CAST(1.125 AS double) AS timestamp(6))) AS t4,
+    (SELECT CAST(CAST(one_and_a_bit AS double) AS timestamp(6)) FROM (SELECT 1.125 AS one_and_a_bit)) AS t5,
+    (SELECT CAST(CAST(one_and_a_bit AS double) AS timestamp(6)) FROM (VALUES (1.125)) t(one_and_a_bit)) AS t6
 )
 ----
-1970-01-01T00:00:00.000001 1970-01-01T00:00:00.000001 1970-01-01T00:00:00.000001 true true
+true 1970-01-01T00:00:00.000001 1970-01-01T00:00:00.000001 1970-01-01T00:00:00.000001 1970-01-01T00:00:00.000001 1970-01-01T00:00:00.000001 1970-01-01T00:00:00.000001
 
-query PPPBB
-SELECT *, t1 = t2, t1 = t3
+query BPPPPPP
+SELECT t1 = t2 AND t1 = t3 AND t1 = t4 AND t1 = t5 AND t1 = t6, *
 FROM (SELECT
-    (SELECT CAST(CAST(1.125 AS double) AS timestamp(9))) AS t1,
-    (SELECT CAST(CAST(one_and_a_bit AS double) AS timestamp(9)) FROM (SELECT 1.125 AS one_and_a_bit)) AS t2,
-    (SELECT CAST(CAST(one_and_a_bit AS double) AS timestamp(9)) FROM (VALUES (1.125)) t(one_and_a_bit)) AS t3
+    (SELECT CAST(CAST(1.125 AS float) AS timestamp(9))) AS t1,
+    (SELECT CAST(CAST(one_and_a_bit AS float) AS timestamp(9)) FROM (SELECT 1.125 AS one_and_a_bit)) AS t2,
+    (SELECT CAST(CAST(one_and_a_bit AS float) AS timestamp(9)) FROM (VALUES (1.125)) t(one_and_a_bit)) AS t3,
+    (SELECT CAST(CAST(1.125 AS double) AS timestamp(9))) AS t4,
+    (SELECT CAST(CAST(one_and_a_bit AS double) AS timestamp(9)) FROM (SELECT 1.125 AS one_and_a_bit)) AS t5,
+    (SELECT CAST(CAST(one_and_a_bit AS double) AS timestamp(9)) FROM (VALUES (1.125)) t(one_and_a_bit)) AS t6
 )
 ----
-1970-01-01T00:00:00.000000001 1970-01-01T00:00:00.000000001 1970-01-01T00:00:00.000000001 true true
+true 1970-01-01T00:00:00.000000001 1970-01-01T00:00:00.000000001 1970-01-01T00:00:00.000000001 1970-01-01T00:00:00.000000001 1970-01-01T00:00:00.000000001 1970-01-01T00:00:00.000000001
 
 
 ##########
