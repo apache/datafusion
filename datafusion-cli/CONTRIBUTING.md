@@ -30,10 +30,10 @@ cargo test
 ## Running Storage Integration Tests
 
 By default, storage integration tests are not run. To run them you will need to set `TEST_STORAGE_INTEGRATION`:
+
 ```shell
 TEST_STORAGE_INTEGRATION=1 cargo test
 ```
-
 
 For some of the tests, [snapshots](https://datafusion.apache.org/contributor-guide/testing.html#snapshot-testing) are used.
 
