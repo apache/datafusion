@@ -328,6 +328,7 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
     fn advance_cursors(&mut self, stream_idx: usize) -> bool {
         if let Some(cursor) = &mut self.cursors[stream_idx] {
             let _ = cursor.advance();
+            self.prev_cursors[stream_idx] = None;
             if cursor.is_finished() {
                 // Take the current cursor, leaving `None` in its place
                 self.prev_cursors[stream_idx] = self.cursors[stream_idx].take();

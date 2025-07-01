@@ -16,6 +16,7 @@
 // under the License.
 
 use std::cmp::Ordering;
+use std::sync::Arc;
 
 use arrow::array::{
     types::ByteArrayType, Array, ArrowPrimitiveType, GenericByteArray,
@@ -151,7 +152,7 @@ impl<T: CursorValues> Ord for Cursor<T> {
 /// Used for sorting when there are multiple columns in the sort key
 #[derive(Debug)]
 pub struct RowValues {
-    rows: Rows,
+    rows: Arc<Rows>,
 
     /// Tracks for the memory used by in the `Rows` of this
     /// cursor. Freed on drop
@@ -164,7 +165,7 @@ impl RowValues {
     ///
     /// Panics if the reservation is not for exactly `rows.size()`
     /// bytes or if `rows` is empty.
-    pub fn new(rows: Rows, reservation: MemoryReservation) -> Self {
+    pub fn new(rows: Arc<Rows>, reservation: MemoryReservation) -> Self {
         assert_eq!(
             rows.size(),
             reservation.size(),

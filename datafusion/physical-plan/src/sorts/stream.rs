@@ -21,7 +21,7 @@ use crate::{PhysicalExpr, PhysicalSortExpr};
 use arrow::array::Array;
 use arrow::datatypes::Schema;
 use arrow::record_batch::RecordBatch;
-use arrow::row::{RowConverter, SortField};
+use arrow::row::{RowConverter, Rows, SortField};
 use datafusion_common::Result;
 use datafusion_execution::memory_pool::MemoryReservation;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
@@ -88,6 +88,8 @@ pub struct RowCursorStream {
     streams: FusedStreams,
     /// Tracks the memory used by `converter`
     reservation: MemoryReservation,
+    /// rows for each partition
+    rows: Vec<[Option<Arc<Rows>>; 2]>,
 }
 
 impl RowCursorStream {
@@ -105,25 +107,48 @@ impl RowCursorStream {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        let streams = streams.into_iter().map(|s| s.fuse()).collect();
+        let streams: Vec<_> = streams.into_iter().map(|s| s.fuse()).collect();
         let converter = RowConverter::new(sort_fields)?;
+        let mut rows = Vec::with_capacity(streams.len());
+        for _ in &streams {
+            // Initialize each stream with an empty Rows
+            rows.push([Some(Arc::new(converter.empty_rows(0, 0))), Some(Arc::new(converter.empty_rows(0, 0)))]);
+        }
         Ok(Self {
             converter,
             reservation,
             column_expressions: expressions.iter().map(|x| Arc::clone(&x.expr)).collect(),
             streams: FusedStreams(streams),
+            rows: rows,
         })
     }
 
-    fn convert_batch(&mut self, batch: &RecordBatch) -> Result<RowValues> {
+    fn convert_batch(
+        &mut self,
+        batch: &RecordBatch,
+        stream_idx: usize,
+    ) -> Result<RowValues> {
         let cols = self
             .column_expressions
             .iter()
             .map(|expr| expr.evaluate(batch)?.into_array(batch.num_rows()))
             .collect::<Result<Vec<_>>>()?;
 
-        let rows = self.converter.convert_columns(&cols)?;
+        // At this point, ownership should be unique
+        let mut rows = Arc::try_unwrap(self.rows[stream_idx][1].take().unwrap())
+            .expect("unique ownership of rows");
+
+        rows.clear();
+
+        self.converter.append(&mut rows, &cols)?;
         self.reservation.try_resize(self.converter.size())?;
+
+        let rows = Arc::new(rows);
+
+        self.rows[stream_idx][1] = Some(rows.clone());
+
+        let [a, b] = &mut self.rows[stream_idx];
+        std::mem::swap(a,  b);
 
         // track the memory in the newly created Rows.
         let mut rows_reservation = self.reservation.new_empty();
@@ -146,7 +171,7 @@ impl PartitionedStream for RowCursorStream {
     ) -> Poll<Option<Self::Output>> {
         Poll::Ready(ready!(self.streams.poll_next(cx, stream_idx)).map(|r| {
             r.and_then(|batch| {
-                let cursor = self.convert_batch(&batch)?;
+                let cursor = self.convert_batch(&batch, stream_idx)?;
                 Ok((cursor, batch))
             })
         }))
