@@ -112,7 +112,10 @@ impl RowCursorStream {
         let mut rows = Vec::with_capacity(streams.len());
         for _ in &streams {
             // Initialize each stream with an empty Rows
-            rows.push([Some(Arc::new(converter.empty_rows(0, 0))), Some(Arc::new(converter.empty_rows(0, 0)))]);
+            rows.push([
+                Some(Arc::new(converter.empty_rows(0, 0))),
+                Some(Arc::new(converter.empty_rows(0, 0))),
+            ]);
         }
         Ok(Self {
             converter,
@@ -148,7 +151,7 @@ impl RowCursorStream {
         self.rows[stream_idx][1] = Some(rows.clone());
 
         let [a, b] = &mut self.rows[stream_idx];
-        std::mem::swap(a,  b);
+        std::mem::swap(a, b);
 
         // track the memory in the newly created Rows.
         let mut rows_reservation = self.reservation.new_empty();
