@@ -22,8 +22,7 @@ use crate::PhysicalOptimizerRule;
 use datafusion_common::{config::ConfigOptions, Result};
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_plan::filter_pushdown::{
-    ChildPushdownResult, FilterPushdownPhase, FilterPushdownPropagation,
-    PredicateSupport, PredicateSupports,
+    ChildPushdownResult, FilterPushdownPhase, FilterPushdownPropagation, PredicateSupport,
 };
 use datafusion_physical_plan::{with_new_children_if_necessary, ExecutionPlan};
 
@@ -497,10 +496,10 @@ fn push_down_filters(
         // Our child doesn't know the difference between filters that were passed down
         // from our parents and filters that the current node injected. We need to de-entangle
         // this since we do need to distinguish between them.
-        let mut all_filters = result.filters.into_inner();
+        let mut all_filters: Vec<_> = result.filters.into_iter().collect();
         let parent_predicates = all_filters.split_off(num_self_filters);
         let self_predicates = all_filters;
-        self_filters_pushdown_supports.push(PredicateSupports::new(self_predicates));
+        self_filters_pushdown_supports.push(self_predicates);
 
         for (idx, result) in parent_supported_predicate_indices
             .iter()
@@ -533,21 +532,15 @@ fn push_down_filters(
     let updated_node = with_new_children_if_necessary(Arc::clone(&node), new_children)?;
     // Remap the result onto the parent filters as they were given to us.
     // Any filters that were not pushed down to any children are marked as unsupported.
-    let parent_pushdown_result = PredicateSupports::new(
-        parent_predicates_pushdown_states
-            .into_iter()
-            .zip(parent_predicates)
-            .map(|(state, filter)| match state {
-                ParentPredicateStates::NoChildren => {
-                    PredicateSupport::Unsupported(filter)
-                }
-                ParentPredicateStates::Unsupported => {
-                    PredicateSupport::Unsupported(filter)
-                }
-                ParentPredicateStates::Supported => PredicateSupport::Supported(filter),
-            })
-            .collect(),
-    );
+    let parent_pushdown_result = parent_predicates_pushdown_states
+        .into_iter()
+        .zip(parent_predicates)
+        .map(|(state, filter)| match state {
+            ParentPredicateStates::NoChildren => PredicateSupport::Unsupported(filter),
+            ParentPredicateStates::Unsupported => PredicateSupport::Unsupported(filter),
+            ParentPredicateStates::Supported => PredicateSupport::Supported(filter),
+        })
+        .collect();
     // TODO: by calling `handle_child_pushdown_result` we are assuming that the
     // `ExecutionPlan` implementation will not change the plan itself.
     // Should we have a separate method for dynamic pushdown that does not allow modifying the plan?

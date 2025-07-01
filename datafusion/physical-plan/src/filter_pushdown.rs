@@ -17,7 +17,6 @@
 
 use std::collections::HashSet;
 use std::sync::Arc;
-use std::vec::IntoIter;
 
 use datafusion_common::Result;
 use datafusion_physical_expr::utils::{collect_columns, reassign_predicate_columns};
@@ -86,66 +85,6 @@ impl PredicateSupport {
     }
 }
 
-/// A collection of filters with their support status.
-#[derive(Debug, Clone)]
-pub struct PredicateSupports(Vec<PredicateSupport>);
-
-impl PredicateSupports {
-    /// Create a new PredicateSupports with the given filters and their pushdown status.
-    pub fn new(pushdowns: Vec<PredicateSupport>) -> Self {
-        Self(pushdowns)
-    }
-
-    /// Create a new PredicateSupports with all filters as unsupported.
-    pub fn all_unsupported(filters: Vec<Arc<dyn PhysicalExpr>>) -> Self {
-        let pushdowns = filters
-            .into_iter()
-            .map(PredicateSupport::Unsupported)
-            .collect();
-        Self::new(pushdowns)
-    }
-
-    /// Collect unsupported filters into a Vec.
-    pub fn collect_unsupported(&self) -> Vec<Arc<dyn PhysicalExpr>> {
-        self.0
-            .iter()
-            .filter_map(|f| match f {
-                PredicateSupport::Unsupported(expr) => Some(Arc::clone(expr)),
-                PredicateSupport::Supported(_) => None,
-            })
-            .collect()
-    }
-
-    /// Collect all filters (both supported and unsupported) into a Vec.
-    pub fn collect_all(&self) -> Vec<Arc<dyn PhysicalExpr>> {
-        self.0
-            .iter()
-            .map(|f| match f {
-                PredicateSupport::Supported(expr) => Arc::clone(expr),
-                PredicateSupport::Unsupported(expr) => Arc::clone(expr),
-            })
-            .collect()
-    }
-
-    pub fn into_inner(self) -> Vec<PredicateSupport> {
-        self.0
-    }
-
-    /// Return an iterator over the inner Vec<PredicateSupport>.
-    pub fn iter(&self) -> impl Iterator<Item = &PredicateSupport> {
-        self.0.iter()
-    }
-}
-
-impl IntoIterator for PredicateSupports {
-    type Item = PredicateSupport;
-    type IntoIter = IntoIter<PredicateSupport>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.0.into_iter()
-    }
-}
-
 /// The result of pushing down filters into a child node.
 /// This is the result provided to nodes in [`ExecutionPlan::handle_child_pushdown_result`].
 /// Nodes process this result and convert it into a [`FilterPushdownPropagation`]
@@ -166,10 +105,10 @@ pub struct ChildPushdownResult {
     /// down into any child then the result is unsupported.
     /// If at least one children and all children that received the filter mark it as supported
     /// then the result is supported.
-    pub parent_filters: PredicateSupports,
+    pub parent_filters: Vec<PredicateSupport>,
     /// The result of pushing down each filter this node provided into each of it's children.
     /// This is not combined with the parent filters so that nodes can treat each child independently.
-    pub self_filters: Vec<PredicateSupports>,
+    pub self_filters: Vec<Vec<PredicateSupport>>,
 }
 
 /// The result of pushing down filters into a node that it returns to its parent.
@@ -182,7 +121,7 @@ pub struct ChildPushdownResult {
 /// [`ExecutionPlan::handle_child_pushdown_result`]: crate::ExecutionPlan::handle_child_pushdown_result
 #[derive(Debug, Clone)]
 pub struct FilterPushdownPropagation<T> {
-    pub filters: PredicateSupports,
+    pub filters: Vec<PredicateSupport>,
     pub updated_node: Option<T>,
 }
 
@@ -197,18 +136,8 @@ impl<T> FilterPushdownPropagation<T> {
         }
     }
 
-    /// Create a new [`FilterPushdownPropagation`] that tells the parent node
-    /// that none of the parent filters were not pushed down.
-    pub fn unsupported(parent_filters: Vec<Arc<dyn PhysicalExpr>>) -> Self {
-        let unsupported = PredicateSupports::all_unsupported(parent_filters);
-        Self {
-            filters: unsupported,
-            updated_node: None,
-        }
-    }
-
     /// Create a new [`FilterPushdownPropagation`] with the specified filter support.
-    pub fn with_filters(filters: PredicateSupports) -> Self {
+    pub fn with_filters(filters: Vec<PredicateSupport>) -> Self {
         Self {
             filters,
             updated_node: None,
@@ -228,7 +157,7 @@ pub struct ChildFilterDescription {
     /// Since we need to transmit filter pushdown results back to this node's parent
     /// we need to track each parent filter for each child, even those that are unsupported / won't be pushed down.
     /// We do this using a [`PredicateSupport`] which simplifies manipulating supported/unsupported filters.
-    pub(crate) parent_filters: PredicateSupports,
+    pub(crate) parent_filters: Vec<PredicateSupport>,
     /// Description of which filters this node is pushing down to its children.
     /// Since this is not transmitted back to the parents we can have variable sized inner arrays
     /// instead of having to track supported/unsupported.
@@ -236,13 +165,6 @@ pub struct ChildFilterDescription {
 }
 
 impl ChildFilterDescription {
-    fn new() -> Self {
-        Self {
-            parent_filters: PredicateSupports::new(vec![]),
-            self_filters: vec![],
-        }
-    }
-
     /// Build a child filter description by analyzing which parent filters can be pushed to a specific child.
     pub fn from_child(
         parent_filters: Vec<Arc<dyn PhysicalExpr>>,
@@ -259,33 +181,31 @@ impl ChildFilterDescription {
 
         // Analyze each parent filter
         let mut child_parent_filters = Vec::with_capacity(parent_filters.len());
-        
+
         for filter in &parent_filters {
             // Check which columns the filter references
             let referenced_columns = collect_columns(filter);
-            
+
             // Check if all referenced columns exist in the child schema
             let all_columns_exist = referenced_columns
                 .iter()
                 .all(|col| child_column_names.contains(col.name()));
-            
+
             if all_columns_exist {
                 // All columns exist in child - we can push down
                 // Need to reassign column indices to match child schema
-                let reassigned_filter = reassign_predicate_columns(
-                    Arc::clone(filter),
-                    &child_schema,
-                    false,
-                )?;
+                let reassigned_filter =
+                    reassign_predicate_columns(Arc::clone(filter), &child_schema, false)?;
                 child_parent_filters.push(PredicateSupport::Supported(reassigned_filter));
             } else {
                 // Some columns don't exist in child - cannot push down
-                child_parent_filters.push(PredicateSupport::Unsupported(Arc::clone(filter)));
+                child_parent_filters
+                    .push(PredicateSupport::Unsupported(Arc::clone(filter)));
             }
         }
 
         Ok(Self {
-            parent_filters: PredicateSupports::new(child_parent_filters),
+            parent_filters: child_parent_filters,
             self_filters: vec![],
         })
     }
@@ -311,17 +231,17 @@ pub struct FilterDescription {
     child_filter_descriptions: Vec<ChildFilterDescription>,
 }
 
+impl Default for FilterDescription {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl FilterDescription {
     /// Create a new empty FilterDescription
     pub fn new() -> Self {
         Self {
             child_filter_descriptions: vec![],
-        }
-    }
-
-    pub fn new_with_child_count(num_children: usize) -> Self {
-        Self {
-            child_filter_descriptions: vec![ChildFilterDescription::new(); num_children],
         }
     }
 
@@ -340,7 +260,7 @@ impl FilterDescription {
         children: &[&Arc<dyn crate::ExecutionPlan>],
     ) -> Result<Self> {
         let mut desc = Self::new();
-        
+
         // For each child, create a ChildFilterDescription
         for child in children {
             desc = desc.with_child(ChildFilterDescription::from_child(
@@ -352,8 +272,7 @@ impl FilterDescription {
         Ok(desc)
     }
 
-
-    pub fn parent_filters(&self) -> Vec<PredicateSupports> {
+    pub fn parent_filters(&self) -> Vec<Vec<PredicateSupport>> {
         self.child_filter_descriptions
             .iter()
             .map(|d| &d.parent_filters)
@@ -368,7 +287,4 @@ impl FilterDescription {
             .cloned()
             .collect()
     }
-
-
-
 }

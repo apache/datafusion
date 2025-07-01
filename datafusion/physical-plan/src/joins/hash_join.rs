@@ -952,10 +952,7 @@ impl ExecutionPlan for HashJoinExec {
         _config: &datafusion_common::config::ConfigOptions,
     ) -> Result<FilterDescription> {
         // Use the new from_children API - it automatically handles column analysis
-        FilterDescription::from_children(
-            parent_filters,
-            &self.children(),
-        )
+        FilterDescription::from_children(parent_filters, &self.children())
     }
 }
 

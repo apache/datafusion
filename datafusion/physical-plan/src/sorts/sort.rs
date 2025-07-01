@@ -27,7 +27,9 @@ use std::sync::Arc;
 use crate::common::spawn_buffered;
 use crate::execution_plan::{Boundedness, CardinalityEffect, EmissionType};
 use crate::expressions::PhysicalSortExpr;
-use crate::filter_pushdown::{ChildFilterDescription, FilterDescription, FilterPushdownPhase};
+use crate::filter_pushdown::{
+    ChildFilterDescription, FilterDescription, FilterPushdownPhase,
+};
 use crate::limit::LimitStream;
 use crate::metrics::{
     BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet, SpillMetrics,
@@ -1268,20 +1270,18 @@ impl ExecutionPlan for SortExec {
         config: &datafusion_common::config::ConfigOptions,
     ) -> Result<FilterDescription> {
         if !matches!(phase, FilterPushdownPhase::Post) {
-            return FilterDescription::from_children(parent_filters, &self.children())
+            return FilterDescription::from_children(parent_filters, &self.children());
         }
-        
-        let mut child = ChildFilterDescription::from_child(
-            parent_filters,
-            &self.input(),
-        )?;
+
+        let mut child = ChildFilterDescription::from_child(parent_filters, self.input())?;
 
         if let Some(filter) = &self.filter {
             if config.optimizer.enable_dynamic_filter_pushdown {
-                child = child.with_self_filter(Arc::clone(filter) as Arc<dyn PhysicalExpr>);
+                child =
+                    child.with_self_filter(Arc::clone(filter) as Arc<dyn PhysicalExpr>);
             }
         }
-        
+
         Ok(FilterDescription::new().with_child(child))
     }
 }

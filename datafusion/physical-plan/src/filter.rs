@@ -28,7 +28,7 @@ use crate::common::can_project;
 use crate::execution_plan::CardinalityEffect;
 use crate::filter_pushdown::{
     ChildFilterDescription, ChildPushdownResult, FilterDescription, FilterPushdownPhase,
-    FilterPushdownPropagation, PredicateSupport, PredicateSupports,
+    FilterPushdownPropagation, PredicateSupport,
 };
 use crate::projection::{
     make_with_child, try_embed_projection, update_expr, EmbeddedProjection,
@@ -456,21 +456,18 @@ impl ExecutionPlan for FilterExec {
                 .map(PredicateSupport::Supported)
                 .collect();
             return Ok(FilterDescription::new().with_child(ChildFilterDescription {
-                parent_filters: PredicateSupports::new(filter_supports),
+                parent_filters: filter_supports,
                 self_filters: vec![],
             }));
         }
 
-        let child = ChildFilterDescription::from_child(
-            parent_filters,
-            &self.input(),
-        )?
-        .with_self_filters(
-            split_conjunction(&self.predicate)
-                .into_iter()
-                .cloned()
-                .collect(),
-        );
+        let child = ChildFilterDescription::from_child(parent_filters, self.input())?
+            .with_self_filters(
+                split_conjunction(&self.predicate)
+                    .into_iter()
+                    .cloned()
+                    .collect(),
+            );
 
         Ok(FilterDescription::new().with_child(child))
     }
@@ -487,15 +484,26 @@ impl ExecutionPlan for FilterExec {
             ));
         }
         // We absorb any parent filters that were not handled by our children
-        let mut unhandled_filters =
-            child_pushdown_result.parent_filters.collect_unsupported();
+        let mut unhandled_filters = child_pushdown_result
+            .parent_filters
+            .iter()
+            .filter_map(|f| match f {
+                PredicateSupport::Unsupported(expr) => Some(Arc::clone(expr)),
+                PredicateSupport::Supported(_) => None,
+            })
+            .collect::<Vec<_>>();
         assert_eq!(
             child_pushdown_result.self_filters.len(),
             1,
             "FilterExec should only have one child"
         );
-        let unsupported_self_filters =
-            child_pushdown_result.self_filters[0].collect_unsupported();
+        let unsupported_self_filters = child_pushdown_result.self_filters[0]
+            .iter()
+            .filter_map(|f| match f {
+                PredicateSupport::Unsupported(expr) => Some(Arc::clone(expr)),
+                PredicateSupport::Supported(_) => None,
+            })
+            .collect::<Vec<_>>();
         unhandled_filters.extend(unsupported_self_filters);
 
         // If we have unhandled filters, we need to create a new FilterExec
@@ -551,9 +559,9 @@ impl ExecutionPlan for FilterExec {
             .into_iter()
             .map(|f| PredicateSupport::Supported(f.into_inner()))
             .collect();
-        
+
         Ok(FilterPushdownPropagation {
-            filters: PredicateSupports::new(supported_filters),
+            filters: supported_filters,
             updated_node,
         })
     }
