@@ -22,11 +22,10 @@ use rstest::rstest;
 use insta::{glob, Settings};
 use insta_cmd::{assert_cmd_snapshot, get_cargo_bin};
 use std::path::PathBuf;
-use std::time::Duration;
 use std::{env, fs};
-use testcontainers::core::{CmdWaitFor, ExecCommand, IntoContainerPort, Mount};
+use testcontainers::core::{CmdWaitFor, ExecCommand, Mount};
 use testcontainers::runners::AsyncRunner;
-use testcontainers::{ContainerAsync, Image, ImageExt};
+use testcontainers::{ContainerAsync, ImageExt};
 use testcontainers_modules::minio;
 
 fn cli() -> Command {
