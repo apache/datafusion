@@ -596,15 +596,15 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     ///
     /// **Helper Methods for Customization:**
     /// There are various helper methods to simplify implementing this method:
-    /// - [`FilterPushdownPropagation::unsupported`]: Indicates that the node
-    ///   does not support filter pushdown at all, rejecting all filters.
     /// - [`FilterPushdownPropagation::transparent`]: Indicates that the node
     ///   supports filter pushdown but does not modify it, simply transmitting
     ///   the children's pushdown results back up to its parent.
-    /// - [`PredicateSupports::new`]: Create a new collection of filters with
-    ///   their support status, useful with [`FilterPushdownPropagation::with_filters`]
-    ///   and [`FilterPushdownPropagation::with_updated_node`] to build mixed results
-    ///   of supported and unsupported filters.
+    /// - [`FilterPushdownPropagation::with_filters`]: Allows adding filters
+    ///  to the propagation result, indicating which filters are supported by
+    ///  the current node.
+    /// - [`FilterPushdownPropagation::with_updated_node`]: Allows updating the
+    /// current node in the propagation result, used if the node
+    /// has modified its plan based on the pushdown results.
     ///
     /// **Filter Pushdown Phases:**
     /// There are two different phases in filter pushdown (`Pre` and others),
@@ -613,7 +613,6 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// [`FilterPushdownPhase`] for more details on phase-specific behavior.
     ///
     /// [`PredicateSupport::Supported`]: crate::filter_pushdown::PredicateSupport::Supported
-    /// [`PredicateSupports::new`]: crate::filter_pushdown::PredicateSupports::new
     fn handle_child_pushdown_result(
         &self,
         _phase: FilterPushdownPhase,
