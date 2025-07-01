@@ -23,107 +23,15 @@ use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, FieldRef, Schema};
 use datafusion_common::{
     exec_err,
-    nested_struct::validate_struct_compatibility,
     tree_node::{Transformed, TransformedResult, TreeNode},
     Result, ScalarValue,
 };
-use datafusion_expr::ScalarUDF;
-use datafusion_functions::core::{getfield::GetFieldFunc, r#struct::StructFunc};
+use datafusion_functions::core::getfield::GetFieldFunc;
 use datafusion_physical_expr::{
     expressions::{self, CastExpr, Column},
     ScalarFunctionExpr,
 };
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
-
-/// Build a struct expression by recursively extracting and rewriting fields from a source struct.
-///
-/// This function creates a new struct expression by:
-/// 1. For each target field, checking if it exists in the source struct
-/// 2. If it exists, using GetFieldFunc to extract it and recursively rewriting it
-/// 3. If it doesn't exist, creating a null literal of the appropriate type
-/// 4. Using StructFunc to combine all field expressions into the target struct
-///
-/// # Arguments
-/// * `source_expr` - The source struct expression
-/// * `source_fields` - Fields from the source struct type
-/// * `target_fields` - Fields from the target struct type
-///
-/// # Returns
-/// A new struct expression matching the target field layout
-fn build_struct_expr(
-    source_expr: Arc<dyn PhysicalExpr>,
-    source_fields: &[FieldRef],
-    target_fields: &[FieldRef],
-) -> Result<Arc<dyn PhysicalExpr>> {
-    let mut field_exprs = Vec::new();
-
-    for target_field in target_fields {
-        let field_expr = if let Some(source_field) = source_fields
-            .iter()
-            .find(|f| f.name() == target_field.name())
-        {
-            // Field exists in source - extract it using GetFieldFunc
-            let get_field_func = Arc::new(ScalarUDF::new_from_impl(GetFieldFunc::new()));
-            let field_name_literal =
-                expressions::lit(ScalarValue::Utf8(Some(target_field.name().clone())));
-
-            let get_field_expr = Arc::new(ScalarFunctionExpr::new(
-                "get_field",
-                get_field_func,
-                vec![Arc::clone(&source_expr), field_name_literal],
-                source_field.clone(),
-            ));
-
-            // Handle field type conversion based on source and target types
-            match (source_field.data_type(), target_field.data_type()) {
-                (
-                    DataType::Struct(nested_source_fields),
-                    DataType::Struct(nested_target_fields),
-                ) => {
-                    // For nested structs, recursively build the nested struct expression
-                    build_struct_expr(
-                        get_field_expr,
-                        nested_source_fields,
-                        nested_target_fields,
-                    )?
-                }
-                _ if source_field.data_type() == target_field.data_type() => {
-                    // Types match, no further rewriting needed
-                    get_field_expr
-                }
-                _ => {
-                    // Types differ, apply normal casting
-                    Arc::new(CastExpr::new(
-                        get_field_expr,
-                        target_field.data_type().clone(),
-                        None,
-                    ))
-                }
-            }
-        } else {
-            // Field doesn't exist in source - create null literal
-            let null_value = ScalarValue::Null.cast_to(target_field.data_type())?;
-            expressions::lit(null_value)
-        };
-
-        field_exprs.push(field_expr);
-    }
-
-    // Build the final struct using StructFunc
-    let struct_func = Arc::new(ScalarUDF::new_from_impl(StructFunc::new()));
-    let return_field = Arc::new(arrow::datatypes::Field::new(
-        "struct",
-        DataType::Struct(target_fields.to_vec().into()),
-        true,
-    ));
-
-    Ok(Arc::new(ScalarFunctionExpr::new(
-        "struct",
-        struct_func,
-        field_exprs,
-        return_field,
-    )))
-}
 
 /// Builder for rewriting physical expressions to match different schemas.
 ///
@@ -193,11 +101,109 @@ impl<'a> PhysicalExprSchemaRewriter<'a> {
         &self,
         expr: Arc<dyn PhysicalExpr>,
     ) -> Result<Transformed<Arc<dyn PhysicalExpr>>> {
+        if let Some(transformed) = self.try_rewrite_struct_field_access(&expr)? {
+            return Ok(Transformed::yes(transformed));
+        }
+
         if let Some(column) = expr.as_any().downcast_ref::<Column>() {
             return self.rewrite_column(Arc::clone(&expr), column);
         }
 
         Ok(Transformed::no(expr))
+    }
+
+    fn try_rewrite_struct_field_access(
+        &self,
+        expr: &Arc<dyn PhysicalExpr>,
+    ) -> Result<Option<Arc<dyn PhysicalExpr>>> {
+        let get_field_expr = match expr.as_any().downcast_ref::<ScalarFunctionExpr>() {
+            Some(expr) => expr,
+            None => return Ok(None),
+        };
+
+        if get_field_expr.name() != "get_field" {
+            return Ok(None);
+        }
+
+        if get_field_expr
+            .fun()
+            .inner()
+            .as_any()
+            .downcast_ref::<GetFieldFunc>()
+            .is_none()
+        {
+            return Ok(None);
+        }
+
+        let source_expr = match get_field_expr.args().get(0) {
+            Some(expr) => expr,
+            None => return Ok(None),
+        };
+
+        let field_name_expr = match get_field_expr.args().get(1) {
+            Some(expr) => expr,
+            None => return Ok(None),
+        };
+
+        let lit = match field_name_expr
+            .as_any()
+            .downcast_ref::<expressions::Literal>()
+        {
+            Some(lit) => lit,
+            None => return Ok(None),
+        };
+
+        let field_name = match lit.value() {
+            ScalarValue::Utf8(Some(name))
+            | ScalarValue::LargeUtf8(Some(name))
+            | ScalarValue::Utf8View(Some(name)) => name,
+            _ => return Ok(None),
+        };
+
+        let column = match source_expr.as_any().downcast_ref::<Column>() {
+            Some(column) => column,
+            None => return Ok(None),
+        };
+
+        let physical_field =
+            match self.physical_file_schema.field_with_name(column.name()) {
+                Ok(field) => field,
+                Err(_) => return Ok(None),
+            };
+
+        let physical_struct_fields = match physical_field.data_type() {
+            DataType::Struct(fields) => fields,
+            _ => return Ok(None),
+        };
+
+        if physical_struct_fields
+            .iter()
+            .any(|f| f.name() == field_name)
+        {
+            return Ok(None);
+        }
+
+        let logical_field = match self.logical_file_schema.field_with_name(column.name())
+        {
+            Ok(field) => field,
+            Err(_) => return Ok(None),
+        };
+
+        let logical_struct_fields = match logical_field.data_type() {
+            DataType::Struct(fields) => fields,
+            _ => return Ok(None),
+        };
+
+        let logical_struct_field = match logical_struct_fields
+            .iter()
+            .find(|f| f.name() == field_name)
+        {
+            Some(field) => field,
+            None => return Ok(None),
+        };
+
+        let null_value = ScalarValue::Null.cast_to(logical_struct_field.data_type())?;
+        Ok(Some(expressions::lit(null_value)))
     }
 
     fn rewrite_column(
@@ -265,16 +271,8 @@ impl<'a> PhysicalExprSchemaRewriter<'a> {
         // TODO: add optimization to move the cast from the column to literal expressions in the case of `col = 123`
         // since that's much cheaper to evalaute.
         // See https://github.com/apache/datafusion/issues/15780#issuecomment-2824716928
-
-        // Check compatibility - for structs use our validation, for others use Arrow's can_cast_types
-        let is_compatible = match (physical_field.data_type(), logical_field.data_type())
-        {
-            (DataType::Struct(source_fields), DataType::Struct(target_fields)) => {
-                validate_struct_compatibility(source_fields, target_fields).is_ok()
-            }
-            _ => can_cast_types(physical_field.data_type(), logical_field.data_type()),
-        };
-
+        let is_compatible =
+            can_cast_types(physical_field.data_type(), logical_field.data_type());
         if !is_compatible {
             return exec_err!(
                 "Cannot cast column '{}' from '{}' (physical data type) to '{}' (logical data type)",
@@ -284,18 +282,11 @@ impl<'a> PhysicalExprSchemaRewriter<'a> {
             );
         }
 
-        // For struct types, we need to recursively build the struct expression
-        let cast_expr: Arc<dyn PhysicalExpr> =
-            match (physical_field.data_type(), logical_field.data_type()) {
-                (DataType::Struct(source_fields), DataType::Struct(target_fields)) => {
-                    build_struct_expr(Arc::new(column), source_fields, target_fields)?
-                }
-                _ => Arc::new(CastExpr::new(
-                    Arc::new(column),
-                    logical_field.data_type().clone(),
-                    None,
-                )),
-            };
+        let cast_expr = Arc::new(CastExpr::new(
+            Arc::new(column),
+            logical_field.data_type().clone(),
+            None,
+        ));
 
         Ok(Transformed::yes(cast_expr))
     }
@@ -312,11 +303,10 @@ impl<'a> PhysicalExprSchemaRewriter<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
-    use datafusion_common::ScalarValue;
-    use datafusion_expr::Operator;
-    use datafusion_physical_expr::expressions::{col, BinaryExpr};
-    use datafusion_physical_expr_common::physical_expr::fmt_sql;
+    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::{assert_contains, ScalarValue};
+    use datafusion_physical_expr::expressions::{CastExpr, Column, Literal};
+    use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
     use std::sync::Arc;
 
     fn create_test_schema() -> (Schema, Schema) {
@@ -334,10 +324,6 @@ mod tests {
         (physical_schema, logical_schema)
     }
 
-    fn expression_to_sql(expr: &Arc<dyn PhysicalExpr>) -> String {
-        format!("{}", fmt_sql(expr.as_ref()))
-    }
-
     #[test]
     fn test_rewrite_column_with_type_cast() {
         let (physical_schema, logical_schema) = create_test_schema();
@@ -345,62 +331,19 @@ mod tests {
         let rewriter = PhysicalExprSchemaRewriter::new(&physical_schema, &logical_schema);
         let column_expr = Arc::new(Column::new("a", 0));
 
-        // Capture input expression
-        insta::assert_snapshot!(expression_to_sql(&(column_expr.clone() as Arc<dyn PhysicalExpr>)), @"a");
-
         let result = rewriter.rewrite(column_expr).unwrap();
 
-        // Capture output expression
-        insta::assert_snapshot!(expression_to_sql(&result), @"CAST(a AS Int64)");
-    }
+        let expected = Arc::new(CastExpr::new(
+            Arc::new(Column::new("a", 0)),
+            DataType::Int64,
+            None,
+        )) as Arc<dyn PhysicalExpr>;
 
-    #[test]
-    fn test_rewrite_struct_column_compatibility() -> Result<()> {
-        // Test that struct compatibility validation is used in schema rewriting
-        let physical_schema = Schema::new(vec![Field::new(
-            "data",
-            DataType::Struct(
-                vec![
-                    Field::new("field1", DataType::Int32, true),
-                    Field::new("field2", DataType::Utf8, true),
-                ]
-                .into(),
-            ),
-            true,
-        )]);
-
-        let logical_schema = Schema::new(vec![Field::new(
-            "data",
-            DataType::Struct(
-                vec![
-                    Field::new("field1", DataType::Int64, true), // Compatible cast
-                    Field::new("field3", DataType::Float64, true), // Missing field, should be OK
-                ]
-                .into(),
-            ),
-            true,
-        )]);
-
-        let rewriter = PhysicalExprSchemaRewriter::new(&physical_schema, &logical_schema);
-        let column_expr = Arc::new(Column::new("data", 0));
-
-        // This should succeed because structs are compatible
-        let result = rewriter.rewrite(column_expr);
-        assert!(result.is_ok());
-
-        // Should be wrapped in a struct function expression
-        let struct_expr = result.unwrap();
-        assert!(struct_expr
-            .as_any()
-            .downcast_ref::<ScalarFunctionExpr>()
-            .is_some());
-
-        Ok(())
+        assert_eq!(result.to_string(), expected.to_string());
     }
 
     #[test]
     fn test_rewrite_struct_column_incompatible() {
-        // Test that incompatible struct fields are rejected
         let physical_schema = Schema::new(vec![Field::new(
             "data",
             DataType::Struct(vec![Field::new("field1", DataType::Binary, true)].into()),
@@ -416,19 +359,16 @@ mod tests {
         let rewriter = PhysicalExprSchemaRewriter::new(&physical_schema, &logical_schema);
         let column_expr = Arc::new(Column::new("data", 0));
 
-        // This should fail because Binary cannot cast to Int32
         let result = rewriter.rewrite(column_expr);
         assert!(result.is_err());
         let error_msg = result.unwrap_err().to_string();
-        assert!(error_msg.contains("Cannot cast column 'data'"));
+        assert_contains!(error_msg, "Cannot cast column 'data'");
     }
 
-    /// Test end-to-end struct evolution with simple field additions
     #[test]
-    fn test_evolved_schema_struct_field_addition() {
-        // Physical schema: {user_info: {id: i32, name: string}}
+    fn test_rewrite_struct_compatible_cast() {
         let physical_schema = Schema::new(vec![Field::new(
-            "user_info",
+            "data",
             DataType::Struct(
                 vec![
                     Field::new("id", DataType::Int32, false),
@@ -439,15 +379,12 @@ mod tests {
             false,
         )]);
 
-        // Logical schema: {user_info: {id: i32, name: string, email: string}}
-        // New field "email" added to struct
         let logical_schema = Schema::new(vec![Field::new(
-            "user_info",
+            "data",
             DataType::Struct(
                 vec![
-                    Field::new("id", DataType::Int32, false),
-                    Field::new("name", DataType::Utf8, true),
-                    Field::new("email", DataType::Utf8, true), // New field
+                    Field::new("id", DataType::Int64, false),
+                    Field::new("name", DataType::Utf8View, true),
                 ]
                 .into(),
             ),
@@ -455,357 +392,82 @@ mod tests {
         )]);
 
         let rewriter = PhysicalExprSchemaRewriter::new(&physical_schema, &logical_schema);
-
-        // Test that we can rewrite a column reference
-        let column_expr = Arc::new(Column::new("user_info", 0));
-
-        // Capture input expression
-        insta::assert_snapshot!(expression_to_sql(&(column_expr.clone() as Arc<dyn PhysicalExpr>)), @"user_info");
+        let column_expr = Arc::new(Column::new("data", 0));
 
         let result = rewriter.rewrite(column_expr).unwrap();
 
-        // Capture output expression
-        insta::assert_snapshot!(expression_to_sql(&result), @"struct(get_field(user_info, id), get_field(user_info, name), NULL)");
-
-        // Test that we can rewrite a predicate on existing fields
-        let predicate = Arc::new(BinaryExpr::new(
-            col("user_info", &logical_schema).unwrap(),
-            Operator::IsNotDistinctFrom,
-            expressions::lit(ScalarValue::Null),
+        let expected = Arc::new(CastExpr::new(
+            Arc::new(Column::new("data", 0)),
+            DataType::Struct(
+                vec![
+                    Field::new("id", DataType::Int64, false),
+                    Field::new("name", DataType::Utf8View, true),
+                ]
+                .into(),
+            ),
+            None,
         )) as Arc<dyn PhysicalExpr>;
 
-        // Capture input predicate
-        insta::assert_snapshot!(expression_to_sql(&predicate), @"user_info IS NOT DISTINCT FROM NULL");
-
-        let rewritten_predicate = rewriter.rewrite(predicate).unwrap();
-
-        // Capture output predicate
-        insta::assert_snapshot!(expression_to_sql(&rewritten_predicate), @"struct(get_field(user_info, id), get_field(user_info, name), NULL) IS NOT DISTINCT FROM NULL");
+        assert_eq!(result.to_string(), expected.to_string());
     }
 
-    /// Test end-to-end struct evolution with field type changes
     #[test]
-    fn test_evolved_schema_struct_field_type_evolution() {
-        // Physical schema: {event_data: {timestamp: i64, count: i32}}
-        let physical_schema = Schema::new(vec![Field::new(
-            "event_data",
-            DataType::Struct(
-                vec![
-                    Field::new("timestamp", DataType::Int64, false),
-                    Field::new("count", DataType::Int32, true),
-                ]
-                .into(),
-            ),
-            false,
-        )]);
-
-        // Logical schema: {event_data: {timestamp: timestamp_ms, count: i64}}
-        // timestamp field evolved from i64 to timestamp, count from i32 to i64
-        let logical_schema = Schema::new(vec![Field::new(
-            "event_data",
-            DataType::Struct(
-                vec![
-                    Field::new(
-                        "timestamp",
-                        DataType::Timestamp(TimeUnit::Millisecond, None),
-                        false,
-                    ),
-                    Field::new("count", DataType::Int64, true),
-                ]
-                .into(),
-            ),
-            false,
-        )]);
-
-        let rewriter = PhysicalExprSchemaRewriter::new(&physical_schema, &logical_schema);
-
-        // Test column rewriting
-        let column_expr = Arc::new(Column::new("event_data", 0));
-
-        // Capture input expression
-        insta::assert_snapshot!(expression_to_sql(&(column_expr.clone() as Arc<dyn PhysicalExpr>)), @"event_data");
-
-        let result = rewriter.rewrite(column_expr).unwrap();
-
-        // Capture output expression
-        insta::assert_snapshot!(expression_to_sql(&result), @"struct(CAST(get_field(event_data, timestamp) AS Timestamp(Millisecond, None)), CAST(get_field(event_data, count) AS Int64))");
-    }
-
-    /// Test end-to-end struct evolution with nested structs
-    #[test]
-    fn test_evolved_schema_nested_struct_evolution() {
-        // Physical schema: {
-        //   metadata: {
-        //     user: {id: i32, name: string},
-        //     created_at: i64
-        //   }
-        // }
-        let physical_schema = Schema::new(vec![Field::new(
-            "metadata",
-            DataType::Struct(
-                vec![
-                    Field::new(
-                        "user",
-                        DataType::Struct(
-                            vec![
-                                Field::new("id", DataType::Int32, false),
-                                Field::new("name", DataType::Utf8, true),
-                            ]
-                            .into(),
-                        ),
-                        false,
-                    ),
-                    Field::new("created_at", DataType::Int64, false),
-                ]
-                .into(),
-            ),
-            false,
-        )]);
-
-        // Logical schema: {
-        //   metadata: {
-        //     user: {id: i64, name: string, email: string},
-        //     created_at: timestamp_ms,
-        //     version: i32
-        //   }
-        // }
-        let logical_schema = Schema::new(vec![Field::new(
-            "metadata",
-            DataType::Struct(
-                vec![
-                    Field::new(
-                        "user",
-                        DataType::Struct(
-                            vec![
-                                Field::new("id", DataType::Int64, false), // Type change
-                                Field::new("name", DataType::Utf8, true),
-                                Field::new("email", DataType::Utf8, true), // New field
-                            ]
-                            .into(),
-                        ),
-                        false,
-                    ),
-                    Field::new(
-                        "created_at",
-                        DataType::Timestamp(TimeUnit::Millisecond, None),
-                        false,
-                    ), // Type change
-                    Field::new("version", DataType::Int32, true), // New field
-                ]
-                .into(),
-            ),
-            false,
-        )]);
-
-        let rewriter = PhysicalExprSchemaRewriter::new(&physical_schema, &logical_schema);
-
-        // Test that we can handle deeply nested struct evolution
-        let column_expr = Arc::new(Column::new("metadata", 0));
-
-        // Capture input expression
-        insta::assert_snapshot!(expression_to_sql(&(column_expr.clone() as Arc<dyn PhysicalExpr>)), @"metadata");
-
-        let result = rewriter.rewrite(column_expr).unwrap();
-
-        // Capture output expression
-        insta::assert_snapshot!(expression_to_sql(&result), @"struct(struct(CAST(get_field(get_field(metadata, user), id) AS Int64), get_field(get_field(metadata, user), name), NULL), CAST(get_field(metadata, created_at) AS Timestamp(Millisecond, None)), NULL)");
-    }
-
-    /// Test end-to-end struct evolution with field removal (extra fields in source)
-    #[test]
-    fn test_evolved_schema_struct_field_removal() {
-        // Physical schema: {config: {debug_mode: bool, log_level: string, deprecated_flag: bool}}
-        let physical_schema = Schema::new(vec![Field::new(
-            "config",
-            DataType::Struct(
-                vec![
-                    Field::new("debug_mode", DataType::Boolean, false),
-                    Field::new("log_level", DataType::Utf8, true),
-                    Field::new("deprecated_flag", DataType::Boolean, true), // This will be ignored
-                ]
-                .into(),
-            ),
-            false,
-        )]);
-
-        // Logical schema: {config: {debug_mode: bool, log_level: string}}
-        // deprecated_flag removed from logical schema
-        let logical_schema = Schema::new(vec![Field::new(
-            "config",
-            DataType::Struct(
-                vec![
-                    Field::new("debug_mode", DataType::Boolean, false),
-                    Field::new("log_level", DataType::Utf8, true),
-                ]
-                .into(),
-            ),
-            false,
-        )]);
-
-        let rewriter = PhysicalExprSchemaRewriter::new(&physical_schema, &logical_schema);
-
-        // Test that extra fields are properly ignored
-        let column_expr = Arc::new(Column::new("config", 0));
-
-        // Capture input expression
-        insta::assert_snapshot!(expression_to_sql(&(column_expr.clone() as Arc<dyn PhysicalExpr>)), @"config");
-
-        let result = rewriter.rewrite(column_expr).unwrap();
-
-        // Capture output expression
-        insta::assert_snapshot!(expression_to_sql(&result), @"struct(get_field(config, debug_mode), get_field(config, log_level))");
-    }
-
-    /// Test end-to-end struct evolution with mixed scenarios (realistic data evolution)
-    #[test]
-    fn test_evolved_schema_complex_struct_evolution() {
-        // Simulate a realistic data evolution scenario:
-        // Physical schema represents an older version of the data
-        let physical_schema = Schema::new(vec![
-            Field::new("id", DataType::Int32, false),
-            Field::new(
-                "profile",
-                DataType::Struct(
-                    vec![
-                        Field::new("username", DataType::Utf8, false),
-                        Field::new("age", DataType::Int32, true),
-                        Field::new("legacy_score", DataType::Float32, true), // Will be removed
-                    ]
-                    .into(),
-                ),
-                true,
-            ),
-        ]);
-
-        // Logical schema represents the current/target version
+    fn test_rewrite_missing_column_non_nullable_error() {
+        let physical_schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
         let logical_schema = Schema::new(vec![
-            Field::new("id", DataType::Int64, false), // Type upgrade
-            Field::new(
-                "profile",
-                DataType::Struct(
-                    vec![
-                        Field::new("username", DataType::Utf8, false),
-                        Field::new("age", DataType::Int64, true), // Type upgrade
-                        Field::new("email", DataType::Utf8, true), // New field
-                        Field::new(
-                            "preferences",
-                            DataType::Struct(
-                                vec![
-                                    Field::new("theme", DataType::Utf8, true),
-                                    Field::new("notifications", DataType::Boolean, true),
-                                ]
-                                .into(),
-                            ),
-                            true,
-                        ), // New nested struct
-                    ]
-                    .into(),
-                ),
-                true,
-            ),
-            Field::new(
-                "created_at",
-                DataType::Timestamp(TimeUnit::Millisecond, None),
-                true,
-            ), // New field
+            Field::new("a", DataType::Int64, false),
+            Field::new("b", DataType::Utf8, false), // Missing and non-nullable
         ]);
 
         let rewriter = PhysicalExprSchemaRewriter::new(&physical_schema, &logical_schema);
+        let column_expr = Arc::new(Column::new("b", 1));
 
-        // Test rewriting of simple field with type change
-        let id_expr = Arc::new(Column::new("id", 0));
-
-        // Capture input expression
-        insta::assert_snapshot!(expression_to_sql(&(id_expr.clone() as Arc<dyn PhysicalExpr>)), @"id");
-
-        let id_result = rewriter.rewrite(id_expr).unwrap();
-
-        // Capture output expression
-        insta::assert_snapshot!(expression_to_sql(&id_result), @"CAST(id AS Int64)");
-
-        // Test rewriting of complex struct field
-        let profile_expr = Arc::new(Column::new("profile", 1));
-
-        // Capture input expression
-        insta::assert_snapshot!(expression_to_sql(&(profile_expr.clone() as Arc<dyn PhysicalExpr>)), @"profile");
-
-        let profile_result = rewriter.rewrite(profile_expr).unwrap();
-
-        // Capture output expression
-        insta::assert_snapshot!(expression_to_sql(&profile_result), @"struct(get_field(profile, username), CAST(get_field(profile, age) AS Int64), NULL, NULL)");
-
-        // Test rewriting of missing field (should become null)
-        let created_at_expr = Arc::new(Column::new("created_at", 2));
-
-        // Capture input expression
-        insta::assert_snapshot!(expression_to_sql(&(created_at_expr.clone() as Arc<dyn PhysicalExpr>)), @"created_at");
-
-        let created_at_result = rewriter.rewrite(created_at_expr).unwrap();
-
-        // Capture output expression
-        insta::assert_snapshot!(expression_to_sql(&created_at_result), @"NULL");
+        let result = rewriter.rewrite(column_expr);
+        assert!(result.is_err());
+        let error_msg = result.unwrap_err().to_string();
+        assert_contains!(error_msg, "Non-nullable column 'b' is missing");
     }
 
-    /// Test that struct evolution works correctly with predicates
     #[test]
-    fn test_evolved_schema_struct_with_predicates() {
-        // Physical schema: {event: {type: string, data: {count: i32}}}
-        let physical_schema = Schema::new(vec![Field::new(
-            "event",
-            DataType::Struct(
-                vec![
-                    Field::new("type", DataType::Utf8, false),
-                    Field::new(
-                        "data",
-                        DataType::Struct(
-                            vec![Field::new("count", DataType::Int32, false)].into(),
-                        ),
-                        false,
-                    ),
-                ]
-                .into(),
-            ),
-            false,
-        )]);
-
-        // Logical schema: {event: {type: string, data: {count: i64, timestamp: i64}}}
-        let logical_schema = Schema::new(vec![Field::new(
-            "event",
-            DataType::Struct(
-                vec![
-                    Field::new("type", DataType::Utf8, false),
-                    Field::new(
-                        "data",
-                        DataType::Struct(
-                            vec![
-                                Field::new("count", DataType::Int64, false), // Type upgrade
-                                Field::new("timestamp", DataType::Int64, true), // New field
-                            ]
-                            .into(),
-                        ),
-                        false,
-                    ),
-                ]
-                .into(),
-            ),
-            false,
-        )]);
+    fn test_rewrite_missing_column_nullable() {
+        let physical_schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let logical_schema = Schema::new(vec![
+            Field::new("a", DataType::Int64, false),
+            Field::new("b", DataType::Utf8, true), // Missing but nullable
+        ]);
 
         let rewriter = PhysicalExprSchemaRewriter::new(&physical_schema, &logical_schema);
+        let column_expr = Arc::new(Column::new("b", 1));
 
-        // Create a complex predicate that references the struct
-        let predicate = Arc::new(BinaryExpr::new(
-            col("event", &logical_schema).unwrap(),
-            Operator::IsNotDistinctFrom,
-            expressions::lit(ScalarValue::Null),
-        )) as Arc<dyn PhysicalExpr>;
+        let result = rewriter.rewrite(column_expr).unwrap();
 
-        // Capture input expression
-        insta::assert_snapshot!(expression_to_sql(&predicate), @"event IS NOT DISTINCT FROM NULL");
+        let expected =
+            Arc::new(Literal::new(ScalarValue::Utf8(None))) as Arc<dyn PhysicalExpr>;
 
-        let rewritten_predicate = rewriter.rewrite(predicate).unwrap();
+        assert_eq!(result.to_string(), expected.to_string());
+    }
 
-        // Capture output expression
-        insta::assert_snapshot!(expression_to_sql(&rewritten_predicate), @"struct(get_field(event, type), struct(CAST(get_field(get_field(event, data), count) AS Int64), NULL)) IS NOT DISTINCT FROM NULL");
+    #[test]
+    fn test_rewrite_partition_column() {
+        let physical_schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        // Partition column is NOT in logical schema - it will be handled by partition logic
+        let logical_schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+
+        let partition_fields =
+            vec![Arc::new(Field::new("part_col", DataType::Utf8, false))];
+        let partition_values =
+            vec![ScalarValue::Utf8(Some("partition_value".to_string()))];
+
+        let rewriter = PhysicalExprSchemaRewriter::new(&physical_schema, &logical_schema)
+            .with_partition_columns(partition_fields, partition_values.clone());
+
+        let column_expr = Arc::new(Column::new("part_col", 1));
+
+        let result = rewriter.rewrite(column_expr).unwrap();
+
+        let expected =
+            Arc::new(Literal::new(partition_values[0].clone())) as Arc<dyn PhysicalExpr>;
+
+        assert_eq!(result.to_string(), expected.to_string());
     }
 }
