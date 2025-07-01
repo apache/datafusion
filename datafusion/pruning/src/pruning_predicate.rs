@@ -470,6 +470,7 @@ impl PruningPredicate {
             &unhandled_hook,
         );
         let predicate_schema = required_columns.schema();
+        // Simplify the newly created predicate to get rid of redundant casts, comparisons, etc.
         let predicate_expr =
             PhysicalExprSimplifier::new(&predicate_schema).simplify(predicate_expr)?;
 
