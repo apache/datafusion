@@ -260,7 +260,7 @@ mod tests {
 
         let column_expr = col("c1", &schema).unwrap();
         let cast_expr = Arc::new(CastExpr::new(column_expr, DataType::Int64, None));
-        let literal_expr = lit(ScalarValue::Int64(Some(10)));
+        let literal_expr = lit(10i64);
         let binary_expr =
             Arc::new(BinaryExpr::new(cast_expr, Operator::Gt, literal_expr));
         let binary_ref = binary_expr.as_any().downcast_ref::<BinaryExpr>().unwrap();
@@ -454,7 +454,7 @@ mod tests {
         // Create: try_cast(str_col as INT64) > INT64(100)
         let column_expr = col("str_col", &schema).unwrap();
         let try_cast_expr = Arc::new(TryCastExpr::new(column_expr, DataType::Int64));
-        let literal_expr = lit(ScalarValue::Int64(Some(100)));
+        let literal_expr = lit(100i64);
         let binary_expr =
             Arc::new(BinaryExpr::new(try_cast_expr, Operator::Gt, literal_expr));
 
@@ -575,7 +575,7 @@ mod tests {
         // This should NOT be unwrapped because 1000 cannot fit in Int8 (max value is 127)
         let column_expr = col("small_int", &schema).unwrap();
         let cast_expr = Arc::new(CastExpr::new(column_expr, DataType::Int64, None));
-        let literal_expr = lit(ScalarValue::Int64(Some(1000))); // Value too large for Int8
+        let literal_expr = lit(1000i64); // Value too large for Int8
         let binary_expr =
             Arc::new(BinaryExpr::new(cast_expr, Operator::Gt, literal_expr));
 
