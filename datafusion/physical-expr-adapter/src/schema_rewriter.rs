@@ -135,7 +135,7 @@ impl<'a> PhysicalExprSchemaRewriter<'a> {
             return Ok(None);
         }
 
-        let source_expr = match get_field_expr.args().get(0) {
+        let source_expr = match get_field_expr.args().first() {
             Some(expr) => expr,
             None => return Ok(None),
         };
