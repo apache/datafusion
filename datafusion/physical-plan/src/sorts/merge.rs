@@ -493,13 +493,12 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
             if self.enable_round_robin_tie_breaker && cmp_node == 1 {
                 match (&self.cursors[winner], &self.cursors[challenger]) {
                     (Some(ac), Some(bc)) => {
-                        let ord = ac.cmp(bc);
-                        if ord.is_eq() {
+                        if ac == bc {
                             self.handle_tie(cmp_node, &mut winner, challenger);
                         } else {
                             // Ends of tie breaker
                             self.round_robin_tie_breaker_mode = false;
-                            if ord.is_gt() {
+                            if ac > bc {
                                 self.update_winner(cmp_node, &mut winner, challenger);
                             }
                         }

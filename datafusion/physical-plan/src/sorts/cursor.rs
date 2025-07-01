@@ -369,10 +369,6 @@ impl CursorValues for StringViewArray {
             return false;
         }
 
-        if l_len == 0 && r_len == 0 {
-            return true; // Both are empty strings, so they are equal
-        }
-
         unsafe { GenericByteViewArray::compare_unchecked(l, l_idx, r, r_idx).is_eq() }
     }
 
@@ -392,10 +388,6 @@ impl CursorValues for StringViewArray {
 
         if l_len != r_len {
             return false;
-        }
-
-        if l_len == 0 && r_len == 0 {
-            return true; // Both are empty strings, so they are equal
         }
 
         unsafe {
