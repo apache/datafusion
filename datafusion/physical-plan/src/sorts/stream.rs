@@ -90,7 +90,8 @@ pub struct RowCursorStream {
     streams: FusedStreams,
     /// Tracks the memory used by `converter`
     reservation: MemoryReservation,
-    /// rows for each partition
+    /// Allocated rows for each partition, we keep two to allow for buffering one
+    /// in the consumer of the stream
     rows: Vec<[Option<Arc<Rows>>; 2]>,
 }
 
