@@ -4790,3 +4790,49 @@ DROP TABLE compound_field_table_t;
 
 statement ok
 DROP TABLE compound_field_table_u;
+
+
+statement ok
+CREATE TABLE t1 (k INT, v INT);
+
+statement ok
+CREATE TABLE t2 (k INT, v INT);
+
+statement ok
+INSERT INTO t1
+  SELECT value AS k, value AS v
+  FROM range(1, 10001) AS t(value);
+
+statement ok
+INSERT INTO t2 VALUES (1, 1);
+
+query TT
+explain
+SELECT *
+FROM t1
+LEFT ANTI JOIN t2 ON t1.k = t2.k
+ORDER BY t1.k
+LIMIT 2;
+----
+logical_plan
+01)Sort: t1.k ASC NULLS LAST, fetch=2
+02)--LeftAnti Join: t1.k = t2.k
+03)----TableScan: t1 projection=[k, v]
+04)----TableScan: t2 projection=[k]
+physical_plan
+01)SortExec: TopK(fetch=2), expr=[k@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--CoalesceBatchesExec: target_batch_size=3
+03)----HashJoinExec: mode=CollectLeft, join_type=RightAnti, on=[(k@0, k@0)]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+05)------DataSourceExec: partitions=1, partition_sizes=[3334]
+
+
+query II
+SELECT *
+FROM t1
+LEFT ANTI JOIN t2 ON t1.k = t2.k
+ORDER BY t1.k
+LIMIT 2;
+----
+2 2
+3 3

@@ -663,11 +663,20 @@ fn handle_custom_pushdown(
 }
 
 // For hash join we only maintain the input order for the right child
-// for join type: Inner, Right, RightSemi, RightAnti
+// for join types: Inner, Right, RightSemi
 fn handle_hash_join(
     plan: &HashJoinExec,
     parent_required: OrderingRequirements,
 ) -> Result<Option<Vec<Option<OrderingRequirements>>>> {
+    // Anti-joins (LeftAnti or RightAnti) do not preserve meaningful input order,
+    // so sorting beforehand cannot be relied on. Bail out early for both flavors:
+    match plan.join_type() {
+        JoinType::LeftAnti | JoinType::RightAnti => {
+            return Ok(None);
+        }
+        _ => {}
+    }
+
     // If the plan has no children or does not maintain the right side ordering,
     // return early:
     if !plan.maintains_input_order()[1] {
