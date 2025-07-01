@@ -223,6 +223,7 @@ impl AggregateExprBuilder {
 
         let return_field = fun.return_field(&input_exprs_fields)?;
         let is_nullable = fun.is_nullable();
+        // TODO rename AggregateExprBuilder::alias to name
         let name = match alias {
             None => {
                 return internal_err!(
@@ -575,18 +576,10 @@ impl AggregateFunctionExpr {
             ReversedUDAF::NotSupported => None,
             ReversedUDAF::Identical => Some(self.clone()),
             ReversedUDAF::Reversed(reverse_udf) => {
-                let mut name = self.name().to_string();
-                // If the function is changed, we need to reverse order_by clause as well
-                // i.e. First(a order by b asc null first) -> Last(a order by b desc null last)
-                if self.fun().name() != reverse_udf.name() {
-                    replace_order_by_clause(&mut name);
-                }
-                replace_fn_name_clause(&mut name, self.fun.name(), reverse_udf.name());
-
                 AggregateExprBuilder::new(reverse_udf, self.args.to_vec())
                     .order_by(self.order_bys.iter().map(|e| e.reverse()).collect())
                     .schema(Arc::new(self.schema.clone()))
-                    .alias(name)
+                    .alias(self.name())
                     .with_ignore_nulls(self.ignore_nulls)
                     .with_distinct(self.is_distinct)
                     .with_reversed(!self.is_reversed)
@@ -683,33 +676,4 @@ impl PartialEq for AggregateFunctionExpr {
                 .zip(other.args.iter())
                 .all(|(this_arg, other_arg)| this_arg.eq(other_arg))
     }
-}
-
-fn replace_order_by_clause(order_by: &mut String) {
-    let suffixes = [
-        (" DESC NULLS FIRST]", " ASC NULLS LAST]"),
-        (" ASC NULLS FIRST]", " DESC NULLS LAST]"),
-        (" DESC NULLS LAST]", " ASC NULLS FIRST]"),
-        (" ASC NULLS LAST]", " DESC NULLS FIRST]"),
-    ];
-
-    if let Some(start) = order_by.find("ORDER BY [") {
-        if let Some(end) = order_by[start..].find(']') {
-            let order_by_start = start + 9;
-            let order_by_end = start + end;
-
-            let column_order = &order_by[order_by_start..=order_by_end];
-            for (suffix, replacement) in suffixes {
-                if column_order.ends_with(suffix) {
-                    let new_order = column_order.replace(suffix, replacement);
-                    order_by.replace_range(order_by_start..=order_by_end, &new_order);
-                    break;
-                }
-            }
-        }
-    }
-}
-
-fn replace_fn_name_clause(aggr_name: &mut String, fn_name_old: &str, fn_name_new: &str) {
-    *aggr_name = aggr_name.replace(fn_name_old, fn_name_new);
 }
