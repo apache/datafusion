@@ -360,7 +360,7 @@ impl CursorValues for StringViewArray {
         let r_view = unsafe { r.views().get_unchecked(r_idx) };
 
         if l.data_buffers().is_empty() && r.data_buffers().is_empty() {
-            return l_view.eq(r_view);
+            return l_view == r_view;
         }
 
         let l_len = *l_view as u32;
@@ -380,7 +380,7 @@ impl CursorValues for StringViewArray {
         let l_view = unsafe { cursor.views().get_unchecked(idx) };
         let r_view = unsafe { cursor.views().get_unchecked(idx - 1) };
         if cursor.data_buffers().is_empty() {
-            return l_view.eq(r_view);
+            return l_view == r_view;
         }
 
         let l_len = *l_view as u32;
