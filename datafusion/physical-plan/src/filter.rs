@@ -20,6 +20,8 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{ready, Context, Poll};
 
+use itertools::Itertools;
+
 use super::{
     ColumnStatistics, DisplayAs, ExecutionPlanProperties, PlanProperties,
     RecordBatchStream, SendableRecordBatchStream, Statistics,
@@ -491,7 +493,7 @@ impl ExecutionPlan for FilterExec {
                 PredicateSupport::Unsupported(expr) => Some(Arc::clone(expr)),
                 PredicateSupport::Supported(_) => None,
             })
-            .collect::<Vec<_>>();
+            .collect_vec();
         assert_eq!(
             child_pushdown_result.self_filters.len(),
             1,
@@ -503,7 +505,7 @@ impl ExecutionPlan for FilterExec {
                 PredicateSupport::Unsupported(expr) => Some(Arc::clone(expr)),
                 PredicateSupport::Supported(_) => None,
             })
-            .collect::<Vec<_>>();
+            .collect_vec();
         unhandled_filters.extend(unsupported_self_filters);
 
         // If we have unhandled filters, we need to create a new FilterExec

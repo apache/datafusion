@@ -665,7 +665,7 @@ impl FileSource for ParquetSource {
                 PredicateSupport::Supported(expr) => Some(Arc::clone(expr)),
                 PredicateSupport::Unsupported(_) => None,
             })
-            .collect::<Vec<_>>();
+            .collect_vec();
         let predicate = match source.predicate {
             Some(predicate) => {
                 conjunction(std::iter::once(predicate).chain(allowed_filters))
@@ -682,7 +682,7 @@ impl FileSource for ParquetSource {
                 filters
                     .into_iter()
                     .map(|f| PredicateSupport::Unsupported(f.into_inner()))
-                    .collect::<Vec<_>>(),
+                    .collect_vec(),
             )
             .with_updated_node(source));
         }
