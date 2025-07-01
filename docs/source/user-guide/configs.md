@@ -144,3 +144,19 @@ Environment variables are read during `SessionConfig` initialisation so they mus
 | datafusion.format.time_format                                           | %H:%M:%S%.f               | Time format for time arrays                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | datafusion.format.duration_format                                       | pretty                    | Duration format. Can be either `"pretty"` or `"ISO8601"`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | datafusion.format.types_info                                            | false                     | Show types in visual representation batches                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+
+# Runtime Configuration Settings
+
+DataFusion runtime configurations can be set via SQL using the `SET` command.
+
+For example, to configure `datafusion.runtime.memory_limit`:
+
+```sql
+SET datafusion.runtime.memory_limit = '2G';
+```
+
+The following runtime configuration settings are available:
+
+| key                             | default | description                                                                                                                                 |
+| ------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| datafusion.runtime.memory_limit | NULL    | Maximum memory limit for query execution. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes). Example: '2G' for 2 gigabytes. |
