@@ -38,6 +38,17 @@
 //!
 //! And it's very efficient, since we don't add any additional info to the metadata, we write the custom index
 //! after the data pages, and we only read it when needed.
+//!
+//! **Compatibility note: why other Parquet readers simply skip over our extra index blob**
+//!
+//! Any standard Parquet reader will:
+//! 1. Seek to the end of the file and read the last 8 bytes (a 4‑byte little‑endian footer length followed by the `PAR1` magic).
+//! 2. Seek backwards by that length to parse only the Thrift‑encoded footer metadata (including key/value pairs).
+//!
+//! Since our custom index bytes are appended *before* the footer (and we do not alter Parquet’s metadata schema), readers
+//! never scan from the file start or “overflow” into our blob. They will encounter two unknown keys
+//! (`distinct_index_offset` and `distinct_index_length`) in the footer metadata, ignore them (or expose as extra metadata),
+//! and will not attempt to read or deserialize the raw index bytes.
 
 use arrow::array::{ArrayRef, StringArray};
 use arrow::record_batch::RecordBatch;
