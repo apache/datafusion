@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::logical_plan::producer::SubstraitProducer;
-use datafusion::arrow::datatypes::{DataType, Field};
+use datafusion::arrow::datatypes::{DataType, Field, TimeUnit};
 use datafusion::common::{plan_err, DFSchemaRef};
 use datafusion::logical_expr::SortExpr;
 use substrait::proto::sort_field::{SortDirection, SortKind};
@@ -75,4 +75,13 @@ pub(crate) fn substrait_sort_field(
         expr: Some(e),
         sort_kind: Some(SortKind::Direction(d as i32)),
     })
+}
+
+pub(crate) fn to_substrait_precision(time_unit: &TimeUnit) -> i32 {
+    match time_unit {
+        TimeUnit::Second => 0,
+        TimeUnit::Millisecond => 3,
+        TimeUnit::Microsecond => 6,
+        TimeUnit::Nanosecond => 9,
+    }
 }
