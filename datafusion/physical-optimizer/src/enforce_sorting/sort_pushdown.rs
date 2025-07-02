@@ -230,10 +230,7 @@ fn pushdown_requirement_to_children(
         //    (equal or lower-equal cardinality). Any other operator (including joins,
         //    sort-with-limit, or UDTFs that may expand rows) must stop the pushdown.
         let effect = plan.cardinality_effect();
-        if !matches!(
-            effect,
-            CardinalityEffect::Equal | CardinalityEffect::LowerEqual
-        ) {
+        if !matches!(effect, CardinalityEffect::Equal) {
             return Ok(None);
         }
         // At this point, only single-input, non-expanding operators
