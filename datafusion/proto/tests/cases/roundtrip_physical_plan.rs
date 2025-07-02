@@ -18,6 +18,7 @@
 use std::any::Any;
 use std::fmt::{Display, Formatter};
 use std::ops::Deref;
+use std::path::Path;
 use std::sync::Arc;
 use std::vec;
 
@@ -1735,4 +1736,58 @@ async fn roundtrip_physical_plan_node() {
         .unwrap();
 
     let _ = plan.execute(0, ctx.task_ctx()).unwrap();
+}
+
+#[tokio::test]
+async fn test_tpch_part_in_list_query_with_real_parquet_data() -> Result<()> {
+    // Test the specific query: SELECT p_size FROM part WHERE p_size IN (14, 6, 5, 31)
+    // This uses REAL TPC-H parquet data to reproduce the serialization bug with actual data sources
+    //
+    // NOTE: This test requires TPC-H data to reproduce the serialization bug.
+    // Using alltypes_plain.parquet does NOT reproduce the issue, suggesting the bug
+    // is specific to certain characteristics of TPC-H parquet files or their schema.
+
+    // Check if TPC-H data is available
+    if !Path::new("/tmp/tpch_s1/part.parquet").exists() {
+        println!("⚠️  Skipping test - TPC-H part.parquet not found at /tmp/tpch_s1/");
+        println!("   To run this test, ensure TPC-H data is available at /tmp/tpch_s1/");
+        println!("   Note: Using alltypes_plain.parquet will NOT reproduce the bug");
+        return Ok(());
+    }
+
+    let ctx = SessionContext::new();
+
+    // Register the TPC-H part table using CREATE EXTERNAL TABLE (like the original test)
+    let table_sql = "CREATE EXTERNAL TABLE part STORED AS PARQUET LOCATION '/tmp/tpch_s1/part.parquet'";
+    ctx.sql(table_sql).await.map_err(|e| {
+        DataFusionError::External(format!("Failed to create part table: {}", e).into())
+    })?;
+
+    // Test the exact problematic query
+    let sql = "SELECT p_size FROM part WHERE p_size IN (14, 6, 5, 31)";
+
+    let logical_plan = ctx.sql(sql).await?.into_unoptimized_plan();
+    let optimized_plan = ctx.state().optimize(&logical_plan)?;
+    let physical_plan = ctx.state().create_physical_plan(&optimized_plan).await?;
+
+    // Serialize the physical plan - bug may happen here already but not necessarily manifests
+    let codec = DefaultPhysicalExtensionCodec {};
+    let proto = PhysicalPlanNode::try_from_physical_plan(physical_plan.clone(), &codec)?;
+
+    // Deserialize the physical plan - this is where the bug occurs
+    let result = proto.try_into_physical_plan(&ctx, ctx.runtime_env().as_ref(), &codec);
+
+    // BUG: Assert that deserialization fails with the expected error
+    // There won't be an error if the bug is fixed
+    let err =
+        result.expect_err("Expected deserialization to fail due to type mismatch bug");
+    assert!(
+        err.to_string().contains("inlist should be same")
+            && err.to_string().contains("Int64")
+            && err.to_string().contains("Int32"),
+        "Expected type mismatch error with Int64/Int32, got: {}",
+        err
+    );
+
+    Ok(())
 }
