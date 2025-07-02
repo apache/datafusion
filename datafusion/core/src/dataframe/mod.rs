@@ -20,11 +20,6 @@
 #[cfg(feature = "parquet")]
 mod parquet;
 
-use std::any::Any;
-use std::borrow::Cow;
-use std::collections::HashMap;
-use std::sync::Arc;
-
 use crate::arrow::record_batch::RecordBatch;
 use crate::arrow::util::pretty;
 use crate::datasource::file_format::csv::CsvFormatFactory;
@@ -43,6 +38,10 @@ use crate::physical_plan::{
     ExecutionPlan, SendableRecordBatchStream,
 };
 use crate::prelude::SessionContext;
+use std::any::Any;
+use std::borrow::Cow;
+use std::collections::HashMap;
+use std::sync::Arc;
 
 use arrow::array::{Array, ArrayRef, Int64Array, StringArray};
 use arrow::compute::{cast, concat};
