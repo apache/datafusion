@@ -150,7 +150,7 @@ impl AggregateUDFImpl for ArrayAgg {
     }
 
     fn order_sensitivity(&self) -> AggregateOrderSensitivity {
-        AggregateOrderSensitivity::Beneficial
+        AggregateOrderSensitivity::SoftRequirement
     }
 
     fn with_beneficial_ordering(

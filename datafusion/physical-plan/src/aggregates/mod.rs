@@ -1084,11 +1084,12 @@ fn get_aggregate_expr_req(
     match aggr_expr.order_sensitivity() {
         AggregateOrderSensitivity::Insensitive => return None,
         AggregateOrderSensitivity::HardRequirement => {}
-        AggregateOrderSensitivity::Beneficial => {
+        AggregateOrderSensitivity::SoftRequirement => {
             if !include_soft_requirement {
                 return None;
             }
         }
+        AggregateOrderSensitivity::Beneficial => return None,
     }
 
     let mut sort_exprs = aggr_expr.order_bys().to_vec();

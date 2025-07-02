@@ -3451,7 +3451,7 @@ physical_plan
 04)------AggregateExec: mode=FinalPartitioned, gby=[a@0 as a, b@1 as b, c@2 as c], aggr=[last_value(r.b) ORDER BY [r.a ASC NULLS FIRST]]
 05)--------CoalesceBatchesExec: target_batch_size=2
 06)----------RepartitionExec: partitioning=Hash([a@0, b@1, c@2], 2), input_partitions=2
-07)------------AggregateExec: mode=Partial, gby=[a@0 as a, b@1 as b, c@2 as c], aggr=[last_value(r.b) ORDER BY [r.a ASC NULLS FIRST]], ordering_mode=PartiallySorted([0])
+07)------------AggregateExec: mode=Partial, gby=[a@0 as a, b@1 as b, c@2 as c], aggr=[last_value(r.b) ORDER BY [r.a ASC NULLS FIRST]]
 08)--------------CoalesceBatchesExec: target_batch_size=2
 09)----------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, a@0)]
 10)------------------CoalesceBatchesExec: target_batch_size=2
@@ -3459,7 +3459,7 @@ physical_plan
 12)----------------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 13)------------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c], output_ordering=[a@0 ASC, b@1 ASC NULLS LAST, c@2 ASC NULLS LAST], file_type=csv, has_header=true
 14)------------------CoalesceBatchesExec: target_batch_size=2
-15)--------------------RepartitionExec: partitioning=Hash([a@0], 2), input_partitions=2, preserve_order=true, sort_exprs=a@0 ASC, b@1 ASC NULLS LAST
+15)--------------------RepartitionExec: partitioning=Hash([a@0], 2), input_partitions=2
 16)----------------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 17)------------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], output_ordering=[a@0 ASC, b@1 ASC NULLS LAST], file_type=csv, has_header=true
 
