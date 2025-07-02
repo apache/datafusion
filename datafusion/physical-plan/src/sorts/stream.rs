@@ -125,7 +125,7 @@ impl RowCursorStream {
             reservation,
             column_expressions: expressions.iter().map(|x| Arc::clone(&x.expr)).collect(),
             streams: FusedStreams(streams),
-            rows: rows,
+            rows,
         })
     }
 
