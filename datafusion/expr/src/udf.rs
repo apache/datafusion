@@ -17,6 +17,7 @@
 
 //! [`ScalarUDF`]: Scalar User Defined Functions
 
+use crate::async_udf::AsyncScalarUDF;
 use crate::expr::schema_name_from_exprs_comma_separated_without_space;
 use crate::simplify::{ExprSimplifyResult, SimplifyInfo};
 use crate::sort_properties::{ExprProperties, SortProperties};
@@ -280,6 +281,11 @@ impl ScalarUDF {
     pub fn documentation(&self) -> Option<&Documentation> {
         self.inner.documentation()
     }
+
+    /// Return true if this function is an async function
+    pub fn as_async(&self) -> Option<&AsyncScalarUDF> {
+        self.inner().as_any().downcast_ref::<AsyncScalarUDF>()
+    }
 }
 
 impl<F> From<F> for ScalarUDF
@@ -293,6 +299,7 @@ where
 
 /// Arguments passed to [`ScalarUDFImpl::invoke_with_args`] when invoking a
 /// scalar function.
+#[derive(Debug, Clone)]
 pub struct ScalarFunctionArgs {
     /// The evaluated arguments to the function
     pub args: Vec<ColumnarValue>,
@@ -412,6 +419,19 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
 
     /// Returns this function's name
     fn name(&self) -> &str;
+
+    /// Returns any aliases (alternate names) for this function.
+    ///
+    /// Aliases can be used to invoke the same function using different names.
+    /// For example in some databases `now()` and `current_timestamp()` are
+    /// aliases for the same function. This behavior can be obtained by
+    /// returning `current_timestamp` as an alias for the `now` function.
+    ///
+    /// Note: `aliases` should only include names other than [`Self::name`].
+    /// Defaults to `[]` (no aliases)
+    fn aliases(&self) -> &[String] {
+        &[]
+    }
 
     /// Returns the user-defined display name of function, given the arguments
     ///
@@ -535,19 +555,6 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     /// [`ColumnarValue::values_to_arrays`] can be used to convert the arguments
     /// to arrays, which will likely be simpler code, but be slower.
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue>;
-
-    /// Returns any aliases (alternate names) for this function.
-    ///
-    /// Aliases can be used to invoke the same function using different names.
-    /// For example in some databases `now()` and `current_timestamp()` are
-    /// aliases for the same function. This behavior can be obtained by
-    /// returning `current_timestamp` as an alias for the `now` function.
-    ///
-    /// Note: `aliases` should only include names other than [`Self::name`].
-    /// Defaults to `[]` (no aliases)
-    fn aliases(&self) -> &[String] {
-        &[]
-    }
 
     /// Optionally apply per-UDF simplification / rewrite rules.
     ///

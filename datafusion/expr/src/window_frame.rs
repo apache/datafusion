@@ -160,7 +160,7 @@ impl WindowFrame {
                 } else {
                     WindowFrameUnits::Range
                 },
-                start_bound: WindowFrameBound::Preceding(ScalarValue::Null),
+                start_bound: WindowFrameBound::Preceding(ScalarValue::UInt64(None)),
                 end_bound: WindowFrameBound::CurrentRow,
                 causal: strict,
             }
@@ -351,11 +351,15 @@ impl WindowFrameBound {
             ast::WindowFrameBound::Preceding(Some(v)) => {
                 Self::Preceding(convert_frame_bound_to_scalar_value(*v, units)?)
             }
-            ast::WindowFrameBound::Preceding(None) => Self::Preceding(ScalarValue::Null),
+            ast::WindowFrameBound::Preceding(None) => {
+                Self::Preceding(ScalarValue::UInt64(None))
+            }
             ast::WindowFrameBound::Following(Some(v)) => {
                 Self::Following(convert_frame_bound_to_scalar_value(*v, units)?)
             }
-            ast::WindowFrameBound::Following(None) => Self::Following(ScalarValue::Null),
+            ast::WindowFrameBound::Following(None) => {
+                Self::Following(ScalarValue::UInt64(None))
+            }
             ast::WindowFrameBound::CurrentRow => Self::CurrentRow,
         })
     }
@@ -570,9 +574,9 @@ mod tests {
     #[test]
     fn test_window_frame_bound_creation() -> Result<()> {
         //  Unbounded
-        test_bound!(Rows, None, ScalarValue::Null);
-        test_bound!(Groups, None, ScalarValue::Null);
-        test_bound!(Range, None, ScalarValue::Null);
+        test_bound!(Rows, None, ScalarValue::UInt64(None));
+        test_bound!(Groups, None, ScalarValue::UInt64(None));
+        test_bound!(Range, None, ScalarValue::UInt64(None));
 
         // Number
         let number = Some(Box::new(ast::Expr::Value(

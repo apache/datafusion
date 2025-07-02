@@ -43,12 +43,12 @@ use crate::utils::{
     group_window_expr_by_sort_keys,
 };
 use crate::{
-    and, binary_expr, lit, DmlStatement, Expr, ExprSchemable, Operator, RecursiveQuery,
-    Statement, TableProviderFilterPushDown, TableSource, WriteOp,
+    and, binary_expr, lit, DmlStatement, ExplainOption, Expr, ExprSchemable, Operator,
+    RecursiveQuery, Statement, TableProviderFilterPushDown, TableSource, WriteOp,
 };
 
 use super::dml::InsertOp;
-use super::plan::{ColumnUnnestList, ExplainFormat};
+use super::plan::ColumnUnnestList;
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
 use datafusion_common::display::ToStringifiedPlan;
@@ -970,11 +970,7 @@ impl LogicalPlanBuilder {
         )
     }
 
-    pub(crate) fn normalize(
-        plan: &LogicalPlan,
-        column: impl Into<Column>,
-    ) -> Result<Column> {
-        let column = column.into();
+    pub(crate) fn normalize(plan: &LogicalPlan, column: Column) -> Result<Column> {
         if column.relation.is_some() {
             // column is already normalized
             return Ok(column);
@@ -1127,7 +1123,7 @@ impl LogicalPlanBuilder {
         self,
         right: LogicalPlan,
         join_type: JoinType,
-        using_keys: Vec<impl Into<Column> + Clone>,
+        using_keys: Vec<Column>,
     ) -> Result<Self> {
         let left_keys: Vec<Column> = using_keys
             .clone()
@@ -1263,12 +1259,24 @@ impl LogicalPlanBuilder {
     ///
     /// if `verbose` is true, prints out additional details.
     pub fn explain(self, verbose: bool, analyze: bool) -> Result<Self> {
+        // Keep the format default to Indent
+        self.explain_option_format(
+            ExplainOption::default()
+                .with_verbose(verbose)
+                .with_analyze(analyze),
+        )
+    }
+
+    /// Create an expression to represent the explanation of the plan
+    /// The`explain_option` is used to specify the format and verbosity of the explanation.
+    /// Details see [`ExplainOption`].
+    pub fn explain_option_format(self, explain_option: ExplainOption) -> Result<Self> {
         let schema = LogicalPlan::explain_schema();
         let schema = schema.to_dfschema_ref()?;
 
-        if analyze {
+        if explain_option.analyze {
             Ok(Self::new(LogicalPlan::Analyze(Analyze {
-                verbose,
+                verbose: explain_option.verbose,
                 input: self.plan,
                 schema,
             })))
@@ -1277,9 +1285,9 @@ impl LogicalPlanBuilder {
                 vec![self.plan.to_stringified(PlanType::InitialLogicalPlan)];
 
             Ok(Self::new(LogicalPlan::Explain(Explain {
-                verbose,
+                verbose: explain_option.verbose,
                 plan: self.plan,
-                explain_format: ExplainFormat::Indent,
+                explain_format: explain_option.format,
                 stringified_plans,
                 schema,
                 logical_optimization_succeeded: false,
