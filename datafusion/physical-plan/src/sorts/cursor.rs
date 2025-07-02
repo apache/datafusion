@@ -498,11 +498,11 @@ impl<T: CursorValues> CursorValues for ArrayValues<T> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
+    use arrow::array::GenericBinaryArray;
     use datafusion_execution::memory_pool::{
         GreedyMemoryPool, MemoryConsumer, MemoryPool,
     };
+    use std::sync::Arc;
 
     use super::*;
 
@@ -662,5 +662,68 @@ mod tests {
         // 6 < -3
         b.advance();
         assert_eq!(a.cmp(&b), Ordering::Less);
+    }
+
+    /// Integration tests for `inline_key_fast` covering:
+    ///
+    /// 1. Monotonic ordering across increasing lengths and lexical variations.
+    /// 2. Cross-check against `GenericBinaryArray` comparison to ensure semantic equivalence.
+    ///
+    /// This also includes a specific test for the “bar” vs. “bar\0” case, demonstrating why
+    /// the length field is required even when all inline bytes fit in 12 bytes.
+    #[test]
+    fn test_inline_key_fast_various_lengths_and_lexical() {
+        /// Helper to create a raw u128 value representing an inline ByteView
+        /// - `length`: number of meaningful bytes (≤ 12)
+        /// - `data`: the actual inline data
+        fn make_raw_inline(length: u32, data: &[u8]) -> u128 {
+            assert!(length as usize <= 12, "Inline length must be ≤ 12");
+            assert!(data.len() == length as usize, "Data must match length");
+
+            let mut raw_bytes = [0u8; 16];
+            raw_bytes[0..4].copy_from_slice(&length.to_le_bytes()); // little-endian length
+            raw_bytes[4..(4 + data.len())].copy_from_slice(data); // inline data
+            u128::from_le_bytes(raw_bytes)
+        }
+
+        // Test inputs: include the specific "bar" vs "bar\0" case, plus length and lexical variations
+        let test_inputs: Vec<&[u8]> = vec![
+            b"a",
+            b"aa",
+            b"aaa",
+            b"aab",
+            b"abcd",
+            b"abcde",
+            b"abcdef",
+            b"abcdefg",
+            b"abcdefgh",
+            b"abcdefghi",
+            b"abcdefghij",
+            b"abcdefghijk",
+            b"abcdefghijkl", // 12 bytes, max inline
+            b"bar",
+            b"bar\0", // special case to test length tiebreaker
+            b"xyy",
+            b"xyz",
+        ];
+
+        // Monotonic key order: content then length，and cross-check against GenericBinaryArray comparison
+        let array: GenericBinaryArray<i32> = GenericBinaryArray::from(
+            test_inputs.iter().map(|s| Some(*s)).collect::<Vec<_>>(),
+        );
+
+        for i in 0..array.len() - 1 {
+            let v1 = array.value(i);
+            let v2 = array.value(i + 1);
+            // Ensure lexical ordering matches
+            assert!(v1 < v2, "Array compare failed: {v1:?} !< {v2:?}");
+            // Ensure fast key compare matches
+            let key1 = inline_key_fast(make_raw_inline(v1.len() as u32, v1));
+            let key2 = inline_key_fast(make_raw_inline(v2.len() as u32, v2));
+            assert!(
+                key1 < key2,
+                "Key compare failed: key({v1:?})=0x{key1:032x} !< key({v2:?})=0x{key2:032x}",
+            );
+        }
     }
 }
