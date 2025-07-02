@@ -35,6 +35,7 @@ use datafusion_physical_expr_common::sort_expr::{
     LexOrdering, LexRequirement, OrderingRequirements, PhysicalSortExpr,
     PhysicalSortRequirement,
 };
+use datafusion_physical_plan::execution_plan::CardinalityEffect;
 use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::joins::utils::{
     calculate_join_output_ordering, ColumnIndex,
@@ -219,6 +220,23 @@ fn pushdown_requirement_to_children(
     parent_required: OrderingRequirements,
     parent_fetch: Option<usize>,
 ) -> Result<Option<Vec<Option<OrderingRequirements>>>> {
+    // Only attempt to push down TopK when there is an upstream LIMIT
+    if parent_fetch.is_some() {
+        // 1) Never push a new TopK below an operator that already has its own fetch
+        if plan.fetch().is_some() {
+            return Ok(None);
+        }
+        // 2) Only allow pushdown through operators that do not increase row count
+        //    (equal or lower-equal cardinality). Any other operator (including joins,
+        //    sort-with-limit, or UDTFs that may expand rows) must stop the pushdown.
+        let effect = plan.cardinality_effect();
+        if !matches!(effect, CardinalityEffect::Equal | CardinalityEffect::LowerEqual) {
+            return Ok(None);
+        }
+        // At this point, only single-input, non-expanding operators
+        // such as Filter, Projection, or Map are allowed to receive TopK.
+    }
+
     let maintains_input_order = plan.maintains_input_order();
     if is_window(plan) {
         let mut required_input_ordering = plan.required_input_ordering();
@@ -347,10 +365,6 @@ fn pushdown_requirement_to_children(
             Ok(None)
         }
     } else if let Some(hash_join) = plan.as_any().downcast_ref::<HashJoinExec>() {
-        // We should not push down TopK requirements through HashJoinExec
-        if parent_fetch.is_some() {
-            return Ok(None);
-        }
         handle_hash_join(hash_join, parent_required)
     } else {
         handle_custom_pushdown(plan, parent_required, maintains_input_order)
