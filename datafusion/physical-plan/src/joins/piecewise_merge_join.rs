@@ -323,7 +323,7 @@ impl PiecewiseMergeJoinExec {
             buffered.equivalence_properties().clone(),
             &join_type,
             schema,
-            &[false],
+            &[false, false],
             Some(Self::probe_side(&join_type)),
             &[join_on.clone()],
         )?;
