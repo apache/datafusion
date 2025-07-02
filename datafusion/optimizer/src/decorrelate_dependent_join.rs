@@ -58,13 +58,12 @@ pub struct DependentJoinDecorrelator {
     domains: IndexSet<CorrelatedColumnInfo>,
     // for each domain column, the corresponding column in delim_get
     correlated_column_to_delim_column: IndexMap<Column, Column>,
-    pub delim_types: Vec<DataType>,
     is_initial: bool,
 
     // top-most subquery DecorrelateDependentJoin has depth 1 and so on
     depth: usize,
-    // hashmap of correlated column by depth
-    correlated_columns_by_depth: IndexMap<usize, Vec<CorrelatedColumnInfo>>,
+    // all correlated columns in current depth and downward (if any)
+    correlated_columns: Vec<CorrelatedColumnInfo>,
     // check if we have to replace any COUNT aggregates into "CASE WHEN X IS NULL THEN 0 ELSE COUNT END"
     // store a mapping between a expr and its original index in the loglan output
     replacement_map: IndexMap<String, Expr>,
@@ -119,6 +118,8 @@ fn natural_join(
 
 impl DependentJoinDecorrelator {
     fn init(&mut self, dependent_join_node: &DependentJoin) {
+        self.is_initial = false;
+        self.depth = dependent_join_node.subquery_depth;
         // TODO: it's better if dependent join node store all outer ref in the RHS
         let all_outer_refs = dependent_join_node.right.all_out_ref_exprs();
         let correlated_columns_of_current_level = dependent_join_node
@@ -140,42 +141,16 @@ impl DependentJoinDecorrelator {
             });
 
         self.domains = correlated_columns_of_current_level.unique().collect();
-        self.delim_types = self
-            .domains
-            .iter()
-            .map(|CorrelatedColumnInfo { data_type, .. }| data_type.clone())
-            .collect();
 
-        dependent_join_node
-            .correlated_columns
-            .iter()
-            .for_each(|info| {
-                let cols = self
-                    .correlated_columns_by_depth
-                    .entry(info.depth)
-                    .or_default();
-                let to_insert = CorrelatedColumnInfo {
-                    col: info.col.clone(),
-                    data_type: info.data_type.clone(),
-                    depth: info.depth,
-                };
-                if !cols.contains(&to_insert) {
-                    cols.push(CorrelatedColumnInfo {
-                        col: info.col.clone(),
-                        data_type: info.data_type.clone(),
-                        depth: info.depth,
-                    });
-                }
-            });
+        self.correlated_columns = dependent_join_node.correlated_columns.clone();
     }
 
     fn new_root() -> Self {
         Self {
             domains: IndexSet::new(),
             correlated_column_to_delim_column: IndexMap::new(),
-            delim_types: vec![],
             is_initial: true,
-            correlated_columns_by_depth: IndexMap::new(),
+            correlated_columns: vec![],
             replacement_map: IndexMap::new(),
             any_join: true,
             delim_scan_id: 0,
@@ -186,71 +161,53 @@ impl DependentJoinDecorrelator {
     fn new(
         node: &DependentJoin,
         // correlated_columns: &Vec<(usize, Column, DataType)>,
-        correlated_columns_by_depth: &mut IndexMap<usize, Vec<CorrelatedColumnInfo>>,
+        correlated_columns_from_parent: &Vec<CorrelatedColumnInfo>,
         is_initial: bool,
         any_join: bool,
         delim_scan_id: usize,
         depth: usize,
     ) -> Self {
-        let current_lvl_domains = node.correlated_columns.iter().filter_map(|info| {
-            if depth == info.depth {
-                Some(CorrelatedColumnInfo {
-                    col: info.col.clone(),
-                    data_type: info.data_type.clone(),
-                    depth,
-                })
-            } else {
-                None
-            }
-        });
+        // the correlated_columns may contains collumns referenced by lower depth, filter them out
+        let current_depth_correlated_columns =
+            node.correlated_columns.iter().filter_map(|info| {
+                if depth == info.depth {
+                    Some(info)
+                } else {
+                    None
+                }
+            });
 
         // TODO: it's better if dependentjoin node store all outer ref on RHS itself
         let all_outer_ref = node.right.all_out_ref_exprs();
-
-        let domains_from_parent = correlated_columns_by_depth
-            .swap_remove(&depth)
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|d| {
+        let parent_correlated_columns =
+            correlated_columns_from_parent.iter().filter(|info| {
                 all_outer_ref.contains(&Expr::OuterReferenceColumn(
-                    d.data_type.clone(),
-                    d.col.clone(),
+                    info.data_type.clone(),
+                    info.col.clone(),
                 ))
             });
-
-        let domains: IndexSet<_> = current_lvl_domains
-            .chain(domains_from_parent)
+        let parent_all_columns: Vec<_> =
+            parent_correlated_columns.clone().cloned().collect();
+        let domains: IndexSet<_> = current_depth_correlated_columns
+            .chain(parent_correlated_columns)
             .unique()
+            .cloned()
             .collect();
+        let _debug = LogicalPlan::DependentJoin(node.clone());
 
-        let delim_types = domains
-            .iter()
-            .map(|CorrelatedColumnInfo { data_type, .. }| data_type.clone())
-            .collect();
-        let mut new_correlated_columns_by_depth = correlated_columns_by_depth.clone();
-        new_correlated_columns_by_depth
-            .retain(|columns_depth, _| *columns_depth >= depth);
-
-        node.correlated_columns.iter().for_each(|info| {
-            let cols = new_correlated_columns_by_depth
-                .entry(info.depth)
-                .or_default();
-            let to_insert = CorrelatedColumnInfo {
-                col: info.col.clone(),
-                data_type: info.data_type.clone(),
-                depth,
-            };
-            if !cols.contains(&to_insert) {
-                cols.push(to_insert);
-            }
-        });
+        println!(
+            "creating new dependent join at depth {depth} {_debug}\n, {:?}\n{:?}",
+            parent_all_columns, domains,
+        );
+        let mut merged_correlated_columns = correlated_columns_from_parent.clone();
+        merged_correlated_columns.retain(|info| info.depth >= depth);
+        merged_correlated_columns.extend_from_slice(&node.correlated_columns);
 
         Self {
             domains,
             correlated_column_to_delim_column: IndexMap::new(),
-            delim_types,
             is_initial,
-            correlated_columns_by_depth: new_correlated_columns_by_depth,
+            correlated_columns: merged_correlated_columns,
             replacement_map: IndexMap::new(),
             any_join,
             delim_scan_id,
@@ -277,6 +234,7 @@ impl DependentJoinDecorrelator {
         };
         false
     }
+    // fn has_correlated_exprs(node: DependentJoin) -> Result<bool> {}
 
     fn decorrelate(
         &mut self,
@@ -287,19 +245,18 @@ impl DependentJoinDecorrelator {
         let correlated_columns = node.correlated_columns.clone();
         let perform_delim = true;
         let left = node.left.as_ref();
+
         let new_left = if !self.is_initial {
             // TODO: revisit this check
             // because after DecorrelateDependentJoin at parent level
             // this correlated_columns list are not mutated yet
-            let new_left = if node.correlated_columns.is_empty() {
+            let new_left = if self.domains.is_empty() {
+                println!("debug node {node}");
                 // self.decorrelate_plan(left.clone())?
                 // TODO: fix me
-                self.push_down_dependent_join(
-                    left,
-                    parent_propagate_nulls,
-                    lateral_depth,
-                )?
+                self.decorrelate_independent(left)?
             } else {
+                println!("trying to push down dependent join on the left side {left}");
                 self.push_down_dependent_join(
                     left,
                     parent_propagate_nulls,
@@ -317,20 +274,20 @@ impl DependentJoinDecorrelator {
             // );
             new_left
         } else {
-            self.init(node);
+            println!("decorrelating left plan {}", left.clone());
             self.decorrelate_plan(left.clone())?
         };
         let lateral_depth = 0;
         // let propagate_null_values = node.propagate_null_value();
         let _propagate_null_values = true;
-
+        println!("creating new node");
         let mut decorrelator = DependentJoinDecorrelator::new(
             node,
-            &mut self.correlated_columns_by_depth,
+            &self.correlated_columns,
             false,
             false,
             self.delim_scan_id,
-            self.depth + 1,
+            node.subquery_depth,
         );
         let right = decorrelator.push_down_dependent_join(
             &node.right,
@@ -483,7 +440,7 @@ impl DependentJoinDecorrelator {
             extra_expr_after_join,
         ))
     }
-    fn pushdown_independent(&mut self, _node: &LogicalPlan) -> Result<LogicalPlan> {
+    fn decorrelate_independent(&mut self, _node: &LogicalPlan) -> Result<LogicalPlan> {
         unimplemented!()
     }
 
@@ -607,7 +564,6 @@ impl DependentJoinDecorrelator {
         } else {
             "empty table".to_string()
         };
-        println!("built delim scan {delim_get} {delim_scan_relation_name}");
         Ok((delim_get, delim_scan_relation_name))
     }
 
@@ -746,8 +702,6 @@ impl DependentJoinDecorrelator {
                         &domain_col.col,
                     )?));
                 }
-                println!("debugging {}", new_input);
-                println!("domains {:?}", self.domains);
                 let proj = Projection::try_new(proj.expr, new_input.into())?;
                 return Self::rewrite_outer_ref_columns(
                     LogicalPlan::Projection(proj),
@@ -964,6 +918,7 @@ impl OptimizerRule for DecorrelateDependentJoin {
         let rewrite_result = transformer.rewrite_subqueries_into_dependent_joins(plan)?;
         if rewrite_result.transformed {
             let mut decorrelator = DependentJoinDecorrelator::new_root();
+            println!("{}", rewrite_result.data);
             return Ok(Transformed::yes(
                 decorrelator.decorrelate_plan(rewrite_result.data)?,
             ));
@@ -1024,7 +979,56 @@ mod tests {
         }};
     }
     #[test]
-    fn todo() -> Result<()> {
+    fn buggy_dependent_join_at_the_same_depth() -> Result<()> {
+        let outer_table = test_table_scan_with_name("outer_table")?;
+        let inner_table_lv1 = test_table_scan_with_name("inner_table_lv1")?;
+
+        let sq1 = Arc::new(
+            LogicalPlanBuilder::from(inner_table_lv1.clone())
+                .filter(
+                    col("inner_table_lv1.b")
+                        .eq(out_ref_col(ArrowDataType::UInt32, "outer_table.b")),
+                )?
+                .build()?,
+        );
+        let sq2 = Arc::new(
+            LogicalPlanBuilder::from(inner_table_lv1.clone())
+                .filter(
+                    col("inner_table_lv1.c")
+                        .eq(out_ref_col(ArrowDataType::UInt32, "outer_table.c")),
+                )?
+                .build()?,
+        );
+
+        let plan = LogicalPlanBuilder::from(outer_table.clone())
+            .filter(exists(sq1).and(exists(sq2)))?
+            .build()?;
+        // print_graphviz(&plan);
+
+        println!("{plan}");
+        assert_decorrelate!(plan, @r"
+        Projection: outer_table.a, outer_table.b, outer_table.c [a:UInt32, b:UInt32, c:UInt32]
+          Filter: __exists_sq_1.output AND __exists_sq_2.output [a:UInt32, b:UInt32, c:UInt32, __exists_sq_1.output:Boolean, __exists_sq_2.output:Boolean]
+            Projection: outer_table.a, outer_table.b, outer_table.c, __exists_sq_1.output, mark AS __exists_sq_2.output [a:UInt32, b:UInt32, c:UInt32, __exists_sq_1.output:Boolean, __exists_sq_2.output:Boolean]
+              LeftMark Join(ComparisonJoin):  Filter: outer_table.c IS NOT DISTINCT FROM delim_scan_2.outer_table_c [a:UInt32, b:UInt32, c:UInt32, __exists_sq_1.output:Boolean, mark:Boolean]
+                Projection: outer_table.a, outer_table.b, outer_table.c, mark AS __exists_sq_1.output [a:UInt32, b:UInt32, c:UInt32, __exists_sq_1.output:Boolean]
+                  LeftMark Join(ComparisonJoin):  Filter: outer_table.b IS NOT DISTINCT FROM delim_scan_1.outer_table_b [a:UInt32, b:UInt32, c:UInt32, mark:Boolean]
+                    TableScan: outer_table [a:UInt32, b:UInt32, c:UInt32]
+                    Filter: inner_table_lv1.b = delim_scan_1.outer_table_b [a:UInt32, b:UInt32, c:UInt32, outer_table_b:UInt32;N]
+                      Inner Join(DelimJoin):  Filter: Boolean(true) [a:UInt32, b:UInt32, c:UInt32, outer_table_b:UInt32;N]
+                        TableScan: inner_table_lv1 [a:UInt32, b:UInt32, c:UInt32]
+                        SubqueryAlias: delim_scan_1 [outer_table_b:UInt32;N]
+                          DelimGet: outer_table.b [outer_table_b:UInt32;N]
+                Filter: inner_table_lv1.c = delim_scan_2.outer_table_c [a:UInt32, b:UInt32, c:UInt32, outer_table_c:UInt32;N]
+                  Inner Join(DelimJoin):  Filter: Boolean(true) [a:UInt32, b:UInt32, c:UInt32, outer_table_c:UInt32;N]
+                    TableScan: inner_table_lv1 [a:UInt32, b:UInt32, c:UInt32]
+                    SubqueryAlias: delim_scan_2 [outer_table_c:UInt32;N]
+                      DelimGet: outer_table.c [outer_table_c:UInt32;N]
+        ");
+        Ok(())
+    }
+    #[test]
+    fn buggy_correlated_column_ref_from_parent() -> Result<()> {
         let outer_table = test_table_scan_with_name("outer_table")?;
         let inner_table_lv1 = test_table_scan_with_name("inner_table_lv1")?;
 
@@ -1052,20 +1056,9 @@ mod tests {
         let plan = LogicalPlanBuilder::from(outer_table.clone())
             .filter(scalar_subquery(scalar_sq_level1).eq(col("outer_table.a")))?
             .build()?;
-        print_graphviz(&plan);
+        // print_graphviz(&plan);
 
-        // Projection: outer_table.a, outer_table.b, outer_table.c
-        //   Filter: outer_table.a > Int32(1) AND __scalar_sq_2.output = outer_table.a
-        //     DependentJoin on [outer_table.a lvl 2, outer_table.c lvl 1] with expr (<subquery>) depth 1
-        //       TableScan: outer_table
-        //       Aggregate: groupBy=[[]], aggr=[[count(inner_table_lv1.a)]]
-        //         Projection: inner_table_lv1.a, inner_table_lv1.b, inner_table_lv1.c
-        //           Filter: inner_table_lv1.c = outer_ref(outer_table.c) AND __scalar_sq_1.output = Int32(1)
-        //             DependentJoin on [inner_table_lv1.b lvl 2] with expr (<subquery>) depth 2
-        //               TableScan: inner_table_lv1
-        //               Aggregate: groupBy=[[]], aggr=[[count(inner_table_lv2.a)]]
-        //                 Filter: inner_table_lv2.a = outer_ref(outer_table.a) AND inner_table_lv2.b = outer_ref(inner_table_lv1.b)
-        //                   TableScan: inner_table_lv2
+        println!("{plan}");
         assert_decorrelate!(plan, @r"
         Projection: outer_table.a, outer_table.b, outer_table.c [a:UInt32, b:UInt32, c:UInt32]
           Filter: __scalar_sq_2.output = outer_table.a [a:UInt32, b:UInt32, c:UInt32, count(inner_table_lv1.a):Int64;N, outer_table_c:UInt32;N, outer_table_c:UInt32;N, __scalar_sq_2.output:Int64;N]
