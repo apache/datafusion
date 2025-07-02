@@ -228,8 +228,10 @@ impl PiecewiseMergeJoinExec {
             }
         };
 
-        let left_sort_exprs = vec![PhysicalSortExpr::new(Arc::clone(&on.0), sort_options)];
-        let right_sort_exprs = vec![PhysicalSortExpr::new(Arc::clone(&on.1), sort_options)];
+        let left_sort_exprs =
+            vec![PhysicalSortExpr::new(Arc::clone(&on.0), sort_options)];
+        let right_sort_exprs =
+            vec![PhysicalSortExpr::new(Arc::clone(&on.1), sort_options)];
         let Some(left_sort_exprs) = LexOrdering::new(left_sort_exprs) else {
             return plan_err!(
                 "PiecewiseMergeJoinExec requires valid sort expressions for its left side"
@@ -309,7 +311,7 @@ impl PiecewiseMergeJoinExec {
     }
 
     // TODO: fix compute properties to work specifically for PiecewiseMergeJoin
-    // This is currently just a filler implementation so that it actually returns 
+    // This is currently just a filler implementation so that it actually returns
     // a PlanProperties
     pub fn compute_properties(
         streamed: &Arc<dyn ExecutionPlan>,
@@ -910,12 +912,8 @@ impl PiecewiseMergeJoinStream {
             return Ok(StatefulStreamResult::Ready(None));
         }
 
-        let buffered_data = Arc::clone(&self
-            .buffered_side
-            .try_as_ready()
-            .unwrap()
-            .buffered_data
-            );
+        let buffered_data =
+            Arc::clone(&self.buffered_side.try_as_ready().unwrap().buffered_data);
 
         if matches!(
             self.join_type,
@@ -987,7 +985,8 @@ impl PiecewiseMergeJoinStream {
         );
 
         let buffered_batch = buffered_data.batch();
-        let empty_stream_batch = RecordBatch::new_empty(Arc::clone(&self.streamed_schema));
+        let empty_stream_batch =
+            RecordBatch::new_empty(Arc::clone(&self.streamed_schema));
 
         let batch = build_matched_indices(
             self.join_type,
