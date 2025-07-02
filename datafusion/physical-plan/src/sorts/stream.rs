@@ -78,7 +78,8 @@ impl FusedStreams {
 
 /// A [`PartitionedStream`] that wraps a set of [`SendableRecordBatchStream`]
 /// and computes [`RowValues`] based on the provided [`PhysicalSortExpr`]
-/// Note: this errors
+/// Note: the stream returns an error if the consumer buffers more than one RowValues (i.e. holds on to two RowValues
+/// from the same partition at the same time).
 #[derive(Debug)]
 pub struct RowCursorStream {
     /// Converter to convert output of physical expressions
