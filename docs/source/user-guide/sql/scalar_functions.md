@@ -1834,7 +1834,7 @@ regexp_count(str, regexp[, start, flags])
 Returns the position in a string where the specified occurrence of a POSIX regular expression is located.
 
 ```sql
-regexp_instr(str, regexp[, start[, N[, flags]]])
+regexp_instr(str, regexp[, start[, N[, flags[, subexpr]]]])
 ```
 
 #### Arguments
