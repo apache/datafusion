@@ -4806,6 +4806,7 @@ INSERT INTO t1
 statement ok
 INSERT INTO t2 VALUES (1, 1);
 
+## The TopK(Sort with fetch) should not be pushed down to the hash join
 query TT
 explain
 SELECT *
@@ -4836,3 +4837,24 @@ LIMIT 2;
 ----
 2 2
 3 3
+
+
+## Test left anti join without limit, we should support push down sort to the left side
+query TT
+explain
+SELECT *
+FROM t1
+LEFT ANTI JOIN t2 ON t1.k = t2.k
+ORDER BY t1.k;
+----
+logical_plan
+01)Sort: t1.k ASC NULLS LAST
+02)--LeftAnti Join: t1.k = t2.k
+03)----TableScan: t1 projection=[k, v]
+04)----TableScan: t2 projection=[k]
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=3
+02)--HashJoinExec: mode=CollectLeft, join_type=RightAnti, on=[(k@0, k@0)]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)----SortExec: expr=[k@0 ASC NULLS LAST], preserve_partitioning=[false]
+05)------DataSourceExec: partitions=1, partition_sizes=[3334]

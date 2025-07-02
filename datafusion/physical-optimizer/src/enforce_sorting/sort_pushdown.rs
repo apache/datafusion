@@ -190,6 +190,7 @@ fn pushdown_sorts_helper(
     } else if let Some(adjusted) = pushdown_requirement_to_children(
         &sort_push_down.plan,
         parent_requirement.clone(),
+        parent_fetch,
     )? {
         // For operators that can take a sort pushdown, continue with updated
         // requirements:
@@ -216,6 +217,7 @@ fn pushdown_sorts_helper(
 fn pushdown_requirement_to_children(
     plan: &Arc<dyn ExecutionPlan>,
     parent_required: OrderingRequirements,
+    parent_fetch: Option<usize>,
 ) -> Result<Option<Vec<Option<OrderingRequirements>>>> {
     let maintains_input_order = plan.maintains_input_order();
     if is_window(plan) {
@@ -345,6 +347,10 @@ fn pushdown_requirement_to_children(
             Ok(None)
         }
     } else if let Some(hash_join) = plan.as_any().downcast_ref::<HashJoinExec>() {
+        // We should not push down TopK requirements through HashJoinExec
+        if parent_fetch.is_some() {
+            return Ok(None);
+        }
         handle_hash_join(hash_join, parent_required)
     } else {
         handle_custom_pushdown(plan, parent_required, maintains_input_order)
@@ -668,15 +674,6 @@ fn handle_hash_join(
     plan: &HashJoinExec,
     parent_required: OrderingRequirements,
 ) -> Result<Option<Vec<Option<OrderingRequirements>>>> {
-    // Anti-joins (LeftAnti or RightAnti) do not preserve meaningful input order,
-    // so sorting beforehand cannot be relied on. Bail out early for both flavors:
-    match plan.join_type() {
-        JoinType::LeftAnti | JoinType::RightAnti => {
-            return Ok(None);
-        }
-        _ => {}
-    }
-
     // If the plan has no children or does not maintain the right side ordering,
     // return early:
     if !plan.maintains_input_order()[1] {
