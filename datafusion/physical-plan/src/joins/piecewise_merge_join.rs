@@ -744,6 +744,7 @@ impl RecordBatchStream for PiecewiseMergeJoinStream {
 //      the buffered side.
 impl PiecewiseMergeJoinStream {
     // Creates a new `PiecewiseMergeJoinStream` instance
+    #[allow(clippy::too_many_arguments)]
     pub fn try_new(
         schema: Arc<Schema>,
         on_streamed: PhysicalExprRef,
