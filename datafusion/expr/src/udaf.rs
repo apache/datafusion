@@ -170,6 +170,11 @@ impl AggregateUDF {
         self.inner.name()
     }
 
+    /// Returns the aliases for this function.
+    pub fn aliases(&self) -> &[String] {
+        self.inner.aliases()
+    }
+
     /// See [`AggregateUDFImpl::schema_name`] for more details.
     pub fn schema_name(&self, params: &AggregateFunctionParams) -> Result<String> {
         self.inner.schema_name(params)
@@ -203,11 +208,6 @@ impl AggregateUDF {
 
     pub fn is_nullable(&self) -> bool {
         self.inner.is_nullable()
-    }
-
-    /// Returns the aliases for this function.
-    pub fn aliases(&self) -> &[String] {
-        self.inner.aliases()
     }
 
     /// Returns this function's signature (what input types are accepted)
@@ -434,6 +434,14 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
 
     /// Returns this function's name
     fn name(&self) -> &str;
+
+    /// Returns any aliases (alternate names) for this function.
+    ///
+    /// Note: `aliases` should only include names other than [`Self::name`].
+    /// Defaults to `[]` (no aliases)
+    fn aliases(&self) -> &[String] {
+        &[]
+    }
 
     /// Returns the name of the column this expression would create
     ///
@@ -786,14 +794,6 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
         _args: AccumulatorArgs,
     ) -> Result<Box<dyn GroupsAccumulator>> {
         not_impl_err!("GroupsAccumulator hasn't been implemented for {self:?} yet")
-    }
-
-    /// Returns any aliases (alternate names) for this function.
-    ///
-    /// Note: `aliases` should only include names other than [`Self::name`].
-    /// Defaults to `[]` (no aliases)
-    fn aliases(&self) -> &[String] {
-        &[]
     }
 
     /// Sliding accumulator is an alternative accumulator that can be used for
