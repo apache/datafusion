@@ -22,7 +22,7 @@ use arrow::array::Array;
 use arrow::datatypes::Schema;
 use arrow::record_batch::RecordBatch;
 use arrow::row::{RowConverter, Rows, SortField};
-use datafusion_common::Result;
+use datafusion_common::{DataFusionError, Result};
 use datafusion_execution::memory_pool::MemoryReservation;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use futures::stream::{Fuse, StreamExt};
@@ -78,8 +78,7 @@ impl FusedStreams {
 
 /// A [`PartitionedStream`] that wraps a set of [`SendableRecordBatchStream`]
 /// and computes [`RowValues`] based on the provided [`PhysicalSortExpr`]
-/// Note: for optimal performance, keep only the final RowValues in memory
-/// before pulling the next batch. This will allow reuse of allocations.
+/// Note: this errors
 #[derive(Debug)]
 pub struct RowCursorStream {
     /// Converter to convert output of physical expressions
@@ -142,7 +141,11 @@ impl RowCursorStream {
 
         // At this point, ownership should of this Rows should be unique
         let mut rows = Arc::try_unwrap(self.rows[stream_idx][1].take().unwrap())
-            .unwrap_or_else(|_| self.converter.empty_rows(0, 0));
+            .map_err(|_| {
+                DataFusionError::Internal(
+                    "Rows from RowCursorStream is still in use by consumer".to_string(),
+                )
+            })?;
 
         rows.clear();
 
