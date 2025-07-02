@@ -25,4 +25,3 @@
 ## PySpark 3.5.5 Result: {'to_binary(abc, utf-8)': bytearray(b'abc'), 'typeof(to_binary(abc, utf-8))': 'binary', 'typeof(abc)': 'string', 'typeof(utf-8)': 'string'}
 #query
 #SELECT to_binary('abc'::string, 'utf-8'::string);
-

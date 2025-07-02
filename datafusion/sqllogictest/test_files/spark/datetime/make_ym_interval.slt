@@ -40,4 +40,3 @@
 ## PySpark 3.5.5 Result: {'make_ym_interval(2, 0)': 24, 'typeof(make_ym_interval(2, 0))': 'interval year to month', 'typeof(2)': 'int'}
 #query
 #SELECT make_ym_interval(2::int);
-

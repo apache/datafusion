@@ -35,4 +35,3 @@
 ## PySpark 3.5.5 Result: {'json_object_keys({})': [], 'typeof(json_object_keys({}))': 'array<string>', 'typeof({})': 'string'}
 #query
 #SELECT json_object_keys('{}'::string);
-

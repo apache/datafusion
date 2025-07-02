@@ -25,4 +25,3 @@
 ## PySpark 3.5.5 Result: {'sentences(Hi there! Good morning., , )': [['Hi', 'there'], ['Good', 'morning']], 'typeof(sentences(Hi there! Good morning., , ))': 'array<array<string>>', 'typeof(Hi there! Good morning.)': 'string'}
 #query
 #SELECT sentences('Hi there! Good morning.'::string);
-

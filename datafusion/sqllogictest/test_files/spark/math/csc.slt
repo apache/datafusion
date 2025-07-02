@@ -25,4 +25,3 @@
 ## PySpark 3.5.5 Result: {'CSC(1)': 1.1883951057781212, 'typeof(CSC(1))': 'double', 'typeof(1)': 'int'}
 #query
 #SELECT csc(1::int);
-

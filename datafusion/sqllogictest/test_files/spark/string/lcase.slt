@@ -25,4 +25,3 @@
 ## PySpark 3.5.5 Result: {'lcase(SparkSql)': 'sparksql', 'typeof(lcase(SparkSql))': 'string', 'typeof(SparkSql)': 'string'}
 #query
 #SELECT lcase('SparkSql'::string);
-
