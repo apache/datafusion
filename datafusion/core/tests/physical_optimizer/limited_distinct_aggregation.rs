@@ -87,9 +87,8 @@ async fn test_partial_final() -> Result<()> {
     "
     );
     let expected = run_plan_and_format(plan).await?;
-    let actual = expected.trim();
     assert_snapshot!(
-        actual,
+        expected,
         @r"
     +---+
     | a |
@@ -136,9 +135,8 @@ async fn test_single_local() -> Result<()> {
     "
     );
     let expected = run_plan_and_format(plan).await?;
-    let actual = expected.trim();
     assert_snapshot!(
-        actual,
+        expected,
         @r"
     +---+
     | a |
@@ -185,9 +183,8 @@ async fn test_single_global() -> Result<()> {
     "
     );
     let expected = run_plan_and_format(plan).await?;
-    let actual = expected.trim();
     assert_snapshot!(
-        actual,
+        expected,
         @r"
     +---+
     | a |
@@ -241,9 +238,8 @@ async fn test_distinct_cols_different_than_group_by_cols() -> Result<()> {
     "
     );
     let expected = run_plan_and_format(plan).await?;
-    let actual = expected.trim();
     assert_snapshot!(
-        actual,
+        expected,
         @r"
     +---+
     | a |
