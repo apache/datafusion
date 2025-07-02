@@ -60,4 +60,3 @@
 ## PySpark 3.5.5 Result: {"datepart(week FROM TIMESTAMP '2019-08-12 01:00:00.123456')": 33, "typeof(datepart(week FROM TIMESTAMP '2019-08-12 01:00:00.123456'))": 'int', 'typeof(week)': 'string', "typeof(TIMESTAMP '2019-08-12 01:00:00.123456')": 'timestamp'}
 #query
 #SELECT datepart('week'::string, TIMESTAMP '2019-08-12 01:00:00.123456'::timestamp);
-

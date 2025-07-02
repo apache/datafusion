@@ -25,4 +25,3 @@
 ## PySpark 3.5.5 Result: {'add_months(2016-08-31, 1)': datetime.date(2016, 9, 30), 'typeof(add_months(2016-08-31, 1))': 'date', 'typeof(2016-08-31)': 'string', 'typeof(1)': 'int'}
 #query
 #SELECT add_months('2016-08-31'::string, 1::int);
-

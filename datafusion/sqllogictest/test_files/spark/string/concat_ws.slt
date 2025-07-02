@@ -40,4 +40,3 @@
 ## PySpark 3.5.5 Result: {'concat_ws(NULL, Spark, SQL)': None, 'typeof(concat_ws(NULL, Spark, SQL))': 'string', 'typeof(NULL)': 'void', 'typeof(Spark)': 'string', 'typeof(SQL)': 'string'}
 #query
 #SELECT concat_ws(NULL::void, 'Spark'::string, 'SQL'::string);
-

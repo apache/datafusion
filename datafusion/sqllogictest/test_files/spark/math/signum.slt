@@ -30,4 +30,3 @@
 ## PySpark 3.5.5 Result: {"SIGNUM(INTERVAL '-100' YEAR)": -1.0, "typeof(SIGNUM(INTERVAL '-100' YEAR))": 'double', "typeof(INTERVAL '-100' YEAR)": 'interval year'}
 #query
 #SELECT signum(INTERVAL '-100' YEAR::interval year);
-

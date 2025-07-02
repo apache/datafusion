@@ -30,4 +30,3 @@
 ## PySpark 3.5.5 Result: {'unix_timestamp(current_timestamp(), yyyy-MM-dd HH:mm:ss)': 1749970660, 'typeof(unix_timestamp(current_timestamp(), yyyy-MM-dd HH:mm:ss))': 'bigint'}
 #query
 #SELECT unix_timestamp();
-

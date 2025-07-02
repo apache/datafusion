@@ -25,4 +25,3 @@
 ## PySpark 3.5.5 Result: {'Spark LIKE _park': True, 'typeof(Spark LIKE _park)': 'boolean', 'typeof(Spark)': 'string', 'typeof(_park)': 'string'}
 #query
 #SELECT like('Spark'::string, '_park'::string);
-

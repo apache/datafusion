@@ -30,4 +30,3 @@
 ## PySpark 3.5.5 Result: {"len(X'537061726B2053514C')": 9, "typeof(len(X'537061726B2053514C'))": 'int', "typeof(X'537061726B2053514C')": 'binary'}
 #query
 #SELECT len(X'537061726B2053514C'::binary);
-

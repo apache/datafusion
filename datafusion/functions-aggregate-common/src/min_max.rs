@@ -291,10 +291,9 @@ fn min_max_batch_generic(array: &ArrayRef, ordering: Ordering) -> Result<ScalarV
             extreme = current;
             continue;
         }
-        if let Some(cmp) = extreme.partial_cmp(&current) {
-            if cmp == ordering {
-                extreme = current;
-            }
+        let cmp = extreme.try_cmp(&current)?;
+        if cmp == ordering {
+            extreme = current;
         }
     }
 

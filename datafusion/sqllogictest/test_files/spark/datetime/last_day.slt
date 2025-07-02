@@ -25,4 +25,3 @@
 ## PySpark 3.5.5 Result: {'last_day(2009-01-12)': datetime.date(2009, 1, 31), 'typeof(last_day(2009-01-12))': 'date', 'typeof(2009-01-12)': 'string'}
 #query
 #SELECT last_day('2009-01-12'::string);
-

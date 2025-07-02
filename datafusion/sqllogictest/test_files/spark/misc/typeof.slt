@@ -25,4 +25,3 @@
 ## PySpark 3.5.5 Result: {'typeof(1)': 'int', 'typeof(typeof(1))': 'string'}
 #query
 #SELECT typeof(1::int);
-

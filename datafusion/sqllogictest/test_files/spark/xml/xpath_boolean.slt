@@ -25,4 +25,3 @@
 ## PySpark 3.5.5 Result: {'xpath_boolean(<a><b>1</b></a>, a/b)': True, 'typeof(xpath_boolean(<a><b>1</b></a>, a/b))': 'boolean', 'typeof(<a><b>1</b></a>)': 'string', 'typeof(a/b)': 'string'}
 #query
 #SELECT xpath_boolean('<a><b>1</b></a>'::string, 'a/b'::string);
-

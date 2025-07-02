@@ -25,4 +25,3 @@
 ## PySpark 3.5.5 Result: {'TAN(0)': 0.0, 'typeof(TAN(0))': 'double', 'typeof(0)': 'int'}
 #query
 #SELECT tan(0::int);
-

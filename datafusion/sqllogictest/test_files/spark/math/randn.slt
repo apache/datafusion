@@ -35,4 +35,3 @@
 ## PySpark 3.5.5 Result: {'randn(NULL)': 1.6034991609278433, 'typeof(randn(NULL))': 'double', 'typeof(NULL)': 'void'}
 #query
 #SELECT randn(NULL::void);
-

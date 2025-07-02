@@ -25,4 +25,3 @@
 ## PySpark 3.5.5 Result: {'input_file_block_length()': -1, 'typeof(input_file_block_length())': 'bigint'}
 #query
 #SELECT input_file_block_length();
-

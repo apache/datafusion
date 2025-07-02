@@ -25,4 +25,3 @@
 ## PySpark 3.5.5 Result: {'RADIANS(180)': 3.141592653589793, 'typeof(RADIANS(180))': 'double', 'typeof(180)': 'int'}
 #query
 #SELECT radians(180::int);
-

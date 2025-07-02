@@ -25,4 +25,3 @@
 ## PySpark 3.5.5 Result: {"assert_true((0 < 1), '(0 < 1)' is not true!)": None, "typeof(assert_true((0 < 1), '(0 < 1)' is not true!))": 'void', 'typeof((0 < 1))': 'boolean'}
 #query
 #SELECT assert_true((0 < 1)::boolean);
-

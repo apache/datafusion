@@ -45,4 +45,3 @@
 ## PySpark 3.5.5 Result: {'to_char(78.12, $99.99)': '$78.12', 'typeof(to_char(78.12, $99.99))': 'string', 'typeof(78.12)': 'decimal(4,2)', 'typeof($99.99)': 'string'}
 #query
 #SELECT to_varchar(78.12::decimal(4,2), '$99.99'::string);
-
