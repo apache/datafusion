@@ -150,7 +150,7 @@ env_logger = "0.11"
 futures = "0.3"
 half = { version = "2.6.0", default-features = false }
 hashbrown = { version = "0.14.5", features = ["raw"] }
-hex = { version = "0.4.3", optional = true }
+hex = { version = "0.4.3"}
 indexmap = "2.10.0"
 itertools = "0.14"
 log = "^0.4"
