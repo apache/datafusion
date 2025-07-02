@@ -358,7 +358,7 @@ impl ExecutionPlan for PiecewiseMergeJoinExec {
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
-        todo!()
+        vec![&self.streamed, &self.buffered]
     }
 
     fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
