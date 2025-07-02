@@ -93,7 +93,7 @@ pub mod expr_fn {
         };
         super::regexp_instr().call(args)
     }
-    /// Returns true if a has at least one match in a string, false otherwise.
+    /// Returns true if a regex has at least one match in a string, false otherwise.
     pub fn regexp_like(values: Expr, regex: Expr, flags: Option<Expr>) -> Expr {
         let mut args = vec![values, regex];
         if let Some(flags) = flags {
@@ -152,7 +152,8 @@ pub fn compile_regex(regex: &str, flags: Option<&str>) -> Result<Regex, ArrowErr
         Some(flags) => {
             if flags.contains("g") {
                 return Err(ArrowError::ComputeError(
-                    "regexp_count() does not support global flag".to_string(),
+                    "regexp_count()/regexp_instr() does not support the global flag"
+                        .to_string(),
                 ));
             }
             format!("(?{flags}){regex}")

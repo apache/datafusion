@@ -39,7 +39,7 @@ use crate::regex::compile_and_cache_regex;
 #[user_doc(
     doc_section(label = "Regular Expression Functions"),
     description = "Returns the position in a string where the specified occurrence of a POSIX regular expression is located.",
-    syntax_example = "regexp_instr(str, regexp[, start[, N[, flags]]])",
+    syntax_example = "regexp_instr(str, regexp[, start[, N[, flags[, subexpr]]]])",
     sql_example = r#"```sql
 > SELECT regexp_instr('ABCDEF', 'C(.)(..)');
 +---------------------------------------------------------------+
@@ -213,24 +213,23 @@ pub fn regexp_instr(
     flags_array: Option<&dyn Datum>,
     subexpr_array: Option<&dyn Datum>,
 ) -> Result<ArrayRef, ArrowError> {
-    let (regex_array, _is_regex_scalar) = regex_array.get();
-    let (start_array, _is_start_scalar) = start_array.map_or((None, true), |start| {
-        let (start, is_start_scalar) = start.get();
-        (Some(start), is_start_scalar)
+    let (regex_array, _) = regex_array.get();
+    let start_array = start_array.map(|start| {
+        let (start, _) = start.get();
+        start
     });
-    let (nth_array, _is_nth_scalar) = nth_array.map_or((None, true), |nth| {
-        let (nth, is_nth_scalar) = nth.get();
-        (Some(nth), is_nth_scalar)
+    let nth_array = nth_array.map(|nth| {
+        let (nth, _) = nth.get();
+        nth
     });
-    let (flags_array, _is_flags_scalar) = flags_array.map_or((None, true), |flags| {
-        let (flags, is_flags_scalar) = flags.get();
-        (Some(flags), is_flags_scalar)
+    let flags_array = flags_array.map(|flags| {
+        let (flags, _) = flags.get();
+        flags
     });
-    let (subexpr_array, _is_subexpr_scalar) =
-        subexpr_array.map_or((None, true), |subexpr| {
-            let (subexpr, is_subexpr_scalar) = subexpr.get();
-            (Some(subexpr), is_subexpr_scalar)
-        });
+    let subexpr_array = subexpr_array.map(|subexpr| {
+        let (subexpr, _) = subexpr.get();
+        subexpr
+    });
 
     match (values.data_type(), regex_array.data_type(), flags_array) {
         (Utf8, Utf8, None) => regexp_instr_inner(
@@ -480,18 +479,19 @@ mod tests {
             .map(|sv| ColumnarValue::Scalar(sv.clone()))
             .collect();
 
-        let arg_fields_owned = args
+        let arg_fields = args
             .iter()
             .enumerate()
-            .map(|(idx, a)| Field::new(format!("arg_{idx}"), a.data_type(), true))
-            .collect::<Vec<Field>>();
-        let arg_fields = arg_fields_owned.iter().collect::<Vec<_>>();
+            .map(|(idx, a)| {
+                Arc::new(Field::new(format!("arg_{idx}"), a.data_type(), true))
+            })
+            .collect::<Vec<_>>();
 
         RegexpInstrFunc::new().invoke_with_args(ScalarFunctionArgs {
             args: args_values,
             arg_fields,
             number_rows: args.len(),
-            return_field: &Field::new("f", Int64, true),
+            return_field: Arc::new(Field::new("f", Int64, true)),
         })
     }
 
@@ -521,10 +521,6 @@ mod tests {
         let regex = ["o", "d", "123", "z", "gg", "📊"];
 
         let expected: Vec<i64> = vec![5, 4, 4, 0, 0, 15];
-
-        // let values = [""];
-        // let regex = [""];
-        // let expected: Vec<i64> = vec![0];
 
         izip!(values.iter(), regex.iter())
             .enumerate()
