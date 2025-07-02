@@ -186,7 +186,7 @@ impl DistinctIndex {
 
         println!("Writing custom index at offset: {offset}, length: {index_len}");
         // Write the index magic and length to the file
-        arrow_writer.write_all(b"IDX1")?;
+        arrow_writer.write_all(INDEX_MAGIC)?;
         arrow_writer.write_all(&index_len.to_le_bytes())?;
 
         // Write the index bytes
