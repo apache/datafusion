@@ -231,8 +231,8 @@ fn pushdown_requirement_to_children(
         //    sort-with-limit, or UDTFs that may expand rows) must stop the pushdown.
         let effect = plan.cardinality_effect();
         if !matches!(
-            plan.cardinality_effect(),
-            CardinalityEffect::Equal
+            effect,
+            CardinalityEffect::Equal | CardinalityEffect::LowerEqual
         ) {
             return Ok(None);
         }
