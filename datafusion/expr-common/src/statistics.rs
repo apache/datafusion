@@ -1047,7 +1047,8 @@ mod tests {
     use super::{
         combine_bernoullis, combine_gaussians, compute_mean, compute_median,
         compute_variance, create_bernoulli_from_comparison, new_generic_from_binary_op,
-        BernoulliDistribution, Distribution, GaussianDistribution, UniformDistribution, SampledDistribution
+        BernoulliDistribution, Distribution, GaussianDistribution, SampledDistribution,
+        UniformDistribution,
     };
     use crate::interval_arithmetic::{apply_operator, Interval};
     use crate::operator::Operator;
