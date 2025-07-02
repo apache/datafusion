@@ -75,7 +75,7 @@ fn start(rng: &mut ThreadRng) -> Int64Array {
 fn n(rng: &mut ThreadRng) -> Int64Array {
     let mut data: Vec<i64> = vec![];
     for _ in 0..1000 {
-        data.push(rng.gen_range(1..5));
+        data.push(rng.random_range(1..5));
     }
 
     Int64Array::from(data)
@@ -99,7 +99,7 @@ fn flags(rng: &mut ThreadRng) -> StringArray {
 fn subexp(rng: &mut ThreadRng) -> Int64Array {
     let mut data: Vec<i64> = vec![];
     for _ in 0..1000 {
-        data.push(rng.gen_range(1..5));
+        data.push(rng.random_range(1..5));
     }
 
     Int64Array::from(data)
@@ -147,7 +147,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     });
 
     c.bench_function("regexp_instr_1000 string", |b| {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let data = Arc::new(data(&mut rng)) as ArrayRef;
         let regex = Arc::new(regex(&mut rng)) as ArrayRef;
         let start = Arc::new(start(&mut rng)) as ArrayRef;
@@ -171,7 +171,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     });
 
     c.bench_function("regexp_instr_1000 utf8view", |b| {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let data = cast(&data(&mut rng), &DataType::Utf8View).unwrap();
         let regex = cast(&regex(&mut rng), &DataType::Utf8View).unwrap();
         let start = Arc::new(start(&mut rng)) as ArrayRef;
