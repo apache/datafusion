@@ -227,14 +227,14 @@ fn pushdown_requirement_to_children(
             return Ok(None);
         }
         // 2) Only allow pushdown through operators that do not increase row count
-        //    (equal or lower-equal cardinality). Any other operator (including joins,
+        //    (equal cardinality). Any other operator (including joins, filter,
         //    sort-with-limit, or UDTFs that may expand rows) must stop the pushdown.
         let effect = plan.cardinality_effect();
         if !matches!(effect, CardinalityEffect::Equal) {
             return Ok(None);
         }
         // At this point, only single-input, non-expanding operators
-        // such as Filter, Projection, or Map are allowed to receive TopK.
+        // such as ProjectionExec, CoalesceBatchesExec, are allowed to receive TopK.
     }
 
     let maintains_input_order = plan.maintains_input_order();
