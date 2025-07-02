@@ -166,6 +166,8 @@ pub struct ChildFilterDescription {
 
 impl ChildFilterDescription {
     /// Build a child filter description by analyzing which parent filters can be pushed to a specific child.
+    ///
+    /// See [`FilterDescription::from_children`] for more details
     pub fn from_child(
         parent_filters: Vec<Arc<dyn PhysicalExpr>>,
         child: &Arc<dyn crate::ExecutionPlan>,
