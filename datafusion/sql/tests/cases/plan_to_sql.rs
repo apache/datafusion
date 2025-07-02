@@ -307,7 +307,8 @@ macro_rules! roundtrip_statement_with_dialect_helper {
             .with_aggregate_function(max_udaf())
             .with_aggregate_function(min_udaf())
             .with_expr_planner(Arc::new(CoreFunctionPlanner::default()))
-            .with_expr_planner(Arc::new(NestedFunctionPlanner));
+            .with_expr_planner(Arc::new(NestedFunctionPlanner))
+            .with_expr_planner(Arc::new(FieldAccessPlanner));
 
         let context = MockContextProvider { state };
         let sql_to_rel = SqlToRel::new(&context);
@@ -1337,7 +1338,10 @@ where
             .with_aggregate_function(grouping_udaf())
             .with_window_function(rank_udwf())
             .with_scalar_function(Arc::new(unicode::substr().as_ref().clone()))
-            .with_scalar_function(make_array_udf()),
+            .with_scalar_function(make_array_udf())
+            .with_expr_planner(Arc::new(CoreFunctionPlanner::default()))
+            .with_expr_planner(Arc::new(NestedFunctionPlanner))
+            .with_expr_planner(Arc::new(FieldAccessPlanner)),
     };
     let sql_to_rel = SqlToRel::new(&context);
     let plan = sql_to_rel.sql_statement_to_plan(statement).unwrap();
@@ -2594,5 +2598,62 @@ fn test_not_ilike_filter_with_escape() {
     assert_snapshot!(
         statement,
         @"SELECT person.first_name FROM person WHERE person.first_name NOT ILIKE 'A!_%' ESCAPE '!'"
+    );
+}
+
+#[test]
+fn test_struct_expr() {
+    let statement = generate_round_trip_statement(
+        GenericDialect {},
+        r#"WITH test AS (SELECT STRUCT(STRUCT('Product Name' as name) as product) AS metadata) SELECT metadata.product FROM test WHERE metadata.product.name  = 'Product Name'"#,
+    );
+    assert_snapshot!(
+        statement,
+        @r#"SELECT test."metadata".product FROM (SELECT {product: {"name": 'Product Name'}} AS "metadata") AS test WHERE (test."metadata".product."name" = 'Product Name')"#
+    );
+
+    let statement = generate_round_trip_statement(
+        GenericDialect {},
+        r#"WITH test AS (SELECT STRUCT(STRUCT('Product Name' as name) as product) AS metadata) SELECT metadata.product FROM test WHERE metadata['product']['name']  = 'Product Name'"#,
+    );
+    assert_snapshot!(
+        statement,
+        @r#"SELECT test."metadata".product FROM (SELECT {product: {"name": 'Product Name'}} AS "metadata") AS test WHERE (test."metadata".product."name" = 'Product Name')"#
+    );
+}
+
+#[test]
+fn test_struct_expr2() {
+    let statement = generate_round_trip_statement(
+        GenericDialect {},
+        r#"SELECT STRUCT(STRUCT('Product Name' as name) as product)['product']['name']  = 'Product Name';"#,
+    );
+    assert_snapshot!(
+        statement,
+        @r#"SELECT ({product: {"name": 'Product Name'}}.product."name" = 'Product Name')"#
+    );
+}
+
+#[test]
+fn test_struct_expr3() {
+    let statement = generate_round_trip_statement(
+        GenericDialect {},
+        r#"WITH
+                test AS (
+                    SELECT
+                        STRUCT (
+                            STRUCT (
+                                STRUCT ('Product Name' as name) as product
+                            ) AS metadata
+                        ) AS c1
+                )
+            SELECT
+                c1.metadata.product.name
+            FROM
+                test"#,
+    );
+    assert_snapshot!(
+        statement,
+        @r#"SELECT test.c1."metadata".product."name" FROM (SELECT {"metadata": {product: {"name": 'Product Name'}}} AS c1) AS test"#
     );
 }
