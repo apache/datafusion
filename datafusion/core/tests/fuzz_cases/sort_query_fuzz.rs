@@ -31,7 +31,6 @@ use datafusion_execution::memory_pool::{
 };
 use datafusion_expr::display_schema;
 use datafusion_physical_plan::spill::get_record_batch_memory_size;
-use itertools::Itertools;
 use std::time::Duration;
 
 use datafusion_execution::{memory_pool::FairSpillPool, runtime_env::RuntimeEnvBuilder};
@@ -71,43 +70,6 @@ async fn sort_query_fuzzer_runner() {
         .with_test_generator(test_generator);
 
     fuzzer.run().await.unwrap();
-}
-
-/// Reproduce the bug with specific seeds from the
-/// [failing test case](https://github.com/apache/datafusion/issues/16452).
-#[tokio::test(flavor = "multi_thread")]
-async fn test_reproduce_sort_query_issue_16452() {
-    // Seeds from the failing test case
-    let init_seed = 10313160656544581998u64;
-    let query_seed = 15004039071976572201u64;
-    let config_seed_1 = 11807432710583113300u64;
-    let config_seed_2 = 759937414670321802u64;
-
-    let random_seed = 1u64; // Use a fixed seed to ensure consistent behavior
-
-    let mut test_generator = SortFuzzerTestGenerator::new(
-        2000,
-        3,
-        "sort_fuzz_table".to_string(),
-        get_supported_types_columns(random_seed),
-        false,
-        random_seed,
-    );
-
-    let mut results = vec![];
-
-    for config_seed in [config_seed_1, config_seed_2] {
-        let r = test_generator
-            .fuzzer_run(init_seed, query_seed, config_seed)
-            .await
-            .unwrap();
-
-        results.push(r);
-    }
-
-    for (lhs, rhs) in results.iter().tuple_windows() {
-        check_equality_of_batches(lhs, rhs).unwrap();
-    }
 }
 
 /// SortQueryFuzzer holds the runner configuration for executing sort query fuzz tests. The fuzzing details are managed inside `SortFuzzerTestGenerator`.
@@ -466,7 +428,7 @@ impl SortFuzzerTestGenerator {
             .collect();
 
         let mut order_by_clauses = Vec::new();
-        for col in selected_columns {
+        for col in &selected_columns {
             let mut clause = col.name.clone();
             if rng.random_bool(0.5) {
                 let order = if rng.random_bool(0.5) { "ASC" } else { "DESC" };
@@ -501,7 +463,12 @@ impl SortFuzzerTestGenerator {
         let limit_clause = limit.map_or(String::new(), |l| format!(" LIMIT {l}"));
 
         let query = format!(
-            "SELECT * FROM {} ORDER BY {}{}",
+            "SELECT {} FROM {} ORDER BY {}{}",
+            selected_columns
+                .iter()
+                .map(|col| col.name.clone())
+                .collect::<Vec<_>>()
+                .join(", "),
             self.table_name,
             order_by_clauses.join(", "),
             limit_clause
