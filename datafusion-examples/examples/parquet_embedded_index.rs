@@ -15,12 +15,47 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Embedding and using a custom “distinct values” index in Parquet files
+//! Embedding and using a custom index in Parquet files
 //!
-//! This example shows how to build a lightweight, application‑specific index
-//! directly in Parquet metadata to achieve efficient file‑level pruning without
-//! modifying the Parquet format. The Parquet files can still be read by any
-//! standard Parquet reader, which will simply ignore the extra index data.
+//! This example shows how to add an application‑specific index to an Apache
+//! Parquet file without modifying the Parquet format itself. The resulting
+//! Parquet files can be read by any standard Parquet reader, which will simply
+//! ignore the extra index data.
+//!
+//! A “distinct value” index, similar to a  ["set" Skip Index in ClickHouse],
+//! is stored in a custom binary format within the parquet file. Only the
+//! location of index is stored in Parquet footer key/value metadata, as
+//! shown below.
+//!
+//! ```text
+//!                   ┌──────────────────────┐                           
+//!                   │┌───────────────────┐ │                           
+//!                   ││     DataPage      │ │                           
+//!                   │└───────────────────┘ │                           
+//!  Standard Parquet │┌───────────────────┐ │                           
+//!  Data Pages       ││     DataPage      │ │                           
+//!                   │└───────────────────┘ │                           
+//!                   │        ...           │                           
+//!                   │┌───────────────────┐ │                           
+//!                   ││     DataPage      │ │                           
+//!                   │└───────────────────┘ │                           
+//!                   │┏━━━━━━━━━━━━━━━━━━━┓ │                           
+//! Non standard      │┃                   ┃ │                           
+//! index (ignored by │┃Custom Binary Index┃ │                           
+//! other Parquet     │┃ (Distinct Values) ┃◀│─ ─ ─                      
+//! readers)          │┃                   ┃ │     │                     
+//!                   │┗━━━━━━━━━━━━━━━━━━━┛ │                           
+//! Standard Parquet  │┏━━━━━━━━━━━━━━━━━━━┓ │     │  key/value metadata
+//! Page Index        │┃    Page Index     ┃ │        contains location  
+//!                   │┗━━━━━━━━━━━━━━━━━━━┛ │     │  of special index   
+//!                   │╔═══════════════════╗ │                           
+//!                   │║ Parquet Footer w/ ║ │     │                     
+//!                   │║     Metadata      ║ ┼ ─ ─                       
+//!                   │║ (Thrift Encoded)  ║ │                           
+//!                   │╚═══════════════════╝ │                           
+//!                   └──────────────────────┘                           
+//!                                                                      
+//!                         Parquet File                                 
 //!
 //! Steps:
 //! 1. Compute the distinct values for a target column and serialize them into bytes.
@@ -38,39 +73,7 @@
 //! the metadata itself. By writing the custom index after the data pages,
 //! we only read it if/when needed.
 //!
-//! This diagram illustrates the final Parquet file layout:
-//!
-//! ```text
-//!         ┌──────────────────────┐
-//!         │┌───────────────────┐ │
-//!         ││     DataPage      │ │      Standard Parquet
-//!         │└───────────────────┘ │      Data pages
-//!         │┌───────────────────┐ │
-//!         ││     DataPage      │ │
-//!         │└───────────────────┘ │
-//!         │        ...           │
-//!         │                      │
-//!         │┌───────────────────┐ │
-//!         ││     DataPage      │ │
-//!         │└───────────────────┘ │
-//!         │┏━━━━━━━━━━━━━━━━━━━┓ │
-//!         │┃                   ┃ │        key/value metadata
-//!         │┃   Special Index   ┃◀┼────    that points to the
-//!         │┃                   ┃ │     │  custom index blob
-//!         │┗━━━━━━━━━━━━━━━━━━━┛ │
-//!         │┏───────────────────┓ │
-//!         │┃ Page Index Offset ┃◀┼────    little‑endian u64
-//!         │┗───────────────────┛ │     │  sitting after the custom index
-//!         │╔═══════════════════╗ │     │
-//!         │║                   ║ │
-//!         │║  Parquet Footer   ║ │     │  thrift‑encoded
-//!         │║                   ║ ┼──────  ParquetMetadata
-//!         │║                   ║ │
-//!         │╚═══════════════════╝ │
-//!         └──────────────────────┘
-//!
-//!               Parquet File
-//! ```
+
 //!
 //! **How can other Parquet readers simply skip over our extra index blob?**
 //!
@@ -92,6 +95,7 @@
 //! or deserialize the raw index bytes.
 //!
 //!
+//! ["set" Skip Index in ClickHouse]: https://clickhouse.com/docs/optimize/skipping-indexes#set
 
 use arrow::array::{ArrayRef, StringArray};
 use arrow::record_batch::RecordBatch;
