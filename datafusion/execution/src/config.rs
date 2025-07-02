@@ -91,8 +91,8 @@ use datafusion_common::{
 /// [`SessionContext::new_with_config`]: https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionContext.html#method.new_with_config
 #[derive(Clone, Debug)]
 pub struct SessionConfig {
-    /// Configuration options
-    options: ConfigOptions,
+    /// Configuration options, copy on write
+    options: Arc<ConfigOptions>,
     /// Opaque extensions.
     extensions: AnyMap,
 }
@@ -100,7 +100,7 @@ pub struct SessionConfig {
 impl Default for SessionConfig {
     fn default() -> Self {
         Self {
-            options: ConfigOptions::new(),
+            options: Arc::new(ConfigOptions::new()),
             // Assume no extensions by default.
             extensions: HashMap::with_capacity_and_hasher(
                 0,
@@ -140,6 +140,11 @@ impl SessionConfig {
         &self.options
     }
 
+    /// Returns the config options as an Arc
+    pub fn options_arc(&self) -> Arc<ConfigOptions> {
+        Arc::clone(&self.options)
+    }
+
     /// Return a mutable handle to the configuration options.
     ///
     /// Can be used to set configuration options.
@@ -152,7 +157,7 @@ impl SessionConfig {
     /// assert_eq!(config.options().execution.batch_size, 1024);
     /// ```
     pub fn options_mut(&mut self) -> &mut ConfigOptions {
-        &mut self.options
+        Arc::make_mut(&mut self.options)
     }
 
     /// Set a configuration option
@@ -177,7 +182,7 @@ impl SessionConfig {
 
     /// Set a generic `str` configuration option
     pub fn set_str(mut self, key: &str, value: &str) -> Self {
-        self.options.set(key, value).unwrap();
+        self.options_mut().set(key, value).unwrap();
         self
     }
 
@@ -185,7 +190,7 @@ impl SessionConfig {
     pub fn with_batch_size(mut self, n: usize) -> Self {
         // batch size must be greater than zero
         assert!(n > 0);
-        self.options.execution.batch_size = n;
+        self.options_mut().execution.batch_size = n;
         self
     }
 
@@ -193,7 +198,7 @@ impl SessionConfig {
     ///
     /// [`target_partitions`]: datafusion_common::config::ExecutionOptions::target_partitions
     pub fn with_target_partitions(mut self, n: usize) -> Self {
-        self.options.execution.target_partitions = if n == 0 {
+        self.options_mut().execution.target_partitions = if n == 0 {
             datafusion_common::config::ExecutionOptions::default().target_partitions
         } else {
             n
@@ -269,62 +274,64 @@ impl SessionConfig {
         catalog: impl Into<String>,
         schema: impl Into<String>,
     ) -> Self {
-        self.options.catalog.default_catalog = catalog.into();
-        self.options.catalog.default_schema = schema.into();
+        self.options_mut().catalog.default_catalog = catalog.into();
+        self.options_mut().catalog.default_schema = schema.into();
         self
     }
 
     /// Controls whether the default catalog and schema will be automatically created
     pub fn with_create_default_catalog_and_schema(mut self, create: bool) -> Self {
-        self.options.catalog.create_default_catalog_and_schema = create;
+        self.options_mut().catalog.create_default_catalog_and_schema = create;
         self
     }
 
     /// Enables or disables the inclusion of `information_schema` virtual tables
     pub fn with_information_schema(mut self, enabled: bool) -> Self {
-        self.options.catalog.information_schema = enabled;
+        self.options_mut().catalog.information_schema = enabled;
         self
     }
 
     /// Enables or disables the use of repartitioning for joins to improve parallelism
     pub fn with_repartition_joins(mut self, enabled: bool) -> Self {
-        self.options.optimizer.repartition_joins = enabled;
+        self.options_mut().optimizer.repartition_joins = enabled;
         self
     }
 
     /// Enables or disables the use of repartitioning for aggregations to improve parallelism
     pub fn with_repartition_aggregations(mut self, enabled: bool) -> Self {
-        self.options.optimizer.repartition_aggregations = enabled;
+        self.options_mut().optimizer.repartition_aggregations = enabled;
         self
     }
 
     /// Sets minimum file range size for repartitioning scans
     pub fn with_repartition_file_min_size(mut self, size: usize) -> Self {
-        self.options.optimizer.repartition_file_min_size = size;
+        self.options_mut().optimizer.repartition_file_min_size = size;
         self
     }
 
     /// Enables or disables the allowing unordered symmetric hash join
     pub fn with_allow_symmetric_joins_without_pruning(mut self, enabled: bool) -> Self {
-        self.options.optimizer.allow_symmetric_joins_without_pruning = enabled;
+        self.options_mut()
+            .optimizer
+            .allow_symmetric_joins_without_pruning = enabled;
         self
     }
 
     /// Enables or disables the use of repartitioning for file scans
     pub fn with_repartition_file_scans(mut self, enabled: bool) -> Self {
-        self.options.optimizer.repartition_file_scans = enabled;
+        self.options_mut().optimizer.repartition_file_scans = enabled;
         self
     }
 
     /// Enables or disables the use of repartitioning for window functions to improve parallelism
     pub fn with_repartition_windows(mut self, enabled: bool) -> Self {
-        self.options.optimizer.repartition_windows = enabled;
+        self.options_mut().optimizer.repartition_windows = enabled;
         self
     }
 
     /// Enables or disables the use of per-partition sorting to improve parallelism
     pub fn with_repartition_sorts(mut self, enabled: bool) -> Self {
-        self.options.optimizer.repartition_sorts = enabled;
+        self.options_mut().optimizer.repartition_sorts = enabled;
         self
     }
 
@@ -333,7 +340,7 @@ impl SessionConfig {
     ///
     /// [prefer_existing_sort]: datafusion_common::config::OptimizerOptions::prefer_existing_sort
     pub fn with_prefer_existing_sort(mut self, enabled: bool) -> Self {
-        self.options.optimizer.prefer_existing_sort = enabled;
+        self.options_mut().optimizer.prefer_existing_sort = enabled;
         self
     }
 
@@ -341,13 +348,13 @@ impl SessionConfig {
     ///
     /// [prefer_existing_union]: datafusion_common::config::OptimizerOptions::prefer_existing_union
     pub fn with_prefer_existing_union(mut self, enabled: bool) -> Self {
-        self.options.optimizer.prefer_existing_union = enabled;
+        self.options_mut().optimizer.prefer_existing_union = enabled;
         self
     }
 
     /// Enables or disables the use of pruning predicate for parquet readers to skip row groups
     pub fn with_parquet_pruning(mut self, enabled: bool) -> Self {
-        self.options.execution.parquet.pruning = enabled;
+        self.options_mut().execution.parquet.pruning = enabled;
         self
     }
 
@@ -363,7 +370,7 @@ impl SessionConfig {
 
     /// Enables or disables the use of bloom filter for parquet readers to skip row groups
     pub fn with_parquet_bloom_filter_pruning(mut self, enabled: bool) -> Self {
-        self.options.execution.parquet.bloom_filter_on_read = enabled;
+        self.options_mut().execution.parquet.bloom_filter_on_read = enabled;
         self
     }
 
@@ -374,13 +381,13 @@ impl SessionConfig {
 
     /// Enables or disables the use of page index for parquet readers to skip parquet data pages
     pub fn with_parquet_page_index_pruning(mut self, enabled: bool) -> Self {
-        self.options.execution.parquet.enable_page_index = enabled;
+        self.options_mut().execution.parquet.enable_page_index = enabled;
         self
     }
 
     /// Enables or disables the collection of statistics after listing files
     pub fn with_collect_statistics(mut self, enabled: bool) -> Self {
-        self.options.execution.collect_statistics = enabled;
+        self.options_mut().execution.collect_statistics = enabled;
         self
     }
 
@@ -391,7 +398,7 @@ impl SessionConfig {
 
     /// Enables or disables the coalescence of small batches into larger batches
     pub fn with_coalesce_batches(mut self, enabled: bool) -> Self {
-        self.options.execution.coalesce_batches = enabled;
+        self.options_mut().execution.coalesce_batches = enabled;
         self
     }
 
@@ -403,7 +410,7 @@ impl SessionConfig {
 
     /// Enables or disables the round robin repartition for increasing parallelism
     pub fn with_round_robin_repartition(mut self, enabled: bool) -> Self {
-        self.options.optimizer.enable_round_robin_repartition = enabled;
+        self.options_mut().optimizer.enable_round_robin_repartition = enabled;
         self
     }
 
@@ -421,7 +428,7 @@ impl SessionConfig {
         mut self,
         sort_spill_reservation_bytes: usize,
     ) -> Self {
-        self.options.execution.sort_spill_reservation_bytes =
+        self.options_mut().execution.sort_spill_reservation_bytes =
             sort_spill_reservation_bytes;
         self
     }
@@ -430,7 +437,7 @@ impl SessionConfig {
     ///
     /// [`spill_compression`]: datafusion_common::config::ExecutionOptions::spill_compression
     pub fn with_spill_compression(mut self, spill_compression: SpillCompression) -> Self {
-        self.options.execution.spill_compression = spill_compression;
+        self.options_mut().execution.spill_compression = spill_compression;
         self
     }
 
@@ -442,7 +449,7 @@ impl SessionConfig {
         mut self,
         sort_in_place_threshold_bytes: usize,
     ) -> Self {
-        self.options.execution.sort_in_place_threshold_bytes =
+        self.options_mut().execution.sort_in_place_threshold_bytes =
             sort_in_place_threshold_bytes;
         self
     }
@@ -452,7 +459,8 @@ impl SessionConfig {
         mut self,
         enforce_batch_size_in_joins: bool,
     ) -> Self {
-        self.options.execution.enforce_batch_size_in_joins = enforce_batch_size_in_joins;
+        self.options_mut().execution.enforce_batch_size_in_joins =
+            enforce_batch_size_in_joins;
         self
     }
 
@@ -590,6 +598,7 @@ impl SessionConfig {
 
 impl From<ConfigOptions> for SessionConfig {
     fn from(options: ConfigOptions) -> Self {
+        let options = Arc::new(options);
         Self {
             options,
             ..Default::default()
