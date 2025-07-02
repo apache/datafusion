@@ -26,7 +26,7 @@ use datafusion_physical_plan::filter_pushdown::{
 };
 use datafusion_physical_plan::{with_new_children_if_necessary, ExecutionPlan};
 
-use itertools::izip;
+use itertools::{izip, Itertools};
 
 /// Attempts to recursively push given filters from the top of the tree into leafs.
 ///
@@ -496,7 +496,7 @@ fn push_down_filters(
         // Our child doesn't know the difference between filters that were passed down
         // from our parents and filters that the current node injected. We need to de-entangle
         // this since we do need to distinguish between them.
-        let mut all_filters: Vec<_> = result.filters.into_iter().collect();
+        let mut all_filters= result.filters.into_iter().collect_vec();
         let parent_predicates = all_filters.split_off(num_self_filters);
         let self_predicates = all_filters;
         self_filters_pushdown_supports.push(self_predicates);
