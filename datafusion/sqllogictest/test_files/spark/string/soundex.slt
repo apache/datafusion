@@ -25,4 +25,3 @@
 ## PySpark 3.5.5 Result: {'soundex(Miller)': 'M460', 'typeof(soundex(Miller))': 'string', 'typeof(Miller)': 'string'}
 #query
 #SELECT soundex('Miller'::string);
-

@@ -25,4 +25,3 @@
 ## PySpark 3.5.5 Result: {'LOG(10, 100)': 2.0, 'typeof(LOG(10, 100))': 'double', 'typeof(10)': 'int', 'typeof(100)': 'int'}
 #query
 #SELECT log(10::int, 100::int);
-

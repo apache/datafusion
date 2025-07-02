@@ -25,4 +25,3 @@
 ## PySpark 3.5.5 Result: {'(+ 1)': 1, 'typeof((+ 1))': 'int', 'typeof(1)': 'int'}
 #query
 #SELECT positive(1::int);
-

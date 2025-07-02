@@ -35,4 +35,3 @@
 ## PySpark 3.5.5 Result: {'parse_url(http://spark.apache.org/path?query=1, QUERY, query)': '1', 'typeof(parse_url(http://spark.apache.org/path?query=1, QUERY, query))': 'string', 'typeof(http://spark.apache.org/path?query=1)': 'string', 'typeof(QUERY)': 'string', 'typeof(query)': 'string'}
 #query
 #SELECT parse_url('http://spark.apache.org/path?query=1'::string, 'QUERY'::string, 'query'::string);
-

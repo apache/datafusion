@@ -25,4 +25,3 @@
 ## PySpark 3.5.5 Result: {'nvl2(NULL, 2, 1)': 1, 'typeof(nvl2(NULL, 2, 1))': 'int', 'typeof(NULL)': 'void', 'typeof(2)': 'int', 'typeof(1)': 'int'}
 #query
 #SELECT nvl2(NULL::void, 2::int, 1::int);
-

@@ -25,4 +25,3 @@
 ## PySpark 3.5.5 Result: {'trim(    SparkSQL   )': 'SparkSQL', 'typeof(trim(    SparkSQL   ))': 'string', 'typeof(    SparkSQL   )': 'string'}
 #query
 #SELECT trim('    SparkSQL   '::string);
-

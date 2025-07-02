@@ -25,4 +25,3 @@
 ## PySpark 3.5.5 Result: {'unbase64(U3BhcmsgU1FM)': bytearray(b'Spark SQL'), 'typeof(unbase64(U3BhcmsgU1FM))': 'binary', 'typeof(U3BhcmsgU1FM)': 'string'}
 #query
 #SELECT unbase64('U3BhcmsgU1FM'::string);
-

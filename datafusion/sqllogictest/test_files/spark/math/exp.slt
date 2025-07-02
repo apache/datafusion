@@ -25,4 +25,3 @@
 ## PySpark 3.5.5 Result: {'EXP(0)': 1.0, 'typeof(EXP(0))': 'double', 'typeof(0)': 'int'}
 #query
 #SELECT exp(0::int);
-

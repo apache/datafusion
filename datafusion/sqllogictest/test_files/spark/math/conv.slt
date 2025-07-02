@@ -30,4 +30,3 @@
 ## PySpark 3.5.5 Result: {'conv(-10, 16, -10)': '-16', 'typeof(conv(-10, 16, -10))': 'string', 'typeof(-10)': 'int', 'typeof(16)': 'int'}
 #query
 #SELECT conv(-10::int, 16::int);
-

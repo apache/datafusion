@@ -25,4 +25,3 @@
 ## PySpark 3.5.5 Result: {'round(2.5, 0)': Decimal('3'), 'typeof(round(2.5, 0))': 'decimal(2,0)', 'typeof(2.5)': 'decimal(2,1)', 'typeof(0)': 'int'}
 #query
 #SELECT round(2.5::decimal(2,1), 0::int);
-

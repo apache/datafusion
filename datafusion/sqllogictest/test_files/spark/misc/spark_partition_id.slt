@@ -25,4 +25,3 @@
 ## PySpark 3.5.5 Result: {'SPARK_PARTITION_ID()': 0, 'typeof(SPARK_PARTITION_ID())': 'int'}
 #query
 #SELECT spark_partition_id();
-
