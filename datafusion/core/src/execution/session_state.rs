@@ -738,6 +738,12 @@ impl SessionState {
         self.config.options()
     }
 
+    /// Mark the start of the execution
+    pub fn start_execution(&mut self) {
+        let config = self.config.options_arc();
+        self.execution_props.start_execution(config);
+    }
+
     /// Return the table options
     pub fn table_options(&self) -> &TableOptions {
         &self.table_options
