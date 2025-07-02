@@ -1047,13 +1047,49 @@ mod tests {
     use super::{
         combine_bernoullis, combine_gaussians, compute_mean, compute_median,
         compute_variance, create_bernoulli_from_comparison, new_generic_from_binary_op,
-        BernoulliDistribution, Distribution, GaussianDistribution, UniformDistribution,
+        BernoulliDistribution, Distribution, GaussianDistribution, UniformDistribution, SampledDistribution
     };
     use crate::interval_arithmetic::{apply_operator, Interval};
     use crate::operator::Operator;
 
     use arrow::datatypes::DataType;
     use datafusion_common::{HashSet, Result, ScalarValue};
+
+    impl SampledDistribution {
+        pub fn estimate_selectivity_gt(&self, threshold: f64) -> Result<ScalarValue> {
+            let mut matching_rows = ScalarValue::new_zero(&DataType::Float64)?;
+            let mut total_rows = ScalarValue::new_zero(&DataType::Float64)?;
+            let threshold = ScalarValue::Float64(Some(threshold));
+
+            for i in 0..self.counts.len() {
+                let left = self.bins.get(i).unwrap_or(&ScalarValue::Null);
+                let right = self.bins.get(i + 1).unwrap_or(&ScalarValue::Null);
+                let count = *self.counts.get(i).unwrap_or(&u64::MIN) as f64;
+                let count_val = ScalarValue::Float64(Some(count));
+                total_rows = total_rows.add(count_val.clone())?;
+
+                if *right <= threshold.clone() {
+                    continue;
+                } else if *left >= threshold {
+                    matching_rows.add(count_val)?;
+                } else {
+                    let bin_width = right.sub(left)?;
+                    if bin_width > ScalarValue::new_zero(&DataType::Float64)? {
+                        let above_width = right.sub(threshold.clone())?;
+                        let proportion_above = above_width.div(bin_width)?;
+                        let partial = count_val.mul(proportion_above)?;
+                        matching_rows = matching_rows.add(partial)?;
+                    }
+                }
+            }
+
+            if total_rows == ScalarValue::new_zero(&DataType::Float64)? {
+                Ok(ScalarValue::Float64(None))
+            } else {
+                Ok(matching_rows.div(total_rows)?)
+            }
+        }
+    }
 
     #[test]
     fn uniform_dist_is_valid_test() -> Result<()> {
@@ -1901,5 +1937,26 @@ mod tests {
         ];
 
         all_ops.into_iter().collect()
+    }
+
+    #[test]
+    fn test_estimate_cardinality_gt_25() -> Result<()> {
+        // 2 buckets: [0, 10] with 100, [20, 30] with 200
+        let bins = vec![
+            ScalarValue::Float64(Some(0.0)),
+            ScalarValue::Float64(Some(10.0)),
+            ScalarValue::Float64(Some(20.0)),
+            ScalarValue::Float64(Some(30.0)),
+        ];
+        let counts = vec![100, 0, 200];
+
+        let dist = SampledDistribution::try_new(bins, counts)?;
+
+        // x > 25 should match half of the [20, 30] bucket => 100 rows
+        // total rows = 100 + 200 = 300
+        // estimated selectivity = 100 / 300 = 1/3
+        let selectivity = dist.estimate_selectivity_gt(25.0)?;
+        assert_eq!(selectivity, ScalarValue::Float64(Some(1.0 / 3.0)));
+        Ok(())
     }
 }
