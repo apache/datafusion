@@ -19,12 +19,14 @@ use std::any::Any;
 use std::sync::Arc;
 
 use crate::datetime::common::*;
+use arrow::array::Float64Array;
 use arrow::datatypes::DataType::*;
 use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
 use arrow::datatypes::{
     ArrowTimestampType, DataType, TimeUnit, TimestampMicrosecondType,
     TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
 };
+use datafusion_common::format::DEFAULT_CAST_OPTIONS;
 use datafusion_common::{exec_err, Result, ScalarType, ScalarValue};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
@@ -319,8 +321,21 @@ impl ScalarUDFImpl for ToTimestampFunc {
             Int32 | Int64 => args[0]
                 .cast_to(&Timestamp(Second, None), None)?
                 .cast_to(&Timestamp(Nanosecond, None), None),
-            Null | Float64 | Timestamp(_, None) => {
+            Null | Timestamp(_, None) => {
                 args[0].cast_to(&Timestamp(Nanosecond, None), None)
+            }
+            Float64 => {
+                let rescaled = arrow::compute::kernels::numeric::mul(
+                    &args[0].to_array(1)?,
+                    &arrow::array::Scalar::new(Float64Array::from(vec![
+                        1_000_000_000f64,
+                    ])),
+                )?;
+                Ok(ColumnarValue::Array(arrow::compute::cast_with_options(
+                    &rescaled,
+                    &Timestamp(Nanosecond, None),
+                    &DEFAULT_CAST_OPTIONS,
+                )?))
             }
             Timestamp(_, Some(tz)) => {
                 args[0].cast_to(&Timestamp(Nanosecond, Some(tz)), None)
