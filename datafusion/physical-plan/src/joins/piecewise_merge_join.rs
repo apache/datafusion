@@ -1386,9 +1386,7 @@ mod tests {
         operator: Operator,
         join_type: JoinType,
     ) -> Result<PiecewiseMergeJoinExec> {
-        Ok(PiecewiseMergeJoinExec::try_new(
-            left, right, on, operator, join_type,
-        )?)
+        PiecewiseMergeJoinExec::try_new(left, right, on, operator, join_type)
     }
 
     async fn join_collect(
