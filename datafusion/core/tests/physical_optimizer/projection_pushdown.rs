@@ -57,7 +57,7 @@ use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::streaming::{PartitionStream, StreamingTableExec};
 use datafusion_physical_plan::union::UnionExec;
-use datafusion_physical_plan::{get_plan_string, ExecutionPlan};
+use datafusion_physical_plan::{displayable, ExecutionPlan};
 
 use insta::assert_snapshot;
 use itertools::Itertools;
@@ -425,7 +425,7 @@ fn test_csv_after_projection() -> Result<()> {
         ],
         csv.clone(),
     )?);
-    let initial = get_plan_string(&projection).join("\n");
+    let initial = displayable(projection.as_ref()).indent(true).to_string();
     let actual = initial.trim();
 
     assert_snapshot!(
@@ -439,7 +439,9 @@ fn test_csv_after_projection() -> Result<()> {
     let after_optimize =
         ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
 
-    let after_optimize_string = get_plan_string(&after_optimize).join("\n");
+    let after_optimize_string = displayable(after_optimize.as_ref())
+        .indent(true)
+        .to_string();
     let actual = after_optimize_string.trim();
 
     assert_snapshot!(
@@ -461,7 +463,7 @@ fn test_memory_after_projection() -> Result<()> {
         ],
         memory.clone(),
     )?);
-    let initial = get_plan_string(&projection).join("\n");
+    let initial = displayable(projection.as_ref()).indent(true).to_string();
     let actual = initial.trim();
 
     assert_snapshot!(
@@ -475,7 +477,9 @@ fn test_memory_after_projection() -> Result<()> {
     let after_optimize =
         ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
 
-    let after_optimize_string = get_plan_string(&after_optimize).join("\n");
+    let after_optimize_string = displayable(after_optimize.as_ref())
+        .indent(true)
+        .to_string();
     let actual = after_optimize_string.trim();
 
     assert_snapshot!(
@@ -649,7 +653,9 @@ fn test_projection_after_projection() -> Result<()> {
         child_projection.clone(),
     )?);
 
-    let initial = get_plan_string(&top_projection).join("\n");
+    let initial = displayable(top_projection.as_ref())
+        .indent(true)
+        .to_string();
     let actual = initial.trim();
 
     assert_snapshot!(
@@ -664,7 +670,9 @@ fn test_projection_after_projection() -> Result<()> {
     let after_optimize =
         ProjectionPushdown::new().optimize(top_projection, &ConfigOptions::new())?;
 
-    let after_optimize_string = get_plan_string(&after_optimize).join("\n");
+    let after_optimize_string = displayable(after_optimize.as_ref())
+        .indent(true)
+        .to_string();
     let actual = after_optimize_string.trim();
 
     assert_snapshot!(
@@ -714,7 +722,7 @@ fn test_output_req_after_projection() -> Result<()> {
         sort_req.clone(),
     )?);
 
-    let initial = get_plan_string(&projection).join("\n");
+    let initial = displayable(projection.as_ref()).indent(true).to_string();
     let actual = initial.trim();
 
     assert_snapshot!(
@@ -729,7 +737,9 @@ fn test_output_req_after_projection() -> Result<()> {
     let after_optimize =
         ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
 
-    let after_optimize_string = get_plan_string(&after_optimize).join("\n");
+    let after_optimize_string = displayable(after_optimize.as_ref())
+        .indent(true)
+        .to_string();
     let actual = after_optimize_string.trim();
 
     assert_snapshot!(
@@ -803,7 +813,7 @@ fn test_coalesce_partitions_after_projection() -> Result<()> {
         ],
         coalesce_partitions,
     )?);
-    let initial = get_plan_string(&projection).join("\n");
+    let initial = displayable(projection.as_ref()).indent(true).to_string();
     let actual = initial.trim();
 
     assert_snapshot!(
@@ -818,7 +828,9 @@ fn test_coalesce_partitions_after_projection() -> Result<()> {
     let after_optimize =
         ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
 
-    let after_optimize_string = get_plan_string(&after_optimize).join("\n");
+    let after_optimize_string = displayable(after_optimize.as_ref())
+        .indent(true)
+        .to_string();
     let actual = after_optimize_string.trim();
 
     assert_snapshot!(
@@ -850,7 +862,7 @@ fn test_filter_after_projection() -> Result<()> {
         )),
     ));
     let filter = Arc::new(FilterExec::try_new(predicate, csv)?);
-    let projection = Arc::new(ProjectionExec::try_new(
+    let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
         vec![
             (Arc::new(Column::new("a", 0)), "a_new".to_string()),
             (Arc::new(Column::new("b", 1)), "b".to_string()),
@@ -859,7 +871,7 @@ fn test_filter_after_projection() -> Result<()> {
         filter.clone(),
     )?) as _;
 
-    let initial = get_plan_string(&projection).join("\n");
+    let initial = displayable(projection.as_ref()).indent(true).to_string();
     let actual = initial.trim();
 
     assert_snapshot!(
@@ -874,7 +886,9 @@ fn test_filter_after_projection() -> Result<()> {
     let after_optimize =
         ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
 
-    let after_optimize_string = get_plan_string(&after_optimize).join("\n");
+    let after_optimize_string = displayable(after_optimize.as_ref())
+        .indent(true)
+        .to_string();
     let actual = after_optimize_string.trim();
 
     assert_snapshot!(
@@ -943,7 +957,7 @@ fn test_join_after_projection() -> Result<()> {
         None,
         StreamJoinPartitionMode::SinglePartition,
     )?);
-    let projection = Arc::new(ProjectionExec::try_new(
+    let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
         vec![
             (Arc::new(Column::new("c", 2)), "c_from_left".to_string()),
             (Arc::new(Column::new("b", 1)), "b_from_left".to_string()),
@@ -953,7 +967,7 @@ fn test_join_after_projection() -> Result<()> {
         ],
         join,
     )?) as _;
-    let initial = get_plan_string(&projection).join("\n");
+    let initial = displayable(projection.as_ref()).indent(true).to_string();
     let actual = initial.trim();
 
     assert_snapshot!(
@@ -969,7 +983,9 @@ fn test_join_after_projection() -> Result<()> {
     let after_optimize =
         ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
 
-    let after_optimize_string = get_plan_string(&after_optimize).join("\n");
+    let after_optimize_string = displayable(after_optimize.as_ref())
+        .indent(true)
+        .to_string();
     let actual = after_optimize_string.trim();
 
     assert_snapshot!(
@@ -1066,7 +1082,7 @@ fn test_join_after_required_projection() -> Result<()> {
         None,
         StreamJoinPartitionMode::SinglePartition,
     )?);
-    let projection = Arc::new(ProjectionExec::try_new(
+    let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
         vec![
             (Arc::new(Column::new("a", 5)), "a".to_string()),
             (Arc::new(Column::new("b", 6)), "b".to_string()),
@@ -1081,7 +1097,7 @@ fn test_join_after_required_projection() -> Result<()> {
         ],
         join,
     )?) as _;
-    let initial = get_plan_string(&projection).join("\n");
+    let initial = displayable(projection.as_ref()).indent(true).to_string();
     let actual = initial.trim();
 
     assert_snapshot!(
@@ -1097,7 +1113,9 @@ fn test_join_after_required_projection() -> Result<()> {
     let after_optimize =
         ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
 
-    let after_optimize_string = get_plan_string(&after_optimize).join("\n");
+    let after_optimize_string = displayable(after_optimize.as_ref())
+        .indent(true)
+        .to_string();
     let actual = after_optimize_string.trim();
 
     assert_snapshot!(
@@ -1154,11 +1172,11 @@ fn test_nested_loop_join_after_projection() -> Result<()> {
         None,
     )?) as _;
 
-    let projection = Arc::new(ProjectionExec::try_new(
+    let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
         vec![(col_left_c, "c".to_string())],
         Arc::clone(&join),
     )?) as _;
-    let initial = get_plan_string(&projection).join("\n");
+    let initial = displayable(projection.as_ref()).indent(true).to_string();
     let actual = initial.trim();
     assert_snapshot!(
         actual,
@@ -1172,7 +1190,9 @@ fn test_nested_loop_join_after_projection() -> Result<()> {
 
     let after_optimize_string =
         ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
-    let after_optimize_string = get_plan_string(&after_optimize_string).join("\n");
+    let after_optimize_string = displayable(after_optimize_string.as_ref())
+        .indent(true)
+        .to_string();
     let actual = after_optimize_string.trim();
     assert_snapshot!(
         actual,
@@ -1241,7 +1261,7 @@ fn test_hash_join_after_projection() -> Result<()> {
         PartitionMode::Auto,
         NullEquality::NullEqualsNull,
     )?);
-    let projection = Arc::new(ProjectionExec::try_new(
+    let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
         vec![
             (Arc::new(Column::new("c", 2)), "c_from_left".to_string()),
             (Arc::new(Column::new("b", 1)), "b_from_left".to_string()),
@@ -1250,7 +1270,7 @@ fn test_hash_join_after_projection() -> Result<()> {
         ],
         join.clone(),
     )?) as _;
-    let initial = get_plan_string(&projection).join("\n");
+    let initial = displayable(projection.as_ref()).indent(true).to_string();
     let actual = initial.trim();
     assert_snapshot!(
         actual,
@@ -1264,7 +1284,9 @@ fn test_hash_join_after_projection() -> Result<()> {
 
     let after_optimize =
         ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
-    let after_optimize_string = get_plan_string(&after_optimize).join("\n");
+    let after_optimize_string = displayable(after_optimize.as_ref())
+        .indent(true)
+        .to_string();
     let actual = after_optimize_string.trim();
 
     // HashJoinExec only returns result after projection. Because there are some alias columns in the projection, the ProjectionExec is not removed.
@@ -1290,7 +1312,9 @@ fn test_hash_join_after_projection() -> Result<()> {
 
     let after_optimize =
         ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
-    let after_optimize_string = get_plan_string(&after_optimize).join("\n");
+    let after_optimize_string = displayable(after_optimize.as_ref())
+        .indent(true)
+        .to_string();
     let actual = after_optimize_string.trim();
 
     // Comparing to the previous result, this projection don't have alias columns either change the order of output fields. So the ProjectionExec is removed.
@@ -1320,7 +1344,7 @@ fn test_repartition_after_projection() -> Result<()> {
             6,
         ),
     )?);
-    let projection = Arc::new(ProjectionExec::try_new(
+    let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
         vec![
             (Arc::new(Column::new("b", 1)), "b_new".to_string()),
             (Arc::new(Column::new("a", 0)), "a".to_string()),
@@ -1328,7 +1352,7 @@ fn test_repartition_after_projection() -> Result<()> {
         ],
         repartition,
     )?) as _;
-    let initial = get_plan_string(&projection).join("\n");
+    let initial = displayable(projection.as_ref()).indent(true).to_string();
     let actual = initial.trim();
     assert_snapshot!(
         actual,
@@ -1342,7 +1366,9 @@ fn test_repartition_after_projection() -> Result<()> {
     let after_optimize =
         ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
 
-    let after_optimize_string = get_plan_string(&after_optimize).join("\n");
+    let after_optimize_string = displayable(after_optimize.as_ref())
+        .indent(true)
+        .to_string();
     let actual = after_optimize_string.trim();
     assert_snapshot!(
         actual,
@@ -1388,7 +1414,7 @@ fn test_sort_after_projection() -> Result<()> {
         .into(),
         csv,
     );
-    let projection = Arc::new(ProjectionExec::try_new(
+    let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
         vec![
             (Arc::new(Column::new("c", 2)), "c".to_string()),
             (Arc::new(Column::new("a", 0)), "new_a".to_string()),
@@ -1397,7 +1423,7 @@ fn test_sort_after_projection() -> Result<()> {
         Arc::new(sort_exec),
     )?) as _;
 
-    let initial = get_plan_string(&projection).join("\n");
+    let initial = displayable(projection.as_ref()).indent(true).to_string();
     let actual = initial.trim();
     assert_snapshot!(
         actual,
@@ -1411,7 +1437,9 @@ fn test_sort_after_projection() -> Result<()> {
     let after_optimize =
         ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
 
-    let after_optimize_string = get_plan_string(&after_optimize).join("\n");
+    let after_optimize_string = displayable(after_optimize.as_ref())
+        .indent(true)
+        .to_string();
     let actual = after_optimize_string.trim();
     assert_snapshot!(
         actual,
@@ -1440,7 +1468,7 @@ fn test_sort_preserving_after_projection() -> Result<()> {
         .into(),
         csv,
     );
-    let projection = Arc::new(ProjectionExec::try_new(
+    let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
         vec![
             (Arc::new(Column::new("c", 2)), "c".to_string()),
             (Arc::new(Column::new("a", 0)), "new_a".to_string()),
@@ -1449,7 +1477,7 @@ fn test_sort_preserving_after_projection() -> Result<()> {
         Arc::new(sort_exec),
     )?) as _;
 
-    let initial = get_plan_string(&projection).join("\n");
+    let initial = displayable(projection.as_ref()).indent(true).to_string();
     let actual = initial.trim();
     assert_snapshot!(
         actual,
@@ -1463,7 +1491,9 @@ fn test_sort_preserving_after_projection() -> Result<()> {
     let after_optimize =
         ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
 
-    let after_optimize_string = get_plan_string(&after_optimize).join("\n");
+    let after_optimize_string = displayable(after_optimize.as_ref())
+        .indent(true)
+        .to_string();
     let actual = after_optimize_string.trim();
     assert_snapshot!(
         actual,
@@ -1481,7 +1511,7 @@ fn test_sort_preserving_after_projection() -> Result<()> {
 fn test_union_after_projection() -> Result<()> {
     let csv = create_simple_csv_exec();
     let union = Arc::new(UnionExec::new(vec![csv.clone(), csv.clone(), csv]));
-    let projection = Arc::new(ProjectionExec::try_new(
+    let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
         vec![
             (Arc::new(Column::new("c", 2)), "c".to_string()),
             (Arc::new(Column::new("a", 0)), "new_a".to_string()),
@@ -1490,7 +1520,7 @@ fn test_union_after_projection() -> Result<()> {
         union.clone(),
     )?) as _;
 
-    let initial = get_plan_string(&projection).join("\n");
+    let initial = displayable(projection.as_ref()).indent(true).to_string();
     let actual = initial.trim();
     assert_snapshot!(
         actual,
@@ -1506,7 +1536,9 @@ fn test_union_after_projection() -> Result<()> {
     let after_optimize =
         ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
 
-    let after_optimize_string = get_plan_string(&after_optimize).join("\n");
+    let after_optimize_string = displayable(after_optimize.as_ref())
+        .indent(true)
+        .to_string();
     let actual = after_optimize_string.trim();
     assert_snapshot!(
         actual,
@@ -1550,7 +1582,7 @@ fn test_partition_col_projection_pushdown() -> Result<()> {
     let source = partitioned_data_source();
     let partitioned_schema = source.schema();
 
-    let projection = Arc::new(ProjectionExec::try_new(
+    let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
         vec![
             (
                 col("string_col", partitioned_schema.as_ref())?,
@@ -1571,7 +1603,9 @@ fn test_partition_col_projection_pushdown() -> Result<()> {
     let after_optimize =
         ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
 
-    let after_optimize_string = get_plan_string(&after_optimize).join("\n");
+    let after_optimize_string = displayable(after_optimize.as_ref())
+        .indent(true)
+        .to_string();
     let actual = after_optimize_string.trim();
     assert_snapshot!(
         actual,
@@ -1589,7 +1623,7 @@ fn test_partition_col_projection_pushdown_expr() -> Result<()> {
     let source = partitioned_data_source();
     let partitioned_schema = source.schema();
 
-    let projection = Arc::new(ProjectionExec::try_new(
+    let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
         vec![
             (
                 col("string_col", partitioned_schema.as_ref())?,
@@ -1615,7 +1649,9 @@ fn test_partition_col_projection_pushdown_expr() -> Result<()> {
     let after_optimize =
         ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
 
-    let after_optimize_string = get_plan_string(&after_optimize).join("\n");
+    let after_optimize_string = displayable(after_optimize.as_ref())
+        .indent(true)
+        .to_string();
     let actual = after_optimize_string.trim();
     assert_snapshot!(
         actual,
