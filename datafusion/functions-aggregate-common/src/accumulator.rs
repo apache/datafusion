@@ -25,7 +25,7 @@ use std::sync::Arc;
 /// [`AccumulatorArgs`] contains information about how an aggregate
 /// function was called, including the types of its arguments and any optional
 /// ordering expressions.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct AccumulatorArgs<'a> {
     /// The return field of the aggregate function.
     pub return_field: FieldRef,
