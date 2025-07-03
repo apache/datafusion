@@ -25,4 +25,3 @@
 ## PySpark 3.5.5 Result: {'POWER(2, 3)': 8.0, 'typeof(POWER(2, 3))': 'double', 'typeof(2)': 'int', 'typeof(3)': 'int'}
 #query
 #SELECT power(2::int, 3::int);
-

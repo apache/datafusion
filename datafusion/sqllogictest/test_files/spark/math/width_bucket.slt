@@ -60,4 +60,3 @@
 ## PySpark 3.5.5 Result: {"width_bucket(INTERVAL '1' YEAR, INTERVAL '0' YEAR, INTERVAL '10' YEAR, 10)": 2, "typeof(width_bucket(INTERVAL '1' YEAR, INTERVAL '0' YEAR, INTERVAL '10' YEAR, 10))": 'bigint', "typeof(INTERVAL '1' YEAR)": 'interval year', "typeof(INTERVAL '0' YEAR)": 'interval year', "typeof(INTERVAL '10' YEAR)": 'interval year', 'typeof(10)': 'int'}
 #query
 #SELECT width_bucket(INTERVAL '1' YEAR::interval year, INTERVAL '0' YEAR::interval year, INTERVAL '10' YEAR::interval year, 10::int);
-

@@ -25,4 +25,3 @@
 ## PySpark 3.5.5 Result: {'to_unix_timestamp(2016-04-08, yyyy-MM-dd)': 1460098800, 'typeof(to_unix_timestamp(2016-04-08, yyyy-MM-dd))': 'bigint', 'typeof(2016-04-08)': 'string', 'typeof(yyyy-MM-dd)': 'string'}
 #query
 #SELECT to_unix_timestamp('2016-04-08'::string, 'yyyy-MM-dd'::string);
-

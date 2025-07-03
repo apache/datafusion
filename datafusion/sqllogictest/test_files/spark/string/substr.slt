@@ -35,4 +35,3 @@
 ## PySpark 3.5.5 Result: {'substr(Spark SQL, 5, 1)': 'k', 'typeof(substr(Spark SQL, 5, 1))': 'string', 'typeof(Spark SQL)': 'string', 'typeof(5)': 'int', 'typeof(1)': 'int'}
 #query
 #SELECT substr('Spark SQL'::string, 5::int, 1::int);
-

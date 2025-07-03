@@ -25,4 +25,3 @@
 ## PySpark 3.5.5 Result: {'java_method(java.util.UUID, randomUUID)': 'e0d43859-1003-4f43-bfff-f2e3c34981e2', 'typeof(java_method(java.util.UUID, randomUUID))': 'string', 'typeof(java.util.UUID)': 'string', 'typeof(randomUUID)': 'string'}
 #query
 #SELECT java_method('java.util.UUID'::string, 'randomUUID'::string);
-

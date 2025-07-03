@@ -33,6 +33,7 @@ use arrow::datatypes::{FieldRef, SchemaRef, TimeUnit};
 use arrow::error::ArrowError;
 use datafusion_common::{exec_err, DataFusionError, Result};
 use datafusion_datasource::PartitionedFile;
+use datafusion_physical_expr::simplifier::PhysicalExprSimplifier;
 use datafusion_physical_expr::PhysicalExprSchemaRewriter;
 use datafusion_physical_expr_common::physical_expr::{
     is_dynamic_physical_expr, PhysicalExpr,
@@ -246,7 +247,16 @@ impl FileOpener for ParquetOpener {
                     )
                     .rewrite(p)
                     .map_err(ArrowError::from)
+                    .map(|p| {
+                        // After rewriting to the file schema, further simplifications may be possible.
+                        // For example, if `'a' = col_that_is_missing` becomes `'a' = NULL` that can then be simplified to `FALSE`
+                        // and we can avoid doing any more work on the file (bloom filters, loading the page index, etc.).
+                        PhysicalExprSimplifier::new(&physical_file_schema)
+                            .simplify(p)
+                            .map_err(ArrowError::from)
+                    })
                 })
+                .transpose()?
                 .transpose()?;
 
             // Build predicates for this specific file

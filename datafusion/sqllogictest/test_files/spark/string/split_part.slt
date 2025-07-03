@@ -25,4 +25,3 @@
 ## PySpark 3.5.5 Result: {'split_part(11.12.13, ., 3)': '13', 'typeof(split_part(11.12.13, ., 3))': 'string', 'typeof(11.12.13)': 'string', 'typeof(.)': 'string', 'typeof(3)': 'int'}
 #query
 #SELECT split_part('11.12.13'::string, '.'::string, 3::int);
-

@@ -25,4 +25,3 @@
 ## PySpark 3.5.5 Result: {'dayofmonth(2009-07-30)': 30, 'typeof(dayofmonth(2009-07-30))': 'int', 'typeof(2009-07-30)': 'string'}
 #query
 #SELECT dayofmonth('2009-07-30'::string);
-

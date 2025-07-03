@@ -25,4 +25,3 @@
 ## PySpark 3.5.5 Result: {'COSH(0)': 1.0, 'typeof(COSH(0))': 'double', 'typeof(0)': 'int'}
 #query
 #SELECT cosh(0::int);
-
