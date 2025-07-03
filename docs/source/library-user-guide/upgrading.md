@@ -30,6 +30,25 @@ Several additioanl `Error` variants are now `Box`ed to reduce their size, which
 reduces the size of the `Result` enum, and thus stack usage and async state
 machine size. Please see [#16652] for more details.
 
+Typically this means to create such a variant instead of 
+
+```rust
+# /* comment to avoid running
+SchemaError::AmbiguousReference {
+  field: Column::new_unqualified(&self.name),
+})
+# */
+```
+
+Use 
+```rust
+# /* comment to avoid running
+SchemaError::AmbiguousReference {
+  field: Box::new(Column::new_unqualified(&self.name))
+})
+# */
+```
+
 [#16552]: https://github.com/apache/datafusion/issues/16652
 
 ### `datafusion.execution.collect_statistics` now defaults to `true`
