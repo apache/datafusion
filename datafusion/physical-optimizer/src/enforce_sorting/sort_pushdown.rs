@@ -220,21 +220,11 @@ fn pushdown_requirement_to_children(
     parent_required: OrderingRequirements,
     parent_fetch: Option<usize>,
 ) -> Result<Option<Vec<Option<OrderingRequirements>>>> {
-    // Only attempt to push down TopK when there is an upstream LIMIT
-    if parent_fetch.is_some() {
-        // 1) Never push a new TopK below an operator that already has its own fetch
-        if plan.fetch().is_some() {
-            return Ok(None);
-        }
-        // 2) Only allow pushdown through operators that do not increase row count
-        //    (equal cardinality). Any other operator (including joins, filter,
-        //    sort-with-limit, or UDTFs that may expand rows) must stop the pushdown.
-        let effect = plan.cardinality_effect();
-        if !matches!(effect, CardinalityEffect::Equal) {
-            return Ok(None);
-        }
-        // At this point, only single-input, non-expanding operators
-        // such as ProjectionExec, CoalesceBatchesExec, are allowed to receive TopK.
+    // If there is a limit on the parent plan we cannot push it down through operators that change the cardinality.
+    // E.g. consider if LIMIT 2 is applied below a FilteExec that filters out 1/2 of the rows we'll end up with 1 row instead of 2.
+    // If the LIMIT is applied after the FilterExec and the FilterExec returns > 2 rows we'll end up with 2 rows (correct).
+    if parent_fetch.is_some() && !plan.supports_limit_pushdown() {
+        return Ok(None)
     }
 
     let maintains_input_order = plan.maintains_input_order();
