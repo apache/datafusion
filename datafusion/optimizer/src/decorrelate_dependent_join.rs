@@ -42,6 +42,8 @@ pub struct DependentJoinDecorrelator {
     domains: IndexSet<CorrelatedColumnInfo>,
     // for each domain column, the corresponding column in delim_get
     correlated_column_to_delim_column: IndexMap<Column, Column>,
+    // correlated columns in D.
+    dscan_cols: Vec<Column>,
     pub delim_types: Vec<DataType>,
     is_initial: bool,
 
@@ -157,6 +159,7 @@ impl DependentJoinDecorrelator {
         Self {
             domains: IndexSet::new(),
             correlated_column_to_delim_column: IndexMap::new(),
+            dscan_cols: vec![],
             delim_types: vec![],
             is_initial: true,
             correlated_columns_by_depth: IndexMap::new(),
@@ -232,6 +235,7 @@ impl DependentJoinDecorrelator {
         Self {
             domains,
             correlated_column_to_delim_column: IndexMap::new(),
+            dscan_cols: vec![],
             delim_types,
             is_initial,
             correlated_columns_by_depth: new_correlated_columns_by_depth,
@@ -577,6 +581,9 @@ impl DependentJoinDecorrelator {
     }
 
     fn build_delim_scan(&mut self) -> Result<LogicalPlan> {
+        // Clear last dscan info every time we build new dscan.
+        self.dscan_cols.clear();
+
         // Collect all correlated columns of different outer table.
         let mut domains_by_table: IndexMap<String, Vec<Column>> = IndexMap::new();
 
@@ -604,6 +611,7 @@ impl DependentJoinDecorrelator {
 
             table_domains.iter().for_each(|c| {
                 let field_name = c.flat_name().replace(".", "_");
+                // TODO: consider to change IndexMap to Vec/HashMap
                 self.correlated_column_to_delim_column.insert(
                     c.clone(),
                     Column::from_qualified_name(format!(
@@ -1067,7 +1075,43 @@ impl DependentJoinDecorrelator {
                 }
 
                 // Both sides have correlation, push into both sides.
-                unimplemented!()
+                let new_left = self.push_down_dependent_join_internal(
+                    old_join.left.as_ref(),
+                    parent_propagate_nulls,
+                    lateral_depth,
+                )?;
+                let left_dscan_cols = self.dscan_cols.clone();
+
+                let new_right = self.push_down_dependent_join_internal(
+                    old_join.right.as_ref(),
+                    parent_propagate_nulls,
+                    lateral_depth,
+                )?;
+                let right_dscan_cols = self.dscan_cols.clone();
+
+                // NOTE: For OUTER JOINS it matters what the correlated column map is after the join:
+                // for the LEFT OUTER JOIN: we want the LEFT side to be the base map after we push,
+                // because the RIGHT might contains NULL values.
+                if old_join.join_type == JoinType::Left {
+                    self.dscan_cols = left_dscan_cols.clone();
+                }
+
+                // Add the correlated columns to the join conditions.
+                let new_join = self.join_with_delim_scan(
+                    new_left,
+                    new_right,
+                    old_join.clone(),
+                    &left_dscan_cols,
+                    &right_dscan_cols,
+                )?;
+
+                // Then we replace any correlated expressions with the corresponding entry in the
+                // correlated_map.
+                return Self::rewrite_outer_ref_columns(
+                    new_join,
+                    &self.correlated_column_to_delim_column,
+                    false,
+                );
             }
             plan_ => {
                 unimplemented!("implement pushdown dependent join for node {plan_}")
@@ -1148,6 +1192,47 @@ impl DependentJoinDecorrelator {
                 Operator::IsNotDistinctFrom,
                 Expr::Column(col_pair.1.clone()),
             ));
+        }
+
+        Ok(LogicalPlan::Join(Join::try_new(
+            Arc::new(left),
+            Arc::new(right),
+            join.on,
+            conjunction(join_conditions).or(Some(lit(true))),
+            join.join_type,
+            join.join_constraint,
+            join.null_equality,
+        )?))
+    }
+
+    fn join_with_delim_scan(
+        &mut self,
+        left: LogicalPlan,
+        right: LogicalPlan,
+        join: Join,
+        left_scan_cols: &Vec<Column>,
+        right_dscan_cols: &Vec<Column>,
+    ) -> Result<LogicalPlan> {
+        let mut join_conditions = vec![];
+        if let Some(filter) = join.filter {
+            join_conditions.push(filter);
+        }
+
+        for (index, left_delim_col) in left_scan_cols.iter().enumerate() {
+            if let Some(right_delim_col) = right_dscan_cols.get(index) {
+                join_conditions.push(binary_expr(
+                    Expr::Column(left_delim_col.clone()),
+                    Operator::IsNotDistinctFrom,
+                    Expr::Column(right_delim_col.clone()),
+                ));
+            } else {
+                return Err(internal_datafusion_err!(
+                    "Index {} not found in right_dscan_cols, left_scan_cols has {} elements, right_dscan_cols has {} elements",
+                    index,
+                    left_scan_cols.len(),
+                    right_dscan_cols.len()
+                ));
+            }
         }
 
         Ok(LogicalPlan::Join(Join::try_new(
