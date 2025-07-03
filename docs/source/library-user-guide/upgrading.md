@@ -30,6 +30,9 @@ Several additioanl `Error` variants are now `Box`ed to reduce their size, which
 reduces the size of the `Result` enum, and thus stack usage and async state
 machine size. Please see [#16652] for more details.
 
+Errors that are now `Box`ed include:
+* `SchemaError`
+
 Typically this means to create such a variant instead of
 
 ```rust
