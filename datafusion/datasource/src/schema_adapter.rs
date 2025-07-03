@@ -57,6 +57,17 @@ pub trait SchemaAdapterFactory: Debug + Send + Sync + 'static {
         projected_table_schema: SchemaRef,
         table_schema: SchemaRef,
     ) -> Box<dyn SchemaAdapter>;
+
+    /// Create a [`SchemaAdapter`] using only the projected table schema.
+    ///
+    /// This is a convenience method for cases where the table schema and the
+    /// projected table schema are the same.
+    fn create_with_projected_schema(
+        &self,
+        projected_table_schema: SchemaRef,
+    ) -> Box<dyn SchemaAdapter> {
+        self.create(Arc::clone(&projected_table_schema), projected_table_schema)
+    }
 }
 
 /// Creates [`SchemaMapper`]s to map file-level [`RecordBatch`]es to a table

@@ -74,10 +74,14 @@ pub enum SchemaSource {
 /// This configuration supports schema evolution through the optional
 /// [`SchemaAdapterFactory`]. You might want to override the default factory when you need:
 ///
+/// - **Reading files with evolving schemas**: When your data files have been written
+///   over time with different but compatible schemas (e.g., added columns, renamed fields)
 /// - **Type coercion requirements**: When you need custom logic for converting between
 ///   different Arrow data types (e.g., Int32 ↔ Int64, Utf8 ↔ LargeUtf8)
-/// - **Column mapping**: You need to map columns with a legacy name to a new name
-/// - **Custom handling of missing columns**: By default they are filled in with nulls, but you may e.g. want to fill them in with `0` or `""`.
+/// - **Column mapping**: When files have different column names or ordering than
+///   your expected table schema
+/// - **Backwards compatibility**: When newer table schemas need to read older file
+///   formats gracefully
 ///
 /// If not specified, a [`DefaultSchemaAdapterFactory`] will be used, which handles
 /// basic schema compatibility cases.
@@ -1015,24 +1019,18 @@ impl ListingTable {
     /// ```rust
     /// # use std::sync::Arc;
     /// # use datafusion::datasource::listing::{ListingTable, ListingTableConfig, ListingOptions, ListingTableUrl};
-    /// # use datafusion::datasource::schema_adapter::{SchemaAdapterFactory, SchemaAdapter};
+    /// # use datafusion::datasource::schema_adapter::{DefaultSchemaAdapterFactory, SchemaAdapter};
     /// # use datafusion::datasource::file_format::parquet::ParquetFormat;
     /// # use arrow::datatypes::{SchemaRef, Schema, Field, DataType};
-    /// # #[derive(Debug)]
-    /// # struct EvolutionAdapterFactory;
-    /// # impl SchemaAdapterFactory for EvolutionAdapterFactory {
-    /// #     fn create(&self, _projected_table_schema: SchemaRef, _file_schema: SchemaRef) -> Box<dyn SchemaAdapter> {
-    /// #         unimplemented!()
-    /// #     }
-    /// # }
     /// # let table_path = ListingTableUrl::parse("file:///path/to/data").unwrap();
     /// # let options = ListingOptions::new(Arc::new(ParquetFormat::default()));
     /// # let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)]));
     /// # let config = ListingTableConfig::new(table_path).with_listing_options(options).with_schema(schema);
     /// # let table = ListingTable::try_new(config).unwrap();
     /// let table_with_evolution = table
-    ///     .with_schema_adapter_factory(Arc::new(EvolutionAdapterFactory));
+    ///     .with_schema_adapter_factory(Arc::new(DefaultSchemaAdapterFactory));
     /// ```
+    /// See [`ListingTableConfig::with_schema_adapter_factory`] for an example of custom SchemaAdapterFactory.
     pub fn with_schema_adapter_factory(
         self,
         schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
@@ -1056,7 +1054,7 @@ impl ListingTable {
         let table_schema = self.schema();
         match &self.schema_adapter_factory {
             Some(factory) => {
-                factory.create(Arc::clone(&table_schema), Arc::clone(&table_schema))
+                factory.create_with_projected_schema(Arc::clone(&table_schema))
             }
             None => DefaultSchemaAdapterFactory::from_schema(Arc::clone(&table_schema)),
         }
