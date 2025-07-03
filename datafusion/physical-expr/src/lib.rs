@@ -69,6 +69,7 @@ pub use datafusion_physical_expr_common::sort_expr::{
 
 pub use planner::{create_physical_expr, create_physical_exprs};
 pub use scalar_function::ScalarFunctionExpr;
+pub use simplifier::PhysicalExprSimplifier;
 pub use utils::{conjunction, conjunction_opt, split_conjunction};
 
 // For backwards compatibility
