@@ -219,7 +219,15 @@ impl PiecewiseMergeJoinExec {
         // We take the operator and enforce a sort order on the streamed + buffered side based on
         // the operator type.
         let sort_options = match operator {
-            Operator::Lt | Operator::LtEq => SortOptions::new(false, false),
+            Operator::Lt | Operator::LtEq => {
+                // For the Left existence joins the inputs will be swapped so we need to switch the sort
+                // options.
+                if is_left_existence_join(join_type) {
+                    SortOptions::new(true, false)
+                } else {
+                    SortOptions::new(false, false)
+                }
+            }
             Operator::Gt | Operator::GtEq => SortOptions::new(true, false),
             _ => {
                 return plan_err!(
@@ -364,10 +372,25 @@ impl ExecutionPlan for PiecewiseMergeJoinExec {
     }
 
     fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
-        vec![
-            Some(OrderingRequirements::from(self.left_sort_exprs.clone())),
-            Some(OrderingRequirements::from(self.right_sort_exprs.clone())),
-        ]
+        // Existence joins don't need to be sorted on one side.
+        if is_left_existence_join(self.join_type) {
+            // Left side needs to be sorted because this will be swapped to the
+            // buffered side
+            vec![
+                Some(OrderingRequirements::from(self.left_sort_exprs.clone())),
+                None,
+            ]
+        } else if is_right_existence_join(self.join_type) {
+            vec![
+                None,
+                Some(OrderingRequirements::from(self.right_sort_exprs.clone())),
+            ]
+        } else {
+            vec![
+                Some(OrderingRequirements::from(self.left_sort_exprs.clone())),
+                Some(OrderingRequirements::from(self.right_sort_exprs.clone())),
+            ]
+        }
     }
 
     fn with_new_children(
@@ -399,28 +422,24 @@ impl ExecutionPlan for PiecewiseMergeJoinExec {
 
         // If the join type is either LeftSemi, LeftAnti, or LeftMark we will swap the inputs
         // and sort ordering because we want the mark side to be the buffered side.
-        let (streamed, buffered, on_streamed, on_buffered, operator, sort_options) = if matches!(
-            self.join_type,
-            JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark
-        ) {
-            (
-                Arc::clone(&self.buffered),
-                Arc::clone(&self.streamed),
-                on_buffered,
-                on_streamed,
-                self.operator.swap().unwrap(),
-                SortOptions::new(!self.sort_options.descending, false),
-            )
-        } else {
-            (
-                Arc::clone(&self.streamed),
-                Arc::clone(&self.buffered),
-                on_streamed,
-                on_buffered,
-                self.operator,
-                self.sort_options,
-            )
-        };
+        let (streamed, buffered, on_streamed, on_buffered, operator) =
+            if is_left_existence_join(self.join_type) {
+                (
+                    Arc::clone(&self.buffered),
+                    Arc::clone(&self.streamed),
+                    on_buffered,
+                    on_streamed,
+                    self.operator.swap().unwrap(),
+                )
+            } else {
+                (
+                    Arc::clone(&self.streamed),
+                    Arc::clone(&self.buffered),
+                    on_streamed,
+                    on_buffered,
+                    self.operator,
+                )
+            };
 
         let metrics = BuildProbeJoinMetrics::new(0, &self.metrics);
         let buffered_fut = self.buffered_fut.try_once(|| {
@@ -452,7 +471,7 @@ impl ExecutionPlan for PiecewiseMergeJoinExec {
                 PiecewiseMergeJoinStreamState::WaitBufferedSide
             },
             existence_join,
-            sort_options,
+            self.sort_options,
         )))
     }
 }
@@ -496,6 +515,22 @@ fn is_existence_join(join_type: JoinType) -> bool {
             | JoinType::RightSemi
             | JoinType::LeftMark
             | JoinType::RightMark
+    )
+}
+
+// Returns boolean for whether the join is a left existence join
+fn is_left_existence_join(join_type: JoinType) -> bool {
+    matches!(
+        join_type,
+        JoinType::LeftAnti | JoinType::LeftSemi | JoinType::LeftMark
+    )
+}
+
+// Returns boolean for whether the join is a right existence join
+fn is_right_existence_join(join_type: JoinType) -> bool {
+    matches!(
+        join_type,
+        JoinType::RightAnti | JoinType::RightSemi | JoinType::RightMark
     )
 }
 
