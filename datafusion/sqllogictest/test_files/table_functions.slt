@@ -482,3 +482,15 @@ SELECT * FROM range(DATE '2023-01-01', DATE '2023-01-02', INTERVAL '-1' DAY)
 
 query error DataFusion error: Error during planning: range function with dates requires exactly 3 arguments
 SELECT * FROM range(DATE '2023-01-01', DATE '2023-01-03')
+
+# Table function as relation
+statement ok
+CREATE OR REPLACE TABLE json_table (c INT) AS VALUES (1), (2);
+
+query II
+SELECT c, f.*  FROM json_table, LATERAL generate_series(1,2) f;
+----
+1 1
+1 2
+2 1
+2 2

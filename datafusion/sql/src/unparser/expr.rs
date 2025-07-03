@@ -322,16 +322,15 @@ impl Unparser<'_> {
                     Some(filter) => Some(Box::new(self.expr_to_sql_inner(filter)?)),
                     None => None,
                 };
-                let within_group = if agg.func.is_ordered_set_aggregate() {
-                    order_by
-                        .as_ref()
-                        .unwrap_or(&Vec::new())
-                        .iter()
-                        .map(|sort_expr| self.sort_to_sql(sort_expr))
-                        .collect::<Result<Vec<_>>>()?
-                } else {
-                    Vec::new()
-                };
+                let within_group: Vec<ast::OrderByExpr> =
+                    if agg.func.is_ordered_set_aggregate() {
+                        order_by
+                            .iter()
+                            .map(|sort_expr| self.sort_to_sql(sort_expr))
+                            .collect::<Result<Vec<ast::OrderByExpr>>>()?
+                    } else {
+                        Vec::new()
+                    };
                 Ok(ast::Expr::Function(Function {
                     name: ObjectName::from(vec![Ident {
                         value: func_name.to_string(),
@@ -621,27 +620,43 @@ impl Unparser<'_> {
             return internal_err!("get_field must have exactly 2 arguments");
         }
 
-        let mut id = match &args[0] {
-            Expr::Column(col) => match self.col_to_sql(col)? {
-                ast::Expr::Identifier(ident) => vec![ident],
-                ast::Expr::CompoundIdentifier(idents) => idents,
-                other => return internal_err!("expected col_to_sql to return an Identifier or CompoundIdentifier, but received: {:?}", other),
-            },
-            _ => return internal_err!("get_field expects first argument to be column, but received: {:?}", &args[0]),
-        };
-
         let field = match &args[1] {
             Expr::Literal(lit, _) => self.new_ident_quoted_if_needs(lit.to_string()),
             _ => {
                 return internal_err!(
                 "get_field expects second argument to be a string, but received: {:?}",
-                &args[0]
+                &args[1]
             )
             }
         };
-        id.push(field);
 
-        Ok(ast::Expr::CompoundIdentifier(id))
+        match &args[0] {
+            Expr::Column(col) => {
+                let mut id = match self.col_to_sql(col)? {
+                    ast::Expr::Identifier(ident) => vec![ident],
+                    ast::Expr::CompoundIdentifier(idents) => idents,
+                    other => return internal_err!("expected col_to_sql to return an Identifier or CompoundIdentifier, but received: {:?}", other),
+                };
+                id.push(field);
+                Ok(ast::Expr::CompoundIdentifier(id))
+            }
+            Expr::ScalarFunction(struct_expr) => {
+                let root = self
+                    .scalar_function_to_sql(struct_expr.func.name(), &struct_expr.args)?;
+                Ok(ast::Expr::CompoundFieldAccess {
+                    root: Box::new(root),
+                    access_chain: vec![ast::AccessExpr::Dot(ast::Expr::Identifier(
+                        field,
+                    ))],
+                })
+            }
+            _ => {
+                internal_err!(
+                    "get_field expects first argument to be column or scalar function, but received: {:?}",
+                    &args[0]
+                )
+            }
+        }
     }
 
     fn map_to_sql(&self, args: &[Expr]) -> Result<ast::Expr> {

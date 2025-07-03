@@ -30,4 +30,3 @@
 ## PySpark 3.5.5 Result: {"base64(X'537061726B2053514C')": 'U3BhcmsgU1FM', "typeof(base64(X'537061726B2053514C'))": 'string', "typeof(X'537061726B2053514C')": 'binary'}
 #query
 #SELECT base64(X'537061726B2053514C'::binary);
-

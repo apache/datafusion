@@ -35,4 +35,3 @@
 ## PySpark 3.5.5 Result: {'rand(NULL)': 0.7604953758285915, 'typeof(rand(NULL))': 'double', 'typeof(NULL)': 'void'}
 #query
 #SELECT random(NULL::void);
-

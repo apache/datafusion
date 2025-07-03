@@ -25,4 +25,3 @@
 ## PySpark 3.5.5 Result: {'current_timezone()': 'America/Los_Angeles', 'typeof(current_timezone())': 'string'}
 #query
 #SELECT current_timezone();
-

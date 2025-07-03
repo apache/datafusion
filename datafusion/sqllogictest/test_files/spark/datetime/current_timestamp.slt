@@ -25,4 +25,3 @@
 ## PySpark 3.5.5 Result: {'current_timestamp()': datetime.datetime(2025, 6, 14, 23, 57, 38, 948981), 'typeof(current_timestamp())': 'timestamp'}
 #query
 #SELECT current_timestamp();
-
