@@ -74,14 +74,10 @@ pub enum SchemaSource {
 /// This configuration supports schema evolution through the optional
 /// [`SchemaAdapterFactory`]. You might want to override the default factory when you need:
 ///
-/// - **Reading files with evolving schemas**: When your data files have been written
-///   over time with different but compatible schemas (e.g., added columns, renamed fields)
 /// - **Type coercion requirements**: When you need custom logic for converting between
 ///   different Arrow data types (e.g., Int32 ↔ Int64, Utf8 ↔ LargeUtf8)
-/// - **Column mapping**: When files have different column names or ordering than
-///   your expected table schema
-/// - **Backwards compatibility**: When newer table schemas need to read older file
-///   formats gracefully
+/// - **Column mapping**: You need to map columns with a legacy name to a new name
+/// - **Custom handling of missing columns**: By default they are filled in with nulls, but you may e.g. want to fill them in with `0` or `""`.
 ///
 /// If not specified, a [`DefaultSchemaAdapterFactory`] will be used, which handles
 /// basic schema compatibility cases.
