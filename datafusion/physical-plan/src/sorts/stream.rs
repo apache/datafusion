@@ -22,7 +22,7 @@ use arrow::array::Array;
 use arrow::datatypes::Schema;
 use arrow::record_batch::RecordBatch;
 use arrow::row::{RowConverter, Rows, SortField};
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{internal_datafusion_err, Result};
 use datafusion_execution::memory_pool::MemoryReservation;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use futures::stream::{Fuse, StreamExt};
@@ -144,7 +144,7 @@ impl RowCursorStream {
         let mut rows = Arc::try_unwrap(self.rows[stream_idx][1].take().unwrap())
             .map_err(|_| {
                 internal_datafusion_err!(
-                    "Rows from RowCursorStream is still in use by consumer".to_string(),
+                    "Rows from RowCursorStream is still in use by consumer"
                 )
             })?;
 
