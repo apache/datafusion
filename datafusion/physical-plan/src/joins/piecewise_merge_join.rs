@@ -228,7 +228,13 @@ impl PiecewiseMergeJoinExec {
                     SortOptions::new(false, false)
                 }
             }
-            Operator::Gt | Operator::GtEq => SortOptions::new(true, false),
+            Operator::Gt | Operator::GtEq => {
+                if is_left_existence_join(join_type) {
+                    SortOptions::new(false, false)
+                } else {
+                    SortOptions::new(true, false)
+                }
+            }
             _ => {
                 return plan_err!(
                     "Cannot contain non-range operator in PiecewiseMergeJoinExec"
