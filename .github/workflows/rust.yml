@@ -203,6 +203,8 @@ jobs:
         run: cargo check --profile ci --no-default-features -p datafusion --features=string_expressions
       - name: Check datafusion (unicode_expressions)
         run: cargo check --profile ci --no-default-features -p datafusion --features=unicode_expressions
+      - name: Check parquet encryption (parquet_encryption)
+        run: cargo check --profile ci --no-default-features -p datafusion --features=parquet_encryption
 
   # Check datafusion-functions crate features
   #
