@@ -28,7 +28,7 @@
 //! 4. **Parent Responds**: The optimizer calls [`ExecutionPlan::handle_child_pushdown_result`] on the parent,
 //!    passing a [`ChildPushdownResult`] containing the aggregated pushdown outcomes. The parent decides
 //!    how to handle filters that couldn't be pushed down (e.g., keep them as FilterExec nodes).
-//! 
+//!
 //! [`ExecutionPlan::gather_filters_for_pushdown`]: crate::ExecutionPlan::gather_filters_for_pushdown
 //! [`ExecutionPlan::handle_child_pushdown_result`]: crate::ExecutionPlan::handle_child_pushdown_result
 //!

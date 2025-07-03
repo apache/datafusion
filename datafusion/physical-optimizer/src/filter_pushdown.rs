@@ -28,7 +28,7 @@
 //! 4. **Parent Responds**: The optimizer calls [`ExecutionPlan::handle_child_pushdown_result`] on the parent,
 //!    passing a [`ChildPushdownResult`] containing the aggregated pushdown outcomes. The parent decides
 //!    how to handle filters that couldn't be pushed down (e.g., keep them as FilterExec nodes).
-//! 
+//!
 //! [`FilterDescription`]: datafusion_physical_plan::filter_pushdown::FilterDescription
 
 use std::sync::Arc;
