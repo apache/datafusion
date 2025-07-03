@@ -1680,6 +1680,10 @@ pub fn build_join_schema(
 /// This is especially useful for queries that come as Substrait, since Substrait doesn't currently allow specifying
 /// aliases, neither for columns nor for tables.  DataFusion requires columns to be uniquely identifiable, in some
 /// places (see e.g. DFSchema::check_names).
+/// The function returns:
+/// - The requalified or original left logical plan
+/// - The requalified or original right logical plan
+/// - If a requalification was needed or not
 pub fn requalify_sides_if_needed(
     left: LogicalPlanBuilder,
     right: LogicalPlanBuilder,

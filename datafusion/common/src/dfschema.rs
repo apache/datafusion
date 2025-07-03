@@ -213,8 +213,9 @@ impl DFSchema {
     ) -> Result<Self> {
         if qualifiers.len() != self.fields().len() {
             return _plan_err!(
-                "{}",
-                "Number of qualifiers must match number of fields".to_string()
+                "Number of qualifiers must match number of fields. Expected {}, got {}",
+                self.fields().len(),
+                qualifiers.len()
             );
         }
         Ok(DFSchema {
