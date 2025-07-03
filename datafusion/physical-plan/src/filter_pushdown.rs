@@ -169,7 +169,7 @@ impl ChildFilterDescription {
     ///
     /// See [`FilterDescription::from_children`] for more details
     pub fn from_child(
-        parent_filters: Vec<Arc<dyn PhysicalExpr>>,
+        parent_filters: &[Arc<dyn PhysicalExpr>],
         child: &Arc<dyn crate::ExecutionPlan>,
     ) -> Result<Self> {
         let child_schema = child.schema();
@@ -184,7 +184,7 @@ impl ChildFilterDescription {
         // Analyze each parent filter
         let mut child_parent_filters = Vec::with_capacity(parent_filters.len());
 
-        for filter in &parent_filters {
+        for filter in parent_filters {
             // Check which columns the filter references
             let referenced_columns = collect_columns(filter);
 
@@ -265,10 +265,8 @@ impl FilterDescription {
 
         // For each child, create a ChildFilterDescription
         for child in children {
-            desc = desc.with_child(ChildFilterDescription::from_child(
-                parent_filters.clone(),
-                child,
-            )?);
+            desc = desc
+                .with_child(ChildFilterDescription::from_child(&parent_filters, child)?);
         }
 
         Ok(desc)

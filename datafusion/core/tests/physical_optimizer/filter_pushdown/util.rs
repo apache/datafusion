@@ -526,7 +526,7 @@ impl ExecutionPlan for TestNode {
         // Since TestNode marks all parent filters as supported and adds its own filter,
         // we use from_child to create a description with all parent filters supported
         let child = &self.input;
-        let child_desc = ChildFilterDescription::from_child(parent_filters, child)?
+        let child_desc = ChildFilterDescription::from_child(&parent_filters, child)?
             .with_self_filter(Arc::clone(&self.predicate));
         Ok(FilterDescription::new().with_child(child_desc))
     }

@@ -463,7 +463,7 @@ impl ExecutionPlan for FilterExec {
             }));
         }
 
-        let child = ChildFilterDescription::from_child(parent_filters, self.input())?
+        let child = ChildFilterDescription::from_child(&parent_filters, self.input())?
             .with_self_filters(
                 split_conjunction(&self.predicate)
                     .into_iter()

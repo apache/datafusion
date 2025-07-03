@@ -1273,7 +1273,8 @@ impl ExecutionPlan for SortExec {
             return FilterDescription::from_children(parent_filters, &self.children());
         }
 
-        let mut child = ChildFilterDescription::from_child(parent_filters, self.input())?;
+        let mut child =
+            ChildFilterDescription::from_child(&parent_filters, self.input())?;
 
         if let Some(filter) = &self.filter {
             if config.optimizer.enable_dynamic_filter_pushdown {
