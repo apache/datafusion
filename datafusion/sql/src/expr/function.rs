@@ -228,7 +228,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         }
 
         if !order_by.is_empty() && !within_group.is_empty() {
-            return plan_err!("ORDER BY and WITHIN GROUP clauses cannot be used together in the same aggregate function. ");
+            return plan_err!("ORDER BY and WITHIN GROUP clauses cannot be used together in the same aggregate function");
         }
 
         // If function is a window function (it has an OVER clause),
