@@ -242,7 +242,7 @@ impl FileOpener for ParquetOpener {
             // This evaluates missing columns and inserts any necessary casts.
             let predicate = predicate
                 .map(|p| {
-                    let mut rewriter = PhysicalExprSchemaRewriter::new(
+                    let rewriter = PhysicalExprSchemaRewriter::new(
                         &physical_file_schema,
                         &logical_file_schema,
                     )
@@ -250,11 +250,6 @@ impl FileOpener for ParquetOpener {
                         partition_fields.to_vec(),
                         file.partition_values,
                     );
-                    if let Some(predicate_rewrite_hook) = predicate_rewrite_hook.as_ref()
-                    {
-                        rewriter = rewriter
-                            .with_rewrite_hook(Arc::clone(predicate_rewrite_hook));
-                    };
                     rewriter.rewrite(p).map_err(ArrowError::from).map(|p| {
                         // After rewriting to the file schema, further simplifications may be possible.
                         // For example, if `'a' = col_that_is_missing` becomes `'a' = NULL` that can then be simplified to `FALSE`
@@ -265,6 +260,23 @@ impl FileOpener for ParquetOpener {
                     })
                 })
                 .transpose()?
+                .transpose()?;
+
+            // if let (Some(predicate_rewrite_hook), Some(predicate)) = (predicate_rewrite_hook.as_ref(), predicate.as_ref())
+            // {
+            //     predicate = predicate_rewrite_hook.rewrite(Arc::clone(&predicate), physical_file_schema)?;
+            // };
+
+            let predicate = predicate
+                .map(|p| {
+                    if let Some(predicate_rewrite_hook) = predicate_rewrite_hook.as_ref()
+                    {
+                        predicate_rewrite_hook
+                            .rewrite(Arc::clone(&p), &physical_file_schema)
+                    } else {
+                        Ok(p)
+                    }
+                })
                 .transpose()?;
 
             // Build predicates for this specific file
