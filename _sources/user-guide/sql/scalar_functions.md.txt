@@ -1793,6 +1793,7 @@ regular expression [syntax](https://docs.rs/regex/latest/regex/#syntax)
 The following regular expression functions are supported:
 
 - [regexp_count](#regexp_count)
+- [regexp_instr](#regexp_instr)
 - [regexp_like](#regexp_like)
 - [regexp_match](#regexp_match)
 - [regexp_replace](#regexp_replace)
@@ -1825,6 +1826,39 @@ regexp_count(str, regexp[, start, flags])
 | regexp_count(Utf8("abcAbAbc"),Utf8("abc"),Int64(2),Utf8("i")) |
 +---------------------------------------------------------------+
 | 1                                                             |
++---------------------------------------------------------------+
+```
+
+### `regexp_instr`
+
+Returns the position in a string where the specified occurrence of a POSIX regular expression is located.
+
+```sql
+regexp_instr(str, regexp[, start[, N[, flags[, subexpr]]]])
+```
+
+#### Arguments
+
+- **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
+- **regexp**: Regular expression to operate on. Can be a constant, column, or function, and any combination of operators.
+- **start**: - **start**: Optional start position (the first position is 1) to search for the regular expression. Can be a constant, column, or function. Defaults to 1
+- **N**: - **N**: Optional The N-th occurrence of pattern to find. Defaults to 1 (first match). Can be a constant, column, or function.
+- **flags**: Optional regular expression flags that control the behavior of the regular expression. The following flags are supported:
+  - **i**: case-insensitive: letters match both upper and lower case
+  - **m**: multi-line mode: ^ and $ match begin/end of line
+  - **s**: allow . to match \n
+  - **R**: enables CRLF mode: when multi-line mode is enabled, \r\n is used
+  - **U**: swap the meaning of x* and x*?
+- **subexpr**: Optional Specifies which capture group (subexpression) to return the position for. Defaults to 0, which returns the position of the entire match.
+
+#### Example
+
+```sql
+> SELECT regexp_instr('ABCDEF', 'C(.)(..)');
++---------------------------------------------------------------+
+| regexp_instr(Utf8("ABCDEF"),Utf8("C(.)(..)"))                 |
++---------------------------------------------------------------+
+| 3                                                             |
 +---------------------------------------------------------------+
 ```
 
