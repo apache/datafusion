@@ -223,8 +223,35 @@ fn pushdown_requirement_to_children(
     // If there is a limit on the parent plan we cannot push it down through operators that change the cardinality.
     // E.g. consider if LIMIT 2 is applied below a FilteExec that filters out 1/2 of the rows we'll end up with 1 row instead of 2.
     // If the LIMIT is applied after the FilterExec and the FilterExec returns > 2 rows we'll end up with 2 rows (correct).
-    if parent_fetch.is_some() && !plan.supports_limit_pushdown() {
-        return Ok(None)
+    if parent_fetch.is_some() {
+        if !plan.supports_limit_pushdown() {
+            return Ok(None);
+        }
+
+        // Note: we still need to check the cardinality effect of the plan here, because the
+        // limit pushdown is not always safe, even if the plan supports it. Here's an example:
+        //
+        // UnionExec advertises `supports_limit_pushdown() == true` because it can
+        // forward a LIMIT k to each of its children—i.e. apply “LIMIT k” separately
+        // on each branch before merging them together.
+        //
+        // However, UnionExec’s `cardinality_effect() == GreaterEqual` (it sums up
+        // all child row counts), so pushing a global TopK/LIMIT through it would
+        // break the semantics of “take the first k rows of the combined result.”
+        //
+        // For example, with two branches A and B and k = 3:
+        //   — Global LIMIT: take the first 3 rows from (A ∪ B) after merging.
+        //   — Pushed down: take 3 from A, 3 from B, then merge → up to 6 rows!
+        //
+        // That’s why we still block on cardinality: even though UnionExec can
+        // push a LIMIT to its children, its GreaterEqual effect means it cannot
+        // preserve the global TopK semantics.
+        match plan.cardinality_effect() {
+            CardinalityEffect::Equal => {
+                // safe: only true sources (e.g. CoalesceBatchesExec, ProjectionExec) pass
+            }
+            _ => return Ok(None),
+        }
     }
 
     let maintains_input_order = plan.maintains_input_order();
