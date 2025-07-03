@@ -171,7 +171,13 @@ async fn main_inner() -> Result<()> {
         env::set_current_dir(p).unwrap();
     };
 
-    let session_config = get_session_config(&args)?;
+    let mut session_config = get_session_config(&args)?;
+
+    let parquet_options = &mut session_config.options_mut().execution.parquet;
+    // Consistent with the clickbench benchmark:
+    // The hits_partitioned dataset specifies string columns
+    // as binary due to how it was written. Force it to strings
+    parquet_options.binary_as_string = true;
 
     let mut rt_builder = RuntimeEnvBuilder::new();
     // set memory pool size
