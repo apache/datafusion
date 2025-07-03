@@ -25,4 +25,3 @@
 ## PySpark 3.5.5 Result: {'struct(1, 2, 3)': Row(col1=1, col2=2, col3=3), 'typeof(struct(1, 2, 3))': 'struct<col1:int,col2:int,col3:int>', 'typeof(1)': 'int', 'typeof(2)': 'int', 'typeof(3)': 'int'}
 #query
 #SELECT struct(1::int, 2::int, 3::int);
-

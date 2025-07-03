@@ -25,4 +25,3 @@
 ## PySpark 3.5.5 Result: {'current_database()': 'default', 'typeof(current_database())': 'string'}
 #query
 #SELECT current_database();
-
