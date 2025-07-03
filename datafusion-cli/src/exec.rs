@@ -236,10 +236,17 @@ pub(super) async fn exec_and_print(
 
         let df = match ctx.execute_logical_plan(plan).await {
             Ok(df) => df,
-            Err(DataFusionError::ObjectStore(Generic { store, source: _ }))
-                if "S3".eq_ignore_ascii_case(store)
+            Err(DataFusionError::ObjectStore(err))
+                if matches!(err.as_ref(), object_store::Error::Generic { store, source: _ } if "S3".eq_ignore_ascii_case(store))
                     && matches!(&statement, Statement::CreateExternalTable(_)) =>
             {
+                let Generic {
+                    store: _,
+                    source: _,
+                } = err.as_ref()
+                else {
+                    unreachable!()
+                };
                 warn!("S3 region is incorrect, auto-detecting the correct region (this may be slow). Consider updating your region configuration.");
                 let plan = create_plan(ctx, statement, true).await?;
                 ctx.execute_logical_plan(plan).await?
