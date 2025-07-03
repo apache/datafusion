@@ -30,4 +30,3 @@
 ## PySpark 3.5.5 Result: {'position(bar, foobarbar, 5)': 7, 'typeof(position(bar, foobarbar, 5))': 'int', 'typeof(bar)': 'string', 'typeof(foobarbar)': 'string', 'typeof(5)': 'int'}
 #query
 #SELECT position('bar'::string, 'foobarbar'::string, 5::int);
-

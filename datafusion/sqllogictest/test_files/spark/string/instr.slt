@@ -25,4 +25,3 @@
 ## PySpark 3.5.5 Result: {'instr(SparkSQL, SQL)': 6, 'typeof(instr(SparkSQL, SQL))': 'int', 'typeof(SparkSQL)': 'string', 'typeof(SQL)': 'string'}
 #query
 #SELECT instr('SparkSQL'::string, 'SQL'::string);
-

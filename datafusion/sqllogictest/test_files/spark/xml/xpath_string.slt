@@ -25,4 +25,3 @@
 ## PySpark 3.5.5 Result: {'xpath_string(<a><b>b</b><c>cc</c></a>, a/c)': 'cc', 'typeof(xpath_string(<a><b>b</b><c>cc</c></a>, a/c))': 'string', 'typeof(<a><b>b</b><c>cc</c></a>)': 'string', 'typeof(a/c)': 'string'}
 #query
 #SELECT xpath_string('<a><b>b</b><c>cc</c></a>'::string, 'a/c'::string);
-

@@ -30,6 +30,8 @@ use arrow::{
 };
 // pub use for backwards compatibility
 pub use datafusion_common::pruning::PruningStatistics;
+use datafusion_physical_expr::simplifier::PhysicalExprSimplifier;
+use datafusion_physical_plan::metrics::Count;
 use log::{debug, trace};
 
 use datafusion_common::error::{DataFusionError, Result};
@@ -376,6 +378,30 @@ pub struct PruningPredicate {
     literal_guarantees: Vec<LiteralGuarantee>,
 }
 
+/// Build a pruning predicate from an optional predicate expression.
+/// If the predicate is None or the predicate cannot be converted to a pruning
+/// predicate, return None.
+/// If there is an error creating the pruning predicate it is recorded by incrementing
+/// the `predicate_creation_errors` counter.
+pub fn build_pruning_predicate(
+    predicate: Arc<dyn PhysicalExpr>,
+    file_schema: &SchemaRef,
+    predicate_creation_errors: &Count,
+) -> Option<Arc<PruningPredicate>> {
+    match PruningPredicate::try_new(predicate, Arc::clone(file_schema)) {
+        Ok(pruning_predicate) => {
+            if !pruning_predicate.always_true() {
+                return Some(Arc::new(pruning_predicate));
+            }
+        }
+        Err(e) => {
+            debug!("Could not create pruning predicate for: {e}");
+            predicate_creation_errors.add(1);
+        }
+    }
+    None
+}
+
 /// Rewrites predicates that [`PredicateRewriter`] can not handle, e.g. certain
 /// complex expressions or predicates that reference columns that are not in the
 /// schema.
@@ -443,6 +469,10 @@ impl PruningPredicate {
             &mut required_columns,
             &unhandled_hook,
         );
+        let predicate_schema = required_columns.schema();
+        // Simplify the newly created predicate to get rid of redundant casts, comparisons, etc.
+        let predicate_expr =
+            PhysicalExprSimplifier::new(&predicate_schema).simplify(predicate_expr)?;
 
         let literal_guarantees = LiteralGuarantee::analyze(&expr);
 
@@ -710,6 +740,21 @@ impl RequiredColumns {
         }
     }
 
+    /// Returns a schema that describes the columns required to evaluate this
+    /// pruning predicate.
+    /// The schema contains the fields for each column in `self.columns` with
+    /// the appropriate data type for the statistics.
+    /// Order matters, this same order is used to evaluate the
+    /// pruning predicate.
+    fn schema(&self) -> Schema {
+        let fields = self
+            .columns
+            .iter()
+            .map(|(_c, _t, f)| f.clone())
+            .collect::<Vec<_>>();
+        Schema::new(fields)
+    }
+
     /// Returns an iterator over items in columns (see doc on
     /// `self.columns` for details)
     pub(crate) fn iter(
@@ -858,7 +903,6 @@ fn build_statistics_record_batch<S: PruningStatistics + ?Sized>(
     statistics: &S,
     required_columns: &RequiredColumns,
 ) -> Result<RecordBatch> {
-    let mut fields = Vec::<Field>::new();
     let mut arrays = Vec::<ArrayRef>::new();
     // For each needed statistics column:
     for (column, statistics_type, stat_field) in required_columns.iter() {
@@ -887,11 +931,10 @@ fn build_statistics_record_batch<S: PruningStatistics + ?Sized>(
         // provides timestamp statistics as "Int64")
         let array = arrow::compute::cast(&array, data_type)?;
 
-        fields.push(stat_field.clone());
         arrays.push(array);
     }
 
-    let schema = Arc::new(Schema::new(fields));
+    let schema = Arc::new(required_columns.schema());
     // provide the count in case there were no needed statistics
     let mut options = RecordBatchOptions::default();
     options.row_count = Some(statistics.num_containers());

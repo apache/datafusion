@@ -25,4 +25,3 @@
 ## PySpark 3.5.5 Result: {'to_utc_timestamp(2016-08-31, Asia/Seoul)': datetime.datetime(2016, 8, 30, 15, 0), 'typeof(to_utc_timestamp(2016-08-31, Asia/Seoul))': 'timestamp', 'typeof(2016-08-31)': 'string', 'typeof(Asia/Seoul)': 'string'}
 #query
 #SELECT to_utc_timestamp('2016-08-31'::string, 'Asia/Seoul'::string);
-

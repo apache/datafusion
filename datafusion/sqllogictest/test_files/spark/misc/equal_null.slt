@@ -45,4 +45,3 @@
 ## PySpark 3.5.5 Result: {'equal_null(true, NULL)': False, 'typeof(equal_null(true, NULL))': 'boolean', 'typeof(true)': 'boolean', 'typeof(NULL)': 'void'}
 #query
 #SELECT equal_null(true::boolean, NULL::void);
-

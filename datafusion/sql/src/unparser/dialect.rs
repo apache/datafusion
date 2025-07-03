@@ -197,6 +197,13 @@ pub trait Dialect: Send + Sync {
     fn unnest_as_table_factor(&self) -> bool {
         false
     }
+
+    /// Allows the dialect to override column alias unparsing if the dialect has specific rules.
+    /// Returns None if the default unparsing should be used, or Some(String) if there is
+    /// a custom implementation for the alias.
+    fn col_alias_overrides(&self, _alias: &str) -> Result<Option<String>> {
+        Ok(None)
+    }
 }
 
 /// `IntervalStyle` to use for unparsing
@@ -497,6 +504,49 @@ impl Dialect for SqliteDialect {
             "date_trunc" => sqlite_date_trunc_to_sql(unparser, args),
             _ => Ok(None),
         }
+    }
+}
+
+#[derive(Default)]
+pub struct BigQueryDialect {}
+
+impl Dialect for BigQueryDialect {
+    fn identifier_quote_style(&self, _: &str) -> Option<char> {
+        Some('`')
+    }
+
+    fn col_alias_overrides(&self, alias: &str) -> Result<Option<String>> {
+        // Check if alias contains any special characters not supported by BigQuery col names
+        // https://cloud.google.com/bigquery/docs/schemas#flexible-column-names
+        let special_chars: [char; 20] = [
+            '!', '"', '$', '(', ')', '*', ',', '.', '/', ';', '?', '@', '[', '\\', ']',
+            '^', '`', '{', '}', '~',
+        ];
+
+        if alias.chars().any(|c| special_chars.contains(&c)) {
+            let mut encoded_name = String::new();
+            for c in alias.chars() {
+                if special_chars.contains(&c) {
+                    encoded_name.push_str(&format!("_{}", c as u32));
+                } else {
+                    encoded_name.push(c);
+                }
+            }
+            Ok(Some(encoded_name))
+        } else {
+            Ok(Some(alias.to_string()))
+        }
+    }
+
+    fn unnest_as_table_factor(&self) -> bool {
+        true
+    }
+}
+
+impl BigQueryDialect {
+    #[must_use]
+    pub fn new() -> Self {
+        Self {}
     }
 }
 
