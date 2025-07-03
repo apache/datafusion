@@ -225,25 +225,26 @@ fn pushdown_requirement_to_children(
     // If the LIMIT is applied after the FilterExec and the FilterExec returns > 2 rows we'll end up with 2 rows (correct).
     if parent_fetch.is_some() && !plan.supports_limit_pushdown() {
         return Ok(None);
-
-        // Note: we still need to check the cardinality effect of the plan here, because the
-        // limit pushdown is not always safe, even if the plan supports it. Here's an example:
-        //
-        // UnionExec advertises `supports_limit_pushdown() == true` because it can
-        // forward a LIMIT k to each of its children—i.e. apply “LIMIT k” separately
-        // on each branch before merging them together.
-        //
-        // However, UnionExec’s `cardinality_effect() == GreaterEqual` (it sums up
-        // all child row counts), so pushing a global TopK/LIMIT through it would
-        // break the semantics of “take the first k rows of the combined result.”
-        //
-        // For example, with two branches A and B and k = 3:
-        //   — Global LIMIT: take the first 3 rows from (A ∪ B) after merging.
-        //   — Pushed down: take 3 from A, 3 from B, then merge → up to 6 rows!
-        //
-        // That’s why we still block on cardinality: even though UnionExec can
-        // push a LIMIT to its children, its GreaterEqual effect means it cannot
-        // preserve the global TopK semantics.
+    }
+    // Note: we still need to check the cardinality effect of the plan here, because the
+    // limit pushdown is not always safe, even if the plan supports it. Here's an example:
+    //
+    // UnionExec advertises `supports_limit_pushdown() == true` because it can
+    // forward a LIMIT k to each of its children—i.e. apply “LIMIT k” separately
+    // on each branch before merging them together.
+    //
+    // However, UnionExec’s `cardinality_effect() == GreaterEqual` (it sums up
+    // all child row counts), so pushing a global TopK/LIMIT through it would
+    // break the semantics of “take the first k rows of the combined result.”
+    //
+    // For example, with two branches A and B and k = 3:
+    //   — Global LIMIT: take the first 3 rows from (A ∪ B) after merging.
+    //   — Pushed down: take 3 from A, 3 from B, then merge → up to 6 rows!
+    //
+    // That’s why we still block on cardinality: even though UnionExec can
+    // push a LIMIT to its children, its GreaterEqual effect means it cannot
+    // preserve the global TopK semantics.
+    if parent_fetch.is_some() {
         match plan.cardinality_effect() {
             CardinalityEffect::Equal => {
                 // safe: only true sources (e.g. CoalesceBatchesExec, ProjectionExec) pass
