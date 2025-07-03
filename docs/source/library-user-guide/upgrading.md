@@ -31,7 +31,8 @@ reduces the size of the `Result` enum, and thus stack usage and async state
 machine size. Please see [#16652] for more details.
 
 Errors that are now `Box`ed include:
-* `SchemaError`
+
+- `SchemaError`
 
 Typically this means to create such a variant instead of
 
