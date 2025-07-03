@@ -40,4 +40,3 @@
 ## PySpark 3.5.5 Result: {"contains(X'537061726B2053514C', X'537061726B')": True, "typeof(contains(X'537061726B2053514C', X'537061726B'))": 'boolean', "typeof(X'537061726B2053514C')": 'binary', "typeof(X'537061726B')": 'binary'}
 #query
 #SELECT contains(X'537061726B2053514C'::binary, X'537061726B'::binary);
-

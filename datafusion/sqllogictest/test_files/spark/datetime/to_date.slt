@@ -30,4 +30,3 @@
 ## PySpark 3.5.5 Result: {'to_date(2016-12-31, yyyy-MM-dd)': datetime.date(2016, 12, 31), 'typeof(to_date(2016-12-31, yyyy-MM-dd))': 'date', 'typeof(2016-12-31)': 'string', 'typeof(yyyy-MM-dd)': 'string'}
 #query
 #SELECT to_date('2016-12-31'::string, 'yyyy-MM-dd'::string);
-

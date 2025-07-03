@@ -30,4 +30,3 @@
 ## PySpark 3.5.5 Result: {'months_between(1997-02-28 10:30:00, 1996-10-30, false)': 3.9495967741935485, 'typeof(months_between(1997-02-28 10:30:00, 1996-10-30, false))': 'double', 'typeof(1997-02-28 10:30:00)': 'string', 'typeof(1996-10-30)': 'string', 'typeof(false)': 'boolean'}
 #query
 #SELECT months_between('1997-02-28 10:30:00'::string, '1996-10-30'::string, false::boolean);
-

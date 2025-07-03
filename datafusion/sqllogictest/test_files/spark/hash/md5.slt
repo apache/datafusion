@@ -25,4 +25,3 @@
 ## PySpark 3.5.5 Result: {'md5(Spark)': '8cde774d6f7333752ed72cacddb05126', 'typeof(md5(Spark))': 'string', 'typeof(Spark)': 'string'}
 #query
 #SELECT md5('Spark'::string);
-

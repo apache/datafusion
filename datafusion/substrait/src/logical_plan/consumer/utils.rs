@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::logical_plan::consumer::SubstraitConsumer;
-use datafusion::arrow::datatypes::{DataType, Field, Schema, UnionFields};
+use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit, UnionFields};
 use datafusion::common::{
     exec_err, not_impl_err, substrait_datafusion_err, substrait_err, DFSchema,
     DFSchemaRef, TableReference,
@@ -474,6 +474,21 @@ pub async fn from_substrait_sorts(
         });
     }
     Ok(sorts)
+}
+
+pub(crate) fn from_substrait_precision(
+    precision: i32,
+    type_name: &str,
+) -> datafusion::common::Result<TimeUnit> {
+    match precision {
+        0 => Ok(TimeUnit::Second),
+        3 => Ok(TimeUnit::Millisecond),
+        6 => Ok(TimeUnit::Microsecond),
+        9 => Ok(TimeUnit::Nanosecond),
+        precision => {
+            not_impl_err!("Unsupported Substrait precision {precision}, for {type_name}")
+        }
+    }
 }
 
 #[cfg(test)]

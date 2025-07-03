@@ -25,4 +25,3 @@
 ## PySpark 3.5.5 Result: {'LOG1P(0)': 0.0, 'typeof(LOG1P(0))': 'double', 'typeof(0)': 'int'}
 #query
 #SELECT log1p(0::int);
-

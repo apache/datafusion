@@ -35,4 +35,3 @@
 ## PySpark 3.5.5 Result: {'try_to_binary(abc, invalidFormat)': None, 'typeof(try_to_binary(abc, invalidFormat))': 'binary', 'typeof(abc)': 'string', 'typeof(invalidFormat)': 'string'}
 #query
 #SELECT try_to_binary('abc'::string, 'invalidFormat'::string);
-

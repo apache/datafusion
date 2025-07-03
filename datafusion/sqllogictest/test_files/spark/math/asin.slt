@@ -30,4 +30,3 @@
 ## PySpark 3.5.5 Result: {'ASIN(2)': nan, 'typeof(ASIN(2))': 'double', 'typeof(2)': 'int'}
 #query
 #SELECT asin(2::int);
-

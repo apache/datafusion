@@ -25,4 +25,3 @@
 ## PySpark 3.5.5 Result: {'SQRT(4)': 2.0, 'typeof(SQRT(4))': 'double', 'typeof(4)': 'int'}
 #query
 #SELECT sqrt(4::int);
-

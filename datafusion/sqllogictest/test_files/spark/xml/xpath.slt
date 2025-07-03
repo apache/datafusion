@@ -25,4 +25,3 @@
 ## PySpark 3.5.5 Result: {'xpath(<a><b>b1</b><b>b2</b><b>b3</b><c>c1</c><c>c2</c></a>, a/b)': [None, None, None], 'typeof(xpath(<a><b>b1</b><b>b2</b><b>b3</b><c>c1</c><c>c2</c></a>, a/b))': 'array<string>', 'typeof(<a><b>b1</b><b>b2</b><b>b3</b><c>c1</c><c>c2</c></a>)': 'string', 'typeof(a/b)': 'string'}
 #query
 #SELECT xpath('<a><b>b1</b><b>b2</b><b>b3</b><c>c1</c><c>c2</c></a>'::string, 'a/b'::string);
-
