@@ -18,16 +18,19 @@
 //! Filter Pushdown Optimization Process
 //!
 //! The filter pushdown mechanism involves four key steps:
-//! 1. **Optimizer Asks Parent for a Filter Pushdown Plan**: The optimizer calls `ExecutionPlan::gather_filters_for_pushdown`
+//! 1. **Optimizer Asks Parent for a Filter Pushdown Plan**: The optimizer calls [`ExecutionPlan::gather_filters_for_pushdown`]
 //!    on the parent node, passing in parent predicates and phase. The parent node creates a [`FilterDescription`]
 //!    by inspecting its logic and children's schemas, determining which filters can be pushed to each child.
 //! 2. **Optimizer Executes Pushdown**: The optimizer recursively pushes down filters for each child,
 //!    passing the appropriate filters (`Vec<Arc<dyn PhysicalExpr>>`) for that child.
 //! 3. **Optimizer Gathers Results**: The optimizer collects [`FilterPushdownPropagation`] results from children,
 //!    containing information about which filters were successfully pushed down vs. unsupported.
-//! 4. **Parent Responds**: The optimizer calls `ExecutionPlan::handle_child_pushdown_result` on the parent,
+//! 4. **Parent Responds**: The optimizer calls [`ExecutionPlan::handle_child_pushdown_result`] on the parent,
 //!    passing a [`ChildPushdownResult`] containing the aggregated pushdown outcomes. The parent decides
 //!    how to handle filters that couldn't be pushed down (e.g., keep them as FilterExec nodes).
+//! 
+//! [`ExecutionPlan::gather_filters_for_pushdown`]: crate::ExecutionPlan::gather_filters_for_pushdown
+//! [`ExecutionPlan::handle_child_pushdown_result`]: crate::ExecutionPlan::handle_child_pushdown_result
 //!
 //! See also datafusion/physical-optimizer/src/filter_pushdown.rs.
 

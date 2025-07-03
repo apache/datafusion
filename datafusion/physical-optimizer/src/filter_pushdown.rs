@@ -21,13 +21,15 @@
 //! 1. **Optimizer Asks Parent for a Filter Pushdown Plan**: The optimizer calls [`ExecutionPlan::gather_filters_for_pushdown`]
 //!    on the parent node, passing in parent predicates and phase. The parent node creates a [`FilterDescription`]
 //!    by inspecting its logic and children's schemas, determining which filters can be pushed to each child.
-//! 2. **Optimizer Executes Pushdown**: The optimizer recursively calls [`push_down_filters`] on each child,
+//! 2. **Optimizer Executes Pushdown**: The optimizer recursively calls `push_down_filters` in this module on each child,
 //!    passing the appropriate filters (`Vec<Arc<dyn PhysicalExpr>>`) for that child.
 //! 3. **Optimizer Gathers Results**: The optimizer collects [`FilterPushdownPropagation`] results from children,
 //!    containing information about which filters were successfully pushed down vs. unsupported.
 //! 4. **Parent Responds**: The optimizer calls [`ExecutionPlan::handle_child_pushdown_result`] on the parent,
 //!    passing a [`ChildPushdownResult`] containing the aggregated pushdown outcomes. The parent decides
 //!    how to handle filters that couldn't be pushed down (e.g., keep them as FilterExec nodes).
+//! 
+//! [`FilterDescription`]: datafusion_physical_plan::filter_pushdown::FilterDescription
 
 use std::sync::Arc;
 
