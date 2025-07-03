@@ -24,6 +24,14 @@
 **Note:** DataFusion `49.0.0` has not been released yet. The information provided in this section pertains to features and changes that have already been merged to the main branch and are awaiting release in this version.
 You can see the current [status of the `49.0.0 `release here](https://github.com/apache/datafusion/issues/16235)
 
+### More `Box`ed `Error` types
+
+Several additioanl `Error` variants are now `Box`ed to reduce their size, which
+reduces the size of the `Result` enum, and thus stack usage and async state
+machine size. Please see [#16652] for more details.
+
+[#16552]: https://github.com/apache/datafusion/issues/16652
+
 ### `datafusion.execution.collect_statistics` now defaults to `true`
 
 The default value of the `datafusion.execution.collect_statistics` configuration
