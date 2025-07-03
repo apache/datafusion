@@ -724,15 +724,13 @@ impl RecordBatchGenerator {
             {
                 // We generate just num_distinct values because they will be reused by different keys
                 let mut array_gen_rng = array_gen_rng;
-
+                debug_assert!((0.0..=1.0).contains(&null_pct));
                 let values = Self::generate_array_of_type_inner(
                     &ColumnDescr::new("values", *value_type.clone()),
                     num_distinct,
                     batch_gen_rng,
                     array_gen_rng.clone(),
-                    // Once https://github.com/apache/datafusion/issues/16228 is fixed
-                    // we can also generate nulls in values
-                    0.0, // null values are generated on the key level
+                    null_pct, // generate some null values
                 );
 
                 match key_type.as_ref() {
