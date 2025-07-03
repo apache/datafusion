@@ -30,4 +30,3 @@
 ## PySpark 3.5.5 Result: {'elt(2, a, 1)': '1', 'typeof(elt(2, a, 1))': 'string', 'typeof(2)': 'int', 'typeof(a)': 'string', 'typeof(1)': 'int'}
 #query
 #SELECT elt(2::int, 'a'::string, 1::int);
-

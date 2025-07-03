@@ -25,4 +25,3 @@
 ## PySpark 3.5.5 Result: {'ln(1)': 0.0, 'typeof(ln(1))': 'double', 'typeof(1)': 'int'}
 #query
 #SELECT ln(1::int);
-

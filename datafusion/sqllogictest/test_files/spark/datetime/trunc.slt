@@ -40,4 +40,3 @@
 ## PySpark 3.5.5 Result: {'trunc(2019-08-04, week)': datetime.date(2019, 7, 29), 'typeof(trunc(2019-08-04, week))': 'date', 'typeof(2019-08-04)': 'string', 'typeof(week)': 'string'}
 #query
 #SELECT trunc('2019-08-04'::string, 'week'::string);
-

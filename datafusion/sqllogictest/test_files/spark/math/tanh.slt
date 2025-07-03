@@ -25,4 +25,3 @@
 ## PySpark 3.5.5 Result: {'TANH(0)': 0.0, 'typeof(TANH(0))': 'double', 'typeof(0)': 'int'}
 #query
 #SELECT tanh(0::int);
-

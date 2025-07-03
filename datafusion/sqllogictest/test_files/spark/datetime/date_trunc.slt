@@ -45,4 +45,3 @@
 ## PySpark 3.5.5 Result: {'date_trunc(YEAR, 2015-03-05T09:32:05.359)': datetime.datetime(2015, 1, 1, 0, 0), 'typeof(date_trunc(YEAR, 2015-03-05T09:32:05.359))': 'timestamp', 'typeof(YEAR)': 'string', 'typeof(2015-03-05T09:32:05.359)': 'string'}
 #query
 #SELECT date_trunc('YEAR'::string, '2015-03-05T09:32:05.359'::string);
-

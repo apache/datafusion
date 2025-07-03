@@ -35,4 +35,3 @@
 ## PySpark 3.5.5 Result: {'make_dt_interval(2, 0, 0, 0.000000)': datetime.timedelta(days=2), 'typeof(make_dt_interval(2, 0, 0, 0.000000))': 'interval day to second', 'typeof(2)': 'int'}
 #query
 #SELECT make_dt_interval(2::int);
-

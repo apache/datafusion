@@ -25,4 +25,3 @@
 ## PySpark 3.5.5 Result: {'url_decode(https%3A%2F%2Fspark.apache.org)': 'https://spark.apache.org', 'typeof(url_decode(https%3A%2F%2Fspark.apache.org))': 'string', 'typeof(https%3A%2F%2Fspark.apache.org)': 'string'}
 #query
 #SELECT url_decode('https%3A%2F%2Fspark.apache.org'::string);
-

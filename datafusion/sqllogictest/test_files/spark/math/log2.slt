@@ -25,4 +25,3 @@
 ## PySpark 3.5.5 Result: {'LOG2(2)': 1.0, 'typeof(LOG2(2))': 'double', 'typeof(2)': 'int'}
 #query
 #SELECT log2(2::int);
-

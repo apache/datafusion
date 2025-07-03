@@ -40,4 +40,3 @@
 ## PySpark 3.5.5 Result: {'FLOOR(5)': 5, 'typeof(FLOOR(5))': 'bigint', 'typeof(5)': 'int'}
 #query
 #SELECT floor(5::int);
-

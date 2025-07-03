@@ -35,4 +35,3 @@
 ## PySpark 3.5.5 Result: {"char_length(X'537061726B2053514C')": 9, "typeof(char_length(X'537061726B2053514C'))": 'int', "typeof(X'537061726B2053514C')": 'binary'}
 #query
 #SELECT char_length(X'537061726B2053514C'::binary);
-

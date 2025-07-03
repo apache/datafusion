@@ -25,4 +25,3 @@
 ## PySpark 3.5.5 Result: {'substring_index(www.apache.org, ., 2)': 'www.apache', 'typeof(substring_index(www.apache.org, ., 2))': 'string', 'typeof(www.apache.org)': 'string', 'typeof(.)': 'string', 'typeof(2)': 'int'}
 #query
 #SELECT substring_index('www.apache.org'::string, '.'::string, 2::int);
-

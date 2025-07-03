@@ -25,4 +25,3 @@
 ## PySpark 3.5.5 Result: {'translate(AaBbCc, abc, 123)': 'A1B2C3', 'typeof(translate(AaBbCc, abc, 123))': 'string', 'typeof(AaBbCc)': 'string', 'typeof(abc)': 'string', 'typeof(123)': 'string'}
 #query
 #SELECT translate('AaBbCc'::string, 'abc'::string, '123'::string);
-

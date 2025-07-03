@@ -40,4 +40,3 @@
 ## PySpark 3.5.5 Result: {'decode(NULL, 6, Spark, NULL, SQL, 4, rocks)': 'SQL', 'typeof(decode(NULL, 6, Spark, NULL, SQL, 4, rocks))': 'string', 'typeof(NULL)': 'void', 'typeof(6)': 'int', 'typeof(Spark)': 'string', 'typeof(SQL)': 'string', 'typeof(4)': 'int', 'typeof(rocks)': 'string'}
 #query
 #SELECT decode(NULL::void, 6::int, 'Spark'::string, 'SQL'::string, 4::int, 'rocks'::string);
-

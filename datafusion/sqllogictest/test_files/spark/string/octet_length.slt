@@ -30,4 +30,3 @@
 ## PySpark 3.5.5 Result: {"octet_length(X'537061726B2053514C')": 9, "typeof(octet_length(X'537061726B2053514C'))": 'int', "typeof(X'537061726B2053514C')": 'binary'}
 #query
 #SELECT octet_length(X'537061726B2053514C'::binary);
-

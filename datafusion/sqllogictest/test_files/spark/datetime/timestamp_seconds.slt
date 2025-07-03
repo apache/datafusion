@@ -30,4 +30,3 @@
 ## PySpark 3.5.5 Result: {'timestamp_seconds(1230219000.123)': datetime.datetime(2008, 12, 25, 7, 30, 0, 123000), 'typeof(timestamp_seconds(1230219000.123))': 'timestamp', 'typeof(1230219000.123)': 'decimal(13,3)'}
 #query
 #SELECT timestamp_seconds(1230219000.123::decimal(13,3));
-
