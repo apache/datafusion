@@ -33,6 +33,7 @@ pub use datafusion_physical_expr::window::WindowExpr;
 pub use datafusion_physical_expr::{
     expressions, Distribution, Partitioning, PhysicalExpr,
 };
+use itertools::Itertools;
 
 use std::any::Any;
 use std::fmt::Debug;
@@ -522,13 +523,13 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     ) -> Result<FilterDescription> {
         // Default implementation: mark all filters as unsupported for all children
         let mut desc = FilterDescription::new();
-        for _child in self.children() {
-            let child_filters = parent_filters
-                .iter()
-                .map(|f| PredicateSupport::Unsupported(Arc::clone(f)))
-                .collect();
+        let child_filters = parent_filters
+            .iter()
+            .map(|f| PredicateSupport::Unsupported(Arc::clone(f)))
+            .collect_vec();
+        for _ in 0..self.children().len() {
             desc = desc.with_child(ChildFilterDescription {
-                parent_filters: child_filters,
+                parent_filters: child_filters.clone(),
                 self_filters: vec![],
             });
         }
