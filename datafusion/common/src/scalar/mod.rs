@@ -4619,6 +4619,17 @@ mod tests {
     }
 
     #[test]
+    fn test_eq_array_err_message() {
+        assert_starts_with(
+            ScalarValue::Utf8(Some("123".to_string()))
+                .eq_array(&(Arc::new(Int32Array::from(vec![123])) as ArrayRef), 0)
+                .unwrap_err()
+                .message(),
+            "could not cast array of type Int32 to arrow_array::array::byte_array::GenericByteArray<arrow_array::types::GenericStringType<i32>>",
+        );
+    }
+
+    #[test]
     fn scalar_add_trait_test() -> Result<()> {
         let float_value = ScalarValue::Float64(Some(123.));
         let float_value_2 = ScalarValue::Float64(Some(123.));
