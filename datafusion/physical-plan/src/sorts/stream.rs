@@ -76,6 +76,36 @@ impl FusedStreams {
     }
 }
 
+/// A pair pf Arc<Rows> that can be reused
+#[derive(Debug)]
+struct ReusableRows {
+    // inner[stream_idx] holds a two Arcs:
+    // at start of a new poll
+    // .0 is the rows from the previous poll (at start),
+    // .1 is the one that is being written to
+    // at end of a poll, .0 will be swapped with .1,
+    inner: Vec<[Option<Arc<Rows>>; 2]>,
+}
+
+impl ReusableRows {
+    // return a Rows for writing,
+    // does not clone if the existing rows can be reused
+    fn take_next(&mut self, stream_idx: usize) -> Result<Rows> {
+        Arc::try_unwrap(self.inner[stream_idx][1].take().unwrap()).map_err(|_| {
+            internal_datafusion_err!(
+                "Rows from RowCursorStream is still in use by consumer"
+            )
+        })
+    }
+    // save the Rows
+    fn save(&mut self, stream_idx: usize, rows: Arc<Rows>) {
+        self.inner[stream_idx][1] = Some(Arc::clone(&rows));
+        // swap the curent with the previous one, so that the next poll can reuse the Rows from the previous poll
+        let [a, b] = &mut self.inner[stream_idx];
+        std::mem::swap(a, b);
+    }
+}
+
 /// A [`PartitionedStream`] that wraps a set of [`SendableRecordBatchStream`]
 /// and computes [`RowValues`] based on the provided [`PhysicalSortExpr`]
 /// Note: the stream returns an error if the consumer buffers more than one RowValues (i.e. holds on to two RowValues
@@ -92,7 +122,7 @@ pub struct RowCursorStream {
     reservation: MemoryReservation,
     /// Allocated rows for each partition, we keep two to allow for buffering one
     /// in the consumer of the stream
-    rows: Vec<[Option<Arc<Rows>>; 2]>,
+    rows: ReusableRows,
 }
 
 impl RowCursorStream {
@@ -125,7 +155,7 @@ impl RowCursorStream {
             reservation,
             column_expressions: expressions.iter().map(|x| Arc::clone(&x.expr)).collect(),
             streams: FusedStreams(streams),
-            rows,
+            rows: ReusableRows { inner: rows },
         })
     }
 
@@ -141,12 +171,7 @@ impl RowCursorStream {
             .collect::<Result<Vec<_>>>()?;
 
         // At this point, ownership should of this Rows should be unique
-        let mut rows = Arc::try_unwrap(self.rows[stream_idx][1].take().unwrap())
-            .map_err(|_| {
-                internal_datafusion_err!(
-                    "Rows from RowCursorStream is still in use by consumer"
-                )
-            })?;
+        let mut rows = self.rows.take_next(stream_idx)?;
 
         rows.clear();
 
@@ -155,11 +180,7 @@ impl RowCursorStream {
 
         let rows = Arc::new(rows);
 
-        self.rows[stream_idx][1] = Some(Arc::clone(&rows));
-
-        // swap the curent with the previous one, so that the next poll can reuse the Rows from the previous poll
-        let [a, b] = &mut self.rows[stream_idx];
-        std::mem::swap(a, b);
+        self.rows.save(stream_idx, Arc::clone(&rows));
 
         // track the memory in the newly created Rows.
         let mut rows_reservation = self.reservation.new_empty();
