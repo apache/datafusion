@@ -143,7 +143,7 @@ impl RowCursorStream {
         // At this point, ownership should of this Rows should be unique
         let mut rows = Arc::try_unwrap(self.rows[stream_idx][1].take().unwrap())
             .map_err(|_| {
-                DataFusionError::Internal(
+                internal_datafusion_err!(
                     "Rows from RowCursorStream is still in use by consumer".to_string(),
                 )
             })?;
