@@ -262,9 +262,9 @@ impl DisplayAs for BoundedWindowAggExec {
                     .iter()
                     .map(|e| {
                         format!(
-                            "{}: {:?}, frame: {:?}",
+                            "{}: {}, frame: {}",
                             e.name().to_owned(),
-                            e.field(),
+                            e.field().unwrap(),
                             e.get_window_frame()
                         )
                     })
