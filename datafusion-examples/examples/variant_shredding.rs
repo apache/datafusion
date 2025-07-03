@@ -25,7 +25,9 @@ use async_trait::async_trait;
 use datafusion::assert_batches_eq;
 use datafusion::catalog::memory::DataSourceExec;
 use datafusion::catalog::{Session, TableProvider};
-use datafusion::common::tree_node::{Transformed, TreeNodeRecursion};
+use datafusion::common::tree_node::{
+    Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
+};
 use datafusion::common::{assert_contains, DFSchema, Result};
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::physical_plan::{FileScanConfigBuilder, ParquetSource};
@@ -343,6 +345,17 @@ struct ShreddedVariantRewriter;
 
 impl PhysicalExprSchemaRewriteHook for ShreddedVariantRewriter {
     fn rewrite(
+        &self,
+        expr: Arc<dyn PhysicalExpr>,
+        physical_file_schema: &Schema,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        expr.transform(|expr| self.rewrite_impl(expr, physical_file_schema))
+            .data()
+    }
+}
+
+impl ShreddedVariantRewriter {
+    fn rewrite_impl(
         &self,
         expr: Arc<dyn PhysicalExpr>,
         physical_file_schema: &Schema,
