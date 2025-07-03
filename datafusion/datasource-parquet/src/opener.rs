@@ -122,7 +122,7 @@ impl FileOpener for ParquetOpener {
         let schema_adapter = self
             .schema_adapter_factory
             .create(projected_schema, Arc::clone(&self.logical_file_schema));
-        let predicate = self.predicate.clone();
+        let mut predicate = self.predicate.clone();
         let logical_file_schema = Arc::clone(&self.logical_file_schema);
         let partition_fields = self.partition_fields.clone();
         let reorder_predicates = self.reorder_filters;
@@ -238,9 +238,21 @@ impl FileOpener for ParquetOpener {
                 }
             }
 
+            predicate = predicate
+                .map(|p| {
+                    if let Some(predicate_rewrite_hook) = predicate_rewrite_hook.as_ref()
+                    {
+                        predicate_rewrite_hook
+                            .rewrite(Arc::clone(&p), &physical_file_schema)
+                    } else {
+                        Ok(p)
+                    }
+                })
+                .transpose()?;
+
             // Adapt the predicate to the physical file schema.
             // This evaluates missing columns and inserts any necessary casts.
-            let predicate = predicate
+            predicate = predicate
                 .map(|p| {
                     let rewriter = PhysicalExprSchemaRewriter::new(
                         &physical_file_schema,
@@ -260,23 +272,6 @@ impl FileOpener for ParquetOpener {
                     })
                 })
                 .transpose()?
-                .transpose()?;
-
-            // if let (Some(predicate_rewrite_hook), Some(predicate)) = (predicate_rewrite_hook.as_ref(), predicate.as_ref())
-            // {
-            //     predicate = predicate_rewrite_hook.rewrite(Arc::clone(&predicate), physical_file_schema)?;
-            // };
-
-            let predicate = predicate
-                .map(|p| {
-                    if let Some(predicate_rewrite_hook) = predicate_rewrite_hook.as_ref()
-                    {
-                        predicate_rewrite_hook
-                            .rewrite(Arc::clone(&p), &physical_file_schema)
-                    } else {
-                        Ok(p)
-                    }
-                })
                 .transpose()?;
 
             // Build predicates for this specific file
