@@ -82,44 +82,6 @@ pub enum SchemaSource {
 /// If not specified, a [`DefaultSchemaAdapterFactory`] will be used, which handles
 /// basic schema compatibility cases.
 ///
-/// # Complete Example: Schema Evolution Setup
-/// ```rust
-/// # use std::sync::Arc;
-/// # use datafusion::datasource::listing::{ListingTableConfig, ListingOptions, ListingTableUrl};
-/// # use datafusion::datasource::file_format::parquet::ParquetFormat;
-/// # use datafusion::datasource::schema_adapter::{SchemaAdapterFactory, SchemaAdapter};
-/// # use arrow::datatypes::{Schema, Field, DataType, SchemaRef};
-/// #
-/// # // Custom schema adapter for handling schema evolution
-/// # #[derive(Debug)]
-/// # struct EvolutionSchemaAdapterFactory;
-/// # impl SchemaAdapterFactory for EvolutionSchemaAdapterFactory {
-/// #     fn create(&self, projected_table_schema: SchemaRef, file_schema: SchemaRef) -> Box<dyn SchemaAdapter> {
-/// #         unimplemented!("Custom schema adapter implementation")
-/// #     }
-/// # }
-/// #
-/// # let table_path = ListingTableUrl::parse("file:///path/to/data").unwrap();
-///
-/// // Define expected table schema (what queries will see)
-/// let table_schema = Arc::new(Schema::new(vec![
-///     Field::new("id", DataType::Int64, false),
-///     Field::new("name", DataType::Utf8, true),
-///     Field::new("created_at", DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, None), true),
-/// ]));
-///
-/// // Configure file format options
-/// let options = ListingOptions::new(Arc::new(ParquetFormat::default()))
-///     .with_file_extension(".parquet")
-///     .with_collect_stat(true);
-///
-/// // Build configuration with schema evolution support
-/// let config = ListingTableConfig::new(table_path)
-///     .with_listing_options(options)
-///     .with_schema(table_schema)
-///     .with_schema_adapter_factory(Arc::new(EvolutionSchemaAdapterFactory));
-/// ```
-///
 #[derive(Debug, Clone, Default)]
 pub struct ListingTableConfig {
     /// Paths on the `ObjectStore` for creating `ListingTable`.
