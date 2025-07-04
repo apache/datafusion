@@ -29,6 +29,16 @@ use datafusion_common::{
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 
 use crate::expressions::{self, CastExpr, Column};
+pub trait PhysicalExprSchemaRewriteHook: Send + Sync + std::fmt::Debug {
+    /// Rewrite a physical expression to match the target schema
+    ///
+    /// This method should return a transformed expression that matches the target schema.
+    fn rewrite(
+        &self,
+        expr: Arc<dyn PhysicalExpr>,
+        physical_file_schema: &Schema,
+    ) -> Result<Arc<dyn PhysicalExpr>>;
+}
 
 /// Builder for rewriting physical expressions to match different schemas.
 ///
@@ -90,7 +100,8 @@ impl<'a> PhysicalExprSchemaRewriter<'a> {
     /// 2. Handles missing columns by inserting null literals
     /// 3. Casts columns when logical and physical schemas have different types
     pub fn rewrite(&self, expr: Arc<dyn PhysicalExpr>) -> Result<Arc<dyn PhysicalExpr>> {
-        expr.transform(|expr| self.rewrite_expr(expr)).data()
+        expr.transform(|expr| self.rewrite_expr(Arc::clone(&expr)))
+            .data()
     }
 
     fn rewrite_expr(
@@ -109,7 +120,7 @@ impl<'a> PhysicalExprSchemaRewriter<'a> {
         expr: Arc<dyn PhysicalExpr>,
         column: &Column,
     ) -> Result<Transformed<Arc<dyn PhysicalExpr>>> {
-        // Get the logical field for this column
+        // Get the logical field for this column if it exists in the logical schema
         let logical_field = match self.logical_file_schema.field_with_name(column.name())
         {
             Ok(field) => field,
@@ -118,10 +129,22 @@ impl<'a> PhysicalExprSchemaRewriter<'a> {
                 if let Some(partition_value) = self.get_partition_value(column.name()) {
                     return Ok(Transformed::yes(expressions::lit(partition_value)));
                 }
-                // If the column is not found in the logical schema and is not a partition value, return an error
-                // This should probably never be hit unless something upstream broke, but nontheless it's better
-                // for us to return a handleable error than to panic / do something unexpected.
-                return Err(e.into());
+                // This can be hit if a custom rewrite injected a reference to a column that doesn't exist in the logical schema.
+                // For example, a pre-computed column that is kept only in the physical schema.
+                // If the column exists in the physical schema, we can still use it.
+                if let Ok(physical_field) =
+                    self.physical_file_schema.field_with_name(column.name())
+                {
+                    // If the column exists in the physical schema, we can use it in place of the logical column.
+                    // This is nice to users because if they do a rewrite that results in something like `phyiscal_int32_col = 123u64`
+                    // we'll at least handle the casts for them.
+                    physical_field
+                } else {
+                    // A completely unknwon column that doesn't exist in either schema!
+                    // This should probably never be hit unless something upstream broke, but nontheless it's better
+                    // for us to return a handleable error than to panic / do something unexpected.
+                    return Err(e.into());
+                }
             }
         };
 
