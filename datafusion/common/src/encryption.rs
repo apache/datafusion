@@ -30,9 +30,9 @@ pub struct FileEncryptionProperties;
 
 #[cfg(feature = "parquet")]
 use crate::config::ParquetEncryptionOptions;
+pub use crate::config::{ConfigFileDecryptionProperties, ConfigFileEncryptionProperties};
 #[cfg(feature = "parquet")]
 use parquet::file::properties::WriterPropertiesBuilder;
-pub use crate::config::{ConfigFileDecryptionProperties, ConfigFileEncryptionProperties};
 
 #[cfg(feature = "parquet")]
 pub fn add_crypto_to_writer_properties(
