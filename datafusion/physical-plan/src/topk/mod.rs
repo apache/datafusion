@@ -133,7 +133,8 @@ pub struct TopK {
 pub struct TopKDynamicFilters {
     /// The current *global* threshold for the dynamic filter.
     /// This is shared across all partitions and is updated by any of them.
-    thresholds: Arc<RwLock<Option<Vec<ScalarValue>>>>,
+    /// Stored as row bytes for efficient comparison.
+    threshold_row: Arc<RwLock<Option<Vec<u8>>>>,
     /// The expression used to evaluate the dynamic filter
     expr: Arc<DynamicFilterPhysicalExpr>,
 }
@@ -142,7 +143,7 @@ impl TopKDynamicFilters {
     /// Create a new `TopKDynamicFilters` with the given expression
     pub fn new(expr: Arc<DynamicFilterPhysicalExpr>) -> Self {
         Self {
-            thresholds: Arc::new(RwLock::new(None)),
+            threshold_row: Arc::new(RwLock::new(None)),
             expr,
         }
     }
@@ -341,94 +342,72 @@ impl TopK {
     /// (a > 2 OR (a = 2 AND b < 3))
     /// ```
     fn update_filter(&mut self) -> Result<()> {
-        let Some(thresholds) = self.heap.get_threshold_values(&self.expr)? else {
+        let Some(new_threshold_row) = self.heap.get_threshold_row() else {
             return Ok(());
         };
 
-        // Are the new thresholds more selective than our existing ones?
-        let should_update = {
-            if let Some(current) = self.filter.thresholds.write().as_mut() {
-                assert!(current.len() == thresholds.len());
-                // Check if new thresholds are more selective than current ones
-                let mut more_selective = false;
-                for ((current_value, new_value), sort_expr) in
-                    current.iter().zip(thresholds.iter()).zip(self.expr.iter())
-                {
-                    // Handle null cases
-                    let (current_is_null, new_is_null) =
-                        (current_value.is_null(), new_value.is_null());
+        // Extract filter expression reference before entering critical section
+        let filter_expr = Arc::clone(&self.filter.expr);
 
-                    match (current_is_null, new_is_null) {
-                        (true, true) => {
-                            // Both null, continue checking next values
-                        }
-                        (true, false) => {
-                            // Current is null, new is not null
-                            // For nulls_first: null < non-null, so new value is less selective
-                            // For nulls_last: null > non-null, so new value is more selective
-                            more_selective = !sort_expr.options.nulls_first;
-                            break;
-                        }
-                        (false, true) => {
-                            // Current is not null, new is null
-                            // For nulls_first: non-null > null, so new value is more selective
-                            // For nulls_last: non-null < null, so new value is less selective
-                            more_selective = sort_expr.options.nulls_first;
-                            break;
-                        }
-                        (false, false) => {
-                            // Neither is null, compare values
-                            match current_value.partial_cmp(new_value) {
-                                Some(ordering) => {
-                                    match ordering {
-                                        Ordering::Equal => {
-                                            // Continue checking next values
-                                        }
-                                        Ordering::Less => {
-                                            // For descending sort: new > current means more selective
-                                            // For ascending sort: new > current means less selective
-                                            more_selective = sort_expr.options.descending;
-                                            break;
-                                        }
-                                        Ordering::Greater => {
-                                            // For descending sort: new < current means less selective
-                                            // For ascending sort: new < current means more selective
-                                            more_selective =
-                                                !sort_expr.options.descending;
-                                            break;
-                                        }
-                                    }
-                                }
-                                None => {
-                                    // If values can't be compared, don't update
-                                    more_selective = false;
-                                    break;
-                                }
-                            }
-                        }
+        // Check if we need to update and do both threshold and filter update atomically
+        {
+            let mut threshold_guard = self.filter.threshold_row.write();
+            if let Some(current_row) = threshold_guard.as_ref() {
+                match current_row.as_slice().cmp(new_threshold_row) {
+                    Ordering::Less => {
+                        // new > current, so new threshold is more selective
+                        // Update threshold and filter atomically to prevent race conditions
+                        *threshold_guard = Some(new_threshold_row.to_vec());
+
+                        // Extract scalar values for filter expression creation
+                        let thresholds =
+                            match self.heap.get_threshold_values(&self.expr)? {
+                                Some(t) => t,
+                                None => return Ok(()),
+                            };
+
+                        // Update the filter expression while still holding the lock
+                        Self::update_filter_expression(
+                            &filter_expr,
+                            &self.expr,
+                            thresholds,
+                        )?;
+                    }
+                    Ordering::Equal | Ordering::Greater => {
+                        // Same threshold or current is more selective, no need to update
                     }
                 }
-                // If the new thresholds are more selective, update the current ones
-                if more_selective {
-                    *current = thresholds.clone();
-                }
-                more_selective
             } else {
                 // No current thresholds, so update with the new ones
-                true
+                *threshold_guard = Some(new_threshold_row.to_vec());
+
+                // Extract scalar values for filter expression creation
+                let thresholds = match self.heap.get_threshold_values(&self.expr)? {
+                    Some(t) => t,
+                    None => return Ok(()),
+                };
+
+                // Update the filter expression while still holding the lock
+                Self::update_filter_expression(&filter_expr, &self.expr, thresholds)?;
             }
         };
 
-        if !should_update {
-            return Ok(());
-        }
+        Ok(())
+    }
 
+    /// Update the filter expression with the given thresholds.
+    /// This should only be called while holding the threshold lock.
+    fn update_filter_expression(
+        filter_expr: &DynamicFilterPhysicalExpr,
+        sort_exprs: &[PhysicalSortExpr],
+        thresholds: Vec<ScalarValue>,
+    ) -> Result<()> {
         // Create filter expressions for each threshold
         let mut filters: Vec<Arc<dyn PhysicalExpr>> =
             Vec::with_capacity(thresholds.len());
 
         let mut prev_sort_expr: Option<Arc<dyn PhysicalExpr>> = None;
-        for (sort_expr, value) in self.expr.iter().zip(thresholds.iter()) {
+        for (sort_expr, value) in sort_exprs.iter().zip(thresholds.iter()) {
             // Create the appropriate operator based on sort order
             let op = if sort_expr.options.descending {
                 // For descending sort, we want col > threshold (exclude smaller values)
@@ -502,7 +481,7 @@ impl TopK {
 
         if let Some(predicate) = dynamic_predicate {
             if !predicate.eq(&lit(true)) {
-                self.filter.expr.update(predicate)?;
+                filter_expr.update(predicate)?;
             }
         }
 
@@ -840,6 +819,15 @@ impl TopKHeap {
             + (self.inner.capacity() * size_of::<TopKRow>())
             + self.store.size()
             + self.owned_bytes
+    }
+
+    fn get_threshold_row(&self) -> Option<&[u8]> {
+        // If the heap doesn't have k elements yet, we can't create thresholds
+        let max_row = self.max()?;
+
+        // Return the row bytes directly - this is much more efficient
+        // than extracting ScalarValues and comparing them
+        Some(&max_row.row)
     }
 
     fn get_threshold_values(
