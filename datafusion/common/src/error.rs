@@ -164,7 +164,7 @@ macro_rules! context {
 #[derive(Debug)]
 pub enum SchemaError {
     /// Schema contains a (possibly) qualified and unqualified field with same unqualified name
-    AmbiguousReference { field: Column },
+    AmbiguousReference { field: Box<Column> },
     /// Schema contains duplicate qualified field name
     DuplicateQualifiedField {
         qualifier: Box<TableReference>,
@@ -951,14 +951,18 @@ pub fn add_possible_columns_to_diag(
 
 #[cfg(test)]
 mod test {
+    use super::*;
+
     use std::mem::size_of;
     use std::sync::Arc;
 
-    use crate::error::{DataFusionError, GenericError};
     use arrow::error::ArrowError;
 
     #[test]
-    fn test_datafusion_error_size() {
+    fn test_error_size() {
+        // Since Errors influence the size of Result which influence the size of the stack
+        // please don't allow this to grow larger
+        assert_eq!(size_of::<SchemaError>(), 40);
         assert_eq!(size_of::<DataFusionError>(), 40);
     }
 
@@ -1128,7 +1132,7 @@ mod test {
         );
 
         // assert wrapping other Error
-        let generic_error: GenericError = Box::new(std::io::Error::other("io error"));
+        let generic_error: GenericError = Box::new(io::Error::other("io error"));
         let datafusion_error: DataFusionError = generic_error.into();
         println!("{}", datafusion_error.strip_backtrace());
         assert_eq!(
@@ -1139,7 +1143,7 @@ mod test {
 
     #[test]
     fn external_error_no_recursive() {
-        let generic_error_1: GenericError = Box::new(std::io::Error::other("io error"));
+        let generic_error_1: GenericError = Box::new(io::Error::other("io error"));
         let external_error_1: DataFusionError = generic_error_1.into();
         let generic_error_2: GenericError = Box::new(external_error_1);
         let external_error_2: DataFusionError = generic_error_2.into();
@@ -1159,7 +1163,7 @@ mod test {
 
     /// Model what happens when using arrow kernels in DataFusion
     /// code: need to turn an ArrowError into a DataFusionError
-    fn return_datafusion_error() -> crate::error::Result<()> {
+    fn return_datafusion_error() -> Result<()> {
         // Expect the '?' to work
         Err(ArrowError::SchemaError("bar".to_string()).into())
     }
