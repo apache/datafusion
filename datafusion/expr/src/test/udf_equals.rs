@@ -37,6 +37,13 @@ impl ScalarUDFImpl for ParamUdf {
     fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         not_impl_err!("not used")
     }
+    fn equals(&self, other: &dyn ScalarUDFImpl) -> bool {
+        if let Some(other) = other.as_any().downcast_ref::<ParamUdf>() {
+            self.param == other.param && self.type_id() == other.type_id()
+        } else {
+            false
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -69,6 +76,13 @@ impl ScalarUDFImpl for AnotherParamUdf {
     fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         not_impl_err!("not used")
     }
+    fn equals(&self, other: &dyn ScalarUDFImpl) -> bool {
+        if let Some(other) = other.as_any().downcast_ref::<AnotherParamUdf>() {
+            self.type_id() == other.type_id()
+        } else {
+            false
+        }
+    }
 }
 
 #[test]
@@ -86,7 +100,7 @@ fn different_types_not_equal() {
 }
 
 #[test]
-fn same_instances_equal() {
+fn same_state_equal() {
     let udf1 = ScalarUDF::from(ParamUdf::new(1));
     let udf2 = ScalarUDF::from(ParamUdf::new(1));
     assert_eq!(udf1, udf2);
