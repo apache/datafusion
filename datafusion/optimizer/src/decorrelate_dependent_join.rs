@@ -1001,6 +1001,26 @@ mod tests {
         let plan = LogicalPlanBuilder::from(outer_table.clone())
             .filter(exists(sq1))?
             .build()?;
+        assert_decorrelate!(plan, @r"
+        Projection: outer_table.a, outer_table.b, outer_table.c [a:UInt32, b:UInt32, c:UInt32]
+          Filter: __exists_sq_1.output AND __exists_sq_2.output [a:UInt32, b:UInt32, c:UInt32, __exists_sq_1.output:Boolean, __exists_sq_2.output:Boolean]
+            Projection: outer_table.a, outer_table.b, outer_table.c, __exists_sq_1.output, mark AS __exists_sq_2.output [a:UInt32, b:UInt32, c:UInt32, __exists_sq_1.output:Boolean, __exists_sq_2.output:Boolean]
+              LeftMark Join(ComparisonJoin):  Filter: outer_table.c IS NOT DISTINCT FROM delim_scan_2.outer_table_c [a:UInt32, b:UInt32, c:UInt32, __exists_sq_1.output:Boolean, mark:Boolean]
+                Projection: outer_table.a, outer_table.b, outer_table.c, mark AS __exists_sq_1.output [a:UInt32, b:UInt32, c:UInt32, __exists_sq_1.output:Boolean]
+                  LeftMark Join(ComparisonJoin):  Filter: outer_table.b IS NOT DISTINCT FROM delim_scan_1.outer_table_b [a:UInt32, b:UInt32, c:UInt32, mark:Boolean]
+                    TableScan: outer_table [a:UInt32, b:UInt32, c:UInt32]
+                    Filter: inner_table_lv1.b = delim_scan_1.outer_table_b [a:UInt32, b:UInt32, c:UInt32, outer_table_b:UInt32;N]
+                      Inner Join(DelimJoin):  Filter: Boolean(true) [a:UInt32, b:UInt32, c:UInt32, outer_table_b:UInt32;N]
+                        TableScan: inner_table_lv1 [a:UInt32, b:UInt32, c:UInt32]
+                        SubqueryAlias: delim_scan_1 [outer_table_b:UInt32;N]
+                          DelimGet: outer_table.b [outer_table_b:UInt32;N]
+                Filter: inner_table_lv1.c = delim_scan_2.outer_table_c [a:UInt32, b:UInt32, c:UInt32, outer_table_c:UInt32;N]
+                  Inner Join(DelimJoin):  Filter: Boolean(true) [a:UInt32, b:UInt32, c:UInt32, outer_table_c:UInt32;N]
+                    TableScan: inner_table_lv1 [a:UInt32, b:UInt32, c:UInt32]
+                    SubqueryAlias: delim_scan_2 [outer_table_c:UInt32;N]
+                      DelimGet: outer_table.c [outer_table_c:UInt32;N]
+        ");
+        Ok(())
     }
     #[test]
     fn two_dependent_joins_at_the_same_depth() -> Result<()> {
