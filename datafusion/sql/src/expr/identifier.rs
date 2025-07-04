@@ -53,13 +53,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             let normalize_ident = self.ident_normalizer.normalize(id);
 
             // Check for qualified field with unqualified name
-            if let Ok((qualifier, _)) =
+            if let Ok((qualifier, field)) =
                 schema.qualified_field_with_unqualified_name(normalize_ident.as_str())
             {
-                let mut column = Column::new(
-                    qualifier.filter(|q| q.table() != UNNAMED_TABLE).cloned(),
-                    normalize_ident,
-                );
+                let filtered_qualifier = qualifier.filter(|q| q.table() != UNNAMED_TABLE).cloned();
+                let mut column = Column::new(filtered_qualifier, field.name().clone());
                 if self.options.collect_spans {
                     if let Some(span) = Span::try_from_sqlparser_span(id_span) {
                         column.spans_mut().add_span(span);

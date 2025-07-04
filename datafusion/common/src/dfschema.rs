@@ -337,6 +337,7 @@ impl DFSchema {
         qualifier: Option<&TableReference>,
         name: &str,
     ) -> Option<usize> {
+        // First try exact match for performance
         let mut matches = self
             .iter()
             .enumerate()
@@ -349,6 +350,31 @@ impl DFSchema {
                 (Some(_), None) => false,
                 // field to lookup is unqualified, no need to compare qualifier
                 (None, Some(_)) | (None, None) => f.name() == name,
+            })
+            .map(|(idx, _)| idx);
+
+        if let Some(idx) = matches.next() {
+            return Some(idx);
+        }
+
+        // If no exact match, try case-insensitive match
+        let mut matches = self
+            .iter()
+            .enumerate()
+            .filter(|(_, (q, f))| match (qualifier, q) {
+                // field to lookup is qualified.
+                // current field is qualified and not shared between relations, compare both
+                // qualifier and name.
+                (Some(q), Some(field_q)) => {
+                    q.resolved_eq(field_q)
+                        && f.name().to_ascii_lowercase() == name.to_ascii_lowercase()
+                }
+                // field to lookup is qualified but current field is unqualified.
+                (Some(_), None) => false,
+                // field to lookup is unqualified, no need to compare qualifier
+                (None, Some(_)) | (None, None) => {
+                    f.name().to_ascii_lowercase() == name.to_ascii_lowercase()
+                }
             })
             .map(|(idx, _)| idx);
         matches.next()
@@ -429,9 +455,24 @@ impl DFSchema {
 
     /// Find all fields that match the given name
     pub fn fields_with_unqualified_name(&self, name: &str) -> Vec<&Field> {
-        self.fields()
+        // First try exact match
+        let exact_matches = self
+            .fields()
             .iter()
             .filter(|field| field.name() == name)
+            .map(|f| f.as_ref())
+            .collect::<Vec<_>>();
+
+        if !exact_matches.is_empty() {
+            return exact_matches;
+        }
+
+        // If no exact match, try case-insensitive match
+        self.fields()
+            .iter()
+            .filter(|field| {
+                field.name().to_ascii_lowercase() == name.to_ascii_lowercase()
+            })
             .map(|f| f.as_ref())
             .collect()
     }
@@ -441,16 +482,44 @@ impl DFSchema {
         &self,
         name: &str,
     ) -> Vec<(Option<&TableReference>, &Field)> {
-        self.iter()
+        // First try exact match
+        let exact_matches = self
+            .iter()
             .filter(|(_, field)| field.name() == name)
+            .map(|(qualifier, field)| (qualifier, field.as_ref()))
+            .collect::<Vec<_>>();
+
+        if !exact_matches.is_empty() {
+            return exact_matches;
+        }
+
+        // If no exact match, try case-insensitive match
+        self.iter()
+            .filter(|(_, field)| {
+                field.name().to_ascii_lowercase() == name.to_ascii_lowercase()
+            })
             .map(|(qualifier, field)| (qualifier, field.as_ref()))
             .collect()
     }
 
     /// Find all fields that match the given name and convert to column
     pub fn columns_with_unqualified_name(&self, name: &str) -> Vec<Column> {
-        self.iter()
+        // First try exact match
+        let exact_matches = self
+            .iter()
             .filter(|(_, field)| field.name() == name)
+            .map(|(qualifier, field)| Column::new(qualifier.cloned(), field.name()))
+            .collect::<Vec<_>>();
+
+        if !exact_matches.is_empty() {
+            return exact_matches;
+        }
+
+        // If no exact match, try case-insensitive match
+        self.iter()
+            .filter(|(_, field)| {
+                field.name().to_ascii_lowercase() == name.to_ascii_lowercase()
+            })
             .map(|(qualifier, field)| Column::new(qualifier.cloned(), field.name()))
             .collect()
     }
@@ -525,7 +594,15 @@ impl DFSchema {
 
     /// Find if the field exists with the given name
     pub fn has_column_with_unqualified_name(&self, name: &str) -> bool {
-        self.fields().iter().any(|field| field.name() == name)
+        // First try exact match
+        if self.fields().iter().any(|field| field.name() == name) {
+            return true;
+        }
+
+        // If no exact match, try case-insensitive match
+        self.fields()
+            .iter()
+            .any(|field| field.name().to_ascii_lowercase() == name.to_ascii_lowercase())
     }
 
     /// Find if the field exists with the given qualified name
@@ -534,8 +611,19 @@ impl DFSchema {
         qualifier: &TableReference,
         name: &str,
     ) -> bool {
-        self.iter()
+        // First try exact match
+        if self
+            .iter()
             .any(|(q, f)| q.map(|q| q.eq(qualifier)).unwrap_or(false) && f.name() == name)
+        {
+            return true;
+        }
+
+        // If no exact match, try case-insensitive match
+        self.iter().any(|(q, f)| {
+            q.map(|q| q.eq(qualifier)).unwrap_or(false)
+                && f.name().to_ascii_lowercase() == name.to_ascii_lowercase()
+        })
     }
 
     /// Find if the field exists with the given qualified column
@@ -692,9 +780,9 @@ impl DFSchema {
                 let iter1 = fields1.iter();
                 let iter2 = fields2.iter();
                 fields1.len() == fields2.len() &&
-                        // all fields have to be the same
+                    // all fields have to be the same
                     iter1
-                    .zip(iter2)
+                        .zip(iter2)
                         .all(|(f1, f2)| Self::field_is_logically_equal(f1, f2))
             }
             (DataType::Union(fields1, _), DataType::Union(fields2, _)) => {
@@ -751,9 +839,9 @@ impl DFSchema {
                 let iter1 = fields1.iter();
                 let iter2 = fields2.iter();
                 fields1.len() == fields2.len() &&
-                        // all fields have to be the same
+                    // all fields have to be the same
                     iter1
-                    .zip(iter2)
+                        .zip(iter2)
                         .all(|(f1, f2)| Self::field_is_semantically_equal(f1, f2))
             }
             (DataType::Union(fields1, _), DataType::Union(fields2, _)) => {
