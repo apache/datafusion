@@ -951,10 +951,16 @@ pub fn add_possible_columns_to_diag(
 
 #[cfg(test)]
 mod test {
+    use std::mem::size_of;
     use std::sync::Arc;
 
     use crate::error::{DataFusionError, GenericError};
     use arrow::error::ArrowError;
+
+    #[test]
+    fn test_datafusion_error_size() {
+        assert_eq!(size_of::<DataFusionError>(), 40);
+    }
 
     #[test]
     fn datafusion_error_to_arrow() {
