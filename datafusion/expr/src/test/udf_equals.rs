@@ -84,3 +84,17 @@ fn different_types_not_equal() {
     let udf2 = ScalarUDF::from(AnotherParamUdf::new());
     assert_ne!(udf1, udf2);
 }
+
+#[test]
+fn same_instances_equal() {
+    let udf1 = ScalarUDF::from(ParamUdf::new(1));
+    let udf2 = ScalarUDF::from(ParamUdf::new(1));
+    assert_eq!(udf1, udf2);
+}
+
+#[test]
+fn same_types_equal() {
+    let udf1 = ScalarUDF::from(AnotherParamUdf::new());
+    let udf2 = ScalarUDF::from(AnotherParamUdf::new());
+    assert_eq!(udf1, udf2);
+}
