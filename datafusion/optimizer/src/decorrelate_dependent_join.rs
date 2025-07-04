@@ -979,7 +979,31 @@ mod tests {
         }};
     }
     #[test]
-    fn buggy_dependent_join_at_the_same_depth() -> Result<()> {
+    fn correlated_subquery_nested_in_uncorrelated_subquery() -> Result<()> {
+        let outer_table = test_table_scan_with_name("outer_table")?;
+        let inner_table_lv1 = test_table_scan_with_name("inner_table_lv1")?;
+        let inner_table_lv2 = test_table_scan_with_name("inner_table_lv2")?;
+
+        let sq1 = Arc::new(
+            LogicalPlanBuilder::from(inner_table_lv2.clone())
+                .filter(
+                    col("inner_table_lv2.b")
+                        .eq(out_ref_col(ArrowDataType::UInt32, "inner_table_1.b")),
+                )?
+                .build()?,
+        );
+        let sq2 = Arc::new(
+            LogicalPlanBuilder::from(inner_table_lv1.clone())
+                .filter(exists(sq2))?
+                .build()?,
+        );
+
+        let plan = LogicalPlanBuilder::from(outer_table.clone())
+            .filter(exists(sq1))?
+            .build()?;
+    }
+    #[test]
+    fn two_dependent_joins_at_the_same_depth() -> Result<()> {
         let outer_table = test_table_scan_with_name("outer_table")?;
         let inner_table_lv1 = test_table_scan_with_name("inner_table_lv1")?;
 
@@ -1003,9 +1027,7 @@ mod tests {
         let plan = LogicalPlanBuilder::from(outer_table.clone())
             .filter(exists(sq1).and(exists(sq2)))?
             .build()?;
-        // print_graphviz(&plan);
 
-        println!("{plan}");
         assert_decorrelate!(plan, @r"
         Projection: outer_table.a, outer_table.b, outer_table.c [a:UInt32, b:UInt32, c:UInt32]
           Filter: __exists_sq_1.output AND __exists_sq_2.output [a:UInt32, b:UInt32, c:UInt32, __exists_sq_1.output:Boolean, __exists_sq_2.output:Boolean]
@@ -1027,8 +1049,12 @@ mod tests {
         ");
         Ok(())
     }
+
+    // Given a plan with 2 level of subquery
+    // This test the fact that correlated columns from the top
+    // are propagated to the very bottom subquery
     #[test]
-    fn buggy_correlated_column_ref_from_parent() -> Result<()> {
+    fn correlated_column_ref_from_parent() -> Result<()> {
         let outer_table = test_table_scan_with_name("outer_table")?;
         let inner_table_lv1 = test_table_scan_with_name("inner_table_lv1")?;
 
@@ -1056,7 +1082,6 @@ mod tests {
         let plan = LogicalPlanBuilder::from(outer_table.clone())
             .filter(scalar_subquery(scalar_sq_level1).eq(col("outer_table.a")))?
             .build()?;
-        // print_graphviz(&plan);
 
         println!("{plan}");
         assert_decorrelate!(plan, @r"
