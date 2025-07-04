@@ -282,7 +282,7 @@ async fn run_test_file(
     };
     setup_scratch_dir(&relative_path)?;
 
-    let count: u64 = get_record_count(&path, "DataFusion".to_string());
+    let count: u64 = get_record_count(&path, "Datafusion".to_string());
     let pb = mp.add(ProgressBar::new(count));
 
     pb.set_style(mp_style);
@@ -295,7 +295,7 @@ async fn run_test_file(
             pb.clone(),
         ))
     });
-    runner.add_label("DataFusion");
+    runner.add_label("Datafusion");
     runner.with_column_validator(strict_column_validator);
     runner.with_normalizer(value_normalizer);
     runner.with_validator(validator);
@@ -444,7 +444,7 @@ async fn run_complete_file(
     };
     setup_scratch_dir(&relative_path)?;
 
-    let count: u64 = get_record_count(&path, "DataFusion".to_string());
+    let count: u64 = get_record_count(&path, "Datafusion".to_string());
     let pb = mp.add(ProgressBar::new(count));
 
     pb.set_style(mp_style);
