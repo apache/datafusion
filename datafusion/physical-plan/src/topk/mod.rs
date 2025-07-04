@@ -342,9 +342,12 @@ impl TopK {
     /// (a > 2 OR (a = 2 AND b < 3))
     /// ```
     fn update_filter(&mut self) -> Result<()> {
-        let Some(new_threshold_row) = self.heap.get_threshold_row() else {
+        // If the heap doesn't have k elements yet, we can't create thresholds
+        let Some(max_row) = self.heap.max() else {
             return Ok(());
         };
+
+        let new_threshold_row = &max_row.row;
 
         // Extract filter expression reference before entering critical section
         let filter_expr = Arc::clone(&self.filter.expr);
@@ -821,14 +824,6 @@ impl TopKHeap {
             + self.owned_bytes
     }
 
-    fn get_threshold_row(&self) -> Option<&[u8]> {
-        // If the heap doesn't have k elements yet, we can't create thresholds
-        let max_row = self.max()?;
-
-        // Return the row bytes directly - this is much more efficient
-        // than extracting ScalarValues and comparing them
-        Some(&max_row.row)
-    }
 
     fn get_threshold_values(
         &self,
