@@ -67,14 +67,17 @@ DataFusionError::SchemaError(
 The default implementation of the `equals` method in the `ScalarUDFImpl` trait has been updated. Previously, it compared only the type IDs, names, and signatures of UDFs. Now, it assumes UDFs are not equal unless their pointers are the same.
 
 **Impact:**
+
 - This change may affect any custom UDF implementations relying on the default `equals` behavior.
 - If your UDFs have internal state or additional properties that should be considered for equality, you must override the `equals` method to include those comparisons.
 
 **Action Required:**
+
 - Review your UDF implementations and ensure the `equals` method is overridden where necessary.
 - Update any tests or logic that depend on the previous default behavior.
 
 **Example:**
+
 ```rust
 impl ScalarUDFImpl for MyUdf {
     fn equals(&self, other: &dyn ScalarUDFImpl) -> bool {
@@ -86,6 +89,7 @@ impl ScalarUDFImpl for MyUdf {
     }
 }
 ```
+
 [#16677] https://github.com/apache/datafusion/issues/16677
 
 ### `datafusion.execution.collect_statistics` now defaults to `true`
@@ -791,4 +795,3 @@ take care of constructing the `TypeSignature` for you:
 - `Signature::array`
 
 [ticket]: https://github.com/apache/datafusion/issues/13286
-
