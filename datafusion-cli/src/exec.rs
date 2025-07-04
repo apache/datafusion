@@ -325,32 +325,23 @@ impl StatementExecutor {
         let adjusted = AdjustedPrintOptions::new(print_options.clone())
             .with_statement(&self.statement);
 
-        let plan = create_plan(ctx, self.statement.clone(), false).await?;
+        let plan = create_plan(ctx, self.statement, false).await?;
         let adjusted = adjusted.with_plan(&plan);
 
         let df = match ctx.execute_logical_plan(plan).await {
-            Ok(df) => df,
+            Ok(df) => Ok(df),
             Err(DataFusionError::ObjectStore(err))
-                if matches!(err.as_ref(), object_store::Error::Generic { store, source: _ } if "S3".eq_ignore_ascii_case(store))
+                if matches!(err.as_ref(), Generic { store, source: _ } if "S3".eq_ignore_ascii_case(store))
                     && self.statement_for_retry.is_some() =>
             {
-                {
-                    let Generic {
-                        store: _,
-                        source: _,
-                    } = err.as_ref()
-                    else {
-                        unreachable!()
-                    };
-                    warn!("S3 region is incorrect, auto-detecting the correct region (this may be slow). Consider updating your region configuration.");
-                    let plan =
-                        create_plan(ctx, self.statement_for_retry.take().unwrap(), true)
-                            .await?;
-                    ctx.execute_logical_plan(plan).await
-                }?
+                warn!("S3 region is incorrect, auto-detecting the correct region (this may be slow). Consider updating your region configuration.");
+                let plan =
+                    create_plan(ctx, self.statement_for_retry.take().unwrap(), true)
+                        .await?;
+                ctx.execute_logical_plan(plan).await
             }
-            Err(e) => return Err(e),
-        };
+            Err(e) => Err(e),
+        }?;
 
         Ok((df, adjusted))
     }
