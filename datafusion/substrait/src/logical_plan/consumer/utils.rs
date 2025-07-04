@@ -19,10 +19,10 @@ use crate::logical_plan::consumer::SubstraitConsumer;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit, UnionFields};
 use datafusion::common::{
     exec_err, not_impl_err, substrait_datafusion_err, substrait_err, DFSchema,
-    DFSchemaRef, TableReference,
+    DFSchemaRef,
 };
 use datafusion::logical_expr::expr::Sort;
-use datafusion::logical_expr::{Cast, Expr, ExprSchemable, LogicalPlanBuilder};
+use datafusion::logical_expr::{Cast, Expr, ExprSchemable};
 use std::collections::HashSet;
 use std::sync::Arc;
 use substrait::proto::sort_field::SortDirection;
@@ -35,33 +35,6 @@ use substrait::proto::SortField;
 // However, DF uses the timezone also for some arithmetic and display purposes (see e.g.
 // https://github.com/apache/arrow-rs/blob/ee5694078c86c8201549654246900a4232d531a9/arrow-cast/src/cast/mod.rs#L1749).
 pub(super) const DEFAULT_TIMEZONE: &str = "UTC";
-
-/// (Re)qualify the sides of a join if needed, i.e. if the columns from one side would otherwise
-/// conflict with the columns from the other.
-/// Substrait doesn't currently allow specifying aliases, neither for columns nor for tables. For
-/// Substrait the names don't matter since it only refers to columns by indices, however DataFusion
-/// requires columns to be uniquely identifiable, in some places (see e.g. DFSchema::check_names).
-pub(super) fn requalify_sides_if_needed(
-    left: LogicalPlanBuilder,
-    right: LogicalPlanBuilder,
-) -> datafusion::common::Result<(LogicalPlanBuilder, LogicalPlanBuilder)> {
-    let left_cols = left.schema().columns();
-    let right_cols = right.schema().columns();
-    if left_cols.iter().any(|l| {
-        right_cols.iter().any(|r| {
-            l == r || (l.name == r.name && (l.relation.is_none() || r.relation.is_none()))
-        })
-    }) {
-        // These names have no connection to the original plan, but they'll make the columns
-        // (mostly) unique.
-        Ok((
-            left.alias(TableReference::bare("left"))?,
-            right.alias(TableReference::bare("right"))?,
-        ))
-    } else {
-        Ok((left, right))
-    }
-}
 
 pub(super) fn next_struct_field_name(
     column_idx: usize,
