@@ -76,7 +76,7 @@ impl FusedStreams {
     }
 }
 
-/// A pair pf Arc<Rows> that can be reused
+/// A pair of `Arc<Rows>` that can be reused
 #[derive(Debug)]
 struct ReusableRows {
     // inner[stream_idx] holds a two Arcs:
