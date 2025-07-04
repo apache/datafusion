@@ -707,10 +707,30 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     /// [`Self::signature`]. Different instances of the same function type are
     /// therefore considered equal only if they are pointer equal.
     fn equals(&self, other: &dyn ScalarUDFImpl) -> bool {
-        std::ptr::eq(self.as_any(), other.as_any())
-            || (self.as_any().type_id() == other.as_any().type_id()
-                && self.name() == other.name()
-                && self.signature() == other.signature())
+        // if the pointers are the same, the UDFs are the same
+        if std::ptr::eq(self.as_any(), other.as_any()) {
+            return true;
+        }
+
+        // if the types are different, the UDFs are not the same
+        if self.as_any().type_id() != other.as_any().type_id() {
+            return false;
+        }
+
+        // if the names are different, the UDFs are not the same
+        if self.name() != other.name() {
+            return false;
+        }
+
+        // if the signatures are different, the UDFs are not the same
+        if self.signature() != other.signature() {
+            return false;
+        }
+
+        // if the types, names and signatures are the same, we can't know if they are the same so we
+        // assume they are not.
+        // If a UDF has internal state that should be compared, it should implement this method
+        false
     }
 
     /// Returns a hash value for this scalar UDF.
