@@ -357,8 +357,8 @@ impl TopK {
             let mut threshold_guard = self.filter.threshold_row.write();
             if let Some(current_row) = threshold_guard.as_ref() {
                 match current_row.as_slice().cmp(new_threshold_row) {
-                    Ordering::Less => {
-                        // new > current, so new threshold is more selective
+                    Ordering::Greater => {
+                        // new < current, so new threshold is more selective
                         // Update threshold and filter atomically to prevent race conditions
                         *threshold_guard = Some(new_threshold_row.to_vec());
 
@@ -376,7 +376,7 @@ impl TopK {
                             thresholds,
                         )?;
                     }
-                    Ordering::Equal | Ordering::Greater => {
+                    _ => {
                         // Same threshold or current is more selective, no need to update
                     }
                 }
