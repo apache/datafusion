@@ -2535,15 +2535,17 @@ mod tests {
 
         match plan {
             Err(DataFusionError::SchemaError(err, _)) => {
-                if let SchemaError::AmbiguousReference {
-                    field:
-                        Column {
-                            relation: Some(TableReference::Bare { table }),
-                            name,
-                            ..
-                        },
-                } = *err
-                {
+                if let SchemaError::AmbiguousReference { field } = *err {
+                    let Column {
+                        relation,
+                        name,
+                        spans: _,
+                    } = *field;
+                    let Some(TableReference::Bare { table }) = relation else {
+                        return plan_err!(
+                            "wrong relation: {relation:?}, expected table name"
+                        );
+                    };
                     assert_eq!(*"employee_csv", *table);
                     assert_eq!("id", &name);
                     Ok(())
