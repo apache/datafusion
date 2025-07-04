@@ -696,16 +696,39 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
 
     /// Return true if this scalar UDF is equal to the other.
     ///
-    /// Allows customizing the equality of scalar UDFs.
-    /// Must be consistent with [`Self::hash_value`] and follow the same rules as [`Eq`]:
+    /// This method allows customizing the equality of scalar UDFs. It must adhere to the rules of equivalence:
     ///
-    /// - reflexive: `a.equals(a)`;
-    /// - symmetric: `a.equals(b)` implies `b.equals(a)`;
-    /// - transitive: `a.equals(b)` and `b.equals(c)` implies `a.equals(c)`.
+    /// - Reflexive: `a.equals(a)` must return true.
+    /// - Symmetric: `a.equals(b)` implies `b.equals(a)`.
+    /// - Transitive: `a.equals(b)` and `b.equals(c)` implies `a.equals(c)`.
     ///
-    /// By default, compares [`Self::as_any().type_id`], [`Self::name`] and
-    /// [`Self::signature`]. Different instances of the same function type are
-    /// therefore considered equal only if they are pointer equal.
+    /// # Default Behavior
+    /// By default, this method compares the type IDs, names, and signatures of the two UDFs. If these match,
+    /// the method assumes the UDFs are not equal unless their pointers are the same. This conservative approach
+    /// ensures that different instances of the same function type are not mistakenly considered equal.
+    ///
+    /// # Custom Implementation
+    /// If a UDF has internal state or additional properties that should be considered for equality, this method
+    /// should be overridden. For example, a UDF with parameters might compare those parameters in addition to
+    /// the default checks.
+    ///
+    /// # Example
+    /// ```rust
+    /// impl ScalarUDFImpl for MyUdf {
+    ///     fn equals(&self, other: &dyn ScalarUDFImpl) -> bool {
+    ///         if let Some(other) = other.as_any().downcast_ref::<Self>() {
+    ///             self.param == other.param && self.name() == other.name()
+    ///         } else {
+    ///             false
+    ///         }
+    ///     }
+    /// }
+    /// ```
+    ///
+    /// # Notes
+    /// - This method must be consistent with [`Self::hash_value`]. If `equals` returns true for two UDFs,
+    ///   their hash values must also be the same.
+    /// - Ensure that the implementation does not panic or cause undefined behavior for any input.
     fn equals(&self, other: &dyn ScalarUDFImpl) -> bool {
         // if the pointers are the same, the UDFs are the same
         if std::ptr::eq(self.as_any(), other.as_any()) {
