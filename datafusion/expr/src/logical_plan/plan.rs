@@ -3814,10 +3814,13 @@ impl Join {
 
         let mut requalified = false;
 
-        // By definition, the resulting schema of an inner join will have first the left side fields and then the right,
+        // By definition, the resulting schema of an inner/left/right & full join will have first the left side fields and then the right,
         // potentially having duplicate field names. Note this will only qualify fields if they have not been qualified before.
-        // TODO: handle left and right joins as well.
-        if original_join.join_type == JoinType::Inner {
+        if original_join.join_type == JoinType::Inner
+            || original_join.join_type == JoinType::Left
+            || original_join.join_type == JoinType::Right
+            || original_join.join_type == JoinType::Full
+        {
             (left_sch, right_sch, requalified) =
                 requalify_sides_if_needed(left_sch.clone(), right_sch.clone())?;
         }
