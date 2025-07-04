@@ -27,6 +27,7 @@ use crate::{
 
 use arrow::datatypes::Schema;
 // TODO: handle once deprecated
+use crate::encryption::add_crypto_to_writer_properties;
 #[allow(deprecated)]
 use parquet::{
     arrow::ARROW_SCHEMA_META_KEY,
@@ -101,12 +102,7 @@ impl TryFrom<&TableParquetOptions> for WriterPropertiesBuilder {
 
         let mut builder = global.into_writer_properties_builder()?;
 
-        #[cfg(feature = "parquet_encryption")]
-        if let Some(file_encryption_properties) = &crypto.file_encryption {
-            builder = builder.with_file_encryption_properties(
-                file_encryption_properties.clone().into(),
-            );
-        }
+        builder = add_crypto_to_writer_properties(crypto, builder);
 
         // check that the arrow schema is present in the kv_metadata, if configured to do so
         if !global.skip_arrow_metadata
@@ -458,12 +454,9 @@ mod tests {
     };
     use std::collections::HashMap;
 
-    use crate::config::{
-        ConfigFileEncryptionProperties, ParquetColumnOptions, ParquetEncryptionOptions,
-        ParquetOptions,
-    };
-
     use super::*;
+    use crate::config::{ParquetColumnOptions, ParquetEncryptionOptions, ParquetOptions};
+    use crate::encryption::map_encryption_to_config_encryption;
 
     const COL_NAME: &str = "configured";
 
@@ -592,11 +585,7 @@ mod tests {
             HashMap::from([(COL_NAME.into(), configured_col_props)])
         };
 
-        #[cfg(feature = "parquet_encryption")]
-        let fep: Option<ConfigFileEncryptionProperties> =
-            props.file_encryption_properties().map(|fe| fe.into());
-        #[cfg(not(feature = "parquet_encryption"))]
-        let fep: Option<ConfigFileEncryptionProperties> = None;
+        let fep = map_encryption_to_config_encryption(props.file_encryption_properties());
 
         #[allow(deprecated)] // max_statistics_size
         TableParquetOptions {

@@ -47,8 +47,10 @@ use datafusion_physical_plan::metrics::Count;
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion_physical_plan::DisplayFormatType;
 
+use datafusion_common::encryption::map_config_decryption_to_decryption;
 use itertools::Itertools;
 use object_store::ObjectStore;
+
 /// Execution plan for reading one or more Parquet files.
 ///
 /// ```text
@@ -475,15 +477,10 @@ impl FileSource for ParquetSource {
                 Arc::new(DefaultParquetFileReaderFactory::new(object_store)) as _
             });
 
-        #[cfg(feature = "parquet_encryption")]
-        let file_decryption_properties = self
-            .table_parquet_options()
-            .crypto
-            .file_decryption
-            .as_ref()
-            .map(|props| Arc::new(props.clone().into()));
-        #[cfg(not(feature = "parquet_encryption"))]
-        let file_decryption_properties = None;
+        let file_decryption_properties = map_config_decryption_to_decryption(
+            self.table_parquet_options().crypto.file_decryption.as_ref(),
+        )
+        .map(Arc::new);
 
         let coerce_int96 = self
             .table_parquet_options

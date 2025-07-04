@@ -38,8 +38,9 @@ use datafusion_datasource::write::demux::DemuxedStreamReceiver;
 
 use arrow::compute::sum;
 use arrow::datatypes::{DataType, Field, FieldRef};
-use datafusion_common::config::{
-    ConfigField, ConfigFileType, FileDecryptionProperties, TableParquetOptions,
+use datafusion_common::config::{ConfigField, ConfigFileType, TableParquetOptions};
+use datafusion_common::encryption::{
+    map_config_decryption_to_decryption, FileDecryptionProperties,
 };
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::stats::Precision;
@@ -352,17 +353,11 @@ impl FileFormat for ParquetFormat {
             Some(time_unit) => Some(parse_coerce_int96_string(time_unit.as_str())?),
             None => None,
         };
-        #[cfg(feature = "parquet_encryption")]
         let file_decryption_properties: Option<FileDecryptionProperties> =
-            match &self.options.crypto.file_decryption {
-                Some(cfd) => {
-                    let fd: FileDecryptionProperties = cfd.clone().into();
-                    Some(fd)
-                }
-                None => None,
-            };
-        #[cfg(not(feature = "parquet_encryption"))]
-        let file_decryption_properties: Option<FileDecryptionProperties> = None;
+            map_config_decryption_to_decryption(
+                self.options.crypto.file_decryption.as_ref(),
+            );
+
         let mut schemas: Vec<_> = futures::stream::iter(objects)
             .map(|object| {
                 fetch_schema_with_location(
@@ -419,17 +414,10 @@ impl FileFormat for ParquetFormat {
         table_schema: SchemaRef,
         object: &ObjectMeta,
     ) -> Result<Statistics> {
-        #[cfg(feature = "parquet_encryption")]
         let file_decryption_properties: Option<FileDecryptionProperties> =
-            match &self.options.crypto.file_decryption {
-                Some(cfd) => {
-                    let fd: FileDecryptionProperties = cfd.clone().into();
-                    Some(fd)
-                }
-                None => None,
-            };
-        #[cfg(not(feature = "parquet_encryption"))]
-        let file_decryption_properties: Option<FileDecryptionProperties> = None;
+            map_config_decryption_to_decryption(
+                self.options.crypto.file_decryption.as_ref(),
+            );
         let stats = fetch_statistics(
             store.as_ref(),
             table_schema,

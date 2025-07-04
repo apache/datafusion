@@ -31,7 +31,8 @@ use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
 
 use arrow::datatypes::{FieldRef, SchemaRef, TimeUnit};
 use arrow::error::ArrowError;
-use datafusion_common::config::FileDecryptionProperties;
+use datafusion_common::encryption::FileDecryptionProperties;
+
 use datafusion_common::{exec_err, DataFusionError, Result};
 use datafusion_datasource::PartitionedFile;
 use datafusion_physical_expr::PhysicalExprSchemaRewriter;

@@ -19,6 +19,8 @@
 
 use arrow_ipc::CompressionType;
 
+#[cfg(feature = "parquet_encryption")]
+use crate::encryption::{FileDecryptionProperties, FileEncryptionProperties};
 use crate::error::_config_err;
 use crate::parsers::CompressionTypeVariant;
 use crate::utils::get_available_parallelism;
@@ -31,14 +33,6 @@ use std::str::FromStr;
 
 #[cfg(feature = "parquet_encryption")]
 use hex;
-#[cfg(feature = "parquet_encryption")]
-pub use parquet::encryption::decrypt::FileDecryptionProperties;
-#[cfg(feature = "parquet_encryption")]
-pub use parquet::encryption::encrypt::FileEncryptionProperties;
-#[cfg(not(feature = "parquet_encryption"))]
-pub struct FileDecryptionProperties;
-#[cfg(not(feature = "parquet_encryption"))]
-pub struct FileEncryptionProperties;
 
 /// A macro that wraps a configuration struct and automatically derives
 /// [`Default`] and [`ConfigField`] for it, allowing it to be used
