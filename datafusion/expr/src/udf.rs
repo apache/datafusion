@@ -703,9 +703,14 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     /// - symmetric: `a.equals(b)` implies `b.equals(a)`;
     /// - transitive: `a.equals(b)` and `b.equals(c)` implies `a.equals(c)`.
     ///
-    /// By default, compares [`Self::name`] and [`Self::signature`].
+    /// By default, compares [`Self::as_any().type_id`], [`Self::name`] and
+    /// [`Self::signature`]. Different instances of the same function type are
+    /// therefore considered equal only if they are pointer equal.
     fn equals(&self, other: &dyn ScalarUDFImpl) -> bool {
-        self.name() == other.name() && self.signature() == other.signature()
+        std::ptr::eq(self.as_any(), other.as_any())
+            || (self.as_any().type_id() == other.as_any().type_id()
+                && self.name() == other.name()
+                && self.signature() == other.signature())
     }
 
     /// Returns a hash value for this scalar UDF.

@@ -16,3 +16,5 @@
 // under the License.
 
 pub mod function_stub;
+#[cfg(test)]
+pub mod udf_equals;
