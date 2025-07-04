@@ -285,8 +285,8 @@ pub async fn spawn_writer_tasks_and_join(
         write_coordinator_task.join_unwind(),
         demux_task.join_unwind()
     );
-    r1.map_err(DataFusionError::ExecutionJoin)??;
-    r2.map_err(DataFusionError::ExecutionJoin)??;
+    r1.map_err(|e| DataFusionError::ExecutionJoin(Box::new(e)))??;
+    r2.map_err(|e| DataFusionError::ExecutionJoin(Box::new(e)))??;
 
     // Return total row count:
     rx_row_cnt.await.map_err(|_| {

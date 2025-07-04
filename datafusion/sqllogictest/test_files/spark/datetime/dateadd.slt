@@ -25,4 +25,3 @@
 ## PySpark 3.5.5 Result: {'date_add(2016-07-30, 1)': datetime.date(2016, 7, 31), 'typeof(date_add(2016-07-30, 1))': 'date', 'typeof(2016-07-30)': 'string', 'typeof(1)': 'int'}
 #query
 #SELECT dateadd('2016-07-30'::string, 1::int);
-

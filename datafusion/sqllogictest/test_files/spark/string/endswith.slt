@@ -45,4 +45,3 @@
 ## PySpark 3.5.5 Result: {"endswith(X'537061726B2053514C', X'537061726B')": False, "typeof(endswith(X'537061726B2053514C', X'537061726B'))": 'boolean', "typeof(X'537061726B2053514C')": 'binary', "typeof(X'537061726B')": 'binary'}
 #query
 #SELECT endswith(X'537061726B2053514C'::binary, X'537061726B'::binary);
-

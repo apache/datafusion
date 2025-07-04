@@ -30,4 +30,3 @@
 ## PySpark 3.5.5 Result: {'make_date(2019, 7, NULL)': None, 'typeof(make_date(2019, 7, NULL))': 'date', 'typeof(2019)': 'int', 'typeof(7)': 'int', 'typeof(NULL)': 'void'}
 #query
 #SELECT make_date(2019::int, 7::int, NULL::void);
-

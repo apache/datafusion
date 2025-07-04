@@ -25,4 +25,3 @@
 ## PySpark 3.5.5 Result: {'date_sub(2016-07-30, 1)': datetime.date(2016, 7, 29), 'typeof(date_sub(2016-07-30, 1))': 'date', 'typeof(2016-07-30)': 'string', 'typeof(1)': 'int'}
 #query
 #SELECT date_sub('2016-07-30'::string, 1::int);
-
