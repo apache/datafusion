@@ -1,0 +1,334 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Import common test data
+include ../../init_data.slt.part
+
+# Test ONE ROW PER MATCH
+query TT
+EXPLAIN SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    ORDER BY price_date
+    MEASURES price AS current_price
+    ONE ROW PER MATCH
+    PATTERN (A)
+    DEFINE A AS price > 100
+)
+----
+logical_plan
+01)Projection: stock_price.price AS current_price
+02)--Filter: __mr_is_last_match_row
+03)----Projection: stock_price.price, __mr_is_last_match_row
+04)------MatchRecognizePattern: order_by=[stock_price.price_date ASC NULLS LAST] pattern=[A]
+05)--------Projection: stock_price.company, stock_price.price_date, stock_price.price, stock_price.price > Int32(100) AS __mr_symbol_A
+06)----------TableScan: stock_price projection=[company, price_date, price]
+physical_plan
+01)ProjectionExec: expr=[price@0 as current_price], schema=[current_price:Int32;N]
+02)--CoalesceBatchesExec: target_batch_size=8192, schema=[price:Int32;N]
+03)----FilterExec: __mr_is_last_match_row@1, projection=[price@0], schema=[price:Int32;N]
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, schema=[price:Int32;N, __mr_is_last_match_row:Boolean]
+05)--------ProjectionExec: expr=[price@2 as price, __mr_is_last_match_row@7 as __mr_is_last_match_row], schema=[price:Int32;N, __mr_is_last_match_row:Boolean]
+06)----------MatchRecognizePatternExec: pattern=Symbol(Named("A")), schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_symbol_A:Boolean;N, __mr_classifier:Utf8, __mr_match_number:UInt64, __mr_match_sequence_number:UInt64, __mr_is_last_match_row:Boolean, __mr_is_included_row:Boolean]
+07)------------SortExec: expr=[price_date@1 ASC NULLS LAST], preserve_partitioning=[false], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_symbol_A:Boolean;N]
+08)--------------ProjectionExec: expr=[company@0 as company, price_date@1 as price_date, price@2 as price, price@2 > 100 as __mr_symbol_A], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_symbol_A:Boolean;N]
+09)----------------DataSourceExec: partitions=1, partition_sizes=[1], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]
+
+# Test ALL ROWS PER MATCH default
+query TT
+EXPLAIN SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    ORDER BY price_date
+    MEASURES price AS current_price
+    ALL ROWS PER MATCH
+    PATTERN (A)
+    DEFINE A AS price > 100
+)
+----
+logical_plan
+01)Projection: stock_price.company, stock_price.price_date, stock_price.price, stock_price.price AS current_price
+02)--Filter: __mr_is_included_row
+03)----Projection: stock_price.company, stock_price.price_date, stock_price.price, __mr_is_included_row
+04)------MatchRecognizePattern: order_by=[stock_price.price_date ASC NULLS LAST] pattern=[A]
+05)--------Projection: stock_price.company, stock_price.price_date, stock_price.price, stock_price.price > Int32(100) AS __mr_symbol_A
+06)----------TableScan: stock_price projection=[company, price_date, price]
+physical_plan
+01)ProjectionExec: expr=[company@0 as company, price_date@1 as price_date, price@2 as price, price@2 as current_price], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, current_price:Int32;N]
+02)--CoalesceBatchesExec: target_batch_size=8192, schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]
+03)----FilterExec: __mr_is_included_row@3, projection=[company@0, price_date@1, price@2], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_is_included_row:Boolean]
+05)--------ProjectionExec: expr=[company@0 as company, price_date@1 as price_date, price@2 as price, __mr_is_included_row@8 as __mr_is_included_row], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_is_included_row:Boolean]
+06)----------MatchRecognizePatternExec: pattern=Symbol(Named("A")), schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_symbol_A:Boolean;N, __mr_classifier:Utf8, __mr_match_number:UInt64, __mr_match_sequence_number:UInt64, __mr_is_last_match_row:Boolean, __mr_is_included_row:Boolean]
+07)------------SortExec: expr=[price_date@1 ASC NULLS LAST], preserve_partitioning=[false], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_symbol_A:Boolean;N]
+08)--------------ProjectionExec: expr=[company@0 as company, price_date@1 as price_date, price@2 as price, price@2 > 100 as __mr_symbol_A], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_symbol_A:Boolean;N]
+09)----------------DataSourceExec: partitions=1, partition_sizes=[1], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]
+
+# Test ALL ROWS PER MATCH SHOW EMPTY MATCHES
+query TT
+EXPLAIN SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    ORDER BY price_date
+    MEASURES price AS current_price
+    ALL ROWS PER MATCH SHOW EMPTY MATCHES
+    PATTERN (A)
+    DEFINE A AS price > 100
+)
+----
+logical_plan
+01)Projection: stock_price.company, stock_price.price_date, stock_price.price, stock_price.price AS current_price
+02)--Filter: __mr_is_included_row
+03)----Projection: stock_price.company, stock_price.price_date, stock_price.price, __mr_is_included_row
+04)------MatchRecognizePattern: order_by=[stock_price.price_date ASC NULLS LAST] pattern=[A]
+05)--------Projection: stock_price.company, stock_price.price_date, stock_price.price, stock_price.price > Int32(100) AS __mr_symbol_A
+06)----------TableScan: stock_price projection=[company, price_date, price]
+physical_plan
+01)ProjectionExec: expr=[company@0 as company, price_date@1 as price_date, price@2 as price, price@2 as current_price], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, current_price:Int32;N]
+02)--CoalesceBatchesExec: target_batch_size=8192, schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]
+03)----FilterExec: __mr_is_included_row@3, projection=[company@0, price_date@1, price@2], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_is_included_row:Boolean]
+05)--------ProjectionExec: expr=[company@0 as company, price_date@1 as price_date, price@2 as price, __mr_is_included_row@8 as __mr_is_included_row], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_is_included_row:Boolean]
+06)----------MatchRecognizePatternExec: pattern=Symbol(Named("A")), schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_symbol_A:Boolean;N, __mr_classifier:Utf8, __mr_match_number:UInt64, __mr_match_sequence_number:UInt64, __mr_is_last_match_row:Boolean, __mr_is_included_row:Boolean]
+07)------------SortExec: expr=[price_date@1 ASC NULLS LAST], preserve_partitioning=[false], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_symbol_A:Boolean;N]
+08)--------------ProjectionExec: expr=[company@0 as company, price_date@1 as price_date, price@2 as price, price@2 > 100 as __mr_symbol_A], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_symbol_A:Boolean;N]
+09)----------------DataSourceExec: partitions=1, partition_sizes=[1], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]
+
+# Test ALL ROWS PER MATCH OMIT EMPTY MATCHES
+query TT
+EXPLAIN SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    ORDER BY price_date
+    MEASURES price AS current_price
+    ALL ROWS PER MATCH OMIT EMPTY MATCHES
+    PATTERN (A)
+    DEFINE A AS price > 100
+)
+----
+logical_plan
+01)Projection: stock_price.company, stock_price.price_date, stock_price.price, stock_price.price AS current_price
+02)--Filter: __mr_is_included_row AND __mr_classifier != Utf8("(empty)")
+03)----Projection: stock_price.company, stock_price.price_date, stock_price.price, __mr_classifier, __mr_is_included_row
+04)------MatchRecognizePattern: order_by=[stock_price.price_date ASC NULLS LAST] pattern=[A]
+05)--------Projection: stock_price.company, stock_price.price_date, stock_price.price, stock_price.price > Int32(100) AS __mr_symbol_A
+06)----------TableScan: stock_price projection=[company, price_date, price]
+physical_plan
+01)ProjectionExec: expr=[company@0 as company, price_date@1 as price_date, price@2 as price, price@2 as current_price], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, current_price:Int32;N]
+02)--CoalesceBatchesExec: target_batch_size=8192, schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]
+03)----FilterExec: __mr_is_included_row@4 AND __mr_classifier@3 != (empty), projection=[company@0, price_date@1, price@2], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_classifier:Utf8, __mr_is_included_row:Boolean]
+05)--------ProjectionExec: expr=[company@0 as company, price_date@1 as price_date, price@2 as price, __mr_classifier@4 as __mr_classifier, __mr_is_included_row@8 as __mr_is_included_row], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_classifier:Utf8, __mr_is_included_row:Boolean]
+06)----------MatchRecognizePatternExec: pattern=Symbol(Named("A")), schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_symbol_A:Boolean;N, __mr_classifier:Utf8, __mr_match_number:UInt64, __mr_match_sequence_number:UInt64, __mr_is_last_match_row:Boolean, __mr_is_included_row:Boolean]
+07)------------SortExec: expr=[price_date@1 ASC NULLS LAST], preserve_partitioning=[false], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_symbol_A:Boolean;N]
+08)--------------ProjectionExec: expr=[company@0 as company, price_date@1 as price_date, price@2 as price, price@2 > 100 as __mr_symbol_A], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_symbol_A:Boolean;N]
+09)----------------DataSourceExec: partitions=1, partition_sizes=[1], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]
+
+# Test ALL ROWS PER MATCH WITH UNMATCHED ROWS
+query TT
+EXPLAIN SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    ORDER BY price_date
+    MEASURES price AS current_price
+    ALL ROWS PER MATCH WITH UNMATCHED ROWS
+    PATTERN (A)
+    DEFINE A AS price > 100
+)
+----
+logical_plan
+01)Projection: stock_price.company, stock_price.price_date, stock_price.price, stock_price.price AS current_price
+02)--MatchRecognizePattern: order_by=[stock_price.price_date ASC NULLS LAST] pattern=[A]
+03)----Projection: stock_price.company, stock_price.price_date, stock_price.price, stock_price.price > Int32(100) AS __mr_symbol_A
+04)------TableScan: stock_price projection=[company, price_date, price]
+physical_plan
+01)ProjectionExec: expr=[company@0 as company, price_date@1 as price_date, price@2 as price, price@2 as current_price], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, current_price:Int32;N]
+02)--MatchRecognizePatternExec: pattern=Symbol(Named("A")), schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_symbol_A:Boolean;N, __mr_classifier:Utf8, __mr_match_number:UInt64, __mr_match_sequence_number:UInt64, __mr_is_last_match_row:Boolean, __mr_is_included_row:Boolean]
+03)----SortExec: expr=[price_date@1 ASC NULLS LAST], preserve_partitioning=[false], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_symbol_A:Boolean;N]
+04)------ProjectionExec: expr=[company@0 as company, price_date@1 as price_date, price@2 as price, price@2 > 100 as __mr_symbol_A], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_symbol_A:Boolean;N]
+05)--------DataSourceExec: partitions=1, partition_sizes=[1], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]
+
+# Test rows per match default
+query TT
+EXPLAIN SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    ORDER BY price_date
+    MEASURES price AS current_price
+    PATTERN (A)
+    DEFINE A AS price > 100
+)
+----
+logical_plan
+01)Projection: stock_price.price AS current_price
+02)--Filter: __mr_is_last_match_row
+03)----Projection: stock_price.price, __mr_is_last_match_row
+04)------MatchRecognizePattern: order_by=[stock_price.price_date ASC NULLS LAST] pattern=[A]
+05)--------Projection: stock_price.company, stock_price.price_date, stock_price.price, stock_price.price > Int32(100) AS __mr_symbol_A
+06)----------TableScan: stock_price projection=[company, price_date, price]
+physical_plan
+01)ProjectionExec: expr=[price@0 as current_price], schema=[current_price:Int32;N]
+02)--CoalesceBatchesExec: target_batch_size=8192, schema=[price:Int32;N]
+03)----FilterExec: __mr_is_last_match_row@1, projection=[price@0], schema=[price:Int32;N]
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, schema=[price:Int32;N, __mr_is_last_match_row:Boolean]
+05)--------ProjectionExec: expr=[price@2 as price, __mr_is_last_match_row@7 as __mr_is_last_match_row], schema=[price:Int32;N, __mr_is_last_match_row:Boolean]
+06)----------MatchRecognizePatternExec: pattern=Symbol(Named("A")), schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_symbol_A:Boolean;N, __mr_classifier:Utf8, __mr_match_number:UInt64, __mr_match_sequence_number:UInt64, __mr_is_last_match_row:Boolean, __mr_is_included_row:Boolean]
+07)------------SortExec: expr=[price_date@1 ASC NULLS LAST], preserve_partitioning=[false], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_symbol_A:Boolean;N]
+08)--------------ProjectionExec: expr=[company@0 as company, price_date@1 as price_date, price@2 as price, price@2 > 100 as __mr_symbol_A], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_symbol_A:Boolean;N]
+09)----------------DataSourceExec: partitions=1, partition_sizes=[1], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]
+
+# Test ONE ROW PER MATCH explicit
+query TT
+EXPLAIN SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    PARTITION BY company
+    ORDER BY price_date
+    MEASURES
+        price AS current_price,
+        COUNT(*) AS match_count
+    ONE ROW PER MATCH
+    PATTERN (A B)
+    DEFINE
+        A AS price > 100,
+        B AS price < 50
+)
+----
+logical_plan
+01)Projection: stock_price.company, stock_price.price AS current_price, count(CASE WHEN __mr_classifier != Utf8("(empty)") THEN Int64(1) ELSE NULL END) PARTITION BY [stock_price.company, __mr_match_number] ORDER BY [stock_price.price_date ASC NULLS LAST, __mr_match_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS match_count
+02)--Filter: __mr_is_last_match_row
+03)----Projection: stock_price.company, stock_price.price, __mr_is_last_match_row, count(CASE WHEN __mr_classifier != Utf8("(empty)") THEN Int64(1) ELSE NULL END) PARTITION BY [stock_price.company, __mr_match_number] ORDER BY [stock_price.price_date ASC NULLS LAST, __mr_match_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+04)------WindowAggr: windowExpr=[[count(CASE WHEN __mr_classifier != Utf8("(empty)") THEN Int64(1) ELSE Int64(NULL) END) PARTITION BY [stock_price.company, __mr_match_number] ORDER BY [stock_price.price_date ASC NULLS LAST, __mr_match_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS count(CASE WHEN __mr_classifier != Utf8("(empty)") THEN Int64(1) ELSE NULL END) PARTITION BY [stock_price.company, __mr_match_number] ORDER BY [stock_price.price_date ASC NULLS LAST, __mr_match_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+05)--------Projection: stock_price.company, stock_price.price_date, stock_price.price, __mr_classifier, __mr_match_number, __mr_is_last_match_row
+06)----------MatchRecognizePattern: partition_by=[stock_price.company] order_by=[stock_price.price_date ASC NULLS LAST] pattern=[A B]
+07)------------Projection: stock_price.company, stock_price.price_date, stock_price.price, stock_price.price > Int32(100) AS __mr_symbol_A, stock_price.price < Int32(50) AS __mr_symbol_B
+08)--------------TableScan: stock_price projection=[company, price_date, price]
+physical_plan
+01)ProjectionExec: expr=[company@0 as company, price@1 as current_price, count(CASE WHEN __mr_classifier != Utf8("(empty)") THEN Int64(1) ELSE NULL END) PARTITION BY [stock_price.company, __mr_match_number] ORDER BY [stock_price.price_date ASC NULLS LAST, __mr_match_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@2 as match_count], schema=[company:Utf8View;N, current_price:Int32;N, match_count:Int64]
+02)--CoalesceBatchesExec: target_batch_size=8192, schema=[company:Utf8View;N, price:Int32;N, count(CASE WHEN __mr_classifier != Utf8("(empty)") THEN Int64(1) ELSE NULL END) PARTITION BY [stock_price.company, __mr_match_number] ORDER BY [stock_price.price_date ASC NULLS LAST, __mr_match_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING:Int64]
+03)----FilterExec: __mr_is_last_match_row@2, projection=[company@0, price@1, count(CASE WHEN __mr_classifier != Utf8("(empty)") THEN Int64(1) ELSE NULL END) PARTITION BY [stock_price.company, __mr_match_number] ORDER BY [stock_price.price_date ASC NULLS LAST, __mr_match_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@3], schema=[company:Utf8View;N, price:Int32;N, count(CASE WHEN __mr_classifier != Utf8("(empty)") THEN Int64(1) ELSE NULL END) PARTITION BY [stock_price.company, __mr_match_number] ORDER BY [stock_price.price_date ASC NULLS LAST, __mr_match_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING:Int64]
+04)------ProjectionExec: expr=[company@0 as company, price@2 as price, __mr_is_last_match_row@5 as __mr_is_last_match_row, count(CASE WHEN __mr_classifier != Utf8("(empty)") THEN Int64(1) ELSE NULL END) PARTITION BY [stock_price.company, __mr_match_number] ORDER BY [stock_price.price_date ASC NULLS LAST, __mr_match_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@6 as count(CASE WHEN __mr_classifier != Utf8("(empty)") THEN Int64(1) ELSE NULL END) PARTITION BY [stock_price.company, __mr_match_number] ORDER BY [stock_price.price_date ASC NULLS LAST, __mr_match_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING], schema=[company:Utf8View;N, price:Int32;N, __mr_is_last_match_row:Boolean, count(CASE WHEN __mr_classifier != Utf8("(empty)") THEN Int64(1) ELSE NULL END) PARTITION BY [stock_price.company, __mr_match_number] ORDER BY [stock_price.price_date ASC NULLS LAST, __mr_match_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING:Int64]
+05)--------WindowAggExec: wdw=[count(CASE WHEN __mr_classifier != Utf8("(empty)") THEN Int64(1) ELSE NULL END) PARTITION BY [stock_price.company, __mr_match_number] ORDER BY [stock_price.price_date ASC NULLS LAST, __mr_match_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "count(CASE WHEN __mr_classifier != Utf8(\"(empty)\") THEN Int64(1) ELSE NULL END) PARTITION BY [stock_price.company, __mr_match_number] ORDER BY [stock_price.price_date ASC NULLS LAST, __mr_match_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_classifier:Utf8, __mr_match_number:UInt64, __mr_is_last_match_row:Boolean, count(CASE WHEN __mr_classifier != Utf8("(empty)") THEN Int64(1) ELSE NULL END) PARTITION BY [stock_price.company, __mr_match_number] ORDER BY [stock_price.price_date ASC NULLS LAST, __mr_match_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING:Int64]
+06)----------SortExec: expr=[company@0 ASC NULLS LAST, __mr_match_number@4 ASC NULLS LAST, price_date@1 ASC NULLS LAST], preserve_partitioning=[true], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_classifier:Utf8, __mr_match_number:UInt64, __mr_is_last_match_row:Boolean]
+07)------------CoalesceBatchesExec: target_batch_size=8192, schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_classifier:Utf8, __mr_match_number:UInt64, __mr_is_last_match_row:Boolean]
+08)--------------RepartitionExec: partitioning=Hash([company@0, __mr_match_number@4], 4), input_partitions=4, schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_classifier:Utf8, __mr_match_number:UInt64, __mr_is_last_match_row:Boolean]
+09)----------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_classifier:Utf8, __mr_match_number:UInt64, __mr_is_last_match_row:Boolean]
+10)------------------ProjectionExec: expr=[company@0 as company, price_date@1 as price_date, price@2 as price, __mr_classifier@5 as __mr_classifier, __mr_match_number@6 as __mr_match_number, __mr_is_last_match_row@8 as __mr_is_last_match_row], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_classifier:Utf8, __mr_match_number:UInt64, __mr_is_last_match_row:Boolean]
+11)--------------------MatchRecognizePatternExec: pattern=Concat([Symbol(Named("A")), Symbol(Named("B"))]), schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_symbol_A:Boolean;N, __mr_symbol_B:Boolean;N, __mr_classifier:Utf8, __mr_match_number:UInt64, __mr_match_sequence_number:UInt64, __mr_is_last_match_row:Boolean, __mr_is_included_row:Boolean]
+12)----------------------SortExec: expr=[company@0 ASC NULLS LAST, price_date@1 ASC NULLS LAST], preserve_partitioning=[false], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_symbol_A:Boolean;N, __mr_symbol_B:Boolean;N]
+13)------------------------ProjectionExec: expr=[company@0 as company, price_date@1 as price_date, price@2 as price, price@2 > 100 as __mr_symbol_A, price@2 < 50 as __mr_symbol_B], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_symbol_A:Boolean;N, __mr_symbol_B:Boolean;N]
+14)--------------------------DataSourceExec: partitions=1, partition_sizes=[1], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]
+
+# Test all ALL ROWS variants comparison
+query TT
+EXPLAIN SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    ORDER BY price_date
+    MEASURES price AS current_price
+    ALL ROWS PER MATCH
+    PATTERN (A)
+    DEFINE A AS price > 100
+)
+----
+logical_plan
+01)Projection: stock_price.company, stock_price.price_date, stock_price.price, stock_price.price AS current_price
+02)--Filter: __mr_is_included_row
+03)----Projection: stock_price.company, stock_price.price_date, stock_price.price, __mr_is_included_row
+04)------MatchRecognizePattern: order_by=[stock_price.price_date ASC NULLS LAST] pattern=[A]
+05)--------Projection: stock_price.company, stock_price.price_date, stock_price.price, stock_price.price > Int32(100) AS __mr_symbol_A
+06)----------TableScan: stock_price projection=[company, price_date, price]
+physical_plan
+01)ProjectionExec: expr=[company@0 as company, price_date@1 as price_date, price@2 as price, price@2 as current_price], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, current_price:Int32;N]
+02)--CoalesceBatchesExec: target_batch_size=8192, schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]
+03)----FilterExec: __mr_is_included_row@3, projection=[company@0, price_date@1, price@2], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_is_included_row:Boolean]
+05)--------ProjectionExec: expr=[company@0 as company, price_date@1 as price_date, price@2 as price, __mr_is_included_row@8 as __mr_is_included_row], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_is_included_row:Boolean]
+06)----------MatchRecognizePatternExec: pattern=Symbol(Named("A")), schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_symbol_A:Boolean;N, __mr_classifier:Utf8, __mr_match_number:UInt64, __mr_match_sequence_number:UInt64, __mr_is_last_match_row:Boolean, __mr_is_included_row:Boolean]
+07)------------SortExec: expr=[price_date@1 ASC NULLS LAST], preserve_partitioning=[false], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_symbol_A:Boolean;N]
+08)--------------ProjectionExec: expr=[company@0 as company, price_date@1 as price_date, price@2 as price, price@2 > 100 as __mr_symbol_A], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_symbol_A:Boolean;N]
+09)----------------DataSourceExec: partitions=1, partition_sizes=[1], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]
+
+query TT
+EXPLAIN SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    ORDER BY price_date
+    MEASURES price AS current_price
+    ALL ROWS PER MATCH SHOW EMPTY MATCHES
+    PATTERN (A)
+    DEFINE A AS price > 100
+)
+----
+logical_plan
+01)Projection: stock_price.company, stock_price.price_date, stock_price.price, stock_price.price AS current_price
+02)--Filter: __mr_is_included_row
+03)----Projection: stock_price.company, stock_price.price_date, stock_price.price, __mr_is_included_row
+04)------MatchRecognizePattern: order_by=[stock_price.price_date ASC NULLS LAST] pattern=[A]
+05)--------Projection: stock_price.company, stock_price.price_date, stock_price.price, stock_price.price > Int32(100) AS __mr_symbol_A
+06)----------TableScan: stock_price projection=[company, price_date, price]
+physical_plan
+01)ProjectionExec: expr=[company@0 as company, price_date@1 as price_date, price@2 as price, price@2 as current_price], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, current_price:Int32;N]
+02)--CoalesceBatchesExec: target_batch_size=8192, schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]
+03)----FilterExec: __mr_is_included_row@3, projection=[company@0, price_date@1, price@2], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_is_included_row:Boolean]
+05)--------ProjectionExec: expr=[company@0 as company, price_date@1 as price_date, price@2 as price, __mr_is_included_row@8 as __mr_is_included_row], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_is_included_row:Boolean]
+06)----------MatchRecognizePatternExec: pattern=Symbol(Named("A")), schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_symbol_A:Boolean;N, __mr_classifier:Utf8, __mr_match_number:UInt64, __mr_match_sequence_number:UInt64, __mr_is_last_match_row:Boolean, __mr_is_included_row:Boolean]
+07)------------SortExec: expr=[price_date@1 ASC NULLS LAST], preserve_partitioning=[false], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_symbol_A:Boolean;N]
+08)--------------ProjectionExec: expr=[company@0 as company, price_date@1 as price_date, price@2 as price, price@2 > 100 as __mr_symbol_A], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_symbol_A:Boolean;N]
+09)----------------DataSourceExec: partitions=1, partition_sizes=[1], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]
+
+query TT
+EXPLAIN SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    ORDER BY price_date
+    MEASURES price AS current_price
+    ALL ROWS PER MATCH OMIT EMPTY MATCHES
+    PATTERN (A)
+    DEFINE A AS price > 100
+)
+----
+logical_plan
+01)Projection: stock_price.company, stock_price.price_date, stock_price.price, stock_price.price AS current_price
+02)--Filter: __mr_is_included_row AND __mr_classifier != Utf8("(empty)")
+03)----Projection: stock_price.company, stock_price.price_date, stock_price.price, __mr_classifier, __mr_is_included_row
+04)------MatchRecognizePattern: order_by=[stock_price.price_date ASC NULLS LAST] pattern=[A]
+05)--------Projection: stock_price.company, stock_price.price_date, stock_price.price, stock_price.price > Int32(100) AS __mr_symbol_A
+06)----------TableScan: stock_price projection=[company, price_date, price]
+physical_plan
+01)ProjectionExec: expr=[company@0 as company, price_date@1 as price_date, price@2 as price, price@2 as current_price], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, current_price:Int32;N]
+02)--CoalesceBatchesExec: target_batch_size=8192, schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]
+03)----FilterExec: __mr_is_included_row@4 AND __mr_classifier@3 != (empty), projection=[company@0, price_date@1, price@2], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_classifier:Utf8, __mr_is_included_row:Boolean]
+05)--------ProjectionExec: expr=[company@0 as company, price_date@1 as price_date, price@2 as price, __mr_classifier@4 as __mr_classifier, __mr_is_included_row@8 as __mr_is_included_row], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_classifier:Utf8, __mr_is_included_row:Boolean]
+06)----------MatchRecognizePatternExec: pattern=Symbol(Named("A")), schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_symbol_A:Boolean;N, __mr_classifier:Utf8, __mr_match_number:UInt64, __mr_match_sequence_number:UInt64, __mr_is_last_match_row:Boolean, __mr_is_included_row:Boolean]
+07)------------SortExec: expr=[price_date@1 ASC NULLS LAST], preserve_partitioning=[false], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_symbol_A:Boolean;N]
+08)--------------ProjectionExec: expr=[company@0 as company, price_date@1 as price_date, price@2 as price, price@2 > 100 as __mr_symbol_A], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_symbol_A:Boolean;N]
+09)----------------DataSourceExec: partitions=1, partition_sizes=[1], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]
+
+query TT
+EXPLAIN SELECT * FROM stock_price
+MATCH_RECOGNIZE (
+    ORDER BY price_date
+    MEASURES price AS current_price
+    ALL ROWS PER MATCH WITH UNMATCHED ROWS
+    PATTERN (A)
+    DEFINE A AS price > 100
+)
+----
+logical_plan
+01)Projection: stock_price.company, stock_price.price_date, stock_price.price, stock_price.price AS current_price
+02)--MatchRecognizePattern: order_by=[stock_price.price_date ASC NULLS LAST] pattern=[A]
+03)----Projection: stock_price.company, stock_price.price_date, stock_price.price, stock_price.price > Int32(100) AS __mr_symbol_A
+04)------TableScan: stock_price projection=[company, price_date, price]
+physical_plan
+01)ProjectionExec: expr=[company@0 as company, price_date@1 as price_date, price@2 as price, price@2 as current_price], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, current_price:Int32;N]
+02)--MatchRecognizePatternExec: pattern=Symbol(Named("A")), schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_symbol_A:Boolean;N, __mr_classifier:Utf8, __mr_match_number:UInt64, __mr_match_sequence_number:UInt64, __mr_is_last_match_row:Boolean, __mr_is_included_row:Boolean]
+03)----SortExec: expr=[price_date@1 ASC NULLS LAST], preserve_partitioning=[false], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_symbol_A:Boolean;N]
+04)------ProjectionExec: expr=[company@0 as company, price_date@1 as price_date, price@2 as price, price@2 > 100 as __mr_symbol_A], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_symbol_A:Boolean;N]
+05)--------DataSourceExec: partitions=1, partition_sizes=[1], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]
