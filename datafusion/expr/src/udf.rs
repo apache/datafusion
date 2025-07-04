@@ -714,7 +714,32 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     ///
     /// # Example
     /// ```rust
+    /// use std::any::Any;
+    /// use arrow::datatypes::DataType;
+    /// use datafusion_common::{not_impl_err, Result};
+    /// use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature};
+    /// #[derive(Debug)]
+    /// struct MyUdf {
+    ///  param: i32,
+    ///  signature: Signature,
+    /// }
+    ///
     /// impl ScalarUDFImpl for MyUdf {
+    ///    fn as_any(&self) -> &dyn Any {
+    ///        self
+    ///    }
+    ///    fn name(&self) -> &str {
+    ///        "my_udf"
+    ///    }
+    ///    fn signature(&self) -> &Signature {
+    ///        &self.signature
+    ///    }
+    ///    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+    ///        Ok(DataType::Int32)
+    ///    }
+    ///    fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+    ///        not_impl_err!("not used")
+    ///    }
     ///     fn equals(&self, other: &dyn ScalarUDFImpl) -> bool {
     ///         if let Some(other) = other.as_any().downcast_ref::<Self>() {
     ///             self.param == other.param && self.name() == other.name()

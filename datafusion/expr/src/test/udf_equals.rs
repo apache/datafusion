@@ -3,8 +3,10 @@ use crate::{
 };
 use arrow::datatypes::DataType;
 use datafusion_common::{not_impl_err, Result};
-use std::any::Any;
-
+use std::{
+    any::Any,
+    hash::{Hash, Hasher},
+};
 #[derive(Debug)]
 #[allow(dead_code)]
 struct ParamUdf {
@@ -71,7 +73,7 @@ impl ScalarUDFImpl for SignatureUdf {
         self
     }
     fn name(&self) -> &str {
-        "param_udf"
+        "signature_udf"
     }
     fn signature(&self) -> &Signature {
         &self.signature
