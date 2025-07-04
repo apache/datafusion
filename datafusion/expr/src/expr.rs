@@ -1173,38 +1173,6 @@ impl Exists {
     }
 }
 
-/// User Defined Aggregate Function
-///
-/// See [`crate::udaf::AggregateUDF`] for more information.
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub struct AggregateUDF {
-    /// The function
-    pub fun: Arc<crate::AggregateUDF>,
-    /// List of expressions to feed to the functions as arguments
-    pub args: Vec<Expr>,
-    /// Optional filter
-    pub filter: Option<Box<Expr>>,
-    /// Optional ORDER BY applied prior to aggregating
-    pub order_by: Vec<Expr>,
-}
-
-impl AggregateUDF {
-    /// Create a new AggregateUDF expression
-    pub fn new(
-        fun: Arc<crate::AggregateUDF>,
-        args: Vec<Expr>,
-        filter: Option<Box<Expr>>,
-        order_by: Vec<Expr>,
-    ) -> Self {
-        Self {
-            fun,
-            args,
-            filter,
-            order_by,
-        }
-    }
-}
-
 /// InList expression
 #[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
 pub struct InList {
