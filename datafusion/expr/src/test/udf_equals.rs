@@ -44,6 +44,12 @@ impl ScalarUDFImpl for ParamUdf {
             false
         }
     }
+    fn hash_value(&self) -> u64 {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        self.param.hash(&mut hasher);
+        self.type_id().hash(&mut hasher);
+        hasher.finish()
+    }
 }
 
 #[derive(Debug)]
