@@ -2040,6 +2040,7 @@ fn roundtrip_unnest() {
 fn roundtrip_wildcard() {
     #[expect(deprecated)]
     let test_expr = Expr::Wildcard {
+        symbol: None,
         qualifier: None,
         options: Box::new(WildcardOptions::default()),
     };
@@ -2052,6 +2053,7 @@ fn roundtrip_wildcard() {
 fn roundtrip_qualified_wildcard() {
     #[expect(deprecated)]
     let test_expr = Expr::Wildcard {
+        symbol: None,
         qualifier: Some("foo".into()),
         options: Box::new(WildcardOptions::default()),
     };

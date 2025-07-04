@@ -543,6 +543,7 @@ pub fn parse_expr(
             let qualifier = qualifier.to_owned().map(|x| x.try_into()).transpose()?;
             #[expect(deprecated)]
             Ok(Expr::Wildcard {
+                symbol: None,
                 qualifier,
                 options: Box::new(WildcardOptions::default()),
             })

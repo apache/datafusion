@@ -3675,9 +3675,14 @@ fn calc_func_dependencies_for_project(
         .iter()
         .map(|expr| match expr {
             #[expect(deprecated)]
-            Expr::Wildcard { qualifier, options } => {
+            Expr::Wildcard {
+                symbol,
+                qualifier,
+                options,
+            } => {
                 let wildcard_fields = exprlist_to_fields(
                     vec![&Expr::Wildcard {
+                        symbol: symbol.clone(),
                         qualifier: qualifier.clone(),
                         options: options.clone(),
                     }],

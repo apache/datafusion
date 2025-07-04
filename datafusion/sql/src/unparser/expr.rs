@@ -1816,6 +1816,7 @@ mod tests {
         #[expect(deprecated)]
         let dummy_logical_plan = table_scan(Some("t"), &dummy_schema, None)?
             .project(vec![Expr::Wildcard {
+                symbol: None,
                 qualifier: None,
                 options: Box::new(WildcardOptions::default()),
             }])?
@@ -1827,6 +1828,7 @@ mod tests {
             (
                 Expr::Column(Column {
                     relation: Some(TableReference::partial("a", "b")),
+                    symbol: None,
                     name: "c".to_string(),
                     spans: Spans::new(),
                 })
@@ -2022,6 +2024,7 @@ mod tests {
                 #[expect(deprecated)]
                 count_udaf()
                     .call(vec![Expr::Wildcard {
+                        symbol: None,
                         qualifier: None,
                         options: Box::new(WildcardOptions::default()),
                     }])
@@ -2034,6 +2037,7 @@ mod tests {
                 #[expect(deprecated)]
                 count_udaf()
                     .call(vec![Expr::Wildcard {
+                        symbol: None,
                         qualifier: None,
                         options: Box::new(WildcardOptions::default()),
                     }])
@@ -2061,6 +2065,7 @@ mod tests {
                     fun: WindowFunctionDefinition::AggregateUDF(count_udaf()),
                     params: WindowFunctionParams {
                         args: vec![Expr::Wildcard {
+                            symbol: None,
                             qualifier: None,
                             options: Box::new(WildcardOptions::default()),
                         }],
@@ -2183,6 +2188,7 @@ mod tests {
                 Expr::Unnest(Unnest {
                     expr: Box::new(Expr::Column(Column {
                         relation: Some(TableReference::partial("schema", "table")),
+                        symbol: None,
                         name: "array_col".to_string(),
                         spans: Spans::new(),
                     })),
