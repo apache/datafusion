@@ -645,6 +645,9 @@ impl DefaultPhysicalPlanner {
                     )?)
                 }
             }
+            LogicalPlan::MatchRecognizePattern(_) => {
+                return exec_err!("MatchRecognizePattern is not yet supported in physical planner");
+            }
             LogicalPlan::Aggregate(Aggregate {
                 input,
                 group_expr,

@@ -1806,6 +1806,9 @@ impl AsLogicalPlan for LogicalPlanNode {
                     ))),
                 })
             }
+            LogicalPlan::MatchRecognizePattern(_) => Err(proto_error(
+                "LogicalPlan serde is not yet implemented for MatchRecognize",
+            )),
         }
     }
 }
