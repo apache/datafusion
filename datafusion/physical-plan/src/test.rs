@@ -47,7 +47,7 @@ use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering, Partitioning};
 
-use futures::{Future, FutureExt};
+use futures::{stream, Future, FutureExt};
 
 pub mod exec;
 
@@ -515,10 +515,78 @@ impl PartitionStream for TestPartitionStream {
         &self.schema
     }
     fn execute(&self, _ctx: Arc<TaskContext>) -> SendableRecordBatchStream {
-        let stream = futures::stream::iter(self.batches.clone().into_iter().map(Ok));
+        let stream = stream::iter(self.batches.clone().into_iter().map(Ok));
         Box::pin(RecordBatchStreamAdapter::new(
             Arc::clone(&self.schema),
             stream,
         ))
+    }
+}
+
+/// Returns an `ExecutionPlan` that return a stream which panics if it is ever polled.
+/// This can be used to test that execution plan implementations do not eagerly start
+/// processing data when `ExecutionPlan::execute is called`.
+pub fn panic_exec(partitions: usize) -> Arc<dyn ExecutionPlan> {
+    let schema = Arc::new(Schema::new(vec![Field::new("i", DataType::Int32, true)]));
+    Arc::new(PanicExec::new(schema, partitions))
+}
+
+#[derive(Debug)]
+struct PanicExec {
+    properties: PlanProperties,
+}
+
+impl PanicExec {
+    fn new(schema: SchemaRef, partitions: usize) -> Self {
+        Self {
+            properties: PlanProperties::new(
+                EquivalenceProperties::new(Arc::clone(&schema)),
+                Partitioning::UnknownPartitioning(partitions),
+                EmissionType::Incremental,
+                Boundedness::Bounded,
+            ),
+        }
+    }
+}
+
+impl DisplayAs for PanicExec {
+    fn fmt_as(&self, _: DisplayFormatType, f: &mut Formatter) -> fmt::Result {
+        write!(f, "Panic")
+    }
+}
+
+impl ExecutionPlan for PanicExec {
+    fn name(&self) -> &str {
+        "PanicExec"
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn properties(&self) -> &PlanProperties {
+        &self.properties
+    }
+
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        vec![]
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        _: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(Arc::<PanicExec>::clone(&self))
+    }
+
+    fn execute(
+        &self,
+        _: usize,
+        _: Arc<TaskContext>,
+    ) -> Result<SendableRecordBatchStream> {
+        Ok(Box::pin(RecordBatchStreamAdapter::new(
+            self.schema(),
+            stream::once(async { panic!() }),
+        )))
     }
 }

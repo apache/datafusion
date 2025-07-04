@@ -32,7 +32,7 @@ use crate::projection::{
     physical_to_column_exprs, ProjectionExec,
 };
 use crate::{
-    handle_state, ColumnStatistics, DisplayAs, DisplayFormatType, Distribution,
+    handle_state, stream, ColumnStatistics, DisplayAs, DisplayFormatType, Distribution,
     ExecutionPlan, ExecutionPlanProperties, PlanProperties, RecordBatchStream,
     SendableRecordBatchStream, Statistics,
 };
@@ -303,12 +303,8 @@ impl ExecutionPlan for CrossJoinExec {
 
         let left_fut = self.left_fut.try_once(|| {
             let left_stream = self.left.execute(0, context)?;
-
-            Ok(load_left_input(
-                left_stream,
-                join_metrics.clone(),
-                reservation,
-            ))
+            let task = load_left_input(left_stream, join_metrics.clone(), reservation);
+            Ok(stream::spawn_deferred(task))
         })?;
 
         if enforce_batch_size_in_joins {

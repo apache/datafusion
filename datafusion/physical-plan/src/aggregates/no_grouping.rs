@@ -17,42 +17,47 @@
 
 //! Aggregate without grouping columns
 
+use super::AggregateExec;
 use crate::aggregates::{
     aggregate_expressions, create_accumulators, finalize_aggregation, AccumulatorItem,
     AggregateMode,
 };
+use crate::filter::batch_filter;
 use crate::metrics::{BaselineMetrics, RecordOutput};
-use crate::{RecordBatchStream, SendableRecordBatchStream};
+use crate::stream::RecordBatchStreamAdapter;
+use crate::SendableRecordBatchStream;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
+use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::PhysicalExpr;
-use futures::stream::BoxStream;
+use futures::stream;
+use futures::stream::StreamExt;
 use std::borrow::Cow;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
-use std::task::{Context, Poll};
+use std::task::{ready, Context, Poll};
 
-use crate::filter::batch_filter;
-use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
-use futures::stream::{Stream, StreamExt};
+pub fn aggregate_stream(
+    agg: &AggregateExec,
+    context: Arc<TaskContext>,
+    partition: usize,
+) -> Result<SendableRecordBatchStream> {
+    let aggregate = Aggregate::new(agg, context, partition)?;
 
-use super::AggregateExec;
-
-/// stream struct for aggregation without grouping columns
-pub(crate) struct AggregateStream {
-    stream: BoxStream<'static, Result<RecordBatch>>,
-    schema: SchemaRef,
+    // Spawn a task the first time the stream is polled for the sort phase.
+    // This ensures the consumer of the aggregate does not poll unnecessarily
+    // while the aggregation is ongoing
+    Ok(crate::stream::create_async_then_emit(
+        Arc::clone(&agg.schema),
+        aggregate,
+    ))
 }
 
-/// Actual implementation of [`AggregateStream`].
-///
-/// This is wrapped into yet another struct because we need to interact with the async memory management subsystem
-/// during poll. To have as little code "weirdness" as possible, we chose to just use [`BoxStream`] together with
-/// [`futures::stream::unfold`].
-///
-/// The latter requires a state object, which is [`AggregateStreamInner`].
-struct AggregateStreamInner {
+/// The state of the aggregation.
+struct Aggregate {
     schema: SchemaRef,
     mode: AggregateMode,
     input: SendableRecordBatchStream,
@@ -61,17 +66,14 @@ struct AggregateStreamInner {
     filter_expressions: Vec<Option<Arc<dyn PhysicalExpr>>>,
     accumulators: Vec<AccumulatorItem>,
     reservation: MemoryReservation,
-    finished: bool,
 }
 
-impl AggregateStream {
-    /// Create a new AggregateStream
-    pub fn new(
+impl Aggregate {
+    fn new(
         agg: &AggregateExec,
         context: Arc<TaskContext>,
         partition: usize,
     ) -> Result<Self> {
-        let agg_schema = Arc::clone(&agg.schema);
         let agg_filter_expr = agg.filter_expr.clone();
 
         let baseline_metrics = BaselineMetrics::new(&agg.metrics, partition);
@@ -91,7 +93,7 @@ impl AggregateStream {
         let reservation = MemoryConsumer::new(format!("AggregateStream[{partition}]"))
             .register(context.memory_pool());
 
-        let inner = AggregateStreamInner {
+        Ok(Self {
             schema: Arc::clone(&agg.schema),
             mode: agg.mode,
             input,
@@ -100,91 +102,55 @@ impl AggregateStream {
             filter_expressions,
             accumulators,
             reservation,
-            finished: false,
-        };
-        let stream = futures::stream::unfold(inner, |mut this| async move {
-            if this.finished {
-                return None;
-            }
-
-            let elapsed_compute = this.baseline_metrics.elapsed_compute();
-
-            loop {
-                let result = match this.input.next().await {
-                    Some(Ok(batch)) => {
-                        let timer = elapsed_compute.timer();
-                        let result = aggregate_batch(
-                            &this.mode,
-                            batch,
-                            &mut this.accumulators,
-                            &this.aggregate_expressions,
-                            &this.filter_expressions,
-                        );
-
-                        timer.done();
-
-                        // allocate memory
-                        // This happens AFTER we actually used the memory, but simplifies the whole accounting and we are OK with
-                        // overshooting a bit. Also this means we either store the whole record batch or not.
-                        match result
-                            .and_then(|allocated| this.reservation.try_grow(allocated))
-                        {
-                            Ok(_) => continue,
-                            Err(e) => Err(e),
-                        }
-                    }
-                    Some(Err(e)) => Err(e),
-                    None => {
-                        this.finished = true;
-                        let timer = this.baseline_metrics.elapsed_compute().timer();
-                        let result =
-                            finalize_aggregation(&mut this.accumulators, &this.mode)
-                                .and_then(|columns| {
-                                    RecordBatch::try_new(
-                                        Arc::clone(&this.schema),
-                                        columns,
-                                    )
-                                    .map_err(Into::into)
-                                })
-                                .record_output(&this.baseline_metrics);
-
-                        timer.done();
-
-                        result
-                    }
-                };
-
-                this.finished = true;
-                return Some((result, this));
-            }
-        });
-
-        // seems like some consumers call this stream even after it returned `None`, so let's fuse the stream.
-        let stream = stream.fuse();
-        let stream = Box::pin(stream);
-
-        Ok(Self {
-            schema: agg_schema,
-            stream,
         })
     }
 }
 
-impl Stream for AggregateStream {
-    type Item = Result<RecordBatch>;
+impl Future for Aggregate {
+    type Output = Result<SendableRecordBatchStream>;
 
-    fn poll_next(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<Option<Self::Item>> {
-        let this = &mut *self;
-        this.stream.poll_next_unpin(cx)
-    }
-}
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
 
-impl RecordBatchStream for AggregateStream {
-    fn schema(&self) -> SchemaRef {
-        Arc::clone(&self.schema)
+        loop {
+            match ready!(self.input.poll_next_unpin(cx)) {
+                Some(Ok(batch)) => {
+                    let timer = elapsed_compute.timer();
+
+                    let result = aggregate_batch(&mut self, &batch);
+
+                    timer.done();
+
+                    // allocate memory
+                    // This happens AFTER we actually used the memory, but simplifies the whole accounting and we are OK with
+                    // overshooting a bit. Also this means we either store the whole record batch or not.
+                    match result
+                        .and_then(|allocated| self.reservation.try_grow(allocated))
+                    {
+                        Ok(_) => continue,
+                        Err(e) => return Poll::Ready(Err(e)),
+                    }
+                }
+                Some(Err(e)) => return Poll::Ready(Err(e)),
+                None => {
+                    let timer = elapsed_compute.timer();
+                    let mode = self.mode;
+                    let result = finalize_aggregation(&mut self.accumulators, mode)
+                        .and_then(|columns| {
+                            RecordBatch::try_new(Arc::clone(&self.schema), columns)
+                                .map_err(Into::into)
+                        })
+                        .record_output(&self.baseline_metrics);
+
+                    timer.done();
+
+                    return Poll::Ready(Ok(Box::pin(RecordBatchStreamAdapter::new(
+                        Arc::clone(&self.schema),
+                        stream::iter(vec![result]),
+                    ))));
+                }
+            };
+        }
     }
 }
 
@@ -193,13 +159,7 @@ impl RecordBatchStream for AggregateStream {
 /// If successful, this returns the additional number of bytes that were allocated during this process.
 ///
 /// TODO: Make this a member function
-fn aggregate_batch(
-    mode: &AggregateMode,
-    batch: RecordBatch,
-    accumulators: &mut [AccumulatorItem],
-    expressions: &[Vec<Arc<dyn PhysicalExpr>>],
-    filters: &[Option<Arc<dyn PhysicalExpr>>],
-) -> Result<usize> {
+fn aggregate_batch(agg: &mut Aggregate, batch: &RecordBatch) -> Result<usize> {
     let mut allocated = 0usize;
 
     // 1.1 iterate accumulators and respective expressions together
@@ -208,15 +168,15 @@ fn aggregate_batch(
     // 1.4 update / merge accumulators with the expressions' values
 
     // 1.1
-    accumulators
+    agg.accumulators
         .iter_mut()
-        .zip(expressions)
-        .zip(filters)
+        .zip(&agg.aggregate_expressions)
+        .zip(&agg.filter_expressions)
         .try_for_each(|((accum, expr), filter)| {
             // 1.2
             let batch = match filter {
-                Some(filter) => Cow::Owned(batch_filter(&batch, filter)?),
-                None => Cow::Borrowed(&batch),
+                Some(filter) => Cow::Owned(batch_filter(batch, filter)?),
+                None => Cow::Borrowed(batch),
             };
 
             let n_rows = batch.num_rows();
@@ -229,7 +189,7 @@ fn aggregate_batch(
 
             // 1.4
             let size_pre = accum.size();
-            let res = match mode {
+            let res = match agg.mode {
                 AggregateMode::Partial
                 | AggregateMode::Single
                 | AggregateMode::SinglePartitioned => accum.update_batch(&values),

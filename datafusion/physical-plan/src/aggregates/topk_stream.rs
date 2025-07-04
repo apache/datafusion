@@ -22,7 +22,8 @@ use crate::aggregates::{
     aggregate_expressions, evaluate_group_by, evaluate_many, AggregateExec,
     PhysicalGroupBy,
 };
-use crate::{RecordBatchStream, SendableRecordBatchStream};
+use crate::stream::RecordBatchStreamAdapter;
+use crate::SendableRecordBatchStream;
 use arrow::array::{Array, ArrayRef, RecordBatch};
 use arrow::datatypes::SchemaRef;
 use arrow::util::pretty::print_batches;
@@ -30,13 +31,32 @@ use datafusion_common::DataFusionError;
 use datafusion_common::Result;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::PhysicalExpr;
-use futures::stream::{Stream, StreamExt};
+use futures::stream;
+use futures::stream::StreamExt;
 use log::{trace, Level};
+use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::task::{Context, Poll};
+use std::task::{ready, Context, Poll};
 
-pub struct GroupedTopKAggregateStream {
+pub fn aggregate_stream(
+    aggr: &AggregateExec,
+    context: Arc<TaskContext>,
+    partition: usize,
+    limit: usize,
+) -> Result<SendableRecordBatchStream> {
+    let aggregate_top_k = AggregateTopK::new(aggr, context, partition, limit)?;
+
+    // Spawn a task the first time the stream is polled for the aggregation phase.
+    // This ensures the consumer of the aggregation does not poll unnecessarily
+    // while the aggregation is ongoing
+    Ok(crate::stream::create_async_then_emit(
+        Arc::clone(&aggr.schema),
+        aggregate_top_k,
+    ))
+}
+
+struct AggregateTopK {
     partition: usize,
     row_count: usize,
     started: bool,
@@ -47,7 +67,7 @@ pub struct GroupedTopKAggregateStream {
     priority_map: PriorityMap,
 }
 
-impl GroupedTopKAggregateStream {
+impl AggregateTopK {
     pub fn new(
         aggr: &AggregateExec,
         context: Arc<TaskContext>,
@@ -69,7 +89,7 @@ impl GroupedTopKAggregateStream {
 
         let priority_map = PriorityMap::new(kt, vt, limit, desc)?;
 
-        Ok(GroupedTopKAggregateStream {
+        Ok(AggregateTopK {
             partition,
             started: false,
             row_count: 0,
@@ -82,13 +102,7 @@ impl GroupedTopKAggregateStream {
     }
 }
 
-impl RecordBatchStream for GroupedTopKAggregateStream {
-    fn schema(&self) -> SchemaRef {
-        Arc::clone(&self.schema)
-    }
-}
-
-impl GroupedTopKAggregateStream {
+impl AggregateTopK {
     fn intern(&mut self, ids: ArrayRef, vals: ArrayRef) -> Result<()> {
         let len = ids.len();
         self.priority_map.set_batch(ids, Arc::clone(&vals));
@@ -104,15 +118,15 @@ impl GroupedTopKAggregateStream {
     }
 }
 
-impl Stream for GroupedTopKAggregateStream {
-    type Item = Result<RecordBatch>;
+impl Future for AggregateTopK {
+    type Output = Result<SendableRecordBatchStream>;
 
-    fn poll_next(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<Option<Self::Item>> {
-        while let Poll::Ready(res) = self.input.poll_next_unpin(cx) {
-            match res {
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        loop {
+            match ready!(self.input.poll_next_unpin(cx)) {
+                Some(Err(e)) => {
+                    return Poll::Ready(Err(e));
+                }
                 // got a batch, convert to rows and append to our TreeMap
                 Some(Ok(batch)) => {
                     self.started = true;
@@ -153,10 +167,6 @@ impl Stream for GroupedTopKAggregateStream {
                 }
                 // inner is done, emit all rows and switch to producing output
                 None => {
-                    if self.priority_map.is_empty() {
-                        trace!("partition {} emit None", self.partition);
-                        return Poll::Ready(None);
-                    }
                     let cols = self.priority_map.emit()?;
                     let batch = RecordBatch::try_new(Arc::clone(&self.schema), cols)?;
                     trace!(
@@ -167,14 +177,13 @@ impl Stream for GroupedTopKAggregateStream {
                     if log::log_enabled!(Level::Trace) {
                         print_batches(std::slice::from_ref(&batch))?;
                     }
-                    return Poll::Ready(Some(Ok(batch)));
-                }
-                // inner had error, return to caller
-                Some(Err(e)) => {
-                    return Poll::Ready(Some(Err(e)));
+
+                    return Poll::Ready(Ok(Box::pin(RecordBatchStreamAdapter::new(
+                        Arc::clone(&self.schema),
+                        stream::iter(vec![Ok(batch)]),
+                    ))));
                 }
             }
         }
-        Poll::Pending
     }
 }
