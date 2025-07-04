@@ -294,8 +294,8 @@ config_namespace! {
 
         /// Should DataFusion collect statistics when first creating a table.
         /// Has no effect after the table is created. Applies to the default
-        /// `ListingTableProvider` in DataFusion. Defaults to false.
-        pub collect_statistics: bool, default = false
+        /// `ListingTableProvider` in DataFusion. Defaults to true.
+        pub collect_statistics: bool, default = true
 
         /// Number of partitions for query execution. Increasing partitions can increase
         /// concurrency.
