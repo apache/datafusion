@@ -96,7 +96,6 @@ impl TryFrom<&TableParquetOptions> for WriterPropertiesBuilder {
             global,
             column_specific_options,
             key_value_metadata,
-            #[allow(unused)]
             crypto,
         } = table_parquet_options;
 
