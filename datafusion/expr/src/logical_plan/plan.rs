@@ -296,13 +296,24 @@ pub enum LogicalPlan {
 #[derive(Clone, Debug, Eq, PartialOrd, Hash)]
 pub struct CorrelatedColumnInfo {
     pub col: Column,
+    // TODO: is data_type necessary?
     pub data_type: DataType,
     pub depth: usize,
 }
 
+impl CorrelatedColumnInfo {
+    pub fn new(col: Column) -> Self {
+        Self {
+            col,
+            data_type: DataType::Null,
+            depth: 0,
+        }
+    }
+}
+
 impl PartialEq for CorrelatedColumnInfo {
     fn eq(&self, other: &Self) -> bool {
-        self.col == other.col && self.data_type == other.data_type
+        self.col == other.col
     }
 }
 
@@ -353,12 +364,10 @@ impl DelimGet {
 
         // Validate all columns come from the same table
         for column_info in correlated_columns.into_iter() {
-            // if column_info.col.relation != first_table_ref {
-            // TODO: add delim union support
-            // return internal_err!(
-            //     "DelimGet requires all columns to be from the same table, found mixed table references"
-            // );
-            // }
+            if column_info.col.relation != first_table_ref {
+                return internal_err!(
+                "DelimGet requires all columns to be from the same table, found mixed table references");
+            }
         }
 
         let table_name = first_table_ref.ok_or_else(|| {
@@ -978,7 +987,7 @@ impl LogicalPlan {
                 // Update schema with unnested column type.
                 unnest_with_options(Arc::unwrap_or_clone(input), exec_columns, options)
             }
-            LogicalPlan::DelimGet(_) => todo!(),
+            LogicalPlan::DelimGet(_) => Ok(self),
         }
     }
 
@@ -4020,6 +4029,12 @@ impl Join {
             null_equality,
             join_kind: JoinKind::ComparisonJoin,
         })
+    }
+
+    pub fn is_cross_product(&self) -> bool {
+        self.filter.is_none()
+            && self.on.is_empty()
+            && matches!(self.join_type, JoinType::Inner)
     }
 
     /// Create Join with input which wrapped with projection, this method is used to help create physical join.
