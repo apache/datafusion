@@ -824,7 +824,6 @@ impl TopKHeap {
             + self.owned_bytes
     }
 
-
     fn get_threshold_values(
         &self,
         sort_exprs: &[PhysicalSortExpr],
