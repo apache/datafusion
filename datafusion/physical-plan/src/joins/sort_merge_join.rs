@@ -2034,10 +2034,10 @@ impl SortMergeJoinStream {
         let record_batch =
             concat_batches(&self.schema, &self.staging_output_record_batches.batches)?;
         self.join_metrics.output_batches.add(1);
-        self.join_metrics
+        let _ = self
+            .join_metrics
             .baseline_metrics
-            .output_rows()
-            .add(record_batch.num_rows());
+            .record_poll(Poll::Ready(Some(Ok(record_batch.clone()))));
         // If join filter exists, `self.output_size` is not accurate as we don't know the exact
         // number of rows in the output record batch. If streamed row joined with buffered rows,
         // once join filter is applied, the number of output rows may be more than 1.
@@ -2064,6 +2064,7 @@ impl SortMergeJoinStream {
         {
             self.staging_output_record_batches.batches.clear();
         }
+
         Ok(record_batch)
     }
 
