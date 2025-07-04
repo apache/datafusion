@@ -158,7 +158,7 @@ impl AggregateUDF {
             args,
             false,
             None,
-            None,
+            vec![],
             None,
         ))
     }
@@ -394,7 +394,7 @@ where
 /// fn get_doc() -> &'static Documentation {
 ///     &DOCUMENTATION
 /// }
-///    
+///
 /// /// Implement the AggregateUDFImpl trait for GeoMeanUdf
 /// impl AggregateUDFImpl for GeoMeanUdf {
 ///    fn as_any(&self) -> &dyn Any { self }
@@ -415,7 +415,7 @@ where
 ///        ])
 ///    }
 ///    fn documentation(&self) -> Option<&Documentation> {
-///        Some(get_doc())  
+///        Some(get_doc())
 ///    }
 /// }
 ///
@@ -482,7 +482,7 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
             schema_name.write_fmt(format_args!(" FILTER (WHERE {filter})"))?;
         };
 
-        if let Some(order_by) = order_by {
+        if !order_by.is_empty() {
             let clause = match self.is_ordered_set_aggregate() {
                 true => "WITHIN GROUP",
                 false => "ORDER BY",
@@ -527,7 +527,7 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
             schema_name.write_fmt(format_args!(" FILTER (WHERE {filter})"))?;
         };
 
-        if let Some(order_by) = order_by {
+        if !order_by.is_empty() {
             schema_name.write_fmt(format_args!(
                 " ORDER BY [{}]",
                 schema_name_from_sorts(order_by)?
@@ -616,10 +616,11 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
         if let Some(fe) = filter {
             display_name.write_fmt(format_args!(" FILTER (WHERE {fe})"))?;
         }
-        if let Some(ob) = order_by {
+        if !order_by.is_empty() {
             display_name.write_fmt(format_args!(
                 " ORDER BY [{}]",
-                ob.iter()
+                order_by
+                    .iter()
                     .map(|o| format!("{o}"))
                     .collect::<Vec<String>>()
                     .join(", ")

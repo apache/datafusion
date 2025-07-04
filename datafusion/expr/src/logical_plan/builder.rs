@@ -2534,20 +2534,22 @@ mod tests {
         .project(vec![col("id"), col("first_name").alias("id")]);
 
         match plan {
-            Err(DataFusionError::SchemaError(
-                SchemaError::AmbiguousReference {
+            Err(DataFusionError::SchemaError(err, _)) => {
+                if let SchemaError::AmbiguousReference {
                     field:
                         Column {
                             relation: Some(TableReference::Bare { table }),
                             name,
-                            spans: _,
+                            ..
                         },
-                },
-                _,
-            )) => {
-                assert_eq!(*"employee_csv", *table);
-                assert_eq!("id", &name);
-                Ok(())
+                } = *err
+                {
+                    assert_eq!(*"employee_csv", *table);
+                    assert_eq!("id", &name);
+                    Ok(())
+                } else {
+                    plan_err!("Plan should have returned an DataFusionError::SchemaError")
+                }
             }
             _ => plan_err!("Plan should have returned an DataFusionError::SchemaError"),
         }
