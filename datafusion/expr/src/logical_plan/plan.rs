@@ -45,7 +45,7 @@ use crate::utils::{
 use crate::{
     build_join_schema, expr_vec_fmt, requalify_sides_if_needed, BinaryExpr,
     CreateMemoryTable, CreateView, Execute, Expr, ExprSchemable, LogicalPlanBuilder,
-    Operator, Prepare, TableProviderFilterPushDown, TableSource,
+    MatchRecognizePattern, Operator, Prepare, TableProviderFilterPushDown, TableSource,
     WindowFunctionDefinition,
 };
 
@@ -288,6 +288,8 @@ pub enum LogicalPlan {
     Unnest(Unnest),
     /// A variadic query (e.g. "Recursive CTEs")
     RecursiveQuery(RecursiveQuery),
+    /// Pattern matching of a Match-recognize query (e.g. `MATCH_RECOGNIZE`'s `PATTERN` clause)
+    MatchRecognizePattern(MatchRecognizePattern),
 }
 
 impl Default for LogicalPlan {
@@ -352,6 +354,9 @@ impl LogicalPlan {
                 // we take the schema of the static term as the schema of the entire recursive query
                 static_term.schema()
             }
+            LogicalPlan::MatchRecognizePattern(MatchRecognizePattern {
+                schema, ..
+            }) => schema,
         }
     }
 
@@ -474,6 +479,9 @@ impl LogicalPlan {
                 recursive_term,
                 ..
             }) => vec![static_term, recursive_term],
+            LogicalPlan::MatchRecognizePattern(MatchRecognizePattern {
+                input, ..
+            }) => vec![input],
             LogicalPlan::Statement(stmt) => stmt.inputs(),
             // plans without inputs
             LogicalPlan::TableScan { .. }
@@ -592,7 +600,8 @@ impl LogicalPlan {
             | LogicalPlan::Copy(_)
             | LogicalPlan::Ddl(_)
             | LogicalPlan::DescribeTable(_)
-            | LogicalPlan::Unnest(_) => Ok(None),
+            | LogicalPlan::Unnest(_)
+            | LogicalPlan::MatchRecognizePattern(_) => Ok(None),
         }
     }
 
@@ -749,6 +758,7 @@ impl LogicalPlan {
                 // Update schema with unnested column type.
                 unnest_with_options(Arc::unwrap_or_clone(input), exec_columns, options)
             }
+            LogicalPlan::MatchRecognizePattern(_) => Ok(self),
         }
     }
 
@@ -1142,6 +1152,19 @@ impl LogicalPlan {
                     unnest_with_options(input, columns.clone(), options.clone())?;
                 Ok(new_plan)
             }
+            LogicalPlan::MatchRecognizePattern(match_recognize) => {
+                let input = self.only_input(inputs)?;
+                Ok(LogicalPlan::MatchRecognizePattern(MatchRecognizePattern {
+                    input: Arc::new(input),
+                    schema: Arc::clone(&match_recognize.schema),
+                    partition_by: match_recognize.partition_by.clone(),
+                    order_by: match_recognize.order_by.clone(),
+                    after_skip: match_recognize.after_skip.clone(),
+                    rows_per_match: match_recognize.rows_per_match.clone(),
+                    pattern: match_recognize.pattern.clone(),
+                    symbols: match_recognize.symbols.clone(),
+                }))
+            }
         }
     }
 
@@ -1376,7 +1399,8 @@ impl LogicalPlan {
             | LogicalPlan::Copy(_)
             | LogicalPlan::DescribeTable(_)
             | LogicalPlan::Statement(_)
-            | LogicalPlan::Extension(_) => None,
+            | LogicalPlan::Extension(_)
+            | LogicalPlan::MatchRecognizePattern(_) => None,
         }
     }
 
@@ -2020,6 +2044,9 @@ impl LogicalPlan {
                         write!(f, "Unnest: lists[{}] structs[{}]",
                         expr_vec_fmt!(list_type_columns),
                         expr_vec_fmt!(struct_type_columns))
+                    }
+                    LogicalPlan::MatchRecognizePattern(match_recognize) => {
+                        write!(f, "{}", match_recognize)
                     }
                 }
             }

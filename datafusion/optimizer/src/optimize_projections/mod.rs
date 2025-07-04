@@ -393,6 +393,10 @@ fn optimize_projections(
             });
             vec![required_indices.append(&additional_necessary_child_indices)]
         }
+        LogicalPlan::MatchRecognizePattern(match_recognize) => {
+            // MatchRecognizePattern requires all columns from the input
+            vec![RequiredIndices::new_for_all_exprs(&match_recognize.input)]
+        }
     };
 
     // Required indices are currently ordered (child0, child1, ...)
