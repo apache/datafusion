@@ -455,6 +455,7 @@ mod tests {
 
     use super::*;
     use crate::config::{ParquetColumnOptions, ParquetEncryptionOptions, ParquetOptions};
+    #[cfg(feature = "parquet_encryption")]
     use crate::encryption::map_encryption_to_config_encryption;
 
     const COL_NAME: &str = "configured";
@@ -584,7 +585,10 @@ mod tests {
             HashMap::from([(COL_NAME.into(), configured_col_props)])
         };
 
+        #[cfg(feature = "parquet_encryption")]
         let fep = map_encryption_to_config_encryption(props.file_encryption_properties());
+        #[cfg(not(feature = "parquet_encryption"))]
+        let fep = None;
 
         #[allow(deprecated)] // max_statistics_size
         TableParquetOptions {

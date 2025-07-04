@@ -36,7 +36,9 @@ use parquet::file::properties::WriterPropertiesBuilder;
 
 #[cfg(feature = "parquet")]
 pub fn add_crypto_to_writer_properties(
+    #[allow(unused)]
     crypto: &ParquetEncryptionOptions,
+    #[allow(unused_mut)]
     mut builder: WriterPropertiesBuilder,
 ) -> WriterPropertiesBuilder {
     #[cfg(feature = "parquet_encryption")]
