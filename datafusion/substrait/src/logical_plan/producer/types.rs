@@ -21,7 +21,8 @@ use crate::variation_const::{
     DATE_32_TYPE_VARIATION_REF, DATE_64_TYPE_VARIATION_REF,
     DECIMAL_128_TYPE_VARIATION_REF, DECIMAL_256_TYPE_VARIATION_REF,
     DEFAULT_CONTAINER_TYPE_VARIATION_REF, DEFAULT_INTERVAL_DAY_TYPE_VARIATION_REF,
-    DEFAULT_TYPE_VARIATION_REF,DICTIONARY_CONTAINER_TYPE_VARIATION_REF, DURATION_INTERVAL_DAY_TYPE_VARIATION_REF,
+    DEFAULT_MAP_TYPE_VARIATION_REF, DEFAULT_TYPE_VARIATION_REF,
+    DICTIONARY_MAP_TYPE_VARIATION_REF, DURATION_INTERVAL_DAY_TYPE_VARIATION_REF,
     LARGE_CONTAINER_TYPE_VARIATION_REF, TIME_32_TYPE_VARIATION_REF,
     TIME_64_TYPE_VARIATION_REF, UNSIGNED_INTEGER_TYPE_VARIATION_REF,
     VIEW_CONTAINER_TYPE_VARIATION_REF,
@@ -276,7 +277,7 @@ pub(crate) fn to_substrait_type(
                     kind: Some(r#type::Kind::Map(Box::new(r#type::Map {
                         key: Some(Box::new(key_type)),
                         value: Some(Box::new(value_type)),
-                        type_variation_reference: DEFAULT_CONTAINER_TYPE_VARIATION_REF,
+                        type_variation_reference: DEFAULT_MAP_TYPE_VARIATION_REF,
                         nullability,
                     }))),
                 })
@@ -290,7 +291,7 @@ pub(crate) fn to_substrait_type(
                 kind: Some(r#type::Kind::Map(Box::new(r#type::Map {
                     key: Some(Box::new(key_type)),
                     value: Some(Box::new(value_type)),
-                    type_variation_reference: DICTIONARY_CONTAINER_TYPE_VARIATION_REF,
+                    type_variation_reference: DICTIONARY_MAP_TYPE_VARIATION_REF,
                     nullability,
                 }))),
             })

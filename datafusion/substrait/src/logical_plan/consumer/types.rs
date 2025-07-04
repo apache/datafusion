@@ -22,7 +22,8 @@ use crate::variation_const::{
     DATE_32_TYPE_VARIATION_REF, DATE_64_TYPE_VARIATION_REF,
     DECIMAL_128_TYPE_VARIATION_REF, DECIMAL_256_TYPE_VARIATION_REF,
     DEFAULT_CONTAINER_TYPE_VARIATION_REF, DEFAULT_INTERVAL_DAY_TYPE_VARIATION_REF,
-    DEFAULT_TYPE_VARIATION_REF,DICTIONARY_CONTAINER_TYPE_VARIATION_REF, DURATION_INTERVAL_DAY_TYPE_VARIATION_REF,
+    DEFAULT_MAP_TYPE_VARIATION_REF, DEFAULT_TYPE_VARIATION_REF,
+    DICTIONARY_MAP_TYPE_VARIATION_REF, DURATION_INTERVAL_DAY_TYPE_VARIATION_REF,
     INTERVAL_DAY_TIME_TYPE_REF, INTERVAL_MONTH_DAY_NANO_TYPE_NAME,
     INTERVAL_MONTH_DAY_NANO_TYPE_REF, INTERVAL_YEAR_MONTH_TYPE_REF,
     LARGE_CONTAINER_TYPE_VARIATION_REF, TIMESTAMP_MICRO_TYPE_VARIATION_REF,
@@ -183,7 +184,7 @@ pub fn from_substrait_type(
                     from_substrait_type(consumer, value_type, dfs_names, name_idx)?;
 
                 match map.type_variation_reference {
-                    DEFAULT_CONTAINER_TYPE_VARIATION_REF => {
+                    DEFAULT_MAP_TYPE_VARIATION_REF => {
                         let key_field = Arc::new(Field::new("key", key_type, false));
                         let value_field = Arc::new(Field::new("value", value_type, true));
                         Ok(DataType::Map(
@@ -195,7 +196,7 @@ pub fn from_substrait_type(
                             false, // whether keys are sorted
                         ))
                     }
-                    DICTIONARY_CONTAINER_TYPE_VARIATION_REF => Ok(DataType::Dictionary(
+                    DICTIONARY_MAP_TYPE_VARIATION_REF => Ok(DataType::Dictionary(
                         Box::new(key_type),
                         Box::new(value_type),
                     )),
