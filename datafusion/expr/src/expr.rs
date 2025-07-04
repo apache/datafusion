@@ -351,6 +351,7 @@ pub enum Expr {
         note = "A wildcard needs to be resolved to concrete expressions when constructing the logical plan. See https://github.com/apache/datafusion/issues/7765"
     )]
     Wildcard {
+        symbol: Option<String>, // Used exclusively for `COUNT(symbol.*)` in MATCH_RECOGNIZE context
         qualifier: Option<TableReference>,
         options: Box<WildcardOptions>,
     },
@@ -1450,6 +1451,7 @@ impl Expr {
         match self {
             Expr::Column(Column {
                 relation,
+                symbol: _,
                 name,
                 spans: _,
             }) => (relation.clone(), name.clone()),
@@ -2619,7 +2621,8 @@ impl HashNode for Expr {
                 subquery.hash(state);
             }
             #[expect(deprecated)]
-            Expr::Wildcard { qualifier, options } => {
+            Expr::Wildcard { symbol, qualifier, options } => {
+                symbol.hash(state);
                 qualifier.hash(state);
                 options.hash(state);
             }
@@ -3385,9 +3388,11 @@ impl Display for Expr {
                 }
             }
             #[expect(deprecated)]
-            Expr::Wildcard { qualifier, options } => match qualifier {
-                Some(qualifier) => write!(f, "{qualifier}.*{options}"),
-                None => write!(f, "*{options}"),
+            Expr::Wildcard { symbol,qualifier, options } => match (symbol, qualifier) {
+                (Some(symbol), Some(qualifier)) => write!(f, "{symbol}.{qualifier}.*{options}"),
+                (Some(symbol), None) => write!(f, "{symbol}.*{options}"),
+                (None, Some(qualifier)) => write!(f, "{qualifier}.*{options}"),
+                (None, None) => write!(f, "*{options}"),
             },
             Expr::GroupingSet(grouping_sets) => match grouping_sets {
                 GroupingSet::Rollup(exprs) => {

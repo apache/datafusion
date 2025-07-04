@@ -54,6 +54,7 @@ async fn count_only_nulls() -> Result<()> {
     }));
     let input_col_ref = Expr::Column(Column {
         relation: None,
+        symbol: None,
         name: "col".to_string(),
         spans: Spans::new(),
     });

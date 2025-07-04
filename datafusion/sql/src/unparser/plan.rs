@@ -1286,11 +1286,13 @@ impl Unparser<'_> {
                 (
                     Expr::Column(Column {
                         relation: _,
+                        symbol: _,
                         name: left_name,
                         spans: _,
                     }),
                     Expr::Column(Column {
                         relation: _,
+                        symbol: _,
                         name: right_name,
                         spans: _,
                     }),

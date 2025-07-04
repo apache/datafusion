@@ -2539,6 +2539,7 @@ mod tests {
                     field:
                         Column {
                             relation: Some(TableReference::Bare { table }),
+                            symbol: _,
                             name,
                             ..
                         },

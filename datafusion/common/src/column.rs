@@ -31,6 +31,8 @@ use std::str::FromStr;
 pub struct Column {
     /// relation/table reference.
     pub relation: Option<TableReference>,
+    /// symbol reference, used exclusively in MATCH_RECOGNIZE context.
+    pub symbol: Option<String>,
     /// field/column name.
     pub name: String,
     /// Original source code location, if known
@@ -41,6 +43,7 @@ impl fmt::Debug for Column {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Column")
             .field("relation", &self.relation)
+            .field("symbol", &self.symbol)
             .field("name", &self.name)
             .finish()
     }
@@ -59,6 +62,16 @@ impl Column {
     ) -> Self {
         Self {
             relation: relation.map(|r| r.into()),
+            symbol: None,
+            name: name.into(),
+            spans: Spans::new(),
+        }
+    }
+
+    pub fn new_with_symbol(symbol: impl Into<String>, name: impl Into<String>) -> Self {
+        Self {
+            relation: None,
+            symbol: Some(symbol.into()),
             name: name.into(),
             spans: Spans::new(),
         }
@@ -68,6 +81,7 @@ impl Column {
     pub fn new_unqualified(name: impl Into<String>) -> Self {
         Self {
             relation: None,
+            symbol: None,
             name: name.into(),
             spans: Spans::new(),
         }
@@ -79,6 +93,7 @@ impl Column {
     pub fn from_name(name: impl Into<String>) -> Self {
         Self {
             relation: None,
+            symbol: None,
             name: name.into(),
             spans: Spans::new(),
         }
@@ -118,6 +133,7 @@ impl Column {
         };
         Some(Self {
             relation,
+            symbol: None,
             name,
             spans: Spans::new(),
         })
@@ -133,6 +149,7 @@ impl Column {
         Self::from_idents(parse_identifiers_normalized(&flat_name, false)).unwrap_or_else(
             || Self {
                 relation: None,
+                symbol: None,
                 name: flat_name,
                 spans: Spans::new(),
             },
@@ -145,6 +162,7 @@ impl Column {
         Self::from_idents(parse_identifiers_normalized(&flat_name, true)).unwrap_or_else(
             || Self {
                 relation: None,
+                symbol: None,
                 name: flat_name,
                 spans: Spans::new(),
             },
@@ -162,7 +180,10 @@ impl Column {
     pub fn flat_name(&self) -> String {
         match &self.relation {
             Some(r) => format!("{}.{}", r, self.name),
-            None => self.name.clone(),
+            None => match &self.symbol {
+                Some(s) => format!("{}.{}", s, self.name),
+                None => self.name.clone(),
+            },
         }
     }
 
@@ -176,7 +197,10 @@ impl Column {
                     quote_identifier(self.name.as_str())
                 )
             }
-            None => quote_identifier(&self.name).to_string(),
+            None => match &self.symbol {
+                Some(s) => format!("{}.{}", s, quote_identifier(self.name.as_str())),
+                None => quote_identifier(&self.name).to_string(),
+            },
         }
     }
 
@@ -221,7 +245,7 @@ impl Column {
         schemas: &[&[&DFSchema]],
         using_columns: &[HashSet<Column>],
     ) -> Result<Self> {
-        if self.relation.is_some() {
+        if self.relation.is_some() || self.symbol.is_some() {
             return Ok(self);
         }
 
@@ -317,6 +341,13 @@ impl Column {
     pub fn with_relation(&self, relation: TableReference) -> Self {
         Self {
             relation: Some(relation),
+            ..self.clone()
+        }
+    }
+
+    pub fn with_symbol(&self, symbol: String) -> Self {
+        Self {
+            symbol: Some(symbol),
             ..self.clone()
         }
     }

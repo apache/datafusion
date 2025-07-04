@@ -535,6 +535,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             } => {
                 #[expect(deprecated)]
                 let expr = Expr::Wildcard {
+                    symbol: None,
                     qualifier: None,
                     options: Box::new(WildcardOptions::default()),
                 };
@@ -547,6 +548,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             FunctionArg::Unnamed(FunctionArgExpr::Wildcard) => {
                 #[expect(deprecated)]
                 let expr = Expr::Wildcard {
+                    symbol: None,
                     qualifier: None,
                     options: Box::new(WildcardOptions::default()),
                 };
@@ -563,6 +565,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
                 #[expect(deprecated)]
                 let expr = Expr::Wildcard {
+                    symbol: None,
                     qualifier: qualifier.into(),
                     options: Box::new(WildcardOptions::default()),
                 };
