@@ -23,7 +23,7 @@ use std::mem::size_of;
 use std::sync::Arc;
 
 use crate::joins::utils::{JoinFilter, JoinHashMapType};
-use crate::metrics::{ExecutionPlanMetricsSet, MetricBuilder};
+use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricBuilder};
 use crate::{metrics, ExecutionPlan};
 
 use arrow::array::{
@@ -659,7 +659,7 @@ pub struct StreamJoinMetrics {
     /// Number of batches produced by this operator
     pub(crate) output_batches: metrics::Count,
     /// Number of rows produced by this operator
-    pub(crate) output_rows: metrics::Count,
+    pub(crate) baseline_metrics: BaselineMetrics,
 }
 
 impl StreamJoinMetrics {
@@ -686,14 +686,12 @@ impl StreamJoinMetrics {
         let output_batches =
             MetricBuilder::new(metrics).counter("output_batches", partition);
 
-        let output_rows = MetricBuilder::new(metrics).output_rows(partition);
-
         Self {
             left,
             right,
             output_batches,
             stream_memory_usage,
-            output_rows,
+            baseline_metrics: BaselineMetrics::new(metrics, partition),
         }
     }
 }
