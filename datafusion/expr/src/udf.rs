@@ -60,7 +60,11 @@ pub struct ScalarUDF {
 
 impl PartialEq for ScalarUDF {
     fn eq(&self, other: &Self) -> bool {
-        self.inner.equals(other.inner.as_ref())
+        if Arc::ptr_eq(&self.inner, &other.inner) {
+            true
+        } else {
+            self.inner.equals(other.inner.as_ref())
+        }
     }
 }
 
