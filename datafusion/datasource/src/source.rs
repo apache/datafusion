@@ -33,8 +33,11 @@ use crate::file_scan_config::FileScanConfig;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{Constraints, Result, Statistics};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
-use datafusion_physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr};
+use datafusion_physical_expr::{
+    conjunction, EquivalenceProperties, Partitioning, PhysicalExpr,
+};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
+use datafusion_physical_plan::filter::collect_columns_from_predicate;
 use datafusion_physical_plan::filter_pushdown::{
     ChildPushdownResult, FilterPushdownPropagation,
 };
@@ -328,6 +331,9 @@ impl ExecutionPlan for DataSourceExec {
                 new_node.data_source = data_source;
                 new_node.cache =
                     Self::compute_properties(Arc::clone(&new_node.data_source));
+                // Add the missing filters' equivalence info when filters pushdown is applied
+                let filter = conjunction(res.filters.collect_supported());
+                new_node = new_node.add_filter_equivalence_info(filter)?;
                 Ok(FilterPushdownPropagation {
                     filters: res.filters,
                     updated_node: Some(Arc::new(new_node)),
@@ -372,6 +378,20 @@ impl DataSourceExec {
     pub fn with_partitioning(mut self, partitioning: Partitioning) -> Self {
         self.cache = self.cache.with_partitioning(partitioning);
         self
+    }
+
+    /// Add filters' equivalence info
+    fn add_filter_equivalence_info(
+        mut self,
+        filter: Arc<dyn PhysicalExpr>,
+    ) -> Result<Self> {
+        let (equal_pairs, _) = collect_columns_from_predicate(&filter);
+        for (lhs, rhs) in equal_pairs {
+            self.cache
+                .eq_properties
+                .add_equal_conditions(&Arc::clone(lhs), &Arc::clone(rhs))?
+        }
+        Ok(self)
     }
 
     fn compute_properties(data_source: Arc<dyn DataSource>) -> PlanProperties {

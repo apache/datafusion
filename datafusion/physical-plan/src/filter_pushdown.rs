@@ -102,6 +102,18 @@ impl PredicateSupports {
             .collect()
     }
 
+    /// Collect supported filters into a Vec, without removing them from the original
+    /// [`PredicateSupport`].
+    pub fn collect_supported(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+        self.0
+            .iter()
+            .filter_map(|f| match f {
+                PredicateSupport::Supported(expr) => Some(Arc::clone(expr)),
+                PredicateSupport::Unsupported(_) => None,
+            })
+            .collect()
+    }
+
     /// Collect all filters into a Vec, without removing them from the original
     /// FilterPushdowns.
     pub fn collect_all(self) -> Vec<Arc<dyn PhysicalExpr>> {
