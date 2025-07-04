@@ -2155,6 +2155,7 @@ dependencies = [
  "datafusion-expr",
  "datafusion-functions-aggregate",
  "datafusion-physical-expr",
+ "datafusion-physical-expr-adapter",
  "datafusion-physical-expr-common",
  "datafusion-physical-optimizer",
  "datafusion-physical-plan",
@@ -2459,6 +2460,21 @@ dependencies = [
  "paste",
  "petgraph 0.8.2",
  "rand 0.9.1",
+ "rstest",
+]
+
+[[package]]
+name = "datafusion-physical-expr-adapter"
+version = "48.0.0"
+dependencies = [
+ "arrow",
+ "datafusion-common",
+ "datafusion-expr",
+ "datafusion-functions",
+ "datafusion-physical-expr",
+ "datafusion-physical-expr-common",
+ "insta",
+ "itertools 0.14.0",
  "rstest",
 ]
 
