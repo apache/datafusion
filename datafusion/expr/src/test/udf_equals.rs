@@ -85,6 +85,40 @@ impl ScalarUDFImpl for SignatureUdf {
     }
 }
 
+#[derive(Debug)]
+#[allow(dead_code)]
+struct DefaultParamUdf {
+    param: i32,
+    signature: Signature,
+}
+
+impl DefaultParamUdf {
+    fn new(param: i32) -> Self {
+        Self {
+            param,
+            signature: Signature::exact(vec![DataType::Int32], Volatility::Immutable),
+        }
+    }
+}
+
+impl ScalarUDFImpl for DefaultParamUdf {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn name(&self) -> &str {
+        "default_param_udf"
+    }
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(DataType::Int32)
+    }
+    fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        not_impl_err!("not used")
+    }
+}
+
 #[test]
 fn different_instances_not_equal() {
     let udf1 = ScalarUDF::from(ParamUdf::new(1));
@@ -111,4 +145,18 @@ fn same_types_equal() {
     let udf1 = ScalarUDF::from(SignatureUdf::new());
     let udf2 = ScalarUDF::from(SignatureUdf::new());
     assert_eq!(udf1, udf2);
+}
+
+#[test]
+fn default_udfs_with_same_param_not_equal() {
+    let udf1 = ScalarUDF::from(DefaultParamUdf::new(1));
+    let udf2 = ScalarUDF::from(DefaultParamUdf::new(1));
+    assert_ne!(udf1, udf2);
+}
+
+#[test]
+fn default_udfs_with_different_param_not_equal() {
+    let udf1 = ScalarUDF::from(DefaultParamUdf::new(1));
+    let udf2 = ScalarUDF::from(DefaultParamUdf::new(2));
+    assert_ne!(udf1, udf2);
 }
