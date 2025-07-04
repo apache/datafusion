@@ -2640,7 +2640,7 @@ impl ScalarValue {
                         value_offsets,
                         child_arrays,
                     )
-                    .map_err(|e| DataFusionError::ArrowError(e, None))?;
+                    .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))?;
                     Arc::new(ar)
                 }
                 None => {
@@ -6679,10 +6679,7 @@ mod tests {
                     let err = value.arithmetic_negate().expect_err("Should receive overflow error on negating {value:?}");
                     let root_err = err.find_root();
                     match  root_err{
-                        DataFusionError::ArrowError(
-                            ArrowError::ArithmeticOverflow(_),
-                            _,
-                        ) => {}
+                        DataFusionError::ArrowError(err, _) if matches!(err.as_ref(), ArrowError::ArithmeticOverflow(_)) => {}
                         _ => return Err(err),
                     };
                 }
