@@ -48,11 +48,11 @@ impl ScalarUDFImpl for ParamUdf {
 
 #[derive(Debug)]
 #[allow(dead_code)]
-struct AnotherParamUdf {
+struct SignatureUdf {
     signature: Signature,
 }
 
-impl AnotherParamUdf {
+impl SignatureUdf {
     fn new() -> Self {
         Self {
             signature: Signature::exact(vec![DataType::Int32], Volatility::Immutable),
@@ -60,7 +60,7 @@ impl AnotherParamUdf {
     }
 }
 
-impl ScalarUDFImpl for AnotherParamUdf {
+impl ScalarUDFImpl for SignatureUdf {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -77,7 +77,7 @@ impl ScalarUDFImpl for AnotherParamUdf {
         not_impl_err!("not used")
     }
     fn equals(&self, other: &dyn ScalarUDFImpl) -> bool {
-        if let Some(other) = other.as_any().downcast_ref::<AnotherParamUdf>() {
+        if let Some(other) = other.as_any().downcast_ref::<SignatureUdf>() {
             self.type_id() == other.type_id()
         } else {
             false
@@ -95,7 +95,7 @@ fn different_instances_not_equal() {
 #[test]
 fn different_types_not_equal() {
     let udf1 = ScalarUDF::from(ParamUdf::new(1));
-    let udf2 = ScalarUDF::from(AnotherParamUdf::new());
+    let udf2 = ScalarUDF::from(SignatureUdf::new());
     assert_ne!(udf1, udf2);
 }
 
@@ -108,7 +108,7 @@ fn same_state_equal() {
 
 #[test]
 fn same_types_equal() {
-    let udf1 = ScalarUDF::from(AnotherParamUdf::new());
-    let udf2 = ScalarUDF::from(AnotherParamUdf::new());
+    let udf1 = ScalarUDF::from(SignatureUdf::new());
+    let udf2 = ScalarUDF::from(SignatureUdf::new());
     assert_eq!(udf1, udf2);
 }
