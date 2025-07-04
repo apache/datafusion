@@ -32,6 +32,7 @@ machine size. Please see [#16652] for more details.
 
 Errors that are now `Box`ed include:
 
+- `DataFusionError`
 - `SchemaError`
 
 Typically this means to create such a variant instead of
