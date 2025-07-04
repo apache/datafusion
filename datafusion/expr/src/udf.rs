@@ -712,21 +712,6 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
             return true;
         }
 
-        // if the types are different, the UDFs are not the same
-        if self.as_any().type_id() != other.as_any().type_id() {
-            return false;
-        }
-
-        // if the names are different, the UDFs are not the same
-        if self.name() != other.name() {
-            return false;
-        }
-
-        // if the signatures are different, the UDFs are not the same
-        if self.signature() != other.signature() {
-            return false;
-        }
-
         // if the types, names and signatures are the same, we can't know if they are the same so we
         // assume they are not.
         // If a UDF has internal state that should be compared, it should implement this method
