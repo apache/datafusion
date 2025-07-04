@@ -715,6 +715,7 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     /// # Example
     /// ```rust
     /// use std::any::Any;
+    /// use std::hash::{DefaultHasher, Hash, Hasher};
     /// use arrow::datatypes::DataType;
     /// use datafusion_common::{not_impl_err, Result};
     /// use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature};
@@ -746,6 +747,12 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     ///         } else {
     ///             false
     ///         }
+    ///     }
+    ///     fn hash_value(&self) -> u64 {
+    ///         let mut hasher = DefaultHasher::new();
+    ///         self.param.hash(&mut hasher);
+    ///         self.name().hash(&mut hasher);
+    ///         hasher.finish()
     ///     }
     /// }
     /// ```
