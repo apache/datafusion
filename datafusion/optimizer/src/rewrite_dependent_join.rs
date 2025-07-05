@@ -648,7 +648,6 @@ impl TreeNodeRewriter for DependentJoinRewriter {
                     self.conclude_lowest_dependent_join_node_if_any(new_id, col)
                 })?;
             }
-            LogicalPlan::Unnest(_unnest) => {}
             LogicalPlan::Projection(proj) => {
                 for expr in &proj.expr {
                     if contains_subquery(expr) {

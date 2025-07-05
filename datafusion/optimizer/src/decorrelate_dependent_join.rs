@@ -24,14 +24,17 @@ use std::sync::Arc;
 
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::{internal_datafusion_err, internal_err, Column, Result};
-use datafusion_expr::expr::{self, Exists, InSubquery};
+use datafusion_expr::expr::{
+    self, Exists, InSubquery, WindowFunction, WindowFunctionParams,
+};
 use datafusion_expr::utils::conjunction;
 use datafusion_expr::{
     binary_expr, col, lit, not, when, Aggregate, BinaryExpr, CorrelatedColumnInfo,
-    DependentJoin, Expr, Join, JoinType, LogicalPlan, LogicalPlanBuilder, Operator,
-    Projection,
+    DependentJoin, Expr, FetchType, Join, JoinType, LogicalPlan, LogicalPlanBuilder,
+    Operator, Projection, SkipType, WindowFrame, WindowFunctionDefinition,
 };
 
+use datafusion_functions_window::row_number::row_number_udwf;
 use indexmap::{IndexMap, IndexSet};
 use itertools::Itertools;
 
@@ -999,8 +1002,130 @@ impl DependentJoinDecorrelator {
                     false,
                 );
             }
-            other => {
-                unimplemented!("implement pushdown dependent join for node {other}")
+            LogicalPlan::Limit(old_limit) => {
+                // Check if the direct child of this LIMIT node is an ORDER BY node, if so, keep is
+                // separate. This is done for an optimization to avoid having to compute the total
+                // order.
+
+                let mut sort = None;
+
+                let new_input = if let LogicalPlan::Sort(child) = old_limit.input.as_ref()
+                {
+                    sort = Some(old_limit.input.as_ref().clone());
+                    self.push_down_dependent_join_internal(
+                        &child.input,
+                        parent_propagate_nulls,
+                        lateral_depth,
+                    )?
+                } else {
+                    self.push_down_dependent_join_internal(
+                        &old_limit.input,
+                        parent_propagate_nulls,
+                        lateral_depth,
+                    )?
+                };
+
+                let new_input_cols = new_input.schema().columns().clone();
+
+                // We push a row_number() OVER (PARTITION BY [correlated columns])
+                // TODO: take perform delim into consideration
+                let mut partition_by = vec![];
+                let partition_count = self.domains.len();
+                for i in 0..partition_count {
+                    if let Some(corr_col) = self.domains.get_index(i) {
+                        let delim_col = Self::rewrite_into_delim_column(
+                            &self.correlated_column_to_delim_column,
+                            &corr_col.col,
+                        )?;
+                        partition_by.push(Expr::Column(delim_col));
+                    }
+                }
+
+                let order_by = if let Some(LogicalPlan::Sort(sort)) = &sort {
+                    // Optimization: if there is an ORDER BY node followed by a LIMIT rather than
+                    // computing the entire order, we push the ORDER BY expressions into the
+                    // row_num computation. This way the order only needs to be computed per
+                    // partition.
+                    sort.expr.clone()
+                } else {
+                    vec![]
+                };
+
+                // Create row_number() window function.
+                let row_number_expr = Expr::WindowFunction(Box::new(WindowFunction {
+                    fun: WindowFunctionDefinition::WindowUDF(row_number_udwf()),
+                    params: WindowFunctionParams {
+                        args: vec![],
+                        partition_by,
+                        order_by,
+                        window_frame: WindowFrame::new(Some(false)),
+                        null_treatment: None,
+                    },
+                }))
+                .alias("row_number");
+
+                // Add window function to create row numbers
+                let mut window_exprs = new_input_cols
+                    .iter()
+                    .map(|c| col(c.clone()))
+                    .collect::<Vec<_>>();
+                window_exprs.push(row_number_expr);
+
+                let window_plan = LogicalPlanBuilder::new(new_input)
+                    .window(window_exprs)?
+                    .build()?;
+
+                // Add filter based on row_number
+                // the filter we add is "row_number > offset AND row_number <= offset + limit"
+                let mut filter_conditions = vec![];
+
+                if let FetchType::Literal(Some(fetch)) = old_limit.get_fetch_type()? {
+                    let upper_bound =
+                        if let SkipType::Literal(skip) = old_limit.get_skip_type()? {
+                            // Both offset and limit specified - upper bound is offset + limit.
+                            fetch + skip
+                        } else {
+                            // No offset - upper bound is not only the limit.
+                            fetch
+                        };
+
+                    filter_conditions
+                        .push(col("row_number").lt_eq(lit(upper_bound as i64)));
+                }
+
+                // We only need to add "row_number >= offset + 1" if offset is bigger than 0.
+
+                if let SkipType::Literal(skip) = old_limit.get_skip_type()? {
+                    if skip > 0 {
+                        filter_conditions.push(col("row_number").gt(lit(skip as i64)));
+                    }
+                }
+
+                let mut result_plan = window_plan;
+                if !filter_conditions.is_empty() {
+                    let filter_expr = filter_conditions
+                        .into_iter()
+                        .reduce(|acc, expr| acc.and(expr))
+                        .unwrap();
+
+                    result_plan = LogicalPlanBuilder::new(result_plan)
+                        .filter(filter_expr)?
+                        .build()?;
+                }
+
+                // Project away the row_number column, keeping only original columns
+                let final_exprs = new_input_cols
+                    .iter()
+                    .map(|c| col(c.clone()))
+                    .collect::<Vec<_>>();
+                result_plan = LogicalPlanBuilder::new(result_plan)
+                    .project(final_exprs)?
+                    .build()?;
+
+                return Ok(result_plan);
+            }
+            plan_ => {
+                unimplemented!("implement pushdown dependent join for node {plan_}")
             }
         }
     }
