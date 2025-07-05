@@ -85,4 +85,3 @@
 ## PySpark 3.5.5 Result: {'mask(NULL, NULL, NULL, NULL, o)': None, 'typeof(mask(NULL, NULL, NULL, NULL, o))': 'string', 'typeof(NULL)': 'void', 'typeof(o)': 'string'}
 #query
 #SELECT mask(NULL::void, 'o'::string);
-

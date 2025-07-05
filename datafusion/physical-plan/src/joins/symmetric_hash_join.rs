@@ -1375,8 +1375,10 @@ impl<T: BatchTransformer> SymmetricHashJoinStream<T> {
                 }
                 Some((batch, _)) => {
                     self.metrics.output_batches.add(1);
-                    self.metrics.output_rows.add(batch.num_rows());
-                    return Poll::Ready(Some(Ok(batch)));
+                    return self
+                        .metrics
+                        .baseline_metrics
+                        .record_poll(Poll::Ready(Some(Ok(batch))));
                 }
             }
         }

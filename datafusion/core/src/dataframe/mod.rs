@@ -61,7 +61,7 @@ use datafusion_expr::{
     expr::{Alias, ScalarFunction},
     is_null, lit,
     utils::COUNT_STAR_EXPANSION,
-    SortExpr, TableProviderFilterPushDown, UNNAMED_TABLE,
+    ExplainOption, SortExpr, TableProviderFilterPushDown, UNNAMED_TABLE,
 };
 use datafusion_functions::core::coalesce;
 use datafusion_functions_aggregate::expr_fn::{
@@ -1602,6 +1602,8 @@ impl DataFrame {
     /// Return a DataFrame with the explanation of its plan so far.
     ///
     /// if `analyze` is specified, runs the plan and reports metrics
+    /// if `verbose` is true, prints out additional details.
+    /// The default format is Indent format.
     ///
     /// ```
     /// # use datafusion::prelude::*;
@@ -1615,11 +1617,38 @@ impl DataFrame {
     /// # }
     /// ```
     pub fn explain(self, verbose: bool, analyze: bool) -> Result<DataFrame> {
+        // Set the default format to Indent to keep the previous behavior
+        let opts = ExplainOption::default()
+            .with_verbose(verbose)
+            .with_analyze(analyze);
+        self.explain_with_options(opts)
+    }
+
+    /// Return a DataFrame with the explanation of its plan so far.
+    ///
+    /// `opt` is used to specify the options for the explain operation.
+    /// Details of the options can be found in [`ExplainOption`].
+    /// ```
+    /// # use datafusion::prelude::*;
+    /// # use datafusion::error::Result;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// use datafusion_expr::{Explain, ExplainOption};
+    /// let ctx = SessionContext::new();
+    /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
+    /// let batches = df.limit(0, Some(100))?.explain_with_options(ExplainOption::default().with_verbose(false).with_analyze(false))?.collect().await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn explain_with_options(
+        self,
+        explain_option: ExplainOption,
+    ) -> Result<DataFrame> {
         if matches!(self.plan, LogicalPlan::Explain(_)) {
             return plan_err!("Nested EXPLAINs are not supported");
         }
         let plan = LogicalPlanBuilder::from(self.plan)
-            .explain(verbose, analyze)?
+            .explain_option_format(explain_option)?
             .build()?;
         Ok(DataFrame {
             session_state: self.session_state,
@@ -2007,10 +2036,11 @@ impl DataFrame {
             match self.plan.schema().qualified_field_from_column(&old_column) {
                 Ok(qualifier_and_field) => qualifier_and_field,
                 // no-op if field not found
-                Err(DataFusionError::SchemaError(
-                    SchemaError::FieldNotFound { .. },
-                    _,
-                )) => return Ok(self),
+                Err(DataFusionError::SchemaError(e, _))
+                    if matches!(*e, SchemaError::FieldNotFound { .. }) =>
+                {
+                    return Ok(self);
+                }
                 Err(err) => return Err(err),
             };
         let projection = self

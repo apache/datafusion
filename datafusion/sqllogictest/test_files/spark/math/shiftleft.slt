@@ -25,4 +25,3 @@
 ## PySpark 3.5.5 Result: {'shiftleft(2, 1)': 4, 'typeof(shiftleft(2, 1))': 'int', 'typeof(2)': 'int', 'typeof(1)': 'int'}
 #query
 #SELECT shiftleft(2::int, 1::int);
-

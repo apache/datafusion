@@ -25,4 +25,3 @@
 ## PySpark 3.5.5 Result: {'COT(1)': 0.6420926159343306, 'typeof(COT(1))': 'double', 'typeof(1)': 'int'}
 #query
 #SELECT cot(1::int);
-

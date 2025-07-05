@@ -25,4 +25,3 @@
 ## PySpark 3.5.5 Result: {'dayofyear(2016-04-09)': 100, 'typeof(dayofyear(2016-04-09))': 'int', 'typeof(2016-04-09)': 'string'}
 #query
 #SELECT dayofyear('2016-04-09'::string);
-

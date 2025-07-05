@@ -25,4 +25,3 @@
 ## PySpark 3.5.5 Result: {'right(Spark SQL, 3)': 'SQL', 'typeof(right(Spark SQL, 3))': 'string', 'typeof(Spark SQL)': 'string', 'typeof(3)': 'int'}
 #query
 #SELECT right('Spark SQL'::string, 3::int);
-

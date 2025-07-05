@@ -821,7 +821,7 @@ impl ExprFuncBuilder {
 
         let fun_expr = match fun {
             ExprFuncKind::Aggregate(mut udaf) => {
-                udaf.params.order_by = order_by;
+                udaf.params.order_by = order_by.unwrap_or_default();
                 udaf.params.filter = filter.map(Box::new);
                 udaf.params.distinct = distinct;
                 udaf.params.null_treatment = null_treatment;

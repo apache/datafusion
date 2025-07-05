@@ -35,4 +35,3 @@
 ## PySpark 3.5.5 Result: {'lpad(hi, 5, ??)': '???hi', 'typeof(lpad(hi, 5, ??))': 'string', 'typeof(hi)': 'string', 'typeof(5)': 'int', 'typeof(??)': 'string'}
 #query
 #SELECT lpad('hi'::string, 5::int, '??'::string);
-

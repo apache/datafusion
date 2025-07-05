@@ -30,4 +30,3 @@
 ## PySpark 3.5.5 Result: {'bround(25, -1)': 20, 'typeof(bround(25, -1))': 'int', 'typeof(25)': 'int', 'typeof(-1)': 'int'}
 #query
 #SELECT bround(25::int, -1::int);
-
