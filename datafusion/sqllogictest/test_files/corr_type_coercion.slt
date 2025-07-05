@@ -15,10 +15,6 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# Tests for the correlation function type coercion
-# These tests verify that the correlation function properly coerces
-# different numeric types to Float64 during physical planning
-
 statement ok
 CREATE TABLE numeric_types (
     int8_col TINYINT,
@@ -178,7 +174,7 @@ query TT
 EXPLAIN SELECT corr(int8_col, float32_col) FROM numeric_types;
 ----
 logical_plan
-01)Aggregate: groupBy=[[]], aggr=[[corr(CAST(numeric_types.int8_col AS Float32), numeric_types.float32_col)]]
+01)Aggregate: groupBy=[[]], aggr=[[corr(CAST(numeric_types.int8_col AS Float64), CAST(numeric_types.float32_col AS Float64))]]
 02)--TableScan: numeric_types projection=[int8_col, float32_col]
 physical_plan
 01)AggregateExec: mode=Single, gby=[], aggr=[corr(numeric_types.int8_col,numeric_types.float32_col)]
@@ -231,7 +227,7 @@ EXPLAIN SELECT id2, id4, power(corr(v1, v2), 2) as r2 FROM benchmark_data GROUP 
 ----
 logical_plan
 01)Projection: benchmark_data.id2, benchmark_data.id4, power(corr(benchmark_data.v1,benchmark_data.v2), Float64(2)) AS r2
-02)--Aggregate: groupBy=[[benchmark_data.id2, benchmark_data.id4]], aggr=[[corr(benchmark_data.v1, benchmark_data.v2)]]
+02)--Aggregate: groupBy=[[benchmark_data.id2, benchmark_data.id4]], aggr=[[corr(CAST(benchmark_data.v1 AS Float64), CAST(benchmark_data.v2 AS Float64))]]
 03)----TableScan: benchmark_data projection=[id2, id4, v1, v2]
 physical_plan
 01)ProjectionExec: expr=[id2@0 as id2, id4@1 as id4, power(corr(benchmark_data.v1,benchmark_data.v2)@2, 2) as r2]

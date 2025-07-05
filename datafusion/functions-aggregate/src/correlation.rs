@@ -38,10 +38,9 @@ use log::debug;
 
 use crate::covariance::CovarianceAccumulator;
 use crate::stddev::StddevAccumulator;
-use datafusion_common::{plan_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{
     function::{AccumulatorArgs, StateFieldsArgs},
-    type_coercion::aggregates::{coerce_correlation_type, NUMERICS},
     utils::format_state_name,
     Accumulator, AggregateUDFImpl, Documentation, Signature, Volatility,
 };
@@ -83,10 +82,13 @@ impl Default for Correlation {
 }
 
 impl Correlation {
-    /// Create a new COVAR_POP aggregate function
+    /// Create a new CORR aggregate function
     pub fn new() -> Self {
         Self {
-            signature: Signature::uniform(2, NUMERICS.to_vec(), Volatility::Immutable),
+            signature: Signature::exact(
+                vec![DataType::Float64, DataType::Float64],
+                Volatility::Immutable,
+            ),
         }
     }
 }
@@ -105,16 +107,7 @@ impl AggregateUDFImpl for Correlation {
         &self.signature
     }
 
-    /// Custom type coercion to ensure all args are coerced to Float64
-    fn coerce_types(&self, input_types: &[DataType]) -> Result<Vec<DataType>> {
-        coerce_correlation_type(self.name(), input_types)
-    }
-
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if !arg_types[0].is_numeric() {
-            return plan_err!("Correlation requires numeric input types");
-        }
-
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         Ok(DataType::Float64)
     }
 
