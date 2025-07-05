@@ -131,13 +131,25 @@ pub fn normalize_sorts(
 }
 
 /// Recursively replace all [`Column`] expressions in a given expression tree with
-/// `Column` expressions provided by the hash map argument.
-pub fn replace_col(expr: Expr, replace_map: &HashMap<&Column, &Column>) -> Result<Expr> {
+/// the expressions provided by the hash map argument.
+///
+/// # Arguments
+/// * `expr` - The expression to transform
+/// * `replace_map` - A mapping from Column to replacement expression
+/// * `to_expr` - A function that converts the replacement value to an Expr
+pub fn replace_col<V, F>(
+    expr: Expr,
+    replace_map: &HashMap<&Column, V>,
+    to_expr: F,
+) -> Result<Expr>
+where
+    F: Fn(&V) -> Expr,
+{
     expr.transform(|expr| {
         Ok({
             if let Expr::Column(c) = &expr {
                 match replace_map.get(c) {
-                    Some(new_c) => Transformed::yes(Expr::Column((*new_c).to_owned())),
+                    Some(replacement) => Transformed::yes(to_expr(replacement)),
                     None => Transformed::no(expr),
                 }
             } else {
