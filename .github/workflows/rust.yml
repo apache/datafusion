@@ -274,7 +274,7 @@ jobs:
       - name: Rust Dependency Cache
         uses: Swatinem/rust-cache@v2
         with:
-         save-if: ${{ github.ref_name == 'main' }} || ${{ github.ref_name == 'ci-cache' }}
+#         save-if: ${{ github.ref_name == 'main' }}
          shared-key: "amd-ci"
       - name: Run tests (excluding doctests and datafusion-cli)
         env:
