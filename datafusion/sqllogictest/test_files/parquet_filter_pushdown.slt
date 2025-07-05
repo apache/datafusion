@@ -113,6 +113,44 @@ physical_plan
 02)--SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]
 03)----DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_table/1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_table/2.parquet]]}, projection=[a], file_type=parquet, predicate=b@1 > 2, pruning_predicate=b_null_count@1 != row_count@2 AND b_max@0 > 2, required_guarantees=[]
 
+query T
+select a from t where b = 2 ORDER BY b;
+----
+bar
+
+query T
+select a from t_pushdown where b = 2 ORDER BY b;
+----
+bar
+
+query TT
+EXPLAIN select a from t where b = 2 ORDER BY b;
+----
+logical_plan
+01)Projection: t.a
+02)--Sort: t.b ASC NULLS LAST
+03)----Filter: t.b = Int32(2)
+04)------TableScan: t projection=[a, b], partial_filters=[t.b = Int32(2)]
+physical_plan
+01)CoalescePartitionsExec
+02)--ProjectionExec: expr=[a@0 as a]
+03)----CoalesceBatchesExec: target_batch_size=8192
+04)------FilterExec: b@1 = 2
+05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=2
+06)----------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_table/1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_table/2.parquet]]}, projection=[a, b], file_type=parquet, predicate=b@1 = 2, pruning_predicate=b_null_count@2 != row_count@3 AND b_min@0 <= 2 AND 2 <= b_max@1, required_guarantees=[b in (2)]
+
+query TT
+EXPLAIN select a from t_pushdown where b = 2 ORDER BY b;
+----
+logical_plan
+01)Projection: t_pushdown.a
+02)--Sort: t_pushdown.b ASC NULLS LAST
+03)----Filter: t_pushdown.b = Int32(2)
+04)------TableScan: t_pushdown projection=[a, b], partial_filters=[t_pushdown.b = Int32(2)]
+physical_plan
+01)CoalescePartitionsExec
+02)--DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_table/1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_table/2.parquet]]}, projection=[a], file_type=parquet, predicate=b@1 = 2, pruning_predicate=b_null_count@2 != row_count@3 AND b_min@0 <= 2 AND 2 <= b_max@1, required_guarantees=[b in (2)]
+
 # If we set the setting to `true` it override's the table's setting
 statement ok
 set datafusion.execution.parquet.pushdown_filters = true;
@@ -160,6 +198,40 @@ physical_plan
 01)SortPreservingMergeExec: [a@0 ASC NULLS LAST]
 02)--SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]
 03)----DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_table/1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_table/2.parquet]]}, projection=[a], file_type=parquet, predicate=b@1 > 2, pruning_predicate=b_null_count@1 != row_count@2 AND b_max@0 > 2, required_guarantees=[]
+
+query T
+select a from t where b = 2 ORDER BY b;
+----
+bar
+
+query T
+select a from t_pushdown where b = 2 ORDER BY b;
+----
+bar
+
+query TT
+EXPLAIN select a from t where b = 2 ORDER BY b;
+----
+logical_plan
+01)Projection: t.a
+02)--Sort: t.b ASC NULLS LAST
+03)----Filter: t.b = Int32(2)
+04)------TableScan: t projection=[a, b], partial_filters=[t.b = Int32(2)]
+physical_plan
+01)CoalescePartitionsExec
+02)--DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_table/1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_table/2.parquet]]}, projection=[a], file_type=parquet, predicate=b@1 = 2, pruning_predicate=b_null_count@2 != row_count@3 AND b_min@0 <= 2 AND 2 <= b_max@1, required_guarantees=[b in (2)]
+
+query TT
+EXPLAIN select a from t_pushdown where b = 2 ORDER BY b;
+----
+logical_plan
+01)Projection: t_pushdown.a
+02)--Sort: t_pushdown.b ASC NULLS LAST
+03)----Filter: t_pushdown.b = Int32(2)
+04)------TableScan: t_pushdown projection=[a, b], partial_filters=[t_pushdown.b = Int32(2)]
+physical_plan
+01)CoalescePartitionsExec
+02)--DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_table/1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_table/2.parquet]]}, projection=[a], file_type=parquet, predicate=b@1 = 2, pruning_predicate=b_null_count@2 != row_count@3 AND b_min@0 <= 2 AND 2 <= b_max@1, required_guarantees=[b in (2)]
 
 # If we reset the default the table created without pushdown goes back to disabling it
 statement ok
@@ -212,6 +284,44 @@ physical_plan
 02)--SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]
 03)----DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_table/1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_table/2.parquet]]}, projection=[a], file_type=parquet, predicate=b@1 > 2, pruning_predicate=b_null_count@1 != row_count@2 AND b_max@0 > 2, required_guarantees=[]
 
+query T
+select a from t where b = 2 ORDER BY b;
+----
+bar
+
+query T
+select a from t_pushdown where b = 2 ORDER BY b;
+----
+bar
+
+query TT
+EXPLAIN select a from t where b = 2 ORDER BY b;
+----
+logical_plan
+01)Projection: t.a
+02)--Sort: t.b ASC NULLS LAST
+03)----Filter: t.b = Int32(2)
+04)------TableScan: t projection=[a, b], partial_filters=[t.b = Int32(2)]
+physical_plan
+01)CoalescePartitionsExec
+02)--ProjectionExec: expr=[a@0 as a]
+03)----CoalesceBatchesExec: target_batch_size=8192
+04)------FilterExec: b@1 = 2
+05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=2
+06)----------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_table/1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_table/2.parquet]]}, projection=[a, b], file_type=parquet, predicate=b@1 = 2, pruning_predicate=b_null_count@2 != row_count@3 AND b_min@0 <= 2 AND 2 <= b_max@1, required_guarantees=[b in (2)]
+
+query TT
+EXPLAIN select a from t_pushdown where b = 2 ORDER BY b;
+----
+logical_plan
+01)Projection: t_pushdown.a
+02)--Sort: t_pushdown.b ASC NULLS LAST
+03)----Filter: t_pushdown.b = Int32(2)
+04)------TableScan: t_pushdown projection=[a, b], partial_filters=[t_pushdown.b = Int32(2)]
+physical_plan
+01)CoalescePartitionsExec
+02)--DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_table/1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_table/2.parquet]]}, projection=[a], file_type=parquet, predicate=b@1 = 2, pruning_predicate=b_null_count@2 != row_count@3 AND b_min@0 <= 2 AND 2 <= b_max@1, required_guarantees=[b in (2)]
+
 # When filter pushdown *is* enabled, ParquetExec can filter exactly,
 # not just metadata, so we expect to see no FilterExec
 query T
@@ -238,6 +348,23 @@ physical_plan
 04)------FilterExec: b@1 > 2, projection=[a@0]
 05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=2
 06)----------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_table/1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_table/2.parquet]]}, projection=[a, b], file_type=parquet, predicate=b@1 > 2, pruning_predicate=b_null_count@1 != row_count@2 AND b_max@0 > 2, required_guarantees=[]
+
+query T
+select a from t_pushdown where b = 2 ORDER BY b;
+----
+bar
+
+query TT
+EXPLAIN select a from t_pushdown where b = 2 ORDER BY b;
+----
+logical_plan
+01)Projection: t_pushdown.a
+02)--Sort: t_pushdown.b ASC NULLS LAST
+03)----Filter: t_pushdown.b = Int32(2)
+04)------TableScan: t_pushdown projection=[a, b], partial_filters=[t_pushdown.b = Int32(2)]
+physical_plan
+01)CoalescePartitionsExec
+02)--DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_table/1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_table/2.parquet]]}, projection=[a], file_type=parquet, predicate=b@1 = 2, pruning_predicate=b_null_count@2 != row_count@3 AND b_min@0 <= 2 AND 2 <= b_max@1, required_guarantees=[b in (2)]
 
 # also test querying on columns that are not in all the files
 query T
