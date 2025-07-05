@@ -1166,7 +1166,46 @@ impl DependentJoinDecorrelator {
                 sort.input = Arc::new(new_input);
                 Ok(LogicalPlan::Sort(sort))
             }
+            LogicalPlan::TableScan(old_table_scan) => {
+                let delim_scan = self.build_delim_scan()?;
 
+                // Add correlated columns to the table scan output
+                let mut projection_exprs: Vec<Expr> = old_table_scan
+                    .projected_schema
+                    .columns()
+                    .into_iter()
+                    .map(|c| Expr::Column(c))
+                    .collect();
+
+                // Add delim columns to projection
+                for domain_col in self.domains.iter() {
+                    let delim_col = Self::rewrite_into_delim_column(
+                        &self.correlated_column_to_delim_column,
+                        &domain_col.col,
+                    )?;
+                    projection_exprs.push(Expr::Column(delim_col));
+                }
+
+                // Cross join with delim scan and project
+                let cross_join = LogicalPlanBuilder::new(LogicalPlan::TableScan(
+                    old_table_scan.clone(),
+                ))
+                .join(
+                    delim_scan,
+                    JoinType::Inner,
+                    (Vec::<Column>::new(), Vec::<Column>::new()),
+                    None,
+                )?
+                .project(projection_exprs)?
+                .build()?;
+
+                // Rewrite correlated expressions
+                Self::rewrite_outer_ref_columns(
+                    cross_join,
+                    &self.correlated_column_to_delim_column,
+                    false,
+                )
+            }
             plan_ => {
                 unimplemented!("implement pushdown dependent join for node {plan_}")
             }
