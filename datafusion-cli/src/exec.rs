@@ -330,8 +330,8 @@ impl StatementExecutor {
 
         let df = match ctx.execute_logical_plan(plan).await {
             Ok(df) => Ok(df),
-            Err(DataFusionError::ObjectStore(Generic { store, source: _ }))
-                if "S3".eq_ignore_ascii_case(store)
+            Err(DataFusionError::ObjectStore(err))
+                if matches!(err.as_ref(), Generic { store, source: _ } if "S3".eq_ignore_ascii_case(store))
                     && self.statement_for_retry.is_some() =>
             {
                 warn!("S3 region is incorrect, auto-detecting the correct region (this may be slow). Consider updating your region configuration.");
