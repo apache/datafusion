@@ -447,6 +447,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 substring_from,
                 substring_for,
                 special: _,
+                shorthand: _,
             } => self.sql_substring_to_expr(
                 expr,
                 substring_from,
