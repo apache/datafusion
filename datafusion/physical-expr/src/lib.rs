@@ -39,6 +39,7 @@ mod physical_expr;
 pub mod planner;
 mod scalar_function;
 pub mod schema_rewriter;
+pub mod simplifier;
 pub mod statistics;
 pub mod utils;
 pub mod window;

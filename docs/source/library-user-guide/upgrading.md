@@ -24,6 +24,44 @@
 **Note:** DataFusion `49.0.0` has not been released yet. The information provided in this section pertains to features and changes that have already been merged to the main branch and are awaiting release in this version.
 You can see the current [status of the `49.0.0 `release here](https://github.com/apache/datafusion/issues/16235)
 
+### `DataFusionError` variants are now `Box`ed
+
+To reduce the size of `DataFusionError`, several variants that were previously stored inline are now `Box`ed. This reduces the size of `Result<T, DataFusionError>` and thus stack usage and async state machine size. Please see [#16652] for more details.
+
+The following variants of `DataFusionError` are now boxed:
+
+- `ArrowError`
+- `SQL`
+- `SchemaError`
+
+This is a breaking change. Code that constructs or matches on these variants will need to be updated.
+
+For example, to create a `SchemaError`, instead of:
+
+```rust
+# /* comment to avoid running
+use datafusion_common::{DataFusionError, SchemaError};
+DataFusionError::SchemaError(
+  SchemaError::DuplicateUnqualifiedField { name: "foo".to_string() },
+  Box::new(None)
+)
+# */
+```
+
+You now need to `Box` the inner error:
+
+```rust
+# /* comment to avoid running
+use datafusion_common::{DataFusionError, SchemaError};
+DataFusionError::SchemaError(
+  Box::new(SchemaError::DuplicateUnqualifiedField { name: "foo".to_string() }),
+  Box::new(None)
+)
+# */
+```
+
+[#16652]: https://github.com/apache/datafusion/issues/16652
+
 ### `datafusion.execution.collect_statistics` now defaults to `true`
 
 The default value of the `datafusion.execution.collect_statistics` configuration

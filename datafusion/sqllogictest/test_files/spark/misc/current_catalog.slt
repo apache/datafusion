@@ -25,4 +25,3 @@
 ## PySpark 3.5.5 Result: {'current_catalog()': 'spark_catalog', 'typeof(current_catalog())': 'string'}
 #query
 #SELECT current_catalog();
-

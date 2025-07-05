@@ -25,4 +25,3 @@
 ## PySpark 3.5.5 Result: {'mod(2, 1.8)': Decimal('0.2'), 'typeof(mod(2, 1.8))': 'decimal(2,1)', 'typeof(2)': 'int', 'typeof(1.8)': 'decimal(2,1)'}
 #query
 #SELECT MOD(2::int, 1.8::decimal(2,1));
-

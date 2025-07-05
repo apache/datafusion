@@ -25,4 +25,3 @@
 ## PySpark 3.5.5 Result: {'ASINH(0)': 0.0, 'typeof(ASINH(0))': 'double', 'typeof(0)': 'int'}
 #query
 #SELECT asinh(0::int);
-

@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use insta::assert_snapshot;
+
 use datafusion::assert_batches_eq;
 use datafusion::datasource::stream::{FileStreamProvider, StreamConfig, StreamTable};
 use datafusion::test_util::register_unbounded_file_with_ordering;
@@ -62,28 +64,21 @@ async fn join_change_in_planner() -> Result<()> {
     let dataframe = ctx.sql(sql).await?;
     let physical_plan = dataframe.create_physical_plan().await?;
     let formatted = displayable(physical_plan.as_ref()).indent(true).to_string();
-    let expected = {
-        [
-            "SymmetricHashJoinExec: mode=Partitioned, join_type=Full, on=[(a2@1, a2@1)], filter=CAST(a1@0 AS Int64) > CAST(a1@1 AS Int64) + 3 AND CAST(a1@0 AS Int64) < CAST(a1@1 AS Int64) + 10",
-            "  CoalesceBatchesExec: target_batch_size=8192",
-            "    RepartitionExec: partitioning=Hash([a2@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a1@0 ASC NULLS LAST",
-            "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            // "     DataSourceExec: file_groups={1 group: [[tempdir/left.csv]]}, projection=[a1, a2], file_type=csv, has_header=false",
-            "  CoalesceBatchesExec: target_batch_size=8192",
-            "    RepartitionExec: partitioning=Hash([a2@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a1@0 ASC NULLS LAST",
-            "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            // "     DataSourceExec: file_groups={1 group: [[tempdir/right.csv]]}, projection=[a1, a2], file_type=csv, has_header=false"
-        ]
-    };
-    let mut actual: Vec<&str> = formatted.trim().lines().collect();
-    // Remove CSV lines
-    actual.remove(4);
-    actual.remove(7);
+    let actual = formatted.trim();
 
-    assert_eq!(
-        expected,
-        actual[..],
-        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+    assert_snapshot!(
+        actual,
+        @r"
+    SymmetricHashJoinExec: mode=Partitioned, join_type=Full, on=[(a2@1, a2@1)], filter=CAST(a1@0 AS Int64) > CAST(a1@1 AS Int64) + 3 AND CAST(a1@0 AS Int64) < CAST(a1@1 AS Int64) + 10
+      CoalesceBatchesExec: target_batch_size=8192
+        RepartitionExec: partitioning=Hash([a2@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a1@0 ASC NULLS LAST
+          RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+            StreamingTableExec: partition_sizes=1, projection=[a1, a2], infinite_source=true, output_ordering=[a1@0 ASC NULLS LAST]
+      CoalesceBatchesExec: target_batch_size=8192
+        RepartitionExec: partitioning=Hash([a2@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a1@0 ASC NULLS LAST
+          RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+            StreamingTableExec: partition_sizes=1, projection=[a1, a2], infinite_source=true, output_ordering=[a1@0 ASC NULLS LAST]
+    "
     );
     Ok(())
 }
@@ -130,28 +125,21 @@ async fn join_no_order_on_filter() -> Result<()> {
     let dataframe = ctx.sql(sql).await?;
     let physical_plan = dataframe.create_physical_plan().await?;
     let formatted = displayable(physical_plan.as_ref()).indent(true).to_string();
-    let expected = {
-        [
-            "SymmetricHashJoinExec: mode=Partitioned, join_type=Full, on=[(a2@1, a2@1)], filter=CAST(a3@0 AS Int64) > CAST(a3@1 AS Int64) + 3 AND CAST(a3@0 AS Int64) < CAST(a3@1 AS Int64) + 10",
-            "  CoalesceBatchesExec: target_batch_size=8192",
-            "    RepartitionExec: partitioning=Hash([a2@1], 8), input_partitions=8",
-            "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            // "     DataSourceExec: file_groups={1 group: [[tempdir/left.csv]]}, projection=[a1, a2], file_type=csv, has_header=false",
-            "  CoalesceBatchesExec: target_batch_size=8192",
-            "    RepartitionExec: partitioning=Hash([a2@1], 8), input_partitions=8",
-            "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            // "     DataSourceExec: file_groups={1 group: [[tempdir/right.csv]]}, projection=[a1, a2], file_type=csv, has_header=false"
-        ]
-    };
-    let mut actual: Vec<&str> = formatted.trim().lines().collect();
-    // Remove CSV lines
-    actual.remove(4);
-    actual.remove(7);
+    let actual = formatted.trim();
 
-    assert_eq!(
-        expected,
-        actual[..],
-        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+    assert_snapshot!(
+        actual,
+        @r"
+    SymmetricHashJoinExec: mode=Partitioned, join_type=Full, on=[(a2@1, a2@1)], filter=CAST(a3@0 AS Int64) > CAST(a3@1 AS Int64) + 3 AND CAST(a3@0 AS Int64) < CAST(a3@1 AS Int64) + 10
+      CoalesceBatchesExec: target_batch_size=8192
+        RepartitionExec: partitioning=Hash([a2@1], 8), input_partitions=8
+          RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+            StreamingTableExec: partition_sizes=1, projection=[a1, a2, a3], infinite_source=true, output_ordering=[a1@0 ASC NULLS LAST]
+      CoalesceBatchesExec: target_batch_size=8192
+        RepartitionExec: partitioning=Hash([a2@1], 8), input_partitions=8
+          RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+            StreamingTableExec: partition_sizes=1, projection=[a1, a2, a3], infinite_source=true, output_ordering=[a1@0 ASC NULLS LAST]
+    "
     );
     Ok(())
 }
@@ -180,28 +168,21 @@ async fn join_change_in_planner_without_sort() -> Result<()> {
     let dataframe = ctx.sql(sql).await?;
     let physical_plan = dataframe.create_physical_plan().await?;
     let formatted = displayable(physical_plan.as_ref()).indent(true).to_string();
-    let expected = {
-        [
-            "SymmetricHashJoinExec: mode=Partitioned, join_type=Full, on=[(a2@1, a2@1)], filter=CAST(a1@0 AS Int64) > CAST(a1@1 AS Int64) + 3 AND CAST(a1@0 AS Int64) < CAST(a1@1 AS Int64) + 10",
-            "  CoalesceBatchesExec: target_batch_size=8192",
-            "    RepartitionExec: partitioning=Hash([a2@1], 8), input_partitions=8",
-            "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            // "     DataSourceExec: file_groups={1 group: [[tempdir/left.csv]]}, projection=[a1, a2], file_type=csv, has_header=false",
-            "  CoalesceBatchesExec: target_batch_size=8192",
-            "    RepartitionExec: partitioning=Hash([a2@1], 8), input_partitions=8",
-            "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            // "     DataSourceExec: file_groups={1 group: [[tempdir/right.csv]]}, projection=[a1, a2], file_type=csv, has_header=false"
-        ]
-    };
-    let mut actual: Vec<&str> = formatted.trim().lines().collect();
-    // Remove CSV lines
-    actual.remove(4);
-    actual.remove(7);
+    let actual = formatted.trim();
 
-    assert_eq!(
-        expected,
-        actual[..],
-        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+    assert_snapshot!(
+        actual,
+        @r"
+    SymmetricHashJoinExec: mode=Partitioned, join_type=Full, on=[(a2@1, a2@1)], filter=CAST(a1@0 AS Int64) > CAST(a1@1 AS Int64) + 3 AND CAST(a1@0 AS Int64) < CAST(a1@1 AS Int64) + 10
+      CoalesceBatchesExec: target_batch_size=8192
+        RepartitionExec: partitioning=Hash([a2@1], 8), input_partitions=8
+          RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+            StreamingTableExec: partition_sizes=1, projection=[a1, a2], infinite_source=true
+      CoalesceBatchesExec: target_batch_size=8192
+        RepartitionExec: partitioning=Hash([a2@1], 8), input_partitions=8
+          RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+            StreamingTableExec: partition_sizes=1, projection=[a1, a2], infinite_source=true
+    "
     );
     Ok(())
 }
