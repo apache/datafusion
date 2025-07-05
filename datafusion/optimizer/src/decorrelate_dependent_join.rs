@@ -1150,12 +1150,23 @@ impl DependentJoinDecorrelator {
                 }
 
                 // Create new distinct plan with additional correlated columns
-                let distinct_plan = LogicalPlanBuilder::new(new_input)
+                let distinct = LogicalPlanBuilder::new(new_input)
                     .distinct_on(distinct_exprs, vec![], None)?
                     .build()?;
 
-                return Ok(distinct_plan);
+                return Ok(distinct);
             }
+            LogicalPlan::Sort(old_sort) => {
+                let new_input = self.push_down_dependent_join(
+                    old_sort.input.as_ref(),
+                    parent_propagate_nulls,
+                    lateral_depth,
+                )?;
+                let mut sort = old_sort.clone();
+                sort.input = Arc::new(new_input);
+                Ok(LogicalPlan::Sort(sort))
+            }
+
             plan_ => {
                 unimplemented!("implement pushdown dependent join for node {plan_}")
             }
