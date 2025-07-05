@@ -154,6 +154,7 @@ datafusion-macros = { workspace = true }
 datafusion-physical-optimizer = { workspace = true }
 doc-comment = { workspace = true }
 env_logger = { workspace = true }
+glob = { version = "0.3.0" }
 insta = { workspace = true }
 paste = "^1.0"
 rand = { workspace = true, features = ["small_rng"] }
