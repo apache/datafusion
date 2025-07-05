@@ -435,7 +435,7 @@ physical_plan DataSourceExec: partitions=1, partition_sizes=[1]
 query TT
 EXPLAIN VALUES (('1'||'2')::int unsigned)
 ----
-logical_plan Values: (UInt32(12) AS Utf8("1") || Utf8("2"))
+logical_plan Values: (UInt32(12) AS (Utf8("1") || Utf8("2")))
 physical_plan DataSourceExec: partitions=1, partition_sizes=[1]
 
 
@@ -1403,7 +1403,7 @@ logical_plan
 03)----TableScan: annotated_data_finite2 projection=[a, b]
 physical_plan
 01)SortPreservingMergeExec: [a@0 ASC NULLS LAST]
-02)--ProjectionExec: expr=[a@0 as a, a@0 + b@1 as annotated_data_finite2.a + annotated_data_finite2.b]
+02)--ProjectionExec: expr=[a@0 as a, a@0 + b@1 as (annotated_data_finite2.a + annotated_data_finite2.b)]
 03)----RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], file_type=csv, has_header=true
 
@@ -1598,11 +1598,11 @@ query TT
 EXPLAIN SELECT x/2, x/2+1 FROM t;
 ----
 logical_plan
-01)Projection: __common_expr_1 AS t.x / Int64(2), __common_expr_1 AS t.x / Int64(2) + Int64(1)
+01)Projection: __common_expr_1 AS (t.x / Int64(2)), __common_expr_1 AS (t.x / Int64(2)) + Int64(1)
 02)--Projection: t.x / Int64(2) AS __common_expr_1
 03)----TableScan: t projection=[x]
 physical_plan
-01)ProjectionExec: expr=[__common_expr_1@0 as t.x / Int64(2), __common_expr_1@0 + 1 as t.x / Int64(2) + Int64(1)]
+01)ProjectionExec: expr=[__common_expr_1@0 as (t.x / Int64(2)), __common_expr_1@0 + 1 as ((t.x / Int64(2)) + Int64(1))]
 02)--ProjectionExec: expr=[x@0 / 2 as __common_expr_1]
 03)----DataSourceExec: partitions=1, partition_sizes=[1]
 
@@ -1620,7 +1620,7 @@ logical_plan
 02)--Projection: abs(t.x) AS __common_expr_1, t.y
 03)----TableScan: t projection=[x, y]
 physical_plan
-01)ProjectionExec: expr=[__common_expr_1@0 as abs(t.x), __common_expr_1@0 + abs(y@1) as abs(t.x) + abs(t.y)]
+01)ProjectionExec: expr=[__common_expr_1@0 as abs(t.x), __common_expr_1@0 + abs(y@1) as (abs(t.x) + abs(t.y))]
 02)--ProjectionExec: expr=[abs(x@0) as __common_expr_1, y@1 as y]
 03)----DataSourceExec: partitions=1, partition_sizes=[1]
 
@@ -1659,18 +1659,18 @@ logical_plan
 01)Projection: coalesce(Int64(1), CAST(t.y / t.x AS Int64)), coalesce(Int64(2), CAST(t.y / t.x AS Int64))
 02)--TableScan: t projection=[x, y]
 physical_plan
-01)ProjectionExec: expr=[coalesce(1, CAST(y@1 / x@0 AS Int64)) as coalesce(Int64(1),t.y / t.x), coalesce(2, CAST(y@1 / x@0 AS Int64)) as coalesce(Int64(2),t.y / t.x)]
+01)ProjectionExec: expr=[coalesce(1, CAST(y@1 / x@0 AS Int64)) as coalesce(Int64(1),(t.y / t.x)), coalesce(2, CAST(y@1 / x@0 AS Int64)) as coalesce(Int64(2),(t.y / t.x))]
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 query TT
 EXPLAIN SELECT y > 0 and 1 / y < 1, x > 0 and y > 0 and 1 / y < 1 / x from t;
 ----
 logical_plan
-01)Projection: __common_expr_1 AND Int64(1) / CAST(t.y AS Int64) < Int64(1) AS t.y > Int64(0) AND Int64(1) / t.y < Int64(1), t.x > Int32(0) AND __common_expr_1 AND Int64(1) / CAST(t.y AS Int64) < Int64(1) / CAST(t.x AS Int64) AS t.x > Int64(0) AND t.y > Int64(0) AND Int64(1) / t.y < Int64(1) / t.x
+01)Projection: __common_expr_1 AND Int64(1) / CAST(t.y AS Int64) < Int64(1) AS ((t.y > Int64(0)) AND ((Int64(1) / t.y) < Int64(1))), t.x > Int32(0) AND __common_expr_1 AND Int64(1) / CAST(t.y AS Int64) < Int64(1) / CAST(t.x AS Int64) AS (((t.x > Int64(0)) AND (t.y > Int64(0))) AND ((Int64(1) / t.y) < (Int64(1) / t.x)))
 02)--Projection: t.y > Int32(0) AS __common_expr_1, t.x, t.y
 03)----TableScan: t projection=[x, y]
 physical_plan
-01)ProjectionExec: expr=[__common_expr_1@0 AND 1 / CAST(y@2 AS Int64) < 1 as t.y > Int64(0) AND Int64(1) / t.y < Int64(1), x@1 > 0 AND __common_expr_1@0 AND 1 / CAST(y@2 AS Int64) < 1 / CAST(x@1 AS Int64) as t.x > Int64(0) AND t.y > Int64(0) AND Int64(1) / t.y < Int64(1) / t.x]
+01)ProjectionExec: expr=[__common_expr_1@0 AND 1 / CAST(y@2 AS Int64) < 1 as ((t.y > Int64(0)) AND ((Int64(1) / t.y) < Int64(1))), x@1 > 0 AND __common_expr_1@0 AND 1 / CAST(y@2 AS Int64) < 1 / CAST(x@1 AS Int64) as (((t.x > Int64(0)) AND (t.y > Int64(0))) AND ((Int64(1) / t.y) < (Int64(1) / t.x)))]
 02)--ProjectionExec: expr=[y@1 > 0 as __common_expr_1, x@0 as x, y@1 as y]
 03)----DataSourceExec: partitions=1, partition_sizes=[1]
 
@@ -1678,11 +1678,11 @@ query TT
 EXPLAIN SELECT y = 0 or 1 / y < 1, x = 0 or y = 0 or 1 / y < 1 / x from t;
 ----
 logical_plan
-01)Projection: __common_expr_1 OR Int64(1) / CAST(t.y AS Int64) < Int64(1) AS t.y = Int64(0) OR Int64(1) / t.y < Int64(1), t.x = Int32(0) OR __common_expr_1 OR Int64(1) / CAST(t.y AS Int64) < Int64(1) / CAST(t.x AS Int64) AS t.x = Int64(0) OR t.y = Int64(0) OR Int64(1) / t.y < Int64(1) / t.x
+01)Projection: __common_expr_1 OR Int64(1) / CAST(t.y AS Int64) < Int64(1) AS ((t.y = Int64(0)) OR ((Int64(1) / t.y) < Int64(1))), t.x = Int32(0) OR __common_expr_1 OR Int64(1) / CAST(t.y AS Int64) < Int64(1) / CAST(t.x AS Int64) AS (((t.x = Int64(0)) OR (t.y = Int64(0))) OR ((Int64(1) / t.y) < (Int64(1) / t.x)))
 02)--Projection: t.y = Int32(0) AS __common_expr_1, t.x, t.y
 03)----TableScan: t projection=[x, y]
 physical_plan
-01)ProjectionExec: expr=[__common_expr_1@0 OR 1 / CAST(y@2 AS Int64) < 1 as t.y = Int64(0) OR Int64(1) / t.y < Int64(1), x@1 = 0 OR __common_expr_1@0 OR 1 / CAST(y@2 AS Int64) < 1 / CAST(x@1 AS Int64) as t.x = Int64(0) OR t.y = Int64(0) OR Int64(1) / t.y < Int64(1) / t.x]
+01)ProjectionExec: expr=[__common_expr_1@0 OR 1 / CAST(y@2 AS Int64) < 1 as ((t.y = Int64(0)) OR ((Int64(1) / t.y) < Int64(1))), x@1 = 0 OR __common_expr_1@0 OR 1 / CAST(y@2 AS Int64) < 1 / CAST(x@1 AS Int64) as (((t.x = Int64(0)) OR (t.y = Int64(0))) OR ((Int64(1) / t.y) < (Int64(1) / t.x)))]
 02)--ProjectionExec: expr=[y@1 = 0 as __common_expr_1, x@0 as x, y@1 as y]
 03)----DataSourceExec: partitions=1, partition_sizes=[1]
 
@@ -1801,13 +1801,11 @@ select a + b from (select 1 as a, 2 as b, 1 as "a + b");
 3
 
 # Can't reference an output column by expression over projection.
-query error DataFusion error: Schema error: No field named a\. Valid fields are "a \+ Int64\(1\)"\.
+query error DataFusion error: Schema error: No field named a\. Valid fields are "\(a \+ Int64\(1\)\)"\.
 select a + 1 from (select a+1 from (select 1 as a));
 
-query I
+query error DataFusion error: Schema error: No field named "a \+ Int64\(1\)"\. Did you mean '\(a \+ Int64\(1\)\)'\?\.
 select "a + Int64(1)" + 10 from (select a+1 from (select 1 as a));
-----
-12
 
 # run below query without logical optimizations
 statement ok
