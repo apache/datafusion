@@ -1124,6 +1124,38 @@ impl DependentJoinDecorrelator {
 
                 return Ok(result_plan);
             }
+            LogicalPlan::Distinct(old_distinct) => {
+                // Push down into child.
+                let new_input = self.push_down_dependent_join(
+                    old_distinct.input().as_ref(),
+                    parent_propagate_nulls,
+                    lateral_depth,
+                )?;
+                // Add all correlated columns to the DISTINCT targets.
+                let mut distinct_exprs = old_distinct
+                    .input()
+                    .schema()
+                    .columns()
+                    .into_iter()
+                    .map(|c| col(c.clone()))
+                    .collect::<Vec<_>>();
+
+                // Add correlated columns as additional columns for grouping
+                for domain_col in self.domains.iter() {
+                    let delim_col = Self::rewrite_into_delim_column(
+                        &self.correlated_column_to_delim_column,
+                        &domain_col.col,
+                    )?;
+                    distinct_exprs.push(col(delim_col));
+                }
+
+                // Create new distinct plan with additional correlated columns
+                let distinct_plan = LogicalPlanBuilder::new(new_input)
+                    .distinct_on(distinct_exprs, vec![], None)?
+                    .build()?;
+
+                return Ok(distinct_plan);
+            }
             plan_ => {
                 unimplemented!("implement pushdown dependent join for node {plan_}")
             }
