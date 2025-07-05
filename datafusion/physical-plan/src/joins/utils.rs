@@ -33,7 +33,7 @@ use crate::{
 };
 // compatibility
 pub use super::join_filter::JoinFilter;
-pub use super::join_hash_map::{JoinHashMap, JoinHashMapType};
+pub use super::join_hash_map::JoinHashMapType;
 pub use crate::joins::{JoinOn, JoinOnRef};
 
 use arrow::array::{
