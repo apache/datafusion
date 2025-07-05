@@ -22,14 +22,12 @@ use crate::sink::DataSink;
 use crate::write::demux::{start_demuxer_task, DemuxedStreamReceiver};
 use crate::ListingTableUrl;
 
-use arrow::array::RecordBatch;
 use arrow::datatypes::{DataType, SchemaRef};
 use datafusion_common::Result;
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::dml::InsertOp;
-use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
 
 use async_trait::async_trait;
 use object_store::ObjectStore;
@@ -79,34 +77,13 @@ pub trait FileSink: DataSink {
             .runtime_env()
             .object_store(&config.object_store_url)?;
         let (demux_task, file_stream_rx) = start_demuxer_task(config, data, context);
-        let mut num_rows = self
-            .spawn_writer_tasks_and_join(
-                context,
-                demux_task,
-                file_stream_rx,
-                Arc::clone(&object_store),
-            )
-            .await?;
-        if num_rows == 0 {
-            // If no rows were written, then no files are output either.
-            // In this case, send an empty record batch through to ensure the output file is generated
-            let schema = Arc::clone(&config.output_schema);
-            let empty_batch = RecordBatch::new_empty(Arc::clone(&schema));
-            let data = Box::pin(RecordBatchStreamAdapter::new(
-                schema,
-                futures::stream::iter(vec![Ok(empty_batch)]),
-            ));
-            let (demux_task, file_stream_rx) = start_demuxer_task(config, data, context);
-            num_rows = self
-                .spawn_writer_tasks_and_join(
-                    context,
-                    demux_task,
-                    file_stream_rx,
-                    Arc::clone(&object_store),
-                )
-                .await?;
-        }
-        Ok(num_rows)
+        self.spawn_writer_tasks_and_join(
+            context,
+            demux_task,
+            file_stream_rx,
+            object_store,
+        )
+        .await
     }
 }
 
