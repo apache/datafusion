@@ -91,7 +91,7 @@ fn build_file_list_recurse(
 
 /// If running in a tokio context spawns the execution of `stream` to a separate task
 /// allowing it to execute in parallel with an intermediate buffer of size `buffer`
-pub(crate) fn spawn_buffered(
+pub fn spawn_buffered(
     mut input: SendableRecordBatchStream,
     buffer: usize,
 ) -> SendableRecordBatchStream {
