@@ -1621,6 +1621,7 @@ impl HashJoinStream {
         let (left_side, right_side) = get_final_indices_from_shared_bitmap(
             build_side.left_data.visited_indices_bitmap(),
             self.join_type,
+            false,
         );
         let empty_right_batch = RecordBatch::new_empty(self.right.schema());
         // use the left and right indices to produce the batch result

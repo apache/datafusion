@@ -943,8 +943,11 @@ impl<T: BatchTransformer> NestedLoopJoinStream<T> {
             // Only setting up timer, input is exhausted
             let timer = self.join_metrics.join_time.timer();
             // use the global left bitmap to produce the left indices and right indices
-            let (left_side, right_side) =
-                get_final_indices_from_shared_bitmap(visited_left_side, self.join_type);
+            let (left_side, right_side) = get_final_indices_from_shared_bitmap(
+                visited_left_side,
+                self.join_type,
+                false,
+            );
             let empty_right_batch = RecordBatch::new_empty(self.outer_table.schema());
             // use the left and right indices to produce the batch result
             let result = build_batch_from_indices(
