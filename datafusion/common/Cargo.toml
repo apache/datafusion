@@ -40,9 +40,15 @@ name = "datafusion_common"
 [features]
 avro = ["apache-avro"]
 backtrace = []
+parquet_encryption = [
+    "parquet",
+    "parquet/encryption",
+    "dep:hex",
+]
 pyarrow = ["pyo3", "arrow/pyarrow", "parquet"]
 force_hash_collisions = []
 recursive_protection = ["dep:recursive"]
+parquet = ["dep:parquet"]
 
 [dependencies]
 ahash = { workspace = true }
@@ -58,7 +64,7 @@ base64 = "0.22.1"
 chrono = { workspace = true }
 half = { workspace = true }
 hashbrown = { workspace = true }
-hex = "0.4.3"
+hex = { workspace = true, optional = true }
 indexmap = { workspace = true }
 libc = "0.2.174"
 log = { workspace = true }

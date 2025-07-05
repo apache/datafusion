@@ -247,6 +247,7 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(feature = "parquet_encryption")]
     #[tokio::test]
     async fn roundtrip_parquet_with_encryption() -> Result<()> {
         use parquet::encryption::decrypt::FileDecryptionProperties;
