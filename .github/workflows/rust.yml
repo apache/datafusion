@@ -51,6 +51,11 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
+      - name: Rust Dependency Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          save-if: false # set in linux-test
+          shared-key: "amd-ci"
       - name: Prepare cargo build
         run: |
           # Adding `--locked` here to assert that the `Cargo.lock` file is up to
@@ -99,6 +104,11 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
+      - name: Rust Dependency Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          save-if: false # set in linux-test
+          shared-key: "amd-ci"
       - name: Check datafusion-substrait (default features)
         run: cargo check --profile ci --all-targets -p datafusion-substrait
         #
@@ -162,6 +172,11 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
+      - name: Rust Dependency Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          save-if: false # set in linux-test
+          shared-key: "amd-ci"
       - name: Check datafusion (default features)
         run: cargo check --profile ci --all-targets -p datafusion
       #
@@ -256,6 +271,11 @@ jobs:
         run: rustup toolchain install stable
       - name: Install Protobuf Compiler
         run: sudo apt-get install -y protobuf-compiler
+      - name: Rust Dependency Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+         save-if: ${{ github.ref_name == 'main' }} || ${{ github.ref_name == 'ci-cache' }}
+         shared-key: "amd-ci"
       - name: Run tests (excluding doctests and datafusion-cli)
         env:
           RUST_BACKTRACE: 1
@@ -329,6 +349,11 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
+      - name: Rust Dependency Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          save-if: false # set in linux-test
+          shared-key: "amd-ci"
       - name: Run examples
         run: |
           # test datafusion-sql examples
