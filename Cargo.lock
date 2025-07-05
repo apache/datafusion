@@ -1992,6 +1992,8 @@ dependencies = [
  "regex",
  "rstest",
  "rustyline",
+ "testcontainers",
+ "testcontainers-modules",
  "tokio",
  "url",
 ]
