@@ -1062,7 +1062,7 @@ impl EmbeddedProjection for NestedLoopJoinExec {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use crate::test::TestMemoryExec;
+    use crate::test::{assert_join_metrics, TestMemoryExec};
     use crate::{
         common, expressions::Column, repartition::RepartitionExec, test::build_table_i32,
     };
@@ -1195,7 +1195,7 @@ pub(crate) mod tests {
         join_type: &JoinType,
         join_filter: Option<JoinFilter>,
         context: Arc<TaskContext>,
-    ) -> Result<(Vec<String>, Vec<RecordBatch>)> {
+    ) -> Result<(Vec<String>, Vec<RecordBatch>, MetricsSet)> {
         let partition_count = 4;
 
         // Redistributing right input
@@ -1219,7 +1219,10 @@ pub(crate) mod tests {
                     .collect::<Vec<_>>(),
             );
         }
-        Ok((columns, batches))
+
+        let metrics = nested_loop_join.metrics().unwrap();
+
+        Ok((columns, batches, metrics))
     }
 
     #[tokio::test]
@@ -1228,7 +1231,7 @@ pub(crate) mod tests {
         let left = build_left_table();
         let right = build_right_table();
         let filter = prepare_join_filter();
-        let (columns, batches) = multi_partitioned_join_collect(
+        let (columns, batches, metrics) = multi_partitioned_join_collect(
             left,
             right,
             &JoinType::Inner,
@@ -1245,6 +1248,8 @@ pub(crate) mod tests {
             +----+----+----+----+----+----+
             "#);
 
+        assert_join_metrics!(metrics, 1);
+
         Ok(())
     }
 
@@ -1255,7 +1260,7 @@ pub(crate) mod tests {
         let right = build_right_table();
 
         let filter = prepare_join_filter();
-        let (columns, batches) = multi_partitioned_join_collect(
+        let (columns, batches, metrics) = multi_partitioned_join_collect(
             left,
             right,
             &JoinType::Left,
@@ -1274,6 +1279,8 @@ pub(crate) mod tests {
             +----+----+-----+----+----+----+
             "#);
 
+        assert_join_metrics!(metrics, 3);
+
         Ok(())
     }
 
@@ -1284,7 +1291,7 @@ pub(crate) mod tests {
         let right = build_right_table();
 
         let filter = prepare_join_filter();
-        let (columns, batches) = multi_partitioned_join_collect(
+        let (columns, batches, metrics) = multi_partitioned_join_collect(
             left,
             right,
             &JoinType::Right,
@@ -1303,6 +1310,8 @@ pub(crate) mod tests {
             +----+----+----+----+----+-----+
             "#);
 
+        assert_join_metrics!(metrics, 3);
+
         Ok(())
     }
 
@@ -1313,7 +1322,7 @@ pub(crate) mod tests {
         let right = build_right_table();
 
         let filter = prepare_join_filter();
-        let (columns, batches) = multi_partitioned_join_collect(
+        let (columns, batches, metrics) = multi_partitioned_join_collect(
             left,
             right,
             &JoinType::Full,
@@ -1334,6 +1343,8 @@ pub(crate) mod tests {
             +----+----+-----+----+----+-----+
             "#);
 
+        assert_join_metrics!(metrics, 5);
+
         Ok(())
     }
 
@@ -1344,7 +1355,7 @@ pub(crate) mod tests {
         let right = build_right_table();
 
         let filter = prepare_join_filter();
-        let (columns, batches) = multi_partitioned_join_collect(
+        let (columns, batches, metrics) = multi_partitioned_join_collect(
             left,
             right,
             &JoinType::LeftSemi,
@@ -1361,6 +1372,8 @@ pub(crate) mod tests {
             +----+----+----+
             "#);
 
+        assert_join_metrics!(metrics, 1);
+
         Ok(())
     }
 
@@ -1371,7 +1384,7 @@ pub(crate) mod tests {
         let right = build_right_table();
 
         let filter = prepare_join_filter();
-        let (columns, batches) = multi_partitioned_join_collect(
+        let (columns, batches, metrics) = multi_partitioned_join_collect(
             left,
             right,
             &JoinType::LeftAnti,
@@ -1389,6 +1402,8 @@ pub(crate) mod tests {
             +----+----+-----+
             "#);
 
+        assert_join_metrics!(metrics, 2);
+
         Ok(())
     }
 
@@ -1399,7 +1414,7 @@ pub(crate) mod tests {
         let right = build_right_table();
 
         let filter = prepare_join_filter();
-        let (columns, batches) = multi_partitioned_join_collect(
+        let (columns, batches, metrics) = multi_partitioned_join_collect(
             left,
             right,
             &JoinType::RightSemi,
@@ -1416,6 +1431,8 @@ pub(crate) mod tests {
             +----+----+----+
             "#);
 
+        assert_join_metrics!(metrics, 1);
+
         Ok(())
     }
 
@@ -1426,7 +1443,7 @@ pub(crate) mod tests {
         let right = build_right_table();
 
         let filter = prepare_join_filter();
-        let (columns, batches) = multi_partitioned_join_collect(
+        let (columns, batches, metrics) = multi_partitioned_join_collect(
             left,
             right,
             &JoinType::RightAnti,
@@ -1444,6 +1461,8 @@ pub(crate) mod tests {
             +----+----+-----+
             "#);
 
+        assert_join_metrics!(metrics, 2);
+
         Ok(())
     }
 
@@ -1454,7 +1473,7 @@ pub(crate) mod tests {
         let right = build_right_table();
 
         let filter = prepare_join_filter();
-        let (columns, batches) = multi_partitioned_join_collect(
+        let (columns, batches, metrics) = multi_partitioned_join_collect(
             left,
             right,
             &JoinType::LeftMark,
@@ -1473,6 +1492,8 @@ pub(crate) mod tests {
             +----+----+-----+-------+
             "#);
 
+        assert_join_metrics!(metrics, 3);
+
         Ok(())
     }
 
@@ -1483,7 +1504,7 @@ pub(crate) mod tests {
         let right = build_right_table();
 
         let filter = prepare_join_filter();
-        let (columns, batches) = multi_partitioned_join_collect(
+        let (columns, batches, metrics) = multi_partitioned_join_collect(
             left,
             right,
             &JoinType::RightMark,
@@ -1502,6 +1523,8 @@ pub(crate) mod tests {
             | 2  | 2  | 80  | true  |
             +----+----+-----+-------+
             "#);
+
+        assert_join_metrics!(metrics, 3);
 
         Ok(())
     }
