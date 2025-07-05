@@ -34,6 +34,9 @@ use super::{
 };
 use super::{JoinOn, JoinOnRef};
 use crate::execution_plan::{boundedness_from_children, EmissionType};
+use crate::filter_pushdown::{
+    FilterDescription, FilterPushdownPhase, PredicateSupport, PredicateSupports,
+};
 use crate::projection::{
     try_embed_projection, try_pushdown_through_join, EmbeddedProjection, JoinData,
     ProjectionExec,
@@ -70,7 +73,7 @@ use arrow::util::bit_util;
 use datafusion_common::utils::memory::estimate_memory_size;
 use datafusion_common::{
     internal_datafusion_err, internal_err, plan_err, project_schema, DataFusionError,
-    JoinSide, JoinType, NullEquality, Result,
+    HashSet, JoinSide, JoinType, NullEquality, Result, ScalarValue,
 };
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
@@ -78,7 +81,9 @@ use datafusion_expr::Operator;
 use datafusion_physical_expr::equivalence::{
     join_equivalence_properties, ProjectionMapping,
 };
-use datafusion_physical_expr::PhysicalExprRef;
+use datafusion_physical_expr::expressions::{lit, BinaryExpr, DynamicFilterPhysicalExpr};
+use datafusion_physical_expr::utils::{collect_columns, reassign_predicate_columns};
+use datafusion_physical_expr::{PhysicalExpr, PhysicalExprRef};
 use datafusion_physical_expr_common::datum::compare_op_for_nested;
 
 use ahash::RandomState;
@@ -357,6 +362,8 @@ pub struct HashJoinExec {
     pub null_equality: NullEquality,
     /// Cache holding plan properties like equivalences, output partitioning etc.
     cache: PlanProperties,
+    /// Dynamic filter for pushing down to the probe side
+    dynamic_filter: Arc<DynamicFilterPhysicalExpr>,
 }
 
 impl HashJoinExec {
@@ -403,6 +410,14 @@ impl HashJoinExec {
             projection.as_ref(),
         )?;
 
+        // Create a dynamic filter with the right-side join keys as children
+        let right_keys: Vec<_> = on.iter().map(|(_, r)| Arc::clone(r)).collect();
+
+        // Initialize with a placeholder expression (true) that will be updated
+        // when the hash table is built
+        let dynamic_filter =
+            Arc::new(DynamicFilterPhysicalExpr::new(right_keys, lit(true)));
+
         Ok(HashJoinExec {
             left,
             right,
@@ -418,6 +433,7 @@ impl HashJoinExec {
             column_indices,
             null_equality,
             cache,
+            dynamic_filter,
         })
     }
 
@@ -666,10 +682,21 @@ impl DisplayAs for HashJoinExec {
                     .map(|(c1, c2)| format!("({c1}, {c2})"))
                     .collect::<Vec<String>>()
                     .join(", ");
+                let dynamic_filter_display = match self.dynamic_filter.current() {
+                    Ok(current) if current != lit(true) => {
+                        format!(", filter=[{current}]")
+                    }
+                    _ => "".to_string(),
+                };
                 write!(
                     f,
-                    "HashJoinExec: mode={:?}, join_type={:?}, on=[{}]{}{}",
-                    self.mode, self.join_type, on, display_filter, display_projections
+                    "HashJoinExec: mode={:?}, join_type={:?}, on=[{}]{}{}{}",
+                    self.mode,
+                    self.join_type,
+                    on,
+                    display_filter,
+                    display_projections,
+                    dynamic_filter_display
                 )
             }
             DisplayFormatType::TreeRender => {
@@ -756,7 +783,7 @@ impl ExecutionPlan for HashJoinExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(HashJoinExec::try_new(
+        let mut new_join = HashJoinExec::try_new(
             Arc::clone(&children[0]),
             Arc::clone(&children[1]),
             self.on.clone(),
@@ -765,7 +792,10 @@ impl ExecutionPlan for HashJoinExec {
             self.projection.clone(),
             self.mode,
             self.null_equality,
-        )?))
+        )?;
+        // Preserve the dynamic filter if it exists
+        new_join.dynamic_filter = Arc::clone(&self.dynamic_filter);
+        Ok(Arc::new(new_join))
     }
 
     fn execute(
@@ -817,6 +847,8 @@ impl ExecutionPlan for HashJoinExec {
                     reservation,
                     need_produce_result_in_final(self.join_type),
                     self.right().output_partitioning().partition_count(),
+                    Arc::clone(&self.dynamic_filter),
+                    on_right.clone(),
                 ))
             })?,
             PartitionMode::Partitioned => {
@@ -834,6 +866,8 @@ impl ExecutionPlan for HashJoinExec {
                     reservation,
                     need_produce_result_in_final(self.join_type),
                     1,
+                    Arc::clone(&self.dynamic_filter),
+                    on_right.clone(),
                 ))
             }
             PartitionMode::Auto => {
@@ -943,10 +977,131 @@ impl ExecutionPlan for HashJoinExec {
             try_embed_projection(projection, self)
         }
     }
+
+    fn gather_filters_for_pushdown(
+        &self,
+        phase: FilterPushdownPhase,
+        parent_filters: Vec<Arc<dyn PhysicalExpr>>,
+        config: &datafusion_common::config::ConfigOptions,
+    ) -> Result<FilterDescription> {
+        // Analyze parent filters to see which can be pushed down to which side
+        let left_schema = self.left.schema();
+        let left_column_names = left_schema
+            .fields()
+            .iter()
+            .map(|f| f.name().as_str())
+            .collect::<HashSet<_>>();
+        let right_schema = self.right.schema();
+        let right_column_names = right_schema
+            .fields()
+            .iter()
+            .map(|f| f.name().as_str())
+            .collect::<HashSet<_>>();
+
+        let mut left_filters = Vec::new();
+        let mut right_filters = Vec::new();
+
+        for filter in &parent_filters {
+            // Check which columns the filter references
+            let referenced_columns = collect_columns(filter);
+
+            // Categorize columns in the filter by which side they belong to
+            let references_left_columns = referenced_columns
+                .iter()
+                .any(|col| left_column_names.contains(col.name()));
+            let references_right_columns = referenced_columns
+                .iter()
+                .any(|col| right_column_names.contains(col.name()));
+            // Some join types produce extra columns, e.g. `mark` columns in RightMark joins or LeftMark joins.
+            let references_non_child_columns = referenced_columns.iter().any(|col| {
+                !left_column_names.contains(col.name())
+                    && !right_column_names.contains(col.name())
+            });
+
+            if references_non_child_columns
+                || (references_left_columns && references_right_columns)
+            {
+                // Filter references both sides - cannot push down, skip it
+                left_filters.push(PredicateSupport::Unsupported(Arc::clone(filter)));
+                right_filters.push(PredicateSupport::Unsupported(Arc::clone(filter)));
+                continue;
+            } else if references_left_columns {
+                // Filter only references left side - push to left
+                left_filters.push(PredicateSupport::Supported(
+                    reassign_predicate_columns(Arc::clone(filter), &left_schema, false)?,
+                ));
+                right_filters.push(PredicateSupport::Unsupported(Arc::clone(filter)));
+            } else if references_right_columns {
+                // Filter only references right side - push to right
+                // Need to adjust column indices for right side
+                left_filters.push(PredicateSupport::Unsupported(Arc::clone(filter)));
+                right_filters.push(PredicateSupport::Supported(
+                    reassign_predicate_columns(Arc::clone(filter), &right_schema, false)?,
+                ));
+            } else {
+                // Filter doesn't reference any columns from either side (e.g., constant)
+                // Push to both sides as it's still valid
+                left_filters.push(PredicateSupport::Supported(Arc::clone(filter)));
+                right_filters.push(PredicateSupport::Supported(Arc::clone(filter)));
+            }
+        }
+
+        let mut right_self_filters = Vec::new();
+        if matches!(phase, FilterPushdownPhase::Post)
+            && config.optimizer.enable_dynamic_filter_pushdown
+        {
+            let dynamic_filter =
+                Arc::clone(&self.dynamic_filter) as Arc<dyn PhysicalExpr>;
+            // Push the dynamic filter to the right side (probe side) only
+            right_self_filters.push(dynamic_filter);
+        }
+
+        let res = FilterDescription::new_with_child_count(0)
+            .with_child_pushdown(PredicateSupports::new(left_filters), vec![])
+            .with_child_pushdown(
+                PredicateSupports::new(right_filters),
+                right_self_filters,
+            );
+
+        Ok(res)
+    }
+}
+
+/// Compute min/max bounds for each column in the given arrays
+fn compute_bounds(arrays: &[ArrayRef]) -> Result<Vec<(ScalarValue, ScalarValue)>> {
+    arrays
+        .iter()
+        .map(|array| {
+            if array.is_empty() {
+                // Return NULL values for empty arrays
+                return Ok((
+                    ScalarValue::try_from(array.data_type())?,
+                    ScalarValue::try_from(array.data_type())?,
+                ));
+            }
+
+            // Compute min/max using ScalarValue's utilities
+            let mut min_val = ScalarValue::try_from_array(array, 0)?;
+            let mut max_val = min_val.clone();
+
+            for i in 1..array.len() {
+                let val = ScalarValue::try_from_array(array, i)?;
+                if val < min_val {
+                    min_val = val.clone();
+                }
+                if val > max_val {
+                    max_val = val;
+                }
+            }
+
+            Ok((min_val, max_val))
+        })
+        .collect()
 }
 
 /// Reads the left (build) side of the input, buffering it in memory, to build a
 /// hash table (`LeftJoinData`)
+#[expect(clippy::too_many_arguments)]
 async fn collect_left_input(
     random_state: RandomState,
     left_stream: SendableRecordBatchStream,
@@ -955,6 +1110,8 @@ async fn collect_left_input(
     reservation: MemoryReservation,
     with_visited_indices_bitmap: bool,
     probe_threads_count: usize,
+    dynamic_filter: Arc<DynamicFilterPhysicalExpr>,
+    on_right: Vec<PhysicalExprRef>,
 ) -> Result<JoinLeftData> {
     let schema = left_stream.schema();
 
@@ -1036,11 +1193,49 @@ async fn collect_left_input(
     let data = JoinLeftData::new(
         hashmap,
         single_batch,
-        left_values,
+        left_values.clone(),
         Mutex::new(visited_indices_bitmap),
         AtomicUsize::new(probe_threads_count),
         reservation,
     );
+
+    // Update dynamic filter with min/max bounds if provided
+    if num_rows > 0 {
+        let bounds = compute_bounds(&left_values)?;
+
+        // Create range predicates for each join key
+        let mut predicates = Vec::with_capacity(bounds.len());
+        for ((min_val, max_val), right_expr) in bounds.iter().zip(on_right.iter()) {
+            // Create predicate: col >= min AND col <= max
+            let min_expr = Arc::new(BinaryExpr::new(
+                Arc::clone(right_expr),
+                Operator::GtEq,
+                lit(min_val.clone()),
+            )) as Arc<dyn PhysicalExpr>;
+
+            let max_expr = Arc::new(BinaryExpr::new(
+                Arc::clone(right_expr),
+                Operator::LtEq,
+                lit(max_val.clone()),
+            )) as Arc<dyn PhysicalExpr>;
+
+            let range_expr = Arc::new(BinaryExpr::new(min_expr, Operator::And, max_expr))
+                as Arc<dyn PhysicalExpr>;
+
+            predicates.push(range_expr);
+        }
+
+        // Combine all predicates with AND
+        let combined_predicate = predicates
+            .into_iter()
+            .reduce(|acc, pred| {
+                Arc::new(BinaryExpr::new(acc, Operator::And, pred))
+                    as Arc<dyn PhysicalExpr>
+            })
+            .unwrap_or_else(|| lit(true));
+
+        dynamic_filter.update(combined_predicate)?;
+    }
 
     Ok(data)
 }
