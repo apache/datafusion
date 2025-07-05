@@ -2306,4 +2306,47 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn complex_method() -> Result<()> {
+        let outer_table = test_table_scan_with_name("T1")?;
+        let inner_table_lv1 = test_table_scan_with_name("T2")?;
+
+        let inner_table_lv2 = test_table_scan_with_name("T3")?;
+        let scalar_sq_level2 = Arc::new(
+            LogicalPlanBuilder::from(inner_table_lv2)
+                .filter(
+                    col("T3.b")
+                        .eq(out_ref_col(DataType::UInt32, "T2.b"))
+                        .and(col("T3.a").eq(out_ref_col(DataType::UInt32, "T1.a"))),
+                )?
+                .aggregate(Vec::<Expr>::new(), vec![sum(col("T3.a"))])?
+                .build()?,
+        );
+        let scalar_sq_level1 = Arc::new(
+            LogicalPlanBuilder::from(inner_table_lv1.clone())
+                .filter(
+                    col("T2.a")
+                        .eq(lit(1))
+                        .and(scalar_subquery(scalar_sq_level2).gt(lit(300000))),
+                )?
+                .aggregate(Vec::<Expr>::new(), vec![count(col("T2.a"))])?
+                .build()?,
+        );
+
+        let plan = LogicalPlanBuilder::from(outer_table.clone())
+            .filter(
+                col("T1.c")
+                    .eq(lit(123))
+                    .and(scalar_subquery(scalar_sq_level1).gt(lit(5))),
+            )?
+            .build()?;
+
+        println!("{}", plan.display_indent_schema());
+
+        assert_dependent_join_rewrite!(plan, @r"");
+        Ok(())
+    }
+
+
 }
