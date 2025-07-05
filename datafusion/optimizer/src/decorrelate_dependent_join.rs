@@ -1206,6 +1206,47 @@ impl DependentJoinDecorrelator {
                     false,
                 )
             }
+            LogicalPlan::Window(old_window) => {
+                // Push into children.
+                let new_input = self.push_down_dependent_join_internal(
+                    &old_window.input,
+                    parent_propagate_nulls,
+                    lateral_depth,
+                )?;
+
+                // Create new window expressions with updated partition clauses
+                let mut new_window_expr = old_window.window_expr.clone();
+
+                // Add correlated columns to PARTITION BY clauses in each window expression
+                for window_expr in &mut new_window_expr {
+                    if let Expr::WindowFunction(ref mut window_func) = window_expr {
+                        // Add correlated columns to the partition by clause
+                        for domain_col in self.domains.iter() {
+                            let delim_col = Self::rewrite_into_delim_column(
+                                &self.correlated_column_to_delim_column,
+                                &domain_col.col,
+                            )?;
+                            window_func
+                                .params
+                                .partition_by
+                                .push(Expr::Column(delim_col));
+                        }
+                    }
+                }
+
+                // Create new window plan with updated expressions and input
+                let mut window = old_window.clone();
+                window.input = Arc::new(new_input);
+                window.window_expr = new_window_expr;
+
+                // We replace any correlated expressions with the corresponding entry in the
+                // correlated_map.
+                Self::rewrite_outer_ref_columns(
+                    LogicalPlan::Window(window),
+                    &self.correlated_column_to_delim_column,
+                    false,
+                )
+            }
             plan_ => {
                 unimplemented!("implement pushdown dependent join for node {plan_}")
             }
