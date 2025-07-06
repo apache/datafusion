@@ -1003,12 +1003,11 @@ impl DependentJoinDecorrelator {
                 );
             }
             LogicalPlan::Limit(old_limit) => {
+                let mut sort = None;
+
                 // Check if the direct child of this LIMIT node is an ORDER BY node, if so, keep is
                 // separate. This is done for an optimization to avoid having to compute the total
                 // order.
-
-                let mut sort = None;
-
                 let new_input = if let LogicalPlan::Sort(child) = old_limit.input.as_ref()
                 {
                     sort = Some(old_limit.input.as_ref().clone());
@@ -1063,15 +1062,10 @@ impl DependentJoinDecorrelator {
                     },
                 }))
                 .alias("row_number");
-
-                // Add window function to create row numbers
-                let mut window_exprs = new_input_cols
-                    .iter()
-                    .map(|c| col(c.clone()))
-                    .collect::<Vec<_>>();
+                let mut window_exprs = vec![];
                 window_exprs.push(row_number_expr);
 
-                let window_plan = LogicalPlanBuilder::new(new_input)
+                let window = LogicalPlanBuilder::new(new_input)
                     .window(window_exprs)?
                     .build()?;
 
@@ -1101,7 +1095,7 @@ impl DependentJoinDecorrelator {
                     }
                 }
 
-                let mut result_plan = window_plan;
+                let mut result_plan = window;
                 if !filter_conditions.is_empty() {
                     let filter_expr = filter_conditions
                         .into_iter()
@@ -1486,12 +1480,14 @@ mod tests {
     };
     use arrow::datatypes::DataType as ArrowDataType;
     use datafusion_common::{Column, Result};
-    use datafusion_expr::JoinType;
+    use datafusion_expr::expr::{WindowFunction, WindowFunctionParams};
+    use datafusion_expr::{JoinType, WindowFrame, WindowFunctionDefinition};
     use datafusion_expr::{
         exists, expr_fn::col, in_subquery, lit, out_ref_col, scalar_subquery, Expr,
         LogicalPlan, LogicalPlanBuilder,
     };
     use datafusion_functions_aggregate::{count::count, sum::sum};
+    use datafusion_functions_window::row_number::row_number_udwf;
     use std::sync::Arc;
     fn print_optimize_tree(plan: &LogicalPlan) {
         let rule: Arc<dyn OptimizerRule + Send + Sync> =
@@ -2102,7 +2098,7 @@ mod tests {
     }
 
     #[test]
-    fn decorrelate_in_subquery_with_distinct_sort_limit() -> Result<()> {
+    fn decorrelate_in_subquery_with_sort_limit() -> Result<()> {
         let outer_table = test_table_scan_with_name("customers")?;
         let inner_table = test_table_scan_with_name("orders")?;
 
@@ -2113,7 +2109,6 @@ mod tests {
                         .eq(out_ref_col(ArrowDataType::UInt32, "customers.a"))
                         .and(col("orders.b").eq(lit(1))), // status = 'completed' simplified as b = 1
                 )?
-                // .distinct_on(vec![col("orders.c")], vec![], None)? // DISTINCT order_amount
                 .sort(vec![col("orders.c").sort(false, true)])? // ORDER BY order_amount DESC
                 .limit(0, Some(3))? // LIMIT 3
                 .project(vec![col("orders.c")])?
@@ -2129,10 +2124,34 @@ mod tests {
             )?
             .build()?;
 
-        println!("{}", plan.display_indent_schema());
+        // Projection: customers.a, customers.b, customers.c
+        //       Filter: customers.a > Int32(100) AND __in_sq_1.output
+        //         DependentJoin on [customers.a lvl 1] with expr customers.a IN (<subquery>) depth 1
+        //           TableScan: customers
+        //           Projection: orders.c
+        //             Limit: skip=0, fetch=3
+        //               Sort: orders.c DESC NULLS FIRST
+        //                 Filter: orders.a = outer_ref(customers.a) AND orders.b = Int32(1)
+        //                   TableScan: orders
 
-        assert_decorrelate!(plan, @r"");
+        assert_decorrelate!(plan, @r"
+           Projection: customers.a, customers.b, customers.c [a:UInt32, b:UInt32, c:UInt32]
+             Filter: customers.a > Int32(100) AND __in_sq_1.output [a:UInt32, b:UInt32, c:UInt32, __in_sq_1.output:Boolean]
+               Projection: customers.a, customers.b, customers.c, mark AS __in_sq_1.output [a:UInt32, b:UInt32, c:UInt32, __in_sq_1.output:Boolean]
+                 LeftMark Join(ComparisonJoin):  Filter: customers.a = orders.c AND customers.a IS NOT DISTINCT FROM delim_scan_1.customers_a [a:UInt32, b:UInt32, c:UInt32, mark:Boolean]
+                   TableScan: customers [a:UInt32, b:UInt32, c:UInt32]
+                   Projection: orders.c, customers_dscan_1.customers_a [c:UInt32, customers_a:UInt32;N]
+                     Projection: orders.a, orders.b, orders.c, customers_dscan_1.customers_a [a:UInt32, b:UInt32, c:UInt32, customers_a:UInt32;N]
+                       Filter: row_number <= Int64(3) [a:UInt32, b:UInt32, c:UInt32, customers_a:UInt32;N, row_number:UInt64]
+                         WindowAggr: windowExpr=[[row_number() PARTITION BY [customers_dscan_1.customers_a] ORDER BY [orders.c DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS row_number]] [a:UInt32, b:UInt32, c:UInt32, customers_a:UInt32;N, row_number:UInt64]
+                           Filter: orders.a = customers_dscan_1.customers_a AND orders.b = Int32(1) [a:UInt32, b:UInt32, c:UInt32, customers_a:UInt32;N]
+                             Inner Join(DelimJoin):  Filter: Boolean(true) [a:UInt32, b:UInt32, c:UInt32, customers_a:UInt32;N]
+                               TableScan: orders [a:UInt32, b:UInt32, c:UInt32]
+                               SubqueryAlias: customers_dscan_1 [customers_a:UInt32;N]
+                                 DelimGet: customers.a [customers_a:UInt32;N]
+            ");
 
         Ok(())
     }
+
 }
