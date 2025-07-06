@@ -1050,7 +1050,7 @@ impl DependentJoinDecorrelator {
         right: LogicalPlan,
         join: Join,
     ) -> Result<LogicalPlan> {
-        Ok(LogicalPlan::Join(Join::try_new(
+        let new_join = LogicalPlan::Join(Join::try_new(
             Arc::new(left),
             Arc::new(right),
             join.on,
@@ -1058,7 +1058,13 @@ impl DependentJoinDecorrelator {
             join.join_type,
             join.join_constraint,
             join.null_equality,
-        )?))
+        )?);
+
+        Self::rewrite_outer_ref_columns(
+            new_join,
+            &self.correlated_column_to_delim_column,
+            false,
+        )
     }
 
     fn join_with_correlation(
@@ -1080,7 +1086,7 @@ impl DependentJoinDecorrelator {
             ));
         }
 
-        Ok(LogicalPlan::Join(Join::try_new(
+        let new_join = LogicalPlan::Join(Join::try_new(
             Arc::new(left),
             Arc::new(right),
             join.on,
@@ -1088,7 +1094,13 @@ impl DependentJoinDecorrelator {
             join.join_type,
             join.join_constraint,
             join.null_equality,
-        )?))
+        )?);
+
+        Self::rewrite_outer_ref_columns(
+            new_join,
+            &self.correlated_column_to_delim_column,
+            false,
+        )
     }
 
     fn join_with_delim_scan(
@@ -1121,7 +1133,7 @@ impl DependentJoinDecorrelator {
             }
         }
 
-        Ok(LogicalPlan::Join(Join::try_new(
+        let new_join = LogicalPlan::Join(Join::try_new(
             Arc::new(left),
             Arc::new(right),
             join.on,
@@ -1129,7 +1141,13 @@ impl DependentJoinDecorrelator {
             join.join_type,
             join.join_constraint,
             join.null_equality,
-        )?))
+        )?);
+
+        Self::rewrite_outer_ref_columns(
+            new_join,
+            &self.correlated_column_to_delim_column,
+            false,
+        )
     }
 }
 
@@ -1822,7 +1840,7 @@ mod tests {
               LeftMark Join(ComparisonJoin):  Filter: outer_table.c = inner_table_lv1.b AND outer_table.a IS NOT DISTINCT FROM delim_scan_1.outer_table_a AND outer_table.b IS NOT DISTINCT FROM delim_scan_1.outer_table_b [a:UInt32, b:UInt32, c:UInt32, mark:Boolean]
                 TableScan: outer_table [a:UInt32, b:UInt32, c:UInt32]
                 Projection: inner_table_lv1.b, outer_table_dscan_1.outer_table_a, outer_table_dscan_1.outer_table_b [b:UInt32, outer_table_a:UInt32;N, outer_table_b:UInt32;N]
-                  Inner Join(ComparisonJoin):  Filter: inner_table_lv1.a = outer_ref(outer_table.a) AND outer_ref(outer_table.a) > inner_table_lv1.c AND inner_table_lv1.b = Int32(1) AND outer_ref(outer_table.b) = inner_table_lv1.b AND inner_table_lv1.a = inner_table_lv2.a [a:UInt32, b:UInt32, c:UInt32, outer_table_a:UInt32;N, outer_table_b:UInt32;N, a:UInt32, b:UInt32, c:UInt32]
+                  Inner Join(ComparisonJoin):  Filter: inner_table_lv1.a = outer_table_dscan_1.outer_table_a AND outer_table_dscan_1.outer_table_a > inner_table_lv1.c AND inner_table_lv1.b = Int32(1) AND outer_table_dscan_1.outer_table_b = inner_table_lv1.b AND inner_table_lv1.a = inner_table_lv2.a [a:UInt32, b:UInt32, c:UInt32, outer_table_a:UInt32;N, outer_table_b:UInt32;N, a:UInt32, b:UInt32, c:UInt32]
                     Inner Join(DelimJoin):  Filter: Boolean(true) [a:UInt32, b:UInt32, c:UInt32, outer_table_a:UInt32;N, outer_table_b:UInt32;N]
                       TableScan: inner_table_lv1 [a:UInt32, b:UInt32, c:UInt32]
                       SubqueryAlias: outer_table_dscan_1 [outer_table_a:UInt32;N, outer_table_b:UInt32;N]
