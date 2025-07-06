@@ -793,6 +793,7 @@ pub(crate) fn need_produce_result_in_final(join_type: JoinType) -> bool {
             | JoinType::LeftSemi
             | JoinType::LeftMark
             | JoinType::Full
+            | JoinType::LeftSingle
     )
 }
 
