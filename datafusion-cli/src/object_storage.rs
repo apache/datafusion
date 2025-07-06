@@ -15,27 +15,35 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
-use std::error::Error;
-use std::fmt::{Debug, Display};
-use std::sync::Arc;
-
-use datafusion::common::config::{
-    ConfigEntry, ConfigExtension, ConfigField, ExtensionOptions, TableOptions, Visit,
-};
-use datafusion::common::{config_err, exec_datafusion_err, exec_err};
-use datafusion::error::{DataFusionError, Result};
-use datafusion::execution::context::SessionState;
-
 use async_trait::async_trait;
 use aws_config::BehaviorVersion;
-use aws_credential_types::provider::error::CredentialsError;
-use aws_credential_types::provider::{ProvideCredentials, SharedCredentialsProvider};
+use aws_credential_types::provider::{
+    error::CredentialsError, ProvideCredentials, SharedCredentialsProvider,
+};
+use datafusion::{
+    common::{
+        config::ConfigEntry, config::ConfigExtension, config::ConfigField,
+        config::ExtensionOptions, config::TableOptions, config::Visit, config_err,
+        exec_datafusion_err, exec_err,
+    },
+    error::{DataFusionError, Result},
+    execution::context::SessionState,
+};
 use log::debug;
-use object_store::aws::{AmazonS3Builder, AmazonS3ConfigKey, AwsCredential};
-use object_store::gcp::GoogleCloudStorageBuilder;
-use object_store::http::HttpBuilder;
-use object_store::{ClientOptions, CredentialProvider, ObjectStore};
+use object_store::{
+    aws::{AmazonS3Builder, AmazonS3ConfigKey, AwsCredential},
+    gcp::GoogleCloudStorageBuilder,
+    http::HttpBuilder,
+    ClientOptions, CredentialProvider,
+    Error::Generic,
+    ObjectStore,
+};
+use std::{
+    any::Any,
+    error::Error,
+    fmt::{Debug, Display},
+    sync::Arc,
+};
 use url::Url;
 
 #[cfg(not(test))]
@@ -153,10 +161,10 @@ impl CredentialsFromConfig {
         let credentials = config
             .credentials_provider()
             .ok_or_else(|| {
-                DataFusionError::ObjectStore(object_store::Error::Generic {
+                DataFusionError::ObjectStore(Box::new(Generic {
                     store: "S3",
                     source: "Failed to get S3 credentials aws_config".into(),
-                })
+                }))
             })?
             .clone();
 
@@ -183,10 +191,10 @@ impl CredentialsFromConfig {
                     "Error getting credentials from provider: {e}{source_message}",
                 );
 
-                return Err(DataFusionError::ObjectStore(object_store::Error::Generic {
+                return Err(DataFusionError::ObjectStore(Box::new(Generic {
                     store: "S3",
                     source: message.into(),
-                }));
+                })));
             }
         };
         Ok(Self {
@@ -206,12 +214,14 @@ impl CredentialProvider for S3CredentialProvider {
     type Credential = AwsCredential;
 
     async fn get_credential(&self) -> object_store::Result<Arc<Self::Credential>> {
-        let creds = self.credentials.provide_credentials().await.map_err(|e| {
-            object_store::Error::Generic {
-                store: "S3",
-                source: Box::new(e),
-            }
-        })?;
+        let creds =
+            self.credentials
+                .provide_credentials()
+                .await
+                .map_err(|e| Generic {
+                    store: "S3",
+                    source: Box::new(e),
+                })?;
         Ok(Arc::new(AwsCredential {
             key_id: creds.access_key_id().to_string(),
             secret_key: creds.secret_access_key().to_string(),
