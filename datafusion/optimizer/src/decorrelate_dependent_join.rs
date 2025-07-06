@@ -1108,7 +1108,7 @@ impl DependentJoinDecorrelator {
         left: LogicalPlan,
         right: LogicalPlan,
         join: Join,
-        left_scan_cols: &Vec<Column>,
+        left_dscan_cols: &Vec<Column>,
         right_dscan_cols: &Vec<Column>,
     ) -> Result<LogicalPlan> {
         let mut join_conditions = vec![];
@@ -1116,21 +1116,23 @@ impl DependentJoinDecorrelator {
             join_conditions.push(filter);
         }
 
-        for (index, left_delim_col) in left_scan_cols.iter().enumerate() {
-            if let Some(right_delim_col) = right_dscan_cols.get(index) {
-                join_conditions.push(binary_expr(
-                    Expr::Column(left_delim_col.clone()),
-                    Operator::IsNotDistinctFrom,
-                    Expr::Column(right_delim_col.clone()),
-                ));
-            } else {
-                return Err(internal_datafusion_err!(
-                    "Index {} not found in right_dscan_cols, left_scan_cols has {} elements, right_dscan_cols has {} elements",
-                    index,
-                    left_scan_cols.len(),
-                    right_dscan_cols.len()
-                ));
-            }
+        // Ensure left_dscan_cols and right_dscan_cols have the same length
+        if left_dscan_cols.len() != right_dscan_cols.len() {
+            return Err(internal_datafusion_err!(
+                "Mismatched dscan columns length: left_dscan_cols has {} elements, right_dscan_cols has {} elements",
+                left_dscan_cols.len(),
+                right_dscan_cols.len()
+            ));
+        }
+
+        for (left_delim_col, right_delim_col) in
+            left_dscan_cols.iter().zip(right_dscan_cols.iter())
+        {
+            join_conditions.push(binary_expr(
+                Expr::Column(left_delim_col.clone()),
+                Operator::IsNotDistinctFrom,
+                Expr::Column(right_delim_col.clone()),
+            ));
         }
 
         let new_join = LogicalPlan::Join(Join::try_new(
