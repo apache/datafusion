@@ -875,13 +875,11 @@ impl DependentJoinDecorrelator {
                             let new_right =
                                 self.decorrelate_independent(old_join.right.as_ref())?;
 
-                            let new_join = self.join_without_correlation(
+                            return self.join_without_correlation(
                                 new_left,
                                 new_right,
                                 old_join.clone(),
-                            )?;
-
-                            return Ok(new_join);
+                            );
                         }
 
                         if !left_has_correlation {
