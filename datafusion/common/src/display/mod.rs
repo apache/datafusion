@@ -18,7 +18,9 @@
 //! Types for plan display
 
 mod graphviz;
+mod tree;
 pub use graphviz::*;
+pub use tree::*;
 
 use std::{
     fmt::{self, Display, Formatter},
@@ -133,4 +135,56 @@ impl StringifiedPlan {
 pub trait ToStringifiedPlan {
     /// Create a stringified plan with the specified type
     fn to_stringified(&self, plan_type: PlanType) -> StringifiedPlan;
+}
+
+pub trait DisplayAs {
+    /// Format according to `DisplayFormatType`, used when verbose representation looks
+    /// different from the default one
+    ///
+    /// Should not include a newline
+    fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> fmt::Result;
+}
+
+pub enum DisplayFormatType {
+    /// Default, compact format. Example: `FilterExec: c12 < 10.0`
+    ///
+    /// This format is designed to provide a detailed textual description
+    /// of all parts of the plan.
+    Default,
+    /// Verbose, showing all available details.
+    ///
+    /// This form is even more detailed than [`Self::Default`]
+    Verbose,
+    /// TreeRender, displayed in the `tree` explain type.
+    ///
+    /// This format is inspired by DuckDB's explain plans. The information
+    /// presented should be "user friendly", and contain only the most relevant
+    /// information for understanding a plan. It should NOT contain the same level
+    /// of detail information as the  [`Self::Default`] format.
+    ///
+    /// In this mode, each line has one of two formats:
+    ///
+    /// 1. A string without a `=`, which is printed in its own line
+    ///
+    /// 2. A string with a `=` that is treated as a `key=value pair`. Everything
+    ///    before the first `=` is treated as the key, and everything after the
+    ///    first `=` is treated as the value.
+    ///
+    /// For example, if the output of `TreeRender` is this:
+    /// ```text
+    /// Parquet
+    /// partition_sizes=[1]
+    /// ```
+    ///
+    /// It is rendered in the center of a box in the following way:
+    ///
+    /// ```text
+    /// ┌───────────────────────────┐
+    /// │       DataSourceExec      │
+    /// │    --------------------   │
+    /// │    partition_sizes: [1]   │
+    /// │          Parquet          │
+    /// └───────────────────────────┘
+    ///  ```
+    TreeRender,
 }

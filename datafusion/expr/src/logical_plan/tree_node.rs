@@ -37,6 +37,8 @@
 //! * [`LogicalPlan::with_new_exprs`]: Create a new plan with different expressions
 //! * [`LogicalPlan::expressions`]: Return a copy of the plan's expressions
 
+use std::fmt::Formatter;
+
 use crate::{
     dml::CopyTo, Aggregate, Analyze, CreateMemoryTable, CreateView, DdlStatement,
     DependentJoin, Distinct, DistinctOn, DmlStatement, Execute, Explain, Expr, Extension,
@@ -44,6 +46,7 @@ use crate::{
     Repartition, Sort, Statement, Subquery, SubqueryAlias, TableScan, Union, Unnest,
     UserDefinedLogicalNode, Values, Window,
 };
+use datafusion_common::display::{DisplayAs, DisplayFormatType, FormattedTreeNode};
 use datafusion_common::tree_node::TreeNodeRefContainer;
 
 use crate::expr::{Exists, InSubquery};
@@ -52,6 +55,22 @@ use datafusion_common::tree_node::{
     TreeNodeRewriter, TreeNodeVisitor,
 };
 use datafusion_common::{internal_err, Result};
+
+impl FormattedTreeNode for LogicalPlan {}
+impl DisplayAs for LogicalPlan {
+    fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
+        if let DisplayFormatType::TreeRender = t {
+            match &self {
+                LogicalPlan::TableScan(TableScan { table_name, .. }) => {
+                    return write!(f, "TableScan {table_name}");
+                }
+                _ => {}
+            };
+            return write!(f, "{}", self.display());
+        }
+        unimplemented!()
+    }
+}
 
 impl TreeNode for LogicalPlan {
     fn apply_children<'n, F: FnMut(&'n Self) -> Result<TreeNodeRecursion>>(

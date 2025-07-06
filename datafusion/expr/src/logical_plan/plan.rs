@@ -50,6 +50,7 @@ use crate::{
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::cse::{NormalizeEq, Normalizeable};
+use datafusion_common::display::tree_render;
 use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeContainer, TreeNodeRecursion,
 };
@@ -2290,6 +2291,58 @@ impl LogicalPlan {
             }
         }
         Wrapper(self)
+    }
+
+    /// Sample
+    /// ```
+    /// ┌───────────────────────────┐
+    /// │                           │
+    /// │    --------------------   │
+    /// │ Projection: outer_table.a,│
+    /// │       outer_table.b,      │
+    /// │        outer_table.c      │
+    /// └─────────────┬─────────────┘
+    /// ┌─────────────┴─────────────┐
+    /// │                           │
+    /// │    --------------------   │
+    /// │   Filter: __exists_sq_1   │
+    /// │        .output AND        │
+    /// │        __exists_sq_2      │
+    /// │          .output          │
+    /// └─────────────┬─────────────┘
+    /// ┌─────────────┴─────────────┐
+    /// │                           │
+    /// │    --------------------   │
+    /// │ Projection: outer_table.a,│
+    /// │       outer_table.b,      │
+    /// │       outer_table.c,      │
+    /// │    __exists_sq_1.output,  │
+    /// │    mark AS __exists_sq_2  │
+    /// │          .output          │
+    /// └─────────────┬─────────────┘
+    /// ┌─────────────┴─────────────┐
+    /// │                           │
+    /// │    --------------------   │
+    /// │       LeftMark Join       │
+    /// │       (ComparisonJo       │
+    /// │ in):  Filter: outer_table ├────────────────────────────────────────────────────────────────────────┐
+    /// │  .c IS NOT DISTINCT FROM  │                                                                        │
+    /// │        delim_scan_2       │                                                                        │
+    /// │       .outer_table_c      │                                                                        │
+    /// └─────────────┬─────────────┘                                                                        │
+    /// ┌─────────────┴─────────────┐                                                          ┌─────────────┴─────────────┐
+    /// │                           │                                                          │                           │
+    /// │    --------------------   │                                                          │    --------------------   │
+    /// │ Projection: outer_table.a,│                                                          │Filter: inner_table_lv1.c :│
+    /// │       outer_table.b,      │                                                          │    outer_table_dscan_2    │
+    /// │       outer_table.c,      │                                                          │       .outer_table_c      │
+    /// │    mark AS __exists_sq_1  │                                                          │                           │
+    /// │          .output          │                                                          │                           │
+    /// └─────────────┬─────────────┘                                                          └─────────────┬─────────────┘
+    ///
+    /// ```
+    pub fn display_tree(&self) -> impl Display + '_ {
+        tree_render(self)
     }
 }
 
