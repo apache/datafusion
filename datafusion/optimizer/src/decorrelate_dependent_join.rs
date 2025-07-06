@@ -2100,4 +2100,39 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn decorrelate_in_subquery_with_distinct_sort_limit() -> Result<()> {
+        let outer_table = test_table_scan_with_name("customers")?;
+        let inner_table = test_table_scan_with_name("orders")?;
+
+        let in_subquery_plan = Arc::new(
+            LogicalPlanBuilder::from(inner_table)
+                .filter(
+                    col("orders.a")
+                        .eq(out_ref_col(ArrowDataType::UInt32, "customers.a"))
+                        .and(col("orders.b").eq(lit(1))), // status = 'completed' simplified as b = 1
+                )?
+                // .distinct_on(vec![col("orders.c")], vec![], None)? // DISTINCT order_amount
+                .sort(vec![col("orders.c").sort(false, true)])? // ORDER BY order_amount DESC
+                .limit(0, Some(3))? // LIMIT 3
+                .project(vec![col("orders.c")])?
+                .build()?,
+        );
+
+        // Outer query
+        let plan = LogicalPlanBuilder::from(outer_table.clone())
+            .filter(
+                col("customers.a")
+                    .gt(lit(100))
+                    .and(in_subquery(col("customers.a"), in_subquery_plan)),
+            )?
+            .build()?;
+
+        println!("{}", plan.display_indent_schema());
+
+        assert_decorrelate!(plan, @r"");
+
+        Ok(())
+    }
 }
