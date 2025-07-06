@@ -386,14 +386,10 @@ impl ExecutionPlan for PiecewiseMergeJoinExec {
                 Some(OrderingRequirements::from(self.left_sort_exprs.clone())),
                 None,
             ]
-        } else if is_right_existence_join(self.join_type) {
+        } else {
+            // We sort the left side in memory, so we do not need to enforce any sorting
             vec![
                 None,
-                Some(OrderingRequirements::from(self.right_sort_exprs.clone())),
-            ]
-        } else {
-            vec![
-                Some(OrderingRequirements::from(self.left_sort_exprs.clone())),
                 Some(OrderingRequirements::from(self.right_sort_exprs.clone())),
             ]
         }
