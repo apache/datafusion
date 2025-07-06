@@ -18,7 +18,9 @@
 //! Types for plan display
 
 mod graphviz;
+mod tree;
 pub use graphviz::*;
+pub use tree::*;
 
 use std::{
     fmt::{self, Display, Formatter},
