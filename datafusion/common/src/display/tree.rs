@@ -17,6 +17,7 @@
 
 //! Types for plan display
 
+use crate::display::{DisplayAs, DisplayFormatType};
 use crate::tree_node::{TreeNode, TreeNodeRecursion};
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Formatter;
@@ -75,7 +76,7 @@ impl TreeRenderVisitor<'_, '_> {
     /// 1. Render top borders and connections
     /// 2. Render node content and vertical connections
     /// 3. Render bottom borders and connections
-    pub fn visit<T: RenderableTreeNode>(&mut self, plan: &T) -> Result<(), fmt::Error> {
+    fn visit<T: FormattedTreeNode>(&mut self, plan: &T) -> Result<(), fmt::Error> {
         let root = RenderTree::create_tree(plan);
 
         for y in 0..root.height {
@@ -339,7 +340,7 @@ impl TreeRenderVisitor<'_, '_> {
         s.trim().to_string()
     }
 
-    pub fn split_up_extra_info(
+    fn split_up_extra_info(
         extra_info: &HashMap<String, String>,
         result: &mut Vec<String>,
         max_lines: usize,
@@ -499,86 +500,25 @@ impl TreeRenderVisitor<'_, '_> {
     }
 }
 
-pub enum DisplayFormatType {
-    /// Default, compact format. Example: `FilterExec: c12 < 10.0`
-    ///
-    /// This format is designed to provide a detailed textual description
-    /// of all parts of the plan.
-    Default,
-    /// Verbose, showing all available details.
-    ///
-    /// This form is even more detailed than [`Self::Default`]
-    Verbose,
-    /// TreeRender, displayed in the `tree` explain type.
-    ///
-    /// This format is inspired by DuckDB's explain plans. The information
-    /// presented should be "user friendly", and contain only the most relevant
-    /// information for understanding a plan. It should NOT contain the same level
-    /// of detail information as the  [`Self::Default`] format.
-    ///
-    /// In this mode, each line has one of two formats:
-    ///
-    /// 1. A string without a `=`, which is printed in its own line
-    ///
-    /// 2. A string with a `=` that is treated as a `key=value pair`. Everything
-    ///    before the first `=` is treated as the key, and everything after the
-    ///    first `=` is treated as the value.
-    ///
-    /// For example, if the output of `TreeRender` is this:
-    /// ```text
-    /// Parquet
-    /// partition_sizes=[1]
-    /// ```
-    ///
-    /// It is rendered in the center of a box in the following way:
-    ///
-    /// ```text
-    /// ┌───────────────────────────┐
-    /// │       DataSourceExec      │
-    /// │    --------------------   │
-    /// │    partition_sizes: [1]   │
-    /// │          Parquet          │
-    /// └───────────────────────────┘
-    ///  ```
-    TreeRender,
+/// Trait to connect TreeNode and DisplayAs, which is used to render
+/// tree of any TreeNode implementation
+pub trait FormattedTreeNode: TreeNode + DisplayAs {
+    fn node_name(&self) -> String {
+        "".to_string()
+    }
 }
 
-/// Trait for types which could have additional details when formatted in `Verbose` mode
-pub trait RenderableTreeNode: TreeNode {
-    /// Format according to `DisplayFormatType`, used when verbose representation looks
-    /// different from the default one
-    ///
-    /// Should not include a newline
-    fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> fmt::Result;
-
-    fn node_name(&self) -> String;
-}
-// impl DisplayAs for LogicalPlan {
-//     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> fmt::Result {
-//         if DisplayFormatType::TreeRender = t {
-//             match self {
-//                 _ => {
-//                     write!(f, "{}", self)
-//                 }
-//             }
-//         }
-//         unimplemented!()
-//     }
-// }
-
-// TODO: It's never used.
 /// Represents a 2D coordinate in the rendered tree.
 /// Used to track positions of nodes and their connections.
-#[allow(dead_code)]
-pub struct Coordinate {
+struct Coordinate {
     /// Horizontal position in the tree
-    pub x: usize,
+    x: usize,
     /// Vertical position in the tree
-    pub y: usize,
+    y: usize,
 }
 
 impl Coordinate {
-    pub fn new(x: usize, y: usize) -> Self {
+    fn new(x: usize, y: usize) -> Self {
         Coordinate { x, y }
     }
 }
@@ -587,15 +527,15 @@ impl Coordinate {
 /// and its relationships to other operators.
 pub struct RenderTreeNode {
     /// The name of physical `ExecutionPlan`.
-    pub name: String,
+    name: String,
     /// Execution info collected from `ExecutionPlan`.
-    pub extra_text: HashMap<String, String>,
+    extra_text: HashMap<String, String>,
     /// Positions of child nodes in the rendered tree.
-    pub child_positions: Vec<Coordinate>,
+    child_positions: Vec<Coordinate>,
 }
 
 impl RenderTreeNode {
-    pub fn new(name: String, extra_text: HashMap<String, String>) -> Self {
+    fn new(name: String, extra_text: HashMap<String, String>) -> Self {
         RenderTreeNode {
             name,
             extra_text,
@@ -612,15 +552,15 @@ impl RenderTreeNode {
 /// Manages a 2D grid of nodes and their layout information.
 pub struct RenderTree {
     /// Storage for tree nodes in a flattened 2D grid
-    pub nodes: Vec<Option<Arc<RenderTreeNode>>>,
+    nodes: Vec<Option<Arc<RenderTreeNode>>>,
     /// Total width of the rendered tree
-    pub width: usize,
+    width: usize,
     /// Total height of the rendered tree
-    pub height: usize,
+    height: usize,
 }
 
 impl RenderTree {
-    pub fn create_tree<T: RenderableTreeNode>(node: &T) -> Self {
+    fn create_tree<T: FormattedTreeNode>(node: &T) -> Self {
         let (width, height) = get_tree_width_height(node);
 
         let mut result = Self::new(width, height);
@@ -638,7 +578,7 @@ impl RenderTree {
         }
     }
 
-    pub fn get_node(&self, x: usize, y: usize) -> Option<Arc<RenderTreeNode>> {
+    fn get_node(&self, x: usize, y: usize) -> Option<Arc<RenderTreeNode>> {
         if x >= self.width || y >= self.height {
             return None;
         }
@@ -647,14 +587,14 @@ impl RenderTree {
         self.nodes.get(pos).and_then(|node| node.clone())
     }
 
-    pub fn set_node(&mut self, x: usize, y: usize, node: Arc<RenderTreeNode>) {
+    fn set_node(&mut self, x: usize, y: usize, node: Arc<RenderTreeNode>) {
         let pos = self.get_position(x, y);
         if let Some(slot) = self.nodes.get_mut(pos) {
             *slot = Some(node);
         }
     }
 
-    pub fn has_node(&self, x: usize, y: usize) -> bool {
+    fn has_node(&self, x: usize, y: usize) -> bool {
         if x >= self.width || y >= self.height {
             return false;
         }
@@ -667,8 +607,20 @@ impl RenderTree {
         y * self.width + x
     }
 
-    fn fmt_display<T: RenderableTreeNode>(plan: &T) -> impl fmt::Display + '_ {
-        Wrapper { plan }
+    fn fmt_display<T: FormattedTreeNode>(node: &T) -> impl fmt::Display + '_ {
+        struct Wrapper<'a, T: FormattedTreeNode> {
+            node: &'a T,
+        }
+
+        impl<T: FormattedTreeNode> fmt::Display for Wrapper<'_, T>
+        where
+            T: FormattedTreeNode,
+        {
+            fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+                self.node.fmt_as(DisplayFormatType::TreeRender, f)
+            }
+        }
+        Wrapper { node }
     }
 }
 
@@ -680,7 +632,7 @@ impl RenderTree {
 ///
 /// # Returns
 /// * A tuple of (width, height) representing the dimensions needed for the tree
-fn get_tree_width_height<T: RenderableTreeNode>(plan: &T) -> (usize, usize) {
+pub fn get_tree_width_height<T: FormattedTreeNode>(plan: &T) -> (usize, usize) {
     let is_empty_ref = &mut true;
     let width = &mut 0;
     let height = &mut 0;
@@ -713,7 +665,7 @@ fn get_tree_width_height<T: RenderableTreeNode>(plan: &T) -> (usize, usize) {
 ///
 /// # Returns
 /// * The width of the subtree rooted at the current node
-fn create_tree_recursive<T: RenderableTreeNode>(
+pub fn create_tree_recursive<T: FormattedTreeNode>(
     result: &mut RenderTree,
     plan: &T,
     x: usize,
@@ -756,28 +708,12 @@ fn create_tree_recursive<T: RenderableTreeNode>(
     *width_ref
 }
 
-struct Wrapper<'a, T: RenderableTreeNode> {
-    plan: &'a T,
-}
-
-impl<T: RenderableTreeNode> fmt::Display for Wrapper<'_, T>
-where
-    T: RenderableTreeNode,
-{
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        RenderableTreeNode::fmt_as(self.plan, DisplayFormatType::TreeRender, f)?;
-        Ok(())
-    }
-}
-
 // render the whole tree
-pub fn tree_render<'a, T: RenderableTreeNode>(
-    n: &'a T,
-) -> impl fmt::Display + use<'a, T> {
-    struct Wrapper<'a, T: RenderableTreeNode> {
+pub fn tree_render<'a, T: FormattedTreeNode>(n: &'a T) -> impl fmt::Display + use<'a, T> {
+    struct Wrapper<'a, T: FormattedTreeNode> {
         n: &'a T,
     }
-    impl<T: RenderableTreeNode> fmt::Display for Wrapper<'_, T> {
+    impl<T: FormattedTreeNode> fmt::Display for Wrapper<'_, T> {
         fn fmt(&self, f: &mut Formatter) -> fmt::Result {
             let mut visitor = TreeRenderVisitor { f };
             visitor.visit(self.n)

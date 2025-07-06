@@ -46,7 +46,7 @@ use crate::{
     Repartition, Sort, Statement, Subquery, SubqueryAlias, TableScan, Union, Unnest,
     UserDefinedLogicalNode, Values, Window,
 };
-use datafusion_common::display::{DisplayFormatType, RenderableTreeNode};
+use datafusion_common::display::{DisplayAs, DisplayFormatType, FormattedTreeNode};
 use datafusion_common::tree_node::TreeNodeRefContainer;
 
 use crate::expr::{Exists, InSubquery};
@@ -56,7 +56,8 @@ use datafusion_common::tree_node::{
 };
 use datafusion_common::{internal_err, Result};
 
-impl RenderableTreeNode for LogicalPlan {
+impl FormattedTreeNode for LogicalPlan {}
+impl DisplayAs for LogicalPlan {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
         if let DisplayFormatType::TreeRender = t {
             match &self {
@@ -68,9 +69,6 @@ impl RenderableTreeNode for LogicalPlan {
             return write!(f, "{}", self.display());
         }
         unimplemented!()
-    }
-    fn node_name(&self) -> String {
-        "".to_string()
     }
 }
 

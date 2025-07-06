@@ -48,7 +48,7 @@ pub struct DependentJoinDecorrelator {
     // depth: usize,
 
     // all correlated columns in current depth and downward (if any)
-    correlated_columns: IndexMap<usize, Vec<CorrelatedColumnInfo>>,
+    correlated_columns: Vec<CorrelatedColumnInfo>,
     // check if we have to replace any COUNT aggregates into "CASE WHEN X IS NULL THEN 0 ELSE COUNT END"
     // store a mapping between a expr and its original index in the loglan output
     replacement_map: IndexMap<String, Expr>,
