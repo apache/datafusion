@@ -154,7 +154,7 @@ impl DependentJoinDecorrelator {
         merged_correlated_columns.retain(|info| info.depth >= depth);
         merged_correlated_columns.extend_from_slice(&node.correlated_columns);
 
-       //  println!("\n\ndomains:{:?}\ncorrelated_columns:{:?}\n correlated_columns_from_parent:{:?}\n\n", &domains, &merged_correlated_columns, &correlated_columns_from_parent);
+        //  println!("\n\ndomains:{:?}\ncorrelated_columns:{:?}\n correlated_columns_from_parent:{:?}\n\n", &domains, &merged_correlated_columns, &correlated_columns_from_parent);
 
         Self {
             domains,
