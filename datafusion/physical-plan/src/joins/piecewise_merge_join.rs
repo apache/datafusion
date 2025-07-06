@@ -528,14 +528,6 @@ fn is_left_existence_join(join_type: JoinType) -> bool {
     )
 }
 
-// Returns boolean for whether the join is a right existence join
-fn is_right_existence_join(join_type: JoinType) -> bool {
-    matches!(
-        join_type,
-        JoinType::RightAnti | JoinType::RightSemi | JoinType::RightMark
-    )
-}
-
 // Returns boolean to check if the join type needs to record
 // buffered side matches for classic joins
 fn need_produce_result_in_final(join_type: JoinType) -> bool {
