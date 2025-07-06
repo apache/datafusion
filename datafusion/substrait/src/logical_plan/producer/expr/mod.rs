@@ -137,14 +137,13 @@ pub fn to_substrait_rex(
         Expr::InList(expr) => producer.handle_in_list(expr, schema),
         Expr::Exists(expr) => not_impl_err!("Cannot convert {expr:?} to Substrait"),
         Expr::InSubquery(expr) => producer.handle_in_subquery(expr, schema),
-        Expr::ScalarSubquery(expr) => {
-            not_impl_err!("Cannot convert {expr:?} to Substrait")
-        }
+        Expr::ScalarSubquery(expr) => producer.handle_scalar_subquery(expr, schema),
         #[expect(deprecated)]
         Expr::Wildcard { .. } => not_impl_err!("Cannot convert {expr:?} to Substrait"),
         Expr::GroupingSet(expr) => not_impl_err!("Cannot convert {expr:?} to Substrait"),
         Expr::Placeholder(expr) => not_impl_err!("Cannot convert {expr:?} to Substrait"),
         Expr::OuterReferenceColumn(_, _) => {
+            // TODO
             not_impl_err!("Cannot convert {expr:?} to Substrait")
         }
         Expr::Unnest(expr) => not_impl_err!("Cannot convert {expr:?} to Substrait"),
@@ -164,8 +163,13 @@ mod tests {
     use super::*;
     use crate::logical_plan::consumer::from_substrait_extended_expr;
     use datafusion::arrow::datatypes::{DataType, Schema};
-    use datafusion::common::{DFSchema, DataFusionError, ScalarValue};
+    use datafusion::common::{DFSchema, DataFusionError, ScalarValue, Spans};
     use datafusion::execution::SessionStateBuilder;
+    use datafusion::logical_expr::{
+        lit, EmptyRelation, LogicalPlan, Projection, Subquery,
+    };
+    use datafusion::prelude::SessionContext;
+    use std::sync::Arc;
 
     #[tokio::test]
     async fn extended_expressions() -> datafusion::common::Result<()> {
@@ -231,5 +235,50 @@ mod tests {
         let err = to_substrait_extended_expr(&[(&expr, &field)], &empty_schema, &state);
 
         assert!(matches!(err, Err(DataFusionError::SchemaError(_, _))));
+    }
+
+    #[tokio::test]
+    async fn scalar_subquery_roundtrip() -> datafusion::common::Result<()> {
+        let ctx = SessionContext::new();
+        let state = ctx.state();
+
+        let subquery_plan = Arc::new(LogicalPlan::Projection(Projection::try_new(
+            vec![lit(1i32)],
+            Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
+                produce_one_row: false,
+                schema: Arc::new(DFSchema::empty()),
+            })),
+        )?));
+
+        let expr = Expr::ScalarSubquery(Subquery {
+            subquery: subquery_plan,
+            outer_ref_columns: vec![],
+            spans: Spans::new(),
+        });
+
+        let field = Field::new("scalar_subquery", DataType::Int32, false);
+        let _empty_schema = DFSchemaRef::new(DFSchema::empty());
+
+        let scalar_subquery_expr = match expr {
+            Expr::ScalarSubquery(ref sq) => sq,
+            _ => panic!("Expected ScalarSubquery"),
+        };
+
+        let subquery_schema = scalar_subquery_expr.subquery.schema().clone();
+
+        let substrait =
+            to_substrait_extended_expr(&[(&expr, &field)], &subquery_schema, &state)?;
+        let roundtrip_expr = from_substrait_extended_expr(&state, &substrait).await?;
+
+        assert_eq!(roundtrip_expr.exprs.len(), 1);
+        let (rt_expr, rt_field) = roundtrip_expr.exprs.first().unwrap();
+
+        assert_eq!(rt_field, &field);
+        // We can't directly compare the expressions because the subquery plan might be different
+        // after optimization and roundtrip. So, we'll check the type and that it's a scalar subquery.
+        match rt_expr {
+            Expr::ScalarSubquery(_) => Ok(()),
+            _ => panic!("Expected ScalarSubquery, got {:?}", rt_expr),
+        }
     }
 }

@@ -17,8 +17,8 @@
 
 use crate::logical_plan::producer::SubstraitProducer;
 use datafusion::common::DFSchemaRef;
-use datafusion::logical_expr::expr::InSubquery;
-use substrait::proto::expression::subquery::InPredicate;
+use datafusion::logical_expr::{expr::InSubquery, Subquery as ScalarSubquery};
+use substrait::proto::expression::subquery::{InPredicate, Scalar};
 use substrait::proto::expression::{RexType, ScalarFunction};
 use substrait::proto::function_argument::ArgType;
 use substrait::proto::{Expression, FunctionArgument};
@@ -69,4 +69,25 @@ pub fn from_in_subquery(
     } else {
         Ok(substrait_subquery)
     }
+}
+
+pub fn from_scalar_subquery(
+    producer: &mut impl SubstraitProducer,
+    subquery: &ScalarSubquery,
+    _schema: &DFSchemaRef,
+) -> datafusion::common::Result<Expression> {
+    let subquery_plan = producer.handle_plan(subquery.subquery.as_ref())?;
+    Ok(Expression {
+        rex_type: Some(RexType::Subquery(Box::new(
+            substrait::proto::expression::Subquery {
+                subquery_type: Some(
+                    substrait::proto::expression::subquery::SubqueryType::Scalar(
+                        Box::new(Scalar {
+                            input: Some(subquery_plan),
+                        }),
+                    ),
+                ),
+            },
+        ))),
+    })
 }
