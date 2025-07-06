@@ -1209,29 +1209,42 @@ impl DependentJoinDecorrelator {
                 )?;
 
                 // Create new window expressions with updated partition clauses
-                let mut new_window_expr = old_window.window_expr.clone();
+                let mut new_window_exprs = old_window.window_expr.clone();
 
                 // Add correlated columns to PARTITION BY clauses in each window expression
-                for window_expr in &mut new_window_expr {
-                    if let Expr::WindowFunction(ref mut window_func) = window_expr {
-                        // Add correlated columns to the partition by clause
-                        for domain_col in self.domains.iter() {
-                            let delim_col = Self::rewrite_into_delim_column(
-                                &self.correlated_column_to_delim_column,
-                                &domain_col.col,
-                            )?;
-                            window_func
-                                .params
-                                .partition_by
-                                .push(Expr::Column(delim_col));
+                for window_expr in &mut new_window_exprs {
+                    // Handle both direct window functions and aliased window functions
+                    let window_func = match window_expr {
+                        Expr::WindowFunction(ref mut window_func) => window_func,
+                        Expr::Alias(alias) => {
+                            if let Expr::WindowFunction(ref mut window_func) =
+                                alias.expr.as_mut()
+                            {
+                                window_func
+                            } else {
+                                continue; // Skip if alias doesn't contain a window function
+                            }
                         }
+                        _ => continue, // Skip non-window expressions
+                    };
+
+                    // Add correlated columns to the partition by clause
+                    for domain_col in self.domains.iter() {
+                        let delim_col = Self::rewrite_into_delim_column(
+                            &self.correlated_column_to_delim_column,
+                            &domain_col.col,
+                        )?;
+                        window_func
+                            .params
+                            .partition_by
+                            .push(Expr::Column(delim_col));
                     }
                 }
 
                 // Create new window plan with updated expressions and input
                 let mut window = old_window.clone();
                 window.input = Arc::new(new_input);
-                window.window_expr = new_window_expr;
+                window.window_expr = new_window_exprs;
 
                 // We replace any correlated expressions with the corresponding entry in the
                 // correlated_map.
@@ -1481,11 +1494,11 @@ mod tests {
     use arrow::datatypes::DataType as ArrowDataType;
     use datafusion_common::{Column, Result};
     use datafusion_expr::expr::{WindowFunction, WindowFunctionParams};
-    use datafusion_expr::{JoinType, WindowFrame, WindowFunctionDefinition};
     use datafusion_expr::{
         exists, expr_fn::col, in_subquery, lit, out_ref_col, scalar_subquery, Expr,
         LogicalPlan, LogicalPlanBuilder,
     };
+    use datafusion_expr::{JoinType, WindowFrame, WindowFunctionDefinition};
     use datafusion_functions_aggregate::{count::count, sum::sum};
     use datafusion_functions_window::row_number::row_number_udwf;
     use std::sync::Arc;
@@ -2154,4 +2167,70 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn decorrelate_subquery_with_window_function() -> Result<()> {
+        let outer_table = test_table_scan_with_name("outer_table")?;
+        let inner_table = test_table_scan_with_name("inner_table")?;
+
+        // Create a subquery with window function
+        let window_expr = Expr::WindowFunction(Box::new(WindowFunction {
+            fun: WindowFunctionDefinition::WindowUDF(row_number_udwf()),
+            params: WindowFunctionParams {
+                args: vec![],
+                partition_by: vec![col("inner_table.b")],
+                order_by: vec![col("inner_table.c").sort(false, true)],
+                window_frame: WindowFrame::new(Some(false)),
+                null_treatment: None,
+            },
+        }))
+        .alias("row_num");
+
+        let subquery = Arc::new(
+            LogicalPlanBuilder::from(inner_table)
+                .filter(
+                    col("inner_table.a")
+                        .eq(out_ref_col(ArrowDataType::UInt32, "outer_table.a")),
+                )?
+                .window(vec![window_expr])?
+                .filter(col("row_num").eq(lit(1)))?
+                .project(vec![col("inner_table.b")])?
+                .build()?,
+        );
+
+        let plan = LogicalPlanBuilder::from(outer_table)
+            .filter(
+                col("outer_table.a")
+                    .gt(lit(1))
+                    .and(in_subquery(col("outer_table.c"), subquery)),
+            )?
+            .build()?;
+
+        // Projection: outer_table.a, outer_table.b, outer_table.c
+        //   Filter: outer_table.a > Int32(1) AND __in_sq_1.output
+        //     DependentJoin on [outer_table.a lvl 1] with expr outer_table.c IN (<subquery>) depth 1
+        //       TableScan: outer_table
+        //       Projection: inner_table.b
+        //         Filter: row_num = Int32(1)
+        //           WindowAggr: windowExpr=[[row_number() PARTITION BY [inner_table.b] ORDER BY [inner_table.c DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS row_num]]
+        //             Filter: inner_table.a = outer_ref(outer_table.a)
+        //               TableScan: inner_table
+
+        assert_decorrelate!(plan, @r"
+        Projection: outer_table.a, outer_table.b, outer_table.c [a:UInt32, b:UInt32, c:UInt32]
+          Filter: outer_table.a > Int32(1) AND __in_sq_1.output [a:UInt32, b:UInt32, c:UInt32, __in_sq_1.output:Boolean]
+            Projection: outer_table.a, outer_table.b, outer_table.c, mark AS __in_sq_1.output [a:UInt32, b:UInt32, c:UInt32, __in_sq_1.output:Boolean]
+              LeftMark Join(ComparisonJoin):  Filter: outer_table.c = inner_table.b AND outer_table.a IS NOT DISTINCT FROM delim_scan_1.outer_table_a [a:UInt32, b:UInt32, c:UInt32, mark:Boolean]
+                TableScan: outer_table [a:UInt32, b:UInt32, c:UInt32]
+                Projection: inner_table.b, outer_table_dscan_1.outer_table_a [b:UInt32, outer_table_a:UInt32;N]
+                  Filter: row_num = Int32(1) [a:UInt32, b:UInt32, c:UInt32, outer_table_a:UInt32;N, row_num:UInt64]
+                    WindowAggr: windowExpr=[[row_number() PARTITION BY [inner_table.b, outer_table_dscan_1.outer_table_a] ORDER BY [inner_table.c DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS row_num]] [a:UInt32, b:UInt32, c:UInt32, outer_table_a:UInt32;N, row_num:UInt64]
+                      Filter: inner_table.a = outer_table_dscan_1.outer_table_a [a:UInt32, b:UInt32, c:UInt32, outer_table_a:UInt32;N]
+                        Inner Join(DelimJoin):  Filter: Boolean(true) [a:UInt32, b:UInt32, c:UInt32, outer_table_a:UInt32;N]
+                          TableScan: inner_table [a:UInt32, b:UInt32, c:UInt32]
+                          SubqueryAlias: outer_table_dscan_1 [outer_table_a:UInt32;N]
+                            DelimGet: outer_table.a [outer_table_a:UInt32;N]
+        ");
+
+        Ok(())
+    }
 }
