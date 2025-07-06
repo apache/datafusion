@@ -328,7 +328,7 @@ impl ExecutionPlan for DataSourceExec {
                 new_node.data_source = data_source;
                 new_node.cache =
                     Self::compute_properties(Arc::clone(&new_node.data_source));
-                // Add the missing filters' equivalence info when filters pushdown is applied
+                // Recompute equivalence info using new filters
                 let filter = conjunction(res.filters.collect_supported());
                 new_node = new_node.add_filter_equivalence_info(filter)?;
                 Ok(FilterPushdownPropagation {
