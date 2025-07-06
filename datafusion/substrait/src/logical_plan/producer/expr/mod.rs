@@ -278,7 +278,7 @@ mod tests {
         // after optimization and roundtrip. So, we'll check the type and that it's a scalar subquery.
         match rt_expr {
             Expr::ScalarSubquery(_) => Ok(()),
-            _ => panic!("Expected ScalarSubquery, got {:?}", rt_expr),
+            _ => panic!("Expected ScalarSubquery, got {rt_expr:?}"),
         }
     }
 }
