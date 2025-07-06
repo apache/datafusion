@@ -829,7 +829,8 @@ impl<T: BatchTransformer> NestedLoopJoinStream<T> {
                     self.join_metrics.baseline.record_poll(poll)
                 }
                 NestedLoopJoinStreamState::ExhaustedProbeSide => {
-                    handle_state!(self.process_unmatched_build_batch())
+                    let poll = handle_state!(self.process_unmatched_build_batch());
+                    self.join_metrics.baseline.record_poll(poll)
                 }
                 NestedLoopJoinStreamState::Completed => Poll::Ready(None),
             };
@@ -962,6 +963,8 @@ impl<T: BatchTransformer> NestedLoopJoinStream<T> {
             if result.is_ok() {
                 timer.done();
             }
+
+            self.join_metrics.output_batches.add(1);
 
             Ok(StatefulStreamResult::Ready(Some(result?)))
         } else {
