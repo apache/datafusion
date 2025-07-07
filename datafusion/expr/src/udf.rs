@@ -724,7 +724,7 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     /// use datafusion_common::{not_impl_err, Result};
     /// use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature};
     ///
-    /// #[derive(Debug)]
+    /// #[derive(Debug, PartialEq)]
     /// struct MyUdf {
     ///  param: i32,
     ///  signature: Signature,
@@ -748,7 +748,7 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     ///    }
     ///     fn equals(&self, other: &dyn ScalarUDFImpl) -> bool {
     ///         if let Some(other) = other.as_any().downcast_ref::<Self>() {
-    ///             self.param == other.param && self.name() == other.name()
+    ///             self == other
     ///         } else {
     ///             false
     ///         }
