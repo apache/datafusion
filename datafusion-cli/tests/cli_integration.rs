@@ -82,7 +82,7 @@ async fn setup_minio_container() -> ContainerAsync<minio::MinIO> {
         let command =
             command.with_cmd_ready_condition(CmdWaitFor::Exit { code: Some(0) });
 
-        let cmd_ref = format!("{:?}", command);
+        let cmd_ref = format!("{command:?}");
 
         if let Err(e) = container.exec(command).await {
             let stdout = container.stdout_to_vec().await.unwrap_or_default();
