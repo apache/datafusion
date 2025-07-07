@@ -214,7 +214,6 @@ pub(super) async fn exec_and_print(
     print_options: &PrintOptions,
     sql: String,
 ) -> Result<()> {
-    let now = Instant::now();
     let task_ctx = ctx.task_ctx();
     let options = task_ctx.session_config().options();
     let dialect = &options.sql_parser.dialect;
@@ -228,25 +227,43 @@ pub(super) async fn exec_and_print(
 
     let statements = DFParser::parse_sql_with_dialect(&sql, dialect.as_ref())?;
     for statement in statements {
-        let adjusted =
-            AdjustedPrintOptions::new(print_options.clone()).with_statement(&statement);
+        StatementExecutor::new(statement)
+            .execute(ctx, print_options)
+            .await?;
+    }
 
-        let plan = create_plan(ctx, statement.clone(), false).await?;
-        let adjusted = adjusted.with_plan(&plan);
+    Ok(())
+}
 
-        let df = match ctx.execute_logical_plan(plan).await {
-            Ok(df) => df,
-            Err(DataFusionError::ObjectStore(Generic { store, source: _ }))
-                if "S3".eq_ignore_ascii_case(store)
-                    && matches!(&statement, Statement::CreateExternalTable(_)) =>
-            {
-                warn!("S3 region is incorrect, auto-detecting the correct region (this may be slow). Consider updating your region configuration.");
-                let plan = create_plan(ctx, statement, true).await?;
-                ctx.execute_logical_plan(plan).await?
-            }
-            Err(e) => return Err(e),
-        };
+/// Executor for SQL statements, including special handling for S3 region detection retry logic
+struct StatementExecutor {
+    statement: Statement,
+    statement_for_retry: Option<Statement>,
+}
+
+impl StatementExecutor {
+    fn new(statement: Statement) -> Self {
+        let statement_for_retry = matches!(statement, Statement::CreateExternalTable(_))
+            .then(|| statement.clone());
+
+        Self {
+            statement,
+            statement_for_retry,
+        }
+    }
+
+    async fn execute(
+        self,
+        ctx: &dyn CliSessionContext,
+        print_options: &PrintOptions,
+    ) -> Result<()> {
+        let now = Instant::now();
+        let (df, adjusted) = self
+            .create_and_execute_logical_plan(ctx, print_options)
+            .await?;
         let physical_plan = df.create_physical_plan().await?;
+        let task_ctx = ctx.task_ctx();
+        let options = task_ctx.session_config().options();
 
         // Track memory usage for the query result if it's bounded
         let mut reservation =
@@ -296,9 +313,38 @@ pub(super) async fn exec_and_print(
             )?;
             reservation.free();
         }
+
+        Ok(())
     }
 
-    Ok(())
+    async fn create_and_execute_logical_plan(
+        mut self,
+        ctx: &dyn CliSessionContext,
+        print_options: &PrintOptions,
+    ) -> Result<(datafusion::dataframe::DataFrame, AdjustedPrintOptions)> {
+        let adjusted = AdjustedPrintOptions::new(print_options.clone())
+            .with_statement(&self.statement);
+
+        let plan = create_plan(ctx, self.statement, false).await?;
+        let adjusted = adjusted.with_plan(&plan);
+
+        let df = match ctx.execute_logical_plan(plan).await {
+            Ok(df) => Ok(df),
+            Err(DataFusionError::ObjectStore(err))
+                if matches!(err.as_ref(), Generic { store, source: _ } if "S3".eq_ignore_ascii_case(store))
+                    && self.statement_for_retry.is_some() =>
+            {
+                warn!("S3 region is incorrect, auto-detecting the correct region (this may be slow). Consider updating your region configuration.");
+                let plan =
+                    create_plan(ctx, self.statement_for_retry.take().unwrap(), true)
+                        .await?;
+                ctx.execute_logical_plan(plan).await
+            }
+            Err(e) => Err(e),
+        }?;
+
+        Ok((df, adjusted))
+    }
 }
 
 /// Track adjustments to the print options based on the plan / statement being executed
