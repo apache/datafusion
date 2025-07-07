@@ -713,9 +713,11 @@ impl TreeNodeRewriter for ColumnRewriter {
 mod tests {
     use std::sync::Arc;
 
-    use arrow::datatypes::DataType as ArrowDataType ;
+    use arrow::datatypes::DataType as ArrowDataType;
     use datafusion_common::{Column, Result};
-    use datafusion_expr::{col, lit, CorrelatedColumnInfo, Expr, JoinType, LogicalPlanBuilder};
+    use datafusion_expr::{
+        col, lit, CorrelatedColumnInfo, Expr, JoinType, LogicalPlanBuilder,
+    };
     use datafusion_functions_aggregate::count::count;
     use datafusion_sql::TableReference;
     use insta::assert_snapshot;
