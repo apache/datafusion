@@ -16,7 +16,7 @@
 // under the License.
 
 use arrow::array::{
-    new_null_array, Array, BooleanArray, Float32Array, Float64Array, Int16Array,
+    new_null_array, Array, AsArray, BooleanArray, Float32Array, Float64Array, Int16Array,
     Int32Array, Int64Array, Int8Array, RecordBatchOptions, UInt16Array, UInt8Array,
 };
 use arrow::compute::take;
@@ -465,7 +465,7 @@ impl ExecutionPlan for PiecewiseMergeJoinExec {
             Ok(build_buffered_data(
                 buffered_stream,
                 Arc::clone(&on_buffered),
-                metrics,
+                metrics.clone(),
                 reservation,
                 build_visited_indices_map(self.join_type),
             ))
@@ -488,6 +488,7 @@ impl ExecutionPlan for PiecewiseMergeJoinExec {
             },
             existence_join,
             self.sort_options,
+            metrics,
         )))
     }
 }
@@ -597,6 +598,13 @@ async fn build_buffered_data(
     let buffered_values = on_buffered
         .evaluate(&single_batch)?
         .into_array(single_batch.num_rows())?;
+
+    // We add the single batch size + the memory of the join keys
+    // size of the size estimation
+    let size_estimation = get_record_batch_memory_size(&single_batch)
+        + buffered_values.get_array_memory_size();
+    reservation.try_grow(size_estimation)?;
+    metrics.build_mem_used.add(size_estimation);
 
     // Created visited indices bitmap only if the join type requires it
     let visited_indices_bitmap = if build_map {
@@ -758,6 +766,8 @@ struct PiecewiseMergeJoinStream {
     // Sort option for buffered and streamed side (specifies whether
     // the sort is ascending or descending)
     sort_option: SortOptions,
+    // Metrics for build + probe joins
+    join_metrics: BuildProbeJoinMetrics,
 }
 
 impl RecordBatchStream for PiecewiseMergeJoinStream {
@@ -798,6 +808,7 @@ impl PiecewiseMergeJoinStream {
         state: PiecewiseMergeJoinStreamState,
         existence_join: bool,
         sort_option: SortOptions,
+        join_metrics: BuildProbeJoinMetrics,
     ) -> Self {
         let streamed_schema = streamed.schema();
         Self {
@@ -812,6 +823,7 @@ impl PiecewiseMergeJoinStream {
             state,
             existence_join,
             sort_option,
+            join_metrics,
         }
     }
 
@@ -843,11 +855,13 @@ impl PiecewiseMergeJoinStream {
         &mut self,
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Result<StatefulStreamResult<Option<RecordBatch>>>> {
+        let build_timer = self.join_metrics.build_time.timer();
         let buffered_data = ready!(self
             .buffered_side
             .try_as_initial_mut()?
             .buffered_fut
             .get_shared(cx))?;
+        build_timer.done();
 
         self.state = if self.existence_join {
             // For existence joins we will start to compare the buffered
@@ -884,9 +898,14 @@ impl PiecewiseMergeJoinStream {
                     .evaluate(&batch)?
                     .into_array(batch.num_rows())?;
 
+                self.join_metrics.input_batches.add(1);
+                self.join_metrics.input_rows.add(batch.num_rows());
+
                 // For existence joins we do not need to sort the output, and we only need to
                 // find the min or max value (depending on the operator) of all the stream batches
                 if self.existence_join {
+                    // Run timer during this phase as finding the min/max on streamed side is considered join time.
+                    let timer = self.join_metrics.join_time.timer();
                     let mut global_min_max = self.streamed_global_min_max.lock();
                     let streamed_batch = StreamedBatch::new(batch, vec![stream_values]);
 
@@ -898,6 +917,7 @@ impl PiecewiseMergeJoinStream {
                         self.operator,
                     )
                     .unwrap();
+                    timer.done();
 
                     self.state = PiecewiseMergeJoinStreamState::FetchStreamBatch;
                     return Poll::Ready(Ok(StatefulStreamResult::Continue));
@@ -924,7 +944,7 @@ impl PiecewiseMergeJoinStream {
         Poll::Ready(Ok(StatefulStreamResult::Continue))
     }
 
-    // Only classic join will call this, we process stream batches and evaluate against
+    // Only classic join will call. This function will process stream batches and evaluate against
     // the buffered side data.
     fn process_stream_batch(
         &mut self,
@@ -932,7 +952,7 @@ impl PiecewiseMergeJoinStream {
         let stream_batch = self.state.try_as_process_stream_batch_mut()?;
         let buffered_side = self.buffered_side.try_as_ready_mut()?;
 
-        let result = resolve_classic_join(
+        let batch = resolve_classic_join(
             stream_batch,
             buffered_side,
             Arc::clone(&self.schema),
@@ -942,7 +962,7 @@ impl PiecewiseMergeJoinStream {
         )?;
 
         self.state = PiecewiseMergeJoinStreamState::FetchStreamBatch;
-        Ok(StatefulStreamResult::Ready(Some(result)))
+        Ok(StatefulStreamResult::Ready(Some(batch)))
     }
 
     // Process remaining unmatched rows
@@ -952,14 +972,15 @@ impl PiecewiseMergeJoinStream {
         // Return early for `JoinType::Left` and `JoinType::Inner`
         if matches!(self.join_type, JoinType::Left | JoinType::Inner) {
             self.state = PiecewiseMergeJoinStreamState::Completed;
-
             return Ok(StatefulStreamResult::Ready(None));
         }
+
+        let timer = self.join_metrics.join_time.timer();
 
         let buffered_data =
             Arc::clone(&self.buffered_side.try_as_ready().unwrap().buffered_data);
 
-        // For Semi/Anti/Mark joins we mark indices on the buffered side, and retrieve final indices from
+        // For Semi/Anti/Mark joins that mark indices on the buffered side, and retrieve final indices from
         // `get_final_indices_bitmap`
         if matches!(
             self.join_type,
@@ -979,7 +1000,7 @@ impl PiecewiseMergeJoinStream {
             let buffered_values = buffered_data.values();
             let mut threshold_idx: Option<usize> = None;
 
-            // We iterate the buffered size values while comparing the threshold value (min/max)
+            // Iterate the buffered size values while comparing the threshold value (min/max)
             // and record our first match
             for buffered_idx in 0..buffered_data.values.len() {
                 let buffered_value =
@@ -1008,7 +1029,7 @@ impl PiecewiseMergeJoinStream {
 
             let mut buffered_indices = UInt64Builder::default();
 
-            // If we found a match then we will append all indices from the threshold index
+            // If a match is found then append all indices from the threshold index
             // to the end of the buffered size rows
             if let Some(threshold_idx) = threshold_idx {
                 let buffered_range: Vec<u64> =
@@ -1044,6 +1065,9 @@ impl PiecewiseMergeJoinStream {
             buffered_indices,
         )?;
 
+        timer.done();
+        self.join_metrics.output_batches.add(1);
+        self.join_metrics.output_rows.add(batch.num_rows());
         self.state = PiecewiseMergeJoinStreamState::Completed;
 
         Ok(StatefulStreamResult::Ready(Some(batch)))
