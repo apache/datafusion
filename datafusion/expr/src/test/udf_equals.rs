@@ -25,7 +25,6 @@ use std::{
     hash::{Hash, Hasher},
 };
 #[derive(Debug, PartialEq)]
-#[allow(dead_code)]
 struct ParamUdf {
     param: i32,
     signature: Signature,

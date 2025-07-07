@@ -774,6 +774,13 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
         // if the types, names and signatures are the same, we can't know if they are the same so we
         // assume they are not.
         // If a UDF has internal state that should be compared, it should implement this method
+        //
+        // Alternative approach: we could potentially do bit-by-bit comparison if both objects
+        // are the same concrete type, but this requires:
+        // 1. Both objects to have identical TypeId
+        // 2. Careful handling of potential padding bytes in structs
+        // 3. The concrete type to be safely comparable via memcmp
+        // For now, we use the conservative approach of returning false
         false
     }
 
