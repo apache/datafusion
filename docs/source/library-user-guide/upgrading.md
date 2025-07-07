@@ -79,7 +79,42 @@ The default implementation of the `equals` method in the `ScalarUDFImpl` trait h
 **Example:**
 
 ```rust
+# use datafusion::logical_expr::{ScalarUDFImpl, Signature, Volatility};
+# use datafusion_common::{DataFusionError, Result};
+# use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
+# use arrow::datatypes::DataType;
+# use std::any::Any;
+# 
+# #[derive(Debug)]
+# struct MyUdf {
+#     param: i32,
+# }
+# 
+# impl MyUdf {
+#     fn name(&self) -> &str { "my_udf" }
+# }
+# 
 impl ScalarUDFImpl for MyUdf {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        "my_udf"
+    }
+
+    fn signature(&self) -> &Signature {
+        todo!()
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        todo!()
+    }
+
+    fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        todo!()
+    }
+
     fn equals(&self, other: &dyn ScalarUDFImpl) -> bool {
         if let Some(other) = other.as_any().downcast_ref::<Self>() {
             self.param == other.param && self.name() == other.name()
