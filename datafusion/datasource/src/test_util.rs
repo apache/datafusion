@@ -58,10 +58,6 @@ impl FileSource for MockSource {
         Arc::new(Self { ..self.clone() })
     }
 
-    fn with_projection(&self, _config: &FileScanConfig) -> Arc<dyn FileSource> {
-        Arc::new(Self { ..self.clone() })
-    }
-
     fn with_statistics(&self, statistics: Statistics) -> Arc<dyn FileSource> {
         let mut source = self.clone();
         source.projected_statistics = Some(statistics);
