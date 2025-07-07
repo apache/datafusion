@@ -379,6 +379,11 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
+      - name: Rust Dependency Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          save-if: false # set in linux-test
+          shared-key: "amd-ci"
       - name: Run doctests
         run: cargo test --profile ci --doc --features avro,json
       - name: Verify Working Directory Clean
