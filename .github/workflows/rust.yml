@@ -54,8 +54,7 @@ jobs:
       - name: Rust Dependency Cache
         uses: Swatinem/rust-cache@v2
         with:
-          save-if: false # set in linux-test
-          shared-key: "amd-ci"
+          shared-key: "amd-ci-check" # this job uses it's own cache becase check has a separate cache and we need it to be fast as it blocks other jobs
       - name: Prepare cargo build
         run: |
           # Adding `--locked` here to assert that the `Cargo.lock` file is up to
