@@ -15,11 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::{
-    ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
-};
 use arrow::datatypes::DataType;
 use datafusion_common::{not_impl_err, Result};
+use datafusion_expr::{
+    ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
+};
 use std::{
     any::Any,
     hash::{Hash, Hasher},
