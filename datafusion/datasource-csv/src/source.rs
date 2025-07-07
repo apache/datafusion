@@ -84,7 +84,6 @@ use tokio::io::AsyncWriteExt;
 pub struct CsvSource {
     batch_size: Option<usize>,
     file_schema: Option<SchemaRef>,
-    file_projection: Option<Vec<usize>>,
     pub(crate) has_header: bool,
     delimiter: u8,
     quote: u8,
@@ -160,10 +159,10 @@ impl CsvSource {
 
 impl CsvSource {
     fn open<R: Read>(&self, reader: R) -> Result<csv::Reader<R>> {
-        Ok(self.builder().build(reader)?)
+        Ok(self.builder(None).build(reader)?)
     }
 
-    fn builder(&self) -> csv::ReaderBuilder {
+    fn builder(&self, projection: Option<Vec<usize>>) -> csv::ReaderBuilder {
         let mut builder = csv::ReaderBuilder::new(Arc::clone(
             self.file_schema
                 .as_ref()
@@ -179,8 +178,8 @@ impl CsvSource {
         if let Some(terminator) = self.terminator {
             builder = builder.with_terminator(terminator);
         }
-        if let Some(proj) = &self.file_projection {
-            builder = builder.with_projection(proj.clone());
+        if let Some(proj) = projection {
+            builder = builder.with_projection(proj);
         }
         if let Some(escape) = self.escape {
             builder = builder.with_escape(escape)
@@ -198,6 +197,7 @@ pub struct CsvOpener {
     config: Arc<CsvSource>,
     file_compression_type: FileCompressionType,
     object_store: Arc<dyn ObjectStore>,
+    projection: Option<Vec<usize>>,
 }
 
 impl CsvOpener {
@@ -211,6 +211,7 @@ impl CsvOpener {
             config,
             file_compression_type,
             object_store,
+            projection: None,
         }
     }
 }
@@ -232,6 +233,7 @@ impl FileSource for CsvSource {
             config: Arc::new(self.clone()),
             file_compression_type: base_config.file_compression_type,
             object_store,
+            projection: base_config.file_column_projection_indices(),
         })
     }
 
@@ -254,12 +256,6 @@ impl FileSource for CsvSource {
     fn with_statistics(&self, statistics: Statistics) -> Arc<dyn FileSource> {
         let mut conf = self.clone();
         conf.projected_statistics = Some(statistics);
-        Arc::new(conf)
-    }
-
-    fn with_projection(&self, config: &FileScanConfig) -> Arc<dyn FileSource> {
-        let mut conf = self.clone();
-        conf.file_projection = config.file_column_projection_indices();
         Arc::new(conf)
     }
 
@@ -355,6 +351,8 @@ impl FileOpener for CsvOpener {
         let store = Arc::clone(&self.object_store);
         let terminator = self.config.terminator;
 
+        let projection = self.projection.clone();
+
         Ok(Box::pin(async move {
             // Current partition contains bytes [start_byte, end_byte) (might contain incomplete lines at boundaries)
 
@@ -395,7 +393,7 @@ impl FileOpener for CsvOpener {
                     Ok(futures::stream::iter(config.open(decoder)?).boxed())
                 }
                 GetResultPayload::Stream(s) => {
-                    let decoder = config.builder().build_decoder();
+                    let decoder = config.builder(projection).build_decoder();
                     let s = s.map_err(DataFusionError::from);
                     let input = file_compression_type.convert_stream(s.boxed())?.fuse();
 

@@ -481,10 +481,7 @@ impl DataSource for FileScanConfig {
             .batch_size
             .unwrap_or_else(|| context.session_config().batch_size());
 
-        let source = self
-            .file_source
-            .with_batch_size(batch_size)
-            .with_projection(self);
+        let source = self.file_source.with_batch_size(batch_size);
 
         let opener = source.create_file_opener(object_store, self, partition);
 
@@ -762,13 +759,6 @@ impl FileScanConfig {
     pub fn projected_constraints(&self) -> Constraints {
         let indexes = self.projection_indices();
         self.constraints.project(&indexes).unwrap_or_default()
-    }
-
-    /// Set the projection of the files
-    #[deprecated(since = "47.0.0", note = "use FileScanConfigBuilder instead")]
-    pub fn with_projection(mut self, projection: Option<Vec<usize>>) -> Self {
-        self.projection = projection;
-        self
     }
 
     /// Set the limit of the files
