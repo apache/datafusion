@@ -307,26 +307,23 @@ impl PiecewiseMergeJoinExec {
         &self.sort_options
     }
 
-    /// Get probe side (buffered side) for the PiecewiseMergeJoin
+    /// Get probe side (streameded side) for the PiecewiseMergeJoin
     /// In current implementation, probe side is determined according to join type.
     pub fn probe_side(join_type: &JoinType) -> JoinSide {
         match join_type {
             JoinType::Right
             | JoinType::RightSemi
             | JoinType::RightAnti
-            | JoinType::RightMark => JoinSide::Right,
+            | JoinType::RightMark => JoinSide::Left,
             JoinType::Inner
             | JoinType::Left
             | JoinType::Full
             | JoinType::LeftAnti
             | JoinType::LeftSemi
-            | JoinType::LeftMark => JoinSide::Left,
+            | JoinType::LeftMark => JoinSide::Right,
         }
     }
 
-    // TODO: fix compute properties to work specifically for PiecewiseMergeJoin
-    // This is currently just a filler implementation so that it actually returns
-    // a PlanProperties
     pub fn compute_properties(
         streamed: &Arc<dyn ExecutionPlan>,
         buffered: &Arc<dyn ExecutionPlan>,
@@ -339,7 +336,7 @@ impl PiecewiseMergeJoinExec {
             buffered.equivalence_properties().clone(),
             &join_type,
             schema,
-            &[false, false],
+            &Self::maintains_input_order(join_type),
             Some(Self::probe_side(&join_type)),
             &[join_on.clone()],
         )?;
@@ -355,6 +352,25 @@ impl PiecewiseMergeJoinExec {
         ))
     }
 
+    fn maintains_input_order(join_type: JoinType) -> Vec<bool> {
+        match join_type {
+            // The existence side is expected to come in sorted
+            JoinType::LeftSemi
+            | JoinType::LeftAnti
+            | JoinType::LeftMark => vec![true, false],
+            JoinType::RightSemi
+            | JoinType::RightAnti
+            | JoinType::RightMark => {
+                vec![false, true]
+            }
+            // Left, Right, Full, Inner Join is not guaranteed to maintain 
+            // input order as the streamed side will be sorted during 
+            // execution for `PiecewiseMergeJoin`
+            _ => vec![false, false],
+        }
+    }
+
+    // TODO: We implement this with the physical planner.
     pub fn swap_inputs(&self) -> Result<Arc<dyn ExecutionPlan>> {
         todo!()
     }
@@ -945,6 +961,8 @@ impl PiecewiseMergeJoinStream {
         let buffered_data =
             Arc::clone(&self.buffered_side.try_as_ready().unwrap().buffered_data);
 
+        // For Semi/Anti/Mark joins we mark indices on the buffered side, and retrieve final indices from 
+        // `get_final_indices_bitmap`
         if matches!(
             self.join_type,
             JoinType::LeftSemi
@@ -1001,13 +1019,14 @@ impl PiecewiseMergeJoinStream {
             }
             let buffered_indices_array = buffered_indices.finish();
 
-            // The visited bitmap hasn't been marked yet for existence joins
+            // Mark bitmap here because the visited bitmap hasn't been marked yet for existence joins
             let mut bitmap = buffered_data.visited_indices_bitmap.lock();
             buffered_indices_array.iter().flatten().for_each(|x| {
                 bitmap.set_bit(x as usize, true);
             });
         }
 
+        // Pass in piecewise flag to allow Right Semi/Anti/Mark joins to also be processed
         let (buffered_indices, streamed_indices) = get_final_indices_from_shared_bitmap(
             &buffered_data.visited_indices_bitmap,
             self.join_type,
