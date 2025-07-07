@@ -262,20 +262,23 @@ jobs:
     name: cargo test (amd64)
     needs: linux-build-lib
     runs-on: ubuntu-latest
+    container:
+      image: amd64/rust
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: true
           fetch-depth: 1
       - name: Setup Rust toolchain
-        run: rustup toolchain install stable
-      - name: Install Protobuf Compiler
-        run: sudo apt-get install -y protobuf-compiler
+        uses: ./.github/actions/setup-builder
+        with:
+          rust-version: stable
       - name: Rust Dependency Cache
         uses: Swatinem/rust-cache@v2
         with:
 #         save-if: ${{ github.ref_name == 'main' }}
          shared-key: "amd-ci"
+         env-vars: ""  # by default,
       - name: Run tests (excluding doctests and datafusion-cli)
         env:
           RUST_BACKTRACE: 1
@@ -299,13 +302,22 @@ jobs:
     name: cargo test datafusion-cli (amd64)
     needs: linux-build-lib
     runs-on: ubuntu-latest
+    container:
+      image: amd64/rust
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: true
           fetch-depth: 1
       - name: Setup Rust toolchain
-        run: rustup toolchain install stable
+        uses: ./.github/actions/setup-builder
+        with:
+          rust-version: stable
+      - name: Rust Dependency Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          save-if: false # set in linux-test
+          shared-key: "amd-ci"
       - name: Setup Minio - S3-compatible storage
         run: |
           docker run -d --name minio-container \
