@@ -1065,7 +1065,6 @@ impl PiecewiseMergeJoinStream {
 
         timer.done();
         self.join_metrics.output_batches.add(1);
-        self.join_metrics.output_rows.add(batch.num_rows());
         self.state = PiecewiseMergeJoinStreamState::Completed;
 
         Ok(StatefulStreamResult::Ready(Some(batch)))
