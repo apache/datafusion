@@ -27,7 +27,7 @@ use std::sync::Arc;
 use crate::expr_fn::binary_expr;
 use crate::function::WindowFunctionSimplification;
 use crate::logical_plan::Subquery;
-use crate::Volatility;
+use crate::{AggregateUDF, Volatility};
 use crate::{ExprSchemable, Operator, Signature, WindowFrame, WindowUDF};
 
 use arrow::datatypes::{DataType, Field, FieldRef};
@@ -982,7 +982,7 @@ impl<'a> TreeNodeContainer<'a, Expr> for Sort {
 #[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
 pub struct AggregateFunction {
     /// Name of the function
-    pub func: Arc<crate::AggregateUDF>,
+    pub func: Arc<AggregateUDF>,
     pub params: AggregateFunctionParams,
 }
 
@@ -1001,7 +1001,7 @@ pub struct AggregateFunctionParams {
 impl AggregateFunction {
     /// Create a new AggregateFunction expression with a user-defined function (UDF)
     pub fn new_udf(
-        func: Arc<crate::AggregateUDF>,
+        func: Arc<AggregateUDF>,
         args: Vec<Expr>,
         distinct: bool,
         filter: Option<Box<Expr>>,
@@ -1029,7 +1029,7 @@ impl AggregateFunction {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub enum WindowFunctionDefinition {
     /// A user defined aggregate function
-    AggregateUDF(Arc<crate::AggregateUDF>),
+    AggregateUDF(Arc<AggregateUDF>),
     /// A user defined aggregate function
     WindowUDF(Arc<WindowUDF>),
 }
@@ -1088,8 +1088,8 @@ impl Display for WindowFunctionDefinition {
     }
 }
 
-impl From<Arc<crate::AggregateUDF>> for WindowFunctionDefinition {
-    fn from(value: Arc<crate::AggregateUDF>) -> Self {
+impl From<Arc<AggregateUDF>> for WindowFunctionDefinition {
+    fn from(value: Arc<AggregateUDF>) -> Self {
         Self::AggregateUDF(value)
     }
 }
@@ -1170,38 +1170,6 @@ impl Exists {
     // Create a new Exists expression.
     pub fn new(subquery: Subquery, negated: bool) -> Self {
         Self { subquery, negated }
-    }
-}
-
-/// User Defined Aggregate Function
-///
-/// See [`crate::udaf::AggregateUDF`] for more information.
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub struct AggregateUDF {
-    /// The function
-    pub fun: Arc<crate::AggregateUDF>,
-    /// List of expressions to feed to the functions as arguments
-    pub args: Vec<Expr>,
-    /// Optional filter
-    pub filter: Option<Box<Expr>>,
-    /// Optional ORDER BY applied prior to aggregating
-    pub order_by: Vec<Expr>,
-}
-
-impl AggregateUDF {
-    /// Create a new AggregateUDF expression
-    pub fn new(
-        fun: Arc<crate::AggregateUDF>,
-        args: Vec<Expr>,
-        filter: Option<Box<Expr>>,
-        order_by: Vec<Expr>,
-    ) -> Self {
-        Self {
-            fun,
-            args,
-            filter,
-            order_by,
-        }
     }
 }
 
