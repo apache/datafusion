@@ -33,8 +33,8 @@
     <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
-    <link rel="next" title="Introduction" href="../contributor-guide/index.html" />
-    <link rel="prev" title="DataFusion Query Optimizer" href="query-optimizer.html" />
+    <link rel="next" title="Extensions List" href="extensions.html" />
+    <link rel="prev" title="Introduction" href="index.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="docsearch:language" content="en">
     
@@ -316,6 +316,11 @@
    Introduction
   </a>
  </li>
+ <li class="toctree-l1 current active">
+  <a class="current reference internal" href="#">
+   Upgrade Guides
+  </a>
+ </li>
  <li class="toctree-l1">
   <a class="reference internal" href="extensions.html">
    Extensions List
@@ -397,11 +402,6 @@
  <li class="toctree-l1">
   <a class="reference internal" href="query-optimizer.html">
    DataFusion Query Optimizer
-  </a>
- </li>
- <li class="toctree-l1 current active">
-  <a class="current reference internal" href="#">
-   Upgrade Guides
   </a>
  </li>
 </ul>
@@ -571,23 +571,8 @@
     </a>
    </li>
    <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#datafusion-execution-collect-statistics-now-defaults-to-true">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       datafusion.execution.collect_statistics
-      </span>
-     </code>
-     now defaults to
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       true
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#metadata-is-now-represented-by-fieldmetadata">
-     Metadata is now represented by
+    <a class="reference internal nav-link" href="#metadata-on-arrow-types-is-now-represented-by-fieldmetadata">
+     Metadata on Arrow Types is now represented by
      <code class="docutils literal notranslate">
       <span class="pre">
        FieldMetadata
@@ -604,6 +589,33 @@
       </span>
      </code>
      configuration option
+    </a>
+   </li>
+  </ul>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#datafusion-48-0-1">
+   DataFusion
+   <code class="docutils literal notranslate">
+    <span class="pre">
+     48.0.1
+    </span>
+   </code>
+  </a>
+  <ul class="nav section-nav flex-column">
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#datafusion-execution-collect-statistics-now-defaults-to-true">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       datafusion.execution.collect_statistics
+      </span>
+     </code>
+     now defaults to
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       true
+      </span>
+     </code>
     </a>
    </li>
   </ul>
@@ -1016,21 +1028,8 @@ You can see the current <a class="reference external" href="https://github.com/a
 </pre></div>
 </div>
 </section>
-<section id="datafusion-execution-collect-statistics-now-defaults-to-true">
-<h3><code class="docutils literal notranslate"><span class="pre">datafusion.execution.collect_statistics</span></code> now defaults to <code class="docutils literal notranslate"><span class="pre">true</span></code><a class="headerlink" href="#datafusion-execution-collect-statistics-now-defaults-to-true" title="Link to this heading">¶</a></h3>
-<p>The default value of the <code class="docutils literal notranslate"><span class="pre">datafusion.execution.collect_statistics</span></code> configuration
-setting is now true. This change impacts users that use that value directly and relied
-on its default value being <code class="docutils literal notranslate"><span class="pre">false</span></code>.</p>
-<p>This change also restores the default behavior of <code class="docutils literal notranslate"><span class="pre">ListingTable</span></code> to its previous. If you use it directly
-you can maintain the current behavior by overriding the default value in your code.</p>
-<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="n">ListingOptions</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">Arc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">ParquetFormat</span><span class="p">::</span><span class="n">default</span><span class="p">()))</span>
-<span class="w">    </span><span class="p">.</span><span class="n">with_collect_stat</span><span class="p">(</span><span class="kc">false</span><span class="p">)</span>
-<span class="w">    </span><span class="c1">// other options</span>
-</pre></div>
-</div>
-</section>
-<section id="metadata-is-now-represented-by-fieldmetadata">
-<h3>Metadata is now represented by <code class="docutils literal notranslate"><span class="pre">FieldMetadata</span></code><a class="headerlink" href="#metadata-is-now-represented-by-fieldmetadata" title="Link to this heading">¶</a></h3>
+<section id="metadata-on-arrow-types-is-now-represented-by-fieldmetadata">
+<h3>Metadata on Arrow Types is now represented by <code class="docutils literal notranslate"><span class="pre">FieldMetadata</span></code><a class="headerlink" href="#metadata-on-arrow-types-is-now-represented-by-fieldmetadata" title="Link to this heading">¶</a></h3>
 <p>Metadata from the Arrow <code class="docutils literal notranslate"><span class="pre">Field</span></code> is now stored using the <code class="docutils literal notranslate"><span class="pre">FieldMetadata</span></code>
 structure. In prior versions it was stored as both a <code class="docutils literal notranslate"><span class="pre">HashMap&lt;String,</span> <span class="pre">String&gt;</span></code>
 and a <code class="docutils literal notranslate"><span class="pre">BTreeMap&lt;String,</span> <span class="pre">String&gt;</span></code>. <code class="docutils literal notranslate"><span class="pre">FieldMetadata</span></code> is a easier to work with and
@@ -1068,6 +1067,22 @@ is more efficient.</p>
 </pre></div>
 </div>
 <p>For more details about this configuration option, including performance trade-offs between different compression codecs, see the <a class="reference internal" href="../user-guide/configs.html"><span class="std std-doc">Configuration Settings</span></a> documentation.</p>
+</section>
+</section>
+<section id="datafusion-48-0-1">
+<h2>DataFusion <code class="docutils literal notranslate"><span class="pre">48.0.1</span></code><a class="headerlink" href="#datafusion-48-0-1" title="Link to this heading">¶</a></h2>
+<section id="datafusion-execution-collect-statistics-now-defaults-to-true">
+<h3><code class="docutils literal notranslate"><span class="pre">datafusion.execution.collect_statistics</span></code> now defaults to <code class="docutils literal notranslate"><span class="pre">true</span></code><a class="headerlink" href="#datafusion-execution-collect-statistics-now-defaults-to-true" title="Link to this heading">¶</a></h3>
+<p>The default value of the <code class="docutils literal notranslate"><span class="pre">datafusion.execution.collect_statistics</span></code> configuration
+setting is now true. This change impacts users that use that value directly and relied
+on its default value being <code class="docutils literal notranslate"><span class="pre">false</span></code>.</p>
+<p>This change also restores the default behavior of <code class="docutils literal notranslate"><span class="pre">ListingTable</span></code> to its previous. If you use it directly
+you can maintain the current behavior by overriding the default value in your code.</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="n">ListingOptions</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">Arc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">ParquetFormat</span><span class="p">::</span><span class="n">default</span><span class="p">()))</span>
+<span class="w">    </span><span class="p">.</span><span class="n">with_collect_stat</span><span class="p">(</span><span class="kc">false</span><span class="p">)</span>
+<span class="w">    </span><span class="c1">// other options</span>
+</pre></div>
+</div>
 </section>
 </section>
 <section id="datafusion-48-0-0">
@@ -1568,17 +1583,17 @@ take care of constructing the <code class="docutils literal notranslate"><span c
               
               <!-- Previous / next buttons -->
 <div class='prev-next-area'>
-    <a class='left-prev' id="prev-link" href="query-optimizer.html" title="previous page">
+    <a class='left-prev' id="prev-link" href="index.html" title="previous page">
         <i class="fas fa-angle-left"></i>
         <div class="prev-next-info">
             <p class="prev-next-subtitle">previous</p>
-            <p class="prev-next-title">DataFusion Query Optimizer</p>
+            <p class="prev-next-title">Introduction</p>
         </div>
     </a>
-    <a class='right-next' id="next-link" href="../contributor-guide/index.html" title="next page">
+    <a class='right-next' id="next-link" href="extensions.html" title="next page">
     <div class="prev-next-info">
         <p class="prev-next-subtitle">next</p>
-        <p class="prev-next-title">Introduction</p>
+        <p class="prev-next-title">Extensions List</p>
     </div>
     <i class="fas fa-angle-right"></i>
     </a>
