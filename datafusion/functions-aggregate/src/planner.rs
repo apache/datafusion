@@ -100,7 +100,7 @@ impl ExprPlanner for AggregateFunctionPlanner {
 
             let new_expr = Expr::AggregateFunction(AggregateFunction::new_udf(
                 func,
-                vec![Expr::Literal(COUNT_STAR_EXPANSION)],
+                vec![Expr::Literal(COUNT_STAR_EXPANSION, None)],
                 distinct,
                 filter,
                 order_by,

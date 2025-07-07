@@ -53,7 +53,7 @@ impl PhysicalOptimizerRule for AggregateStatistics {
                 .as_any()
                 .downcast_ref::<AggregateExec>()
                 .expect("take_optimizable() ensures that this is a AggregateExec");
-            let stats = partial_agg_exec.input().statistics()?;
+            let stats = partial_agg_exec.input().partition_statistics(None)?;
             let mut projections = vec![];
             for expr in partial_agg_exec.aggr_expr() {
                 let field = expr.field();

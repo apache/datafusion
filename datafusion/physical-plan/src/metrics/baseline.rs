@@ -45,7 +45,7 @@ use datafusion_common::Result;
 /// ```
 #[derive(Debug, Clone)]
 pub struct BaselineMetrics {
-    /// end_time is set when `ExecutionMetrics::done()` is called
+    /// end_time is set when `BaselineMetrics::done()` is called
     end_time: Timestamp,
 
     /// amount of time the operator was actively trying to use the CPU
@@ -117,9 +117,10 @@ impl BaselineMetrics {
         }
     }
 
-    /// Process a poll result of a stream producing output for an
-    /// operator, recording the output rows and stream done time and
-    /// returning the same poll result
+    /// Process a poll result of a stream producing output for an operator.
+    ///
+    /// Note: this method only updates `output_rows` and `end_time` metrics.
+    /// Remember to update `elapsed_compute` and other metrics manually.
     pub fn record_poll(
         &self,
         poll: Poll<Option<Result<RecordBatch>>>,
@@ -150,7 +151,7 @@ pub struct SpillMetrics {
     /// count of spills during the execution of the operator
     pub spill_file_count: Count,
 
-    /// total spilled bytes during the execution of the operator
+    /// total bytes actually written to disk during the execution of the operator
     pub spilled_bytes: Count,
 
     /// total spilled rows during the execution of the operator

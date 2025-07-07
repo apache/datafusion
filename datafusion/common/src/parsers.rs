@@ -64,7 +64,7 @@ impl Display for CompressionTypeVariant {
             Self::ZSTD => "ZSTD",
             Self::UNCOMPRESSED => "",
         };
-        write!(f, "{}", str)
+        write!(f, "{str}")
     }
 }
 

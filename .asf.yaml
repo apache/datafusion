@@ -50,6 +50,9 @@ github:
     main:
       required_pull_request_reviews:
         required_approving_review_count: 1
+  pull_requests:
+    # enable updating head branches of pull requests
+    allow_update_branch: true
 
 # publishes the content of the `asf-site` branch to
 # https://datafusion.apache.org/

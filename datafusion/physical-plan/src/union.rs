@@ -248,7 +248,7 @@ impl ExecutionPlan for UnionExec {
             }
         }
 
-        warn!("Error in Union: Partition {} not found", partition);
+        warn!("Error in Union: Partition {partition} not found");
 
         exec_err!("Partition {partition} not found in Union")
     }
@@ -258,16 +258,36 @@ impl ExecutionPlan for UnionExec {
     }
 
     fn statistics(&self) -> Result<Statistics> {
-        let stats = self
-            .inputs
-            .iter()
-            .map(|stat| stat.statistics())
-            .collect::<Result<Vec<_>>>()?;
+        self.partition_statistics(None)
+    }
 
-        Ok(stats
-            .into_iter()
-            .reduce(stats_union)
-            .unwrap_or_else(|| Statistics::new_unknown(&self.schema())))
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        if let Some(partition_idx) = partition {
+            // For a specific partition, find which input it belongs to
+            let mut remaining_idx = partition_idx;
+            for input in &self.inputs {
+                let input_partition_count = input.output_partitioning().partition_count();
+                if remaining_idx < input_partition_count {
+                    // This partition belongs to this input
+                    return input.partition_statistics(Some(remaining_idx));
+                }
+                remaining_idx -= input_partition_count;
+            }
+            // If we get here, the partition index is out of bounds
+            Ok(Statistics::new_unknown(&self.schema()))
+        } else {
+            // Collect statistics from all inputs
+            let stats = self
+                .inputs
+                .iter()
+                .map(|input_exec| input_exec.partition_statistics(None))
+                .collect::<Result<Vec<_>>>()?;
+
+            Ok(stats
+                .into_iter()
+                .reduce(stats_union)
+                .unwrap_or_else(|| Statistics::new_unknown(&self.schema())))
+        }
     }
 
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {
@@ -461,7 +481,7 @@ impl ExecutionPlan for InterleaveExec {
             )));
         }
 
-        warn!("Error in InterleaveExec: Partition {} not found", partition);
+        warn!("Error in InterleaveExec: Partition {partition} not found");
 
         exec_err!("Partition {partition} not found in InterleaveExec")
     }
@@ -471,10 +491,17 @@ impl ExecutionPlan for InterleaveExec {
     }
 
     fn statistics(&self) -> Result<Statistics> {
+        self.partition_statistics(None)
+    }
+
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        if partition.is_some() {
+            return Ok(Statistics::new_unknown(&self.schema()));
+        }
         let stats = self
             .inputs
             .iter()
-            .map(|stat| stat.statistics())
+            .map(|stat| stat.partition_statistics(None))
             .collect::<Result<Vec<_>>>()?;
 
         Ok(stats
@@ -513,7 +540,12 @@ fn union_schema(inputs: &[Arc<dyn ExecutionPlan>]) -> SchemaRef {
 
     let fields = (0..first_schema.fields().len())
         .map(|i| {
-            inputs
+            // We take the name from the left side of the union to match how names are coerced during logical planning,
+            // which also uses the left side names.
+            let base_field = first_schema.field(i).clone();
+
+            // Coerce metadata and nullability across all inputs
+            let merged_field = inputs
                 .iter()
                 .enumerate()
                 .map(|(input_idx, input)| {
@@ -535,6 +567,9 @@ fn union_schema(inputs: &[Arc<dyn ExecutionPlan>]) -> SchemaRef {
                 // We can unwrap this because if inputs was empty, this would've already panic'ed when we
                 // indexed into inputs[0].
                 .unwrap()
+                .with_name(base_field.name());
+
+            merged_field
         })
         .collect::<Vec<_>>();
 
@@ -642,15 +677,13 @@ fn stats_union(mut left: Statistics, right: Statistics) -> Statistics {
 mod tests {
     use super::*;
     use crate::collect;
-    use crate::test;
-    use crate::test::TestMemoryExec;
+    use crate::test::{self, TestMemoryExec};
 
     use arrow::compute::SortOptions;
     use arrow::datatypes::DataType;
     use datafusion_common::ScalarValue;
+    use datafusion_physical_expr::equivalence::convert_to_orderings;
     use datafusion_physical_expr::expressions::col;
-    use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
-    use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
     // Generate a schema which consists of 7 columns (a, b, c, d, e, f, g)
     fn create_test_schema() -> Result<SchemaRef> {
@@ -664,19 +697,6 @@ mod tests {
         let schema = Arc::new(Schema::new(vec![a, b, c, d, e, f, g]));
 
         Ok(schema)
-    }
-
-    // Convert each tuple to PhysicalSortExpr
-    fn convert_to_sort_exprs(
-        in_data: &[(&Arc<dyn PhysicalExpr>, SortOptions)],
-    ) -> LexOrdering {
-        in_data
-            .iter()
-            .map(|(expr, options)| PhysicalSortExpr {
-                expr: Arc::clone(*expr),
-                options: *options,
-            })
-            .collect::<LexOrdering>()
     }
 
     #[tokio::test]
@@ -854,18 +874,9 @@ mod tests {
             (first_child_orderings, second_child_orderings, union_orderings),
         ) in test_cases.iter().enumerate()
         {
-            let first_orderings = first_child_orderings
-                .iter()
-                .map(|ordering| convert_to_sort_exprs(ordering))
-                .collect::<Vec<_>>();
-            let second_orderings = second_child_orderings
-                .iter()
-                .map(|ordering| convert_to_sort_exprs(ordering))
-                .collect::<Vec<_>>();
-            let union_expected_orderings = union_orderings
-                .iter()
-                .map(|ordering| convert_to_sort_exprs(ordering))
-                .collect::<Vec<_>>();
+            let first_orderings = convert_to_orderings(first_child_orderings);
+            let second_orderings = convert_to_orderings(second_child_orderings);
+            let union_expected_orderings = convert_to_orderings(union_orderings);
             let child1 = Arc::new(TestMemoryExec::update_cache(Arc::new(
                 TestMemoryExec::try_new(&[], Arc::clone(&schema), None)?
                     .try_with_sort_information(first_orderings)?,
@@ -876,7 +887,7 @@ mod tests {
             )));
 
             let mut union_expected_eq = EquivalenceProperties::new(Arc::clone(&schema));
-            union_expected_eq.add_new_orderings(union_expected_orderings);
+            union_expected_eq.add_orderings(union_expected_orderings);
 
             let union = UnionExec::new(vec![child1, child2]);
             let union_eq_properties = union.properties().equivalence_properties();
@@ -897,7 +908,7 @@ mod tests {
         // Check whether orderings are same.
         let lhs_orderings = lhs.oeq_class();
         let rhs_orderings = rhs.oeq_class();
-        assert_eq!(lhs_orderings.len(), rhs_orderings.len(), "{}", err_msg);
+        assert_eq!(lhs_orderings.len(), rhs_orderings.len(), "{err_msg}");
         for rhs_ordering in rhs_orderings.iter() {
             assert!(lhs_orderings.contains(rhs_ordering), "{}", err_msg);
         }

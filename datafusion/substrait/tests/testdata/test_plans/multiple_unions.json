@@ -1,0 +1,328 @@
+{
+  "extensionUris": [{
+    "extensionUriAnchor": 1,
+    "uri": "/functions_comparison.yaml"
+  }],
+  "extensions": [{
+    "extensionFunction": {
+      "extensionUriReference": 1,
+      "functionAnchor": 0,
+      "name": "equal:any_any"
+    }
+  }],
+  "relations": [{
+    "root": {
+      "input": {
+        "set": {
+          "common": {
+            "direct": {
+            }
+          },
+          "inputs": [{
+            "project": {
+              "common": {
+                "emit": {
+                  "outputMapping": [2, 3, 4]
+                }
+              },
+              "input": {
+                "join": {
+                  "common": {
+                    "direct": {
+                    }
+                  },
+                  "left": {
+                    "read": {
+                      "common": {
+                        "direct": {
+                        }
+                      },
+                        "baseSchema": {
+                          "names": ["product_key"],
+                          "struct": {
+                            "types": [{
+                              "string": {
+                                "nullability": "NULLABILITY_NULLABLE"
+                              }
+                            }],
+                            "nullability": "NULLABILITY_REQUIRED"
+                          }
+                        },
+                      "namedTable": {
+                        "names": [
+                          "sales"
+                        ]
+                      }
+                    }
+                  },
+                  "right": {
+                    "read": {
+                      "common": {
+                        "direct": {
+                        }
+                      },
+                        "baseSchema": {
+                          "names": ["@food_id"],
+                          "struct": {
+                            "types": [{
+                              "string": {
+                                "nullability": "NULLABILITY_NULLABLE"
+                              }
+                            }],
+                            "nullability": "NULLABILITY_REQUIRED"
+                          }
+                        },
+                      "namedTable": {
+                        "names": [
+                          "food"
+                        ]
+                      }
+                    }
+                  },
+                  "expression": {
+                    "scalarFunction": {
+                      "functionReference": 0,
+                      "outputType": {
+                        "bool": {
+                          "nullability": "NULLABILITY_NULLABLE"
+                        }
+                      },
+                      "arguments": [{
+                        "value": {
+                          "selection": {
+                            "directReference": {
+                              "structField": {
+                                "field": 0
+                              }
+                            },
+                            "rootReference": {
+                            }
+                          }
+                        }
+                      }, {
+                        "value": {
+                          "selection": {
+                            "directReference": {
+                              "structField": {
+                                "field": 1
+                              }
+                            },
+                            "rootReference": {
+                            }
+                          }
+                        }
+                      }]
+                    }
+                  },
+                  "type": "JOIN_TYPE_LEFT"
+                }
+              },
+              "expressions": [{
+                "literal": {
+                  "string": "people"
+                }
+              }, {
+                "literal": {
+                  "string": "people"
+                }
+              }, {
+                "selection": {
+                  "directReference": {
+                    "structField": {
+                      "field": 0
+                    }
+                  },
+                  "rootReference": {
+                  }
+                }
+              }]
+            }
+          }, {
+            "set": {
+              "common": {
+                "direct": {
+                }
+              },
+              "inputs": [{
+                "project": {
+                  "common": {
+                    "emit": {
+                      "outputMapping": [4, 5, 6]
+                    }
+                  },
+                  "input": {
+                    "join": {
+                      "common": {
+                        "direct": {
+                        }
+                      },
+                      "left": {
+                        "read": {
+                          "common": {
+                            "direct": {
+                            }
+                          },
+                          "baseSchema": {
+                            "names": ["$f3", "$f5", "product_key0"],
+                            "struct": {
+                              "types": [{
+                                "string": {
+                                  "nullability": "NULLABILITY_REQUIRED"
+                                }
+                              }, {
+                                "string": {
+                                  "nullability": "NULLABILITY_REQUIRED"
+                                }
+                              }, {
+                                "string": {
+                                  "nullability": "NULLABILITY_NULLABLE"
+                                }
+                              }],
+                              "nullability": "NULLABILITY_REQUIRED"
+                            }
+                          },
+                      "namedTable": {
+                        "names": [
+                          "people"
+                        ]
+                      }                          
+                        }
+                      },
+                      "right": {
+                        "read": {
+                          "common": {
+                            "direct": {
+                            }
+                          },
+                            "baseSchema": {
+                              "names": ["@food_id"],
+                              "struct": {
+                                "types": [{
+                                  "string": {
+                                    "nullability": "NULLABILITY_NULLABLE"
+                                  }
+                                }],
+                                "nullability": "NULLABILITY_REQUIRED"
+                              }
+                            },
+                            "namedTable": {
+                        "names": [
+                          "food"
+                        ]
+                      }   
+                          
+                        }
+                      },
+                      "expression": {
+                        "scalarFunction": {
+                          "functionReference": 0,
+                          "outputType": {
+                            "bool": {
+                              "nullability": "NULLABILITY_NULLABLE"
+                            }
+                          },
+                          "arguments": [{
+                            "value": {
+                              "selection": {
+                                "directReference": {
+                                  "structField": {
+                                    "field": 2
+                                  }
+                                },
+                                "rootReference": {
+                                }
+                              }
+                            }
+                          }, {
+                            "value": {
+                              "selection": {
+                                "directReference": {
+                                  "structField": {
+                                    "field": 3
+                                  }
+                                },
+                                "rootReference": {
+                                }
+                              }
+                            }
+                          }]
+                        }
+                      },
+                      "type": "JOIN_TYPE_LEFT"
+                    }
+                  },
+                  "expressions": [{
+                    "selection": {
+                      "directReference": {
+                        "structField": {
+                          "field": 0
+                        }
+                      },
+                      "rootReference": {
+                      }
+                    }
+                  }, {
+                    "selection": {
+                      "directReference": {
+                        "structField": {
+                          "field": 1
+                        }
+                      },
+                      "rootReference": {
+                      }
+                    }
+                  }, {
+                    "selection": {
+                      "directReference": {
+                        "structField": {
+                          "field": 2
+                        }
+                      },
+                      "rootReference": {
+                      }
+                    }
+                  }]
+                }
+              }, {
+                "read": {
+                  "common": {
+                    "direct": {
+                    }
+                  },
+                    "baseSchema": {
+                      "names": ["$f1000", "$f2000", "more_products_key0000"],
+                      "struct": {
+                        "types": [{
+                          "string": {
+                            "nullability": "NULLABILITY_REQUIRED"
+                          }
+                        }, {
+                          "string": {
+                            "nullability": "NULLABILITY_REQUIRED"
+                          }
+                        }, {
+                          "string": {
+                            "nullability": "NULLABILITY_NULLABLE"
+                          }
+                        }],
+                        "nullability": "NULLABILITY_REQUIRED"
+                      }
+                    },
+                    "namedTable": {
+                        "names": [
+                          "more_products"
+                        ]
+                    }   
+                  
+                }
+              }],
+              "op": "SET_OP_UNION_ALL"
+            }
+          }],
+          "op": "SET_OP_UNION_ALL"
+        }
+      },
+      "names": ["product_category", "product_type", "product_key"]
+    }
+  }]
+}

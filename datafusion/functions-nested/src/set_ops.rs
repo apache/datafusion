@@ -17,16 +17,21 @@
 
 //! [`ScalarUDFImpl`] definitions for array_union, array_intersect and array_distinct functions.
 
-use crate::make_array::{empty_array_type, make_array_inner};
 use crate::utils::make_scalar_function;
-use arrow::array::{new_empty_array, Array, ArrayRef, GenericListArray, OffsetSizeTrait};
+use arrow::array::{
+    new_null_array, Array, ArrayRef, GenericListArray, LargeListArray, ListArray,
+    OffsetSizeTrait,
+};
 use arrow::buffer::OffsetBuffer;
 use arrow::compute;
-use arrow::datatypes::DataType::{FixedSizeList, LargeList, List, Null};
+use arrow::datatypes::DataType::{LargeList, List, Null};
 use arrow::datatypes::{DataType, Field, FieldRef};
 use arrow::row::{RowConverter, SortField};
 use datafusion_common::cast::{as_large_list_array, as_list_array};
-use datafusion_common::{exec_err, internal_err, utils::take_function_args, Result};
+use datafusion_common::utils::ListCoercion;
+use datafusion_common::{
+    exec_err, internal_err, plan_err, utils::take_function_args, Result,
+};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
@@ -104,7 +109,11 @@ impl Default for ArrayUnion {
 impl ArrayUnion {
     pub fn new() -> Self {
         Self {
-            signature: Signature::any(2, Volatility::Immutable),
+            signature: Signature::arrays(
+                2,
+                Some(ListCoercion::FixedSizedListToList),
+                Volatility::Immutable,
+            ),
             aliases: vec![String::from("list_union")],
         }
     }
@@ -124,8 +133,10 @@ impl ScalarUDFImpl for ArrayUnion {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        match (&arg_types[0], &arg_types[1]) {
-            (&Null, dt) => Ok(dt.clone()),
+        let [array1, array2] = take_function_args(self.name(), arg_types)?;
+        match (array1, array2) {
+            (Null, Null) => Ok(DataType::new_list(Null, true)),
+            (Null, dt) => Ok(dt.clone()),
             (dt, Null) => Ok(dt.clone()),
             (dt, _) => Ok(dt.clone()),
         }
@@ -183,7 +194,11 @@ pub(super) struct ArrayIntersect {
 impl ArrayIntersect {
     pub fn new() -> Self {
         Self {
-            signature: Signature::any(2, Volatility::Immutable),
+            signature: Signature::arrays(
+                2,
+                Some(ListCoercion::FixedSizedListToList),
+                Volatility::Immutable,
+            ),
             aliases: vec![String::from("list_intersect")],
         }
     }
@@ -203,10 +218,12 @@ impl ScalarUDFImpl for ArrayIntersect {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        match (arg_types[0].clone(), arg_types[1].clone()) {
-            (Null, Null) | (Null, _) => Ok(Null),
-            (_, Null) => Ok(empty_array_type()),
-            (dt, _) => Ok(dt),
+        let [array1, array2] = take_function_args(self.name(), arg_types)?;
+        match (array1, array2) {
+            (Null, Null) => Ok(DataType::new_list(Null, true)),
+            (Null, dt) => Ok(dt.clone()),
+            (dt, Null) => Ok(dt.clone()),
+            (dt, _) => Ok(dt.clone()),
         }
     }
 
@@ -273,16 +290,11 @@ impl ScalarUDFImpl for ArrayDistinct {
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         match &arg_types[0] {
-            List(field) | FixedSizeList(field, _) => Ok(List(Arc::new(
-                Field::new_list_field(field.data_type().clone(), true),
-            ))),
-            LargeList(field) => Ok(LargeList(Arc::new(Field::new_list_field(
-                field.data_type().clone(),
-                true,
-            )))),
-            _ => exec_err!(
-                "Not reachable, data_type should be List, LargeList or FixedSizeList"
-            ),
+            List(field) => Ok(DataType::new_list(field.data_type().clone(), true)),
+            LargeList(field) => {
+                Ok(DataType::new_large_list(field.data_type().clone(), true))
+            }
+            arg_type => plan_err!("{} does not support type {arg_type}", self.name()),
         }
     }
 
@@ -305,24 +317,18 @@ impl ScalarUDFImpl for ArrayDistinct {
 /// array_distinct SQL function
 /// example: from list [1, 3, 2, 3, 1, 2, 4] to [1, 2, 3, 4]
 fn array_distinct_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let [input_array] = take_function_args("array_distinct", args)?;
-
-    // handle null
-    if input_array.data_type() == &Null {
-        return Ok(Arc::clone(input_array));
-    }
-
-    // handle for list & largelist
-    match input_array.data_type() {
+    let [array] = take_function_args("array_distinct", args)?;
+    match array.data_type() {
+        Null => Ok(Arc::clone(array)),
         List(field) => {
-            let array = as_list_array(&input_array)?;
+            let array = as_list_array(&array)?;
             general_array_distinct(array, field)
         }
         LargeList(field) => {
-            let array = as_large_list_array(&input_array)?;
+            let array = as_large_list_array(&array)?;
             general_array_distinct(array, field)
         }
-        array_type => exec_err!("array_distinct does not support type '{array_type:?}'"),
+        arg_type => exec_err!("array_distinct does not support type {arg_type}"),
     }
 }
 
@@ -347,80 +353,76 @@ fn generic_set_lists<OffsetSize: OffsetSizeTrait>(
     field: Arc<Field>,
     set_op: SetOp,
 ) -> Result<ArrayRef> {
-    if matches!(l.value_type(), Null) {
+    if l.is_empty() || l.value_type().is_null() {
         let field = Arc::new(Field::new_list_field(r.value_type(), true));
         return general_array_distinct::<OffsetSize>(r, &field);
-    } else if matches!(r.value_type(), Null) {
+    } else if r.is_empty() || r.value_type().is_null() {
         let field = Arc::new(Field::new_list_field(l.value_type(), true));
         return general_array_distinct::<OffsetSize>(l, &field);
-    }
-
-    // Handle empty array at rhs case
-    // array_union(arr, []) -> arr;
-    // array_intersect(arr, []) -> [];
-    if r.value_length(0).is_zero() {
-        if set_op == SetOp::Union {
-            return Ok(Arc::new(l.clone()) as ArrayRef);
-        } else {
-            return Ok(Arc::new(r.clone()) as ArrayRef);
-        }
     }
 
     if l.value_type() != r.value_type() {
         return internal_err!("{set_op:?} is not implemented for '{l:?}' and '{r:?}'");
     }
 
-    let dt = l.value_type();
-
     let mut offsets = vec![OffsetSize::usize_as(0)];
     let mut new_arrays = vec![];
-
-    let converter = RowConverter::new(vec![SortField::new(dt)])?;
+    let converter = RowConverter::new(vec![SortField::new(l.value_type())])?;
     for (first_arr, second_arr) in l.iter().zip(r.iter()) {
-        if let (Some(first_arr), Some(second_arr)) = (first_arr, second_arr) {
-            let l_values = converter.convert_columns(&[first_arr])?;
-            let r_values = converter.convert_columns(&[second_arr])?;
+        let l_values = if let Some(first_arr) = first_arr {
+            converter.convert_columns(&[first_arr])?
+        } else {
+            converter.convert_columns(&[])?
+        };
 
-            let l_iter = l_values.iter().sorted().dedup();
-            let values_set: HashSet<_> = l_iter.clone().collect();
-            let mut rows = if set_op == SetOp::Union {
-                l_iter.collect::<Vec<_>>()
-            } else {
-                vec![]
-            };
-            for r_val in r_values.iter().sorted().dedup() {
-                match set_op {
-                    SetOp::Union => {
-                        if !values_set.contains(&r_val) {
-                            rows.push(r_val);
-                        }
+        let r_values = if let Some(second_arr) = second_arr {
+            converter.convert_columns(&[second_arr])?
+        } else {
+            converter.convert_columns(&[])?
+        };
+
+        let l_iter = l_values.iter().sorted().dedup();
+        let values_set: HashSet<_> = l_iter.clone().collect();
+        let mut rows = if set_op == SetOp::Union {
+            l_iter.collect()
+        } else {
+            vec![]
+        };
+
+        for r_val in r_values.iter().sorted().dedup() {
+            match set_op {
+                SetOp::Union => {
+                    if !values_set.contains(&r_val) {
+                        rows.push(r_val);
                     }
-                    SetOp::Intersect => {
-                        if values_set.contains(&r_val) {
-                            rows.push(r_val);
-                        }
+                }
+                SetOp::Intersect => {
+                    if values_set.contains(&r_val) {
+                        rows.push(r_val);
                     }
                 }
             }
-
-            let last_offset = match offsets.last().copied() {
-                Some(offset) => offset,
-                None => return internal_err!("offsets should not be empty"),
-            };
-            offsets.push(last_offset + OffsetSize::usize_as(rows.len()));
-            let arrays = converter.convert_rows(rows)?;
-            let array = match arrays.first() {
-                Some(array) => Arc::clone(array),
-                None => {
-                    return internal_err!("{set_op}: failed to get array from rows");
-                }
-            };
-            new_arrays.push(array);
         }
+
+        let last_offset = match offsets.last() {
+            Some(offset) => *offset,
+            None => return internal_err!("offsets should not be empty"),
+        };
+
+        offsets.push(last_offset + OffsetSize::usize_as(rows.len()));
+        let arrays = converter.convert_rows(rows)?;
+        let array = match arrays.first() {
+            Some(array) => Arc::clone(array),
+            None => {
+                return internal_err!("{set_op}: failed to get array from rows");
+            }
+        };
+
+        new_arrays.push(array);
     }
 
     let offsets = OffsetBuffer::new(offsets.into());
-    let new_arrays_ref = new_arrays.iter().map(|v| v.as_ref()).collect::<Vec<_>>();
+    let new_arrays_ref: Vec<_> = new_arrays.iter().map(|v| v.as_ref()).collect();
     let values = compute::concat(&new_arrays_ref)?;
     let arr = GenericListArray::<OffsetSize>::try_new(field, offsets, values, None)?;
     Ok(Arc::new(arr))
@@ -431,38 +433,59 @@ fn general_set_op(
     array2: &ArrayRef,
     set_op: SetOp,
 ) -> Result<ArrayRef> {
+    fn empty_array(data_type: &DataType, len: usize, large: bool) -> Result<ArrayRef> {
+        let field = Arc::new(Field::new_list_field(data_type.clone(), true));
+        let values = new_null_array(data_type, len);
+        if large {
+            Ok(Arc::new(LargeListArray::try_new(
+                field,
+                OffsetBuffer::new_zeroed(len),
+                values,
+                None,
+            )?))
+        } else {
+            Ok(Arc::new(ListArray::try_new(
+                field,
+                OffsetBuffer::new_zeroed(len),
+                values,
+                None,
+            )?))
+        }
+    }
+
     match (array1.data_type(), array2.data_type()) {
+        (Null, Null) => Ok(Arc::new(ListArray::new_null(
+            Arc::new(Field::new_list_field(Null, true)),
+            array1.len(),
+        ))),
         (Null, List(field)) => {
             if set_op == SetOp::Intersect {
-                return Ok(new_empty_array(&Null));
+                return empty_array(field.data_type(), array1.len(), false);
             }
             let array = as_list_array(&array2)?;
             general_array_distinct::<i32>(array, field)
         }
-
         (List(field), Null) => {
             if set_op == SetOp::Intersect {
-                return make_array_inner(&[]);
+                return empty_array(field.data_type(), array1.len(), false);
             }
             let array = as_list_array(&array1)?;
             general_array_distinct::<i32>(array, field)
         }
         (Null, LargeList(field)) => {
             if set_op == SetOp::Intersect {
-                return Ok(new_empty_array(&Null));
+                return empty_array(field.data_type(), array1.len(), true);
             }
             let array = as_large_list_array(&array2)?;
             general_array_distinct::<i64>(array, field)
         }
         (LargeList(field), Null) => {
             if set_op == SetOp::Intersect {
-                return make_array_inner(&[]);
+                return empty_array(field.data_type(), array1.len(), true);
             }
             let array = as_large_list_array(&array1)?;
             general_array_distinct::<i64>(array, field)
         }
-        (Null, Null) => Ok(new_empty_array(&Null)),
-
         (List(field), List(_)) => {
             let array1 = as_list_array(&array1)?;
             let array2 = as_list_array(&array2)?;

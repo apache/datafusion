@@ -17,16 +17,24 @@
 
 //! Runtime configuration, via [`ConfigOptions`]
 
+use arrow_ipc::CompressionType;
+
+use crate::error::_config_err;
+use crate::parsers::CompressionTypeVariant;
+use crate::utils::get_available_parallelism;
+use crate::{DataFusionError, Result};
 use std::any::Any;
 use std::collections::{BTreeMap, HashMap};
 use std::error::Error;
 use std::fmt::{self, Display};
 use std::str::FromStr;
 
-use crate::error::_config_err;
-use crate::parsers::CompressionTypeVariant;
-use crate::utils::get_available_parallelism;
-use crate::{DataFusionError, Result};
+#[cfg(feature = "parquet")]
+use hex;
+#[cfg(feature = "parquet")]
+use parquet::encryption::decrypt::FileDecryptionProperties;
+#[cfg(feature = "parquet")]
+use parquet::encryption::encrypt::FileEncryptionProperties;
 
 /// A macro that wraps a configuration struct and automatically derives
 /// [`Default`] and [`ConfigField`] for it, allowing it to be used
@@ -188,7 +196,6 @@ macro_rules! config_namespace {
         }
     }
 }
-
 config_namespace! {
     /// Options related to catalog and directory scanning
     ///
@@ -260,10 +267,10 @@ config_namespace! {
         /// string length and thus DataFusion can not enforce such limits.
         pub support_varchar_with_length: bool, default = true
 
-       /// If true, `VARCHAR` is mapped to `Utf8View` during SQL planning.
-       /// If false, `VARCHAR` is mapped to `Utf8`  during SQL planning.
-       /// Default is false.
-        pub map_varchar_to_utf8view: bool, default = false
+        /// If true, string types (VARCHAR, CHAR, Text, and String) are mapped to `Utf8View` during SQL planning.
+        /// If false, they are mapped to `Utf8`.
+        /// Default is true.
+        pub map_string_types_to_utf8view: bool, default = true
 
         /// When set to true, the source locations relative to the original SQL
         /// query (i.e. [`Span`](https://docs.rs/sqlparser/latest/sqlparser/tokenizer/struct.Span.html)) will be collected
@@ -272,6 +279,61 @@ config_namespace! {
 
         /// Specifies the recursion depth limit when parsing complex SQL Queries
         pub recursion_limit: usize, default = 50
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum SpillCompression {
+    Zstd,
+    Lz4Frame,
+    #[default]
+    Uncompressed,
+}
+
+impl FromStr for SpillCompression {
+    type Err = DataFusionError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_ascii_lowercase().as_str() {
+            "zstd" => Ok(Self::Zstd),
+            "lz4_frame" => Ok(Self::Lz4Frame),
+            "uncompressed" | "" => Ok(Self::Uncompressed),
+            other => Err(DataFusionError::Configuration(format!(
+                "Invalid Spill file compression type: {other}. Expected one of: zstd, lz4_frame, uncompressed"
+            ))),
+        }
+    }
+}
+
+impl ConfigField for SpillCompression {
+    fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
+        v.some(key, self, description)
+    }
+
+    fn set(&mut self, _: &str, value: &str) -> Result<()> {
+        *self = SpillCompression::from_str(value)?;
+        Ok(())
+    }
+}
+
+impl Display for SpillCompression {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let str = match self {
+            Self::Zstd => "zstd",
+            Self::Lz4Frame => "lz4_frame",
+            Self::Uncompressed => "uncompressed",
+        };
+        write!(f, "{str}")
+    }
+}
+
+impl From<SpillCompression> for Option<CompressionType> {
+    fn from(c: SpillCompression) -> Self {
+        match c {
+            SpillCompression::Zstd => Some(CompressionType::ZSTD),
+            SpillCompression::Lz4Frame => Some(CompressionType::LZ4_FRAME),
+            SpillCompression::Uncompressed => None,
+        }
     }
 }
 
@@ -293,20 +355,22 @@ config_namespace! {
         /// target batch size is determined by the configuration setting
         pub coalesce_batches: bool, default = true
 
-        /// Should DataFusion collect statistics after listing files
-        pub collect_statistics: bool, default = false
+        /// Should DataFusion collect statistics when first creating a table.
+        /// Has no effect after the table is created. Applies to the default
+        /// `ListingTableProvider` in DataFusion. Defaults to true.
+        pub collect_statistics: bool, default = true
 
         /// Number of partitions for query execution. Increasing partitions can increase
         /// concurrency.
         ///
         /// Defaults to the number of CPU cores on the system
-        pub target_partitions: usize, default = get_available_parallelism()
+        pub target_partitions: usize, transform = ExecutionOptions::normalized_parallelism, default = get_available_parallelism()
 
         /// The default time zone
         ///
         /// Some functions, e.g. `EXTRACT(HOUR from SOME_TIME)`, shift the underlying datetime
         /// according to this time zone, and then extract the hour
-        pub time_zone: Option<String>, default = Some("+00:00".into())
+        pub time_zone: String, default = "+00:00".into()
 
         /// Parquet options
         pub parquet: ParquetOptions, default = Default::default()
@@ -316,7 +380,7 @@ config_namespace! {
         /// This is mostly use to plan `UNION` children in parallel.
         ///
         /// Defaults to the number of CPU cores on the system
-        pub planning_concurrency: usize, default = get_available_parallelism()
+        pub planning_concurrency: usize, transform = ExecutionOptions::normalized_parallelism, default = get_available_parallelism()
 
         /// When set to true, skips verifying that the schema produced by
         /// planning the input of `LogicalPlan::Aggregate` exactly matches the
@@ -328,6 +392,16 @@ config_namespace! {
         /// This is used to workaround bugs in the planner that are now caught by
         /// the new schema verification step.
         pub skip_physical_aggregate_schema_check: bool, default = false
+
+        /// Sets the compression codec used when spilling data to disk.
+        ///
+        /// Since datafusion writes spill files using the Arrow IPC Stream format,
+        /// only codecs supported by the Arrow IPC Stream Writer are allowed.
+        /// Valid values are: uncompressed, lz4_frame, zstd.
+        /// Note: lz4_frame offers faster (de)compression, but typically results in
+        /// larger spill files. In contrast, zstd achieves
+        /// higher compression ratios at the cost of slower (de)compression speed.
+        pub spill_compression: SpillCompression, default = SpillCompression::Uncompressed
 
         /// Specifies the reserved memory for each spillable sort operation to
         /// facilitate an in-memory merge.
@@ -405,6 +479,13 @@ config_namespace! {
         /// in joins can reduce memory usage when joining large
         /// tables with a highly-selective join filter, but is also slightly slower.
         pub enforce_batch_size_in_joins: bool, default = false
+
+        /// Size (bytes) of data buffer DataFusion uses when writing output files.
+        /// This affects the size of the data chunks that are uploaded to remote
+        /// object stores (e.g. AWS S3). If very large (>= 100 GiB) output files are being
+        /// written, it may be necessary to increase this size to avoid errors from
+        /// the remote end point.
+        pub objectstore_writer_buffer_size: usize, default = 10 * 1024 * 1024
     }
 }
 
@@ -466,6 +547,9 @@ config_namespace! {
         /// to write values with a larger date range than 64-bit timestamps with
         /// nanosecond resolution.
         pub coerce_int96: Option<String>, transform = str::to_lowercase, default = None
+
+        /// (reading) Use any available bloom filters when reading parquet files
+        pub bloom_filter_on_read: bool, default = true
 
         // The following options affect writing to parquet files
         // and map to parquet::file::properties::WriterProperties
@@ -542,9 +626,6 @@ config_namespace! {
         /// default parquet writer setting
         pub encoding: Option<String>, transform = str::to_lowercase, default = None
 
-        /// (writing) Use any available bloom filters when reading parquet files
-        pub bloom_filter_on_read: bool, default = true
-
         /// (writing) Write bloom filters for all columns when creating parquet files
         pub bloom_filter_on_write: bool, default = false
 
@@ -587,6 +668,17 @@ config_namespace! {
 }
 
 config_namespace! {
+    /// Options for configuring Parquet Modular Encryption
+    pub struct ParquetEncryptionOptions {
+        /// Optional file decryption properties
+        pub file_decryption: Option<ConfigFileDecryptionProperties>, default = None
+
+        /// Optional file encryption properties
+        pub file_encryption: Option<ConfigFileEncryptionProperties>, default = None
+    }
+}
+
+config_namespace! {
     /// Options related to query optimization
     ///
     /// See also: [`SessionConfig`]
@@ -605,6 +697,13 @@ config_namespace! {
         /// When set to true, the optimizer will attempt to perform limit operations
         /// during aggregations, if possible
         pub enable_topk_aggregation: bool, default = true
+
+        /// When set to true attempts to push down dynamic filters generated by operators into the file scan phase.
+        /// For example, for a query such as `SELECT * FROM t ORDER BY timestamp DESC LIMIT 10`, the optimizer
+        /// will attempt to push down the current top 10 timestamps that the TopK operator references into the file scans.
+        /// This means that if we already have 10 timestamps in the year 2025
+        /// any files that only have timestamps in the year 2024 can be skipped / pruned at various stages in the scan.
+        pub enable_dynamic_filter_pushdown: bool, default = true
 
         /// When set to true, the optimizer will insert filters before a join between
         /// a nullable and non-nullable column to filter out nulls on the nullable side. This
@@ -632,13 +731,20 @@ config_namespace! {
         /// long runner execution, all types of joins may encounter out-of-memory errors.
         pub allow_symmetric_joins_without_pruning: bool, default = true
 
-        /// When set to `true`, file groups will be repartitioned to achieve maximum parallelism.
-        /// Currently Parquet and CSV formats are supported.
+        /// When set to `true`, datasource partitions will be repartitioned to achieve maximum parallelism.
+        /// This applies to both in-memory partitions and FileSource's file groups (1 group is 1 partition).
         ///
-        /// If set to `true`, all files will be repartitioned evenly (i.e., a single large file
+        /// For FileSources, only Parquet and CSV formats are currently supported.
+        ///
+        /// If set to `true` for a FileSource, all files will be repartitioned evenly (i.e., a single large file
         /// might be partitioned into smaller chunks) for parallel scanning.
-        /// If set to `false`, different files will be read in parallel, but repartitioning won't
+        /// If set to `false` for a FileSource, different files will be read in parallel, but repartitioning won't
         /// happen within a single file.
+        ///
+        /// If set to `true` for an in-memory source, all memtable's partitions will have their batches
+        /// repartitioned evenly to the desired number of `target_partitions`. Repartitioning can change
+        /// the total number of partitions and batches per partition, but does not slice the initial
+        /// record tables provided to the MemTable on creation.
         pub repartition_file_scans: bool, default = true
 
         /// Should DataFusion repartition data using the partitions keys to execute window
@@ -739,6 +845,72 @@ config_namespace! {
     }
 }
 
+impl ExecutionOptions {
+    /// Returns the correct parallelism based on the provided `value`.
+    /// If `value` is `"0"`, returns the default available parallelism, computed with
+    /// `get_available_parallelism`. Otherwise, returns `value`.
+    fn normalized_parallelism(value: &str) -> String {
+        if value.parse::<usize>() == Ok(0) {
+            get_available_parallelism().to_string()
+        } else {
+            value.to_owned()
+        }
+    }
+}
+
+config_namespace! {
+    /// Options controlling the format of output when printing record batches
+    /// Copies [`arrow::util::display::FormatOptions`]
+    pub struct FormatOptions {
+        /// If set to `true` any formatting errors will be written to the output
+        /// instead of being converted into a [`std::fmt::Error`]
+        pub safe: bool, default = true
+        /// Format string for nulls
+        pub null: String, default = "".into()
+        /// Date format for date arrays
+        pub date_format: Option<String>, default = Some("%Y-%m-%d".to_string())
+        /// Format for DateTime arrays
+        pub datetime_format: Option<String>, default = Some("%Y-%m-%dT%H:%M:%S%.f".to_string())
+        /// Timestamp format for timestamp arrays
+        pub timestamp_format: Option<String>, default = Some("%Y-%m-%dT%H:%M:%S%.f".to_string())
+        /// Timestamp format for timestamp with timezone arrays. When `None`, ISO 8601 format is used.
+        pub timestamp_tz_format: Option<String>, default = None
+        /// Time format for time arrays
+        pub time_format: Option<String>, default = Some("%H:%M:%S%.f".to_string())
+        /// Duration format. Can be either `"pretty"` or `"ISO8601"`
+        pub duration_format: String, transform = str::to_lowercase, default = "pretty".into()
+        /// Show types in visual representation batches
+        pub types_info: bool, default = false
+    }
+}
+
+impl<'a> TryInto<arrow::util::display::FormatOptions<'a>> for &'a FormatOptions {
+    type Error = DataFusionError;
+    fn try_into(self) -> Result<arrow::util::display::FormatOptions<'a>> {
+        let duration_format = match self.duration_format.as_str() {
+            "pretty" => arrow::util::display::DurationFormat::Pretty,
+            "iso8601" => arrow::util::display::DurationFormat::ISO8601,
+            _ => {
+                return _config_err!(
+                    "Invalid duration format: {}. Valid values are pretty or iso8601",
+                    self.duration_format
+                )
+            }
+        };
+
+        Ok(arrow::util::display::FormatOptions::new()
+            .with_display_error(self.safe)
+            .with_null(&self.null)
+            .with_date_format(self.date_format.as_deref())
+            .with_datetime_format(self.datetime_format.as_deref())
+            .with_timestamp_format(self.timestamp_format.as_deref())
+            .with_timestamp_tz_format(self.timestamp_tz_format.as_deref())
+            .with_time_format(self.time_format.as_deref())
+            .with_duration_format(duration_format)
+            .with_types_info(self.types_info))
+    }
+}
+
 /// A key value pair, with a corresponding description
 #[derive(Debug)]
 pub struct ConfigEntry {
@@ -768,6 +940,8 @@ pub struct ConfigOptions {
     pub explain: ExplainOptions,
     /// Optional extensions registered using [`Extensions::insert`]
     pub extensions: Extensions,
+    /// Formatting options when printing batches
+    pub format: FormatOptions,
 }
 
 impl ConfigField for ConfigOptions {
@@ -780,6 +954,7 @@ impl ConfigField for ConfigOptions {
             "optimizer" => self.optimizer.set(rem, value),
             "explain" => self.explain.set(rem, value),
             "sql_parser" => self.sql_parser.set(rem, value),
+            "format" => self.format.set(rem, value),
             _ => _config_err!("Config value \"{key}\" not found on ConfigOptions"),
         }
     }
@@ -790,6 +965,7 @@ impl ConfigField for ConfigOptions {
         self.optimizer.visit(v, "datafusion.optimizer", "");
         self.explain.visit(v, "datafusion.explain", "");
         self.sql_parser.visit(v, "datafusion.sql_parser", "");
+        self.format.visit(v, "datafusion.format", "");
     }
 }
 
@@ -851,7 +1027,9 @@ impl ConfigOptions {
         for key in keys.0 {
             let env = key.to_uppercase().replace('.', "_");
             if let Some(var) = std::env::var_os(env) {
-                ret.set(&key, var.to_string_lossy().as_ref())?;
+                let value = var.to_string_lossy();
+                log::info!("Set {key} to {value} from the environment variable");
+                ret.set(&key, value.as_ref())?;
             }
         }
 
@@ -1087,7 +1265,10 @@ impl<F: ConfigField + Default> ConfigField for Option<F> {
     }
 }
 
-fn default_transform<T>(input: &str) -> Result<T>
+/// Default transformation to parse a [`ConfigField`] for a string.
+///
+/// This uses [`FromStr`] to parse the data.
+pub fn default_config_transform<T>(input: &str) -> Result<T>
 where
     T: FromStr,
     <T as FromStr>::Err: Sync + Send + Error + 'static,
@@ -1104,19 +1285,45 @@ where
     })
 }
 
+/// Macro that generates [`ConfigField`] for a given type.
+///
+/// # Usage
+/// This always requires [`Display`] to be implemented for the given type.
+///
+/// There are two ways to invoke this macro. The first one uses
+/// [`default_config_transform`]/[`FromStr`] to parse the data:
+///
+/// ```ignore
+/// config_field(MyType);
+/// ```
+///
+/// Note that the parsing error MUST implement [`std::error::Error`]!
+///
+/// Or you can specify how you want to parse an [`str`] into the type:
+///
+/// ```ignore
+/// fn parse_it(s: &str) -> Result<MyType> {
+///     ...
+/// }
+///
+/// config_field(
+///     MyType,
+///     value => parse_it(value)
+/// );
+/// ```
 #[macro_export]
 macro_rules! config_field {
     ($t:ty) => {
-        config_field!($t, value => default_transform(value)?);
+        config_field!($t, value => $crate::config::default_config_transform(value)?);
     };
 
     ($t:ty, $arg:ident => $transform:expr) => {
-        impl ConfigField for $t {
-            fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
+        impl $crate::config::ConfigField for $t {
+            fn visit<V: $crate::config::Visit>(&self, v: &mut V, key: &str, description: &'static str) {
                 v.some(key, self, description)
             }
 
-            fn set(&mut self, _: &str, $arg: &str) -> Result<()> {
+            fn set(&mut self, _: &str, $arg: &str) -> $crate::error::Result<()> {
                 *self = $transform;
                 Ok(())
             }
@@ -1125,7 +1332,7 @@ macro_rules! config_field {
 }
 
 config_field!(String);
-config_field!(bool, value => default_transform(value.to_lowercase().as_str())?);
+config_field!(bool, value => default_config_transform(value.to_lowercase().as_str())?);
 config_field!(usize);
 config_field!(f64);
 config_field!(u64);
@@ -1138,8 +1345,7 @@ impl ConfigField for u8 {
     fn set(&mut self, key: &str, value: &str) -> Result<()> {
         if value.is_empty() {
             return Err(DataFusionError::Configuration(format!(
-                "Input string for {} key is empty",
-                key
+                "Input string for {key} key is empty"
             )));
         }
         // Check if the string is a valid number
@@ -1151,8 +1357,7 @@ impl ConfigField for u8 {
             // Check if the first character is ASCII (single byte)
             if bytes.len() > 1 || !value.chars().next().unwrap().is_ascii() {
                 return Err(DataFusionError::Configuration(format!(
-                    "Error parsing {} as u8. Non-ASCII string provided",
-                    value
+                    "Error parsing {value} as u8. Non-ASCII string provided"
                 )));
             }
             *self = bytes[0];
@@ -1631,6 +1836,24 @@ pub struct TableParquetOptions {
     /// )
     /// ```
     pub key_value_metadata: HashMap<String, Option<String>>,
+    /// Options for configuring Parquet modular encryption
+    /// See ConfigFileEncryptionProperties and ConfigFileDecryptionProperties in datafusion/common/src/config.rs
+    /// These can be set via 'format.crypto', for example:
+    /// ```sql
+    /// OPTIONS (
+    ///    'format.crypto.file_encryption.encrypt_footer' 'true',
+    ///    'format.crypto.file_encryption.footer_key_as_hex' '30313233343536373839303132333435',  -- b"0123456789012345" */
+    ///    'format.crypto.file_encryption.column_key_as_hex::double_field' '31323334353637383930313233343530', -- b"1234567890123450"
+    ///    'format.crypto.file_encryption.column_key_as_hex::float_field' '31323334353637383930313233343531', -- b"1234567890123451"
+    ///     -- Same for decryption
+    ///    'format.crypto.file_decryption.footer_key_as_hex' '30313233343536373839303132333435', -- b"0123456789012345"
+    ///    'format.crypto.file_decryption.column_key_as_hex::double_field' '31323334353637383930313233343530', -- b"1234567890123450"
+    ///    'format.crypto.file_decryption.column_key_as_hex::float_field' '31323334353637383930313233343531', -- b"1234567890123451"
+    /// )
+    /// ```
+    /// See datafusion-cli/tests/sql/encrypted_parquet.sql for a more complete example.
+    /// Note that keys must be provided as in hex format since these are binary strings.
+    pub crypto: ParquetEncryptionOptions,
 }
 
 impl TableParquetOptions {
@@ -1658,7 +1881,9 @@ impl ConfigField for TableParquetOptions {
     fn visit<V: Visit>(&self, v: &mut V, key_prefix: &str, description: &'static str) {
         self.global.visit(v, key_prefix, description);
         self.column_specific_options
-            .visit(v, key_prefix, description)
+            .visit(v, key_prefix, description);
+        self.crypto
+            .visit(v, &format!("{key_prefix}.crypto"), description);
     }
 
     fn set(&mut self, key: &str, value: &str) -> Result<()> {
@@ -1679,6 +1904,8 @@ impl ConfigField for TableParquetOptions {
             };
             self.key_value_metadata.insert(k, Some(value.into()));
             Ok(())
+        } else if let Some(crypto_feature) = key.strip_prefix("crypto.") {
+            self.crypto.set(crypto_feature, value)
         } else if key.contains("::") {
             self.column_specific_options.set(key, value)
         } else {
@@ -1826,6 +2053,322 @@ config_namespace_with_hashmap! {
         // TODO: remove once deprecated
         #[deprecated(since = "45.0.0", note = "Setting does not do anything")]
         pub max_statistics_size: Option<usize>, default = None
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ConfigFileEncryptionProperties {
+    /// Should the parquet footer be encrypted
+    /// default is true
+    pub encrypt_footer: bool,
+    /// Key to use for the parquet footer encoded in hex format
+    pub footer_key_as_hex: String,
+    /// Metadata information for footer key
+    pub footer_key_metadata_as_hex: String,
+    /// HashMap of column names --> (key in hex format, metadata)
+    pub column_encryption_properties: HashMap<String, ColumnEncryptionProperties>,
+    /// AAD prefix string uniquely identifies the file and prevents file swapping
+    pub aad_prefix_as_hex: String,
+    /// If true, store the AAD prefix in the file
+    /// default is false
+    pub store_aad_prefix: bool,
+}
+
+// Setup to match EncryptionPropertiesBuilder::new()
+impl Default for ConfigFileEncryptionProperties {
+    fn default() -> Self {
+        ConfigFileEncryptionProperties {
+            encrypt_footer: true,
+            footer_key_as_hex: String::new(),
+            footer_key_metadata_as_hex: String::new(),
+            column_encryption_properties: Default::default(),
+            aad_prefix_as_hex: String::new(),
+            store_aad_prefix: false,
+        }
+    }
+}
+
+config_namespace_with_hashmap! {
+    pub struct ColumnEncryptionProperties {
+        /// Per column encryption key
+        pub column_key_as_hex: String, default = "".to_string()
+        /// Per column encryption key metadata
+        pub column_metadata_as_hex: Option<String>, default = None
+    }
+}
+
+impl ConfigField for ConfigFileEncryptionProperties {
+    fn visit<V: Visit>(&self, v: &mut V, key_prefix: &str, _description: &'static str) {
+        let key = format!("{key_prefix}.encrypt_footer");
+        let desc = "Encrypt the footer";
+        self.encrypt_footer.visit(v, key.as_str(), desc);
+
+        let key = format!("{key_prefix}.footer_key_as_hex");
+        let desc = "Key to use for the parquet footer";
+        self.footer_key_as_hex.visit(v, key.as_str(), desc);
+
+        let key = format!("{key_prefix}.footer_key_metadata_as_hex");
+        let desc = "Metadata to use for the parquet footer";
+        self.footer_key_metadata_as_hex.visit(v, key.as_str(), desc);
+
+        let key = format!("{key_prefix}.aad_prefix_as_hex");
+        let desc = "AAD prefix to use";
+        self.aad_prefix_as_hex.visit(v, key.as_str(), desc);
+
+        let key = format!("{key_prefix}.store_aad_prefix");
+        let desc = "If true, store the AAD prefix";
+        self.store_aad_prefix.visit(v, key.as_str(), desc);
+
+        self.aad_prefix_as_hex.visit(v, key.as_str(), desc);
+    }
+
+    fn set(&mut self, key: &str, value: &str) -> Result<()> {
+        // Any hex encoded values must be pre-encoded using
+        // hex::encode() before calling set.
+
+        if key.contains("::") {
+            // Handle any column specific properties
+            return self.column_encryption_properties.set(key, value);
+        };
+
+        let (key, rem) = key.split_once('.').unwrap_or((key, ""));
+        match key {
+            "encrypt_footer" => self.encrypt_footer.set(rem, value.as_ref()),
+            "footer_key_as_hex" => self.footer_key_as_hex.set(rem, value.as_ref()),
+            "footer_key_metadata_as_hex" => {
+                self.footer_key_metadata_as_hex.set(rem, value.as_ref())
+            }
+            "aad_prefix_as_hex" => self.aad_prefix_as_hex.set(rem, value.as_ref()),
+            "store_aad_prefix" => self.store_aad_prefix.set(rem, value.as_ref()),
+            _ => _config_err!(
+                "Config value \"{}\" not found on ConfigFileEncryptionProperties",
+                key
+            ),
+        }
+    }
+}
+
+#[cfg(feature = "parquet")]
+impl From<ConfigFileEncryptionProperties> for FileEncryptionProperties {
+    fn from(val: ConfigFileEncryptionProperties) -> Self {
+        let mut fep = FileEncryptionProperties::builder(
+            hex::decode(val.footer_key_as_hex).unwrap(),
+        )
+        .with_plaintext_footer(!val.encrypt_footer)
+        .with_aad_prefix_storage(val.store_aad_prefix);
+
+        if !val.footer_key_metadata_as_hex.is_empty() {
+            fep = fep.with_footer_key_metadata(
+                hex::decode(&val.footer_key_metadata_as_hex)
+                    .expect("Invalid footer key metadata"),
+            );
+        }
+
+        for (column_name, encryption_props) in val.column_encryption_properties.iter() {
+            let encryption_key = hex::decode(&encryption_props.column_key_as_hex)
+                .expect("Invalid column encryption key");
+            let key_metadata = encryption_props
+                .column_metadata_as_hex
+                .as_ref()
+                .map(|x| hex::decode(x).expect("Invalid column metadata"));
+            match key_metadata {
+                Some(key_metadata) => {
+                    fep = fep.with_column_key_and_metadata(
+                        column_name,
+                        encryption_key,
+                        key_metadata,
+                    );
+                }
+                None => {
+                    fep = fep.with_column_key(column_name, encryption_key);
+                }
+            }
+        }
+
+        if !val.aad_prefix_as_hex.is_empty() {
+            let aad_prefix: Vec<u8> =
+                hex::decode(&val.aad_prefix_as_hex).expect("Invalid AAD prefix");
+            fep = fep.with_aad_prefix(aad_prefix);
+        }
+        fep.build().unwrap()
+    }
+}
+
+#[cfg(feature = "parquet")]
+impl From<&FileEncryptionProperties> for ConfigFileEncryptionProperties {
+    fn from(f: &FileEncryptionProperties) -> Self {
+        let (column_names_vec, column_keys_vec, column_metas_vec) = f.column_keys();
+
+        let mut column_encryption_properties: HashMap<
+            String,
+            ColumnEncryptionProperties,
+        > = HashMap::new();
+
+        for (i, column_name) in column_names_vec.iter().enumerate() {
+            let column_key_as_hex = hex::encode(&column_keys_vec[i]);
+            let column_metadata_as_hex: Option<String> =
+                column_metas_vec.get(i).map(hex::encode);
+            column_encryption_properties.insert(
+                column_name.clone(),
+                ColumnEncryptionProperties {
+                    column_key_as_hex,
+                    column_metadata_as_hex,
+                },
+            );
+        }
+        let mut aad_prefix: Vec<u8> = Vec::new();
+        if let Some(prefix) = f.aad_prefix() {
+            aad_prefix = prefix.clone();
+        }
+        ConfigFileEncryptionProperties {
+            encrypt_footer: f.encrypt_footer(),
+            footer_key_as_hex: hex::encode(f.footer_key()),
+            footer_key_metadata_as_hex: f
+                .footer_key_metadata()
+                .map(hex::encode)
+                .unwrap_or_default(),
+            column_encryption_properties,
+            aad_prefix_as_hex: hex::encode(aad_prefix),
+            store_aad_prefix: f.store_aad_prefix(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ConfigFileDecryptionProperties {
+    /// Binary string to use for the parquet footer encoded in hex format
+    pub footer_key_as_hex: String,
+    /// HashMap of column names --> key in hex format
+    pub column_decryption_properties: HashMap<String, ColumnDecryptionProperties>,
+    /// AAD prefix string uniquely identifies the file and prevents file swapping
+    pub aad_prefix_as_hex: String,
+    /// If true, then verify signature for files with plaintext footers.
+    /// default = true
+    pub footer_signature_verification: bool,
+}
+
+config_namespace_with_hashmap! {
+    pub struct ColumnDecryptionProperties {
+        /// Per column encryption key
+        pub column_key_as_hex: String, default = "".to_string()
+    }
+}
+
+// Setup to match DecryptionPropertiesBuilder::new()
+impl Default for ConfigFileDecryptionProperties {
+    fn default() -> Self {
+        ConfigFileDecryptionProperties {
+            footer_key_as_hex: String::new(),
+            column_decryption_properties: Default::default(),
+            aad_prefix_as_hex: String::new(),
+            footer_signature_verification: true,
+        }
+    }
+}
+
+impl ConfigField for ConfigFileDecryptionProperties {
+    fn visit<V: Visit>(&self, v: &mut V, key_prefix: &str, _description: &'static str) {
+        let key = format!("{key_prefix}.footer_key_as_hex");
+        let desc = "Key to use for the parquet footer";
+        self.footer_key_as_hex.visit(v, key.as_str(), desc);
+
+        let key = format!("{key_prefix}.aad_prefix_as_hex");
+        let desc = "AAD prefix to use";
+        self.aad_prefix_as_hex.visit(v, key.as_str(), desc);
+
+        let key = format!("{key_prefix}.footer_signature_verification");
+        let desc = "If true, verify the footer signature";
+        self.footer_signature_verification
+            .visit(v, key.as_str(), desc);
+
+        self.column_decryption_properties.visit(v, key_prefix, desc);
+    }
+
+    fn set(&mut self, key: &str, value: &str) -> Result<()> {
+        // Any hex encoded values must be pre-encoded using
+        // hex::encode() before calling set.
+
+        if key.contains("::") {
+            // Handle any column specific properties
+            return self.column_decryption_properties.set(key, value);
+        };
+
+        let (key, rem) = key.split_once('.').unwrap_or((key, ""));
+        match key {
+            "footer_key_as_hex" => self.footer_key_as_hex.set(rem, value.as_ref()),
+            "aad_prefix_as_hex" => self.aad_prefix_as_hex.set(rem, value.as_ref()),
+            "footer_signature_verification" => {
+                self.footer_signature_verification.set(rem, value.as_ref())
+            }
+            _ => _config_err!(
+                "Config value \"{}\" not found on ConfigFileEncryptionProperties",
+                key
+            ),
+        }
+    }
+}
+
+#[cfg(feature = "parquet")]
+impl From<ConfigFileDecryptionProperties> for FileDecryptionProperties {
+    fn from(val: ConfigFileDecryptionProperties) -> Self {
+        let mut column_names: Vec<&str> = Vec::new();
+        let mut column_keys: Vec<Vec<u8>> = Vec::new();
+
+        for (col_name, decryption_properties) in val.column_decryption_properties.iter() {
+            column_names.push(col_name.as_str());
+            column_keys.push(
+                hex::decode(&decryption_properties.column_key_as_hex)
+                    .expect("Invalid column decryption key"),
+            );
+        }
+
+        let mut fep = FileDecryptionProperties::builder(
+            hex::decode(val.footer_key_as_hex).expect("Invalid footer key"),
+        )
+        .with_column_keys(column_names, column_keys)
+        .unwrap();
+
+        if !val.footer_signature_verification {
+            fep = fep.disable_footer_signature_verification();
+        }
+
+        if !val.aad_prefix_as_hex.is_empty() {
+            let aad_prefix =
+                hex::decode(&val.aad_prefix_as_hex).expect("Invalid AAD prefix");
+            fep = fep.with_aad_prefix(aad_prefix);
+        }
+
+        fep.build().unwrap()
+    }
+}
+
+#[cfg(feature = "parquet")]
+impl From<&FileDecryptionProperties> for ConfigFileDecryptionProperties {
+    fn from(f: &FileDecryptionProperties) -> Self {
+        let (column_names_vec, column_keys_vec) = f.column_keys();
+        let mut column_decryption_properties: HashMap<
+            String,
+            ColumnDecryptionProperties,
+        > = HashMap::new();
+        for (i, column_name) in column_names_vec.iter().enumerate() {
+            let props = ColumnDecryptionProperties {
+                column_key_as_hex: hex::encode(column_keys_vec[i].clone()),
+            };
+            column_decryption_properties.insert(column_name.clone(), props);
+        }
+
+        let mut aad_prefix: Vec<u8> = Vec::new();
+        if let Some(prefix) = f.aad_prefix() {
+            aad_prefix = prefix.clone();
+        }
+        ConfigFileDecryptionProperties {
+            footer_key_as_hex: hex::encode(
+                f.footer_key(None).unwrap_or_default().as_ref(),
+            ),
+            column_decryption_properties,
+            aad_prefix_as_hex: hex::encode(aad_prefix),
+            footer_signature_verification: f.check_plaintext_footer_integrity(),
+        }
     }
 }
 
@@ -1982,11 +2525,11 @@ config_namespace! {
     }
 }
 
-pub trait FormatOptionsExt: Display {}
+pub trait OutputFormatExt: Display {}
 
 #[derive(Debug, Clone, PartialEq)]
 #[allow(clippy::large_enum_variant)]
-pub enum FormatOptions {
+pub enum OutputFormat {
     CSV(CsvOptions),
     JSON(JsonOptions),
     #[cfg(feature = "parquet")]
@@ -1995,29 +2538,28 @@ pub enum FormatOptions {
     ARROW,
 }
 
-impl Display for FormatOptions {
+impl Display for OutputFormat {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let out = match self {
-            FormatOptions::CSV(_) => "csv",
-            FormatOptions::JSON(_) => "json",
+            OutputFormat::CSV(_) => "csv",
+            OutputFormat::JSON(_) => "json",
             #[cfg(feature = "parquet")]
-            FormatOptions::PARQUET(_) => "parquet",
-            FormatOptions::AVRO => "avro",
-            FormatOptions::ARROW => "arrow",
+            OutputFormat::PARQUET(_) => "parquet",
+            OutputFormat::AVRO => "avro",
+            OutputFormat::ARROW => "arrow",
         };
-        write!(f, "{}", out)
+        write!(f, "{out}")
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::any::Any;
-    use std::collections::HashMap;
-
     use crate::config::{
         ConfigEntry, ConfigExtension, ConfigField, ConfigFileType, ExtensionOptions,
         Extensions, TableOptions,
     };
+    use std::any::Any;
+    use std::collections::HashMap;
 
     #[derive(Default, Debug, Clone)]
     pub struct TestExtensionConfig {
@@ -2143,6 +2685,129 @@ mod tests {
         assert_eq!(
             table_config.parquet.column_specific_options["col1"].bloom_filter_enabled,
             Some(true)
+        );
+    }
+
+    #[cfg(feature = "parquet")]
+    #[test]
+    fn parquet_table_encryption() {
+        use crate::config::{
+            ConfigFileDecryptionProperties, ConfigFileEncryptionProperties,
+        };
+        use parquet::encryption::decrypt::FileDecryptionProperties;
+        use parquet::encryption::encrypt::FileEncryptionProperties;
+
+        let footer_key = b"0123456789012345".to_vec(); // 128bit/16
+        let column_names = vec!["double_field", "float_field"];
+        let column_keys =
+            vec![b"1234567890123450".to_vec(), b"1234567890123451".to_vec()];
+
+        let file_encryption_properties =
+            FileEncryptionProperties::builder(footer_key.clone())
+                .with_column_keys(column_names.clone(), column_keys.clone())
+                .unwrap()
+                .build()
+                .unwrap();
+
+        let decryption_properties = FileDecryptionProperties::builder(footer_key.clone())
+            .with_column_keys(column_names.clone(), column_keys.clone())
+            .unwrap()
+            .build()
+            .unwrap();
+
+        // Test round-trip
+        let config_encrypt: ConfigFileEncryptionProperties =
+            (&file_encryption_properties).into();
+        let encryption_properties_built: FileEncryptionProperties =
+            config_encrypt.clone().into();
+        assert_eq!(file_encryption_properties, encryption_properties_built);
+
+        let config_decrypt: ConfigFileDecryptionProperties =
+            (&decryption_properties).into();
+        let decryption_properties_built: FileDecryptionProperties =
+            config_decrypt.clone().into();
+        assert_eq!(decryption_properties, decryption_properties_built);
+
+        ///////////////////////////////////////////////////////////////////////////////////
+        // Test encryption config
+
+        // Display original encryption config
+        // println!("{:#?}", config_encrypt);
+
+        let mut table_config = TableOptions::new();
+        table_config.set_config_format(ConfigFileType::PARQUET);
+        table_config
+            .parquet
+            .set(
+                "crypto.file_encryption.encrypt_footer",
+                config_encrypt.encrypt_footer.to_string().as_str(),
+            )
+            .unwrap();
+        table_config
+            .parquet
+            .set(
+                "crypto.file_encryption.footer_key_as_hex",
+                config_encrypt.footer_key_as_hex.as_str(),
+            )
+            .unwrap();
+
+        for (i, col_name) in column_names.iter().enumerate() {
+            let key = format!("crypto.file_encryption.column_key_as_hex::{col_name}");
+            let value = hex::encode(column_keys[i].clone());
+            table_config
+                .parquet
+                .set(key.as_str(), value.as_str())
+                .unwrap();
+        }
+
+        // Print matching final encryption config
+        // println!("{:#?}", table_config.parquet.crypto.file_encryption);
+
+        assert_eq!(
+            table_config.parquet.crypto.file_encryption,
+            Some(config_encrypt)
+        );
+
+        ///////////////////////////////////////////////////////////////////////////////////
+        // Test decryption config
+
+        // Display original decryption config
+        // println!("{:#?}", config_decrypt);
+
+        let mut table_config = TableOptions::new();
+        table_config.set_config_format(ConfigFileType::PARQUET);
+        table_config
+            .parquet
+            .set(
+                "crypto.file_decryption.footer_key_as_hex",
+                config_decrypt.footer_key_as_hex.as_str(),
+            )
+            .unwrap();
+
+        for (i, col_name) in column_names.iter().enumerate() {
+            let key = format!("crypto.file_decryption.column_key_as_hex::{col_name}");
+            let value = hex::encode(column_keys[i].clone());
+            table_config
+                .parquet
+                .set(key.as_str(), value.as_str())
+                .unwrap();
+        }
+
+        // Print matching final decryption config
+        // println!("{:#?}", table_config.parquet.crypto.file_decryption);
+
+        assert_eq!(
+            table_config.parquet.crypto.file_decryption,
+            Some(config_decrypt.clone())
+        );
+
+        // Set config directly
+        let mut table_config = TableOptions::new();
+        table_config.set_config_format(ConfigFileType::PARQUET);
+        table_config.parquet.crypto.file_decryption = Some(config_decrypt.clone());
+        assert_eq!(
+            table_config.parquet.crypto.file_decryption,
+            Some(config_decrypt.clone())
         );
     }
 

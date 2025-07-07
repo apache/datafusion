@@ -65,8 +65,8 @@ pub(crate) fn should_swap_join_order(
     // Get the left and right table's total bytes
     // If both the left and right tables contain total_byte_size statistics,
     // use `total_byte_size` to determine `should_swap_join_order`, else use `num_rows`
-    let left_stats = left.statistics()?;
-    let right_stats = right.statistics()?;
+    let left_stats = left.partition_statistics(None)?;
+    let right_stats = right.partition_statistics(None)?;
     // First compare `total_byte_size` of left and right side,
     // if information in this field is insufficient fallback to the `num_rows`
     match (
@@ -91,7 +91,7 @@ fn supports_collect_by_thresholds(
 ) -> bool {
     // Currently we do not trust the 0 value from stats, due to stats collection might have bug
     // TODO check the logic in datasource::get_statistics_with_limit()
-    let Ok(stats) = plan.statistics() else {
+    let Ok(stats) = plan.partition_statistics(None) else {
         return false;
     };
 
@@ -245,7 +245,7 @@ pub(crate) fn try_collect_left(
                     hash_join.join_type(),
                     hash_join.projection.clone(),
                     PartitionMode::CollectLeft,
-                    hash_join.null_equals_null(),
+                    hash_join.null_equality(),
                 )?)))
             }
         }
@@ -257,7 +257,7 @@ pub(crate) fn try_collect_left(
             hash_join.join_type(),
             hash_join.projection.clone(),
             PartitionMode::CollectLeft,
-            hash_join.null_equals_null(),
+            hash_join.null_equality(),
         )?))),
         (false, true) => {
             if hash_join.join_type().supports_swap() {
@@ -292,7 +292,7 @@ pub(crate) fn partitioned_hash_join(
             hash_join.join_type(),
             hash_join.projection.clone(),
             PartitionMode::Partitioned,
-            hash_join.null_equals_null(),
+            hash_join.null_equality(),
         )?))
     }
 }
@@ -459,7 +459,7 @@ fn hash_join_convert_symmetric_subrule(
                             JoinSide::Right => hash_join.right().output_ordering(),
                             JoinSide::None => unreachable!(),
                         }
-                        .map(|p| LexOrdering::new(p.to_vec()))
+                        .cloned()
                     })
                     .flatten()
             };
@@ -474,7 +474,7 @@ fn hash_join_convert_symmetric_subrule(
                 hash_join.on().to_vec(),
                 hash_join.filter().cloned(),
                 hash_join.join_type(),
-                hash_join.null_equals_null(),
+                hash_join.null_equality(),
                 left_order,
                 right_order,
                 mode,

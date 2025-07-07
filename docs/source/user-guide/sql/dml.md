@@ -49,7 +49,7 @@ The output format is determined by the first match of the following rules:
 1. Value of `STORED AS`
 2. Filename extension (e.g. `foo.parquet` implies `PARQUET` format)
 
-For a detailed list of valid OPTIONS, see [Write Options](write_options).
+For a detailed list of valid OPTIONS, see [Format Options](format_options.md).
 
 ### Examples
 

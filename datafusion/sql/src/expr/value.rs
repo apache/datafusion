@@ -50,7 +50,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         match value {
             Value::Number(n, _) => self.parse_sql_number(&n, false),
             Value::SingleQuotedString(s) | Value::DoubleQuotedString(s) => Ok(lit(s)),
-            Value::Null => Ok(Expr::Literal(ScalarValue::Null)),
+            Value::Null => Ok(Expr::Literal(ScalarValue::Null, None)),
             Value::Boolean(n) => Ok(lit(n)),
             Value::Placeholder(param) => {
                 Self::create_placeholder_expr(param, param_data_types)
@@ -131,10 +131,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         // Check if the placeholder is in the parameter list
         let param_type = param_data_types.get(idx);
         // Data type of the parameter
-        debug!(
-            "type of param {} param_data_types[idx]: {:?}",
-            param, param_type
-        );
+        debug!("type of param {param} param_data_types[idx]: {param_type:?}");
 
         Ok(Expr::Placeholder(Placeholder::new(
             param,
@@ -383,11 +380,10 @@ fn parse_decimal(unsigned_number: &str, negative: bool) -> Result<Expr> {
                 int_val
             )
         })?;
-        Ok(Expr::Literal(ScalarValue::Decimal128(
-            Some(val),
-            precision as u8,
-            scale as i8,
-        )))
+        Ok(Expr::Literal(
+            ScalarValue::Decimal128(Some(val), precision as u8, scale as i8),
+            None,
+        ))
     } else if precision <= DECIMAL256_MAX_PRECISION as u64 {
         let val = bigint_to_i256(&int_val).ok_or_else(|| {
             // Failures are unexpected here as we have already checked the precision
@@ -396,11 +392,10 @@ fn parse_decimal(unsigned_number: &str, negative: bool) -> Result<Expr> {
                 int_val
             )
         })?;
-        Ok(Expr::Literal(ScalarValue::Decimal256(
-            Some(val),
-            precision as u8,
-            scale as i8,
-        )))
+        Ok(Expr::Literal(
+            ScalarValue::Decimal256(Some(val), precision as u8, scale as i8),
+            None,
+        ))
     } else {
         not_impl_err!(
             "Decimal precision {} exceeds the maximum supported precision: {}",
@@ -486,10 +481,13 @@ mod tests {
         ];
         for (input, expect) in cases {
             let output = parse_decimal(input, true).unwrap();
-            assert_eq!(output, Expr::Literal(expect.arithmetic_negate().unwrap()));
+            assert_eq!(
+                output,
+                Expr::Literal(expect.arithmetic_negate().unwrap(), None)
+            );
 
             let output = parse_decimal(input, false).unwrap();
-            assert_eq!(output, Expr::Literal(expect));
+            assert_eq!(output, Expr::Literal(expect, None));
         }
 
         // scale < i8::MIN

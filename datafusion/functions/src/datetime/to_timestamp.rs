@@ -639,7 +639,7 @@ mod tests {
         TimestampNanosecondArray, TimestampSecondArray,
     };
     use arrow::array::{ArrayRef, Int64Array, StringBuilder};
-    use arrow::datatypes::TimeUnit;
+    use arrow::datatypes::{Field, TimeUnit};
     use chrono::Utc;
     use datafusion_common::{assert_contains, DataFusionError, ScalarValue};
     use datafusion_expr::ScalarFunctionImplementation;
@@ -1012,11 +1012,13 @@ mod tests {
         for udf in &udfs {
             for array in arrays {
                 let rt = udf.return_type(&[array.data_type()]).unwrap();
+                let arg_field = Field::new("arg", array.data_type().clone(), true).into();
                 assert!(matches!(rt, Timestamp(_, Some(_))));
                 let args = datafusion_expr::ScalarFunctionArgs {
                     args: vec![array.clone()],
+                    arg_fields: vec![arg_field],
                     number_rows: 4,
-                    return_type: &rt,
+                    return_field: Field::new("f", rt, true).into(),
                 };
                 let res = udf
                     .invoke_with_args(args)
@@ -1060,10 +1062,12 @@ mod tests {
             for array in arrays {
                 let rt = udf.return_type(&[array.data_type()]).unwrap();
                 assert!(matches!(rt, Timestamp(_, None)));
+                let arg_field = Field::new("arg", array.data_type().clone(), true).into();
                 let args = datafusion_expr::ScalarFunctionArgs {
                     args: vec![array.clone()],
+                    arg_fields: vec![arg_field],
                     number_rows: 5,
-                    return_type: &rt,
+                    return_field: Field::new("f", rt, true).into(),
                 };
                 let res = udf
                     .invoke_with_args(args)

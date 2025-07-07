@@ -20,16 +20,17 @@ use insta::assert_snapshot;
 use std::{collections::HashMap, sync::Arc};
 
 use datafusion_common::{Diagnostic, Location, Result, Span};
-use datafusion_sql::planner::{ParserOptions, SqlToRel};
+use datafusion_sql::{
+    parser::{DFParser, DFParserBuilder},
+    planner::{ParserOptions, SqlToRel},
+};
 use regex::Regex;
-use sqlparser::{dialect::GenericDialect, parser::Parser};
 
 use crate::{MockContextProvider, MockSessionState};
 
 fn do_query(sql: &'static str) -> Diagnostic {
-    let dialect = GenericDialect {};
-    let statement = Parser::new(&dialect)
-        .try_with_sql(sql)
+    let statement = DFParserBuilder::new(sql)
+        .build()
         .expect("unable to create parser")
         .parse_statement()
         .expect("unable to parse query");
@@ -41,7 +42,7 @@ fn do_query(sql: &'static str) -> Diagnostic {
         .with_scalar_function(Arc::new(string::concat().as_ref().clone()));
     let context = MockContextProvider { state };
     let sql_to_rel = SqlToRel::new_with_options(&context, options);
-    match sql_to_rel.sql_statement_to_plan(statement) {
+    match sql_to_rel.statement_to_plan(statement) {
         Ok(_) => panic!("expected error"),
         Err(err) => match err.diagnostic() {
             Some(diag) => diag.clone(),
@@ -365,4 +366,26 @@ fn test_unary_op_plus_with_non_column() -> Result<()> {
     assert_eq!(diag.helps[0].span, None);
     assert_eq!(diag.span, None);
     Ok(())
+}
+
+#[test]
+fn test_syntax_error() -> Result<()> {
+    // create a table with a column of type varchar
+    let query = "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV PARTITIONED BY (c1, p1 /*int*/int/*int*/) LOCATION 'foo.csv'";
+    let spans = get_spans(query);
+    match DFParser::parse_sql(query) {
+        Ok(_) => panic!("expected error"),
+        Err(err) => match err.diagnostic() {
+            Some(diag) => {
+                let diag = diag.clone();
+                assert_snapshot!(diag.message, @"Expected: ',' or ')' after partition definition, found: int at Line: 1, Column: 77");
+                println!("{spans:?}");
+                assert_eq!(diag.span, Some(spans["int"]));
+                Ok(())
+            }
+            None => {
+                panic!("expected diagnostic")
+            }
+        },
+    }
 }

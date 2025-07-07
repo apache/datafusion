@@ -21,7 +21,7 @@ use std::sync::Arc;
 use super::{
     get_query_sql, get_tbl_tpch_table_schema, get_tpch_table_schema, TPCH_TABLES,
 };
-use crate::util::{BenchmarkRun, CommonOpt};
+use crate::util::{BenchmarkRun, CommonOpt, QueryResult};
 
 use arrow::record_batch::RecordBatch;
 use arrow::util::pretty::{self, pretty_format_batches};
@@ -109,36 +109,49 @@ impl RunOpt {
         };
 
         let mut benchmark_run = BenchmarkRun::new();
-        for query_id in query_range {
-            benchmark_run.start_new_case(&format!("Query {query_id}"));
-            let query_run = self.benchmark_query(query_id).await?;
-            for iter in query_run {
-                benchmark_run.write_iter(iter.elapsed, iter.row_count);
-            }
-        }
-        benchmark_run.maybe_write_json(self.output_path.as_ref())?;
-        Ok(())
-    }
-
-    async fn benchmark_query(&self, query_id: usize) -> Result<Vec<QueryResult>> {
         let mut config = self
             .common
-            .config()
+            .config()?
             .with_collect_statistics(!self.disable_statistics);
         config.options_mut().optimizer.prefer_hash_join = self.prefer_hash_join;
         let rt_builder = self.common.runtime_env_builder()?;
         let ctx = SessionContext::new_with_config_rt(config, rt_builder.build_arc()?);
-
         // register tables
         self.register_tables(&ctx).await?;
 
+        for query_id in query_range {
+            benchmark_run.start_new_case(&format!("Query {query_id}"));
+            let query_run = self.benchmark_query(query_id, &ctx).await;
+            match query_run {
+                Ok(query_results) => {
+                    for iter in query_results {
+                        benchmark_run.write_iter(iter.elapsed, iter.row_count);
+                    }
+                }
+                Err(e) => {
+                    benchmark_run.mark_failed();
+                    eprintln!("Query {query_id} failed: {e}");
+                }
+            }
+        }
+        benchmark_run.maybe_write_json(self.output_path.as_ref())?;
+        benchmark_run.maybe_print_failures();
+        Ok(())
+    }
+
+    async fn benchmark_query(
+        &self,
+        query_id: usize,
+        ctx: &SessionContext,
+    ) -> Result<Vec<QueryResult>> {
         let mut millis = vec![];
         // run benchmark
         let mut query_results = vec![];
+
+        let sql = &get_query_sql(query_id)?;
+
         for i in 0..self.iterations() {
             let start = Instant::now();
-
-            let sql = &get_query_sql(query_id)?;
 
             // query 15 is special, with 3 statements. the second statement is the one from which we
             // want to capture the results
@@ -146,14 +159,14 @@ impl RunOpt {
             if query_id == 15 {
                 for (n, query) in sql.iter().enumerate() {
                     if n == 1 {
-                        result = self.execute_query(&ctx, query).await?;
+                        result = self.execute_query(ctx, query).await?;
                     } else {
-                        self.execute_query(&ctx, query).await?;
+                        self.execute_query(ctx, query).await?;
                     }
                 }
             } else {
                 for query in sql {
-                    result = self.execute_query(&ctx, query).await?;
+                    result = self.execute_query(ctx, query).await?;
                 }
             }
 
@@ -261,7 +274,7 @@ impl RunOpt {
                     (Arc::new(format), path, ".tbl")
                 }
                 "csv" => {
-                    let path = format!("{path}/{table}");
+                    let path = format!("{path}/csv/{table}");
                     let format = CsvFormat::default()
                         .with_delimiter(b',')
                         .with_has_header(true);
@@ -313,13 +326,8 @@ impl RunOpt {
     fn partitions(&self) -> usize {
         self.common
             .partitions
-            .unwrap_or(get_available_parallelism())
+            .unwrap_or_else(get_available_parallelism)
     }
-}
-
-struct QueryResult {
-    elapsed: std::time::Duration,
-    row_count: usize,
 }
 
 #[cfg(test)]
@@ -355,7 +363,7 @@ mod tests {
         let common = CommonOpt {
             iterations: 1,
             partitions: Some(2),
-            batch_size: 8192,
+            batch_size: Some(8192),
             mem_pool_type: "fair".to_string(),
             memory_limit: None,
             sort_spill_reservation_bytes: None,
@@ -392,7 +400,7 @@ mod tests {
         let common = CommonOpt {
             iterations: 1,
             partitions: Some(2),
-            batch_size: 8192,
+            batch_size: Some(8192),
             mem_pool_type: "fair".to_string(),
             memory_limit: None,
             sort_spill_reservation_bytes: None,

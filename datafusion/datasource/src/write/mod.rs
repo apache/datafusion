@@ -77,15 +77,18 @@ pub trait BatchSerializer: Sync + Send {
 
 /// Returns an [`AsyncWrite`] which writes to the given object store location
 /// with the specified compression.
+///
+/// The writer will have a default buffer size as chosen by [`BufWriter::new`].
+///
 /// We drop the `AbortableWrite` struct and the writer will not try to cleanup on failure.
 /// Users can configure automatic cleanup with their cloud provider.
+#[deprecated(since = "48.0.0", note = "Use ObjectWriterBuilder::new(...) instead")]
 pub async fn create_writer(
     file_compression_type: FileCompressionType,
     location: &Path,
     object_store: Arc<dyn ObjectStore>,
 ) -> Result<Box<dyn AsyncWrite + Send + Unpin>> {
-    let buf_writer = BufWriter::new(object_store, location.clone());
-    file_compression_type.convert_async_writer(buf_writer)
+    ObjectWriterBuilder::new(file_compression_type, location, object_store).build()
 }
 
 /// Converts table schema to writer schema, which may differ in the case
@@ -107,5 +110,110 @@ pub fn get_writer_schema(config: &FileSinkConfig) -> Arc<Schema> {
         ))
     } else {
         Arc::clone(config.output_schema())
+    }
+}
+
+/// A builder for an [`AsyncWrite`] that writes to an object store location.
+///
+/// This can be used to specify file compression on the writer. The writer
+/// will have a default buffer size unless altered. The specific default size
+/// is chosen by [`BufWriter::new`].
+///
+/// We drop the `AbortableWrite` struct and the writer will not try to cleanup on failure.
+/// Users can configure automatic cleanup with their cloud provider.
+#[derive(Debug)]
+pub struct ObjectWriterBuilder {
+    /// Compression type for object writer.
+    file_compression_type: FileCompressionType,
+    /// Output path
+    location: Path,
+    /// The related store that handles the given path
+    object_store: Arc<dyn ObjectStore>,
+    /// The size of the buffer for the object writer.
+    buffer_size: Option<usize>,
+}
+
+impl ObjectWriterBuilder {
+    /// Create a new [`ObjectWriterBuilder`] for the specified path and compression type.
+    pub fn new(
+        file_compression_type: FileCompressionType,
+        location: &Path,
+        object_store: Arc<dyn ObjectStore>,
+    ) -> Self {
+        Self {
+            file_compression_type,
+            location: location.clone(),
+            object_store,
+            buffer_size: None,
+        }
+    }
+
+    /// Set buffer size in bytes for object writer.
+    ///
+    /// # Example
+    /// ```
+    /// # use datafusion_datasource::file_compression_type::FileCompressionType;
+    /// # use datafusion_datasource::write::ObjectWriterBuilder;
+    /// # use object_store::memory::InMemory;
+    /// # use object_store::path::Path;
+    /// # use std::sync::Arc;
+    /// # let compression_type = FileCompressionType::UNCOMPRESSED;
+    /// # let location = Path::from("/foo/bar");
+    /// # let object_store = Arc::new(InMemory::new());
+    /// let mut builder = ObjectWriterBuilder::new(compression_type, &location, object_store);
+    /// builder.set_buffer_size(Some(20 * 1024 * 1024)); //20 MiB
+    /// assert_eq!(builder.get_buffer_size(), Some(20 * 1024 * 1024), "Internal error: Builder buffer size doesn't match");
+    /// ```
+    pub fn set_buffer_size(&mut self, buffer_size: Option<usize>) {
+        self.buffer_size = buffer_size;
+    }
+
+    /// Set buffer size in bytes for object writer, returning the builder.
+    ///
+    /// # Example
+    /// ```
+    /// # use datafusion_datasource::file_compression_type::FileCompressionType;
+    /// # use datafusion_datasource::write::ObjectWriterBuilder;
+    /// # use object_store::memory::InMemory;
+    /// # use object_store::path::Path;
+    /// # use std::sync::Arc;
+    /// # let compression_type = FileCompressionType::UNCOMPRESSED;
+    /// # let location = Path::from("/foo/bar");
+    /// # let object_store = Arc::new(InMemory::new());
+    /// let builder = ObjectWriterBuilder::new(compression_type, &location, object_store)
+    ///     .with_buffer_size(Some(20 * 1024 * 1024)); //20 MiB
+    /// assert_eq!(builder.get_buffer_size(), Some(20 * 1024 * 1024), "Internal error: Builder buffer size doesn't match");
+    /// ```
+    pub fn with_buffer_size(mut self, buffer_size: Option<usize>) -> Self {
+        self.buffer_size = buffer_size;
+        self
+    }
+
+    /// Currently specified buffer size in bytes.
+    pub fn get_buffer_size(&self) -> Option<usize> {
+        self.buffer_size
+    }
+
+    /// Return a writer object that writes to the object store location.
+    ///
+    /// If a buffer size has not been set, the default buffer buffer size will
+    /// be used.
+    ///
+    /// # Errors
+    /// If there is an error applying the compression type.
+    pub fn build(self) -> Result<Box<dyn AsyncWrite + Send + Unpin>> {
+        let Self {
+            file_compression_type,
+            location,
+            object_store,
+            buffer_size,
+        } = self;
+
+        let buf_writer = match buffer_size {
+            Some(size) => BufWriter::with_capacity(object_store, location, size),
+            None => BufWriter::new(object_store, location),
+        };
+
+        file_compression_type.convert_async_writer(buf_writer)
     }
 }

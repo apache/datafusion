@@ -1,0 +1,201 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Import common test data
+include ./init_data.slt.part
+
+query ?
+SELECT regexp_match(str, pattern, flags) FROM regexp_test_data;
+----
+NULL
+[a]
+[A]
+[B]
+NULL
+NULL
+NULL
+[010]
+[Düsseldorf]
+[Москва]
+[Köln]
+[إسرائيل]
+
+# test string view
+statement ok
+CREATE TABLE t_stringview AS
+SELECT arrow_cast(str, 'Utf8View') as str, arrow_cast(pattern, 'Utf8View') as pattern, arrow_cast(flags, 'Utf8View') as flags FROM regexp_test_data;
+
+query ?
+SELECT regexp_match(str, pattern, flags) FROM t_stringview;
+----
+NULL
+[a]
+[A]
+[B]
+NULL
+NULL
+NULL
+[010]
+[Düsseldorf]
+[Москва]
+[Köln]
+[إسرائيل]
+
+statement ok
+DROP TABLE t_stringview;
+
+query ?
+SELECT regexp_match('foobarbequebaz', '');
+----
+[]
+
+query ?
+SELECT regexp_match('', '');
+----
+[]
+
+query ?
+SELECT regexp_match('foobarbequebaz', '(bar)(beque)');
+----
+[bar, beque]
+
+query ?
+SELECT regexp_match('fooBarb
+eQuebaz', '(bar).*(que)', 'is');
+----
+[Bar, Que]
+
+query ?
+SELECT regexp_match('foobarbequebaz', '(ba3r)(bequ34e)');
+----
+NULL
+
+query ?
+SELECT regexp_match('foobarbequebaz', '^.*(barbequ[0-9]*e).*$', 'm');
+----
+[barbeque]
+
+query ?
+SELECT regexp_match('aaa-0', '.*-(\d)');
+----
+[0]
+
+query ?
+SELECT regexp_match('bb-1', '.*-(\d)');
+----
+[1]
+
+query ?
+SELECT regexp_match('aa', '.*-(\d)');
+----
+NULL
+
+query ?
+SELECT regexp_match(NULL, '.*-(\d)');
+----
+NULL
+
+query ?
+SELECT regexp_match('aaa-0', NULL);
+----
+NULL
+
+query ?
+SELECT regexp_match(null, '.*-(\d)');
+----
+NULL
+
+query error Error during planning: regexp_match\(\) does not support the "global" option
+SELECT regexp_match('bb-1', '.*-(\d)', 'g');
+
+query error Error during planning: regexp_match\(\) does not support the "global" option
+SELECT regexp_match('bb-1', '.*-(\d)', 'g');
+
+query error Arrow error: Compute error: Regular expression did not compile: CompiledTooBig\(10485760\)
+SELECT regexp_match('aaaaa', 'a{5}{5}{5}{5}{5}{5}{5}{5}{5}{5}{5}{5}{5}{5}{5}{5}{5}{5}');
+
+# look-around is not supported and will just return null
+query ?
+SELECT regexp_match('(?<=[A-Z]\w )Smith', 'John Smith', 'i');
+----
+NULL
+
+# ported test
+query ?
+SELECT regexp_match('aaa-555', '.*-(\d*)');
+----
+[555]
+
+query B
+select 'abc' ~ null;
+----
+NULL
+
+query B
+select null ~ null;
+----
+NULL
+
+query B
+select null ~ 'abc';
+----
+NULL
+
+query B
+select 'abc' ~* null;
+----
+NULL
+
+query B
+select null ~* null;
+----
+NULL
+
+query B
+select null ~* 'abc';
+----
+NULL
+
+query B
+select 'abc' !~ null;
+----
+NULL
+
+query B
+select null !~ null;
+----
+NULL
+
+query B
+select null !~ 'abc';
+----
+NULL
+
+query B
+select 'abc' !~* null;
+----
+NULL
+
+query B
+select null !~* null;
+----
+NULL
+
+query B
+select null !~* 'abc';
+----
+NULL

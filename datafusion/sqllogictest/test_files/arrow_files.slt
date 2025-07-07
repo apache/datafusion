@@ -19,6 +19,11 @@
 ## Arrow Files Format support
 #############
 
+# We using fixed arrow file to test for sqllogictests, and this arrow field is writing with arrow-ipc utf8,
+# so when we decode to read it's also loading utf8.
+# Currently, so we disable the map_string_types_to_utf8view
+statement ok
+set datafusion.sql_parser.map_string_types_to_utf8view = false;
 
 statement ok
 

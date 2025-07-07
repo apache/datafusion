@@ -23,6 +23,7 @@ use arrow::{
     array::{ArrayRef, AsArray, Float64Array},
     datatypes::Float64Type,
 };
+use arrow_schema::FieldRef;
 use datafusion::common::ScalarValue;
 use datafusion::error::Result;
 use datafusion::functions_aggregate::average::avg_udaf;
@@ -87,8 +88,8 @@ impl WindowUDFImpl for SmoothItUdf {
         Ok(Box::new(MyPartitionEvaluator::new()))
     }
 
-    fn field(&self, field_args: WindowUDFFieldArgs) -> Result<Field> {
-        Ok(Field::new(field_args.name(), DataType::Float64, true))
+    fn field(&self, field_args: WindowUDFFieldArgs) -> Result<FieldRef> {
+        Ok(Field::new(field_args.name(), DataType::Float64, true).into())
     }
 }
 
@@ -190,7 +191,7 @@ impl WindowUDFImpl for SimplifySmoothItUdf {
     /// default implementation will not be called (left as `todo!()`)
     fn simplify(&self) -> Option<WindowFunctionSimplification> {
         let simplify = |window_function: WindowFunction, _: &dyn SimplifyInfo| {
-            Ok(Expr::WindowFunction(WindowFunction {
+            Ok(Expr::from(WindowFunction {
                 fun: WindowFunctionDefinition::AggregateUDF(avg_udaf()),
                 params: WindowFunctionParams {
                     args: window_function.params.args,
@@ -205,8 +206,8 @@ impl WindowUDFImpl for SimplifySmoothItUdf {
         Some(Box::new(simplify))
     }
 
-    fn field(&self, field_args: WindowUDFFieldArgs) -> Result<Field> {
-        Ok(Field::new(field_args.name(), DataType::Float64, true))
+    fn field(&self, field_args: WindowUDFFieldArgs) -> Result<FieldRef> {
+        Ok(Field::new(field_args.name(), DataType::Float64, true).into())
     }
 }
 

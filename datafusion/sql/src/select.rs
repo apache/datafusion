@@ -94,12 +94,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             planner_context,
         )?;
 
-        let order_by =
-            to_order_by_exprs_with_select(query_order_by, Some(&select_exprs))?;
-
         // Having and group by clause may reference aliases defined in select projection
         let projected_plan = self.project(base_plan.clone(), select_exprs)?;
         let select_exprs = projected_plan.expressions();
+
+        let order_by =
+            to_order_by_exprs_with_select(query_order_by, Some(&select_exprs))?;
 
         // Place the fields of the base plan at the front so that when there are references
         // with the same name, the fields of the base plan will be searched first.
@@ -307,6 +307,15 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
         let mut intermediate_plan = input;
         let mut intermediate_select_exprs = select_exprs;
+        // Fast path: If there is are no unnests in the select_exprs, wrap the plan in a projection
+        if !intermediate_select_exprs
+            .iter()
+            .any(has_unnest_expr_recursively)
+        {
+            return LogicalPlanBuilder::from(intermediate_plan)
+                .project(intermediate_select_exprs)?
+                .build();
+        }
 
         // Each expr in select_exprs can contains multiple unnest stage
         // The transformation happen bottom up, one at a time for each iteration
@@ -374,6 +383,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
     fn try_process_aggregate_unnest(&self, input: LogicalPlan) -> Result<LogicalPlan> {
         match input {
+            // Fast path if there are no unnest in group by
+            LogicalPlan::Aggregate(ref agg)
+                if !&agg.group_expr.iter().any(has_unnest_expr_recursively) =>
+            {
+                Ok(input)
+            }
             LogicalPlan::Aggregate(agg) => {
                 let agg_expr = agg.aggr_expr.clone();
                 let (new_input, new_group_by_exprs) =
@@ -885,7 +900,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             | SelectItem::UnnamedExpr(expr) = proj
             {
                 let mut err = None;
-                visit_expressions_mut(expr, |expr| {
+                let _ = visit_expressions_mut(expr, |expr| {
                     if let SQLExpr::Function(f) = expr {
                         if let Some(WindowType::NamedWindow(ident)) = &f.over {
                             let normalized_ident =
@@ -938,4 +953,18 @@ fn check_conflicting_windows(window_defs: &[NamedWindowDefinition]) -> Result<()
         }
     }
     Ok(())
+}
+
+/// Returns true if the expression recursively contains an `Expr::Unnest` expression
+fn has_unnest_expr_recursively(expr: &Expr) -> bool {
+    let mut has_unnest = false;
+    let _ = expr.apply(|e| {
+        if let Expr::Unnest(_) = e {
+            has_unnest = true;
+            Ok(TreeNodeRecursion::Stop)
+        } else {
+            Ok(TreeNodeRecursion::Continue)
+        }
+    });
+    has_unnest
 }

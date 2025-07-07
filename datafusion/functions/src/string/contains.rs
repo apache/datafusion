@@ -150,10 +150,11 @@ fn contains(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
 #[cfg(test)]
 mod test {
     use super::ContainsFunc;
+    use crate::expr_fn::contains;
     use arrow::array::{BooleanArray, StringArray};
-    use arrow::datatypes::DataType;
+    use arrow::datatypes::{DataType, Field};
     use datafusion_common::ScalarValue;
-    use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
+    use datafusion_expr::{ColumnarValue, Expr, ScalarFunctionArgs, ScalarUDFImpl};
     use std::sync::Arc;
 
     #[test]
@@ -164,11 +165,16 @@ mod test {
             Some("yyy?()"),
         ])));
         let scalar = ColumnarValue::Scalar(ScalarValue::Utf8(Some("x?(".to_string())));
+        let arg_fields = vec![
+            Field::new("a", DataType::Utf8, true).into(),
+            Field::new("a", DataType::Utf8, true).into(),
+        ];
 
         let args = ScalarFunctionArgs {
             args: vec![array, scalar],
+            arg_fields,
             number_rows: 2,
-            return_type: &DataType::Boolean,
+            return_field: Field::new("f", DataType::Boolean, true).into(),
         };
 
         let actual = udf.invoke_with_args(args).unwrap();
@@ -179,6 +185,21 @@ mod test {
         assert_eq!(
             *actual.into_array(2).unwrap(),
             *expect.into_array(2).unwrap()
+        );
+    }
+
+    #[test]
+    fn test_contains_api() {
+        let expr = contains(
+            Expr::Literal(
+                ScalarValue::Utf8(Some("the quick brown fox".to_string())),
+                None,
+            ),
+            Expr::Literal(ScalarValue::Utf8(Some("row".to_string())), None),
+        );
+        assert_eq!(
+            expr.to_string(),
+            "contains(Utf8(\"the quick brown fox\"), Utf8(\"row\"))"
         );
     }
 }

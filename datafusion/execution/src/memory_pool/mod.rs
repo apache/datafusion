@@ -57,8 +57,8 @@ pub use pool::*;
 /// `GroupByHashExec`. It does NOT track and limit memory used internally by
 /// other operators such as `DataSourceExec` or the `RecordBatch`es that flow
 /// between operators. Furthermore, operators should not reserve memory for the
-/// batches they produce. Instead, if a parent operator needs to hold batches
-/// from its children in memory for an extended period, it is the parent
+/// batches they produce. Instead, if a consumer operator needs to hold batches
+/// from its producers in memory for an extended period, it is the consumer
 /// operator's responsibility to reserve the necessary memory for those batches.
 ///
 /// In order to avoid allocating memory until the OS or the container system
@@ -97,6 +97,67 @@ pub use pool::*;
 /// reached the memory limit, it will return an error. Then, `Aggregate`
 /// operator will spill the intermediate buffers to disk, and release memory
 /// from the memory pool, and continue to retry memory reservation.
+///
+/// # Related Structs
+///
+/// To better understand memory management in DataFusion, here are the key structs
+/// and their relationships:
+///
+/// - [`MemoryConsumer`]: A named allocation traced by a particular operator. If an
+///   execution is parallelized, and there are multiple partitions of the same
+///   operator, each partition will have a separate `MemoryConsumer`.
+/// - `SharedRegistration`: A registration of a `MemoryConsumer` with a `MemoryPool`.
+///   `SharedRegistration` and `MemoryPool` have a many-to-one relationship. `MemoryPool`
+///   implementation can decide how to allocate memory based on the registered consumers.
+///   (e.g. `FairSpillPool` will try to share available memory evenly among all registered
+///   consumers)
+/// - [`MemoryReservation`]: Each `MemoryConsumer`/operator can have multiple
+///   `MemoryReservation`s for different internal data structures. The relationship
+///   between `MemoryConsumer` and `MemoryReservation` is one-to-many. This design
+///   enables cleaner operator implementations:
+///   - Different `MemoryReservation`s can be used for different purposes
+///   - `MemoryReservation` follows RAII principles - to release a reservation,
+///     simply drop the `MemoryReservation` object. When all `MemoryReservation`s
+///     for a `SharedRegistration` are dropped, the `SharedRegistration` is dropped
+///     when its reference count reaches zero, automatically unregistering the
+///     `MemoryConsumer` from the `MemoryPool`.
+///
+/// ## Relationship Diagram
+///
+/// ```text
+/// ┌──────────────────┐     ┌──────────────────┐
+/// │MemoryReservation │     │MemoryReservation │
+/// └───┬──────────────┘     └──────────────────┘ ......
+///     │belongs to                    │
+///     │      ┌───────────────────────┘           │  │
+///     │      │                                   │  │
+///     ▼      ▼                                   ▼  ▼
+/// ┌────────────────────────┐       ┌────────────────────────┐
+/// │   SharedRegistration   │       │   SharedRegistration   │
+/// │   ┌────────────────┐   │       │   ┌────────────────┐   │
+/// │   │                │   │       │   │                │   │
+/// │   │ MemoryConsumer │   │       │   │ MemoryConsumer │   │
+/// │   │                │   │       │   │                │   │
+/// │   └────────────────┘   │       │   └────────────────┘   │
+/// └────────────┬───────────┘       └────────────┬───────────┘
+///              │                                │
+///              │                        register│into
+///              │                                │
+///              └─────────────┐   ┌──────────────┘
+///                            │   │
+///                            ▼   ▼
+///    ╔═══════════════════════════════════════════════════╗
+///    ║                                                   ║
+///    ║                    MemoryPool                     ║
+///    ║                                                   ║
+///    ╚═══════════════════════════════════════════════════╝
+/// ```
+///
+/// For example, there are two parallel partitions of an operator X: each partition
+/// corresponds to a `MemoryConsumer` in the above diagram. Inside each partition of
+/// operator X, there are typically several `MemoryReservation`s - one for each
+/// internal data structure that needs memory tracking (e.g., 1 reservation for the hash
+/// table, and 1 reservation for buffered input, etc.).
 ///
 /// # Implementing `MemoryPool`
 ///
@@ -141,6 +202,25 @@ pub trait MemoryPool: Send + Sync + std::fmt::Debug {
 
     /// Return the total amount of memory reserved
     fn reserved(&self) -> usize;
+
+    /// Return the memory limit of the pool
+    ///
+    /// The default implementation of `MemoryPool::memory_limit`
+    /// will return `MemoryLimit::Unknown`.
+    /// If you are using your custom memory pool, but have the requirement to
+    /// know the memory usage limit of the pool, please implement this method
+    /// to return it(`Memory::Finite(limit)`).
+    fn memory_limit(&self) -> MemoryLimit {
+        MemoryLimit::Unknown
+    }
+}
+
+/// Memory limit of `MemoryPool`
+pub enum MemoryLimit {
+    Infinite,
+    /// Bounded memory limit in bytes.
+    Finite(usize),
+    Unknown,
 }
 
 /// A memory consumer is a named allocation traced by a particular

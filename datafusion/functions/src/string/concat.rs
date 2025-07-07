@@ -295,7 +295,7 @@ pub fn simplify_concat(args: Vec<Expr>) -> Result<ExprSimplifyResult> {
         let data_types: Vec<_> = args
             .iter()
             .filter_map(|expr| match expr {
-                Expr::Literal(l) => Some(l.data_type()),
+                Expr::Literal(l, _) => Some(l.data_type()),
                 _ => None,
             })
             .collect();
@@ -304,25 +304,25 @@ pub fn simplify_concat(args: Vec<Expr>) -> Result<ExprSimplifyResult> {
 
     for arg in args.clone() {
         match arg {
-            Expr::Literal(ScalarValue::Utf8(None)) => {}
-            Expr::Literal(ScalarValue::LargeUtf8(None)) => {
+            Expr::Literal(ScalarValue::Utf8(None), _) => {}
+            Expr::Literal(ScalarValue::LargeUtf8(None), _) => {
             }
-            Expr::Literal(ScalarValue::Utf8View(None)) => { }
+            Expr::Literal(ScalarValue::Utf8View(None), _) => { }
 
             // filter out `null` args
             // All literals have been converted to Utf8 or LargeUtf8 in type_coercion.
             // Concatenate it with the `contiguous_scalar`.
-            Expr::Literal(ScalarValue::Utf8(Some(v))) => {
+            Expr::Literal(ScalarValue::Utf8(Some(v)), _) => {
                 contiguous_scalar += &v;
             }
-            Expr::Literal(ScalarValue::LargeUtf8(Some(v))) => {
+            Expr::Literal(ScalarValue::LargeUtf8(Some(v)), _) => {
                 contiguous_scalar += &v;
             }
-            Expr::Literal(ScalarValue::Utf8View(Some(v))) => {
+            Expr::Literal(ScalarValue::Utf8View(Some(v)), _) => {
                 contiguous_scalar += &v;
             }
 
-            Expr::Literal(x) => {
+            Expr::Literal(x, _) => {
                 return internal_err!(
                     "The scalar {x} should be casted to string type during the type coercion."
                 )
@@ -376,6 +376,7 @@ mod tests {
     use crate::utils::test::test_function;
     use arrow::array::{Array, LargeStringArray, StringViewArray};
     use arrow::array::{ArrayRef, StringArray};
+    use arrow::datatypes::Field;
     use DataType::*;
 
     #[test]
@@ -468,11 +469,22 @@ mod tests {
             None,
             Some("b"),
         ])));
+        let arg_fields = vec![
+            Field::new("a", Utf8, true),
+            Field::new("a", Utf8, true),
+            Field::new("a", Utf8, true),
+            Field::new("a", Utf8View, true),
+            Field::new("a", Utf8View, true),
+        ]
+        .into_iter()
+        .map(Arc::new)
+        .collect::<Vec<_>>();
 
         let args = ScalarFunctionArgs {
             args: vec![c0, c1, c2, c3, c4],
+            arg_fields,
             number_rows: 3,
-            return_type: &Utf8,
+            return_field: Field::new("f", Utf8, true).into(),
         };
 
         let result = ConcatFunc::new().invoke_with_args(args)?;

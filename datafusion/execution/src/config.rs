@@ -23,7 +23,7 @@ use std::{
 };
 
 use datafusion_common::{
-    config::{ConfigExtension, ConfigOptions},
+    config::{ConfigExtension, ConfigOptions, SpillCompression},
     Result, ScalarValue,
 };
 
@@ -193,9 +193,11 @@ impl SessionConfig {
     ///
     /// [`target_partitions`]: datafusion_common::config::ExecutionOptions::target_partitions
     pub fn with_target_partitions(mut self, n: usize) -> Self {
-        // partition count must be greater than zero
-        assert!(n > 0);
-        self.options.execution.target_partitions = n;
+        self.options.execution.target_partitions = if n == 0 {
+            datafusion_common::config::ExecutionOptions::default().target_partitions
+        } else {
+            n
+        };
         self
     }
 
@@ -254,6 +256,11 @@ impl SessionConfig {
     /// Are statistics collected during execution?
     pub fn collect_statistics(&self) -> bool {
         self.options.execution.collect_statistics
+    }
+
+    /// Compression codec for spill file
+    pub fn spill_compression(&self) -> SpillCompression {
+        self.options.execution.spill_compression
     }
 
     /// Selects a name for the default catalog and schema
@@ -416,6 +423,14 @@ impl SessionConfig {
     ) -> Self {
         self.options.execution.sort_spill_reservation_bytes =
             sort_spill_reservation_bytes;
+        self
+    }
+
+    /// Set the compression codec [`spill_compression`] used when spilling data to disk.
+    ///
+    /// [`spill_compression`]: datafusion_common::config::ExecutionOptions::spill_compression
+    pub fn with_spill_compression(mut self, spill_compression: SpillCompression) -> Self {
+        self.options.execution.spill_compression = spill_compression;
         self
     }
 

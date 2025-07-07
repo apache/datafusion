@@ -20,11 +20,8 @@ use std::fmt::{Debug, Formatter};
 use std::mem::size_of_val;
 use std::sync::Arc;
 
-use arrow::{
-    array::ArrayRef,
-    datatypes::{DataType, Field},
-};
-
+use arrow::datatypes::FieldRef;
+use arrow::{array::ArrayRef, datatypes::DataType};
 use datafusion_common::ScalarValue;
 use datafusion_common::{not_impl_err, plan_err, Result};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
@@ -52,14 +49,14 @@ make_udaf_expr_and_func!(
 #[user_doc(
     doc_section(label = "Approximate Functions"),
     description = "Returns the weighted approximate percentile of input values using the t-digest algorithm.",
-    syntax_example = "approx_percentile_cont_with_weight(expression, weight, percentile)",
+    syntax_example = "approx_percentile_cont_with_weight(weight, percentile) WITHIN GROUP (ORDER BY expression)",
     sql_example = r#"```sql
-> SELECT approx_percentile_cont_with_weight(column_name, weight_column, 0.90) FROM table_name;
-+----------------------------------------------------------------------+
-| approx_percentile_cont_with_weight(column_name, weight_column, 0.90) |
-+----------------------------------------------------------------------+
-| 78.5                                                                 |
-+----------------------------------------------------------------------+
+> SELECT approx_percentile_cont_with_weight(weight_column, 0.90) WITHIN GROUP (ORDER BY column_name) FROM table_name;
++---------------------------------------------------------------------------------------------+
+| approx_percentile_cont_with_weight(weight_column, 0.90) WITHIN GROUP (ORDER BY column_name) |
++---------------------------------------------------------------------------------------------+
+| 78.5                                                                                        |
++---------------------------------------------------------------------------------------------+
 ```"#,
     standard_argument(name = "expression", prefix = "The"),
     argument(
@@ -174,8 +171,16 @@ impl AggregateUDFImpl for ApproxPercentileContWithWeight {
     #[allow(rustdoc::private_intra_doc_links)]
     /// See [`TDigest::to_scalar_state()`] for a description of the serialized
     /// state.
-    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
+    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         self.approx_percentile_cont.state_fields(args)
+    }
+
+    fn supports_null_handling_clause(&self) -> bool {
+        false
+    }
+
+    fn is_ordered_set_aggregate(&self) -> bool {
+        true
     }
 
     fn documentation(&self) -> Option<&Documentation> {

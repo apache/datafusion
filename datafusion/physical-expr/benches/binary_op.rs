@@ -126,14 +126,25 @@ fn generate_boolean_cases<const TEST_ALL_FALSE: bool>(
         ));
     }
 
+    // Scenario 7: Test all true or all false in AND/OR
+    // This situation won't cause a short circuit, but it can skip the bool calculation
+    if TEST_ALL_FALSE {
+        let all_true = vec![true; len];
+        cases.push(("all_true_in_and".to_string(), BooleanArray::from(all_true)));
+    } else {
+        let all_false = vec![false; len];
+        cases.push(("all_false_in_or".to_string(), BooleanArray::from(all_false)));
+    }
+
     cases
 }
 
 /// Benchmarks AND/OR operator short-circuiting by evaluating complex regex conditions.
 ///
-/// Creates 6 test scenarios per operator:
+/// Creates 7 test scenarios per operator:
 /// 1. All values enable short-circuit (all_true/all_false)
 /// 2. 2-6 Single true/false value at different positions to measure early exit
+/// 3. Test all true or all false in AND/OR
 ///
 /// You can run this benchmark with:
 /// ```sh
@@ -203,16 +214,16 @@ fn benchmark_binary_op_in_short_circuit(c: &mut Criterion) {
 
     // Each scenario when the test operator is `and`
     {
-        for (name, batch) in batches_and {
-            c.bench_function(&format!("short_circuit/and/{}", name), |b| {
+        for (name, batch) in batches_and.into_iter() {
+            c.bench_function(&format!("short_circuit/and/{name}"), |b| {
                 b.iter(|| expr_and.evaluate(black_box(&batch)).unwrap())
             });
         }
     }
     // Each scenario when the test operator is `or`
     {
-        for (name, batch) in batches_or {
-            c.bench_function(&format!("short_circuit/or/{}", name), |b| {
+        for (name, batch) in batches_or.into_iter() {
+            c.bench_function(&format!("short_circuit/or/{name}"), |b| {
                 b.iter(|| expr_or.evaluate(black_box(&batch)).unwrap())
             });
         }

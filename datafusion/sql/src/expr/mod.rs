@@ -21,8 +21,9 @@ use datafusion_expr::planner::{
 };
 use sqlparser::ast::{
     AccessExpr, BinaryOperator, CastFormat, CastKind, DataType as SQLDataType,
-    DictionaryField, Expr as SQLExpr, ExprWithAlias as SQLExprWithAlias, MapEntry,
-    StructField, Subscript, TrimWhereField, Value, ValueWithSpan,
+    DictionaryField, Expr as SQLExpr, ExprWithAlias as SQLExprWithAlias,
+    FunctionArguments, MapEntry, StructField, Subscript, TrimWhereField, Value,
+    ValueWithSpan,
 };
 
 use datafusion_common::{
@@ -215,7 +216,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             }
             SQLExpr::Extract { field, expr, .. } => {
                 let mut extract_args = vec![
-                    Expr::Literal(ScalarValue::from(format!("{field}"))),
+                    Expr::Literal(ScalarValue::from(format!("{field}")), None),
                     self.sql_expr_to_logical_expr(*expr, schema, planner_context)?,
                 ];
 
@@ -476,7 +477,21 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             ),
 
             SQLExpr::Function(function) => {
-                self.sql_function_to_expr(function, schema, planner_context)
+                // workaround for https://github.com/apache/datafusion-sqlparser-rs/issues/1909
+                if matches!(function.args, FunctionArguments::None)
+                    && function.name.0.len() > 1
+                    && function.name.0.iter().all(|part| part.as_ident().is_some())
+                {
+                    let ids = function
+                        .name
+                        .0
+                        .iter()
+                        .map(|part| part.as_ident().expect("just checked").clone())
+                        .collect();
+                    self.sql_compound_identifier_to_expr(ids, schema, planner_context)
+                } else {
+                    self.sql_function_to_expr(function, schema, planner_context)
+                }
             }
 
             SQLExpr::Rollup(exprs) => {
@@ -644,7 +659,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         values: Vec<SQLExpr>,
     ) -> Result<Expr> {
         match values.first() {
-            Some(SQLExpr::Identifier(_)) | Some(SQLExpr::Value(_)) => {
+            Some(SQLExpr::Identifier(_))
+            | Some(SQLExpr::Value(_))
+            | Some(SQLExpr::CompoundIdentifier(_)) => {
                 self.parse_struct(schema, planner_context, values, vec![])
             }
             None => not_impl_err!("Empty tuple not supported yet"),

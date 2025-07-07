@@ -22,6 +22,7 @@ use std::hash::Hash;
 use std::sync::Arc;
 
 use crate::physical_expr::PhysicalExpr;
+use arrow::datatypes::FieldRef;
 use arrow::{
     datatypes::{DataType, Schema, SchemaRef},
     record_batch::RecordBatch,
@@ -125,6 +126,10 @@ impl PhysicalExpr for Column {
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
         self.bounds_check(batch.schema().as_ref())?;
         Ok(ColumnarValue::Array(Arc::clone(batch.column(self.index))))
+    }
+
+    fn return_field(&self, input_schema: &Schema) -> Result<FieldRef> {
+        Ok(input_schema.field(self.index).clone().into())
     }
 
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {

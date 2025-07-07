@@ -20,6 +20,7 @@ extern crate criterion;
 use std::sync::Arc;
 
 use arrow::array::{Array, ArrayRef, TimestampSecondArray};
+use arrow::datatypes::Field;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use datafusion_common::ScalarValue;
 use rand::rngs::ThreadRng;
@@ -31,7 +32,7 @@ use datafusion_functions::datetime::date_trunc;
 fn timestamps(rng: &mut ThreadRng) -> TimestampSecondArray {
     let mut seconds = vec![];
     for _ in 0..1000 {
-        seconds.push(rng.gen_range(0..1_000_000));
+        seconds.push(rng.random_range(0..1_000_000));
     }
 
     TimestampSecondArray::from(seconds)
@@ -39,7 +40,7 @@ fn timestamps(rng: &mut ThreadRng) -> TimestampSecondArray {
 
 fn criterion_benchmark(c: &mut Criterion) {
     c.bench_function("date_trunc_minute_1000", |b| {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let timestamps_array = Arc::new(timestamps(&mut rng)) as ArrayRef;
         let batch_len = timestamps_array.len();
         let precision =
@@ -47,15 +48,25 @@ fn criterion_benchmark(c: &mut Criterion) {
         let timestamps = ColumnarValue::Array(timestamps_array);
         let udf = date_trunc();
         let args = vec![precision, timestamps];
-        let return_type = &udf
+        let arg_fields = args
+            .iter()
+            .enumerate()
+            .map(|(idx, arg)| {
+                Field::new(format!("arg_{idx}"), arg.data_type(), true).into()
+            })
+            .collect::<Vec<_>>();
+
+        let return_type = udf
             .return_type(&args.iter().map(|arg| arg.data_type()).collect::<Vec<_>>())
             .unwrap();
+        let return_field = Arc::new(Field::new("f", return_type, true));
         b.iter(|| {
             black_box(
                 udf.invoke_with_args(ScalarFunctionArgs {
                     args: args.clone(),
+                    arg_fields: arg_fields.clone(),
                     number_rows: batch_len,
-                    return_type,
+                    return_field: Arc::clone(&return_field),
                 })
                 .expect("date_trunc should work on valid values"),
             )

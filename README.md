@@ -26,6 +26,7 @@
 [![Open Issues][open-issues-badge]][open-issues-url]
 [![Discord chat][discord-badge]][discord-url]
 [![Linkedin][linkedin-badge]][linkedin-url]
+![Crates.io MSRV][msrv-badge]
 
 [crates-badge]: https://img.shields.io/crates/v/datafusion.svg
 [crates-url]: https://crates.io/crates/datafusion
@@ -40,6 +41,7 @@
 [open-issues-url]: https://github.com/apache/datafusion/issues
 [linkedin-badge]: https://img.shields.io/badge/Follow-Linkedin-blue
 [linkedin-url]: https://www.linkedin.com/company/apache-datafusion/
+[msrv-badge]: https://img.shields.io/crates/msrv/datafusion?label=Min%20Rust%20Version
 
 [Website](https://datafusion.apache.org/) |
 [API Docs](https://docs.rs/datafusion/latest/datafusion/) |
@@ -132,20 +134,6 @@ Optional features:
 
 [apache avro]: https://avro.apache.org/
 [apache parquet]: https://parquet.apache.org/
-
-## Rust Version Compatibility Policy
-
-The Rust toolchain releases are tracked at [Rust Versions](https://releases.rs) and follow
-[semantic versioning](https://semver.org/). A Rust toolchain release can be identified
-by a version string like `1.80.0`, or more generally `major.minor.patch`.
-
-DataFusion's supports the last 4 stable Rust minor versions released and any such versions released within the last 4 months.
-
-For example, given the releases `1.78.0`, `1.79.0`, `1.80.0`, `1.80.1` and `1.81.0` DataFusion will support 1.78.0, which is 3 minor versions prior to the most minor recent `1.81`.
-
-Note: If a Rust hotfix is released for the current MSRV, the MSRV will be updated to the specific minor version that includes all applicable hotfixes preceding other policies.
-
-DataFusion enforces MSRV policy using a [MSRV CI Check](https://github.com/search?q=repo%3Aapache%2Fdatafusion+rust-version+language%3ATOML+path%3A%2F%5ECargo.toml%2F&type=code)
 
 ## DataFusion API Evolution and Deprecation Guidelines
 

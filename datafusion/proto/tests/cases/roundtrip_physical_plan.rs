@@ -60,12 +60,13 @@ use datafusion::logical_expr::{create_udf, JoinType, Operator, Volatility};
 use datafusion::physical_expr::expressions::Literal;
 use datafusion::physical_expr::window::{SlidingAggregateWindowExpr, StandardWindowExpr};
 use datafusion::physical_expr::{
-    LexOrdering, LexRequirement, PhysicalSortRequirement, ScalarFunctionExpr,
+    LexOrdering, PhysicalSortRequirement, ScalarFunctionExpr,
 };
 use datafusion::physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
 };
 use datafusion::physical_plan::analyze::AnalyzeExec;
+use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::expressions::{
     binary, cast, col, in_list, like, lit, BinaryExpr, Column, NotExpr, PhysicalSortExpr,
@@ -73,6 +74,7 @@ use datafusion::physical_plan::expressions::{
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::joins::{
     HashJoinExec, NestedLoopJoinExec, PartitionMode, StreamJoinPartitionMode,
+    SymmetricHashJoinExec,
 };
 use datafusion::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion::physical_plan::placeholder_row::PlaceholderRowExec;
@@ -96,7 +98,7 @@ use datafusion_common::file_options::json_writer::JsonWriterOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
-    internal_err, not_impl_err, DataFusionError, Result, UnnestOptions,
+    internal_err, not_impl_err, DataFusionError, NullEquality, Result, UnnestOptions,
 };
 use datafusion_expr::{
     Accumulator, AccumulatorFactoryFunction, AggregateUDF, ColumnarValue, ScalarUDF,
@@ -108,8 +110,7 @@ use datafusion_functions_aggregate::string_agg::string_agg_udaf;
 use datafusion_proto::physical_plan::{
     AsExecutionPlan, DefaultPhysicalExtensionCodec, PhysicalExtensionCodec,
 };
-use datafusion_proto::protobuf;
-use datafusion_proto::protobuf::PhysicalPlanNode;
+use datafusion_proto::protobuf::{self, PhysicalPlanNode};
 
 /// Perform a serde roundtrip and assert that the string representation of the before and after plans
 /// are identical. Note that this often isn't sufficient to guarantee that no information is
@@ -267,7 +268,7 @@ fn roundtrip_hash_join() -> Result<()> {
                 join_type,
                 None,
                 *partition_mode,
-                false,
+                NullEquality::NullEqualsNothing,
             )?))?;
         }
     }
@@ -320,9 +321,9 @@ fn roundtrip_udwf() -> Result<()> {
         &[
             col("a", &schema)?
         ],
-        &LexOrdering::new(vec![
-            PhysicalSortExpr::new(col("b", &schema)?, SortOptions::new(true, true)),
-        ]),
+        &[
+            PhysicalSortExpr::new(col("b", &schema)?, SortOptions::new(true, true))
+        ],
         Arc::new(WindowFrame::new(None)),
     ));
 
@@ -359,13 +360,13 @@ fn roundtrip_window() -> Result<()> {
     let udwf_expr = Arc::new(StandardWindowExpr::new(
         nth_value_window,
         &[col("b", &schema)?],
-        &LexOrdering::new(vec![PhysicalSortExpr {
+        &[PhysicalSortExpr {
             expr: col("a", &schema)?,
             options: SortOptions {
                 descending: false,
                 nulls_first: false,
             },
-        }]),
+        }],
         Arc::new(window_frame),
     ));
 
@@ -379,7 +380,7 @@ fn roundtrip_window() -> Result<()> {
         .build()
         .map(Arc::new)?,
         &[],
-        &LexOrdering::default(),
+        &[],
         Arc::new(WindowFrame::new(None)),
     ));
 
@@ -399,7 +400,7 @@ fn roundtrip_window() -> Result<()> {
     let sliding_aggr_window_expr = Arc::new(SlidingAggregateWindowExpr::new(
         sum_expr,
         &[],
-        &LexOrdering::default(),
+        &[],
         Arc::new(window_frame),
     ));
 
@@ -504,7 +505,7 @@ fn rountrip_aggregate_with_approx_pencentile_cont() -> Result<()> {
         vec![col("b", &schema)?, lit(0.5)],
     )
     .schema(Arc::clone(&schema))
-    .alias("APPROX_PERCENTILE_CONT(b, 0.5)")
+    .alias("APPROX_PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY b)")
     .build()
     .map(Arc::new)?];
 
@@ -527,13 +528,13 @@ fn rountrip_aggregate_with_sort() -> Result<()> {
 
     let groups: Vec<(Arc<dyn PhysicalExpr>, String)> =
         vec![(col("a", &schema)?, "unused".to_string())];
-    let sort_exprs = LexOrdering::new(vec![PhysicalSortExpr {
+    let sort_exprs = vec![PhysicalSortExpr {
         expr: col("b", &schema)?,
         options: SortOptions {
             descending: false,
             nulls_first: true,
         },
-    }]);
+    }];
 
     let aggregates =
         vec![
@@ -594,7 +595,7 @@ fn roundtrip_aggregate_udaf() -> Result<()> {
         Signature::exact(vec![DataType::Int64], Volatility::Immutable),
         return_type,
         accumulator,
-        vec![Field::new("value", DataType::Int64, true)],
+        vec![Field::new("value", DataType::Int64, true).into()],
     ));
 
     let ctx = SessionContext::new();
@@ -653,7 +654,7 @@ fn roundtrip_sort() -> Result<()> {
     let field_a = Field::new("a", DataType::Boolean, false);
     let field_b = Field::new("b", DataType::Int64, false);
     let schema = Arc::new(Schema::new(vec![field_a, field_b]));
-    let sort_exprs = LexOrdering::new(vec![
+    let sort_exprs = [
         PhysicalSortExpr {
             expr: col("a", &schema)?,
             options: SortOptions {
@@ -668,7 +669,8 @@ fn roundtrip_sort() -> Result<()> {
                 nulls_first: true,
             },
         },
-    ]);
+    ]
+    .into();
     roundtrip_test(Arc::new(SortExec::new(
         sort_exprs,
         Arc::new(EmptyExec::new(schema)),
@@ -680,7 +682,7 @@ fn roundtrip_sort_preserve_partitioning() -> Result<()> {
     let field_a = Field::new("a", DataType::Boolean, false);
     let field_b = Field::new("b", DataType::Int64, false);
     let schema = Arc::new(Schema::new(vec![field_a, field_b]));
-    let sort_exprs = LexOrdering::new(vec![
+    let sort_exprs: LexOrdering = [
         PhysicalSortExpr {
             expr: col("a", &schema)?,
             options: SortOptions {
@@ -695,7 +697,8 @@ fn roundtrip_sort_preserve_partitioning() -> Result<()> {
                 nulls_first: true,
             },
         },
-    ]);
+    ]
+    .into();
 
     roundtrip_test(Arc::new(SortExec::new(
         sort_exprs.clone(),
@@ -709,7 +712,7 @@ fn roundtrip_sort_preserve_partitioning() -> Result<()> {
 }
 
 #[test]
-fn roundtrip_coalesce_with_fetch() -> Result<()> {
+fn roundtrip_coalesce_batches_with_fetch() -> Result<()> {
     let field_a = Field::new("a", DataType::Boolean, false);
     let field_b = Field::new("b", DataType::Int64, false);
     let schema = Arc::new(Schema::new(vec![field_a, field_b]));
@@ -721,6 +724,22 @@ fn roundtrip_coalesce_with_fetch() -> Result<()> {
 
     roundtrip_test(Arc::new(
         CoalesceBatchesExec::new(Arc::new(EmptyExec::new(schema)), 8096)
+            .with_fetch(Some(10)),
+    ))
+}
+
+#[test]
+fn roundtrip_coalesce_partitions_with_fetch() -> Result<()> {
+    let field_a = Field::new("a", DataType::Boolean, false);
+    let field_b = Field::new("b", DataType::Int64, false);
+    let schema = Arc::new(Schema::new(vec![field_a, field_b]));
+
+    roundtrip_test(Arc::new(CoalescePartitionsExec::new(Arc::new(
+        EmptyExec::new(schema.clone()),
+    ))))?;
+
+    roundtrip_test(Arc::new(
+        CoalescePartitionsExec::new(Arc::new(EmptyExec::new(schema)))
             .with_fetch(Some(10)),
     ))
 }
@@ -739,9 +758,7 @@ fn roundtrip_parquet_exec_with_pruning_predicate() -> Result<()> {
     let mut options = TableParquetOptions::new();
     options.global.pushdown_filters = true;
 
-    let file_source = Arc::new(
-        ParquetSource::new(options).with_predicate(Arc::clone(&file_schema), predicate),
-    );
+    let file_source = Arc::new(ParquetSource::new(options).with_predicate(predicate));
 
     let scan_config = FileScanConfigBuilder::new(
         ObjectStoreUrl::local_filesystem(),
@@ -800,10 +817,8 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
         inner: Arc::new(Column::new("col", 1)),
     });
 
-    let file_source = Arc::new(
-        ParquetSource::default()
-            .with_predicate(Arc::clone(&file_schema), custom_predicate_expr),
-    );
+    let file_source =
+        Arc::new(ParquetSource::default().with_predicate(custom_predicate_expr));
 
     let scan_config = FileScanConfigBuilder::new(
         ObjectStoreUrl::local_filesystem(),
@@ -968,7 +983,7 @@ fn roundtrip_scalar_udf() -> Result<()> {
         "dummy",
         fun_def,
         vec![col("a", &schema)?],
-        DataType::Int64,
+        Field::new("f", DataType::Int64, true).into(),
     );
 
     let project =
@@ -1096,7 +1111,7 @@ fn roundtrip_scalar_udf_extension_codec() -> Result<()> {
         "regex_udf",
         Arc::new(ScalarUDF::from(MyRegexUdf::new(".*".to_string()))),
         vec![col("text", &schema)?],
-        DataType::Int64,
+        Field::new("f", DataType::Int64, true).into(),
     ));
 
     let filter = Arc::new(FilterExec::try_new(
@@ -1118,7 +1133,7 @@ fn roundtrip_scalar_udf_extension_codec() -> Result<()> {
         vec![Arc::new(PlainAggregateWindowExpr::new(
             aggr_expr.clone(),
             &[col("author", &schema)?],
-            &LexOrdering::default(),
+            &[],
             Arc::new(WindowFrame::new(None)),
         ))],
         filter,
@@ -1163,13 +1178,13 @@ fn roundtrip_udwf_extension_codec() -> Result<()> {
     let udwf_expr = Arc::new(StandardWindowExpr::new(
         udwf,
         &[col("b", &schema)?],
-        &LexOrdering::new(vec![PhysicalSortExpr {
+        &[PhysicalSortExpr {
             expr: col("a", &schema)?,
             options: SortOptions {
                 descending: false,
                 nulls_first: false,
             },
-        }]),
+        }],
         Arc::new(window_frame),
     ));
 
@@ -1198,7 +1213,7 @@ fn roundtrip_aggregate_udf_extension_codec() -> Result<()> {
         "regex_udf",
         Arc::new(ScalarUDF::from(MyRegexUdf::new(".*".to_string()))),
         vec![col("text", &schema)?],
-        DataType::Int64,
+        Field::new("f", DataType::Int64, true).into(),
     ));
 
     let udaf = Arc::new(AggregateUDF::from(MyAggregateUDF::new(
@@ -1226,7 +1241,7 @@ fn roundtrip_aggregate_udf_extension_codec() -> Result<()> {
         vec![Arc::new(PlainAggregateWindowExpr::new(
             aggr_expr,
             &[col("author", &schema)?],
-            &LexOrdering::default(),
+            &[],
             Arc::new(WindowFrame::new(None)),
         ))],
         filter,
@@ -1322,13 +1337,14 @@ fn roundtrip_json_sink() -> Result<()> {
         file_sink_config,
         JsonWriterOptions::new(CompressionTypeVariant::UNCOMPRESSED),
     ));
-    let sort_order = LexRequirement::new(vec![PhysicalSortRequirement::new(
+    let sort_order = [PhysicalSortRequirement::new(
         Arc::new(Column::new("plan_type", 0)),
         Some(SortOptions {
             descending: true,
             nulls_first: false,
         }),
-    )]);
+    )]
+    .into();
 
     roundtrip_test(Arc::new(DataSinkExec::new(
         input,
@@ -1359,13 +1375,14 @@ fn roundtrip_csv_sink() -> Result<()> {
         file_sink_config,
         CsvWriterOptions::new(WriterBuilder::default(), CompressionTypeVariant::ZSTD),
     ));
-    let sort_order = LexRequirement::new(vec![PhysicalSortRequirement::new(
+    let sort_order = [PhysicalSortRequirement::new(
         Arc::new(Column::new("plan_type", 0)),
         Some(SortOptions {
             descending: true,
             nulls_first: false,
         }),
-    )]);
+    )]
+    .into();
 
     let ctx = SessionContext::new();
     let codec = DefaultPhysicalExtensionCodec {};
@@ -1415,13 +1432,14 @@ fn roundtrip_parquet_sink() -> Result<()> {
         file_sink_config,
         TableParquetOptions::default(),
     ));
-    let sort_order = LexRequirement::new(vec![PhysicalSortRequirement::new(
+    let sort_order = [PhysicalSortRequirement::new(
         Arc::new(Column::new("plan_type", 0)),
         Some(SortOptions {
             descending: true,
             nulls_first: false,
         }),
-    )]);
+    )]
+    .into();
 
     roundtrip_test(Arc::new(DataSinkExec::new(
         input,
@@ -1458,31 +1476,29 @@ fn roundtrip_sym_hash_join() -> Result<()> {
         ] {
             for left_order in &[
                 None,
-                Some(LexOrdering::new(vec![PhysicalSortExpr {
+                LexOrdering::new(vec![PhysicalSortExpr {
                     expr: Arc::new(Column::new("col", schema_left.index_of("col")?)),
                     options: Default::default(),
-                }])),
+                }]),
             ] {
-                for right_order in &[
+                for right_order in [
                     None,
-                    Some(LexOrdering::new(vec![PhysicalSortExpr {
+                    LexOrdering::new(vec![PhysicalSortExpr {
                         expr: Arc::new(Column::new("col", schema_right.index_of("col")?)),
                         options: Default::default(),
-                    }])),
+                    }]),
                 ] {
-                    roundtrip_test(Arc::new(
-                        datafusion::physical_plan::joins::SymmetricHashJoinExec::try_new(
-                            Arc::new(EmptyExec::new(schema_left.clone())),
-                            Arc::new(EmptyExec::new(schema_right.clone())),
-                            on.clone(),
-                            None,
-                            join_type,
-                            false,
-                            left_order.clone(),
-                            right_order.clone(),
-                            *partition_mode,
-                        )?,
-                    ))?;
+                    roundtrip_test(Arc::new(SymmetricHashJoinExec::try_new(
+                        Arc::new(EmptyExec::new(schema_left.clone())),
+                        Arc::new(EmptyExec::new(schema_right.clone())),
+                        on.clone(),
+                        None,
+                        join_type,
+                        NullEquality::NullEqualsNothing,
+                        left_order.clone(),
+                        right_order,
+                        *partition_mode,
+                    )?))?;
                 }
             }
         }

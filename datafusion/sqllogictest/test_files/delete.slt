@@ -1,0 +1,107 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+##########
+## Delete Tests
+##########
+
+statement ok
+create table t1(a int, b varchar, c double, d int);
+
+# Turn off the optimizer to make the logical plan closer to the initial one
+statement ok
+set datafusion.optimizer.max_passes = 0;
+
+
+# Delete all
+query TT
+explain delete from t1;
+----
+logical_plan
+01)Dml: op=[Delete] table=[t1]
+02)--TableScan: t1
+physical_plan_error This feature is not implemented: Unsupported logical plan: Dml(Delete)
+
+
+# Filtered by existing columns
+query TT
+explain delete from t1 where a = 1 and b = 2 and c > 3 and d != 4;
+----
+logical_plan
+01)Dml: op=[Delete] table=[t1]
+02)--Filter: CAST(t1.a AS Int64) = Int64(1) AND t1.b = CAST(Int64(2) AS Utf8View) AND t1.c > CAST(Int64(3) AS Float64) AND CAST(t1.d AS Int64) != Int64(4)
+03)----TableScan: t1
+physical_plan_error This feature is not implemented: Unsupported logical plan: Dml(Delete)
+
+
+# Filtered by existing columns, using qualified and unqualified names
+query TT
+explain delete from t1 where t1.a = 1 and b = 2 and t1.c > 3 and d != 4;
+----
+logical_plan
+01)Dml: op=[Delete] table=[t1]
+02)--Filter: CAST(t1.a AS Int64) = Int64(1) AND t1.b = CAST(Int64(2) AS Utf8View) AND t1.c > CAST(Int64(3) AS Float64) AND CAST(t1.d AS Int64) != Int64(4)
+03)----TableScan: t1
+physical_plan_error This feature is not implemented: Unsupported logical plan: Dml(Delete)
+
+
+# Filtered by a mix of columns and literal predicates
+query TT
+explain delete from t1 where a = 1 and 1 = 1 and true;
+----
+logical_plan
+01)Dml: op=[Delete] table=[t1]
+02)--Filter: CAST(t1.a AS Int64) = Int64(1) AND Int64(1) = Int64(1) AND Boolean(true)
+03)----TableScan: t1
+physical_plan_error This feature is not implemented: Unsupported logical plan: Dml(Delete)
+
+
+# Deleting by columns that do not exist returns an error
+query error DataFusion error: Schema error: No field named e. Valid fields are t1.a, t1.b, t1.c, t1.d.
+explain delete from t1 where e = 1;
+
+
+# Filtering using subqueries
+
+statement ok
+create table t2(a int, b varchar, c double, d int);
+
+query TT
+explain delete from t1 where a = (select max(a) from t2 where t1.b = t2.b);
+----
+logical_plan
+01)Dml: op=[Delete] table=[t1]
+02)--Filter: t1.a = (<subquery>)
+03)----Subquery:
+04)------Projection: max(t2.a)
+05)--------Aggregate: groupBy=[[]], aggr=[[max(t2.a)]]
+06)----------Filter: outer_ref(t1.b) = t2.b
+07)------------TableScan: t2
+08)----TableScan: t1
+physical_plan_error This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+
+query TT
+explain delete from t1 where a in (select a from t2);
+----
+logical_plan
+01)Dml: op=[Delete] table=[t1]
+02)--Filter: t1.a IN (<subquery>)
+03)----Subquery:
+04)------Projection: t2.a
+05)--------TableScan: t2
+06)----TableScan: t1
+physical_plan_error This feature is not implemented: Physical plan does not support logical expression InSubquery(InSubquery { expr: Column(Column { relation: Some(Bare { table: "t1" }), name: "a" }), subquery: <subquery>, negated: false })

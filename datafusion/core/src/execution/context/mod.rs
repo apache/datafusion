@@ -35,7 +35,11 @@ use crate::{
     },
     datasource::{provider_as_source, MemTable, ViewTable},
     error::{DataFusionError, Result},
-    execution::{options::ArrowReadOptions, runtime_env::RuntimeEnv, FunctionRegistry},
+    execution::{
+        options::ArrowReadOptions,
+        runtime_env::{RuntimeEnv, RuntimeEnvBuilder},
+        FunctionRegistry,
+    },
     logical_expr::AggregateUDF,
     logical_expr::ScalarUDF,
     logical_expr::{
@@ -1036,11 +1040,68 @@ impl SessionContext {
             variable, value, ..
         } = stmt;
 
-        let mut state = self.state.write();
-        state.config_mut().options_mut().set(&variable, &value)?;
-        drop(state);
+        // Check if this is a runtime configuration
+        if variable.starts_with("datafusion.runtime.") {
+            self.set_runtime_variable(&variable, &value)?;
+        } else {
+            let mut state = self.state.write();
+            state.config_mut().options_mut().set(&variable, &value)?;
+            drop(state);
+        }
 
         self.return_empty_dataframe()
+    }
+
+    fn set_runtime_variable(&self, variable: &str, value: &str) -> Result<()> {
+        let key = variable.strip_prefix("datafusion.runtime.").unwrap();
+
+        match key {
+            "memory_limit" => {
+                let memory_limit = Self::parse_memory_limit(value)?;
+
+                let mut state = self.state.write();
+                let mut builder =
+                    RuntimeEnvBuilder::from_runtime_env(state.runtime_env());
+                builder = builder.with_memory_limit(memory_limit, 1.0);
+                *state = SessionStateBuilder::from(state.clone())
+                    .with_runtime_env(Arc::new(builder.build()?))
+                    .build();
+            }
+            _ => {
+                return Err(DataFusionError::Plan(format!(
+                    "Unknown runtime configuration: {variable}"
+                )))
+            }
+        }
+        Ok(())
+    }
+
+    /// Parse memory limit from string to number of bytes
+    /// Supports formats like '1.5G', '100M', '512K'
+    ///
+    /// # Examples
+    /// ```
+    /// use datafusion::execution::context::SessionContext;
+    ///
+    /// assert_eq!(SessionContext::parse_memory_limit("1M").unwrap(), 1024 * 1024);
+    /// assert_eq!(SessionContext::parse_memory_limit("1.5G").unwrap(), (1.5 * 1024.0 * 1024.0 * 1024.0) as usize);
+    /// ```
+    pub fn parse_memory_limit(limit: &str) -> Result<usize> {
+        let (number, unit) = limit.split_at(limit.len() - 1);
+        let number: f64 = number.parse().map_err(|_| {
+            DataFusionError::Plan(format!(
+                "Failed to parse number from memory limit '{limit}'"
+            ))
+        })?;
+
+        match unit {
+            "K" => Ok((number * 1024.0) as usize),
+            "M" => Ok((number * 1024.0 * 1024.0) as usize),
+            "G" => Ok((number * 1024.0 * 1024.0 * 1024.0) as usize),
+            _ => Err(DataFusionError::Plan(format!(
+                "Unsupported unit '{unit}' in memory limit '{limit}'"
+            ))),
+        }
     }
 
     async fn create_custom_table(
@@ -1153,7 +1214,7 @@ impl SessionContext {
         let mut params: Vec<ScalarValue> = parameters
             .into_iter()
             .map(|e| match e {
-                Expr::Literal(scalar) => Ok(scalar),
+                Expr::Literal(scalar, _) => Ok(scalar),
                 _ => not_impl_err!("Unsupported parameter type: {}", e),
             })
             .collect::<Result<_>>()?;
@@ -1647,7 +1708,7 @@ impl FunctionRegistry for SessionContext {
     }
 
     fn expr_planners(&self) -> Vec<Arc<dyn ExprPlanner>> {
-        self.state.read().expr_planners()
+        self.state.read().expr_planners().to_vec()
     }
 
     fn register_expr_planner(
@@ -1833,7 +1894,6 @@ mod tests {
     use crate::test;
     use crate::test_util::{plan_and_collect, populate_csv_partitions};
     use arrow::datatypes::{DataType, TimeUnit};
-    use std::env;
     use std::error::Error;
     use std::path::PathBuf;
 

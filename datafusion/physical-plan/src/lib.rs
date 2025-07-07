@@ -50,6 +50,7 @@ pub use crate::ordering::InputOrderMode;
 pub use crate::stream::EmptyRecordBatchStream;
 pub use crate::topk::TopK;
 pub use crate::visitor::{accept, visit_execution_plan, ExecutionPlanVisitor};
+pub use crate::work_table::WorkTable;
 pub use spill::spill_manager::SpillManager;
 
 mod ordering;
@@ -59,14 +60,18 @@ mod visitor;
 
 pub mod aggregates;
 pub mod analyze;
+pub mod async_func;
+pub mod coalesce;
 pub mod coalesce_batches;
 pub mod coalesce_partitions;
 pub mod common;
+pub mod coop;
 pub mod display;
 pub mod empty;
 pub mod execution_plan;
 pub mod explain;
 pub mod filter;
+pub mod filter_pushdown;
 pub mod joins;
 pub mod limit;
 pub mod memory;
@@ -90,6 +95,4 @@ pub mod udaf {
     pub use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 }
 
-pub mod coalesce;
-#[cfg(test)]
 pub mod test;

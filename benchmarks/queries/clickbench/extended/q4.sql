@@ -1,0 +1,1 @@
+SELECT "ClientIP", "WatchID",  COUNT(*) c, MIN("ResponseStartTiming") tmin, MEDIAN("ResponseStartTiming") tmed, MAX("ResponseStartTiming") tmax FROM hits WHERE "JavaEnable" = 0  GROUP BY  "ClientIP", "WatchID" HAVING c > 1 ORDER BY tmed DESC LIMIT 10;

@@ -115,7 +115,7 @@ impl CrossJoinExec {
         };
 
         let schema = Arc::new(Schema::new(all_columns).with_metadata(metadata));
-        let cache = Self::compute_properties(&left, &right, Arc::clone(&schema));
+        let cache = Self::compute_properties(&left, &right, Arc::clone(&schema)).unwrap();
 
         CrossJoinExec {
             left,
@@ -142,7 +142,7 @@ impl CrossJoinExec {
         left: &Arc<dyn ExecutionPlan>,
         right: &Arc<dyn ExecutionPlan>,
         schema: SchemaRef,
-    ) -> PlanProperties {
+    ) -> Result<PlanProperties> {
         // Calculate equivalence properties
         // TODO: Check equivalence properties of cross join, it may preserve
         //       ordering in some cases.
@@ -154,7 +154,7 @@ impl CrossJoinExec {
             &[false, false],
             None,
             &[],
-        );
+        )?;
 
         // Get output partitioning:
         // TODO: Optimize the cross join implementation to generate M * N
@@ -162,14 +162,14 @@ impl CrossJoinExec {
         let output_partitioning = adjust_right_output_partitioning(
             right.output_partitioning(),
             left.schema().fields.len(),
-        );
+        )?;
 
-        PlanProperties::new(
+        Ok(PlanProperties::new(
             eq_properties,
             output_partitioning,
             EmissionType::Final,
             boundedness_from_children([left, right]),
-        )
+        ))
     }
 
     /// Returns a new `ExecutionPlan` that computes the same join as this one,
@@ -337,10 +337,15 @@ impl ExecutionPlan for CrossJoinExec {
     }
 
     fn statistics(&self) -> Result<Statistics> {
-        Ok(stats_cartesian_product(
-            self.left.statistics()?,
-            self.right.statistics()?,
-        ))
+        self.partition_statistics(None)
+    }
+
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        // Get the all partitions statistics of the left
+        let left_stats = self.left.partition_statistics(None)?;
+        let right_stats = self.right.partition_statistics(partition)?;
+
+        Ok(stats_cartesian_product(left_stats, right_stats))
     }
 
     /// Tries to swap the projection with its input [`CrossJoinExec`]. If it can be done,
@@ -869,7 +874,7 @@ mod tests {
 
         assert_contains!(
             err.to_string(),
-            "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as: CrossJoinExec"
+            "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:\n  CrossJoinExec"
         );
 
         Ok(())

@@ -20,10 +20,11 @@ use std::sync::Arc;
 
 use arrow::array::{ArrayRef, BooleanArray, Int32Array};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use datafusion::common::pruning::PruningStatistics;
 use datafusion::common::{DFSchema, ScalarValue};
 use datafusion::execution::context::ExecutionProps;
 use datafusion::physical_expr::create_physical_expr;
-use datafusion::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
+use datafusion::physical_optimizer::pruning::PruningPredicate;
 use datafusion::prelude::*;
 
 /// This example shows how to use  DataFusion's `PruningPredicate` to prove

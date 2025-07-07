@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#[macro_export]
 macro_rules! make_udaf_expr {
     ($EXPR_FN:ident, $($arg:ident)*, $DOC:expr, $AGGREGATE_UDF_FN:ident) => {
         // "fluent expr_fn" style function
@@ -27,13 +28,14 @@ macro_rules! make_udaf_expr {
                 vec![$($arg),*],
                 false,
                 None,
-                None,
+                vec![],
                 None,
             ))
         }
     };
 }
 
+#[macro_export]
 macro_rules! make_udaf_expr_and_func {
     ($UDAF:ty, $EXPR_FN:ident, $($arg:ident)*, $DOC:expr, $AGGREGATE_UDF_FN:ident) => {
         make_udaf_expr!($EXPR_FN, $($arg)*, $DOC, $AGGREGATE_UDF_FN);
@@ -50,7 +52,7 @@ macro_rules! make_udaf_expr_and_func {
                 args,
                 false,
                 None,
-                None,
+                vec![],
                 None,
             ))
         }
@@ -59,6 +61,7 @@ macro_rules! make_udaf_expr_and_func {
     };
 }
 
+#[macro_export]
 macro_rules! create_func {
     ($UDAF:ty, $AGGREGATE_UDF_FN:ident) => {
         create_func!($UDAF, $AGGREGATE_UDF_FN, <$UDAF>::default());

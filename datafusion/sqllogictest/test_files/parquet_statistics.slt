@@ -1,0 +1,125 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Tests for statistics in parquet files.
+# Writes data into two files:
+# * test_table/0.parquet
+# * test_table/1.parquet
+#
+# And verifies statistics are correctly calculated for the table
+#
+# NOTE that statistics are ONLY gathered when the table is first created
+# so the table must be recreated to see the effects of the setting
+
+query I
+COPY (values (1), (2), (3))
+TO 'test_files/scratch/parquet_statistics/test_table/0.parquet'
+STORED AS PARQUET;
+----
+3
+
+query I
+COPY (values (3), (4))
+TO 'test_files/scratch/parquet_statistics/test_table/1.parquet'
+STORED AS PARQUET;
+----
+2
+
+statement ok
+set datafusion.explain.physical_plan_only = true;
+
+statement ok
+set datafusion.explain.show_statistics = true;
+
+######
+# By default, the statistics are gathered
+######
+
+# Recreate the table to pick up the current setting
+statement ok
+CREATE EXTERNAL TABLE test_table
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_statistics/test_table';
+
+query TT
+EXPLAIN SELECT * FROM test_table WHERE column1 = 1;
+----
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=8192, statistics=[Rows=Inexact(2), Bytes=Inexact(44), [(Col[0]: Min=Exact(Int64(1)) Max=Exact(Int64(1)) Null=Inexact(0))]]
+02)--FilterExec: column1@0 = 1, statistics=[Rows=Inexact(2), Bytes=Inexact(44), [(Col[0]: Min=Exact(Int64(1)) Max=Exact(Int64(1)) Null=Inexact(0))]]
+03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=2, statistics=[Rows=Inexact(5), Bytes=Inexact(173), [(Col[0]: Min=Inexact(Int64(1)) Max=Inexact(Int64(4)) Null=Inexact(0))]]
+04)------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_statistics/test_table/0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_statistics/test_table/1.parquet]]}, projection=[column1], file_type=parquet, predicate=column1@0 = 1, pruning_predicate=column1_null_count@2 != row_count@3 AND column1_min@0 <= 1 AND 1 <= column1_max@1, required_guarantees=[column1 in (1)]
+05), statistics=[Rows=Inexact(5), Bytes=Inexact(173), [(Col[0]: Min=Inexact(Int64(1)) Max=Inexact(Int64(4)) Null=Inexact(0))]]
+
+# cleanup
+statement ok
+DROP TABLE test_table;
+
+######
+# When the setting is true, statistics are gathered
+######
+
+statement ok
+set datafusion.execution.collect_statistics = true;
+
+# Recreate the table to pick up the current setting
+statement ok
+CREATE EXTERNAL TABLE test_table
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_statistics/test_table';
+
+query TT
+EXPLAIN SELECT * FROM test_table WHERE column1 = 1;
+----
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=8192, statistics=[Rows=Inexact(2), Bytes=Inexact(44), [(Col[0]: Min=Exact(Int64(1)) Max=Exact(Int64(1)) Null=Inexact(0))]]
+02)--FilterExec: column1@0 = 1, statistics=[Rows=Inexact(2), Bytes=Inexact(44), [(Col[0]: Min=Exact(Int64(1)) Max=Exact(Int64(1)) Null=Inexact(0))]]
+03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=2, statistics=[Rows=Inexact(5), Bytes=Inexact(173), [(Col[0]: Min=Inexact(Int64(1)) Max=Inexact(Int64(4)) Null=Inexact(0))]]
+04)------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_statistics/test_table/0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_statistics/test_table/1.parquet]]}, projection=[column1], file_type=parquet, predicate=column1@0 = 1, pruning_predicate=column1_null_count@2 != row_count@3 AND column1_min@0 <= 1 AND 1 <= column1_max@1, required_guarantees=[column1 in (1)]
+05), statistics=[Rows=Inexact(5), Bytes=Inexact(173), [(Col[0]: Min=Inexact(Int64(1)) Max=Inexact(Int64(4)) Null=Inexact(0))]]
+
+# cleanup
+statement ok
+DROP TABLE test_table;
+
+
+######
+# When the setting is false, the statistics are NOT gathered
+######
+
+statement ok
+set datafusion.execution.collect_statistics = false;
+
+# Recreate the table to pick up the current setting
+statement ok
+CREATE EXTERNAL TABLE test_table
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_statistics/test_table';
+
+query TT
+EXPLAIN SELECT * FROM test_table WHERE column1 = 1;
+----
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=8192, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:)]]
+02)--FilterExec: column1@0 = 1, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]: Min=Exact(Int64(1)) Max=Exact(Int64(1)))]]
+03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=2, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:)]]
+04)------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_statistics/test_table/0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_statistics/test_table/1.parquet]]}, projection=[column1], file_type=parquet, predicate=column1@0 = 1, pruning_predicate=column1_null_count@2 != row_count@3 AND column1_min@0 <= 1 AND 1 <= column1_max@1, required_guarantees=[column1 in (1)]
+05), statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:)]]
+
+# cleanup
+statement ok
+DROP TABLE test_table;

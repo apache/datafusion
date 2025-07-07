@@ -15,8 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{ArrayRef, Int32Array, RecordBatch, StringArray};
+use arrow::array::{ArrayRef, Int32Array, RecordBatch, StringArray, StringViewArray};
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
+use datafusion::catalog::MemTable;
 use datafusion::common::config::CsvOptions;
 use datafusion::common::parsers::CompressionTypeVariant;
 use datafusion::common::DataFusionError;
@@ -63,6 +64,7 @@ async fn main() -> Result<()> {
     read_parquet(&ctx).await?;
     read_csv(&ctx).await?;
     read_memory(&ctx).await?;
+    read_memory_macro().await?;
     write_out(&ctx).await?;
     register_aggregate_test_data("t1", &ctx).await?;
     register_aggregate_test_data("t2", &ctx).await?;
@@ -144,7 +146,7 @@ async fn read_csv(ctx: &SessionContext) -> Result<()> {
     // and using the `enable_url_table` refer to local files directly
     let dyn_ctx = ctx.clone().enable_url_table();
     let csv_df = dyn_ctx
-        .sql(&format!("SELECT rating, unixtime FROM '{}'", file_path))
+        .sql(&format!("SELECT rating, unixtime FROM '{file_path}'"))
         .await?;
     csv_df.show().await?;
 
@@ -174,15 +176,39 @@ async fn read_memory(ctx: &SessionContext) -> Result<()> {
 }
 
 /// Use the DataFrame API to:
+/// 1. Read in-memory data.
+async fn read_memory_macro() -> Result<()> {
+    // create a DataFrame using macro
+    let df = dataframe!(
+        "a" => ["a", "b", "c", "d"],
+        "b" => [1, 10, 10, 100]
+    )?;
+    // print the results
+    df.show().await?;
+
+    // create empty DataFrame using macro
+    let df_empty = dataframe!()?;
+    df_empty.show().await?;
+
+    Ok(())
+}
+
+/// Use the DataFrame API to:
 /// 1. Write out a DataFrame to a table
 /// 2. Write out a DataFrame to a parquet file
 /// 3. Write out a DataFrame to a csv file
 /// 4. Write out a DataFrame to a json file
 async fn write_out(ctx: &SessionContext) -> std::result::Result<(), DataFusionError> {
-    let mut df = ctx.sql("values ('a'), ('b'), ('c')").await.unwrap();
-
-    // Ensure the column names and types match the target table
-    df = df.with_column_renamed("column1", "tablecol1").unwrap();
+    let array = StringViewArray::from(vec!["a", "b", "c"]);
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "tablecol1",
+        DataType::Utf8View,
+        false,
+    )]));
+    let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(array)])?;
+    let mem_table = MemTable::try_new(schema.clone(), vec![vec![batch]])?;
+    ctx.register_table("initial_data", Arc::new(mem_table))?;
+    let df = ctx.table("initial_data").await?;
 
     ctx.sql(
         "create external table

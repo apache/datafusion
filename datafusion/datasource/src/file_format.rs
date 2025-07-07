@@ -28,11 +28,10 @@ use crate::file_compression_type::FileCompressionType;
 use crate::file_scan_config::FileScanConfig;
 use crate::file_sink_config::FileSinkConfig;
 
-use arrow::datatypes::{Schema, SchemaRef};
+use arrow::datatypes::SchemaRef;
 use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::{internal_err, not_impl_err, GetExt, Result, Statistics};
-use datafusion_expr::Expr;
-use datafusion_physical_expr::{LexRequirement, PhysicalExpr};
+use datafusion_physical_expr::LexRequirement;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_session::Session;
 
@@ -94,7 +93,6 @@ pub trait FileFormat: Send + Sync + fmt::Debug {
         &self,
         state: &dyn Session,
         conf: FileScanConfig,
-        filters: Option<&Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn ExecutionPlan>>;
 
     /// Take a list of files and the configuration to convert it to the
@@ -109,35 +107,8 @@ pub trait FileFormat: Send + Sync + fmt::Debug {
         not_impl_err!("Writer not implemented for this format")
     }
 
-    /// Check if the specified file format has support for pushing down the provided filters within
-    /// the given schemas. Added initially to support the Parquet file format's ability to do this.
-    fn supports_filters_pushdown(
-        &self,
-        _file_schema: &Schema,
-        _table_schema: &Schema,
-        _filters: &[&Expr],
-    ) -> Result<FilePushdownSupport> {
-        Ok(FilePushdownSupport::NoSupport)
-    }
-
     /// Return the related FileSource such as `CsvSource`, `JsonSource`, etc.
     fn file_source(&self) -> Arc<dyn FileSource>;
-}
-
-/// An enum to distinguish between different states when determining if certain filters can be
-/// pushed down to file scanning
-#[derive(Debug, PartialEq)]
-pub enum FilePushdownSupport {
-    /// The file format/system being asked does not support any sort of pushdown. This should be
-    /// used even if the file format theoretically supports some sort of pushdown, but it's not
-    /// enabled or implemented yet.
-    NoSupport,
-    /// The file format/system being asked *does* support pushdown, but it can't make it work for
-    /// the provided filter/expression
-    NotSupportedForFilter,
-    /// The file format/system being asked *does* support pushdown and *can* make it work for the
-    /// provided filter/expression
-    Supported,
 }
 
 /// Factory for creating [`FileFormat`] instances based on session and command level options

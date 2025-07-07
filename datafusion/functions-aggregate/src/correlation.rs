@@ -27,7 +27,7 @@ use arrow::array::{
     UInt64Array,
 };
 use arrow::compute::{and, filter, is_not_null, kernels::cast};
-use arrow::datatypes::{Float64Type, UInt64Type};
+use arrow::datatypes::{FieldRef, Float64Type, UInt64Type};
 use arrow::{
     array::ArrayRef,
     datatypes::{DataType, Field},
@@ -117,7 +117,7 @@ impl AggregateUDFImpl for Correlation {
         Ok(Box::new(CorrelationAccumulator::try_new()?))
     }
 
-    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
+    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         let name = args.name;
         Ok(vec![
             Field::new(format_state_name(name, "count"), DataType::UInt64, true),
@@ -130,7 +130,10 @@ impl AggregateUDFImpl for Correlation {
                 DataType::Float64,
                 true,
             ),
-        ])
+        ]
+        .into_iter()
+        .map(Arc::new)
+        .collect())
     }
 
     fn documentation(&self) -> Option<&Documentation> {

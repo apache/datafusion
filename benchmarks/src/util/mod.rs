@@ -22,4 +22,4 @@ mod run;
 
 pub use access_log::AccessLogOpt;
 pub use options::CommonOpt;
-pub use run::{BenchQuery, BenchmarkRun};
+pub use run::{BenchQuery, BenchmarkRun, QueryResult};

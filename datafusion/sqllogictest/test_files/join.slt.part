@@ -842,7 +842,7 @@ LEFT JOIN department AS d
 ON (e.name = 'Alice' OR e.name = 'Bob');
 ----
 logical_plan
-01)Left Join:  Filter: e.name = Utf8("Alice") OR e.name = Utf8("Bob")
+01)Left Join:  Filter: e.name = Utf8View("Alice") OR e.name = Utf8View("Bob")
 02)--SubqueryAlias: e
 03)----TableScan: employees projection=[emp_id, name]
 04)--SubqueryAlias: d
@@ -929,7 +929,7 @@ ON (e.name = 'Alice' OR e.name = 'Bob');
 logical_plan
 01)Cross Join: 
 02)--SubqueryAlias: e
-03)----Filter: employees.name = Utf8("Alice") OR employees.name = Utf8("Bob")
+03)----Filter: employees.name = Utf8View("Alice") OR employees.name = Utf8View("Bob")
 04)------TableScan: employees projection=[emp_id, name]
 05)--SubqueryAlias: d
 06)----TableScan: department projection=[dept_name]
@@ -974,11 +974,11 @@ ON e.emp_id = d.emp_id
 WHERE ((dept_name != 'Engineering' AND e.name = 'Alice') OR (name != 'Alice' AND e.name = 'Carol'));
 ----
 logical_plan
-01)Filter: d.dept_name != Utf8("Engineering") AND e.name = Utf8("Alice") OR e.name != Utf8("Alice") AND e.name = Utf8("Carol")
+01)Filter: d.dept_name != Utf8View("Engineering") AND e.name = Utf8View("Alice") OR e.name != Utf8View("Alice") AND e.name = Utf8View("Carol")
 02)--Projection: e.emp_id, e.name, d.dept_name
 03)----Left Join: e.emp_id = d.emp_id
 04)------SubqueryAlias: e
-05)--------Filter: employees.name = Utf8("Alice") OR employees.name != Utf8("Alice") AND employees.name = Utf8("Carol")
+05)--------Filter: employees.name = Utf8View("Alice") OR employees.name != Utf8View("Alice") AND employees.name = Utf8View("Carol")
 06)----------TableScan: employees projection=[emp_id, name]
 07)------SubqueryAlias: d
 08)--------TableScan: department projection=[emp_id, dept_name]
@@ -1404,3 +1404,102 @@ set datafusion.execution.target_partitions = 4;
 
 statement ok
 set datafusion.optimizer.repartition_joins = false;
+
+statement ok
+CREATE TABLE t1(v0 BIGINT, v1 BIGINT);
+
+statement ok
+CREATE TABLE t0(v0 BIGINT, v1 BIGINT);
+
+statement ok
+INSERT INTO t0(v0, v1) VALUES (1, 1), (1, 2), (3, 3), (4, 4);
+
+statement ok
+INSERT INTO t1(v0, v1) VALUES (1, 1), (3, 2), (3, 5);
+
+query TT
+explain SELECT *
+FROM t0,
+LATERAL (SELECT sum(v1) FROM t1 WHERE t0.v0 = t1.v0);
+----
+logical_plan
+01)Projection: t0.v0, t0.v1, sum(t1.v1)
+02)--Left Join: t0.v0 = t1.v0
+03)----TableScan: t0 projection=[v0, v1]
+04)----Projection: sum(t1.v1), t1.v0
+05)------Aggregate: groupBy=[[t1.v0]], aggr=[[sum(t1.v1)]]
+06)--------TableScan: t1 projection=[v0, v1]
+physical_plan
+01)ProjectionExec: expr=[v0@1 as v0, v1@2 as v1, sum(t1.v1)@0 as sum(t1.v1)]
+02)--CoalesceBatchesExec: target_batch_size=8192
+03)----HashJoinExec: mode=CollectLeft, join_type=Right, on=[(v0@1, v0@0)], projection=[sum(t1.v1)@0, v0@2, v1@3]
+04)------CoalescePartitionsExec
+05)--------ProjectionExec: expr=[sum(t1.v1)@1 as sum(t1.v1), v0@0 as v0]
+06)----------AggregateExec: mode=FinalPartitioned, gby=[v0@0 as v0], aggr=[sum(t1.v1)]
+07)------------CoalesceBatchesExec: target_batch_size=8192
+08)--------------RepartitionExec: partitioning=Hash([v0@0], 4), input_partitions=4
+09)----------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+10)------------------AggregateExec: mode=Partial, gby=[v0@0 as v0], aggr=[sum(t1.v1)]
+11)--------------------DataSourceExec: partitions=1, partition_sizes=[1]
+12)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+query III
+SELECT *
+FROM t0,
+LATERAL (SELECT sum(v1) FROM t1 WHERE t0.v0 = t1.v0);
+----
+1 1 1
+1 2 1
+3 3 7
+4 4 NULL
+
+query TT
+explain SELECT * FROM t0, LATERAL (SELECT * FROM t1 WHERE t0.v0 = t1.v0);
+----
+logical_plan
+01)Inner Join: t0.v0 = t1.v0
+02)--TableScan: t0 projection=[v0, v1]
+03)--TableScan: t1 projection=[v0, v1]
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=8192
+02)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(v0@0, v0@0)]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+query IIII
+SELECT * FROM t0, LATERAL (SELECT * FROM t1 WHERE t0.v0 = t1.v0);
+----
+1 1 1 1
+1 2 1 1
+3 3 3 2
+3 3 3 5
+
+query III
+SELECT * FROM t0, LATERAL (SELECT 1);
+----
+1 1 1
+1 2 1
+3 3 1
+4 4 1
+
+query IIII
+SELECT * FROM t0, LATERAL (SELECT * FROM t1 WHERE t1.v0 = 1);
+----
+1 1 1 1
+1 2 1 1
+3 3 1 1
+4 4 1 1
+
+query IIII
+SELECT * FROM t0 JOIN LATERAL (SELECT * FROM t1 WHERE t1.v0 = 1) on true;
+----
+1 1 1 1
+1 2 1 1
+3 3 1 1
+4 4 1 1
+
+statement ok
+drop table t1;
+
+statement ok
+drop table t0;

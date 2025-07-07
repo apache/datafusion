@@ -40,7 +40,7 @@ use datafusion_common::instant::Instant;
 use datafusion_common::utils::get_available_parallelism;
 use datafusion_common::DEFAULT_PARQUET_EXTENSION;
 
-use crate::util::{BenchmarkRun, CommonOpt};
+use crate::util::{BenchmarkRun, CommonOpt, QueryResult};
 
 #[derive(Debug, StructOpt)]
 pub struct RunOpt {
@@ -72,11 +72,6 @@ pub struct RunOpt {
     /// Append a `LIMIT n` clause to the query
     #[structopt(short = "l", long = "limit")]
     limit: Option<usize>,
-}
-
-struct QueryResult {
-    elapsed: std::time::Duration,
-    row_count: usize,
 }
 
 impl RunOpt {
@@ -179,7 +174,7 @@ impl RunOpt {
     /// If query is specified from command line, run only that query.
     /// Otherwise, run all queries.
     pub async fn run(&self) -> Result<()> {
-        let mut benchmark_run = BenchmarkRun::new();
+        let mut benchmark_run: BenchmarkRun = BenchmarkRun::new();
 
         let query_range = match self.query {
             Some(query_id) => query_id..=query_id,
@@ -189,20 +184,28 @@ impl RunOpt {
         for query_id in query_range {
             benchmark_run.start_new_case(&format!("{query_id}"));
 
-            let query_results = self.benchmark_query(query_id).await?;
-            for iter in query_results {
-                benchmark_run.write_iter(iter.elapsed, iter.row_count);
+            let query_results = self.benchmark_query(query_id).await;
+            match query_results {
+                Ok(query_results) => {
+                    for iter in query_results {
+                        benchmark_run.write_iter(iter.elapsed, iter.row_count);
+                    }
+                }
+                Err(e) => {
+                    benchmark_run.mark_failed();
+                    eprintln!("Query {query_id} failed: {e}");
+                }
             }
         }
 
         benchmark_run.maybe_write_json(self.output_path.as_ref())?;
-
+        benchmark_run.maybe_print_failures();
         Ok(())
     }
 
     /// Benchmark query `query_id` in `SORT_QUERIES`
     async fn benchmark_query(&self, query_id: usize) -> Result<Vec<QueryResult>> {
-        let config = self.common.config();
+        let config = self.common.config()?;
         let rt_builder = self.common.runtime_env_builder()?;
         let state = SessionStateBuilder::new()
             .with_config(config)
@@ -294,7 +297,7 @@ impl RunOpt {
 
         let mut stream = execute_stream(physical_plan.clone(), state.task_ctx())?;
         while let Some(batch) = stream.next().await {
-            row_count += batch.unwrap().num_rows();
+            row_count += batch?.num_rows();
         }
 
         if debug {
@@ -352,6 +355,6 @@ impl RunOpt {
     fn partitions(&self) -> usize {
         self.common
             .partitions
-            .unwrap_or(get_available_parallelism())
+            .unwrap_or_else(get_available_parallelism)
     }
 }

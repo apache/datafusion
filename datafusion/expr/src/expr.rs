@@ -17,18 +17,20 @@
 
 //! Logical Expressions: [`Expr`]
 
-use std::collections::HashSet;
+use std::cmp::Ordering;
+use std::collections::{BTreeMap, HashSet};
 use std::fmt::{self, Display, Formatter, Write};
 use std::hash::{Hash, Hasher};
 use std::mem;
 use std::sync::Arc;
 
 use crate::expr_fn::binary_expr;
+use crate::function::WindowFunctionSimplification;
 use crate::logical_plan::Subquery;
-use crate::Volatility;
-use crate::{udaf, ExprSchemable, Operator, Signature, WindowFrame, WindowUDF};
+use crate::{AggregateUDF, Volatility};
+use crate::{ExprSchemable, Operator, Signature, WindowFrame, WindowUDF};
 
-use arrow::datatypes::{DataType, FieldRef};
+use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::cse::{HashNode, NormalizeEq, Normalizeable};
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeContainer, TreeNodeRecursion,
@@ -50,7 +52,7 @@ use sqlparser::ast::{
 ///  BinaryExpr {
 ///    left: Expr::Column("A"),
 ///    op: Operator::Plus,
-///    right: Expr::Literal(ScalarValue::Int32(Some(1)))
+///    right: Expr::Literal(ScalarValue::Int32(Some(1)), None)
 /// }
 /// ```
 ///
@@ -112,10 +114,10 @@ use sqlparser::ast::{
 /// # use datafusion_expr::{lit, col, Expr};
 /// // All literals are strongly typed in DataFusion. To make an `i64` 42:
 /// let expr = lit(42i64);
-/// assert_eq!(expr, Expr::Literal(ScalarValue::Int64(Some(42))));
-/// assert_eq!(expr, Expr::Literal(ScalarValue::Int64(Some(42))));
+/// assert_eq!(expr, Expr::Literal(ScalarValue::Int64(Some(42)), None));
+/// assert_eq!(expr, Expr::Literal(ScalarValue::Int64(Some(42)), None));
 /// // To make a (typed) NULL:
-/// let expr = Expr::Literal(ScalarValue::Int64(None));
+/// let expr = Expr::Literal(ScalarValue::Int64(None), None);
 /// // to make an (untyped) NULL (the optimizer will coerce this to the correct type):
 /// let expr = lit(ScalarValue::Null);
 /// ```
@@ -149,7 +151,7 @@ use sqlparser::ast::{
 /// if let Expr::BinaryExpr(binary_expr) = expr {
 ///   assert_eq!(*binary_expr.left, col("c1"));
 ///   let scalar = ScalarValue::Int32(Some(42));
-///   assert_eq!(*binary_expr.right, Expr::Literal(scalar));
+///   assert_eq!(*binary_expr.right, Expr::Literal(scalar, None));
 ///   assert_eq!(binary_expr.op, Operator::Eq);
 /// }
 /// ```
@@ -193,7 +195,7 @@ use sqlparser::ast::{
 /// ```
 /// # use datafusion_expr::{lit, col};
 /// let expr = col("c1") + lit(42);
-/// assert_eq!(format!("{expr:?}"), "BinaryExpr(BinaryExpr { left: Column(Column { relation: None, name: \"c1\" }), op: Plus, right: Literal(Int32(42)) })");
+/// assert_eq!(format!("{expr:?}"), "BinaryExpr(BinaryExpr { left: Column(Column { relation: None, name: \"c1\" }), op: Plus, right: Literal(Int32(42), None) })");
 /// ```
 ///
 /// ## Use the `Display` trait  (detailed expression)
@@ -239,7 +241,7 @@ use sqlparser::ast::{
 /// let mut scalars = HashSet::new();
 /// // apply recursively visits all nodes in the expression tree
 /// expr.apply(|e| {
-///    if let Expr::Literal(scalar) = e {
+///    if let Expr::Literal(scalar, _) = e {
 ///       scalars.insert(scalar);
 ///    }
 ///    // The return value controls whether to continue visiting the tree
@@ -274,7 +276,7 @@ use sqlparser::ast::{
 /// assert!(rewritten.transformed);
 /// // to 42 = 5 AND b = 6
 /// assert_eq!(rewritten.data, lit(42).eq(lit(5)).and(col("b").eq(lit(6))));
-#[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
+#[derive(Clone, PartialEq, PartialOrd, Eq, Debug, Hash)]
 pub enum Expr {
     /// An expression with a specific name.
     Alias(Alias),
@@ -282,8 +284,8 @@ pub enum Expr {
     Column(Column),
     /// A named reference to a variable in a registry.
     ScalarVariable(DataType, Vec<String>),
-    /// A constant value.
-    Literal(ScalarValue),
+    /// A constant value along with associated [`FieldMetadata`].
+    Literal(ScalarValue, Option<FieldMetadata>),
     /// A binary expression such as "age > 21"
     BinaryExpr(BinaryExpr),
     /// LIKE expression
@@ -312,27 +314,7 @@ pub enum Expr {
     Negative(Box<Expr>),
     /// Whether an expression is between a given range.
     Between(Between),
-    /// The CASE expression is similar to a series of nested if/else and there are two forms that
-    /// can be used. The first form consists of a series of boolean "when" expressions with
-    /// corresponding "then" expressions, and an optional "else" expression.
-    ///
-    /// ```text
-    /// CASE WHEN condition THEN result
-    ///      [WHEN ...]
-    ///      [ELSE result]
-    /// END
-    /// ```
-    ///
-    /// The second form uses a base expression and then a series of "when" clauses that match on a
-    /// literal value.
-    ///
-    /// ```text
-    /// CASE expression
-    ///     WHEN value THEN result
-    ///     [WHEN ...]
-    ///     [ELSE result]
-    /// END
-    /// ```
+    /// A CASE expression (see docs on [`Case`])
     Case(Case),
     /// Casts the expression to a given type and will return a runtime error if the expression cannot be cast.
     /// This expression is guaranteed to have a fixed type.
@@ -340,7 +322,7 @@ pub enum Expr {
     /// Casts the expression to a given type and will return a null value if the expression cannot be cast.
     /// This expression is guaranteed to have a fixed type.
     TryCast(TryCast),
-    /// Represents the call of a scalar function with a set of arguments.
+    /// Call a scalar function with a set of arguments.
     ScalarFunction(ScalarFunction),
     /// Calls an aggregate function with arguments, and optional
     /// `ORDER BY`, `FILTER`, `DISTINCT` and `NULL TREATMENT`.
@@ -349,8 +331,8 @@ pub enum Expr {
     ///
     /// [`ExprFunctionExt`]: crate::expr_fn::ExprFunctionExt
     AggregateFunction(AggregateFunction),
-    /// Represents the call of a window function with arguments.
-    WindowFunction(WindowFunction),
+    /// Call a window function with a set of arguments.
+    WindowFunction(Box<WindowFunction>),
     /// Returns whether the list contains the expr value.
     InList(InList),
     /// EXISTS subquery
@@ -378,7 +360,7 @@ pub enum Expr {
     /// A place holder for parameters in a prepared statement
     /// (e.g. `$foo` or `$1`)
     Placeholder(Placeholder),
-    /// A place holder which hold a reference to a qualified field
+    /// A placeholder which holds a reference to a qualified field
     /// in the outer query, used for correlated sub queries.
     OuterReferenceColumn(DataType, Column),
     /// Unnest expression
@@ -387,7 +369,7 @@ pub enum Expr {
 
 impl Default for Expr {
     fn default() -> Self {
-        Expr::Literal(ScalarValue::Null)
+        Expr::Literal(ScalarValue::Null, None)
     }
 }
 
@@ -395,6 +377,13 @@ impl Default for Expr {
 impl From<Column> for Expr {
     fn from(value: Column) -> Self {
         Expr::Column(value)
+    }
+}
+
+/// Create an [`Expr`] from a [`WindowFunction`]
+impl From<WindowFunction> for Expr {
+    fn from(value: WindowFunction) -> Self {
+        Expr::WindowFunction(Box::new(value))
     }
 }
 
@@ -424,6 +413,192 @@ impl<'a> TreeNodeContainer<'a, Self> for Expr {
     }
 }
 
+/// Literal metadata
+///
+/// Stores metadata associated with a literal expressions
+/// and is designed to be fast to `clone`.
+///
+/// This structure is used to store metadata associated with a literal expression, and it
+/// corresponds to the `metadata` field on [`Field`].
+///
+/// # Example: Create [`FieldMetadata`] from a [`Field`]
+/// ```
+/// # use std::collections::HashMap;
+/// # use datafusion_expr::expr::FieldMetadata;
+/// # use arrow::datatypes::{Field, DataType};
+/// # let field = Field::new("c1", DataType::Int32, true)
+/// #  .with_metadata(HashMap::from([("foo".to_string(), "bar".to_string())]));
+/// // Create a new `FieldMetadata` instance from a `Field`
+/// let metadata = FieldMetadata::new_from_field(&field);
+/// // There is also a `From` impl:
+/// let metadata = FieldMetadata::from(&field);
+/// ```
+///
+/// # Example: Update a [`Field`] with [`FieldMetadata`]
+/// ```
+/// # use datafusion_expr::expr::FieldMetadata;
+/// # use arrow::datatypes::{Field, DataType};
+/// # let field = Field::new("c1", DataType::Int32, true);
+/// # let metadata = FieldMetadata::new_from_field(&field);
+/// // Add any metadata from `FieldMetadata` to `Field`
+/// let updated_field = metadata.add_to_field(field);
+/// ```
+///
+#[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
+pub struct FieldMetadata {
+    /// The inner metadata of a literal expression, which is a map of string
+    /// keys to string values.
+    ///
+    /// Note this is not a `HashMap because `HashMap` does not provide
+    /// implementations for traits like `Debug` and `Hash`.
+    inner: Arc<BTreeMap<String, String>>,
+}
+
+impl Default for FieldMetadata {
+    fn default() -> Self {
+        Self::new_empty()
+    }
+}
+
+impl FieldMetadata {
+    /// Create a new empty metadata instance.
+    pub fn new_empty() -> Self {
+        Self {
+            inner: Arc::new(BTreeMap::new()),
+        }
+    }
+
+    /// Merges two optional `FieldMetadata` instances, overwriting any existing
+    /// keys in `m` with keys from `n` if present
+    pub fn merge_options(
+        m: Option<&FieldMetadata>,
+        n: Option<&FieldMetadata>,
+    ) -> Option<FieldMetadata> {
+        match (m, n) {
+            (Some(m), Some(n)) => {
+                let mut merged = m.clone();
+                merged.extend(n.clone());
+                Some(merged)
+            }
+            (Some(m), None) => Some(m.clone()),
+            (None, Some(n)) => Some(n.clone()),
+            (None, None) => None,
+        }
+    }
+
+    /// Create a new metadata instance from a `Field`'s metadata.
+    pub fn new_from_field(field: &Field) -> Self {
+        let inner = field
+            .metadata()
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        Self {
+            inner: Arc::new(inner),
+        }
+    }
+
+    /// Create a new metadata instance from a map of string keys to string values.
+    pub fn new(inner: BTreeMap<String, String>) -> Self {
+        Self {
+            inner: Arc::new(inner),
+        }
+    }
+
+    /// Get the inner metadata as a reference to a `BTreeMap`.
+    pub fn inner(&self) -> &BTreeMap<String, String> {
+        &self.inner
+    }
+
+    /// Return the inner metadata
+    pub fn into_inner(self) -> Arc<BTreeMap<String, String>> {
+        self.inner
+    }
+
+    /// Adds metadata from `other` into `self`, overwriting any existing keys.
+    pub fn extend(&mut self, other: Self) {
+        if other.is_empty() {
+            return;
+        }
+        let other = Arc::unwrap_or_clone(other.into_inner());
+        Arc::make_mut(&mut self.inner).extend(other);
+    }
+
+    /// Returns true if the metadata is empty.
+    pub fn is_empty(&self) -> bool {
+        self.inner.is_empty()
+    }
+
+    /// Returns the number of key-value pairs in the metadata.
+    pub fn len(&self) -> usize {
+        self.inner.len()
+    }
+
+    /// Convert this `FieldMetadata` into a `HashMap<String, String>`
+    pub fn to_hashmap(&self) -> std::collections::HashMap<String, String> {
+        self.inner
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    /// Updates the metadata on the Field with this metadata, if it is not empty.
+    pub fn add_to_field(&self, field: Field) -> Field {
+        if self.inner.is_empty() {
+            return field;
+        }
+
+        field.with_metadata(self.to_hashmap())
+    }
+}
+
+impl From<&Field> for FieldMetadata {
+    fn from(field: &Field) -> Self {
+        Self::new_from_field(field)
+    }
+}
+
+impl From<BTreeMap<String, String>> for FieldMetadata {
+    fn from(inner: BTreeMap<String, String>) -> Self {
+        Self::new(inner)
+    }
+}
+
+impl From<std::collections::HashMap<String, String>> for FieldMetadata {
+    fn from(map: std::collections::HashMap<String, String>) -> Self {
+        Self::new(map.into_iter().collect())
+    }
+}
+
+/// From reference
+impl From<&std::collections::HashMap<String, String>> for FieldMetadata {
+    fn from(map: &std::collections::HashMap<String, String>) -> Self {
+        let inner = map
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        Self::new(inner)
+    }
+}
+
+/// From hashbrown map
+impl From<HashMap<String, String>> for FieldMetadata {
+    fn from(map: HashMap<String, String>) -> Self {
+        let inner = map.into_iter().collect();
+        Self::new(inner)
+    }
+}
+
+impl From<&HashMap<String, String>> for FieldMetadata {
+    fn from(map: &HashMap<String, String>) -> Self {
+        let inner = map
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        Self::new(inner)
+    }
+}
+
 /// UNNEST expression.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
 pub struct Unnest {
@@ -450,7 +625,7 @@ pub struct Alias {
     pub expr: Box<Expr>,
     pub relation: Option<TableReference>,
     pub name: String,
-    pub metadata: Option<std::collections::HashMap<String, String>>,
+    pub metadata: Option<FieldMetadata>,
 }
 
 impl Hash for Alias {
@@ -462,13 +637,13 @@ impl Hash for Alias {
 }
 
 impl PartialOrd for Alias {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         let cmp = self.expr.partial_cmp(&other.expr);
-        let Some(std::cmp::Ordering::Equal) = cmp else {
+        let Some(Ordering::Equal) = cmp else {
             return cmp;
         };
         let cmp = self.relation.partial_cmp(&other.relation);
-        let Some(std::cmp::Ordering::Equal) = cmp else {
+        let Some(Ordering::Equal) = cmp else {
             return cmp;
         };
         self.name.partial_cmp(&other.name)
@@ -490,10 +665,7 @@ impl Alias {
         }
     }
 
-    pub fn with_metadata(
-        mut self,
-        metadata: Option<std::collections::HashMap<String, String>>,
-    ) -> Self {
+    pub fn with_metadata(mut self, metadata: Option<FieldMetadata>) -> Self {
         self.metadata = metadata;
         self
     }
@@ -551,6 +723,28 @@ impl Display for BinaryExpr {
 }
 
 /// CASE expression
+///
+/// The CASE expression is similar to a series of nested if/else and there are two forms that
+/// can be used. The first form consists of a series of boolean "when" expressions with
+/// corresponding "then" expressions, and an optional "else" expression.
+///
+/// ```text
+/// CASE WHEN condition THEN result
+///      [WHEN ...]
+///      [ELSE result]
+/// END
+/// ```
+///
+/// The second form uses a base expression and then a series of "when" clauses that match on a
+/// literal value.
+///
+/// ```text
+/// CASE expression
+///     WHEN value THEN result
+///     [WHEN ...]
+///     [ELSE result]
+/// END
+/// ```
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Hash)]
 pub struct Case {
     /// Optional base expression that can be compared to literal values in the "when" expressions
@@ -631,7 +825,9 @@ impl Between {
     }
 }
 
-/// ScalarFunction expression invokes a built-in scalar function
+/// Invoke a [`ScalarUDF`] with a set of arguments
+///
+/// [`ScalarUDF`]: crate::ScalarUDF
 #[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
 pub struct ScalarFunction {
     /// The function
@@ -648,7 +844,9 @@ impl ScalarFunction {
 }
 
 impl ScalarFunction {
-    /// Create a new ScalarFunction expression with a user-defined function (UDF)
+    /// Create a new `ScalarFunction` from a [`ScalarUDF`]
+    ///
+    /// [`ScalarUDF`]: crate::ScalarUDF
     pub fn new_udf(udf: Arc<crate::ScalarUDF>, args: Vec<Expr>) -> Self {
         Self { func: udf, args }
     }
@@ -784,7 +982,7 @@ impl<'a> TreeNodeContainer<'a, Expr> for Sort {
 #[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
 pub struct AggregateFunction {
     /// Name of the function
-    pub func: Arc<crate::AggregateUDF>,
+    pub func: Arc<AggregateUDF>,
     pub params: AggregateFunctionParams,
 }
 
@@ -796,18 +994,18 @@ pub struct AggregateFunctionParams {
     /// Optional filter
     pub filter: Option<Box<Expr>>,
     /// Optional ordering
-    pub order_by: Option<Vec<Sort>>,
+    pub order_by: Vec<Sort>,
     pub null_treatment: Option<NullTreatment>,
 }
 
 impl AggregateFunction {
     /// Create a new AggregateFunction expression with a user-defined function (UDF)
     pub fn new_udf(
-        func: Arc<crate::AggregateUDF>,
+        func: Arc<AggregateUDF>,
         args: Vec<Expr>,
         distinct: bool,
         filter: Option<Box<Expr>>,
-        order_by: Option<Vec<Sort>>,
+        order_by: Vec<Sort>,
         null_treatment: Option<NullTreatment>,
     ) -> Self {
         Self {
@@ -831,26 +1029,26 @@ impl AggregateFunction {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub enum WindowFunctionDefinition {
     /// A user defined aggregate function
-    AggregateUDF(Arc<crate::AggregateUDF>),
+    AggregateUDF(Arc<AggregateUDF>),
     /// A user defined aggregate function
     WindowUDF(Arc<WindowUDF>),
 }
 
 impl WindowFunctionDefinition {
     /// Returns the datatype of the window function
-    pub fn return_type(
+    pub fn return_field(
         &self,
-        input_expr_types: &[DataType],
+        input_expr_fields: &[FieldRef],
         _input_expr_nullable: &[bool],
         display_name: &str,
-    ) -> Result<DataType> {
+    ) -> Result<FieldRef> {
         match self {
             WindowFunctionDefinition::AggregateUDF(fun) => {
-                fun.return_type(input_expr_types)
+                fun.return_field(input_expr_fields)
             }
-            WindowFunctionDefinition::WindowUDF(fun) => fun
-                .field(WindowUDFFieldArgs::new(input_expr_types, display_name))
-                .map(|field| field.data_type().clone()),
+            WindowFunctionDefinition::WindowUDF(fun) => {
+                fun.field(WindowUDFFieldArgs::new(input_expr_fields, display_name))
+            }
         }
     }
 
@@ -869,6 +1067,16 @@ impl WindowFunctionDefinition {
             WindowFunctionDefinition::AggregateUDF(fun) => fun.name(),
         }
     }
+
+    /// Return the the inner window simplification function, if any
+    ///
+    /// See [`WindowFunctionSimplification`] for more information
+    pub fn simplify(&self) -> Option<WindowFunctionSimplification> {
+        match self {
+            WindowFunctionDefinition::AggregateUDF(_) => None,
+            WindowFunctionDefinition::WindowUDF(udwf) => udwf.simplify(),
+        }
+    }
 }
 
 impl Display for WindowFunctionDefinition {
@@ -880,8 +1088,8 @@ impl Display for WindowFunctionDefinition {
     }
 }
 
-impl From<Arc<crate::AggregateUDF>> for WindowFunctionDefinition {
-    fn from(value: Arc<crate::AggregateUDF>) -> Self {
+impl From<Arc<AggregateUDF>> for WindowFunctionDefinition {
+    fn from(value: Arc<AggregateUDF>) -> Self {
         Self::AggregateUDF(value)
     }
 }
@@ -940,6 +1148,13 @@ impl WindowFunction {
             },
         }
     }
+
+    /// Return the the inner window simplification function, if any
+    ///
+    /// See [`WindowFunctionSimplification`] for more information
+    pub fn simplify(&self) -> Option<WindowFunctionSimplification> {
+        self.fun.simplify()
+    }
 }
 
 /// EXISTS expression
@@ -955,38 +1170,6 @@ impl Exists {
     // Create a new Exists expression.
     pub fn new(subquery: Subquery, negated: bool) -> Self {
         Self { subquery, negated }
-    }
-}
-
-/// User Defined Aggregate Function
-///
-/// See [`udaf::AggregateUDF`] for more information.
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub struct AggregateUDF {
-    /// The function
-    pub fun: Arc<udaf::AggregateUDF>,
-    /// List of expressions to feed to the functions as arguments
-    pub args: Vec<Expr>,
-    /// Optional filter
-    pub filter: Option<Box<Expr>>,
-    /// Optional ORDER BY applied prior to aggregating
-    pub order_by: Option<Vec<Expr>>,
-}
-
-impl AggregateUDF {
-    /// Create a new AggregateUDF expression
-    pub fn new(
-        fun: Arc<udaf::AggregateUDF>,
-        args: Vec<Expr>,
-        filter: Option<Box<Expr>>,
-        order_by: Option<Vec<Expr>>,
-    ) -> Self {
-        Self {
-            fun,
-            args,
-            filter,
-            order_by,
-        }
     }
 }
 
@@ -1397,15 +1580,17 @@ impl Expr {
     /// # Example
     /// ```
     /// # use datafusion_expr::col;
-    /// use std::collections::HashMap;
+    /// # use std::collections::HashMap;
+    /// # use datafusion_expr::expr::FieldMetadata;
     /// let metadata = HashMap::from([("key".to_string(), "value".to_string())]);
+    /// let metadata = FieldMetadata::from(metadata);
     /// let expr = col("foo").alias_with_metadata("bar", Some(metadata));
     /// ```
     ///
     pub fn alias_with_metadata(
         self,
         name: impl Into<String>,
-        metadata: Option<std::collections::HashMap<String, String>>,
+        metadata: Option<FieldMetadata>,
     ) -> Expr {
         Expr::Alias(Alias::new(self, None::<&str>, name.into()).with_metadata(metadata))
     }
@@ -1427,8 +1612,10 @@ impl Expr {
     /// # Example
     /// ```
     /// # use datafusion_expr::col;
-    /// use std::collections::HashMap;
+    /// # use std::collections::HashMap;
+    /// # use datafusion_expr::expr::FieldMetadata;
     /// let metadata = HashMap::from([("key".to_string(), "value".to_string())]);
+    /// let metadata = FieldMetadata::from(metadata);
     /// let expr = col("foo").alias_qualified_with_metadata(Some("tbl"), "bar", Some(metadata));
     /// ```
     ///
@@ -1436,7 +1623,7 @@ impl Expr {
         self,
         relation: Option<impl Into<TableReference>>,
         name: impl Into<String>,
-        metadata: Option<std::collections::HashMap<String, String>>,
+        metadata: Option<FieldMetadata>,
     ) -> Expr {
         Expr::Alias(Alias::new(self, relation, name.into()).with_metadata(metadata))
     }
@@ -1506,8 +1693,16 @@ impl Expr {
             |expr| {
                 // f_up: unalias on up so we can remove nested aliases like
                 // `(x as foo) as bar`
-                if let Expr::Alias(Alias { expr, .. }) = expr {
-                    Ok(Transformed::yes(*expr))
+                if let Expr::Alias(alias) = expr {
+                    match alias
+                        .metadata
+                        .as_ref()
+                        .map(|h| h.is_empty())
+                        .unwrap_or(true)
+                    {
+                        true => Ok(Transformed::yes(*alias.expr)),
+                        false => Ok(Transformed::no(Expr::Alias(alias))),
+                    }
                 } else {
                     Ok(Transformed::no(expr))
                 }
@@ -1747,23 +1942,38 @@ impl Expr {
     pub fn infer_placeholder_types(self, schema: &DFSchema) -> Result<(Expr, bool)> {
         let mut has_placeholder = false;
         self.transform(|mut expr| {
-            // Default to assuming the arguments are the same type
-            if let Expr::BinaryExpr(BinaryExpr { left, op: _, right }) = &mut expr {
-                rewrite_placeholder(left.as_mut(), right.as_ref(), schema)?;
-                rewrite_placeholder(right.as_mut(), left.as_ref(), schema)?;
-            };
-            if let Expr::Between(Between {
-                expr,
-                negated: _,
-                low,
-                high,
-            }) = &mut expr
-            {
-                rewrite_placeholder(low.as_mut(), expr.as_ref(), schema)?;
-                rewrite_placeholder(high.as_mut(), expr.as_ref(), schema)?;
-            }
-            if let Expr::Placeholder(_) = &expr {
-                has_placeholder = true;
+            match &mut expr {
+                // Default to assuming the arguments are the same type
+                Expr::BinaryExpr(BinaryExpr { left, op: _, right }) => {
+                    rewrite_placeholder(left.as_mut(), right.as_ref(), schema)?;
+                    rewrite_placeholder(right.as_mut(), left.as_ref(), schema)?;
+                }
+                Expr::Between(Between {
+                    expr,
+                    negated: _,
+                    low,
+                    high,
+                }) => {
+                    rewrite_placeholder(low.as_mut(), expr.as_ref(), schema)?;
+                    rewrite_placeholder(high.as_mut(), expr.as_ref(), schema)?;
+                }
+                Expr::InList(InList {
+                    expr,
+                    list,
+                    negated: _,
+                }) => {
+                    for item in list.iter_mut() {
+                        rewrite_placeholder(item, expr.as_ref(), schema)?;
+                    }
+                }
+                Expr::Like(Like { expr, pattern, .. })
+                | Expr::SimilarTo(Like { expr, pattern, .. }) => {
+                    rewrite_placeholder(pattern.as_mut(), expr.as_ref(), schema)?;
+                }
+                Expr::Placeholder(_) => {
+                    has_placeholder = true;
+                }
+                _ => {}
             }
             Ok(Transformed::yes(expr))
         })
@@ -1825,6 +2035,15 @@ impl Expr {
         match self {
             Expr::Column(col) => Some(&col.spans),
             _ => None,
+        }
+    }
+
+    /// Check if the Expr is literal and get the literal value if it is.
+    pub fn as_literal(&self) -> Option<&ScalarValue> {
+        if let Expr::Literal(lit, _) = self {
+            Some(lit)
+        } else {
+            None
         }
     }
 }
@@ -2052,45 +2271,39 @@ impl NormalizeEq for Expr {
                         (None, None) => true,
                         _ => false,
                     }
-                    && match (self_order_by, other_order_by) {
-                        (Some(self_order_by), Some(other_order_by)) => self_order_by
-                            .iter()
-                            .zip(other_order_by.iter())
-                            .all(|(a, b)| {
-                                a.asc == b.asc
-                                    && a.nulls_first == b.nulls_first
-                                    && a.expr.normalize_eq(&b.expr)
-                            }),
-                        (None, None) => true,
-                        _ => false,
-                    }
+                    && self_order_by
+                        .iter()
+                        .zip(other_order_by.iter())
+                        .all(|(a, b)| {
+                            a.asc == b.asc
+                                && a.nulls_first == b.nulls_first
+                                && a.expr.normalize_eq(&b.expr)
+                        })
+                    && self_order_by.len() == other_order_by.len()
             }
-            (
-                Expr::WindowFunction(WindowFunction {
+            (Expr::WindowFunction(left), Expr::WindowFunction(other)) => {
+                let WindowFunction {
                     fun: self_fun,
-                    params: self_params,
-                }),
-                Expr::WindowFunction(WindowFunction {
+                    params:
+                        WindowFunctionParams {
+                            args: self_args,
+                            window_frame: self_window_frame,
+                            partition_by: self_partition_by,
+                            order_by: self_order_by,
+                            null_treatment: self_null_treatment,
+                        },
+                } = left.as_ref();
+                let WindowFunction {
                     fun: other_fun,
-                    params: other_params,
-                }),
-            ) => {
-                let (
-                    WindowFunctionParams {
-                        args: self_args,
-                        window_frame: self_window_frame,
-                        partition_by: self_partition_by,
-                        order_by: self_order_by,
-                        null_treatment: self_null_treatment,
-                    },
-                    WindowFunctionParams {
-                        args: other_args,
-                        window_frame: other_window_frame,
-                        partition_by: other_partition_by,
-                        order_by: other_order_by,
-                        null_treatment: other_null_treatment,
-                    },
-                ) = (self_params, other_params);
+                    params:
+                        WindowFunctionParams {
+                            args: other_args,
+                            window_frame: other_window_frame,
+                            partition_by: other_partition_by,
+                            order_by: other_order_by,
+                            null_treatment: other_null_treatment,
+                        },
+                } = other.as_ref();
 
                 self_fun.name() == other_fun.name()
                     && self_window_frame == other_window_frame
@@ -2256,7 +2469,7 @@ impl HashNode for Expr {
                 data_type.hash(state);
                 name.hash(state);
             }
-            Expr::Literal(scalar_value) => {
+            Expr::Literal(scalar_value, _) => {
                 scalar_value.hash(state);
             }
             Expr::BinaryExpr(BinaryExpr {
@@ -2335,14 +2548,18 @@ impl HashNode for Expr {
                 distinct.hash(state);
                 null_treatment.hash(state);
             }
-            Expr::WindowFunction(WindowFunction { fun, params }) => {
-                let WindowFunctionParams {
-                    args: _args,
-                    partition_by: _,
-                    order_by: _,
-                    window_frame,
-                    null_treatment,
-                } = params;
+            Expr::WindowFunction(window_fun) => {
+                let WindowFunction {
+                    fun,
+                    params:
+                        WindowFunctionParams {
+                            args: _args,
+                            partition_by: _,
+                            order_by: _,
+                            window_frame,
+                            null_treatment,
+                        },
+                } = window_fun.as_ref();
                 fun.hash(state);
                 window_frame.hash(state);
                 null_treatment.hash(state);
@@ -2432,7 +2649,7 @@ impl Display for SchemaDisplay<'_> {
             // TODO: remove the next line after `Expr::Wildcard` is removed
             #[expect(deprecated)]
             Expr::Column(_)
-            | Expr::Literal(_)
+            | Expr::Literal(_, _)
             | Expr::ScalarVariable(..)
             | Expr::OuterReferenceColumn(..)
             | Expr::Placeholder(_)
@@ -2443,7 +2660,7 @@ impl Display for SchemaDisplay<'_> {
                         write!(f, "{name}")
                     }
                     Err(e) => {
-                        write!(f, "got error from schema_name {}", e)
+                        write!(f, "got error from schema_name {e}")
                     }
                 }
             }
@@ -2594,7 +2811,7 @@ impl Display for SchemaDisplay<'_> {
                         write!(f, "{name}")
                     }
                     Err(e) => {
-                        write!(f, "got error from schema_name {}", e)
+                        write!(f, "got error from schema_name {e}")
                     }
                 }
             }
@@ -2625,52 +2842,62 @@ impl Display for SchemaDisplay<'_> {
 
                 Ok(())
             }
-            Expr::WindowFunction(WindowFunction { fun, params }) => match fun {
-                WindowFunctionDefinition::AggregateUDF(fun) => {
-                    match fun.window_function_schema_name(params) {
-                        Ok(name) => {
-                            write!(f, "{name}")
-                        }
-                        Err(e) => {
-                            write!(f, "got error from window_function_schema_name {}", e)
+            Expr::WindowFunction(window_fun) => {
+                let WindowFunction { fun, params } = window_fun.as_ref();
+                match fun {
+                    WindowFunctionDefinition::AggregateUDF(fun) => {
+                        match fun.window_function_schema_name(params) {
+                            Ok(name) => {
+                                write!(f, "{name}")
+                            }
+                            Err(e) => {
+                                write!(
+                                    f,
+                                    "got error from window_function_schema_name {e}"
+                                )
+                            }
                         }
                     }
-                }
-                _ => {
-                    let WindowFunctionParams {
-                        args,
-                        partition_by,
-                        order_by,
-                        window_frame,
-                        null_treatment,
-                    } = params;
+                    _ => {
+                        let WindowFunctionParams {
+                            args,
+                            partition_by,
+                            order_by,
+                            window_frame,
+                            null_treatment,
+                        } = params;
 
-                    write!(
-                        f,
-                        "{}({})",
-                        fun,
-                        schema_name_from_exprs_comma_separated_without_space(args)?
-                    )?;
-
-                    if let Some(null_treatment) = null_treatment {
-                        write!(f, " {}", null_treatment)?;
-                    }
-
-                    if !partition_by.is_empty() {
                         write!(
                             f,
-                            " PARTITION BY [{}]",
-                            schema_name_from_exprs(partition_by)?
+                            "{}({})",
+                            fun,
+                            schema_name_from_exprs_comma_separated_without_space(args)?
                         )?;
+
+                        if let Some(null_treatment) = null_treatment {
+                            write!(f, " {null_treatment}")?;
+                        }
+
+                        if !partition_by.is_empty() {
+                            write!(
+                                f,
+                                " PARTITION BY [{}]",
+                                schema_name_from_exprs(partition_by)?
+                            )?;
+                        }
+
+                        if !order_by.is_empty() {
+                            write!(
+                                f,
+                                " ORDER BY [{}]",
+                                schema_name_from_sorts(order_by)?
+                            )?;
+                        };
+
+                        write!(f, " {window_frame}")
                     }
-
-                    if !order_by.is_empty() {
-                        write!(f, " ORDER BY [{}]", schema_name_from_sorts(order_by)?)?;
-                    };
-
-                    write!(f, " {window_frame}")
                 }
-            },
+            }
         }
     }
 }
@@ -2681,7 +2908,7 @@ struct SqlDisplay<'a>(&'a Expr);
 impl Display for SqlDisplay<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self.0 {
-            Expr::Literal(scalar) => scalar.fmt(f),
+            Expr::Literal(scalar, _) => scalar.fmt(f),
             Expr::Alias(Alias { name, .. }) => write!(f, "{name}"),
             Expr::Between(Between {
                 expr,
@@ -2847,7 +3074,7 @@ impl Display for SqlDisplay<'_> {
                         write!(f, "{name}")
                     }
                     Err(e) => {
-                        write!(f, "got error from schema_name {}", e)
+                        write!(f, "got error from schema_name {e}")
                     }
                 }
             }
@@ -2948,7 +3175,12 @@ impl Display for Expr {
                 write!(f, "{OUTER_REFERENCE_COLUMN_PREFIX}({c})")
             }
             Expr::ScalarVariable(_, var_names) => write!(f, "{}", var_names.join(".")),
-            Expr::Literal(v) => write!(f, "{v:?}"),
+            Expr::Literal(v, metadata) => {
+                match metadata.as_ref().map(|m| m.is_empty()).unwrap_or(true) {
+                    false => write!(f, "{v:?} {:?}", metadata.as_ref().unwrap()),
+                    true => write!(f, "{v:?}"),
+                }
+            }
             Expr::Case(case) => {
                 write!(f, "CASE ")?;
                 if let Some(e) = &case.expr {
@@ -3005,54 +3237,60 @@ impl Display for Expr {
             // Expr::ScalarFunction(ScalarFunction { func, args }) => {
             //     write!(f, "{}", func.display_name(args).unwrap())
             // }
-            Expr::WindowFunction(WindowFunction { fun, params }) => match fun {
-                WindowFunctionDefinition::AggregateUDF(fun) => {
-                    match fun.window_function_display_name(params) {
-                        Ok(name) => {
-                            write!(f, "{}", name)
+            Expr::WindowFunction(window_fun) => {
+                let WindowFunction { fun, params } = window_fun.as_ref();
+                match fun {
+                    WindowFunctionDefinition::AggregateUDF(fun) => {
+                        match fun.window_function_display_name(params) {
+                            Ok(name) => {
+                                write!(f, "{name}")
+                            }
+                            Err(e) => {
+                                write!(
+                                    f,
+                                    "got error from window_function_display_name {e}"
+                                )
+                            }
                         }
-                        Err(e) => {
-                            write!(f, "got error from window_function_display_name {}", e)
+                    }
+                    WindowFunctionDefinition::WindowUDF(fun) => {
+                        let WindowFunctionParams {
+                            args,
+                            partition_by,
+                            order_by,
+                            window_frame,
+                            null_treatment,
+                        } = params;
+
+                        fmt_function(f, &fun.to_string(), false, args, true)?;
+
+                        if let Some(nt) = null_treatment {
+                            write!(f, "{nt}")?;
                         }
+
+                        if !partition_by.is_empty() {
+                            write!(f, " PARTITION BY [{}]", expr_vec_fmt!(partition_by))?;
+                        }
+                        if !order_by.is_empty() {
+                            write!(f, " ORDER BY [{}]", expr_vec_fmt!(order_by))?;
+                        }
+                        write!(
+                            f,
+                            " {} BETWEEN {} AND {}",
+                            window_frame.units,
+                            window_frame.start_bound,
+                            window_frame.end_bound
+                        )
                     }
                 }
-                WindowFunctionDefinition::WindowUDF(fun) => {
-                    let WindowFunctionParams {
-                        args,
-                        partition_by,
-                        order_by,
-                        window_frame,
-                        null_treatment,
-                    } = params;
-
-                    fmt_function(f, &fun.to_string(), false, args, true)?;
-
-                    if let Some(nt) = null_treatment {
-                        write!(f, "{}", nt)?;
-                    }
-
-                    if !partition_by.is_empty() {
-                        write!(f, " PARTITION BY [{}]", expr_vec_fmt!(partition_by))?;
-                    }
-                    if !order_by.is_empty() {
-                        write!(f, " ORDER BY [{}]", expr_vec_fmt!(order_by))?;
-                    }
-                    write!(
-                        f,
-                        " {} BETWEEN {} AND {}",
-                        window_frame.units,
-                        window_frame.start_bound,
-                        window_frame.end_bound
-                    )
-                }
-            },
+            }
             Expr::AggregateFunction(AggregateFunction { func, params }) => {
                 match func.display_name(params) {
                     Ok(name) => {
-                        write!(f, "{}", name)
+                        write!(f, "{name}")
                     }
                     Err(e) => {
-                        write!(f, "got error from display_name {}", e)
+                        write!(f, "got error from display_name {e}")
                     }
                 }
             }
@@ -3185,9 +3423,116 @@ mod test {
         case, lit, qualified_wildcard, wildcard, wildcard_with_options, ColumnarValue,
         ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Volatility,
     };
+    use arrow::datatypes::{Field, Schema};
     use sqlparser::ast;
     use sqlparser::ast::{Ident, IdentWithAlias};
     use std::any::Any;
+
+    #[test]
+    fn infer_placeholder_in_clause() {
+        // SELECT * FROM employees WHERE department_id IN ($1, $2, $3);
+        let column = col("department_id");
+        let param_placeholders = vec![
+            Expr::Placeholder(Placeholder {
+                id: "$1".to_string(),
+                data_type: None,
+            }),
+            Expr::Placeholder(Placeholder {
+                id: "$2".to_string(),
+                data_type: None,
+            }),
+            Expr::Placeholder(Placeholder {
+                id: "$3".to_string(),
+                data_type: None,
+            }),
+        ];
+        let in_list = Expr::InList(InList {
+            expr: Box::new(column),
+            list: param_placeholders,
+            negated: false,
+        });
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("name", DataType::Utf8, true),
+            Field::new("department_id", DataType::Int32, true),
+        ]));
+        let df_schema = DFSchema::try_from(schema).unwrap();
+
+        let (inferred_expr, contains_placeholder) =
+            in_list.infer_placeholder_types(&df_schema).unwrap();
+
+        assert!(contains_placeholder);
+
+        match inferred_expr {
+            Expr::InList(in_list) => {
+                for expr in in_list.list {
+                    match expr {
+                        Expr::Placeholder(placeholder) => {
+                            assert_eq!(
+                                placeholder.data_type,
+                                Some(DataType::Int32),
+                                "Placeholder {} should infer Int32",
+                                placeholder.id
+                            );
+                        }
+                        _ => panic!("Expected Placeholder expression"),
+                    }
+                }
+            }
+            _ => panic!("Expected InList expression"),
+        }
+    }
+
+    #[test]
+    fn infer_placeholder_like_and_similar_to() {
+        // name LIKE $1
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("name", DataType::Utf8, true)]));
+        let df_schema = DFSchema::try_from(schema).unwrap();
+
+        let like = Like {
+            expr: Box::new(col("name")),
+            pattern: Box::new(Expr::Placeholder(Placeholder {
+                id: "$1".to_string(),
+                data_type: None,
+            })),
+            negated: false,
+            case_insensitive: false,
+            escape_char: None,
+        };
+
+        let expr = Expr::Like(like.clone());
+
+        let (inferred_expr, _) = expr.infer_placeholder_types(&df_schema).unwrap();
+        match inferred_expr {
+            Expr::Like(like) => match *like.pattern {
+                Expr::Placeholder(placeholder) => {
+                    assert_eq!(placeholder.data_type, Some(DataType::Utf8));
+                }
+                _ => panic!("Expected Placeholder"),
+            },
+            _ => panic!("Expected Like"),
+        }
+
+        // name SIMILAR TO $1
+        let expr = Expr::SimilarTo(like);
+
+        let (inferred_expr, _) = expr.infer_placeholder_types(&df_schema).unwrap();
+        match inferred_expr {
+            Expr::SimilarTo(like) => match *like.pattern {
+                Expr::Placeholder(placeholder) => {
+                    assert_eq!(
+                        placeholder.data_type,
+                        Some(DataType::Utf8),
+                        "Placeholder {} should infer Utf8",
+                        placeholder.id
+                    );
+                }
+                _ => panic!("Expected Placeholder expression"),
+            },
+            _ => panic!("Expected SimilarTo expression"),
+        }
+    }
 
     #[test]
     #[allow(deprecated)]
@@ -3206,7 +3551,7 @@ mod test {
     #[allow(deprecated)]
     fn format_cast() -> Result<()> {
         let expr = Expr::Cast(Cast {
-            expr: Box::new(Expr::Literal(ScalarValue::Float32(Some(1.23)))),
+            expr: Box::new(Expr::Literal(ScalarValue::Float32(Some(1.23)), None)),
             data_type: DataType::Utf8,
         });
         let expected_canonical = "CAST(Float32(1.23) AS Utf8)";
@@ -3463,5 +3808,20 @@ mod test {
             replace: opt_replace,
             rename: opt_rename,
         }
+    }
+
+    #[test]
+    fn test_size_of_expr() {
+        // because Expr is such a widely used struct in DataFusion
+        // it is important to keep its size as small as possible
+        //
+        // If this test fails when you change `Expr`, please try
+        // `Box`ing the fields to make `Expr` smaller
+        // See https://github.com/apache/datafusion/issues/16199 for details
+        assert_eq!(size_of::<Expr>(), 128);
+        assert_eq!(size_of::<ScalarValue>(), 64);
+        assert_eq!(size_of::<DataType>(), 24); // 3 ptrs
+        assert_eq!(size_of::<Vec<Expr>>(), 24);
+        assert_eq!(size_of::<Arc<Expr>>(), 8);
     }
 }

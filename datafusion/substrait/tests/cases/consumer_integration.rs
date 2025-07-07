@@ -44,7 +44,7 @@ mod tests {
         let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto)?;
         let plan = from_substrait_plan(&ctx.state(), &proto).await?;
         ctx.state().create_physical_plan(&plan).await?;
-        Ok(format!("{}", plan))
+        Ok(format!("{plan}"))
     }
 
     #[tokio::test]
@@ -501,7 +501,7 @@ mod tests {
         let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto)?;
         let plan = from_substrait_plan(&ctx.state(), &proto).await?;
         ctx.state().create_physical_plan(&plan).await?;
-        Ok(format!("{}", plan))
+        Ok(format!("{plan}"))
     }
 
     #[tokio::test]
@@ -558,6 +558,30 @@ mod tests {
             TableScan: DATA
         "#
                         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_multiple_unions() -> Result<()> {
+        let plan_str = test_plan_to_string("multiple_unions.json").await?;
+        assert_snapshot!(
+        plan_str,
+        @r#"
+        Projection: Utf8("people") AS product_category, Utf8("people")__temp__0 AS product_type, product_key
+          Union
+            Projection: Utf8("people"), Utf8("people") AS Utf8("people")__temp__0, sales.product_key
+              Left Join: sales.product_key = food.@food_id
+                TableScan: sales
+                TableScan: food
+            Union
+              Projection: people.$f3, people.$f5, people.product_key0
+                Left Join: people.product_key0 = food.@food_id
+                  TableScan: people
+                  TableScan: food
+              TableScan: more_products
+        "#
+        );
+
         Ok(())
     }
 }

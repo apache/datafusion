@@ -15,12 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use abi_stable::std_types::RVec;
-use arrow::{datatypes::DataType, ffi::FFI_ArrowSchema};
-
 use crate::arrow_wrappers::WrappedSchema;
+use abi_stable::std_types::RVec;
+use arrow::datatypes::Field;
+use arrow::{datatypes::DataType, ffi::FFI_ArrowSchema};
+use arrow_schema::FieldRef;
+use std::sync::Arc;
 
-/// This macro is a helpful conversion utility to conver from an abi_stable::RResult to a
+/// This macro is a helpful conversion utility to convert from an abi_stable::RResult to a
 /// DataFusion result.
 #[macro_export]
 macro_rules! df_result {
@@ -62,6 +64,31 @@ macro_rules! rresult_return {
             }
         }
     };
+}
+
+/// This is a utility function to convert a slice of [`Field`] to its equivalent
+/// FFI friendly counterpart, [`WrappedSchema`]
+pub fn vec_fieldref_to_rvec_wrapped(
+    fields: &[FieldRef],
+) -> Result<RVec<WrappedSchema>, arrow::error::ArrowError> {
+    Ok(fields
+        .iter()
+        .map(FFI_ArrowSchema::try_from)
+        .collect::<Result<Vec<_>, arrow::error::ArrowError>>()?
+        .into_iter()
+        .map(WrappedSchema)
+        .collect())
+}
+
+/// This is a utility function to convert an FFI friendly vector of [`WrappedSchema`]
+/// to their equivalent [`Field`].
+pub fn rvec_wrapped_to_vec_fieldref(
+    fields: &RVec<WrappedSchema>,
+) -> Result<Vec<FieldRef>, arrow::error::ArrowError> {
+    fields
+        .iter()
+        .map(|d| Field::try_from(&d.0).map(Arc::new))
+        .collect()
 }
 
 /// This is a utility function to convert a slice of [`DataType`] to its equivalent
@@ -116,7 +143,7 @@ mod tests {
         assert!(returned_err_result.is_err());
         assert!(
             returned_err_result.unwrap_err().to_string()
-                == format!("Execution error: {}", ERROR_VALUE)
+                == format!("Execution error: {ERROR_VALUE}")
         );
 
         let ok_result: Result<String, DataFusionError> = Ok(VALID_VALUE.to_string());
@@ -129,7 +156,7 @@ mod tests {
         let returned_err_r_result = wrap_result(err_result);
         assert!(
             returned_err_r_result
-                == RResult::RErr(format!("Execution error: {}", ERROR_VALUE).into())
+                == RResult::RErr(format!("Execution error: {ERROR_VALUE}").into())
         );
     }
 }

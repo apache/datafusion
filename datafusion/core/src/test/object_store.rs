@@ -148,7 +148,7 @@ impl ObjectStore for BlockingObjectStore {
                     "{} barrier wait timed out for {location}",
                     BlockingObjectStore::NAME
                 );
-                log::error!("{}", error_message);
+                log::error!("{error_message}");
                 return Err(Error::Generic {
                     store: BlockingObjectStore::NAME,
                     source: error_message.into(),

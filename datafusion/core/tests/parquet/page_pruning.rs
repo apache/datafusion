@@ -77,7 +77,7 @@ async fn get_parquet_exec(state: &SessionState, filter: Expr) -> DataSourceExec 
 
     let source = Arc::new(
         ParquetSource::default()
-            .with_predicate(Arc::clone(&schema), predicate)
+            .with_predicate(predicate)
             .with_enable_page_index(true),
     );
     let base_config = FileScanConfigBuilder::new(object_store_url, schema, source)

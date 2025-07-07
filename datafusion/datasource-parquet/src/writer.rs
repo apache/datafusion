@@ -46,7 +46,15 @@ pub async fn plan_to_parquet(
         let propclone = writer_properties.clone();
 
         let storeref = Arc::clone(&store);
-        let buf_writer = BufWriter::new(storeref, file.clone());
+        let buf_writer = BufWriter::with_capacity(
+            storeref,
+            file.clone(),
+            task_ctx
+                .session_config()
+                .options()
+                .execution
+                .objectstore_writer_buffer_size,
+        );
         let mut stream = plan.execute(i, Arc::clone(&task_ctx))?;
         join_set.spawn(async move {
             let mut writer =

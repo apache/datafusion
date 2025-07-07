@@ -50,11 +50,22 @@ pub const TIMESTAMP_NANO_TYPE_VARIATION_REF: u32 = 3;
 
 pub const DATE_32_TYPE_VARIATION_REF: u32 = 0;
 pub const DATE_64_TYPE_VARIATION_REF: u32 = 1;
+pub const TIME_32_TYPE_VARIATION_REF: u32 = 0;
+pub const TIME_64_TYPE_VARIATION_REF: u32 = 1;
 pub const DEFAULT_CONTAINER_TYPE_VARIATION_REF: u32 = 0;
 pub const LARGE_CONTAINER_TYPE_VARIATION_REF: u32 = 1;
 pub const VIEW_CONTAINER_TYPE_VARIATION_REF: u32 = 2;
 pub const DECIMAL_128_TYPE_VARIATION_REF: u32 = 0;
 pub const DECIMAL_256_TYPE_VARIATION_REF: u32 = 1;
+/// Used for the arrow type [`DataType::Interval`] with [`IntervalUnit::DayTime`].
+///
+/// [`DataType::Interval`]: datafusion::arrow::datatypes::DataType::Interval
+/// [`IntervalUnit::DayTime`]: datafusion::arrow::datatypes::IntervalUnit::DayTime
+pub const DEFAULT_INTERVAL_DAY_TYPE_VARIATION_REF: u32 = 0;
+/// Used for the arrow type [`DataType::Duration`].
+///
+/// [`DataType::Duration`]: datafusion::arrow::datatypes::DataType::Duration
+pub const DURATION_INTERVAL_DAY_TYPE_VARIATION_REF: u32 = 1;
 
 // For [user-defined types](https://substrait.io/types/type_classes/#user-defined-types).
 /// For [`DataType::Interval`] with [`IntervalUnit::YearMonth`].

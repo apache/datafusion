@@ -108,6 +108,7 @@ impl ScalarUDFImpl for CurrentDateFunc {
         );
         Ok(ExprSimplifyResult::Simplified(Expr::Literal(
             ScalarValue::Date32(days),
+            None,
         )))
     }
 
