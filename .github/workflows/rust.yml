@@ -699,7 +699,7 @@ jobs:
       - name: Rust Dependency Cache
         uses: Swatinem/rust-cache@v2
         with:
-          save-if: false # set in linux-test
+#          save-if: ${{ github.ref_name == 'main' }}
           shared-key: "amd-ci-clippy"
       - name: Run clippy
         run: ci/scripts/rust_clippy.sh
