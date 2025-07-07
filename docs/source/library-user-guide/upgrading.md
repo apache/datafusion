@@ -84,16 +84,16 @@ The default implementation of the `equals` method in the `ScalarUDFImpl` trait h
 # use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 # use arrow::datatypes::DataType;
 # use std::any::Any;
-# 
+#
 # #[derive(Debug)]
 # struct MyUdf {
 #     param: i32,
 # }
-# 
+#
 # impl MyUdf {
 #     fn name(&self) -> &str { "my_udf" }
 # }
-# 
+#
 impl ScalarUDFImpl for MyUdf {
     fn as_any(&self) -> &dyn Any {
         self
