@@ -353,6 +353,18 @@ impl FilterDescription {
         }
     }
 
+    pub fn with_child_pushdown(
+        mut self,
+        parent_filters: PredicateSupports,
+        self_filters: Vec<Arc<dyn PhysicalExpr>>,
+    ) -> Self {
+        self.child_filter_descriptions.push(ChildFilterDescription {
+            parent_filters,
+            self_filters,
+        });
+        self
+    }
+
     pub fn parent_filters(&self) -> Vec<PredicateSupports> {
         self.child_filter_descriptions
             .iter()
