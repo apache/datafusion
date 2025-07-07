@@ -24,6 +24,7 @@ use std::{
     any::Any,
     hash::{Hash, Hasher},
 };
+
 #[derive(Debug)]
 #[allow(dead_code)]
 struct ParamUdf {
