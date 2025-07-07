@@ -1774,20 +1774,9 @@ async fn test_tpch_part_in_list_query_with_real_parquet_data() -> Result<()> {
     let codec = DefaultPhysicalExtensionCodec {};
     let proto = PhysicalPlanNode::try_from_physical_plan(physical_plan.clone(), &codec)?;
 
-    // Deserialize the physical plan - this is where the bug occurs
-    let result = proto.try_into_physical_plan(&ctx, ctx.runtime_env().as_ref(), &codec);
-
-    // BUG: Assert that deserialization fails with the expected error
-    // There won't be an error if the bug is fixed
-    let err =
-        result.expect_err("Expected deserialization to fail due to type mismatch bug");
-    assert!(
-        err.to_string().contains("inlist should be same")
-            && err.to_string().contains("Int64")
-            && err.to_string().contains("Int32"),
-        "Expected type mismatch error with Int64/Int32, got: {}",
-        err
-    );
+    // This will fail with the bug, but should succeed when fixed
+    let _deserialized_plan =
+        proto.try_into_physical_plan(&ctx, ctx.runtime_env().as_ref(), &codec)?;
 
     Ok(())
 }
