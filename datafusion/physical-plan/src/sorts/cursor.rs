@@ -289,7 +289,7 @@ impl CursorArray for StringViewArray {
     }
 }
 
-/// Todo use arrow-rs side api after: <https://github.com/apache/arrow-rs/pull/7748> released
+/// Todo use arrow-rs side api after: <https://github.com/apache/arrow-rs/pull/7748> and <https://github.com/apache/arrow-rs/pull/7875> released
 /// Builds a 128-bit composite key for an inline value:
 ///
 /// - High 96 bits: the inline data in big-endian byte order (for correct lexicographical sorting).
@@ -300,7 +300,7 @@ impl CursorArray for StringViewArray {
 /// little-endian `u128` representation, converts them to big-endian ordering, and packs them
 /// into a single `u128` value suitable for fast, branchless comparisons.
 ///
-/// ### Why include length?
+/// # Why include length?
 ///
 /// A pure 96-bit content comparison can’t distinguish between two values whose inline bytes
 /// compare equal—either because one is a true prefix of the other or because zero-padding
@@ -322,29 +322,85 @@ impl CursorArray for StringViewArray {
 /// key("bar\0") = 0x0000000000000000000062617200000004
 /// ⇒ key("bar") < key("bar\0")
 /// ```
+/// # Inlining and Endianness
+///
+/// - We start by calling `.to_le_bytes()` on the `raw` `u128`, because Rust’s native in‑memory
+///   representation is little‑endian on x86/ARM.
+/// - We extract the low 32 bits numerically (`raw as u32`)—this step is endianness‑free.
+/// - We copy the 12 bytes of inline data (original order) into `buf[0..12]`.
+/// - We serialize `length` as big‑endian into `buf[12..16]`.
+/// - Finally, `u128::from_be_bytes(buf)` treats `buf[0]` as the most significant byte
+///   and `buf[15]` as the least significant, producing a `u128` whose integer value
+///   directly encodes “inline data then length” in big‑endian form.
+///
+/// This ensures that a simple `u128` comparison is equivalent to the desired
+/// lexicographical comparison of the inline bytes followed by length.
 #[inline(always)]
 pub fn inline_key_fast(raw: u128) -> u128 {
-    // Convert the raw u128 (little-endian) into bytes for manipulation
+    // 1. Decompose `raw` into little‑endian bytes:
+    //    - raw_bytes[0..4]  = length in LE
+    //    - raw_bytes[4..16] = inline string data
     let raw_bytes = raw.to_le_bytes();
 
-    // Extract the length (first 4 bytes), convert to big-endian u32, and promote to u128
-    let len_le = &raw_bytes[0..4];
-    let len_be = u32::from_le_bytes(len_le.try_into().unwrap()).to_be() as u128;
+    // 2. Numerically truncate to get the low 32‑bit length (endianness‑free).
+    let length = raw as u32;
 
-    // Extract the inline string bytes (next 12 bytes), place them into the lower 12 bytes of a 16-byte array,
-    // padding the upper 4 bytes with zero to form a little-endian u128 value
-    let mut inline_bytes = [0u8; 16];
-    inline_bytes[4..16].copy_from_slice(&raw_bytes[4..16]);
+    // 3. Build a 16‑byte buffer in big‑endian order:
+    //    - buf[0..12]  = inline string bytes (in original order)
+    //    - buf[12..16] = length.to_be_bytes() (BE)
+    let mut buf = [0u8; 16];
+    buf[0..12].copy_from_slice(&raw_bytes[4..16]); // inline data
 
-    // Convert to big-endian to ensure correct lexical ordering
-    let inline_u128 = u128::from_le_bytes(inline_bytes).to_be();
+    // Why convert length to big-endian for comparison?
+    //
+    // Rust (on most platforms) stores integers in little-endian format,
+    // meaning the least significant byte is at the lowest memory address.
+    // For example, an u32 value like 0x22345677 is stored in memory as:
+    //
+    //   [0x77, 0x56, 0x34, 0x22]  // little-endian layout
+    //    ^     ^     ^     ^
+    //  LSB   ↑↑↑           MSB
+    //
+    // This layout is efficient for arithmetic but *not* suitable for
+    // lexicographic (dictionary-style) comparison of byte arrays.
+    //
+    // To compare values by byte order—e.g., for sorted keys or binary trees—
+    // we must convert them to **big-endian**, where:
+    //
+    //   - The most significant byte (MSB) comes first (index 0)
+    //   - The least significant byte (LSB) comes last (index N-1)
+    //
+    // In big-endian, the same u32 = 0x22345677 would be represented as:
+    //
+    //   [0x22, 0x34, 0x56, 0x77]
+    //
+    // This ordering aligns with natural string/byte sorting, so calling
+    // `.to_be_bytes()` allows us to construct
+    // keys where standard numeric comparison (e.g., `<`, `>`) behaves
+    // like lexicographic byte comparison.
+    buf[12..16].copy_from_slice(&length.to_be_bytes()); // length in BE
 
-    // Shift right by 32 bits to discard the zero padding (upper 4 bytes),
-    // so that the inline string occupies the high 96 bits
-    let inline_part = inline_u128 >> 32;
-
-    // Combine the inline string part (high 96 bits) and length (low 32 bits) into the final key
-    (inline_part << 32) | len_be
+    // 4. Deserialize the buffer as a big‑endian u128:
+    //    buf[0] is MSB, buf[15] is LSB.
+    // Details:
+    // Note on endianness and layout:
+    //
+    // Although `buf[0]` is stored at the lowest memory address,
+    // calling `u128::from_be_bytes(buf)` interprets it as the **most significant byte (MSB)**,
+    // and `buf[15]` as the **least significant byte (LSB)**.
+    //
+    // This is the core principle of **big-endian decoding**:
+    //   - Byte at index 0 maps to bits 127..120 (highest)
+    //   - Byte at index 1 maps to bits 119..112
+    //   - ...
+    //   - Byte at index 15 maps to bits 7..0 (lowest)
+    //
+    // So even though memory layout goes from low to high (left to right),
+    // big-endian treats the **first byte** as highest in value.
+    //
+    // This guarantees that comparing two `u128` keys is equivalent to lexicographically
+    // comparing the original inline bytes, followed by length.
+    u128::from_be_bytes(buf)
 }
 
 impl CursorValues for StringViewArray {
@@ -672,22 +728,35 @@ mod tests {
     ///
     /// This also includes a specific test for the “bar” vs. “bar\0” case, demonstrating why
     /// the length field is required even when all inline bytes fit in 12 bytes.
+    ///
+    /// The test includes strings that verify correct byte order (prevent reversal bugs),
+    /// and length-based tie-breaking in the composite key.
+    ///
+    /// The test confirms that `inline_key_fast` produces keys which sort consistently
+    /// with the expected lexicographical order of the raw byte arrays.
     #[test]
     fn test_inline_key_fast_various_lengths_and_lexical() {
-        /// Helper to create a raw u128 value representing an inline ByteView
-        /// - `length`: number of meaningful bytes (≤ 12)
-        /// - `data`: the actual inline data
+        /// Helper to create a raw u128 value representing an inline ByteView:
+        /// - `length`: number of meaningful bytes (must be ≤ 12)
+        /// - `data`: the actual inline data bytes
+        ///
+        /// The first 4 bytes encode length in little-endian,
+        /// the following 12 bytes contain the inline string data (unpadded).
         fn make_raw_inline(length: u32, data: &[u8]) -> u128 {
             assert!(length as usize <= 12, "Inline length must be ≤ 12");
-            assert!(data.len() == length as usize, "Data must match length");
+            assert!(
+                data.len() == length as usize,
+                "Data length must match `length`"
+            );
 
             let mut raw_bytes = [0u8; 16];
-            raw_bytes[0..4].copy_from_slice(&length.to_le_bytes()); // little-endian length
+            raw_bytes[0..4].copy_from_slice(&length.to_le_bytes()); // length stored little-endian
             raw_bytes[4..(4 + data.len())].copy_from_slice(data); // inline data
             u128::from_le_bytes(raw_bytes)
         }
 
-        // Test inputs: include the specific "bar" vs "bar\0" case, plus length and lexical variations
+        // Test inputs: various lengths and lexical orders,
+        // plus special cases for byte order and length tie-breaking
         let test_inputs: Vec<&[u8]> = vec![
             b"a",
             b"aa",
@@ -701,14 +770,31 @@ mod tests {
             b"abcdefghi",
             b"abcdefghij",
             b"abcdefghijk",
-            b"abcdefghijkl", // 12 bytes, max inline
+            b"abcdefghijkl",
+            // Tests for byte-order reversal bug:
+            // Without the fix, "backend one" would compare as "eno dnekcab",
+            // causing incorrect sort order relative to "backend two".
+            b"backend one",
+            b"backend two",
+            // Tests length-tiebreaker logic:
+            // "bar" (3 bytes) and "bar\0" (4 bytes) have identical inline data,
+            // so only the length differentiates their ordering.
             b"bar",
-            b"bar\0", // special case to test length tiebreaker
+            b"bar\0",
+            // Additional lexical and length tie-breaking cases with same prefix, in correct lex order:
+            b"than12Byt",
+            b"than12Bytes",
+            b"than12Bytes\0",
+            b"than12Bytesx",
+            b"than12Bytex",
+            b"than12Bytez",
+            // Additional lexical tests
             b"xyy",
             b"xyz",
+            b"xza",
         ];
 
-        // Monotonic key order: content then length，and cross-check against GenericBinaryArray comparison
+        // Create a GenericBinaryArray for cross-comparison of lex order
         let array: GenericBinaryArray<i32> = GenericBinaryArray::from(
             test_inputs.iter().map(|s| Some(*s)).collect::<Vec<_>>(),
         );
@@ -716,11 +802,14 @@ mod tests {
         for i in 0..array.len() - 1 {
             let v1 = array.value(i);
             let v2 = array.value(i + 1);
-            // Ensure lexical ordering matches
+
+            // Assert the array's natural lexical ordering is correct
             assert!(v1 < v2, "Array compare failed: {v1:?} !< {v2:?}");
-            // Ensure fast key compare matches
+
+            // Assert the keys produced by inline_key_fast reflect the same ordering
             let key1 = inline_key_fast(make_raw_inline(v1.len() as u32, v1));
             let key2 = inline_key_fast(make_raw_inline(v2.len() as u32, v2));
+
             assert!(
                 key1 < key2,
                 "Key compare failed: key({v1:?})=0x{key1:032x} !< key({v2:?})=0x{key2:032x}",
