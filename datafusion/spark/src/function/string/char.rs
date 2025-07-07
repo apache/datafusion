@@ -15,15 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{any::Any, sync::Arc};
-extern crate arrow;
-extern crate datafusion_common;
-extern crate datafusion_expr;
 use arrow::array::ArrayRef;
 use arrow::array::GenericStringBuilder;
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::Int64;
 use arrow::datatypes::DataType::Utf8;
+use std::{any::Any, sync::Arc};
 
 use datafusion_common::{cast::as_int64_array, exec_err, Result, ScalarValue};
 use datafusion_expr::{
