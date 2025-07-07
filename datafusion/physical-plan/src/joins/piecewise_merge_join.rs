@@ -15,10 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{
-    new_null_array, Array, AsArray, BooleanArray, Float32Array, Float64Array, Int16Array,
-    Int32Array, Int64Array, Int8Array, RecordBatchOptions, UInt16Array, UInt8Array,
-};
+use arrow::array::{new_null_array, Array, RecordBatchOptions};
 use arrow::compute::take;
 use arrow::{
     array::{
@@ -28,16 +25,17 @@ use arrow::{
     compute::{concat_batches, sort_to_indices, take_record_batch},
     util::bit_util,
 };
-use arrow_schema::{ArrowError, DataType, Schema, SchemaRef, SortOptions};
+use arrow_schema::{ArrowError, Schema, SchemaRef, SortOptions};
+use datafusion_common::NullEquality;
 use datafusion_common::{
     exec_err, internal_err, plan_err, utils::compare_rows, JoinSide, Result, ScalarValue,
 };
-use datafusion_common::{not_impl_err, NullEquality};
 use datafusion_execution::{
     memory_pool::{MemoryConsumer, MemoryReservation},
     RecordBatchStream, SendableRecordBatchStream,
 };
 use datafusion_expr::{JoinType, Operator};
+use datafusion_functions_aggregate_common::min_max::{max_batch, min_batch};
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
 use datafusion_physical_expr::{
     LexOrdering, OrderingRequirements, PhysicalExpr, PhysicalExprRef, PhysicalSortExpr,
@@ -1097,7 +1095,7 @@ fn resolve_existence_join(
     // Based on the operator we will find the minimum or maximum value.
     match operator {
         Operator::Gt | Operator::GtEq => {
-            let max_value = min_max(&stream_batch.values[0], true)?;
+            let max_value = max_batch(&stream_batch.values[0])?;
             let new_max = if let Some(prev) = (*min_max_value).clone() {
                 if max_value.partial_cmp(&prev).unwrap() == Ordering::Greater {
                     max_value
@@ -1111,7 +1109,7 @@ fn resolve_existence_join(
         }
 
         Operator::Lt | Operator::LtEq => {
-            let min_value = min_max(&stream_batch.values[0], false)?;
+            let min_value = min_batch(&stream_batch.values[0])?;
             let new_min = if let Some(prev) = (*min_max_value).clone() {
                 if min_value.partial_cmp(&prev).unwrap() == Ordering::Less {
                     min_value
@@ -1292,82 +1290,6 @@ fn build_matched_indices(
     )?)
 }
 
-pub fn min_max(array: &ArrayRef, find_max: bool) -> Result<ScalarValue> {
-    macro_rules! find_min_max {
-        ($ARR:ty, $SCALAR:ident) => {{
-            let arr = array.as_any().downcast_ref::<$ARR>().unwrap();
-            let mut extreme: Option<_> = None;
-            for i in 0..arr.len() {
-                if arr.is_valid(i) {
-                    let v = arr.value(i);
-                    extreme = Some(match extreme {
-                        Some(cur) => {
-                            if find_max {
-                                if v > cur {
-                                    v
-                                } else {
-                                    cur
-                                }
-                            } else {
-                                if v < cur {
-                                    v
-                                } else {
-                                    cur
-                                }
-                            }
-                        }
-                        None => v,
-                    });
-                }
-            }
-            ScalarValue::$SCALAR(extreme)
-        }};
-    }
-
-    let result = match array.data_type() {
-        DataType::Int8 => find_min_max!(Int8Array, Int8),
-        DataType::Int16 => find_min_max!(Int16Array, Int16),
-        DataType::Int32 => find_min_max!(Int32Array, Int32),
-        DataType::Int64 => find_min_max!(Int64Array, Int64),
-        DataType::UInt8 => find_min_max!(UInt8Array, UInt8),
-        DataType::UInt16 => find_min_max!(UInt16Array, UInt16),
-        DataType::UInt32 => find_min_max!(UInt32Array, UInt32),
-        DataType::UInt64 => find_min_max!(UInt64Array, UInt64),
-        DataType::Float32 => find_min_max!(Float32Array, Float32),
-        DataType::Float64 => find_min_max!(Float64Array, Float64),
-
-        DataType::Boolean => {
-            let arr = array.as_any().downcast_ref::<BooleanArray>().unwrap();
-            let mut extreme: Option<bool> = None;
-            for i in 0..arr.len() {
-                if arr.is_valid(i) {
-                    let v = arr.value(i);
-                    extreme = Some(match extreme {
-                        Some(cur) => {
-                            if find_max {
-                                cur || v // max: true if either is true
-                            } else {
-                                cur && v // min: false if either is false
-                            }
-                        }
-                        None => v,
-                    });
-                }
-            }
-            ScalarValue::Boolean(extreme)
-        }
-
-        dt => {
-            return not_impl_err!(
-                "Unsupported data type in PiecewiseMergeJoin min/max function: {}",
-                dt
-            );
-        }
-    };
-
-    Ok(result)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1377,7 +1299,7 @@ mod tests {
         ExecutionPlan,
     };
     use arrow::array::{Date32Array, Date64Array};
-    use arrow_schema::Field;
+    use arrow_schema::{DataType, Field};
     use datafusion_common::test_util::batches_to_string;
     use datafusion_execution::TaskContext;
     use datafusion_expr::JoinType;
