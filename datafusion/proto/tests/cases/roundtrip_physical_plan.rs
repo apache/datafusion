@@ -1756,11 +1756,11 @@ async fn test_tpch_part_in_list_query_with_real_parquet_data() -> Result<()> {
     // Register the TPC-H part table using the local test data
     let test_data = datafusion_test_data();
     let table_sql = format!(
-        "CREATE EXTERNAL TABLE part STORED AS PARQUET LOCATION '{}/tpch_part_small.parquet'",
-        test_data
+        "CREATE EXTERNAL TABLE part STORED AS PARQUET LOCATION '{test_data}/tpch_part_small.parquet'"
+
     );
     ctx.sql(&table_sql).await.map_err(|e| {
-        DataFusionError::External(format!("Failed to create part table: {}", e).into())
+        DataFusionError::External(format!("Failed to create part table: {e}").into())
     })?;
 
     // Test the exact problematic query
