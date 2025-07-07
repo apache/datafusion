@@ -694,7 +694,7 @@ struct Options {
         long,
         help = "IGNORED (for compatibility with built-in rust test runner)"
     )]
-    test_threads: usize,
+    test_threads: Option<usize>,
 }
 
 impl Options {
