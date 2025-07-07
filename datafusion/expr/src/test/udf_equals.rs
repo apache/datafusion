@@ -24,7 +24,7 @@ use std::{
     any::Any,
     hash::{Hash, Hasher},
 };
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 #[allow(dead_code)]
 struct ParamUdf {
     param: i32,
@@ -58,7 +58,7 @@ impl ScalarUDFImpl for ParamUdf {
     }
     fn equals(&self, other: &dyn ScalarUDFImpl) -> bool {
         if let Some(other) = other.as_any().downcast_ref::<ParamUdf>() {
-            self.param == other.param && self.type_id() == other.type_id()
+            self == other
         } else {
             false
         }
@@ -66,7 +66,7 @@ impl ScalarUDFImpl for ParamUdf {
     fn hash_value(&self) -> u64 {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         self.param.hash(&mut hasher);
-        self.type_id().hash(&mut hasher);
+        self.signature.hash(&mut hasher);
         hasher.finish()
     }
 }
