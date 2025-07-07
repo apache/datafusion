@@ -24,7 +24,6 @@ pub use hash_join::HashJoinExec;
 pub use nested_loop_join::NestedLoopJoinExec;
 use parking_lot::Mutex;
 pub use piecewise_merge_join::PiecewiseMergeJoinExec;
-// Note: SortMergeJoin is not used in plans yet
 pub use sort_merge_join::SortMergeJoinExec;
 pub use symmetric_hash_join::SymmetricHashJoinExec;
 mod cross_join;
