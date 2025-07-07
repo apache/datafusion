@@ -78,6 +78,11 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
+      - name: Rust Dependency Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "amd-ci-check"
+          save-if: 'false' # set in linux-test
       - name: Check datafusion-common (default features)
         run: cargo check --profile ci --all-targets -p datafusion-common
       #
