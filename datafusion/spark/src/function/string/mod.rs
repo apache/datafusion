@@ -23,7 +23,7 @@ use datafusion_functions::make_udf_function;
 use std::sync::Arc;
 
 make_udf_function!(ascii::SparkAscii, ascii);
-make_udf_function!(char::SparkChar, char);
+make_udf_function!(char::CharFunc, char);
 
 pub mod expr_fn {
     use datafusion_functions::export_functions;

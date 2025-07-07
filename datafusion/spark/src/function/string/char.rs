@@ -16,14 +16,14 @@
 // under the License.
 
 use std::{any::Any, sync::Arc};
-
-use arrow::{
-    array::{ArrayRef, GenericStringBuilder},
-    datatypes::{
-        DataType,
-        DataType::{Int64, Utf8},
-    },
-};
+extern crate arrow;
+extern crate datafusion_common;
+extern crate datafusion_expr;
+use arrow::array::ArrayRef;
+use arrow::array::GenericStringBuilder;
+use arrow::datatypes::DataType;
+use arrow::datatypes::DataType::Int64;
+use arrow::datatypes::DataType::Utf8;
 
 use datafusion_common::{cast::as_int64_array, exec_err, Result, ScalarValue};
 use datafusion_expr::{
@@ -33,17 +33,17 @@ use datafusion_expr::{
 /// Spark-compatible `char` expression
 /// <https://spark.apache.org/docs/latest/api/sql/index.html#char>
 #[derive(Debug)]
-pub struct SparkChar {
+pub struct CharFunc {
     signature: Signature,
 }
 
-impl Default for SparkChar {
+impl Default for CharFunc {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl SparkChar {
+impl CharFunc {
     pub fn new() -> Self {
         Self {
             signature: Signature::uniform(1, vec![Int64], Volatility::Immutable),
@@ -51,7 +51,7 @@ impl SparkChar {
     }
 }
 
-impl ScalarUDFImpl for SparkChar {
+impl ScalarUDFImpl for CharFunc {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -119,7 +119,11 @@ fn chr(args: &[ArrayRef]) -> Result<ArrayRef> {
                 } else {
                     match core::char::from_u32((integer % 256) as u32) {
                         Some(ch) => builder.append_value(ch.to_string()),
-                        None => return exec_err!("requested character not compatible for encoding.")
+                        None => {
+                            return exec_err!(
+                                "requested character not compatible for encoding."
+                            )
+                        }
                     }
                 }
             }
