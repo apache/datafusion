@@ -132,14 +132,14 @@ impl FileSource for TestSource {
     fn create_file_opener(
         &self,
         _object_store: Arc<dyn ObjectStore>,
-        _base_config: &FileScanConfig,
+        base_config: &FileScanConfig,
         _partition: usize,
     ) -> Arc<dyn FileOpener> {
         Arc::new(TestOpener {
             batches: self.batches.clone(),
             batch_size: self.batch_size,
             schema: self.schema.clone(),
-            projection: self.projection.clone(),
+            projection: base_config.projection.clone(),
         })
     }
 
@@ -157,13 +157,6 @@ impl FileSource for TestSource {
     fn with_schema(&self, schema: SchemaRef) -> Arc<dyn FileSource> {
         Arc::new(TestSource {
             schema: Some(schema),
-            ..self.clone()
-        })
-    }
-
-    fn with_projection(&self, config: &FileScanConfig) -> Arc<dyn FileSource> {
-        Arc::new(TestSource {
-            projection: config.projection.clone(),
             ..self.clone()
         })
     }
