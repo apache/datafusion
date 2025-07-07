@@ -723,6 +723,7 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     /// use arrow::datatypes::DataType;
     /// use datafusion_common::{not_impl_err, Result};
     /// use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature};
+    ///
     /// #[derive(Debug)]
     /// struct MyUdf {
     ///  param: i32,
