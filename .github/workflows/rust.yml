@@ -303,8 +303,8 @@ jobs:
     runs-on: ubuntu-latest
     # should be uncommented once https://github.com/apache/datafusion/pull/16644 is merged
     # and cache should be added
-    container:
-      image: amd64/rust
+    #container:
+    #  image: amd64/rust
     steps:
       - uses: actions/checkout@v4
         with:
