@@ -113,7 +113,6 @@ pub struct TestSource {
     batches: Vec<RecordBatch>,
     schema: Option<SchemaRef>,
     metrics: ExecutionPlanMetricsSet,
-    projection: Option<Vec<usize>>,
     schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
 }
 
