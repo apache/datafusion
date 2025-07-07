@@ -1675,6 +1675,38 @@ pub fn build_join_schema(
     dfschema.with_functional_dependencies(func_dependencies)
 }
 
+/// (Re)qualify the sides of a join if needed, i.e. if the columns from one side would otherwise
+/// conflict with the columns from the other.
+/// This is especially useful for queries that come as Substrait, since Substrait doesn't currently allow specifying
+/// aliases, neither for columns nor for tables.  DataFusion requires columns to be uniquely identifiable, in some
+/// places (see e.g. DFSchema::check_names).
+/// The function returns:
+/// - The requalified or original left logical plan
+/// - The requalified or original right logical plan
+/// - If a requalification was needed or not
+pub fn requalify_sides_if_needed(
+    left: LogicalPlanBuilder,
+    right: LogicalPlanBuilder,
+) -> Result<(LogicalPlanBuilder, LogicalPlanBuilder, bool)> {
+    let left_cols = left.schema().columns();
+    let right_cols = right.schema().columns();
+    if left_cols.iter().any(|l| {
+        right_cols.iter().any(|r| {
+            l == r || (l.name == r.name && (l.relation.is_none() || r.relation.is_none()))
+        })
+    }) {
+        // These names have no connection to the original plan, but they'll make the columns
+        // (mostly) unique.
+        Ok((
+            left.alias(TableReference::bare("left"))?,
+            right.alias(TableReference::bare("right"))?,
+            true,
+        ))
+    } else {
+        Ok((left, right, false))
+    }
+}
+
 /// Add additional "synthetic" group by expressions based on functional
 /// dependencies.
 ///
@@ -2534,20 +2566,24 @@ mod tests {
         .project(vec![col("id"), col("first_name").alias("id")]);
 
         match plan {
-            Err(DataFusionError::SchemaError(
-                SchemaError::AmbiguousReference {
-                    field:
-                        Column {
-                            relation: Some(TableReference::Bare { table }),
-                            name,
-                            spans: _,
-                        },
-                },
-                _,
-            )) => {
-                assert_eq!(*"employee_csv", *table);
-                assert_eq!("id", &name);
-                Ok(())
+            Err(DataFusionError::SchemaError(err, _)) => {
+                if let SchemaError::AmbiguousReference { field } = *err {
+                    let Column {
+                        relation,
+                        name,
+                        spans: _,
+                    } = *field;
+                    let Some(TableReference::Bare { table }) = relation else {
+                        return plan_err!(
+                            "wrong relation: {relation:?}, expected table name"
+                        );
+                    };
+                    assert_eq!(*"employee_csv", *table);
+                    assert_eq!("id", &name);
+                    Ok(())
+                } else {
+                    plan_err!("Plan should have returned an DataFusionError::SchemaError")
+                }
             }
             _ => plan_err!("Plan should have returned an DataFusionError::SchemaError"),
         }

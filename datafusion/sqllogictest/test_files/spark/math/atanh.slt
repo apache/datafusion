@@ -30,4 +30,3 @@
 ## PySpark 3.5.5 Result: {'ATANH(2)': nan, 'typeof(ATANH(2))': 'double', 'typeof(2)': 'int'}
 #query
 #SELECT atanh(2::int);
-

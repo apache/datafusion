@@ -25,4 +25,3 @@
 ## PySpark 3.5.5 Result: {'ATAN2(0, 0)': 0.0, 'typeof(ATAN2(0, 0))': 'double', 'typeof(0)': 'int'}
 #query
 #SELECT atan2(0::int);
-

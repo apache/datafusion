@@ -25,4 +25,3 @@
 ## PySpark 3.5.5 Result: {'find_in_set(ab, abc,b,ab,c,def)': 3, 'typeof(find_in_set(ab, abc,b,ab,c,def))': 'int', 'typeof(ab)': 'string', 'typeof(abc,b,ab,c,def)': 'string'}
 #query
 #SELECT find_in_set('ab'::string, 'abc,b,ab,c,def'::string);
-
