@@ -905,13 +905,13 @@ impl AsLogicalPlan for LogicalPlanNode {
                     extension_codec.try_decode_file_format(&copy.file_type, ctx)?,
                 );
 
-                Ok(LogicalPlan::Copy(dml::CopyTo {
-                    input: Arc::new(input),
-                    output_url: copy.output_url.clone(),
-                    partition_by: copy.partition_by.clone(),
+                Ok(LogicalPlan::Copy(dml::CopyTo::new(
+                    Arc::new(input),
+                    copy.output_url.clone(),
+                    copy.partition_by.clone(),
                     file_type,
-                    options: Default::default(),
-                }))
+                    Default::default(),
+                )))
             }
             LogicalPlanType::Unnest(unnest) => {
                 let input: LogicalPlan =
