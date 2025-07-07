@@ -355,16 +355,14 @@ impl PiecewiseMergeJoinExec {
     fn maintains_input_order(join_type: JoinType) -> Vec<bool> {
         match join_type {
             // The existence side is expected to come in sorted
-            JoinType::LeftSemi
-            | JoinType::LeftAnti
-            | JoinType::LeftMark => vec![true, false],
-            JoinType::RightSemi
-            | JoinType::RightAnti
-            | JoinType::RightMark => {
+            JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark => {
+                vec![true, false]
+            }
+            JoinType::RightSemi | JoinType::RightAnti | JoinType::RightMark => {
                 vec![false, true]
             }
-            // Left, Right, Full, Inner Join is not guaranteed to maintain 
-            // input order as the streamed side will be sorted during 
+            // Left, Right, Full, Inner Join is not guaranteed to maintain
+            // input order as the streamed side will be sorted during
             // execution for `PiecewiseMergeJoin`
             _ => vec![false, false],
         }
@@ -961,7 +959,7 @@ impl PiecewiseMergeJoinStream {
         let buffered_data =
             Arc::clone(&self.buffered_side.try_as_ready().unwrap().buffered_data);
 
-        // For Semi/Anti/Mark joins we mark indices on the buffered side, and retrieve final indices from 
+        // For Semi/Anti/Mark joins we mark indices on the buffered side, and retrieve final indices from
         // `get_final_indices_bitmap`
         if matches!(
             self.join_type,
