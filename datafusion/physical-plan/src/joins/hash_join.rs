@@ -1403,10 +1403,12 @@ impl HashJoinStream {
                     handle_state!(ready!(self.fetch_probe_batch(cx)))
                 }
                 HashJoinStreamState::ProcessProbeBatch(_) => {
-                    handle_state!(self.process_probe_batch())
+                    let poll = handle_state!(self.process_probe_batch());
+                    self.join_metrics.baseline.record_poll(poll)
                 }
                 HashJoinStreamState::ExhaustedProbeSide => {
-                    handle_state!(self.process_unmatched_build_batch())
+                    let poll = handle_state!(self.process_unmatched_build_batch());
+                    self.join_metrics.baseline.record_poll(poll)
                 }
                 HashJoinStreamState::Completed => Poll::Ready(None),
             };
@@ -1582,7 +1584,6 @@ impl HashJoinStream {
         };
 
         self.join_metrics.output_batches.add(1);
-        self.join_metrics.output_rows.add(result.num_rows());
         timer.done();
 
         if next_offset.is_none() {
@@ -1640,7 +1641,6 @@ impl HashJoinStream {
             self.join_metrics.input_rows.add(batch.num_rows());
 
             self.join_metrics.output_batches.add(1);
-            self.join_metrics.output_rows.add(batch.num_rows());
         }
         timer.done();
 
@@ -1671,7 +1671,7 @@ impl EmbeddedProjection for HashJoinExec {
 mod tests {
     use super::*;
     use crate::coalesce_partitions::CoalescePartitionsExec;
-    use crate::test::TestMemoryExec;
+    use crate::test::{assert_join_metrics, TestMemoryExec};
     use crate::{
         common, expressions::Column, repartition::RepartitionExec, test::build_table_i32,
         test::exec::MockExec,
@@ -1764,14 +1764,15 @@ mod tests {
         join_type: &JoinType,
         null_equality: NullEquality,
         context: Arc<TaskContext>,
-    ) -> Result<(Vec<String>, Vec<RecordBatch>)> {
+    ) -> Result<(Vec<String>, Vec<RecordBatch>, MetricsSet)> {
         let join = join(left, right, on, join_type, null_equality)?;
         let columns_header = columns(&join.schema());
 
         let stream = join.execute(0, context)?;
         let batches = common::collect(stream).await?;
+        let metrics = join.metrics().unwrap();
 
-        Ok((columns_header, batches))
+        Ok((columns_header, batches, metrics))
     }
 
     async fn partitioned_join_collect(
@@ -1781,7 +1782,7 @@ mod tests {
         join_type: &JoinType,
         null_equality: NullEquality,
         context: Arc<TaskContext>,
-    ) -> Result<(Vec<String>, Vec<RecordBatch>)> {
+    ) -> Result<(Vec<String>, Vec<RecordBatch>, MetricsSet)> {
         join_collect_with_partition_mode(
             left,
             right,
@@ -1802,7 +1803,7 @@ mod tests {
         partition_mode: PartitionMode,
         null_equality: NullEquality,
         context: Arc<TaskContext>,
-    ) -> Result<(Vec<String>, Vec<RecordBatch>)> {
+    ) -> Result<(Vec<String>, Vec<RecordBatch>, MetricsSet)> {
         let partition_count = 4;
 
         let (left_expr, right_expr) = on
@@ -1866,8 +1867,9 @@ mod tests {
                     .collect::<Vec<_>>(),
             );
         }
+        let metrics = join.metrics().unwrap();
 
-        Ok((columns, batches))
+        Ok((columns, batches, metrics))
     }
 
     #[apply(batch_sizes)]
@@ -1890,7 +1892,7 @@ mod tests {
             Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
         )];
 
-        let (columns, batches) = join_collect(
+        let (columns, batches, metrics) = join_collect(
             Arc::clone(&left),
             Arc::clone(&right),
             on.clone(),
@@ -1915,6 +1917,8 @@ mod tests {
                 "#);
         }
 
+        assert_join_metrics!(metrics, 3);
+
         Ok(())
     }
 
@@ -1937,7 +1941,7 @@ mod tests {
             Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
         )];
 
-        let (columns, batches) = partitioned_join_collect(
+        let (columns, batches, metrics) = partitioned_join_collect(
             Arc::clone(&left),
             Arc::clone(&right),
             on.clone(),
@@ -1961,6 +1965,8 @@ mod tests {
                 "#);
         }
 
+        assert_join_metrics!(metrics, 3);
+
         Ok(())
     }
 
@@ -1982,7 +1988,7 @@ mod tests {
             Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
         )];
 
-        let (columns, batches) = join_collect(
+        let (columns, batches, metrics) = join_collect(
             left,
             right,
             on,
@@ -2007,6 +2013,8 @@ mod tests {
                 "#);
         }
 
+        assert_join_metrics!(metrics, 3);
+
         Ok(())
     }
 
@@ -2028,7 +2036,7 @@ mod tests {
             Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
         )];
 
-        let (columns, batches) = join_collect(
+        let (columns, batches, metrics) = join_collect(
             left,
             right,
             on,
@@ -2053,6 +2061,8 @@ mod tests {
             +----+----+----+----+----+----+
                 "#);
         }
+
+        assert_join_metrics!(metrics, 4);
 
         Ok(())
     }
@@ -2082,7 +2092,7 @@ mod tests {
             ),
         ];
 
-        let (columns, batches) = join_collect(
+        let (columns, batches, metrics) = join_collect(
             left,
             right,
             on,
@@ -2122,6 +2132,8 @@ mod tests {
             +----+----+----+----+----+----+
                 "#);
         }
+
+        assert_join_metrics!(metrics, 3);
 
         Ok(())
     }
@@ -2160,7 +2172,7 @@ mod tests {
             ),
         ];
 
-        let (columns, batches) = join_collect(
+        let (columns, batches, metrics) = join_collect(
             left,
             right,
             on,
@@ -2201,6 +2213,8 @@ mod tests {
                 "#);
         }
 
+        assert_join_metrics!(metrics, 3);
+
         Ok(())
     }
 
@@ -2233,7 +2247,7 @@ mod tests {
             Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
         )];
 
-        let (columns, batches) = join_collect(
+        let (columns, batches, metrics) = join_collect(
             left,
             right,
             on,
@@ -2258,6 +2272,8 @@ mod tests {
             +----+----+----+----+----+----+
                 "#);
         }
+
+        assert_join_metrics!(metrics, 4);
 
         Ok(())
     }
@@ -2578,7 +2594,7 @@ mod tests {
             Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
         )];
 
-        let (columns, batches) = join_collect(
+        let (columns, batches, metrics) = join_collect(
             Arc::clone(&left),
             Arc::clone(&right),
             on.clone(),
@@ -2587,6 +2603,7 @@ mod tests {
             task_ctx,
         )
         .await?;
+
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b1", "c2"]);
 
         allow_duplicates! {
@@ -2600,6 +2617,8 @@ mod tests {
             +----+----+----+----+----+----+
                 "#);
         }
+
+        assert_join_metrics!(metrics, 3);
 
         Ok(())
     }
@@ -2623,7 +2642,7 @@ mod tests {
             Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
         )];
 
-        let (columns, batches) = partitioned_join_collect(
+        let (columns, batches, metrics) = partitioned_join_collect(
             Arc::clone(&left),
             Arc::clone(&right),
             on.clone(),
@@ -2632,6 +2651,7 @@ mod tests {
             task_ctx,
         )
         .await?;
+
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b1", "c2"]);
 
         allow_duplicates! {
@@ -2645,6 +2665,8 @@ mod tests {
             +----+----+----+----+----+----+
                 "#);
         }
+
+        assert_join_metrics!(metrics, 3);
 
         Ok(())
     }
@@ -3268,7 +3290,7 @@ mod tests {
             Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
         )];
 
-        let (columns, batches) = join_collect(
+        let (columns, batches, metrics) = join_collect(
             left,
             right,
             on,
@@ -3291,6 +3313,8 @@ mod tests {
             +----+----+----+----+----+----+
                 "#);
         }
+
+        assert_join_metrics!(metrics, 3);
 
         Ok(())
     }
@@ -3314,7 +3338,7 @@ mod tests {
             Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
         )];
 
-        let (columns, batches) = partitioned_join_collect(
+        let (columns, batches, metrics) = partitioned_join_collect(
             left,
             right,
             on,
@@ -3337,6 +3361,8 @@ mod tests {
             +----+----+----+----+----+----+
                 "#);
         }
+
+        assert_join_metrics!(metrics, 3);
 
         Ok(())
     }
@@ -3409,7 +3435,7 @@ mod tests {
             Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
         )];
 
-        let (columns, batches) = join_collect(
+        let (columns, batches, metrics) = join_collect(
             Arc::clone(&left),
             Arc::clone(&right),
             on.clone(),
@@ -3418,6 +3444,7 @@ mod tests {
             task_ctx,
         )
         .await?;
+
         assert_eq!(columns, vec!["a1", "b1", "c1", "mark"]);
 
         allow_duplicates! {
@@ -3431,6 +3458,8 @@ mod tests {
             +----+----+----+-------+
                 "#);
         }
+
+        assert_join_metrics!(metrics, 3);
 
         Ok(())
     }
@@ -3454,7 +3483,7 @@ mod tests {
             Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
         )];
 
-        let (columns, batches) = partitioned_join_collect(
+        let (columns, batches, metrics) = partitioned_join_collect(
             Arc::clone(&left),
             Arc::clone(&right),
             on.clone(),
@@ -3463,6 +3492,7 @@ mod tests {
             task_ctx,
         )
         .await?;
+
         assert_eq!(columns, vec!["a1", "b1", "c1", "mark"]);
 
         allow_duplicates! {
@@ -3476,6 +3506,8 @@ mod tests {
             +----+----+----+-------+
                 "#);
         }
+
+        assert_join_metrics!(metrics, 3);
 
         Ok(())
     }
@@ -3499,7 +3531,7 @@ mod tests {
             Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
         )];
 
-        let (columns, batches) = join_collect(
+        let (columns, batches, metrics) = join_collect(
             Arc::clone(&left),
             Arc::clone(&right),
             on.clone(),
@@ -3508,6 +3540,7 @@ mod tests {
             task_ctx,
         )
         .await?;
+
         assert_eq!(columns, vec!["a2", "b1", "c2", "mark"]);
 
         let expected = [
@@ -3520,6 +3553,8 @@ mod tests {
             "+----+----+----+-------+",
         ];
         assert_batches_sorted_eq!(expected, &batches);
+
+        assert_join_metrics!(metrics, 3);
 
         Ok(())
     }
@@ -3543,7 +3578,7 @@ mod tests {
             Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
         )];
 
-        let (columns, batches) = partitioned_join_collect(
+        let (columns, batches, metrics) = partitioned_join_collect(
             Arc::clone(&left),
             Arc::clone(&right),
             on.clone(),
@@ -3552,6 +3587,7 @@ mod tests {
             task_ctx,
         )
         .await?;
+
         assert_eq!(columns, vec!["a2", "b1", "c2", "mark"]);
 
         let expected = [
@@ -3565,6 +3601,8 @@ mod tests {
             "+----+----+----+-------+",
         ];
         assert_batches_sorted_eq!(expected, &batches);
+
+        assert_join_metrics!(metrics, 4);
 
         Ok(())
     }
@@ -4055,7 +4093,7 @@ mod tests {
         ];
 
         for (join_type, expected) in test_cases {
-            let (_, batches) = join_collect_with_partition_mode(
+            let (_, batches, metrics) = join_collect_with_partition_mode(
                 Arc::clone(&left),
                 Arc::clone(&right),
                 on.clone(),
@@ -4066,6 +4104,7 @@ mod tests {
             )
             .await?;
             assert_batches_sorted_eq!(expected, &batches);
+            assert_join_metrics!(metrics, expected.len() - 4);
         }
 
         Ok(())
@@ -4493,7 +4532,7 @@ mod tests {
             Arc::new(Column::new_with_schema("n2", &right.schema())?) as _,
         )];
 
-        let (columns, batches) = join_collect(
+        let (columns, batches, metrics) = join_collect(
             left,
             right,
             on,
@@ -4517,6 +4556,8 @@ mod tests {
                 "#);
         }
 
+        assert_join_metrics!(metrics, 3);
+
         Ok(())
     }
 
@@ -4532,7 +4573,7 @@ mod tests {
             Arc::new(Column::new_with_schema("n2", &right.schema())?) as _,
         )];
 
-        let (_, batches_null_eq) = join_collect(
+        let (_, batches_null_eq, metrics) = join_collect(
             Arc::clone(&left),
             Arc::clone(&right),
             on.clone(),
@@ -4552,7 +4593,9 @@ mod tests {
                 "#);
         }
 
-        let (_, batches_null_neq) = join_collect(
+        assert_join_metrics!(metrics, 1);
+
+        let (_, batches_null_neq, metrics) = join_collect(
             left,
             right,
             on,
@@ -4561,6 +4604,8 @@ mod tests {
             task_ctx,
         )
         .await?;
+
+        assert_join_metrics!(metrics, 0);
 
         let expected_null_neq =
             ["+----+----+", "| n1 | n2 |", "+----+----+", "+----+----+"];

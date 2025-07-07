@@ -960,8 +960,8 @@ async fn roundtrip_expr_api() -> Result<()> {
         array_replace_all(make_array(vec![lit(1), lit(2), lit(3)]), lit(2), lit(4)),
         count(lit(1)),
         count_distinct(lit(1)),
-        first_value(lit(1), None),
-        first_value(lit(1), Some(vec![lit(2).sort(true, true)])),
+        first_value(lit(1), vec![]),
+        first_value(lit(1), vec![lit(2).sort(true, true)]),
         functions_window::nth_value::first_value(lit(1)),
         functions_window::nth_value::last_value(lit(1)),
         functions_window::nth_value::nth_value(lit(1), 1),
@@ -2181,7 +2181,7 @@ fn roundtrip_aggregate_udf() {
         vec![lit(1.0_f64)],
         false,
         Some(Box::new(lit(true))),
-        None,
+        vec![],
         None,
     ));
 

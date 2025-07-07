@@ -4322,7 +4322,7 @@ mod tests {
                 vec![],
                 false,
                 None,
-                None,
+                vec![],
                 None,
             ));
 
@@ -4336,7 +4336,7 @@ mod tests {
                 vec![],
                 false,
                 None,
-                None,
+                vec![],
                 None,
             ));
 
