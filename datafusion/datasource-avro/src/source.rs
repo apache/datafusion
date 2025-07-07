@@ -50,7 +50,11 @@ impl AvroSource {
         Self::default()
     }
 
-    fn open<R: std::io::Read>(&self, reader: R, projection: Option<Vec<String>>) -> Result<AvroReader<'static, R>> {
+    fn open<R: std::io::Read>(
+        &self,
+        reader: R,
+        projection: Option<Vec<String>>,
+    ) -> Result<AvroReader<'static, R>> {
         AvroReader::try_new(
             reader,
             Arc::clone(self.schema.as_ref().expect("Schema must set before open")),
