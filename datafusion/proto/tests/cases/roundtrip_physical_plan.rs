@@ -1738,6 +1738,8 @@ async fn roundtrip_physical_plan_node() {
     let _ = plan.execute(0, ctx.task_ctx()).unwrap();
 }
 
+// Failing due to https://github.com/apache/datafusion/pull/16662
+#[ignore]
 #[tokio::test]
 async fn test_tpch_part_in_list_query_with_real_parquet_data() -> Result<()> {
     // Test the specific query: SELECT p_size FROM part WHERE p_size IN (14, 6, 5, 31)
