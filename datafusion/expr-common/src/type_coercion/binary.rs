@@ -755,6 +755,7 @@ pub fn comparison_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<D
         return Some(lhs_type.clone());
     }
     binary_numeric_coercion(lhs_type, rhs_type)
+        .or_else(|| bool_numeric_coercion(lhs_type, rhs_type))
         .or_else(|| dictionary_comparison_coercion(lhs_type, rhs_type, true))
         .or_else(|| temporal_coercion_nonstrict_timezone(lhs_type, rhs_type))
         .or_else(|| string_coercion(lhs_type, rhs_type))
@@ -765,6 +766,14 @@ pub fn comparison_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<D
         .or_else(|| binary_coercion(lhs_type, rhs_type))
         .or_else(|| struct_coercion(lhs_type, rhs_type))
         .or_else(|| map_coercion(lhs_type, rhs_type))
+}
+
+fn bool_numeric_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
+    match (lhs_type, rhs_type) {
+        (DataType::Boolean, _) if rhs_type.is_numeric() => Some(DataType::Boolean),
+        (_, DataType::Boolean) if lhs_type.is_numeric() => Some(DataType::Boolean),
+        _ => None,
+    }
 }
 
 /// Similar to [`comparison_coercion`] but prefers numeric if compares with
