@@ -41,11 +41,11 @@ use crate::utils::{
     grouping_set_expr_count, grouping_set_to_exprlist, split_conjunction,
 };
 use crate::{
-    build_join_schema, expr_vec_fmt, BinaryExpr, CreateMemoryTable, CreateView, Execute,
-    Expr, ExprSchemable, LogicalPlanBuilder, Operator, Prepare,
+    build_join_schema, expr_vec_fmt, BinaryExpr, Cast, CreateMemoryTable, CreateView,
+    Execute, Expr, ExprSchemable, LogicalPlanBuilder, Operator, Prepare,
     TableProviderFilterPushDown, TableSource, WindowFunctionDefinition,
 };
-
+use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::cse::{NormalizeEq, Normalizeable};
 use datafusion_common::tree_node::{
@@ -2293,14 +2293,19 @@ impl Filter {
         // Note that it is not always possible to resolve the predicate expression during plan
         // construction (such as with correlated subqueries) so we make a best effort here and
         // ignore errors resolving the expression against the schema.
-        if let Ok(predicate_type) = predicate.get_type(input.schema()) {
-            if !Filter::is_allowed_filter_type(&predicate_type) {
-                return plan_err!(
-                    "Cannot create filter with non-boolean predicate '{predicate}' returning {predicate_type}"
-                );
-            }
-        }
-
+        let predicate = match predicate.get_type(input.schema()) {
+            Ok(predicate_type) if Filter::is_allowed_filter_type(&predicate_type) => predicate,
+            Ok(predicate_type) if can_cast_types(&predicate_type, &DataType::Boolean) => {
+                Expr::Cast(Cast {
+                    expr: Box::new(predicate),
+                    data_type: DataType::Boolean,
+                })
+            },
+            Ok(predicate_type) => return plan_err!(
+                "Cannot create filter with non-boolean predicate '{predicate}' returning {predicate_type}"
+            ),
+            Err(_) => predicate,
+        };
         Ok(Self {
             predicate: predicate.unalias_nested().data,
             input,
