@@ -345,7 +345,7 @@ impl LogicalPlan {
                 output_schema
             }
             LogicalPlan::Dml(DmlStatement { output_schema, .. }) => output_schema,
-            LogicalPlan::Copy(CopyTo { input, .. }) => input.schema(),
+            LogicalPlan::Copy(CopyTo { output_schema, .. }) => output_schema,
             LogicalPlan::Ddl(ddl) => ddl.schema(),
             LogicalPlan::Unnest(Unnest { schema, .. }) => schema,
             LogicalPlan::RecursiveQuery(RecursiveQuery { static_term, .. }) => {
@@ -810,16 +810,17 @@ impl LogicalPlan {
                 file_type,
                 options,
                 partition_by,
+                output_schema: _,
             }) => {
                 self.assert_no_expressions(expr)?;
                 let input = self.only_input(inputs)?;
-                Ok(LogicalPlan::Copy(CopyTo {
-                    input: Arc::new(input),
-                    output_url: output_url.clone(),
-                    file_type: Arc::clone(file_type),
-                    options: options.clone(),
-                    partition_by: partition_by.clone(),
-                }))
+                Ok(LogicalPlan::Copy(CopyTo::new(
+                    Arc::new(input),
+                    output_url.clone(),
+                    partition_by.clone(),
+                    Arc::clone(file_type),
+                    options.clone(),
+                )))
             }
             LogicalPlan::Values(Values { schema, .. }) => {
                 self.assert_no_inputs(inputs)?;

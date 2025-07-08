@@ -407,13 +407,13 @@ impl LogicalPlanBuilder {
         options: HashMap<String, String>,
         partition_by: Vec<String>,
     ) -> Result<Self> {
-        Ok(Self::new(LogicalPlan::Copy(CopyTo {
-            input: Arc::new(input),
+        Ok(Self::new(LogicalPlan::Copy(CopyTo::new(
+            Arc::new(input),
             output_url,
             partition_by,
             file_type,
             options,
-        })))
+        ))))
     }
 
     /// Create a [`DmlStatement`] for inserting the contents of this builder into the named table.
