@@ -36,7 +36,7 @@ types of UDFs.
 
 ## Adding a Scalar UDF
 
-A Scalar UDF is a function that takes a row of data and returns a single value. In order for good performance
+A Scalar UDF is a function that takes a row of data and returns a single value. To achieve good performance,
 such functions are "vectorized" in DataFusion, meaning they get one or more Arrow Arrays as input and produce
 an Arrow Array with the same number of rows as output.
 
@@ -48,8 +48,8 @@ To create a Scalar UDF, you
 
 In the following example, we will add a function takes a single i64 and returns a single i64 with 1 added to it:
 
-For brevity, we'll skipped some error handling, but e.g. you may want to check that `args.len()` is the expected number
-of arguments.
+For brevity, we'll skip some error handling.
+For production code, you may want to check, for example, that `args.len()` matches the expected number of arguments.
 
 ### Adding by `impl ScalarUDFImpl`
 

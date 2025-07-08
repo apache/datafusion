@@ -38,7 +38,7 @@ use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::filter_pushdown::{
-    ChildPushdownResult, FilterPushdownPhase, FilterPushdownPropagation,
+    ChildPushdownResult, FilterPushdownPhase, FilterPushdownPropagation, PredicateSupport,
 };
 
 /// A source of data, typically a list of files or memory
@@ -168,7 +168,12 @@ pub trait DataSource: Send + Sync + Debug {
         filters: Vec<Arc<dyn PhysicalExpr>>,
         _config: &ConfigOptions,
     ) -> Result<FilterPushdownPropagation<Arc<dyn DataSource>>> {
-        Ok(FilterPushdownPropagation::unsupported(filters))
+        Ok(FilterPushdownPropagation::with_filters(
+            filters
+                .into_iter()
+                .map(PredicateSupport::Unsupported)
+                .collect(),
+        ))
     }
 }
 
@@ -316,7 +321,14 @@ impl ExecutionPlan for DataSourceExec {
     ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
         // Push any remaining filters into our data source
         let res = self.data_source.try_pushdown_filters(
-            child_pushdown_result.parent_filters.collect_all(),
+            child_pushdown_result
+                .parent_filters
+                .into_iter()
+                .map(|f| match f {
+                    PredicateSupport::Supported(expr) => expr,
+                    PredicateSupport::Unsupported(expr) => expr,
+                })
+                .collect(),
             config,
         )?;
         match res.updated_node {

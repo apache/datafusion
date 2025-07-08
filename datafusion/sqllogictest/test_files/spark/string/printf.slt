@@ -25,4 +25,3 @@
 ## PySpark 3.5.5 Result: {'printf(Hello World %d %s, 100, days)': 'Hello World 100 days', 'typeof(printf(Hello World %d %s, 100, days))': 'string', 'typeof(Hello World %d %s)': 'string', 'typeof(100)': 'int', 'typeof(days)': 'string'}
 #query
 #SELECT printf('Hello World %d %s'::string, 100::int, 'days'::string);
-

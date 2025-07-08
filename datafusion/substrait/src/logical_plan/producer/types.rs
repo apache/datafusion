@@ -15,16 +15,19 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::logical_plan::producer::to_substrait_precision;
 use crate::logical_plan::producer::utils::flatten_names;
 use crate::variation_const::{
     DATE_32_TYPE_VARIATION_REF, DATE_64_TYPE_VARIATION_REF,
     DECIMAL_128_TYPE_VARIATION_REF, DECIMAL_256_TYPE_VARIATION_REF,
     DEFAULT_CONTAINER_TYPE_VARIATION_REF, DEFAULT_INTERVAL_DAY_TYPE_VARIATION_REF,
-    DEFAULT_TYPE_VARIATION_REF, DURATION_INTERVAL_DAY_TYPE_VARIATION_REF,
-    LARGE_CONTAINER_TYPE_VARIATION_REF, UNSIGNED_INTEGER_TYPE_VARIATION_REF,
+    DEFAULT_MAP_TYPE_VARIATION_REF, DEFAULT_TYPE_VARIATION_REF,
+    DICTIONARY_MAP_TYPE_VARIATION_REF, DURATION_INTERVAL_DAY_TYPE_VARIATION_REF,
+    LARGE_CONTAINER_TYPE_VARIATION_REF, TIME_32_TYPE_VARIATION_REF,
+    TIME_64_TYPE_VARIATION_REF, UNSIGNED_INTEGER_TYPE_VARIATION_REF,
     VIEW_CONTAINER_TYPE_VARIATION_REF,
 };
-use datafusion::arrow::datatypes::{DataType, IntervalUnit, TimeUnit};
+use datafusion::arrow::datatypes::{DataType, IntervalUnit};
 use datafusion::common::{internal_err, not_impl_err, plan_err, DFSchemaRef};
 use substrait::proto::{r#type, NamedStruct};
 
@@ -107,12 +110,7 @@ pub(crate) fn to_substrait_type(
             })),
         }),
         DataType::Timestamp(unit, tz) => {
-            let precision = match unit {
-                TimeUnit::Second => 0,
-                TimeUnit::Millisecond => 3,
-                TimeUnit::Microsecond => 6,
-                TimeUnit::Nanosecond => 9,
-            };
+            let precision = to_substrait_precision(unit);
             let kind = match tz {
                 None => r#type::Kind::PrecisionTimestamp(r#type::PrecisionTimestamp {
                     type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
@@ -131,6 +129,26 @@ pub(crate) fn to_substrait_type(
                 }
             };
             Ok(substrait::proto::Type { kind: Some(kind) })
+        }
+        DataType::Time32(unit) => {
+            let precision = to_substrait_precision(unit);
+            Ok(substrait::proto::Type {
+                kind: Some(r#type::Kind::PrecisionTime(r#type::PrecisionTime {
+                    precision,
+                    type_variation_reference: TIME_32_TYPE_VARIATION_REF,
+                    nullability,
+                })),
+            })
+        }
+        DataType::Time64(unit) => {
+            let precision = to_substrait_precision(unit);
+            Ok(substrait::proto::Type {
+                kind: Some(r#type::Kind::PrecisionTime(r#type::PrecisionTime {
+                    precision,
+                    type_variation_reference: TIME_64_TYPE_VARIATION_REF,
+                    nullability,
+                })),
+            })
         }
         DataType::Date32 => Ok(substrait::proto::Type {
             kind: Some(r#type::Kind::Date(r#type::Date {
@@ -173,12 +191,7 @@ pub(crate) fn to_substrait_type(
             }
         }
         DataType::Duration(duration_unit) => {
-            let precision = match duration_unit {
-                TimeUnit::Second => 0,
-                TimeUnit::Millisecond => 3,
-                TimeUnit::Microsecond => 6,
-                TimeUnit::Nanosecond => 9,
-            };
+            let precision = to_substrait_precision(duration_unit);
             Ok(substrait::proto::Type {
                 kind: Some(r#type::Kind::IntervalDay(r#type::IntervalDay {
                     type_variation_reference: DURATION_INTERVAL_DAY_TYPE_VARIATION_REF,
@@ -264,13 +277,25 @@ pub(crate) fn to_substrait_type(
                     kind: Some(r#type::Kind::Map(Box::new(r#type::Map {
                         key: Some(Box::new(key_type)),
                         value: Some(Box::new(value_type)),
-                        type_variation_reference: DEFAULT_CONTAINER_TYPE_VARIATION_REF,
+                        type_variation_reference: DEFAULT_MAP_TYPE_VARIATION_REF,
                         nullability,
                     }))),
                 })
             }
             _ => plan_err!("Map fields must contain a Struct with exactly 2 fields"),
         },
+        DataType::Dictionary(key_type, value_type) => {
+            let key_type = to_substrait_type(key_type, nullable)?;
+            let value_type = to_substrait_type(value_type, nullable)?;
+            Ok(substrait::proto::Type {
+                kind: Some(r#type::Kind::Map(Box::new(r#type::Map {
+                    key: Some(Box::new(key_type)),
+                    value: Some(Box::new(value_type)),
+                    type_variation_reference: DICTIONARY_MAP_TYPE_VARIATION_REF,
+                    nullability,
+                }))),
+            })
+        }
         DataType::Struct(fields) => {
             let field_types = fields
                 .iter()
@@ -335,7 +360,7 @@ mod tests {
     use crate::logical_plan::consumer::{
         from_substrait_named_struct, from_substrait_type_without_names,
     };
-    use datafusion::arrow::datatypes::{Field, Fields, Schema};
+    use datafusion::arrow::datatypes::{Field, Fields, Schema, TimeUnit};
     use datafusion::common::{DFSchema, Result};
     use std::sync::Arc;
 
@@ -360,6 +385,10 @@ mod tests {
             round_trip_type(DataType::Timestamp(TimeUnit::Nanosecond, tz))?;
         }
 
+        round_trip_type(DataType::Time32(TimeUnit::Second))?;
+        round_trip_type(DataType::Time32(TimeUnit::Millisecond))?;
+        round_trip_type(DataType::Time64(TimeUnit::Microsecond))?;
+        round_trip_type(DataType::Time64(TimeUnit::Nanosecond))?;
         round_trip_type(DataType::Date32)?;
         round_trip_type(DataType::Date64)?;
         round_trip_type(DataType::Binary)?;
@@ -390,6 +419,10 @@ mod tests {
             )
             .into(),
             false,
+        ))?;
+        round_trip_type(DataType::Dictionary(
+            Box::new(DataType::Utf8),
+            Box::new(DataType::Int32),
         ))?;
 
         round_trip_type(DataType::Struct(

@@ -227,6 +227,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 OVER is for window functions, whereas WITHIN GROUP is for ordered set aggregate functions");
         }
 
+        if !order_by.is_empty() && !within_group.is_empty() {
+            return plan_err!("ORDER BY and WITHIN GROUP clauses cannot be used together in the same aggregate function");
+        }
+
         // If function is a window function (it has an OVER clause),
         // it shouldn't have ordering requirement as function argument
         // required ordering should be defined in OVER clause.
@@ -402,21 +406,20 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                             .chain(args)
                             .collect::<Vec<_>>();
                     }
-                    (!within_group.is_empty()).then_some(within_group)
+                    within_group
                 } else {
                     let order_by = if !order_by.is_empty() {
                         order_by
                     } else {
                         within_group
                     };
-                    let order_by = self.order_by_to_sort_expr(
+                    self.order_by_to_sort_expr(
                         order_by,
                         schema,
                         planner_context,
                         true,
                         None,
-                    )?;
-                    (!order_by.is_empty()).then_some(order_by)
+                    )?
                 };
 
                 let filter: Option<Box<Expr>> = filter

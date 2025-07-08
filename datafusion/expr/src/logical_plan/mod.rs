@@ -27,8 +27,9 @@ mod statement;
 pub mod tree_node;
 
 pub use builder::{
-    build_join_schema, table_scan, union, wrap_projection_for_join_if_necessary,
-    LogicalPlanBuilder, LogicalPlanBuilderOptions, LogicalTableSource, UNNAMED_TABLE,
+    build_join_schema, requalify_sides_if_needed, table_scan, union,
+    wrap_projection_for_join_if_necessary, LogicalPlanBuilder, LogicalPlanBuilderOptions,
+    LogicalTableSource, UNNAMED_TABLE,
 };
 pub use ddl::{
     CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateFunction,
@@ -38,10 +39,10 @@ pub use ddl::{
 pub use dml::{DmlStatement, WriteOp};
 pub use plan::{
     projection_schema, Aggregate, Analyze, ColumnUnnestList, DescribeTable, Distinct,
-    DistinctOn, EmptyRelation, Explain, ExplainFormat, Extension, FetchType, Filter,
-    Join, JoinConstraint, JoinType, Limit, LogicalPlan, Partitioning, PlanType,
-    Projection, RecursiveQuery, Repartition, SkipType, Sort, StringifiedPlan, Subquery,
-    SubqueryAlias, TableScan, ToStringifiedPlan, Union, Unnest, Values, Window,
+    DistinctOn, EmptyRelation, Explain, ExplainFormat, ExplainOption, Extension,
+    FetchType, Filter, Join, JoinConstraint, JoinType, Limit, LogicalPlan, Partitioning,
+    PlanType, Projection, RecursiveQuery, Repartition, SkipType, Sort, StringifiedPlan,
+    Subquery, SubqueryAlias, TableScan, ToStringifiedPlan, Union, Unnest, Values, Window,
 };
 pub use statement::{
     Deallocate, Execute, Prepare, SetVariable, Statement, TransactionAccessMode,

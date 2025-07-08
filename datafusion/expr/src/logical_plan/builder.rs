@@ -43,12 +43,12 @@ use crate::utils::{
     group_window_expr_by_sort_keys,
 };
 use crate::{
-    and, binary_expr, lit, DmlStatement, Expr, ExprSchemable, Operator, RecursiveQuery,
-    Statement, TableProviderFilterPushDown, TableSource, WriteOp,
+    and, binary_expr, lit, DmlStatement, ExplainOption, Expr, ExprSchemable, Operator,
+    RecursiveQuery, Statement, TableProviderFilterPushDown, TableSource, WriteOp,
 };
 
 use super::dml::InsertOp;
-use super::plan::{ColumnUnnestList, ExplainFormat};
+use super::plan::ColumnUnnestList;
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
 use datafusion_common::display::ToStringifiedPlan;
@@ -1259,12 +1259,24 @@ impl LogicalPlanBuilder {
     ///
     /// if `verbose` is true, prints out additional details.
     pub fn explain(self, verbose: bool, analyze: bool) -> Result<Self> {
+        // Keep the format default to Indent
+        self.explain_option_format(
+            ExplainOption::default()
+                .with_verbose(verbose)
+                .with_analyze(analyze),
+        )
+    }
+
+    /// Create an expression to represent the explanation of the plan
+    /// The`explain_option` is used to specify the format and verbosity of the explanation.
+    /// Details see [`ExplainOption`].
+    pub fn explain_option_format(self, explain_option: ExplainOption) -> Result<Self> {
         let schema = LogicalPlan::explain_schema();
         let schema = schema.to_dfschema_ref()?;
 
-        if analyze {
+        if explain_option.analyze {
             Ok(Self::new(LogicalPlan::Analyze(Analyze {
-                verbose,
+                verbose: explain_option.verbose,
                 input: self.plan,
                 schema,
             })))
@@ -1273,9 +1285,9 @@ impl LogicalPlanBuilder {
                 vec![self.plan.to_stringified(PlanType::InitialLogicalPlan)];
 
             Ok(Self::new(LogicalPlan::Explain(Explain {
-                verbose,
+                verbose: explain_option.verbose,
                 plan: self.plan,
-                explain_format: ExplainFormat::Indent,
+                explain_format: explain_option.format,
                 stringified_plans,
                 schema,
                 logical_optimization_succeeded: false,
@@ -1661,6 +1673,38 @@ pub fn build_join_schema(
 
     let dfschema = DFSchema::new_with_metadata(qualified_fields, metadata)?;
     dfschema.with_functional_dependencies(func_dependencies)
+}
+
+/// (Re)qualify the sides of a join if needed, i.e. if the columns from one side would otherwise
+/// conflict with the columns from the other.
+/// This is especially useful for queries that come as Substrait, since Substrait doesn't currently allow specifying
+/// aliases, neither for columns nor for tables.  DataFusion requires columns to be uniquely identifiable, in some
+/// places (see e.g. DFSchema::check_names).
+/// The function returns:
+/// - The requalified or original left logical plan
+/// - The requalified or original right logical plan
+/// - If a requalification was needed or not
+pub fn requalify_sides_if_needed(
+    left: LogicalPlanBuilder,
+    right: LogicalPlanBuilder,
+) -> Result<(LogicalPlanBuilder, LogicalPlanBuilder, bool)> {
+    let left_cols = left.schema().columns();
+    let right_cols = right.schema().columns();
+    if left_cols.iter().any(|l| {
+        right_cols.iter().any(|r| {
+            l == r || (l.name == r.name && (l.relation.is_none() || r.relation.is_none()))
+        })
+    }) {
+        // These names have no connection to the original plan, but they'll make the columns
+        // (mostly) unique.
+        Ok((
+            left.alias(TableReference::bare("left"))?,
+            right.alias(TableReference::bare("right"))?,
+            true,
+        ))
+    } else {
+        Ok((left, right, false))
+    }
 }
 
 /// Add additional "synthetic" group by expressions based on functional
@@ -2522,20 +2566,24 @@ mod tests {
         .project(vec![col("id"), col("first_name").alias("id")]);
 
         match plan {
-            Err(DataFusionError::SchemaError(
-                SchemaError::AmbiguousReference {
-                    field:
-                        Column {
-                            relation: Some(TableReference::Bare { table }),
-                            name,
-                            spans: _,
-                        },
-                },
-                _,
-            )) => {
-                assert_eq!(*"employee_csv", *table);
-                assert_eq!("id", &name);
-                Ok(())
+            Err(DataFusionError::SchemaError(err, _)) => {
+                if let SchemaError::AmbiguousReference { field } = *err {
+                    let Column {
+                        relation,
+                        name,
+                        spans: _,
+                    } = *field;
+                    let Some(TableReference::Bare { table }) = relation else {
+                        return plan_err!(
+                            "wrong relation: {relation:?}, expected table name"
+                        );
+                    };
+                    assert_eq!(*"employee_csv", *table);
+                    assert_eq!("id", &name);
+                    Ok(())
+                } else {
+                    plan_err!("Plan should have returned an DataFusionError::SchemaError")
+                }
             }
             _ => plan_err!("Plan should have returned an DataFusionError::SchemaError"),
         }

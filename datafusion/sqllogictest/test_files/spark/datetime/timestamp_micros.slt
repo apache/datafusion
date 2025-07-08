@@ -25,4 +25,3 @@
 ## PySpark 3.5.5 Result: {'timestamp_micros(1230219000123123)': datetime.datetime(2008, 12, 25, 7, 30, 0, 123123), 'typeof(timestamp_micros(1230219000123123))': 'timestamp', 'typeof(1230219000123123)': 'bigint'}
 #query
 #SELECT timestamp_micros(1230219000123123::bigint);
-
