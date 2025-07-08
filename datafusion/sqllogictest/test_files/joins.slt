@@ -4858,3 +4858,249 @@ physical_plan
 03)----DataSourceExec: partitions=1, partition_sizes=[1]
 04)----SortExec: expr=[k@0 ASC NULLS LAST], preserve_partitioning=[false]
 05)------DataSourceExec: partitions=1, partition_sizes=[3334]
+
+statement ok
+DROP TABLE t1;
+
+statement ok
+DROP TABLE t2;
+
+
+# Test hash joins with an empty build relation (empty build relation optimization)
+
+statement ok
+CREATE TABLE t1 (k1 int, v1 int);
+
+statement ok
+CREATE TABLE t2 (k2 int, v2 int);
+
+statement ok
+INSERT INTO t1 SELECT i AS k, 1 FROM generate_series(1, 30000) t(i);
+
+statement ok
+set datafusion.explain.physical_plan_only = true;
+
+# INNER JOIN
+query TT
+EXPLAIN
+SELECT *
+FROM t1
+JOIN t2 ON k1 = k2
+----
+physical_plan
+01)ProjectionExec: expr=[k1@2 as k1, v1@3 as v1, k2@0 as k2, v2@1 as v2]
+02)--CoalesceBatchesExec: target_batch_size=3
+03)----HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(k2@0, k1@0)]
+04)------DataSourceExec: partitions=1, partition_sizes=[0]
+05)------DataSourceExec: partitions=1, partition_sizes=[10000]
+
+query IIII
+SELECT sum(k1), sum(v1), sum(k2), sum(v2)
+FROM t1
+JOIN t2 ON k1 = k2
+----
+NULL NULL NULL NULL
+
+# LEFT JOIN
+query TT
+EXPLAIN
+SELECT *
+FROM t1
+LEFT JOIN t2 ON k1 = k2
+----
+physical_plan
+01)ProjectionExec: expr=[k1@2 as k1, v1@3 as v1, k2@0 as k2, v2@1 as v2]
+02)--CoalesceBatchesExec: target_batch_size=3
+03)----HashJoinExec: mode=CollectLeft, join_type=Right, on=[(k2@0, k1@0)]
+04)------DataSourceExec: partitions=1, partition_sizes=[0]
+05)------DataSourceExec: partitions=1, partition_sizes=[10000]
+
+query IIII
+SELECT sum(k1), sum(v1), sum(k2), sum(v2)
+FROM t1
+LEFT JOIN t2 ON k1 = k2
+----
+450015000 30000 NULL NULL
+
+# RIGHT JOIN
+query TT
+EXPLAIN
+SELECT *
+FROM t1
+RIGHT JOIN t2 ON k1 = k2
+----
+physical_plan
+01)ProjectionExec: expr=[k1@2 as k1, v1@3 as v1, k2@0 as k2, v2@1 as v2]
+02)--CoalesceBatchesExec: target_batch_size=3
+03)----HashJoinExec: mode=CollectLeft, join_type=Left, on=[(k2@0, k1@0)]
+04)------DataSourceExec: partitions=1, partition_sizes=[0]
+05)------DataSourceExec: partitions=1, partition_sizes=[10000]
+
+query IIII
+SELECT sum(k1), sum(v1), sum(k2), sum(v2)
+FROM t1
+RIGHT JOIN t2 ON k1 = k2
+----
+NULL NULL NULL NULL
+
+# LEFT SEMI JOIN
+query TT
+EXPLAIN
+SELECT *
+FROM t1
+LEFT SEMI JOIN t2 ON k1 = k2
+----
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=3
+02)--HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(k2@0, k1@0)]
+03)----DataSourceExec: partitions=1, partition_sizes=[0]
+04)----DataSourceExec: partitions=1, partition_sizes=[10000]
+
+query II
+SELECT sum(k1), sum(v1)
+FROM t1
+LEFT SEMI JOIN t2 ON k1 = k2
+----
+NULL NULL
+
+# RIGHT SEMI JOIN
+query TT
+EXPLAIN
+SELECT *
+FROM t1
+RIGHT SEMI JOIN t2 ON k1 = k2
+----
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=3
+02)--HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(k2@0, k1@0)]
+03)----DataSourceExec: partitions=1, partition_sizes=[0]
+04)----DataSourceExec: partitions=1, partition_sizes=[10000]
+
+query II
+SELECT sum(k2), sum(v2)
+FROM t1
+RIGHT SEMI JOIN t2 ON k1 = k2
+----
+NULL NULL
+
+# LEFT ANTI JOIN
+query TT
+EXPLAIN
+SELECT *
+FROM t1
+LEFT ANTI JOIN t2 ON k1 = k2
+----
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=3
+02)--HashJoinExec: mode=CollectLeft, join_type=RightAnti, on=[(k2@0, k1@0)]
+03)----DataSourceExec: partitions=1, partition_sizes=[0]
+04)----DataSourceExec: partitions=1, partition_sizes=[10000]
+
+query II
+SELECT sum(k1), sum(v1)
+FROM t1
+LEFT ANTI JOIN t2 ON k1 = k2
+----
+450015000 30000
+
+# RIGHT ANTI JOIN
+query TT
+EXPLAIN
+SELECT *
+FROM t1
+RIGHT ANTI JOIN t2 ON k1 = k2
+----
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=3
+02)--HashJoinExec: mode=CollectLeft, join_type=LeftAnti, on=[(k2@0, k1@0)]
+03)----DataSourceExec: partitions=1, partition_sizes=[0]
+04)----DataSourceExec: partitions=1, partition_sizes=[10000]
+
+query II
+SELECT sum(k2), sum(v2)
+FROM t1
+RIGHT ANTI JOIN t2 ON k1 = k2
+----
+NULL NULL
+
+# FULL JOIN
+query TT
+EXPLAIN
+SELECT *
+FROM t1
+FULL JOIN t2 ON k1 = k2
+----
+physical_plan
+01)ProjectionExec: expr=[k1@2 as k1, v1@3 as v1, k2@0 as k2, v2@1 as v2]
+02)--CoalesceBatchesExec: target_batch_size=3
+03)----HashJoinExec: mode=CollectLeft, join_type=Full, on=[(k2@0, k1@0)]
+04)------DataSourceExec: partitions=1, partition_sizes=[0]
+05)------DataSourceExec: partitions=1, partition_sizes=[10000]
+
+query IIII
+SELECT sum(k1), sum(v1), sum(k2), sum(v2)
+FROM t1
+FULL JOIN t2 ON k1 = k2
+----
+450015000 30000 NULL NULL
+
+# LEFT MARK JOIN
+query TT
+EXPLAIN 
+SELECT *
+FROM t2
+WHERE k2 > 0
+    OR EXISTS (
+        SELECT *
+        FROM t1
+        WHERE k2 = k1
+    )
+----
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=3
+02)--FilterExec: k2@0 > 0 OR mark@2, projection=[k2@0, v2@1]
+03)----CoalesceBatchesExec: target_batch_size=3
+04)------HashJoinExec: mode=CollectLeft, join_type=LeftMark, on=[(k2@0, k1@0)]
+05)--------DataSourceExec: partitions=1, partition_sizes=[0]
+06)--------DataSourceExec: partitions=1, partition_sizes=[10000]
+
+query II 
+SELECT *
+FROM t2
+WHERE k2 > 0
+    OR EXISTS (
+        SELECT *
+        FROM t1
+        WHERE k2 = k1
+    )
+----
+
+# Projection inside the join (changes the output schema)
+query TT
+EXPLAIN
+SELECT distinct(v1)
+FROM t1
+LEFT ANTI JOIN t2 ON k1 = k2
+----
+physical_plan
+01)AggregateExec: mode=Single, gby=[v1@0 as v1], aggr=[]
+02)--CoalesceBatchesExec: target_batch_size=3
+03)----HashJoinExec: mode=CollectLeft, join_type=RightAnti, on=[(k2@0, k1@0)], projection=[v1@1]
+04)------DataSourceExec: partitions=1, partition_sizes=[0]
+05)------DataSourceExec: partitions=1, partition_sizes=[10000]
+
+query I
+SELECT distinct(v1)
+FROM t1
+LEFT ANTI JOIN t2 ON k1 = k2
+----
+1
+
+statement ok
+DROP TABLE t1;
+
+statement ok
+DROP TABLE t2;
+
+statement ok
+set datafusion.explain.physical_plan_only = false;
