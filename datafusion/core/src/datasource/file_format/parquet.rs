@@ -1273,11 +1273,20 @@ mod tests {
         let tmp_dir = tempfile::TempDir::new().unwrap();
         let path = format!("{}/empty2.parquet", tmp_dir.path().to_string_lossy());
 
-        let df = SessionContext::new().read_batch(empty_record_batch)?;
+        let ctx = SessionContext::new();
+        let df = ctx.read_batch(empty_record_batch.clone())?;
         df.write_parquet(&path, crate::dataframe::DataFrameWriteOptions::new(), None)
             .await?;
         assert!(std::path::Path::new(&path).exists());
 
+        let stream = ctx
+            .read_parquet(&path, ParquetReadOptions::new())
+            .await?
+            .execute_stream()
+            .await?;
+        assert_eq!(stream.schema(), empty_record_batch.schema());
+        let results = stream.collect::<Vec<_>>().await;
+        assert_eq!(results.len(), 0);
         Ok(())
     }
 
