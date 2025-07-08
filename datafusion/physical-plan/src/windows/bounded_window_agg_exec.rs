@@ -263,7 +263,7 @@ impl DisplayAs for BoundedWindowAggExec {
                     .map(|e| {
                         let field = match e.field() {
                             Ok(f) => f.to_string(),
-                            Err(e) => format!("{:?}", e),
+                            Err(e) => format!("{e:?}"),
                         };
                         format!(
                             "{}: {}, frame: {}",
