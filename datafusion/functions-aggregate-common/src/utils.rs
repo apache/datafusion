@@ -18,7 +18,7 @@
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, AsArray};
-use arrow::datatypes::ArrowNativeType;
+use arrow::datatypes::{ArrowNativeType, FieldRef};
 use arrow::{
     array::ArrowNativeTypeOp,
     compute::SortOptions,
@@ -30,7 +30,7 @@ use arrow::{
 };
 use datafusion_common::{exec_err, DataFusionError, Result};
 use datafusion_expr_common::accumulator::Accumulator;
-use datafusion_physical_expr_common::sort_expr::LexOrdering;
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 
 /// Convert scalar values from an accumulator into arrays.
 pub fn get_accum_scalar_values_as_arrays(
@@ -87,13 +87,13 @@ pub fn adjust_output_array(data_type: &DataType, array: ArrayRef) -> Result<Arra
     Ok(array)
 }
 
-/// Construct corresponding fields for lexicographical ordering requirement expression
+/// Construct corresponding fields for the expressions in an ORDER BY clause.
 pub fn ordering_fields(
-    ordering_req: &LexOrdering,
+    order_bys: &[PhysicalSortExpr],
     // Data type of each expression in the ordering requirement
     data_types: &[DataType],
-) -> Vec<Field> {
-    ordering_req
+) -> Vec<FieldRef> {
+    order_bys
         .iter()
         .zip(data_types.iter())
         .map(|(sort_expr, dtype)| {
@@ -104,6 +104,7 @@ pub fn ordering_fields(
                 true,
             )
         })
+        .map(Arc::new)
         .collect()
 }
 

@@ -22,7 +22,9 @@ use std::fmt;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
-use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
+use datafusion_physical_plan::execution_plan::{
+    Boundedness, EmissionType, SchedulingType,
+};
 use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::{
@@ -36,7 +38,7 @@ use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::filter_pushdown::{
-    ChildPushdownResult, FilterPushdownPropagation,
+    ChildPushdownResult, FilterPushdownPhase, FilterPushdownPropagation, PredicateSupport,
 };
 
 /// A source of data, typically a list of files or memory
@@ -58,8 +60,60 @@ use datafusion_physical_plan::filter_pushdown::{
 /// Requires `Debug` to assist debugging
 ///
 /// [`FileScanConfig`]: https://docs.rs/datafusion/latest/datafusion/datasource/physical_plan/struct.FileScanConfig.html
-/// [`MemorySourceConfig`]: https://docs.rs/datafusion/latest//datafusion/datasource/memory/struct.MemorySourceConfig.html
+/// [`MemorySourceConfig`]: https://docs.rs/datafusion/latest/datafusion/datasource/memory/struct.MemorySourceConfig.html
 /// [`FileSource`]: crate::file::FileSource
+/// [`FileFormat``]: https://docs.rs/datafusion/latest/datafusion/datasource/file_format/index.html
+/// [`TableProvider`]: https://docs.rs/datafusion/latest/datafusion/catalog/trait.TableProvider.html
+///
+/// The following diagram shows how DataSource, FileSource, and DataSourceExec are related
+/// ```text
+///                       ┌─────────────────────┐                              -----► execute path
+///                       │                     │                              ┄┄┄┄┄► init path
+///                       │   DataSourceExec    │  
+///                       │                     │    
+///                       └───────▲─────────────┘
+///                               ┊  │
+///                               ┊  │
+///                       ┌──────────▼──────────┐                            ┌──────────-──────────┐
+///                       │                     │                            |                     |
+///                       │  DataSource(trait)  │                            | TableProvider(trait)|
+///                       │                     │                            |                     |
+///                       └───────▲─────────────┘                            └─────────────────────┘
+///                               ┊  │                                                  ┊
+///               ┌───────────────┿──┴────────────────┐                                 ┊
+///               |   ┌┄┄┄┄┄┄┄┄┄┄┄┘                   |                                 ┊
+///               |   ┊                               |                                 ┊
+///    ┌──────────▼──────────┐             ┌──────────▼──────────┐                      ┊
+///    │                     │             │                     │           ┌──────────▼──────────┐
+///    │   FileScanConfig    │             │ MemorySourceConfig  │           |                     |
+///    │                     │             │                     │           |  FileFormat(trait)  |
+///    └──────────────▲──────┘             └─────────────────────┘           |                     |
+///               │   ┊                                                      └─────────────────────┘
+///               │   ┊                                                                 ┊
+///               │   ┊                                                                 ┊
+///    ┌──────────▼──────────┐                                               ┌──────────▼──────────┐
+///    │                     │                                               │     ArrowSource     │
+///    │ FileSource(trait)   ◄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄│          ...        │
+///    │                     │                                               │    ParquetSource    │
+///    └─────────────────────┘                                               └─────────────────────┘
+///               │
+///               │
+///               │
+///               │
+///    ┌──────────▼──────────┐
+///    │     ArrowSource     │
+///    │          ...        │
+///    │    ParquetSource    │
+///    └─────────────────────┘
+///               |
+/// FileOpener (called by FileStream)
+///               │
+///    ┌──────────▼──────────┐
+///    │                     │
+///    │     RecordBatch     │
+///    │                     │
+///    └─────────────────────┘
+/// ```
 pub trait DataSource: Send + Sync + Debug {
     fn open(
         &self,
@@ -70,7 +124,16 @@ pub trait DataSource: Send + Sync + Debug {
     /// Format this source for display in explain plans
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> fmt::Result;
 
-    /// Return a copy of this DataSource with a new partitioning scheme
+    /// Return a copy of this DataSource with a new partitioning scheme.
+    ///
+    /// Returns `Ok(None)` (the default) if the partitioning cannot be changed.
+    /// Refer to [`ExecutionPlan::repartitioned`] for details on when None should be returned.
+    ///
+    /// Repartitioning should not change the output ordering, if this ordering exists.
+    /// Refer to [`MemorySourceConfig::repartition_preserving_order`](crate::memory::MemorySourceConfig)
+    /// and the FileSource's
+    /// [`FileGroupPartitioner::repartition_file_groups`](crate::file_groups::FileGroupPartitioner::repartition_file_groups)
+    /// for examples.
     fn repartitioned(
         &self,
         _target_partitions: usize,
@@ -82,6 +145,9 @@ pub trait DataSource: Send + Sync + Debug {
 
     fn output_partitioning(&self) -> Partitioning;
     fn eq_properties(&self) -> EquivalenceProperties;
+    fn scheduling_type(&self) -> SchedulingType {
+        SchedulingType::NonCooperative
+    }
     fn statistics(&self) -> Result<Statistics>;
     /// Return a copy of this DataSource with a new fetch limit
     fn with_fetch(&self, _limit: Option<usize>) -> Option<Arc<dyn DataSource>>;
@@ -102,7 +168,12 @@ pub trait DataSource: Send + Sync + Debug {
         filters: Vec<Arc<dyn PhysicalExpr>>,
         _config: &ConfigOptions,
     ) -> Result<FilterPushdownPropagation<Arc<dyn DataSource>>> {
-        Ok(FilterPushdownPropagation::unsupported(filters))
+        Ok(FilterPushdownPropagation::with_filters(
+            filters
+                .into_iter()
+                .map(PredicateSupport::Unsupported)
+                .collect(),
+        ))
     }
 }
 
@@ -162,6 +233,10 @@ impl ExecutionPlan for DataSourceExec {
         Ok(self)
     }
 
+    /// Implementation of [`ExecutionPlan::repartitioned`] which relies upon the inner [`DataSource::repartitioned`].
+    ///
+    /// If the data source does not support changing its partitioning, returns `Ok(None)` (the default). Refer
+    /// to [`ExecutionPlan::repartitioned`] for more details.
     fn repartitioned(
         &self,
         target_partitions: usize,
@@ -191,7 +266,7 @@ impl ExecutionPlan for DataSourceExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        self.data_source.open(partition, context)
+        self.data_source.open(partition, Arc::clone(&context))
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
@@ -240,12 +315,20 @@ impl ExecutionPlan for DataSourceExec {
 
     fn handle_child_pushdown_result(
         &self,
+        _phase: FilterPushdownPhase,
         child_pushdown_result: ChildPushdownResult,
         config: &ConfigOptions,
     ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
         // Push any remaining filters into our data source
         let res = self.data_source.try_pushdown_filters(
-            child_pushdown_result.parent_filters.collect_all(),
+            child_pushdown_result
+                .parent_filters
+                .into_iter()
+                .map(|f| match f {
+                    PredicateSupport::Supported(expr) => expr,
+                    PredicateSupport::Unsupported(expr) => expr,
+                })
+                .collect(),
             config,
         )?;
         match res.updated_node {
@@ -272,6 +355,7 @@ impl DataSourceExec {
         Arc::new(Self::new(Arc::new(data_source)))
     }
 
+    // Default constructor for `DataSourceExec`, setting the `cooperative` flag to `true`.
     pub fn new(data_source: Arc<dyn DataSource>) -> Self {
         let cache = Self::compute_properties(Arc::clone(&data_source));
         Self { data_source, cache }
@@ -307,6 +391,7 @@ impl DataSourceExec {
             EmissionType::Incremental,
             Boundedness::Bounded,
         )
+        .with_scheduling_type(data_source.scheduling_type())
     }
 
     /// Downcast the `DataSourceExec`'s `data_source` to a specific file source

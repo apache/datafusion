@@ -82,6 +82,8 @@ For a comprehensive list of format-specific options that can be specified in the
 a path to a file or directory of partitioned files locally or on an
 object store.
 
+### Example: Parquet
+
 Parquet data sources can be registered by executing a `CREATE EXTERNAL TABLE` SQL statement such as the following. It is not necessary to
 provide schema information for Parquet files.
 
@@ -90,6 +92,23 @@ CREATE EXTERNAL TABLE taxi
 STORED AS PARQUET
 LOCATION '/mnt/nyctaxi/tripdata.parquet';
 ```
+
+:::{note}
+Statistics
+: By default, when a table is created, DataFusion will read the files
+to gather statistics, which can be expensive but can accelerate subsequent
+queries substantially. If you don't want to gather statistics
+when creating a table, set the `datafusion.execution.collect_statistics`
+configuration option to `false` before creating the table. For example:
+
+```sql
+SET datafusion.execution.collect_statistics = false;
+```
+
+See the [config settings docs](../configs.md) for more details.
+:::
+
+### Example: Comma Separated Value (CSV)
 
 CSV data sources can also be registered by executing a `CREATE EXTERNAL TABLE` SQL statement. The schema will be inferred based on
 scanning a subset of the file.
@@ -101,6 +120,8 @@ LOCATION '/path/to/aggregate_simple.csv'
 OPTIONS ('has_header' 'true');
 ```
 
+### Example: Compression
+
 It is also possible to use compressed files, such as `.csv.gz`:
 
 ```sql
@@ -110,6 +131,8 @@ COMPRESSION TYPE GZIP
 LOCATION '/path/to/aggregate_simple.csv.gz'
 OPTIONS ('has_header' 'true');
 ```
+
+### Example: Specifying Schema
 
 It is also possible to specify the schema manually.
 
@@ -134,6 +157,8 @@ LOCATION '/path/to/aggregate_test_100.csv'
 OPTIONS ('has_header' 'true');
 ```
 
+### Example: Partitioned Tables
+
 It is also possible to specify a directory that contains a partitioned
 table (multiple files with the same schema)
 
@@ -144,7 +169,9 @@ LOCATION '/path/to/directory/of/files'
 OPTIONS ('has_header' 'true');
 ```
 
-With `CREATE UNBOUNDED EXTERNAL TABLE` SQL statement. We can create unbounded data sources such as following:
+### Example: Unbounded Data Sources
+
+We can create unbounded data sources using the `CREATE UNBOUNDED EXTERNAL TABLE` SQL statement.
 
 ```sql
 CREATE UNBOUNDED EXTERNAL TABLE taxi
@@ -153,6 +180,8 @@ LOCATION '/mnt/nyctaxi/tripdata.parquet';
 ```
 
 Note that this statement actually reads data from a fixed-size file, so a better example would involve reading from a FIFO file. Nevertheless, once Datafusion sees the `UNBOUNDED` keyword in a data source, it tries to execute queries that refer to this unbounded source in streaming fashion. If this is not possible according to query specifications, plan generation fails stating it is not possible to execute given query in streaming fashion. Note that queries that can run with unbounded sources (i.e. in streaming mode) are a subset of those that can with bounded sources. A query that fails with unbounded source(s) may work with bounded source(s).
+
+### Example: `WITH ORDER` Clause
 
 When creating an output from a data source that is already ordered by
 an expression, you can pre-specify the order of the data using the
@@ -190,7 +219,7 @@ WITH ORDER (sort_expression1 [ASC | DESC] [NULLS { FIRST | LAST }]
          [, sort_expression2 [ASC | DESC] [NULLS { FIRST | LAST }] ...])
 ```
 
-### Cautions when using the WITH ORDER Clause
+#### Cautions when using the WITH ORDER Clause
 
 - It's important to understand that using the `WITH ORDER` clause in the `CREATE EXTERNAL TABLE` statement only specifies the order in which the data should be read from the external file. If the data in the file is not already sorted according to the specified order, then the results may not be correct.
 
@@ -287,3 +316,78 @@ DROP VIEW [ IF EXISTS ] <b><i>view_name</i></b>;
 -- drop users_v view from the customer_a schema
 DROP VIEW IF EXISTS customer_a.users_v;
 ```
+
+## DESCRIBE
+
+Displays the schema of a table, showing column names, data types, and nullable status. Both `DESCRIBE` and `DESC` are supported as aliases.
+
+<pre>
+{ DESCRIBE | DESC } <b><i>table_name</i></b>
+</pre>
+
+The output contains three columns:
+
+- `column_name`: The name of the column
+- `data_type`: The data type of the column (e.g., Int32, Utf8, Boolean)
+- `is_nullable`: Whether the column can contain null values (YES/NO)
+
+### Example: Basic table description
+
+```sql
+-- Create a table
+CREATE TABLE users AS VALUES (1, 'Alice', true), (2, 'Bob', false);
+
+-- Describe the table structure
+DESCRIBE users;
+```
+
+Output:
+
+```sql
++--------------+-----------+-------------+
+| column_name  | data_type | is_nullable |
++--------------+-----------+-------------+
+| column1      | Int64     | YES         |
+| column2      | Utf8      | YES         |
+| column3      | Boolean   | YES         |
++--------------+-----------+-------------+
+```
+
+### Example: Using DESC alias
+
+```sql
+-- DESC is an alias for DESCRIBE
+DESC users;
+```
+
+### Example: Describing external tables
+
+```sql
+-- Create an external table
+CREATE EXTERNAL TABLE taxi
+STORED AS PARQUET
+LOCATION '/mnt/nyctaxi/tripdata.parquet';
+
+-- Describe its schema
+DESCRIBE taxi;
+```
+
+Output might show:
+
+```sql
++--------------------+-----------------------------+-------------+
+| column_name        | data_type                   | is_nullable |
++--------------------+-----------------------------+-------------+
+| vendor_id          | Int32                       | YES         |
+| pickup_datetime    | Timestamp(Nanosecond, None) | NO          |
+| passenger_count    | Int32                       | YES         |
+| trip_distance      | Float64                     | YES         |
++--------------------+-----------------------------+-------------+
+```
+
+The `DESCRIBE` command works with all table types in DataFusion, including:
+
+- Regular tables created with `CREATE TABLE`
+- External tables created with `CREATE EXTERNAL TABLE`
+- Views created with `CREATE VIEW`
+- Tables in different schemas using qualified names (e.g., `DESCRIBE schema_name.table_name`)

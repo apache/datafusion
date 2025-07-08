@@ -154,7 +154,7 @@ fn criterion_benchmark_limited_distinct_sampled(c: &mut Criterion) {
     let sql =
         format!("select DISTINCT trace_id from traces group by trace_id limit {limit};");
     c.bench_function(
-        format!("distinct query with {} partitions and {} samples per partition with limit {}", partitions, samples, limit).as_str(),
+        format!("distinct query with {partitions} partitions and {samples} samples per partition with limit {limit}").as_str(),
         |b| b.iter(|| {
             let (plan, ctx) = rt.block_on(
                 create_context_sampled_data(sql.as_str(), partitions, samples)
@@ -168,7 +168,7 @@ fn criterion_benchmark_limited_distinct_sampled(c: &mut Criterion) {
     let sql =
         format!("select DISTINCT trace_id from traces group by trace_id limit {limit};");
     c.bench_function(
-        format!("distinct query with {} partitions and {} samples per partition with limit {}", partitions, samples, limit).as_str(),
+        format!("distinct query with {partitions} partitions and {samples} samples per partition with limit {limit}").as_str(),
         |b| b.iter(|| {
             let (plan, ctx) = rt.block_on(
                 create_context_sampled_data(sql.as_str(), partitions, samples)
@@ -182,7 +182,7 @@ fn criterion_benchmark_limited_distinct_sampled(c: &mut Criterion) {
     let sql =
         format!("select DISTINCT trace_id from traces group by trace_id limit {limit};");
     c.bench_function(
-        format!("distinct query with {} partitions and {} samples per partition with limit {}", partitions, samples, limit).as_str(),
+        format!("distinct query with {partitions} partitions and {samples} samples per partition with limit {limit}").as_str(),
         |b| b.iter(|| {
             let (plan, ctx) = rt.block_on(
                 create_context_sampled_data(sql.as_str(), partitions, samples)

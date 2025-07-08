@@ -18,13 +18,8 @@
 //! Implementation of `rank`, `dense_rank`, and `percent_rank` window functions,
 //! which can be evaluated at runtime during query execution.
 
-use std::any::Any;
-use std::fmt::Debug;
-use std::iter;
-use std::ops::Range;
-use std::sync::{Arc, LazyLock};
-
 use crate::define_udwf_and_expr;
+use arrow::datatypes::FieldRef;
 use datafusion_common::arrow::array::ArrayRef;
 use datafusion_common::arrow::array::{Float64Array, UInt64Array};
 use datafusion_common::arrow::compute::SortOptions;
@@ -39,6 +34,11 @@ use datafusion_expr::{
 use datafusion_functions_window_common::field;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 use field::WindowUDFFieldArgs;
+use std::any::Any;
+use std::fmt::Debug;
+use std::iter;
+use std::ops::Range;
+use std::sync::{Arc, LazyLock};
 
 define_udwf_and_expr!(
     Rank,
@@ -110,6 +110,26 @@ static RANK_DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
             skips ranks for identical values.",
 
         "rank()")
+        .with_sql_example(r#"```sql
+    --Example usage of the rank window function:
+    SELECT department,
+           salary,
+           rank() OVER (PARTITION BY department ORDER BY salary DESC) AS rank
+    FROM employees;
+```
+
+```sql
++-------------+--------+------+
+| department  | salary | rank |
++-------------+--------+------+
+| Sales       | 70000  | 1    |
+| Sales       | 50000  | 2    |
+| Sales       | 50000  | 2    |
+| Sales       | 30000  | 4    |
+| Engineering | 90000  | 1    |
+| Engineering | 80000  | 2    |
++-------------+--------+------+
+```"#)
         .build()
 });
 
@@ -121,6 +141,26 @@ static DENSE_RANK_DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
     Documentation::builder(DOC_SECTION_RANKING, "Returns the rank of the current row without gaps. This function ranks \
             rows in a dense manner, meaning consecutive ranks are assigned even for identical \
             values.", "dense_rank()")
+        .with_sql_example(r#"```sql
+    --Example usage of the dense_rank window function:
+    SELECT department,
+           salary,
+           dense_rank() OVER (PARTITION BY department ORDER BY salary DESC) AS dense_rank
+    FROM employees;
+```
+
+```sql
++-------------+--------+------------+
+| department  | salary | dense_rank |
++-------------+--------+------------+
+| Sales       | 70000  | 1          |
+| Sales       | 50000  | 2          |
+| Sales       | 50000  | 2          |
+| Sales       | 30000  | 3          |
+| Engineering | 90000  | 1          |
+| Engineering | 80000  | 2          |
++-------------+--------+------------+
+```"#)
         .build()
 });
 
@@ -131,6 +171,23 @@ fn get_dense_rank_doc() -> &'static Documentation {
 static PERCENT_RANK_DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
     Documentation::builder(DOC_SECTION_RANKING, "Returns the percentage rank of the current row within its partition. \
             The value ranges from 0 to 1 and is computed as `(rank - 1) / (total_rows - 1)`.", "percent_rank()")
+        .with_sql_example(r#"```sql
+    --Example usage of the percent_rank window function:
+    SELECT employee_id,
+           salary,
+           percent_rank() OVER (ORDER BY salary) AS percent_rank
+    FROM employees;
+```
+
+```sql
++-------------+--------+---------------+
+| employee_id | salary | percent_rank  |
++-------------+--------+---------------+
+| 1           | 30000  | 0.00          |
+| 2           | 50000  | 0.50          |
+| 3           | 70000  | 1.00          |
++-------------+--------+---------------+
+```"#)
         .build()
 });
 
@@ -161,14 +218,14 @@ impl WindowUDFImpl for Rank {
         }))
     }
 
-    fn field(&self, field_args: WindowUDFFieldArgs) -> Result<Field> {
+    fn field(&self, field_args: WindowUDFFieldArgs) -> Result<FieldRef> {
         let return_type = match self.rank_type {
             RankType::Basic | RankType::Dense => DataType::UInt64,
             RankType::Percent => DataType::Float64,
         };
 
         let nullable = false;
-        Ok(Field::new(field_args.name(), return_type, nullable))
+        Ok(Field::new(field_args.name(), return_type, nullable).into())
     }
 
     fn sort_options(&self) -> Option<SortOptions> {

@@ -117,6 +117,7 @@ mod tests {
     use crate::analyzer::type_coercion::TypeCoercion;
     use crate::analyzer::Analyzer;
     use crate::assert_optimized_plan_eq_snapshot;
+    use crate::OptimizerContext;
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::config::ConfigOptions;
     use datafusion_expr::{col, logical_plan::table_scan};
@@ -137,9 +138,11 @@ mod tests {
             let options = ConfigOptions::default();
             let analyzed_plan = Analyzer::with_rules(vec![Arc::new(TypeCoercion::new())])
                 .execute_and_check($plan, &options, |_, _| {})?;
-            let rule: Arc<dyn crate::OptimizerRule + Send + Sync> = Arc::new(EliminateNestedUnion::new());
+            let optimizer_ctx = OptimizerContext::new().with_max_passes(1);
+            let rules: Vec<Arc<dyn crate::OptimizerRule + Send + Sync>> = vec![Arc::new(EliminateNestedUnion::new())];
             assert_optimized_plan_eq_snapshot!(
-                rule,
+                optimizer_ctx,
+                rules,
                 analyzed_plan,
                 @ $expected,
             )

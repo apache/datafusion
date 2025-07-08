@@ -101,18 +101,17 @@ fn invoke_substr_with_args(
     args: Vec<ColumnarValue>,
     number_rows: usize,
 ) -> Result<ColumnarValue, DataFusionError> {
-    let arg_fields_owned = args
+    let arg_fields = args
         .iter()
         .enumerate()
-        .map(|(idx, arg)| Field::new(format!("arg_{idx}"), arg.data_type(), true))
+        .map(|(idx, arg)| Field::new(format!("arg_{idx}"), arg.data_type(), true).into())
         .collect::<Vec<_>>();
-    let arg_fields = arg_fields_owned.iter().collect::<Vec<_>>();
 
     unicode::substr().invoke_with_args(ScalarFunctionArgs {
         args: args.clone(),
         arg_fields,
         number_rows,
-        return_field: &Field::new("f", DataType::Utf8View, true),
+        return_field: Field::new("f", DataType::Utf8View, true).into(),
     })
 }
 
@@ -126,19 +125,18 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         let args = create_args_without_count::<i32>(size, len, true, true);
         group.bench_function(
-            format!("substr_string_view [size={}, strlen={}]", size, len),
+            format!("substr_string_view [size={size}, strlen={len}]"),
             |b| b.iter(|| black_box(invoke_substr_with_args(args.clone(), size))),
         );
 
         let args = create_args_without_count::<i32>(size, len, false, false);
-        group.bench_function(
-            format!("substr_string [size={}, strlen={}]", size, len),
-            |b| b.iter(|| black_box(invoke_substr_with_args(args.clone(), size))),
-        );
+        group.bench_function(format!("substr_string [size={size}, strlen={len}]"), |b| {
+            b.iter(|| black_box(invoke_substr_with_args(args.clone(), size)))
+        });
 
         let args = create_args_without_count::<i64>(size, len, true, false);
         group.bench_function(
-            format!("substr_large_string [size={}, strlen={}]", size, len),
+            format!("substr_large_string [size={size}, strlen={len}]"),
             |b| b.iter(|| black_box(invoke_substr_with_args(args.clone(), size))),
         );
 
@@ -153,28 +151,19 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         let args = create_args_with_count::<i32>(size, len, count, true);
         group.bench_function(
-            format!(
-                "substr_string_view [size={}, count={}, strlen={}]",
-                size, count, len,
-            ),
+            format!("substr_string_view [size={size}, count={count}, strlen={len}]",),
             |b| b.iter(|| black_box(invoke_substr_with_args(args.clone(), size))),
         );
 
         let args = create_args_with_count::<i32>(size, len, count, false);
         group.bench_function(
-            format!(
-                "substr_string [size={}, count={}, strlen={}]",
-                size, count, len,
-            ),
+            format!("substr_string [size={size}, count={count}, strlen={len}]",),
             |b| b.iter(|| black_box(invoke_substr_with_args(args.clone(), size))),
         );
 
         let args = create_args_with_count::<i64>(size, len, count, false);
         group.bench_function(
-            format!(
-                "substr_large_string [size={}, count={}, strlen={}]",
-                size, count, len,
-            ),
+            format!("substr_large_string [size={size}, count={count}, strlen={len}]",),
             |b| b.iter(|| black_box(invoke_substr_with_args(args.clone(), size))),
         );
 
@@ -189,28 +178,19 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         let args = create_args_with_count::<i32>(size, len, count, true);
         group.bench_function(
-            format!(
-                "substr_string_view [size={}, count={}, strlen={}]",
-                size, count, len,
-            ),
+            format!("substr_string_view [size={size}, count={count}, strlen={len}]",),
             |b| b.iter(|| black_box(invoke_substr_with_args(args.clone(), size))),
         );
 
         let args = create_args_with_count::<i32>(size, len, count, false);
         group.bench_function(
-            format!(
-                "substr_string [size={}, count={}, strlen={}]",
-                size, count, len,
-            ),
+            format!("substr_string [size={size}, count={count}, strlen={len}]",),
             |b| b.iter(|| black_box(invoke_substr_with_args(args.clone(), size))),
         );
 
         let args = create_args_with_count::<i64>(size, len, count, false);
         group.bench_function(
-            format!(
-                "substr_large_string [size={}, count={}, strlen={}]",
-                size, count, len,
-            ),
+            format!("substr_large_string [size={size}, count={count}, strlen={len}]",),
             |b| b.iter(|| black_box(invoke_substr_with_args(args.clone(), size))),
         );
 

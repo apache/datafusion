@@ -147,7 +147,7 @@ impl fmt::Display for CopyToStatement {
 
         write!(f, "COPY {source} TO {target}")?;
         if let Some(file_type) = stored_as {
-            write!(f, " STORED AS {}", file_type)?;
+            write!(f, " STORED AS {file_type}")?;
         }
         if !partitioned_by.is_empty() {
             write!(f, " PARTITIONED BY ({})", partitioned_by.join(", "))?;
@@ -521,13 +521,13 @@ impl<'a> DFParser<'a> {
             .map(|stmt| Statement::Statement(Box::from(stmt)))
             .map_err(|e| match e {
                 ParserError::RecursionLimitExceeded => DataFusionError::SQL(
-                    ParserError::RecursionLimitExceeded,
+                    Box::new(ParserError::RecursionLimitExceeded),
                     Some(format!(
                         " (current limit: {})",
                         self.options.recursion_limit
                     )),
                 ),
-                other => DataFusionError::SQL(other, None),
+                other => DataFusionError::SQL(Box::new(other), None),
             })
     }
 

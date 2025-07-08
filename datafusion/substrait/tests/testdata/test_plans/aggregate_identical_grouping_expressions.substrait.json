@@ -1,0 +1,53 @@
+{
+  "extensionUris": [],
+  "extensions": [],
+  "relations": [
+    {
+      "root": {
+        "input": {
+          "aggregate": {
+            "input": {
+              "read": {
+                "common": {
+                  "direct": {}
+                },
+                "baseSchema": {
+                  "names": [],
+                  "struct": {
+                    "types": [],
+                    "nullability": "NULLABILITY_NULLABLE"
+                  }
+                },
+                "namedTable": {
+                  "names": ["data"]
+                }
+              }
+            },
+            "groupings": [
+              {
+                "groupingExpressions": [
+                  {
+                    "literal": {
+                      "i32": 1
+                    }
+                  },
+                  {
+                    "literal": {
+                      "i32": 1
+                    }
+                  }
+                ]
+              }
+            ],
+            "measures": []
+          }
+        },
+        "names": ["grouping_col_1", "grouping_col_2"]
+      }
+    }
+  ],
+  "version": {
+    "minorNumber": 54,
+    "producer": "manual"
+  }
+}

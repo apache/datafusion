@@ -16,12 +16,14 @@
 // under the License.
 
 pub mod ascii;
+pub mod char;
 
 use datafusion_expr::ScalarUDF;
 use datafusion_functions::make_udf_function;
 use std::sync::Arc;
 
 make_udf_function!(ascii::SparkAscii, ascii);
+make_udf_function!(char::SparkChar, char);
 
 pub mod expr_fn {
     use datafusion_functions::export_functions;
@@ -31,8 +33,13 @@ pub mod expr_fn {
         "Returns the ASCII code point of the first character of string.",
         arg1
     ));
+    export_functions!((
+        char,
+        "Returns the ASCII character having the binary equivalent to col. If col is larger than 256 the result is equivalent to char(col % 256).",
+        arg1
+    ));
 }
 
 pub fn functions() -> Vec<Arc<ScalarUDF>> {
-    vec![ascii()]
+    vec![ascii(), char()]
 }

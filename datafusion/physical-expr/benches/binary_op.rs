@@ -215,7 +215,7 @@ fn benchmark_binary_op_in_short_circuit(c: &mut Criterion) {
     // Each scenario when the test operator is `and`
     {
         for (name, batch) in batches_and.into_iter() {
-            c.bench_function(&format!("short_circuit/and/{}", name), |b| {
+            c.bench_function(&format!("short_circuit/and/{name}"), |b| {
                 b.iter(|| expr_and.evaluate(black_box(&batch)).unwrap())
             });
         }
@@ -223,7 +223,7 @@ fn benchmark_binary_op_in_short_circuit(c: &mut Criterion) {
     // Each scenario when the test operator is `or`
     {
         for (name, batch) in batches_or.into_iter() {
-            c.bench_function(&format!("short_circuit/or/{}", name), |b| {
+            c.bench_function(&format!("short_circuit/or/{name}"), |b| {
                 b.iter(|| expr_or.evaluate(black_box(&batch)).unwrap())
             });
         }

@@ -19,6 +19,7 @@
 
 mod baseline;
 mod builder;
+mod custom;
 mod value;
 
 use parking_lot::Mutex;
@@ -33,6 +34,7 @@ use datafusion_common::HashMap;
 // public exports
 pub use baseline::{BaselineMetrics, RecordOutput, SpillMetrics};
 pub use builder::MetricBuilder;
+pub use custom::CustomMetricValue;
 pub use value::{Count, Gauge, MetricValue, ScopedTimerGuard, Time, Timestamp};
 
 /// Something that tracks a value of interest (metric) of a DataFusion
@@ -263,6 +265,7 @@ impl MetricsSet {
             MetricValue::Gauge { name, .. } => name == metric_name,
             MetricValue::StartTimestamp(_) => false,
             MetricValue::EndTimestamp(_) => false,
+            MetricValue::Custom { .. } => false,
         })
     }
 

@@ -52,7 +52,7 @@ impl FromStr for MaxRows {
         } else {
             match maxrows.parse::<usize>() {
                 Ok(nrows)  => Ok(Self::Limited(nrows)),
-                _ => Err(format!("Invalid maxrows {}. Valid inputs are natural numbers or \'none\', \'inf\', or \'infinite\' for no limit.", maxrows)),
+                _ => Err(format!("Invalid maxrows {maxrows}. Valid inputs are natural numbers or \'none\', \'inf\', or \'infinite\' for no limit.")),
             }
         }
     }

@@ -60,7 +60,7 @@ impl OptimizerRule for EliminateFilter {
     ) -> Result<Transformed<LogicalPlan>> {
         match plan {
             LogicalPlan::Filter(Filter {
-                predicate: Expr::Literal(ScalarValue::Boolean(v)),
+                predicate: Expr::Literal(ScalarValue::Boolean(v), _),
                 input,
                 ..
             }) => match v {
@@ -82,6 +82,7 @@ mod tests {
     use std::sync::Arc;
 
     use crate::assert_optimized_plan_eq_snapshot;
+    use crate::OptimizerContext;
     use datafusion_common::{Result, ScalarValue};
     use datafusion_expr::{col, lit, logical_plan::builder::LogicalPlanBuilder, Expr};
 
@@ -94,9 +95,11 @@ mod tests {
             $plan:expr,
             @ $expected:literal $(,)?
         ) => {{
-            let rule: Arc<dyn crate::OptimizerRule + Send + Sync> = Arc::new(EliminateFilter::new());
+            let optimizer_ctx = OptimizerContext::new().with_max_passes(1);
+            let rules: Vec<Arc<dyn crate::OptimizerRule + Send + Sync>> = vec![Arc::new(EliminateFilter::new())];
             assert_optimized_plan_eq_snapshot!(
-                rule,
+                optimizer_ctx,
+                rules,
                 $plan,
                 @ $expected,
             )
@@ -119,7 +122,7 @@ mod tests {
 
     #[test]
     fn filter_null() -> Result<()> {
-        let filter_expr = Expr::Literal(ScalarValue::Boolean(None));
+        let filter_expr = Expr::Literal(ScalarValue::Boolean(None), None);
 
         let table_scan = test_table_scan().unwrap();
         let plan = LogicalPlanBuilder::from(table_scan)

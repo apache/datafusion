@@ -42,7 +42,6 @@ use datafusion_physical_expr::utils::map_columns_before_projection;
 use datafusion_physical_expr::{
     physical_exprs_equal, EquivalenceProperties, PhysicalExpr, PhysicalExprRef,
 };
-use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
 };
@@ -296,7 +295,7 @@ pub fn adjust_input_keys_ordering(
         join_type,
         projection,
         mode,
-        null_equals_null,
+        null_equality,
         ..
     }) = plan.as_any().downcast_ref::<HashJoinExec>()
     {
@@ -315,7 +314,7 @@ pub fn adjust_input_keys_ordering(
                         // TODO: although projection is not used in the join here, because projection pushdown is after enforce_distribution. Maybe we need to handle it later. Same as filter.
                         projection.clone(),
                         PartitionMode::Partitioned,
-                        *null_equals_null,
+                        *null_equality,
                     )
                     .map(|e| Arc::new(e) as _)
                 };
@@ -335,7 +334,7 @@ pub fn adjust_input_keys_ordering(
                         left.schema().fields().len(),
                     )
                     .unwrap_or_default(),
-                    JoinType::RightSemi | JoinType::RightAnti => {
+                    JoinType::RightSemi | JoinType::RightAnti | JoinType::RightMark => {
                         requirements.data.clone()
                     }
                     JoinType::Left
@@ -365,7 +364,7 @@ pub fn adjust_input_keys_ordering(
         filter,
         join_type,
         sort_options,
-        null_equals_null,
+        null_equality,
         ..
     }) = plan.as_any().downcast_ref::<SortMergeJoinExec>()
     {
@@ -380,7 +379,7 @@ pub fn adjust_input_keys_ordering(
                 filter.clone(),
                 *join_type,
                 new_conditions.1,
-                *null_equals_null,
+                *null_equality,
             )
             .map(|e| Arc::new(e) as _)
         };
@@ -617,7 +616,7 @@ pub fn reorder_join_keys_to_inputs(
         join_type,
         projection,
         mode,
-        null_equals_null,
+        null_equality,
         ..
     }) = plan_any.downcast_ref::<HashJoinExec>()
     {
@@ -643,7 +642,7 @@ pub fn reorder_join_keys_to_inputs(
                     join_type,
                     projection.clone(),
                     PartitionMode::Partitioned,
-                    *null_equals_null,
+                    *null_equality,
                 )?));
             }
         }
@@ -654,7 +653,7 @@ pub fn reorder_join_keys_to_inputs(
         filter,
         join_type,
         sort_options,
-        null_equals_null,
+        null_equality,
         ..
     }) = plan_any.downcast_ref::<SortMergeJoinExec>()
     {
@@ -682,7 +681,7 @@ pub fn reorder_join_keys_to_inputs(
                     filter.clone(),
                     *join_type,
                     new_sort_options,
-                    *null_equals_null,
+                    *null_equality,
                 )
                 .map(|smj| Arc::new(smj) as _);
             }
@@ -945,16 +944,10 @@ fn add_spm_on_top(input: DistributionContext) -> DistributionContext {
         // if any of the following conditions is true
         // - Preserving ordering is not helpful in terms of satisfying ordering requirements
         // - Usage of order preserving variants is not desirable
-        // (determined by flag `config.optimizer.bounded_order_preserving_variants`)
-        let should_preserve_ordering = input.plan.output_ordering().is_some();
-
-        let new_plan = if should_preserve_ordering {
+        // (determined by flag `config.optimizer.prefer_existing_sort`)
+        let new_plan = if let Some(ordering) = input.plan.output_ordering() {
             Arc::new(SortPreservingMergeExec::new(
-                input
-                    .plan
-                    .output_ordering()
-                    .unwrap_or(&LexOrdering::default())
-                    .clone(),
+                ordering.clone(),
                 Arc::clone(&input.plan),
             )) as _
         } else {
@@ -1158,6 +1151,10 @@ fn get_repartition_requirement_status(
 /// operators to satisfy distribution requirements. Since this function
 /// takes care of such requirements, we should avoid manually adding data
 /// exchange operators in other places.
+///
+/// This function is intended to be used in a bottom up traversal, as it
+/// can first repartition (or newly partition) at the datasources -- these
+/// source partitions may be later repartitioned with additional data exchange operators.
 pub fn ensure_distribution(
     dist_context: DistributionContext,
     config: &ConfigOptions,
@@ -1247,6 +1244,10 @@ pub fn ensure_distribution(
 
             // When `repartition_file_scans` is set, attempt to increase
             // parallelism at the source.
+            //
+            // If repartitioning is not possible (a.k.a. None is returned from `ExecutionPlan::repartitioned`)
+            // then no repartitioning will have occurred. As the default implementation returns None, it is only
+            // specific physical plan nodes, such as certain datasources, which are repartitioned.
             if repartition_file_scans && roundrobin_beneficial_stats {
                 if let Some(new_child) =
                     child.plan.repartitioned(target_partitions, config)?
@@ -1286,10 +1287,12 @@ pub fn ensure_distribution(
                 // Either:
                 // - Ordering requirement cannot be satisfied by preserving ordering through repartitions, or
                 // - using order preserving variant is not desirable.
+                let sort_req = required_input_ordering.into_single();
                 let ordering_satisfied = child
                     .plan
                     .equivalence_properties()
-                    .ordering_satisfy_requirement(&required_input_ordering);
+                    .ordering_satisfy_requirement(sort_req.clone())?;
+
                 if (!ordering_satisfied || !order_preserving_variants_desirable)
                     && child.data
                 {
@@ -1300,9 +1303,12 @@ pub fn ensure_distribution(
                         // Make sure to satisfy ordering requirement:
                         child = add_sort_above_with_check(
                             child,
-                            required_input_ordering.clone(),
-                            None,
-                        );
+                            sort_req,
+                            plan.as_any()
+                                .downcast_ref::<OutputRequirementExec>()
+                                .map(|output| output.fetch())
+                                .unwrap_or(None),
+                        )?;
                     }
                 }
                 // Stop tracking distribution changing operators

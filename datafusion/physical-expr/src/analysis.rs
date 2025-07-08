@@ -112,7 +112,7 @@ impl ExprBoundaries {
                 .min_value
                 .get_value()
                 .cloned()
-                .unwrap_or(empty_field.clone()),
+                .unwrap_or_else(|| empty_field.clone()),
             col_stats
                 .max_value
                 .get_value()

@@ -130,7 +130,7 @@ impl ScalarUDFImpl for StartsWithFunc {
         args: Vec<Expr>,
         info: &dyn SimplifyInfo,
     ) -> Result<ExprSimplifyResult> {
-        if let Expr::Literal(scalar_value) = &args[1] {
+        if let Expr::Literal(scalar_value, _) = &args[1] {
             // Convert starts_with(col, 'prefix') to col LIKE 'prefix%' with proper escaping
             // Example: starts_with(col, 'ja%') -> col LIKE 'ja\%%'
             //   1. 'ja%'         (input pattern)
@@ -141,8 +141,8 @@ impl ScalarUDFImpl for StartsWithFunc {
                 | ScalarValue::LargeUtf8(Some(pattern))
                 | ScalarValue::Utf8View(Some(pattern)) => {
                     let escaped_pattern = pattern.replace("%", "\\%");
-                    let like_pattern = format!("{}%", escaped_pattern);
-                    Expr::Literal(ScalarValue::Utf8(Some(like_pattern)))
+                    let like_pattern = format!("{escaped_pattern}%");
+                    Expr::Literal(ScalarValue::Utf8(Some(like_pattern)), None)
                 }
                 _ => return Ok(ExprSimplifyResult::Original(args)),
             };

@@ -304,6 +304,54 @@ select count(*) from listing_table;
 ----
 12
 
+# Test table pointing to the folder with parquet files(ends with /)
+statement ok
+CREATE EXTERNAL TABLE listing_table_folder_0
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet/test_table/';
+
+statement ok
+set datafusion.execution.listing_table_ignore_subdirectory = true;
+
+# scan file: 0.parquet 1.parquet 2.parquet
+query I
+select count(*) from listing_table_folder_0;
+----
+9
+
+statement ok
+set datafusion.execution.listing_table_ignore_subdirectory = false;
+
+# scan file: 0.parquet 1.parquet 2.parquet 3.parquet
+query I
+select count(*) from listing_table_folder_0;
+----
+12
+
+# Test table pointing to the folder with parquet files(doesn't end with /)
+statement ok
+CREATE EXTERNAL TABLE listing_table_folder_1
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet/test_table';
+
+statement ok
+set datafusion.execution.listing_table_ignore_subdirectory = true;
+
+# scan file: 0.parquet 1.parquet 2.parquet
+query I
+select count(*) from listing_table_folder_1;
+----
+9
+
+statement ok
+set datafusion.execution.listing_table_ignore_subdirectory = false;
+
+# scan file: 0.parquet 1.parquet 2.parquet 3.parquet
+query I
+select count(*) from listing_table_folder_1;
+----
+12
+
 # Clean up
 statement ok
 DROP TABLE timestamp_with_tz;

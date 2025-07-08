@@ -193,6 +193,29 @@ Returns the rank of the current row without gaps. This function ranks rows in a 
 dense_rank()
 ```
 
+#### Example
+
+```sql
+    --Example usage of the dense_rank window function:
+    SELECT department,
+           salary,
+           dense_rank() OVER (PARTITION BY department ORDER BY salary DESC) AS dense_rank
+    FROM employees;
+```
+
+```sql
++-------------+--------+------------+
+| department  | salary | dense_rank |
++-------------+--------+------------+
+| Sales       | 70000  | 1          |
+| Sales       | 50000  | 2          |
+| Sales       | 50000  | 2          |
+| Sales       | 30000  | 3          |
+| Engineering | 90000  | 1          |
+| Engineering | 80000  | 2          |
++-------------+--------+------------+
+```
+
 ### `ntile`
 
 Integer ranging from 1 to the argument value, dividing the partition as equally as possible
@@ -205,12 +228,57 @@ ntile(expression)
 
 - **expression**: An integer describing the number groups the partition should be split into
 
+#### Example
+
+```sql
+    --Example usage of the ntile window function:
+    SELECT employee_id,
+           salary,
+           ntile(4) OVER (ORDER BY salary DESC) AS quartile
+    FROM employees;
+```
+
+```sql
++-------------+--------+----------+
+| employee_id | salary | quartile |
++-------------+--------+----------+
+| 1           | 90000  | 1        |
+| 2           | 85000  | 1        |
+| 3           | 80000  | 2        |
+| 4           | 70000  | 2        |
+| 5           | 60000  | 3        |
+| 6           | 50000  | 3        |
+| 7           | 40000  | 4        |
+| 8           | 30000  | 4        |
++-------------+--------+----------+
+```
+
 ### `percent_rank`
 
 Returns the percentage rank of the current row within its partition. The value ranges from 0 to 1 and is computed as `(rank - 1) / (total_rows - 1)`.
 
 ```sql
 percent_rank()
+```
+
+#### Example
+
+```sql
+    --Example usage of the percent_rank window function:
+    SELECT employee_id,
+           salary,
+           percent_rank() OVER (ORDER BY salary) AS percent_rank
+    FROM employees;
+```
+
+```sql
++-------------+--------+---------------+
+| employee_id | salary | percent_rank  |
++-------------+--------+---------------+
+| 1           | 30000  | 0.00          |
+| 2           | 50000  | 0.50          |
+| 3           | 70000  | 1.00          |
++-------------+--------+---------------+
 ```
 
 ### `rank`
@@ -221,6 +289,29 @@ Returns the rank of the current row within its partition, allowing gaps between 
 rank()
 ```
 
+#### Example
+
+```sql
+    --Example usage of the rank window function:
+    SELECT department,
+           salary,
+           rank() OVER (PARTITION BY department ORDER BY salary DESC) AS rank
+    FROM employees;
+```
+
+```sql
++-------------+--------+------+
+| department  | salary | rank |
++-------------+--------+------+
+| Sales       | 70000  | 1    |
+| Sales       | 50000  | 2    |
+| Sales       | 50000  | 2    |
+| Sales       | 30000  | 4    |
+| Engineering | 90000  | 1    |
+| Engineering | 80000  | 2    |
++-------------+--------+------+
+```
+
 ### `row_number`
 
 Number of the current row within its partition, counting from 1.
@@ -228,6 +319,30 @@ Number of the current row within its partition, counting from 1.
 ```sql
 row_number()
 ```
+
+#### Example
+
+```sql
+    --Example usage of the row_number window function:
+    SELECT department,
+           salary,
+           row_number() OVER (PARTITION BY department ORDER BY salary DESC) AS row_num
+    FROM employees;
+```
+
+````sql
++-------------+--------+---------+
+| department  | salary | row_num |
++-------------+--------+---------+
+| Sales       | 70000  | 1       |
+| Sales       | 50000  | 2       |
+| Sales       | 50000  | 3       |
+| Sales       | 30000  | 4       |
+| Engineering | 90000  | 1       |
+| Engineering | 80000  | 2       |
++-------------+--------+---------+
+```#
+
 
 ## Analytical Functions
 
@@ -243,11 +358,34 @@ Returns value evaluated at the row that is the first row of the window frame.
 
 ```sql
 first_value(expression)
-```
+````
 
 #### Arguments
 
 - **expression**: Expression to operate on
+
+#### Example
+
+```sql
+    --Example usage of the first_value window function:
+    SELECT department,
+           employee_id,
+           salary,
+           first_value(salary) OVER (PARTITION BY department ORDER BY salary DESC) AS top_salary
+    FROM employees;
+```
+
+```sql
++-------------+-------------+--------+------------+
+| department  | employee_id | salary | top_salary |
++-------------+-------------+--------+------------+
+| Sales       | 1           | 70000  | 70000      |
+| Sales       | 2           | 50000  | 70000      |
+| Sales       | 3           | 30000  | 70000      |
+| Engineering | 4           | 90000  | 90000      |
+| Engineering | 5           | 80000  | 90000      |
++-------------+-------------+--------+------------+
+```
 
 ### `lag`
 
@@ -263,6 +401,27 @@ lag(expression, offset, default)
 - **offset**: Integer. Specifies how many rows back the value of expression should be retrieved. Defaults to 1.
 - **default**: The default value if the offset is not within the partition. Must be of the same type as expression.
 
+#### Example
+
+```sql
+    --Example usage of the lag window function:
+    SELECT employee_id,
+           salary,
+           lag(salary, 1, 0) OVER (ORDER BY employee_id) AS prev_salary
+    FROM employees;
+```
+
+```sql
++-------------+--------+-------------+
+| employee_id | salary | prev_salary |
++-------------+--------+-------------+
+| 1           | 30000  | 0           |
+| 2           | 50000  | 30000       |
+| 3           | 70000  | 50000       |
+| 4           | 60000  | 70000       |
++-------------+--------+-------------+
+```
+
 ### `last_value`
 
 Returns value evaluated at the row that is the last row of the window frame.
@@ -274,6 +433,29 @@ last_value(expression)
 #### Arguments
 
 - **expression**: Expression to operate on
+
+#### Example
+
+```sql
+-- SQL example of last_value:
+SELECT department,
+       employee_id,
+       salary,
+       last_value(salary) OVER (PARTITION BY department ORDER BY salary) AS running_last_salary
+FROM employees;
+```
+
+```sql
++-------------+-------------+--------+---------------------+
+| department  | employee_id | salary | running_last_salary |
++-------------+-------------+--------+---------------------+
+| Sales       | 1           | 30000  | 30000               |
+| Sales       | 2           | 50000  | 50000               |
+| Sales       | 3           | 70000  | 70000               |
+| Engineering | 4           | 40000  | 40000               |
+| Engineering | 5           | 60000  | 60000               |
++-------------+-------------+--------+---------------------+
+```
 
 ### `lead`
 
@@ -288,6 +470,30 @@ lead(expression, offset, default)
 - **expression**: Expression to operate on
 - **offset**: Integer. Specifies how many rows forward the value of expression should be retrieved. Defaults to 1.
 - **default**: The default value if the offset is not within the partition. Must be of the same type as expression.
+
+#### Example
+
+```sql
+-- Example usage of lead() :
+SELECT
+    employee_id,
+    department,
+    salary,
+    lead(salary, 1, 0) OVER (PARTITION BY department ORDER BY salary) AS next_salary
+FROM employees;
+```
+
+```sql
++-------------+-------------+--------+--------------+
+| employee_id | department  | salary | next_salary  |
++-------------+-------------+--------+--------------+
+| 1           | Sales       | 30000  | 50000        |
+| 2           | Sales       | 50000  | 70000        |
+| 3           | Sales       | 70000  | 0            |
+| 4           | Engineering | 40000  | 60000        |
+| 5           | Engineering | 60000  | 0            |
++-------------+-------------+--------+--------------+
+```
 
 ### `nth_value`
 

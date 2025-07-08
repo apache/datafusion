@@ -34,7 +34,7 @@ mod data_utils;
 fn build_keys(rng: &mut ThreadRng) -> Vec<String> {
     let mut keys = vec![];
     for _ in 0..1000 {
-        keys.push(rng.gen_range(0..9999).to_string());
+        keys.push(rng.random_range(0..9999).to_string());
     }
     keys
 }
@@ -42,7 +42,7 @@ fn build_keys(rng: &mut ThreadRng) -> Vec<String> {
 fn build_values(rng: &mut ThreadRng) -> Vec<i32> {
     let mut values = vec![];
     for _ in 0..1000 {
-        values.push(rng.gen_range(0..9999));
+        values.push(rng.random_range(0..9999));
     }
     values
 }
@@ -64,15 +64,18 @@ fn criterion_benchmark(c: &mut Criterion) {
     let rt = Runtime::new().unwrap();
     let df = rt.block_on(ctx.lock().table("t")).unwrap();
 
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let keys = build_keys(&mut rng);
     let values = build_values(&mut rng);
     let mut key_buffer = Vec::new();
     let mut value_buffer = Vec::new();
 
     for i in 0..1000 {
-        key_buffer.push(Expr::Literal(ScalarValue::Utf8(Some(keys[i].clone()))));
-        value_buffer.push(Expr::Literal(ScalarValue::Int32(Some(values[i]))));
+        key_buffer.push(Expr::Literal(
+            ScalarValue::Utf8(Some(keys[i].clone())),
+            None,
+        ));
+        value_buffer.push(Expr::Literal(ScalarValue::Int32(Some(values[i])), None));
     }
     c.bench_function("map_1000_1", |b| {
         b.iter(|| {

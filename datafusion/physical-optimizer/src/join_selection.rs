@@ -245,7 +245,7 @@ pub(crate) fn try_collect_left(
                     hash_join.join_type(),
                     hash_join.projection.clone(),
                     PartitionMode::CollectLeft,
-                    hash_join.null_equals_null(),
+                    hash_join.null_equality(),
                 )?)))
             }
         }
@@ -257,7 +257,7 @@ pub(crate) fn try_collect_left(
             hash_join.join_type(),
             hash_join.projection.clone(),
             PartitionMode::CollectLeft,
-            hash_join.null_equals_null(),
+            hash_join.null_equality(),
         )?))),
         (false, true) => {
             if hash_join.join_type().supports_swap() {
@@ -292,7 +292,7 @@ pub(crate) fn partitioned_hash_join(
             hash_join.join_type(),
             hash_join.projection.clone(),
             PartitionMode::Partitioned,
-            hash_join.null_equals_null(),
+            hash_join.null_equality(),
         )?))
     }
 }
@@ -459,7 +459,7 @@ fn hash_join_convert_symmetric_subrule(
                             JoinSide::Right => hash_join.right().output_ordering(),
                             JoinSide::None => unreachable!(),
                         }
-                        .map(|p| LexOrdering::new(p.to_vec()))
+                        .cloned()
                     })
                     .flatten()
             };
@@ -474,7 +474,7 @@ fn hash_join_convert_symmetric_subrule(
                 hash_join.on().to_vec(),
                 hash_join.filter().cloned(),
                 hash_join.join_type(),
-                hash_join.null_equals_null(),
+                hash_join.null_equality(),
                 left_order,
                 right_order,
                 mode,

@@ -61,18 +61,17 @@ fn invoke_repeat_with_args(
     args: Vec<ColumnarValue>,
     repeat_times: i64,
 ) -> Result<ColumnarValue, DataFusionError> {
-    let arg_fields_owned = args
+    let arg_fields = args
         .iter()
         .enumerate()
-        .map(|(idx, arg)| Field::new(format!("arg_{idx}"), arg.data_type(), true))
+        .map(|(idx, arg)| Field::new(format!("arg_{idx}"), arg.data_type(), true).into())
         .collect::<Vec<_>>();
-    let arg_fields = arg_fields_owned.iter().collect::<Vec<_>>();
 
     string::repeat().invoke_with_args(ScalarFunctionArgs {
         args,
         arg_fields,
         number_rows: repeat_times as usize,
-        return_field: &Field::new("f", DataType::Utf8, true),
+        return_field: Field::new("f", DataType::Utf8, true).into(),
     })
 }
 
@@ -80,17 +79,14 @@ fn criterion_benchmark(c: &mut Criterion) {
     for size in [1024, 4096] {
         // REPEAT 3 TIMES
         let repeat_times = 3;
-        let mut group = c.benchmark_group(format!("repeat {} times", repeat_times));
+        let mut group = c.benchmark_group(format!("repeat {repeat_times} times"));
         group.sampling_mode(SamplingMode::Flat);
         group.sample_size(10);
         group.measurement_time(Duration::from_secs(10));
 
         let args = create_args::<i32>(size, 32, repeat_times, true);
         group.bench_function(
-            format!(
-                "repeat_string_view [size={}, repeat_times={}]",
-                size, repeat_times
-            ),
+            format!("repeat_string_view [size={size}, repeat_times={repeat_times}]"),
             |b| {
                 b.iter(|| {
                     let args_cloned = args.clone();
@@ -101,10 +97,7 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         let args = create_args::<i32>(size, 32, repeat_times, false);
         group.bench_function(
-            format!(
-                "repeat_string [size={}, repeat_times={}]",
-                size, repeat_times
-            ),
+            format!("repeat_string [size={size}, repeat_times={repeat_times}]"),
             |b| {
                 b.iter(|| {
                     let args_cloned = args.clone();
@@ -115,10 +108,7 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         let args = create_args::<i64>(size, 32, repeat_times, false);
         group.bench_function(
-            format!(
-                "repeat_large_string [size={}, repeat_times={}]",
-                size, repeat_times
-            ),
+            format!("repeat_large_string [size={size}, repeat_times={repeat_times}]"),
             |b| {
                 b.iter(|| {
                     let args_cloned = args.clone();
@@ -131,17 +121,14 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         // REPEAT 30 TIMES
         let repeat_times = 30;
-        let mut group = c.benchmark_group(format!("repeat {} times", repeat_times));
+        let mut group = c.benchmark_group(format!("repeat {repeat_times} times"));
         group.sampling_mode(SamplingMode::Flat);
         group.sample_size(10);
         group.measurement_time(Duration::from_secs(10));
 
         let args = create_args::<i32>(size, 32, repeat_times, true);
         group.bench_function(
-            format!(
-                "repeat_string_view [size={}, repeat_times={}]",
-                size, repeat_times
-            ),
+            format!("repeat_string_view [size={size}, repeat_times={repeat_times}]"),
             |b| {
                 b.iter(|| {
                     let args_cloned = args.clone();
@@ -152,10 +139,7 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         let args = create_args::<i32>(size, 32, repeat_times, false);
         group.bench_function(
-            format!(
-                "repeat_string [size={}, repeat_times={}]",
-                size, repeat_times
-            ),
+            format!("repeat_string [size={size}, repeat_times={repeat_times}]"),
             |b| {
                 b.iter(|| {
                     let args_cloned = args.clone();
@@ -166,10 +150,7 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         let args = create_args::<i64>(size, 32, repeat_times, false);
         group.bench_function(
-            format!(
-                "repeat_large_string [size={}, repeat_times={}]",
-                size, repeat_times
-            ),
+            format!("repeat_large_string [size={size}, repeat_times={repeat_times}]"),
             |b| {
                 b.iter(|| {
                     let args_cloned = args.clone();
@@ -182,17 +163,14 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         // REPEAT overflow
         let repeat_times = 1073741824;
-        let mut group = c.benchmark_group(format!("repeat {} times", repeat_times));
+        let mut group = c.benchmark_group(format!("repeat {repeat_times} times"));
         group.sampling_mode(SamplingMode::Flat);
         group.sample_size(10);
         group.measurement_time(Duration::from_secs(10));
 
         let args = create_args::<i32>(size, 2, repeat_times, false);
         group.bench_function(
-            format!(
-                "repeat_string overflow [size={}, repeat_times={}]",
-                size, repeat_times
-            ),
+            format!("repeat_string overflow [size={size}, repeat_times={repeat_times}]"),
             |b| {
                 b.iter(|| {
                     let args_cloned = args.clone();

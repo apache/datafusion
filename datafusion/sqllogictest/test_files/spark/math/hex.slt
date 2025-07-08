@@ -1,0 +1,40 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+query T
+SELECT hex('Spark SQL');
+----
+537061726B2053514C
+
+query T
+SELECT hex(1234::INT);
+----
+4D2
+
+query T
+SELECT hex(a) from VALUES (1234::INT), (NULL), (456::INT) AS t(a);
+----
+4D2
+NULL
+1C8
+
+query T
+SELECT hex(a) from VALUES ('foo'), (NULL), ('foobarbaz') AS t(a);
+----
+666F6F
+NULL
+666F6F62617262617A

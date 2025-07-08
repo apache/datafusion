@@ -238,8 +238,7 @@ where
     {
         let index: O = index.try_into().map_err(|_| {
             DataFusionError::Execution(format!(
-                "array_element got invalid index: {}",
-                index
+                "array_element got invalid index: {index}"
             ))
         })?;
         // 0 ~ len - 1

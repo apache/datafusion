@@ -82,22 +82,29 @@ select count(*) from 'https://datasets.clickhouse.com/hits_compatible/athena_par
 To read from an AWS S3 or GCS, use `s3` or `gs` as a protocol prefix. For
 example, to read a file in an S3 bucket named `my-data-bucket` use the URL
 `s3://my-data-bucket`and set the relevant access credentials as environmental
-variables (e.g. for AWS S3 you need to at least `AWS_ACCESS_KEY_ID` and
+variables (e.g. for AWS S3 you can use `AWS_ACCESS_KEY_ID` and
 `AWS_SECRET_ACCESS_KEY`).
 
 ```sql
-select count(*) from 's3://my-data-bucket/athena_partitioned/hits.parquet'
+> select count(*) from 's3://altinity-clickhouse-data/nyc_taxi_rides/data/tripdata_parquet/';
++------------+
+| count(*)   |
++------------+
+| 1310903963 |
++------------+
 ```
 
-See the [`CREATE EXTERNAL TABLE`](#create-external-table) section for
+See the [`CREATE EXTERNAL TABLE`](#create-external-table) section below for
 additional configuration options.
 
 # `CREATE EXTERNAL TABLE`
 
 It is also possible to create a table backed by files or remote locations via
-`CREATE EXTERNAL TABLE` as shown below. Note that DataFusion does not support wildcards (e.g. `*`) in file paths; instead, specify the directory path directly to read all compatible files in that directory.
+`CREATE EXTERNAL TABLE` as shown below. Note that DataFusion does not support
+wildcards (e.g. `*`) in file paths; instead, specify the directory path directly
+to read all compatible files in that directory.
 
-For example, to create a table `hits` backed by a local parquet file, use:
+For example, to create a table `hits` backed by a local parquet file named `hits.parquet`:
 
 ```sql
 CREATE EXTERNAL TABLE hits
@@ -105,7 +112,7 @@ STORED AS PARQUET
 LOCATION 'hits.parquet';
 ```
 
-To create a table `hits` backed by a remote parquet file via HTTP(S), use
+To create a table `hits` backed by a remote parquet file via HTTP(S):
 
 ```sql
 CREATE EXTERNAL TABLE hits
@@ -127,7 +134,11 @@ select count(*) from hits;
 
 **Why Wildcards Are Not Supported**
 
-Although wildcards (e.g., _.parquet or \*\*/_.parquet) may work for local filesystems in some cases, they are not officially supported by DataFusion. This is because wildcards are not universally applicable across all storage backends (e.g., S3, GCS). Instead, DataFusion expects the user to specify the directory path, and it will automatically read all compatible files within that directory.
+Although wildcards (e.g., _.parquet or \*\*/_.parquet) may work for local
+filesystems in some cases, they are not supported by DataFusion CLI. This
+is because wildcards are not universally applicable across all storage backends
+(e.g., S3, GCS). Instead, DataFusion expects the user to specify the directory
+path, and it will automatically read all compatible files within that directory.
 
 For example, the following usage is not supported:
 
@@ -148,7 +159,7 @@ CREATE EXTERNAL TABLE test (
     day DATE
 )
 STORED AS PARQUET
-LOCATION 'gs://bucket/my_table';
+LOCATION 'gs://bucket/my_table/';
 ```
 
 # Formats
@@ -168,17 +179,63 @@ LOCATION '/mnt/nyctaxi/tripdata.parquet';
 Register a single folder parquet datasource. Note: All files inside must be valid
 parquet files and have compatible schemas
 
+:::{note}
+Paths must end in Slash `/`
+: The path must end in `/` otherwise DataFusion will treat the path as a file and not a directory
+:::
+
 ```sql
 CREATE EXTERNAL TABLE taxi
 STORED AS PARQUET
 LOCATION '/mnt/nyctaxi/';
 ```
 
+### Parquet Specific Options
+
+You can specify additional options for parquet files using the `OPTIONS` clause.
+For example, to read and write a parquet directory with encryption settings you could use:
+
+```sql
+CREATE EXTERNAL TABLE encrypted_parquet_table
+(
+double_field double,
+float_field float
+)
+STORED AS PARQUET LOCATION 'pq/' OPTIONS (
+    -- encryption
+    'format.crypto.file_encryption.encrypt_footer' 'true',
+    'format.crypto.file_encryption.footer_key_as_hex' '30313233343536373839303132333435',  -- b"0123456789012345"
+    'format.crypto.file_encryption.column_key_as_hex::double_field' '31323334353637383930313233343530', -- b"1234567890123450"
+    'format.crypto.file_encryption.column_key_as_hex::float_field' '31323334353637383930313233343531', -- b"1234567890123451"
+    -- decryption
+    'format.crypto.file_decryption.footer_key_as_hex' '30313233343536373839303132333435', -- b"0123456789012345"
+    'format.crypto.file_decryption.column_key_as_hex::double_field' '31323334353637383930313233343530', -- b"1234567890123450"
+    'format.crypto.file_decryption.column_key_as_hex::float_field' '31323334353637383930313233343531', -- b"1234567890123451"
+);
+```
+
+Here the keys are specified in hexadecimal format because they are binary data. These can be encoded in SQL using:
+
+```sql
+select encode('0123456789012345', 'hex');
+/*
++----------------------------------------------+
+| encode(Utf8("0123456789012345"),Utf8("hex")) |
++----------------------------------------------+
+| 30313233343536373839303132333435             |
++----------------------------------------------+
+*/
+```
+
+For more details on the available options, refer to the Rust
+[TableParquetOptions](https://docs.rs/datafusion/latest/datafusion/common/config/struct.TableParquetOptions.html)
+documentation in DataFusion.
+
 ## CSV
 
 DataFusion will infer the CSV schema automatically or you can provide it explicitly.
 
-Register a single file csv datasource with a header row.
+Register a single file csv datasource with a header row:
 
 ```sql
 CREATE EXTERNAL TABLE test
@@ -187,7 +244,7 @@ LOCATION '/path/to/aggregate_test_100.csv'
 OPTIONS ('has_header' 'true');
 ```
 
-Register a single file csv datasource with explicitly defined schema.
+Register a single file csv datasource with explicitly defined schema:
 
 ```sql
 CREATE EXTERNAL TABLE test (
@@ -213,7 +270,7 @@ LOCATION '/path/to/aggregate_test_100.csv';
 
 ## HTTP(s)
 
-To read from a remote parquet file via HTTP(S) you can use the following:
+To read from a remote parquet file via HTTP(S):
 
 ```sql
 CREATE EXTERNAL TABLE hits
@@ -223,9 +280,12 @@ LOCATION 'https://datasets.clickhouse.com/hits_compatible/athena_partitioned/hit
 
 ## S3
 
-[AWS S3](https://aws.amazon.com/s3/) data sources must have connection credentials configured.
+DataFusion CLI supports configuring [AWS S3](https://aws.amazon.com/s3/) via the
+`CREATE EXTERNAL TABLE` statement and standard AWS configuration methods (via the
+[`aws-config`] AWS SDK crate).
 
-To create an external table from a file in an S3 bucket:
+To create an external table from a file in an S3 bucket with explicit
+credentials:
 
 ```sql
 CREATE EXTERNAL TABLE test
@@ -238,7 +298,7 @@ OPTIONS(
 LOCATION 's3://bucket/path/file.parquet';
 ```
 
-It is also possible to specify the access information using environment variables:
+To create an external table using environment variables:
 
 ```bash
 $ export AWS_DEFAULT_REGION=us-east-2
@@ -247,7 +307,7 @@ $ export AWS_ACCESS_KEY_ID=******
 
 $ datafusion-cli
 `datafusion-cli v21.0.0
-> create external table test stored as parquet location 's3://bucket/path/file.parquet';
+> create CREATE TABLE test STORED AS PARQUET LOCATION 's3://bucket/path/file.parquet';
 0 rows in set. Query took 0.374 seconds.
 > select * from test;
 +----------+----------+
@@ -258,19 +318,39 @@ $ datafusion-cli
 1 row in set. Query took 0.171 seconds.
 ```
 
+To read from a public S3 bucket without signatures, use the
+`aws.SKIP_SIGNATURE` option:
+
+```sql
+CREATE EXTERNAL TABLE nyc_taxi_rides
+STORED AS PARQUET LOCATION 's3://altinity-clickhouse-data/nyc_taxi_rides/data/tripdata_parquet/'
+OPTIONS(aws.SKIP_SIGNATURE true);
+```
+
+Credentials are taken in this order of precedence:
+
+1. Explicitly specified in the `OPTIONS` clause of the `CREATE EXTERNAL TABLE` statement.
+2. Determined by [`aws-config`] crate (standard environment variables such as `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` as well as other AWS specific features).
+
+If no credentials are specified, DataFusion CLI will use unsigned requests to S3,
+which allows reading from public buckets.
+
 Supported configuration options are:
 
-| Environment Variable                     | Configuration Option    | Description                                          |
-| ---------------------------------------- | ----------------------- | ---------------------------------------------------- |
-| `AWS_ACCESS_KEY_ID`                      | `aws.access_key_id`     |                                                      |
-| `AWS_SECRET_ACCESS_KEY`                  | `aws.secret_access_key` |                                                      |
-| `AWS_DEFAULT_REGION`                     | `aws.region`            |                                                      |
-| `AWS_ENDPOINT`                           | `aws.endpoint`          |                                                      |
-| `AWS_SESSION_TOKEN`                      | `aws.token`             |                                                      |
-| `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI` |                         | See [IAM Roles]                                      |
-| `AWS_ALLOW_HTTP`                         |                         | set to "true" to permit HTTP connections without TLS |
+| Environment Variable                     | Configuration Option    | Description                                    |
+| ---------------------------------------- | ----------------------- | ---------------------------------------------- |
+| `AWS_ACCESS_KEY_ID`                      | `aws.access_key_id`     |                                                |
+| `AWS_SECRET_ACCESS_KEY`                  | `aws.secret_access_key` |                                                |
+| `AWS_DEFAULT_REGION`                     | `aws.region`            |                                                |
+| `AWS_ENDPOINT`                           | `aws.endpoint`          |                                                |
+| `AWS_SESSION_TOKEN`                      | `aws.token`             |                                                |
+| `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI` |                         | See [IAM Roles]                                |
+| `AWS_ALLOW_HTTP`                         |                         | If "true", permit HTTP connections without TLS |
+| `AWS_SKIP_SIGNATURE`                     | `aws.skip_signature`    | If "true", does not sign requests              |
+|                                          | `aws.nosign`            | Alias for `skip_signature`                     |
 
 [iam roles]: https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles.html
+[`aws-config`]: https://docs.rs/aws-config/latest/aws_config/
 
 ## OSS
 

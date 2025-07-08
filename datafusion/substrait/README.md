@@ -19,8 +19,9 @@
 
 # Apache DataFusion Substrait
 
-This crate contains a [Substrait] producer and consumer for Apache Arrow
-[DataFusion] plans. See [API Docs] for details and examples.
+This crate contains a [Substrait] producer and consumer for [Apache DataFusion]
+plans. See [API Docs] for details and examples.
 
 [substrait]: https://substrait.io
+[apache datafusion]: https://datafusion.apache.org
 [api docs]: https://docs.rs/datafusion-substrait/latest

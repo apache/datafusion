@@ -18,7 +18,8 @@
 use arrow::array::{ArrayRef, ArrowPrimitiveType, PrimitiveArray, UInt32Array};
 use arrow::datatypes::DataType;
 use chrono_tz::{Tz, TZ_VARIANTS};
-use rand::{rngs::StdRng, seq::SliceRandom, thread_rng, Rng};
+use rand::prelude::IndexedRandom;
+use rand::{rng, rngs::StdRng, Rng};
 use std::sync::Arc;
 
 use super::random_data::RandomNativeData;
@@ -66,6 +67,7 @@ impl PrimitiveArrayGenerator {
             | DataType::Time32(_)
             | DataType::Time64(_)
             | DataType::Interval(_)
+            | DataType::Duration(_)
             | DataType::Binary
             | DataType::LargeBinary
             | DataType::BinaryView
@@ -81,11 +83,11 @@ impl PrimitiveArrayGenerator {
         // pick num_primitives randomly from the distinct string table
         let indices: UInt32Array = (0..self.num_primitives)
             .map(|_| {
-                if self.rng.gen::<f64>() < self.null_pct {
+                if self.rng.random::<f64>() < self.null_pct {
                     None
                 } else if self.num_distinct_primitives > 1 {
                     let range = 1..(self.num_distinct_primitives as u32);
-                    Some(self.rng.gen_range(range))
+                    Some(self.rng.random_range(range))
                 } else {
                     Some(0)
                 }
@@ -102,7 +104,7 @@ impl PrimitiveArrayGenerator {
     /// - `Some(Arc<String>)` containing the timezone name.
     /// - `None` if no timezone is selected.
     fn generate_timezone() -> Option<Arc<str>> {
-        let mut rng = thread_rng();
+        let mut rng = rng();
 
         // Allows for timezones + None
         let mut timezone_options: Vec<Option<&Tz>> = vec![None];

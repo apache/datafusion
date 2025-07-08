@@ -37,7 +37,8 @@ use datafusion_physical_expr::PhysicalExpr;
 use crate::coalesce::{BatchCoalescer, CoalescerState};
 use crate::execution_plan::CardinalityEffect;
 use crate::filter_pushdown::{
-    ChildPushdownResult, FilterDescription, FilterPushdownPropagation,
+    ChildPushdownResult, FilterDescription, FilterPushdownPhase,
+    FilterPushdownPropagation,
 };
 use datafusion_common::config::ConfigOptions;
 use futures::ready;
@@ -229,15 +230,16 @@ impl ExecutionPlan for CoalesceBatchesExec {
 
     fn gather_filters_for_pushdown(
         &self,
+        _phase: FilterPushdownPhase,
         parent_filters: Vec<Arc<dyn PhysicalExpr>>,
         _config: &ConfigOptions,
     ) -> Result<FilterDescription> {
-        Ok(FilterDescription::new_with_child_count(1)
-            .all_parent_filters_supported(parent_filters))
+        FilterDescription::from_children(parent_filters, &self.children())
     }
 
     fn handle_child_pushdown_result(
         &self,
+        _phase: FilterPushdownPhase,
         child_pushdown_result: ChildPushdownResult,
         _config: &ConfigOptions,
     ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
@@ -354,6 +356,7 @@ impl CoalesceBatchesStream {
                     }
                 }
                 CoalesceBatchesStreamState::ReturnBuffer => {
+                    let _timer = cloned_time.timer();
                     // Combine buffered batches into one batch and return it.
                     let batch = self.coalescer.finish_batch()?;
                     // Set to pull state for the next iteration.
@@ -366,6 +369,7 @@ impl CoalesceBatchesStream {
                         // If buffer is empty, return None indicating the stream is fully consumed.
                         Poll::Ready(None)
                     } else {
+                        let _timer = cloned_time.timer();
                         // If the buffer still contains batches, prepare to return them.
                         let batch = self.coalescer.finish_batch()?;
                         Poll::Ready(Some(Ok(batch)))

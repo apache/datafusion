@@ -46,7 +46,7 @@ fn main() -> Result<()> {
         "scalar" => print_scalar_docs(),
         "window" => print_window_docs(),
         _ => {
-            panic!("Unknown function type: {}", function_type)
+            panic!("Unknown function type: {function_type}")
         }
     }?;
 
@@ -92,7 +92,7 @@ fn print_window_docs() -> Result<String> {
 fn save_doc_code_text(documentation: &Documentation, name: &str) {
     let attr_text = documentation.to_doc_attribute();
 
-    let file_path = format!("{}.txt", name);
+    let file_path = format!("{name}.txt");
     if std::path::Path::new(&file_path).exists() {
         std::fs::remove_file(&file_path).unwrap();
     }
@@ -215,16 +215,15 @@ fn print_docs(
                     r#"
 #### Example
 
-{}
-"#,
-                    example
+{example}
+"#
                 );
             }
 
             if let Some(alt_syntax) = &documentation.alternative_syntax {
                 let _ = writeln!(docs, "#### Alternative Syntax\n");
                 for syntax in alt_syntax {
-                    let _ = writeln!(docs, "```sql\n{}\n```", syntax);
+                    let _ = writeln!(docs, "```sql\n{syntax}\n```");
                 }
             }
 

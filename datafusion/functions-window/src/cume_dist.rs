@@ -17,6 +17,7 @@
 
 //! `cume_dist` window function implementation
 
+use arrow::datatypes::FieldRef;
 use datafusion_common::arrow::array::{ArrayRef, Float64Array};
 use datafusion_common::arrow::datatypes::DataType;
 use datafusion_common::arrow::datatypes::Field;
@@ -101,8 +102,8 @@ impl WindowUDFImpl for CumeDist {
         Ok(Box::<CumeDistEvaluator>::default())
     }
 
-    fn field(&self, field_args: WindowUDFFieldArgs) -> Result<Field> {
-        Ok(Field::new(field_args.name(), DataType::Float64, false))
+    fn field(&self, field_args: WindowUDFFieldArgs) -> Result<FieldRef> {
+        Ok(Field::new(field_args.name(), DataType::Float64, false).into())
     }
 
     fn documentation(&self) -> Option<&Documentation> {

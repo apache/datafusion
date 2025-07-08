@@ -41,18 +41,18 @@ fn criterion_benchmark(c: &mut Criterion) {
             false,
         );
         c.bench_function(
-            &format!("reverse_StringArray_ascii_str_len_{}", str_len),
+            &format!("reverse_StringArray_ascii_str_len_{str_len}"),
             |b| {
                 b.iter(|| {
                     black_box(reverse.invoke_with_args(ScalarFunctionArgs {
                         args: args_string_ascii.clone(),
-                        arg_fields: vec![&Field::new(
+                        arg_fields: vec![Field::new(
                             "a",
                             args_string_ascii[0].data_type(),
                             true,
-                        )],
+                        ).into()],
                         number_rows: N_ROWS,
-                        return_field: &Field::new("f", DataType::Utf8, true),
+                        return_field: Field::new("f", DataType::Utf8, true).into(),
                     }))
                 })
             },
@@ -63,20 +63,17 @@ fn criterion_benchmark(c: &mut Criterion) {
             gen_string_array(N_ROWS, str_len, NULL_DENSITY, NORMAL_UTF8_DENSITY, false);
         c.bench_function(
             &format!(
-                "reverse_StringArray_utf8_density_{}_str_len_{}",
-                NORMAL_UTF8_DENSITY, str_len
+                "reverse_StringArray_utf8_density_{NORMAL_UTF8_DENSITY}_str_len_{str_len}"
             ),
             |b| {
                 b.iter(|| {
                     black_box(reverse.invoke_with_args(ScalarFunctionArgs {
                         args: args_string_utf8.clone(),
-                        arg_fields: vec![&Field::new(
-                            "a",
-                            args_string_utf8[0].data_type(),
-                            true,
-                        )],
+                        arg_fields: vec![
+                            Field::new("a", args_string_utf8[0].data_type(), true).into(),
+                        ],
                         number_rows: N_ROWS,
-                        return_field: &Field::new("f", DataType::Utf8, true),
+                        return_field: Field::new("f", DataType::Utf8, true).into(),
                     }))
                 })
             },
@@ -91,18 +88,18 @@ fn criterion_benchmark(c: &mut Criterion) {
             true,
         );
         c.bench_function(
-            &format!("reverse_StringViewArray_ascii_str_len_{}", str_len),
+            &format!("reverse_StringViewArray_ascii_str_len_{str_len}"),
             |b| {
                 b.iter(|| {
                     black_box(reverse.invoke_with_args(ScalarFunctionArgs {
                         args: args_string_view_ascii.clone(),
-                        arg_fields: vec![&Field::new(
+                        arg_fields: vec![Field::new(
                             "a",
                             args_string_view_ascii[0].data_type(),
                             true,
-                        )],
+                        ).into()],
                         number_rows: N_ROWS,
-                        return_field: &Field::new("f", DataType::Utf8, true),
+                        return_field: Field::new("f", DataType::Utf8, true).into(),
                     }))
                 })
             },
@@ -113,20 +110,19 @@ fn criterion_benchmark(c: &mut Criterion) {
             gen_string_array(N_ROWS, str_len, NULL_DENSITY, NORMAL_UTF8_DENSITY, true);
         c.bench_function(
             &format!(
-                "reverse_StringViewArray_utf8_density_{}_str_len_{}",
-                NORMAL_UTF8_DENSITY, str_len
+                "reverse_StringViewArray_utf8_density_{NORMAL_UTF8_DENSITY}_str_len_{str_len}"
             ),
             |b| {
                 b.iter(|| {
                     black_box(reverse.invoke_with_args(ScalarFunctionArgs {
                         args: args_string_view_utf8.clone(),
-                        arg_fields: vec![&Field::new(
+                        arg_fields: vec![Field::new(
                             "a",
                             args_string_view_utf8[0].data_type(),
                             true,
-                        )],
+                        ).into()],
                         number_rows: N_ROWS,
-                        return_field: &Field::new("f", DataType::Utf8, true),
+                        return_field: Field::new("f", DataType::Utf8, true).into(),
                     }))
                 })
             },

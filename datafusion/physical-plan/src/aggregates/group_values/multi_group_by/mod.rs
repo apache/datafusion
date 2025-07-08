@@ -65,7 +65,7 @@ pub trait GroupColumn: Send + Sync {
     fn equal_to(&self, lhs_row: usize, array: &ArrayRef, rhs_row: usize) -> bool;
 
     /// Appends the row at `row` in `array` to this builder
-    fn append_val(&mut self, array: &ArrayRef, row: usize);
+    fn append_val(&mut self, array: &ArrayRef, row: usize) -> Result<()>;
 
     /// The vectorized version equal to
     ///
@@ -86,7 +86,7 @@ pub trait GroupColumn: Send + Sync {
     );
 
     /// The vectorized version `append_val`
-    fn vectorized_append(&mut self, array: &ArrayRef, rows: &[usize]);
+    fn vectorized_append(&mut self, array: &ArrayRef, rows: &[usize]) -> Result<()>;
 
     /// Returns the number of rows stored in this builder
     fn len(&self) -> usize;
@@ -270,7 +270,7 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
             map_size: 0,
             group_values: vec![],
             hashes_buffer: Default::default(),
-            random_state: Default::default(),
+            random_state: crate::aggregates::AGGREGATION_HASH_SEED,
         })
     }
 
@@ -384,7 +384,7 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
                     let mut checklen = 0;
                     let group_idx = self.group_values[0].len();
                     for (i, group_value) in self.group_values.iter_mut().enumerate() {
-                        group_value.append_val(&cols[i], row);
+                        group_value.append_val(&cols[i], row)?;
                         let len = group_value.len();
                         if i == 0 {
                             checklen = len;
@@ -460,14 +460,14 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
         self.collect_vectorized_process_context(&batch_hashes, groups);
 
         // 2. Perform `vectorized_append`
-        self.vectorized_append(cols);
+        self.vectorized_append(cols)?;
 
         // 3. Perform `vectorized_equal_to`
         self.vectorized_equal_to(cols, groups);
 
         // 4. Perform scalarized inter for remaining rows
         // (about remaining rows, can see comments for `remaining_row_indices`)
-        self.scalarized_intern_remaining(cols, &batch_hashes, groups);
+        self.scalarized_intern_remaining(cols, &batch_hashes, groups)?;
 
         self.hashes_buffer = batch_hashes;
 
@@ -563,13 +563,13 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
     }
 
     /// Perform `vectorized_append`` for `rows` in `vectorized_append_row_indices`
-    fn vectorized_append(&mut self, cols: &[ArrayRef]) {
+    fn vectorized_append(&mut self, cols: &[ArrayRef]) -> Result<()> {
         if self
             .vectorized_operation_buffers
             .append_row_indices
             .is_empty()
         {
-            return;
+            return Ok(());
         }
 
         let iter = self.group_values.iter_mut().zip(cols.iter());
@@ -577,8 +577,10 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
             group_column.vectorized_append(
                 col,
                 &self.vectorized_operation_buffers.append_row_indices,
-            );
+            )?;
         }
+
+        Ok(())
     }
 
     /// Perform `vectorized_equal_to`
@@ -719,13 +721,13 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
         cols: &[ArrayRef],
         batch_hashes: &[u64],
         groups: &mut [usize],
-    ) {
+    ) -> Result<()> {
         if self
             .vectorized_operation_buffers
             .remaining_row_indices
             .is_empty()
         {
-            return;
+            return Ok(());
         }
 
         let mut map = mem::take(&mut self.map);
@@ -758,7 +760,7 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
             let group_idx = self.group_values[0].len();
             let mut checklen = 0;
             for (i, group_value) in self.group_values.iter_mut().enumerate() {
-                group_value.append_val(&cols[i], row);
+                group_value.append_val(&cols[i], row)?;
                 let len = group_value.len();
                 if i == 0 {
                     checklen = len;
@@ -795,6 +797,7 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
         }
 
         self.map = map;
+        Ok(())
     }
 
     fn scalarized_equal_to_remaining(
@@ -1756,11 +1759,9 @@ mod tests {
                 (i, actual_line),
                 (i, expected_line),
                 "Inconsistent result\n\n\
-                 Actual batch:\n{}\n\
-                 Expected batch:\n{}\n\
+                 Actual batch:\n{formatted_actual_batch}\n\
+                 Expected batch:\n{formatted_expected_batch}\n\
                  ",
-                formatted_actual_batch,
-                formatted_expected_batch,
             );
         }
     }

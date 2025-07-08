@@ -102,13 +102,13 @@ pub fn parse_physical_sort_exprs(
     registry: &dyn FunctionRegistry,
     input_schema: &Schema,
     codec: &dyn PhysicalExtensionCodec,
-) -> Result<LexOrdering> {
+) -> Result<Vec<PhysicalSortExpr>> {
     proto
         .iter()
         .map(|sort_expr| {
             parse_physical_sort_expr(sort_expr, registry, input_schema, codec)
         })
-        .collect::<Result<LexOrdering>>()
+        .collect()
 }
 
 /// Parses a physical window expr from a protobuf.
@@ -152,13 +152,13 @@ pub fn parse_physical_window_expr(
             protobuf::physical_window_expr_node::WindowFunction::UserDefinedAggrFunction(udaf_name) => {
                 WindowFunctionDefinition::AggregateUDF(match &proto.fun_definition {
                     Some(buf) => codec.try_decode_udaf(udaf_name, buf)?,
-                    None => registry.udaf(udaf_name)?
+                    None => registry.udaf(udaf_name).or_else(|_| codec.try_decode_udaf(udaf_name, &[]))?,
                 })
             }
             protobuf::physical_window_expr_node::WindowFunction::UserDefinedWindowFunction(udwf_name) => {
                 WindowFunctionDefinition::WindowUDF(match &proto.fun_definition {
                     Some(buf) => codec.try_decode_udwf(udwf_name, buf)?,
-                    None => registry.udwf(udwf_name)?
+                    None => registry.udwf(udwf_name).or_else(|_| codec.try_decode_udwf(udwf_name, &[]))?
                 })
             }
         }
@@ -175,7 +175,7 @@ pub fn parse_physical_window_expr(
         name,
         &window_node_expr,
         &partition_by,
-        order_by.as_ref(),
+        &order_by,
         Arc::new(window_frame),
         &extended_schema,
         false,
@@ -355,7 +355,9 @@ pub fn parse_physical_expr(
         ExprType::ScalarUdf(e) => {
             let udf = match &e.fun_definition {
                 Some(buf) => codec.try_decode_udf(&e.name, buf)?,
-                None => registry.udf(e.name.as_str())?,
+                None => registry
+                    .udf(e.name.as_str())
+                    .or_else(|_| codec.try_decode_udf(&e.name, &[]))?,
             };
             let scalar_fun_def = Arc::clone(&udf);
 
@@ -366,7 +368,7 @@ pub fn parse_physical_expr(
                     e.name.as_str(),
                     scalar_fun_def,
                     args,
-                    Field::new("f", convert_required!(e.return_type)?, true),
+                    Field::new("f", convert_required!(e.return_type)?, true).into(),
                 )
                 .with_nullable(e.nullable),
             )
@@ -526,13 +528,13 @@ pub fn parse_protobuf_file_scan_config(
 
     let mut output_ordering = vec![];
     for node_collection in &proto.output_ordering {
-        let sort_expr = parse_physical_sort_exprs(
+        let sort_exprs = parse_physical_sort_exprs(
             &node_collection.physical_sort_expr_nodes,
             registry,
             &schema,
             codec,
         )?;
-        output_ordering.push(sort_expr);
+        output_ordering.extend(LexOrdering::new(sort_exprs));
     }
 
     let config = FileScanConfigBuilder::new(object_store_url, file_schema, file_source)

@@ -54,7 +54,6 @@ use datafusion_datasource::sink::{DataSink, DataSinkExec};
 use datafusion_datasource::write::ObjectWriterBuilder;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::dml::InsertOp;
-use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
 
 use async_trait::async_trait;
@@ -135,6 +134,10 @@ impl FileFormat for ArrowFormat {
         }
     }
 
+    fn compression_type(&self) -> Option<FileCompressionType> {
+        None
+    }
+
     async fn infer_schema(
         &self,
         _state: &dyn Session,
@@ -174,7 +177,6 @@ impl FileFormat for ArrowFormat {
         &self,
         _state: &dyn Session,
         conf: FileScanConfig,
-        _filters: Option<&Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let source = Arc::new(ArrowSource::default());
         let config = FileScanConfigBuilder::from(conf)
@@ -296,7 +298,7 @@ impl FileSink for ArrowFileSink {
         demux_task
             .join_unwind()
             .await
-            .map_err(DataFusionError::ExecutionJoin)??;
+            .map_err(|e| DataFusionError::ExecutionJoin(Box::new(e)))??;
         Ok(row_count as u64)
     }
 }

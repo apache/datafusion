@@ -33,6 +33,7 @@ mod tests {
     use arrow_schema::{DataType, Field, Schema, SchemaRef};
     use datafusion_catalog::Session;
     use datafusion_common::cast::as_string_array;
+    use datafusion_common::config::CsvOptions;
     use datafusion_common::internal_err;
     use datafusion_common::stats::Precision;
     use datafusion_common::test_util::{arrow_test_data, batches_to_string};
@@ -55,6 +56,7 @@ mod tests {
     use async_trait::async_trait;
     use bytes::Bytes;
     use chrono::DateTime;
+    use datafusion_common::parsers::CompressionTypeVariant;
     use futures::stream::BoxStream;
     use futures::StreamExt;
     use insta::assert_snapshot;
@@ -795,6 +797,62 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn test_csv_write_empty_file() -> Result<()> {
+        // Case 1. write to a single file
+        // Expect: an empty file created
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let path = format!("{}/empty.csv", tmp_dir.path().to_string_lossy());
+
+        let ctx = SessionContext::new();
+
+        let df = ctx.sql("SELECT 1 limit 0").await?;
+
+        let cfg1 =
+            crate::dataframe::DataFrameWriteOptions::new().with_single_file_output(true);
+        let cfg2 = CsvOptions::default().with_has_header(true);
+
+        df.write_csv(&path, cfg1, Some(cfg2)).await?;
+        assert!(std::path::Path::new(&path).exists());
+
+        // Case 2. write to a directory without partition columns
+        // Expect: under the directory, an empty file is created
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let path = format!("{}", tmp_dir.path().to_string_lossy());
+
+        let cfg1 =
+            crate::dataframe::DataFrameWriteOptions::new().with_single_file_output(true);
+        let cfg2 = CsvOptions::default().with_has_header(true);
+
+        let df = ctx.sql("SELECT 1 limit 0").await?;
+
+        df.write_csv(&path, cfg1, Some(cfg2)).await?;
+        assert!(std::path::Path::new(&path).exists());
+
+        let files = std::fs::read_dir(&path).unwrap();
+        assert!(files.count() == 1);
+
+        // Case 3. write to a directory with partition columns
+        // Expect: No file is created
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let path = format!("{}", tmp_dir.path().to_string_lossy());
+
+        let df = ctx.sql("SELECT 1 as col1, 2 as col2 limit 0").await?;
+
+        let cfg1 = crate::dataframe::DataFrameWriteOptions::new()
+            .with_single_file_output(true)
+            .with_partition_by(vec!["col1".to_string()]);
+        let cfg2 = CsvOptions::default().with_has_header(true);
+
+        df.write_csv(&path, cfg1, Some(cfg2)).await?;
+
+        assert!(std::path::Path::new(&path).exists());
+        let files = std::fs::read_dir(&path).unwrap();
+        assert!(files.count() == 0);
+
+        Ok(())
+    }
+
     /// Read a single empty csv file with header
     ///
     /// empty.csv:
@@ -816,6 +874,86 @@ mod tests {
             ++
             ++
         "###);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_csv_extension_compressed() -> Result<()> {
+        // Write compressed CSV files
+        // Expect: under the directory, a file is created with ".csv.gz" extension
+        let ctx = SessionContext::new();
+
+        let df = ctx
+            .read_csv(
+                &format!("{}/csv/aggregate_test_100.csv", arrow_test_data()),
+                CsvReadOptions::default().has_header(true),
+            )
+            .await?;
+
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let path = format!("{}", tmp_dir.path().to_string_lossy());
+
+        let cfg1 = crate::dataframe::DataFrameWriteOptions::new();
+        let cfg2 = CsvOptions::default()
+            .with_has_header(true)
+            .with_compression(CompressionTypeVariant::GZIP);
+
+        df.write_csv(&path, cfg1, Some(cfg2)).await?;
+        assert!(std::path::Path::new(&path).exists());
+
+        let files: Vec<_> = std::fs::read_dir(&path).unwrap().collect();
+        assert_eq!(files.len(), 1);
+        assert!(files
+            .last()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .path()
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .ends_with(".csv.gz"));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_csv_extension_uncompressed() -> Result<()> {
+        // Write plain uncompressed CSV files
+        // Expect: under the directory, a file is created with ".csv" extension
+        let ctx = SessionContext::new();
+
+        let df = ctx
+            .read_csv(
+                &format!("{}/csv/aggregate_test_100.csv", arrow_test_data()),
+                CsvReadOptions::default().has_header(true),
+            )
+            .await?;
+
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let path = format!("{}", tmp_dir.path().to_string_lossy());
+
+        let cfg1 = crate::dataframe::DataFrameWriteOptions::new();
+        let cfg2 = CsvOptions::default().with_has_header(true);
+
+        df.write_csv(&path, cfg1, Some(cfg2)).await?;
+        assert!(std::path::Path::new(&path).exists());
+
+        let files: Vec<_> = std::fs::read_dir(&path).unwrap().collect();
+        assert_eq!(files.len(), 1);
+        assert!(files
+            .last()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .path()
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .ends_with(".csv"));
 
         Ok(())
     }
@@ -1026,7 +1164,7 @@ mod tests {
         for _ in 0..batch_count {
             let output = deserializer.next()?;
             let DeserializerOutput::RecordBatch(batch) = output else {
-                panic!("Expected RecordBatch, got {:?}", output);
+                panic!("Expected RecordBatch, got {output:?}");
             };
             all_batches = concat_batches(&schema, &[all_batches, batch])?;
         }
@@ -1064,7 +1202,7 @@ mod tests {
         for _ in 0..batch_count {
             let output = deserializer.next()?;
             let DeserializerOutput::RecordBatch(batch) = output else {
-                panic!("Expected RecordBatch, got {:?}", output);
+                panic!("Expected RecordBatch, got {output:?}");
             };
             all_batches = concat_batches(&schema, &[all_batches, batch])?;
         }
@@ -1145,18 +1283,14 @@ mod tests {
 
     fn csv_line(line_number: usize) -> Bytes {
         let (int_value, float_value, bool_value, char_value) = csv_values(line_number);
-        format!(
-            "{},{},{},{}\n",
-            int_value, float_value, bool_value, char_value
-        )
-        .into()
+        format!("{int_value},{float_value},{bool_value},{char_value}\n").into()
     }
 
     fn csv_values(line_number: usize) -> (i32, f64, bool, String) {
         let int_value = line_number as i32;
         let float_value = line_number as f64;
         let bool_value = line_number % 2 == 0;
-        let char_value = format!("{}-string", line_number);
+        let char_value = format!("{line_number}-string");
         (int_value, float_value, bool_value, char_value)
     }
 

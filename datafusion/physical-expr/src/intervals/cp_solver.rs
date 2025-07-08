@@ -42,7 +42,7 @@
 //!
 //! In order to use interval arithmetic to compute bounds for this expression,
 //! one would first determine intervals that represent the possible values of
-//! `x` and `y`` Let's say that the interval for `x` is `[1, 2]` and the interval
+//! `x` and `y` Let's say that the interval for `x` is `[1, 2]` and the interval
 //! for `y` is `[-3, 1]`. In the chart below, you can see how the computation
 //! takes place.
 //!
@@ -868,8 +868,8 @@ mod tests {
                 let mut r = StdRng::seed_from_u64(seed);
 
                 let (left_given, right_given, left_expected, right_expected) = if ASC {
-                    let left = r.gen_range((0 as $TYPE)..(1000 as $TYPE));
-                    let right = r.gen_range((0 as $TYPE)..(1000 as $TYPE));
+                    let left = r.random_range((0 as $TYPE)..(1000 as $TYPE));
+                    let right = r.random_range((0 as $TYPE)..(1000 as $TYPE));
                     (
                         (Some(left), None),
                         (Some(right), None),
@@ -877,8 +877,8 @@ mod tests {
                         (Some(<$TYPE>::max(right, left + expr_right)), None),
                     )
                 } else {
-                    let left = r.gen_range((0 as $TYPE)..(1000 as $TYPE));
-                    let right = r.gen_range((0 as $TYPE)..(1000 as $TYPE));
+                    let left = r.random_range((0 as $TYPE)..(1000 as $TYPE));
+                    let right = r.random_range((0 as $TYPE)..(1000 as $TYPE));
                     (
                         (None, Some(left)),
                         (None, Some(right)),

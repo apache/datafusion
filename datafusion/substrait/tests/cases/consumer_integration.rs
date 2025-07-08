@@ -44,7 +44,7 @@ mod tests {
         let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto)?;
         let plan = from_substrait_plan(&ctx.state(), &proto).await?;
         ctx.state().create_physical_plan(&plan).await?;
-        Ok(format!("{}", plan))
+        Ok(format!("{plan}"))
     }
 
     #[tokio::test]
@@ -501,7 +501,7 @@ mod tests {
         let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto)?;
         let plan = from_substrait_plan(&ctx.state(), &proto).await?;
         ctx.state().create_physical_plan(&plan).await?;
-        Ok(format!("{}", plan))
+        Ok(format!("{plan}"))
     }
 
     #[tokio::test]
@@ -558,6 +558,59 @@ mod tests {
             TableScan: DATA
         "#
                         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_multiple_unions() -> Result<()> {
+        let plan_str = test_plan_to_string("multiple_unions.json").await?;
+        assert_snapshot!(
+        plan_str,
+        @r#"
+        Projection: Utf8("people") AS product_category, Utf8("people")__temp__0 AS product_type, product_key
+          Union
+            Projection: Utf8("people"), Utf8("people") AS Utf8("people")__temp__0, sales.product_key
+              Left Join: sales.product_key = food.@food_id
+                TableScan: sales
+                TableScan: food
+            Union
+              Projection: people.$f3, people.$f5, people.product_key0
+                Left Join: people.product_key0 = food.@food_id
+                  TableScan: people
+                  TableScan: food
+              TableScan: more_products
+        "#
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_join_with_expression_key() -> Result<()> {
+        let plan_str = test_plan_to_string("join_with_expression_key.json").await?;
+        assert_snapshot!(
+        plan_str,
+        @r#"
+        Projection: left.index_name AS index, right.upper(host) AS host, left.max(size_bytes) AS idx_size, right.max(total_bytes) AS db_size, CAST(left.max(size_bytes) AS Float64) / CAST(right.max(total_bytes) AS Float64) * Float64(100) AS pct_of_db
+          Inner Join: left.upper(host) = right.upper(host)
+            SubqueryAlias: left
+              Aggregate: groupBy=[[index_name, upper(host)]], aggr=[[max(size_bytes)]]
+                Projection: size_bytes, index_name, upper(host)
+                  Filter: index_name = Utf8("aaa")
+                    Values: (Utf8("aaa"), Utf8("host-a"), Int64(128)), (Utf8("bbb"), Utf8("host-b"), Int64(256))
+            SubqueryAlias: right
+              Aggregate: groupBy=[[upper(host)]], aggr=[[max(total_bytes)]]
+                Projection: total_bytes, upper(host)
+                  Inner Join:  Filter: upper(host) = upper(host)
+                    Values: (Utf8("host-a"), Int64(107)), (Utf8("host-b"), Int64(214))
+                    Projection: upper(host)
+                      Aggregate: groupBy=[[index_name, upper(host)]], aggr=[[max(size_bytes)]]
+                        Projection: size_bytes, index_name, upper(host)
+                          Filter: index_name = Utf8("aaa")
+                            Values: (Utf8("aaa"), Utf8("host-a"), Int64(128)), (Utf8("bbb"), Utf8("host-b"), Int64(256))
+        "#
+        );
+
         Ok(())
     }
 }

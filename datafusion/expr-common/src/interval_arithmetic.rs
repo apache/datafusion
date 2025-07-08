@@ -1696,9 +1696,9 @@ impl Display for NullableInterval {
         match self {
             Self::Null { .. } => write!(f, "NullableInterval: {{NULL}}"),
             Self::MaybeNull { values } => {
-                write!(f, "NullableInterval: {} U {{NULL}}", values)
+                write!(f, "NullableInterval: {values} U {{NULL}}")
             }
-            Self::NotNull { values } => write!(f, "NullableInterval: {}", values),
+            Self::NotNull { values } => write!(f, "NullableInterval: {values}"),
         }
     }
 }
@@ -2719,8 +2719,8 @@ mod tests {
             ),
         ];
         for (first, second, expected) in possible_cases {
-            println!("{}", first);
-            println!("{}", second);
+            println!("{first}");
+            println!("{second}");
             assert_eq!(first.union(second)?, expected)
         }
 
@@ -3717,14 +3717,14 @@ mod tests {
     #[test]
     fn test_interval_display() {
         let interval = Interval::make(Some(0.25_f32), Some(0.50_f32)).unwrap();
-        assert_eq!(format!("{}", interval), "[0.25, 0.5]");
+        assert_eq!(format!("{interval}"), "[0.25, 0.5]");
 
         let interval = Interval::try_new(
             ScalarValue::Float32(Some(f32::NEG_INFINITY)),
             ScalarValue::Float32(Some(f32::INFINITY)),
         )
         .unwrap();
-        assert_eq!(format!("{}", interval), "[NULL, NULL]");
+        assert_eq!(format!("{interval}"), "[NULL, NULL]");
     }
 
     macro_rules! capture_mode_change {

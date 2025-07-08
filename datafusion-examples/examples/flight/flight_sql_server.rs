@@ -115,6 +115,7 @@ impl FlightSqlServiceImpl {
         Ok(uuid)
     }
 
+    #[allow(clippy::result_large_err)]
     fn get_ctx<T>(&self, req: &Request<T>) -> Result<Arc<SessionContext>, Status> {
         // get the token from the authorization header on Request
         let auth = req
@@ -140,6 +141,7 @@ impl FlightSqlServiceImpl {
         }
     }
 
+    #[allow(clippy::result_large_err)]
     fn get_plan(&self, handle: &str) -> Result<LogicalPlan, Status> {
         if let Some(plan) = self.statements.get(handle) {
             Ok(plan.clone())
@@ -148,6 +150,7 @@ impl FlightSqlServiceImpl {
         }
     }
 
+    #[allow(clippy::result_large_err)]
     fn get_result(&self, handle: &str) -> Result<Vec<RecordBatch>, Status> {
         if let Some(result) = self.results.get(handle) {
             Ok(result.clone())
@@ -195,11 +198,13 @@ impl FlightSqlServiceImpl {
         .unwrap()
     }
 
+    #[allow(clippy::result_large_err)]
     fn remove_plan(&self, handle: &str) -> Result<(), Status> {
         self.statements.remove(&handle.to_string());
         Ok(())
     }
 
+    #[allow(clippy::result_large_err)]
     fn remove_result(&self, handle: &str) -> Result<(), Status> {
         self.results.remove(&handle.to_string());
         Ok(())

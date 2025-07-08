@@ -40,6 +40,7 @@ use datafusion_expr::{
 };
 
 use crate::optimizer::ApplyOrder;
+use crate::simplify_expressions::simplify_predicates;
 use crate::utils::{has_all_column_refs, is_restrict_null_predicate};
 use crate::{OptimizerConfig, OptimizerRule};
 
@@ -168,7 +169,7 @@ pub(crate) fn lr_is_preserved(join_type: JoinType) -> (bool, bool) {
         JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark => (true, false),
         // No columns from the left side of the join can be referenced in output
         // predicates for semi/anti joins, so whether we specify t/f doesn't matter.
-        JoinType::RightSemi | JoinType::RightAnti => (false, true),
+        JoinType::RightSemi | JoinType::RightAnti | JoinType::RightMark => (false, true),
     }
 }
 
@@ -191,6 +192,7 @@ pub(crate) fn on_lr_is_preserved(join_type: JoinType) -> (bool, bool) {
         JoinType::LeftAnti => (false, true),
         JoinType::RightAnti => (true, false),
         JoinType::LeftMark => (false, true),
+        JoinType::RightMark => (true, false),
     }
 }
 
@@ -254,7 +256,7 @@ fn can_evaluate_as_join_condition(predicate: &Expr) -> Result<bool> {
     let mut is_evaluate = true;
     predicate.apply(|expr| match expr {
         Expr::Column(_)
-        | Expr::Literal(_)
+        | Expr::Literal(_, _)
         | Expr::Placeholder(_)
         | Expr::ScalarVariable(_, _) => Ok(TreeNodeRecursion::Jump),
         Expr::Exists { .. }
@@ -691,7 +693,7 @@ fn infer_join_predicates_from_on_filters(
                 inferred_predicates,
             )
         }
-        JoinType::Right | JoinType::RightSemi => {
+        JoinType::Right | JoinType::RightSemi | JoinType::RightMark => {
             infer_join_predicates_impl::<false, true>(
                 join_col_keys,
                 on_filters,
@@ -777,6 +779,18 @@ impl OptimizerRule for PushDownFilter {
         let LogicalPlan::Filter(mut filter) = plan else {
             return Ok(Transformed::no(plan));
         };
+
+        let predicate = split_conjunction_owned(filter.predicate.clone());
+        let old_predicate_len = predicate.len();
+        let new_predicates = simplify_predicates(predicate)?;
+        if old_predicate_len != new_predicates.len() {
+            let Some(new_predicate) = conjunction(new_predicates) else {
+                // new_predicates is empty - remove the filter entirely
+                // Return the child plan without the filter
+                return Ok(Transformed::yes(Arc::unwrap_or_clone(filter.input)));
+            };
+            filter.predicate = new_predicate;
+        }
 
         match Arc::unwrap_or_clone(filter.input) {
             LogicalPlan::Filter(child_filter) => {
@@ -1418,9 +1432,11 @@ mod tests {
             $plan:expr,
             @ $expected:literal $(,)?
         ) => {{
-            let rule: Arc<dyn crate::OptimizerRule + Send + Sync> = Arc::new(PushDownFilter::new());
+            let optimizer_ctx = OptimizerContext::new().with_max_passes(1);
+            let rules: Vec<Arc<dyn crate::OptimizerRule + Send + Sync>> = vec![Arc::new(PushDownFilter::new())];
             assert_optimized_plan_eq_snapshot!(
-                rule,
+                optimizer_ctx,
+                rules,
                 $plan,
                 @ $expected,
             )
@@ -1582,7 +1598,7 @@ mod tests {
     fn filter_move_window() -> Result<()> {
         let table_scan = test_table_scan()?;
 
-        let window = Expr::WindowFunction(WindowFunction::new(
+        let window = Expr::from(WindowFunction::new(
             WindowFunctionDefinition::WindowUDF(
                 datafusion_functions_window::rank::rank_udwf(),
             ),
@@ -1613,7 +1629,7 @@ mod tests {
     fn filter_move_complex_window() -> Result<()> {
         let table_scan = test_table_scan()?;
 
-        let window = Expr::WindowFunction(WindowFunction::new(
+        let window = Expr::from(WindowFunction::new(
             WindowFunctionDefinition::WindowUDF(
                 datafusion_functions_window::rank::rank_udwf(),
             ),
@@ -1643,7 +1659,7 @@ mod tests {
     fn filter_move_partial_window() -> Result<()> {
         let table_scan = test_table_scan()?;
 
-        let window = Expr::WindowFunction(WindowFunction::new(
+        let window = Expr::from(WindowFunction::new(
             WindowFunctionDefinition::WindowUDF(
                 datafusion_functions_window::rank::rank_udwf(),
             ),
@@ -1675,7 +1691,7 @@ mod tests {
     fn filter_expression_keep_window() -> Result<()> {
         let table_scan = test_table_scan()?;
 
-        let window = Expr::WindowFunction(WindowFunction::new(
+        let window = Expr::from(WindowFunction::new(
             WindowFunctionDefinition::WindowUDF(
                 datafusion_functions_window::rank::rank_udwf(),
             ),
@@ -1708,7 +1724,7 @@ mod tests {
     fn filter_order_keep_window() -> Result<()> {
         let table_scan = test_table_scan()?;
 
-        let window = Expr::WindowFunction(WindowFunction::new(
+        let window = Expr::from(WindowFunction::new(
             WindowFunctionDefinition::WindowUDF(
                 datafusion_functions_window::rank::rank_udwf(),
             ),
@@ -1740,7 +1756,7 @@ mod tests {
     fn filter_multiple_windows_common_partitions() -> Result<()> {
         let table_scan = test_table_scan()?;
 
-        let window1 = Expr::WindowFunction(WindowFunction::new(
+        let window1 = Expr::from(WindowFunction::new(
             WindowFunctionDefinition::WindowUDF(
                 datafusion_functions_window::rank::rank_udwf(),
             ),
@@ -1751,7 +1767,7 @@ mod tests {
         .build()
         .unwrap();
 
-        let window2 = Expr::WindowFunction(WindowFunction::new(
+        let window2 = Expr::from(WindowFunction::new(
             WindowFunctionDefinition::WindowUDF(
                 datafusion_functions_window::rank::rank_udwf(),
             ),
@@ -1782,7 +1798,7 @@ mod tests {
     fn filter_multiple_windows_disjoint_partitions() -> Result<()> {
         let table_scan = test_table_scan()?;
 
-        let window1 = Expr::WindowFunction(WindowFunction::new(
+        let window1 = Expr::from(WindowFunction::new(
             WindowFunctionDefinition::WindowUDF(
                 datafusion_functions_window::rank::rank_udwf(),
             ),
@@ -1793,7 +1809,7 @@ mod tests {
         .build()
         .unwrap();
 
-        let window2 = Expr::WindowFunction(WindowFunction::new(
+        let window2 = Expr::from(WindowFunction::new(
             WindowFunctionDefinition::WindowUDF(
                 datafusion_functions_window::rank::rank_udwf(),
             ),

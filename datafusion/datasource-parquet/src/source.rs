@@ -21,31 +21,35 @@ use std::fmt::Debug;
 use std::fmt::Formatter;
 use std::sync::Arc;
 
-use crate::opener::build_page_pruning_predicate;
-use crate::opener::build_pruning_predicate;
+use crate::opener::build_pruning_predicates;
 use crate::opener::ParquetOpener;
-use crate::page_filter::PagePruningAccessPlanFilter;
+use crate::row_filter::can_expr_be_pushed_down_with_schemas;
 use crate::DefaultParquetFileReaderFactory;
 use crate::ParquetFileReaderFactory;
+use datafusion_common::config::ConfigOptions;
+use datafusion_datasource::as_file_source;
 use datafusion_datasource::file_stream::FileOpener;
 use datafusion_datasource::schema_adapter::{
     DefaultSchemaAdapterFactory, SchemaAdapterFactory,
 };
 
-use arrow::datatypes::{Schema, SchemaRef, TimeUnit};
+use arrow::datatypes::{SchemaRef, TimeUnit};
 use datafusion_common::config::TableParquetOptions;
 use datafusion_common::{DataFusionError, Statistics};
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
+use datafusion_physical_expr::conjunction;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
-use datafusion_physical_optimizer::pruning::PruningPredicate;
-use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricBuilder};
+use datafusion_physical_plan::filter_pushdown::{
+    FilterPushdownPropagation, PredicateSupport,
+};
+use datafusion_physical_plan::metrics::Count;
+use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion_physical_plan::DisplayFormatType;
 
 use itertools::Itertools;
 use object_store::ObjectStore;
-
 /// Execution plan for reading one or more Parquet files.
 ///
 /// ```text
@@ -92,7 +96,7 @@ use object_store::ObjectStore;
 /// # let predicate = lit(true);
 /// let source = Arc::new(
 ///     ParquetSource::default()
-///     .with_predicate(Arc::clone(&file_schema), predicate)
+///     .with_predicate(predicate)
 /// );
 /// // Create a DataSourceExec for reading `file1.parquet` with a file size of 100MB
 /// let config = FileScanConfigBuilder::new(object_store_url, file_schema, source)
@@ -259,12 +263,12 @@ pub struct ParquetSource {
     pub(crate) table_parquet_options: TableParquetOptions,
     /// Optional metrics
     pub(crate) metrics: ExecutionPlanMetricsSet,
+    /// The schema of the file.
+    /// In particular, this is the schema of the table without partition columns,
+    /// *not* the physical schema of the file.
+    pub(crate) file_schema: Option<SchemaRef>,
     /// Optional predicate for row filtering during parquet scan
     pub(crate) predicate: Option<Arc<dyn PhysicalExpr>>,
-    /// Optional predicate for pruning row groups (derived from `predicate`)
-    pub(crate) pruning_predicate: Option<Arc<PruningPredicate>>,
-    /// Optional predicate for pruning pages (derived from `predicate`)
-    pub(crate) page_pruning_predicate: Option<Arc<PagePruningAccessPlanFilter>>,
     /// Optional user defined parquet file reader factory
     pub(crate) parquet_file_reader_factory: Option<Arc<dyn ParquetFileReaderFactory>>,
     /// Optional user defined schema adapter
@@ -303,26 +307,12 @@ impl ParquetSource {
         self
     }
 
-    /// Set predicate information, also sets pruning_predicate and page_pruning_predicate attributes
-    pub fn with_predicate(
-        &self,
-        file_schema: Arc<Schema>,
-        predicate: Arc<dyn PhysicalExpr>,
-    ) -> Self {
+    /// Set predicate information
+    pub fn with_predicate(&self, predicate: Arc<dyn PhysicalExpr>) -> Self {
         let mut conf = self.clone();
-
         let metrics = ExecutionPlanMetricsSet::new();
-        let predicate_creation_errors =
-            MetricBuilder::new(&metrics).global_counter("num_predicate_creation_errors");
-
         conf = conf.with_metrics(metrics);
         conf.predicate = Some(Arc::clone(&predicate));
-
-        conf.page_pruning_predicate =
-            Some(build_page_pruning_predicate(&predicate, &file_schema));
-        conf.pruning_predicate =
-            build_pruning_predicate(predicate, &file_schema, &predicate_creation_errors);
-
         conf
     }
 
@@ -353,29 +343,8 @@ impl ParquetSource {
         self
     }
 
-    /// return the optional schema adapter factory
-    pub fn schema_adapter_factory(&self) -> Option<&Arc<dyn SchemaAdapterFactory>> {
-        self.schema_adapter_factory.as_ref()
-    }
-
-    /// Set optional schema adapter factory.
-    ///
-    /// [`SchemaAdapterFactory`] allows user to specify how fields from the
-    /// parquet file get mapped to that of the table schema.  The default schema
-    /// adapter uses arrow's cast library to map the parquet fields to the table
-    /// schema.
-    pub fn with_schema_adapter_factory(
-        mut self,
-        schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
-    ) -> Self {
-        self.schema_adapter_factory = Some(schema_adapter_factory);
-        self
-    }
-
     /// If true, the predicate will be used during the parquet scan.
-    /// Defaults to false
-    ///
-    /// [`Expr`]: datafusion_expr::Expr
+    /// Defaults to false.
     pub fn with_pushdown_filters(mut self, pushdown_filters: bool) -> Self {
         self.table_parquet_options.global.pushdown_filters = pushdown_filters;
         self
@@ -436,6 +405,28 @@ impl ParquetSource {
     fn bloom_filter_on_read(&self) -> bool {
         self.table_parquet_options.global.bloom_filter_on_read
     }
+
+    /// Applies schema adapter factory from the FileScanConfig if present.
+    ///
+    /// # Arguments
+    /// * `conf` - FileScanConfig that may contain a schema adapter factory
+    /// # Returns
+    /// The converted FileSource with schema adapter factory applied if provided
+    pub fn apply_schema_adapter(
+        self,
+        conf: &FileScanConfig,
+    ) -> datafusion_common::Result<Arc<dyn FileSource>> {
+        let file_source: Arc<dyn FileSource> = self.into();
+
+        // If the FileScanConfig.file_source() has a schema adapter factory, apply it
+        if let Some(factory) = conf.file_source().schema_adapter_factory() {
+            file_source.with_schema_adapter_factory(
+                Arc::<dyn SchemaAdapterFactory>::clone(&factory),
+            )
+        } else {
+            Ok(file_source)
+        }
+    }
 }
 
 /// Parses datafusion.common.config.ParquetOptions.coerce_int96 String to a arrow_schema.datatype.TimeUnit
@@ -453,6 +444,13 @@ pub(crate) fn parse_coerce_int96_string(
             "Unknown or unsupported parquet coerce_int96: \
         {str_setting}. Valid values are: ns, us, ms, and s."
         ))),
+    }
+}
+
+/// Allows easy conversion from ParquetSource to Arc&lt;dyn FileSource&gt;
+impl From<ParquetSource> for Arc<dyn FileSource> {
+    fn from(source: ParquetSource) -> Self {
+        as_file_source(source)
     }
 }
 
@@ -476,6 +474,13 @@ impl FileSource for ParquetSource {
                 Arc::new(DefaultParquetFileReaderFactory::new(object_store)) as _
             });
 
+        let file_decryption_properties = self
+            .table_parquet_options()
+            .crypto
+            .file_decryption
+            .as_ref()
+            .map(|props| Arc::new(props.clone().into()));
+
         let coerce_int96 = self
             .table_parquet_options
             .global
@@ -491,7 +496,8 @@ impl FileSource for ParquetSource {
                 .expect("Batch size must set before creating ParquetOpener"),
             limit: base_config.limit,
             predicate: self.predicate.clone(),
-            table_schema: Arc::clone(&base_config.file_schema),
+            logical_file_schema: Arc::clone(&base_config.file_schema),
+            partition_fields: base_config.table_partition_cols.clone(),
             metadata_size_hint: self.metadata_size_hint,
             metrics: self.metrics().clone(),
             parquet_file_reader_factory,
@@ -502,6 +508,7 @@ impl FileSource for ParquetSource {
             enable_row_group_stats_pruning: self.table_parquet_options.global.pruning,
             schema_adapter_factory,
             coerce_int96,
+            file_decryption_properties,
         })
     }
 
@@ -515,8 +522,11 @@ impl FileSource for ParquetSource {
         Arc::new(conf)
     }
 
-    fn with_schema(&self, _schema: SchemaRef) -> Arc<dyn FileSource> {
-        Arc::new(Self { ..self.clone() })
+    fn with_schema(&self, schema: SchemaRef) -> Arc<dyn FileSource> {
+        Arc::new(Self {
+            file_schema: Some(schema),
+            ..self.clone()
+        })
     }
 
     fn with_statistics(&self, statistics: Statistics) -> Arc<dyn FileSource> {
@@ -561,25 +571,41 @@ impl FileSource for ParquetSource {
                     .predicate()
                     .map(|p| format!(", predicate={p}"))
                     .unwrap_or_default();
-                let pruning_predicate_string = self
-                    .pruning_predicate
-                    .as_ref()
-                    .map(|pre| {
-                        let mut guarantees = pre
+
+                write!(f, "{predicate_string}")?;
+
+                // Try to build a the pruning predicates.
+                // These are only generated here because it's useful to have *some*
+                // idea of what pushdown is happening when viewing plans.
+                // However it is important to note that these predicates are *not*
+                // necessarily the predicates that are actually evaluated:
+                // the actual predicates are built in reference to the physical schema of
+                // each file, which we do not have at this point and hence cannot use.
+                // Instead we use the logical schema of the file (the table schema without partition columns).
+                if let (Some(file_schema), Some(predicate)) =
+                    (&self.file_schema, &self.predicate)
+                {
+                    let predicate_creation_errors = Count::new();
+                    if let (Some(pruning_predicate), _) = build_pruning_predicates(
+                        Some(predicate),
+                        file_schema,
+                        &predicate_creation_errors,
+                    ) {
+                        let mut guarantees = pruning_predicate
                             .literal_guarantees()
                             .iter()
-                            .map(|item| format!("{}", item))
+                            .map(|item| format!("{item}"))
                             .collect_vec();
                         guarantees.sort();
-                        format!(
+                        writeln!(
+                            f,
                             ", pruning_predicate={}, required_guarantees=[{}]",
-                            pre.predicate_expr(),
+                            pruning_predicate.predicate_expr(),
                             guarantees.join(", ")
-                        )
-                    })
-                    .unwrap_or_default();
-
-                write!(f, "{}{}", predicate_string, pruning_predicate_string)
+                        )?;
+                    }
+                };
+                Ok(())
             }
             DisplayFormatType::TreeRender => {
                 if let Some(predicate) = self.predicate() {
@@ -588,5 +614,92 @@ impl FileSource for ParquetSource {
                 Ok(())
             }
         }
+    }
+
+    fn try_pushdown_filters(
+        &self,
+        filters: Vec<Arc<dyn PhysicalExpr>>,
+        config: &ConfigOptions,
+    ) -> datafusion_common::Result<FilterPushdownPropagation<Arc<dyn FileSource>>> {
+        let Some(file_schema) = self.file_schema.clone() else {
+            return Ok(FilterPushdownPropagation::with_filters(
+                filters
+                    .into_iter()
+                    .map(PredicateSupport::Unsupported)
+                    .collect(),
+            ));
+        };
+        // Determine if based on configs we should push filters down.
+        // If either the table / scan itself or the config has pushdown enabled,
+        // we will push down the filters.
+        // If both are disabled, we will not push down the filters.
+        // By default they are both disabled.
+        // Regardless of pushdown, we will update the predicate to include the filters
+        // because even if scan pushdown is disabled we can still use the filters for stats pruning.
+        let config_pushdown_enabled = config.execution.parquet.pushdown_filters;
+        let table_pushdown_enabled = self.pushdown_filters();
+        let pushdown_filters = table_pushdown_enabled || config_pushdown_enabled;
+
+        let mut source = self.clone();
+        let filters: Vec<PredicateSupport> = filters
+            .into_iter()
+            .map(|filter| {
+                if can_expr_be_pushed_down_with_schemas(&filter, &file_schema) {
+                    PredicateSupport::Supported(filter)
+                } else {
+                    PredicateSupport::Unsupported(filter)
+                }
+            })
+            .collect();
+        if filters
+            .iter()
+            .all(|f| matches!(f, PredicateSupport::Unsupported(_)))
+        {
+            // No filters can be pushed down, so we can just return the remaining filters
+            // and avoid replacing the source in the physical plan.
+            return Ok(FilterPushdownPropagation::with_filters(filters));
+        }
+        let allowed_filters = filters
+            .iter()
+            .filter_map(|f| match f {
+                PredicateSupport::Supported(expr) => Some(Arc::clone(expr)),
+                PredicateSupport::Unsupported(_) => None,
+            })
+            .collect_vec();
+        let predicate = match source.predicate {
+            Some(predicate) => {
+                conjunction(std::iter::once(predicate).chain(allowed_filters))
+            }
+            None => conjunction(allowed_filters),
+        };
+        source.predicate = Some(predicate);
+        source = source.with_pushdown_filters(pushdown_filters);
+        let source = Arc::new(source);
+        // If pushdown_filters is false we tell our parents that they still have to handle the filters,
+        // even if we updated the predicate to include the filters (they will only be used for stats pruning).
+        if !pushdown_filters {
+            return Ok(FilterPushdownPropagation::with_filters(
+                filters
+                    .into_iter()
+                    .map(|f| PredicateSupport::Unsupported(f.into_inner()))
+                    .collect_vec(),
+            )
+            .with_updated_node(source));
+        }
+        Ok(FilterPushdownPropagation::with_filters(filters).with_updated_node(source))
+    }
+
+    fn with_schema_adapter_factory(
+        &self,
+        schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
+    ) -> datafusion_common::Result<Arc<dyn FileSource>> {
+        Ok(Arc::new(Self {
+            schema_adapter_factory: Some(schema_adapter_factory),
+            ..self.clone()
+        }))
+    }
+
+    fn schema_adapter_factory(&self) -> Option<Arc<dyn SchemaAdapterFactory>> {
+        self.schema_adapter_factory.clone()
     }
 }

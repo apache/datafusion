@@ -51,7 +51,7 @@ pub async fn from_literal(
     expr: &Literal,
 ) -> datafusion::common::Result<Expr> {
     let scalar_value = from_substrait_literal_without_names(consumer, expr)?;
-    Ok(Expr::Literal(scalar_value))
+    Ok(Expr::Literal(scalar_value, None))
 }
 
 pub(crate) fn from_substrait_literal_without_names(

@@ -26,7 +26,7 @@ use arrow::datatypes::DataType::{
     Date32, Date64, Duration, Interval, Time32, Time64, Timestamp,
 };
 use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
-use arrow::datatypes::{DataType, Field, TimeUnit};
+use arrow::datatypes::{DataType, Field, FieldRef, TimeUnit};
 use datafusion_common::types::{logical_date, NativeType};
 
 use datafusion_common::{
@@ -145,7 +145,7 @@ impl ScalarUDFImpl for DatePartFunc {
         internal_err!("return_field_from_args should be called instead")
     }
 
-    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<Field> {
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         let [field, _] = take_function_args(self.name(), args.scalar_arguments)?;
 
         field
@@ -161,6 +161,7 @@ impl ScalarUDFImpl for DatePartFunc {
                         }
                     })
             })
+            .map(Arc::new)
             .map_or_else(
                 || exec_err!("{} requires non-empty constant string", self.name()),
                 Ok,
@@ -231,6 +232,7 @@ impl ScalarUDFImpl for DatePartFunc {
     fn aliases(&self) -> &[String] {
         &self.aliases
     }
+
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }
