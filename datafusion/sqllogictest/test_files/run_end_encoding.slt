@@ -1,0 +1,340 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Tests for querying on Run-End Encoded (REE) data
+
+# This table models a common pattern in event and timeseries logs,
+# where a string column (e.g., a tag or type) contains long
+# contiguous runs of the same value — a pattern ideal for
+# Run-End Encoding.
+
+# There are three types of columns:
+# 1. `pathway_type`: a REE-encoded Utf8 column, repeating values in long runs
+# 2. `latency`: a Float64 field column with numeric values
+# 3. `time`: a nanosecond timestamp field
+
+# The REE encoding stores:
+# run_ends = [4, 8, 16]
+# values = [
+#   "pathway_type:full_detailed_sequence",
+#   "pathway_type:partial_detailed_sequence",
+#   "pathway_type:full_detailed_sequence"
+# ]
+
+CREATE VIEW ree_test_long_strings AS
+SELECT
+    arrow_cast(pathway_type, 'RunEndEncoded(Int32, Utf8)') AS pathway_type,
+    arrow_cast(latency, 'Float64') AS latency,
+    arrow_cast(time, 'Timestamp(Nanosecond, None)') AS time
+FROM (
+    VALUES
+    ('pathway_type:full_detailed_sequence',   10.0, 1703030400000000000),
+    ('pathway_type:full_detailed_sequence',   12.0, 1703031000000000000),
+    ('pathway_type:full_detailed_sequence',   11.5, 1703031600000000000),
+    ('pathway_type:full_detailed_sequence',   11.0, 1703032200000000000),
+    ('pathway_type:partial_detailed_sequence',15.0, 1703032800000000000),
+    ('pathway_type:partial_detailed_sequence',15.2, 1703033400000000000),
+    ('pathway_type:partial_detailed_sequence',15.1, 1703034000000000000),
+    ('pathway_type:partial_detailed_sequence',15.3, 1703034600000000000),
+    ('pathway_type:full_detailed_sequence',   12.0, 1703035200000000000),
+    ('pathway_type:full_detailed_sequence',   12.1, 1703035800000000000),
+    ('pathway_type:full_detailed_sequence',   12.3, 1703036400000000000),
+    ('pathway_type:full_detailed_sequence',   12.5, 1703037000000000000),
+    ('pathway_type:full_detailed_sequence',   12.4, 1703037600000000000),
+    ('pathway_type:full_detailed_sequence',   12.6, 1703038200000000000),
+    ('pathway_type:full_detailed_sequence',   12.7, 1703038800000000000),
+    ('pathway_type:full_detailed_sequence',   12.8, 1703039400000000000)
+);
+
+# expanded view of REE
+query TRI
+select * from ree_test_long_strings;
+----
+pathway_type:full_detailed_sequence 10.0 1703030400000000000
+pathway_type:full_detailed_sequence 12.0 1703031000000000000
+pathway_type:full_detailed_sequence 11.5 1703031600000000000
+pathway_type:full_detailed_sequence 11.0 1703032200000000000
+pathway_type:partial_detailed_sequence 15.0 1703032800000000000
+pathway_type:partial_detailed_sequence 15.2 1703033400000000000
+pathway_type:partial_detailed_sequence 15.1 1703034000000000
+pathway_type:partial_detailed_sequence 15.3 1703034600000000000
+pathway_type:full_detailed_sequence 12.0 1703035200000000000
+pathway_type:full_detailed_sequence 12.1 1703035800000000000
+pathway_type:full_detailed_sequence 12.3 1703036400000000000
+pathway_type:full_detailed_sequence 12.5 1703037000000000000
+pathway_type:full_detailed_sequence 12.4 1703037600000000000
+pathway_type:full_detailed_sequence 12.6 1703038200000000000
+pathway_type:full_detailed_sequence 12.7 1703038800000000000
+pathway_type:full_detailed_sequence 12.8 1703039400000000000 
+
+# dataTypes of table must be correct
+query TTT
+DESCRIBE ree_test_long_strings;
+----
+pathway_type RunEndEncoded(Int32, Utf8) YES
+latency Float64 YES
+time Timestamp(Nanosecond,None) YES 
+ 
+# Basic filtering tests
+query TRI
+SELECT pathway_type, latency, time FROM ree_test_long_strings WHERE latency > 15.0;
+----
+pathway_type:partial_detailed_sequence 15.0 1703032800000000000
+pathway_type:partial_detailed_sequence 15.2 1703033400000000000
+pathway_type:partial_detailed_sequence 15.1 1703034000000000000
+pathway_type:partial_detailed_sequence 15.3 1703034600000000000
+
+query TRI
+SELECT pathway_type, latency, time FROM ree_test_long_strings WHERE pathway_type = 'pathway_type:full_detailed_sequence' AND latency < 12.0;
+----
+pathway_type:full_detailed_sequence 10.0 1703030400000000000
+pathway_type:full_detailed_sequence 11.5 1703031600000000000
+pathway_type:full_detailed_sequence 11.0 1703032200000000000
+
+# COUNT tests, 
+query I
+SELECT COUNT(*) FROM ree_test_long_strings;
+----
+16
+
+query I
+SELECT COUNT(DISTINCT pathway_type) FROM ree_test_long_strings;
+----
+2
+
+# DISTINCT tests
+query T
+SELECT DISTINCT pathway_type FROM ree_test_long_strings ORDER BY pathway_type;
+----
+pathway_type:full_detailed_sequence
+pathway_type:partial_detailed_sequence
+
+# clean up
+statement ok
+DROP VIEW ree_test_long_strings;
+
+# Create table with two REE columns
+CREATE VIEW ree_test_two_columns AS
+SELECT
+    arrow_cast(column1, 'RunEndEncoded(Int32, Utf8)') AS name,
+    arrow_cast(column2, 'RunEndEncoded(Int32, Utf8)') AS category,
+    arrow_cast(column3, 'Int32') AS value
+FROM (
+    VALUES
+    ('Alice', 'ADMIN', 100),
+    ('Alice', 'ADMIN', 101),
+    ('Alice', 'ADMIN', 102),
+    ('Bob', 'USER', 200),
+    ('Bob', 'USER', 201),
+    ('Bob', 'USER', 202),
+    ('Charlie', 'ADMIN', 300),
+    ('Charlie', 'ADMIN', 301),
+    ('David', 'USER', 400),
+    ('David', 'USER', 401),
+    ('Eve', 'ADMIN', 500),
+    ('Eve', 'ADMIN', 501)
+);
+
+# Verify table structure
+query TTT
+DESCRIBE ree_test_two_columns;
+----
+name RunEndEncoded(Int32, Utf8) YES
+category RunEndEncoded(Int32, Utf8) YES
+value Int32 YES
+
+# Show all data
+query TTI
+SELECT * FROM ree_test_two_columns;
+----
+Alice ADMIN 100
+Alice ADMIN 101
+Alice ADMIN 102
+Bob USER 200
+Bob USER 201
+Bob USER 202
+Charlie ADMIN 300
+Charlie ADMIN 301
+David USER 400
+David USER 401
+Eve ADMIN 500
+Eve ADMIN 501
+
+# LOWER function tests
+query T
+SELECT LOWER(name) FROM ree_test_two_columns WHERE name = 'Alice' LIMIT 1;
+----
+alice
+
+query T
+SELECT LOWER(category) FROM ree_test_two_columns WHERE category = 'ADMIN' LIMIT 1;
+----
+admin
+
+query TT
+SELECT LOWER(name), LOWER(category) FROM ree_test_two_columns WHERE name = 'Bob' LIMIT 1;
+----
+bob user
+
+query TTI
+SELECT LOWER(name), LOWER(category), value FROM ree_test_two_columns ORDER BY name, value LIMIT 3;
+----
+alice admin 100
+alice admin 101
+alice admin 102
+
+# UPPER() function tests
+query T
+SELECT UPPER(name) FROM ree_test_two_columns WHERE name = 'Alice' LIMIT 1;
+----
+ALICE
+
+query TT
+SELECT UPPER(name), UPPER(category) FROM ree_test_two_columns WHERE name = 'Charlie' LIMIT 1;
+----
+CHARLIE ADMIN
+
+# UPPER on multiple REE columns
+query TTI
+SELECT UPPER(name), UPPER(category), value FROM ree_test_two_columns WHERE name = 'David' ORDER BY value;
+----
+DAVID USER 400
+DAVID USER 401
+
+# CONCAT() function tests
+query T
+SELECT CONCAT(name, '_', category) FROM ree_test_two_columns WHERE name = 'Alice' LIMIT 1;
+----
+Alice_ADMIN
+
+# stacking CONCAT and LOWER functions
+query T
+SELECT CONCAT(LOWER(name), '-', LOWER(category)) FROM ree_test_two_columns WHERE name = 'Bob' LIMIT 1;
+----
+bob-user
+
+query T
+SELECT CONCAT(name, ' is a ', category) FROM ree_test_two_columns WHERE name = 'Charlie' LIMIT 1;
+----
+Charlie is a ADMIN
+
+# SUBSTR()/SUBSTRING() function tests
+query T
+SELECT SUBSTR(name, 1, 3) FROM ree_test_two_columns WHERE name = 'Alice' LIMIT 1;
+----
+Ali
+
+query T
+SELECT SUBSTR(category, 1, 2) FROM ree_test_two_columns WHERE category = 'ADMIN' LIMIT 1;
+----
+AD
+
+query TT
+SELECT SUBSTR(name, 1, 2), SUBSTR(category, 1, 1) FROM ree_test_two_columns WHERE name = 'Charlie' LIMIT 1;
+----
+Ch A
+
+query TTI
+SELECT SUBSTR(name, 1, 3), SUBSTR(category, 1, 3), value FROM ree_test_two_columns WHERE name = 'David' ORDER BY value;
+----
+Dav USE 400
+Dav USE 401
+
+# REPLACE() function tests
+query T
+SELECT REPLACE(name, 'i', 'y') FROM ree_test_two_columns WHERE name = 'Alice' LIMIT 1;
+----
+Alyce
+
+query T
+SELECT REPLACE(category, 'ADMIN', 'MANAGER') FROM ree_test_two_columns WHERE category = 'ADMIN' LIMIT 1;
+----
+MANAGER
+
+query T
+SELECT REPLACE(name, 'e', 'a') FROM ree_test_two_columns WHERE name = 'Eve' LIMIT 1;
+----
+Eva
+
+# REVERSE() function tests
+query T
+SELECT REVERSE(category) FROM ree_test_two_columns WHERE category = 'ADMIN' LIMIT 1;
+----
+NIMDA
+
+query TT
+SELECT REVERSE(name), REVERSE(category) FROM ree_test_two_columns WHERE name = 'Charlie' LIMIT 1;
+----
+eilrahC NIMDA
+
+query TTI
+SELECT REVERSE(name), REVERSE(category), value FROM ree_test_two_columns WHERE name = 'Eve' ORDER BY value;
+----
+evE NIMDA 500
+evE NIMDA 501
+
+# Combined string function tests
+query T
+SELECT UPPER(SUBSTR(name, 1, 2)) FROM ree_test_two_columns WHERE name = 'Alice' LIMIT 1;
+----
+AL
+
+query T
+SELECT LOWER(REVERSE(category)) FROM ree_test_two_columns WHERE category = 'USER' LIMIT 1;
+----
+resu
+
+query T
+SELECT CONCAT(SUBSTR(name, 1, 1), '_', LOWER(category)) FROM ree_test_two_columns WHERE name = 'Charlie' LIMIT 1;
+----
+C_admin
+
+query TT
+SELECT 
+    CONCAT(SUBSTR(name, 1, 2), '_', LOWER(category)),
+    REVERSE(REPLACE(name, 'e', 'a'))
+FROM ree_test_two_columns WHERE name = 'Eve' LIMIT 1;
+----
+Ev_admin avE
+
+# String functions with filtering
+query T
+SELECT LOWER(name) FROM ree_test_two_columns WHERE UPPER(category) = 'ADMIN' LIMIT 3;
+----
+alice
+alice
+alice
+
+query T
+SELECT SUBSTR(name, 1, 3) FROM ree_test_two_columns WHERE LOWER(category) = 'user' LIMIT 3;
+----
+Bob
+Bob
+Bob
+
+query T
+SELECT REVERSE(name) FROM ree_test_two_columns WHERE SUBSTR(category, 1, 1) = 'A' LIMIT 3;
+----
+ecilA
+ecilA
+ecilA
+
+# Cleanup
+statement ok
+DROP VIEW ree_test_two_columns;
+
+#TBD: Look over logical_plan's being generated with 'explain', ref:https://github.com/apache/datafusion/blob/main/datafusion/sqllogictest/test_files/dictionary.slt line 438
