@@ -21,6 +21,8 @@ use std::task::Poll;
 
 use arrow::record_batch::RecordBatch;
 
+use crate::spill::get_record_batch_memory_size;
+
 use super::{Count, ExecutionPlanMetricsSet, MetricBuilder, Time, Timestamp};
 use datafusion_common::Result;
 
@@ -53,6 +55,9 @@ pub struct BaselineMetrics {
 
     /// output rows: the total output rows
     output_rows: Count,
+
+    /// output bytes: the total output bytes
+    output_bytes: Count,
 }
 
 impl BaselineMetrics {
@@ -65,6 +70,7 @@ impl BaselineMetrics {
             end_time: MetricBuilder::new(metrics).end_timestamp(partition),
             elapsed_compute: MetricBuilder::new(metrics).elapsed_compute(partition),
             output_rows: MetricBuilder::new(metrics).output_rows(partition),
+            output_bytes: MetricBuilder::new(metrics).output_bytes(partition),
         }
     }
 
@@ -78,6 +84,7 @@ impl BaselineMetrics {
             end_time: Default::default(),
             elapsed_compute: self.elapsed_compute.clone(),
             output_rows: Default::default(),
+            output_bytes: Default::default(),
         }
     }
 
@@ -91,6 +98,11 @@ impl BaselineMetrics {
         &self.output_rows
     }
 
+    /// return the metric for the total number of output bytes produced
+    pub fn output_bytes(&self) -> &Count {
+        &self.output_bytes
+    }
+
     /// Records the fact that this operator's execution is complete
     /// (recording the `end_time` metric).
     ///
@@ -102,12 +114,13 @@ impl BaselineMetrics {
         self.end_time.record()
     }
 
-    /// Record that some number of rows have been produced as output
+    /// Record that some number of rows and bytes have been produced as output
     ///
     /// See the [`RecordOutput`] for conveniently recording record
     /// batch output for other thing
-    pub fn record_output(&self, num_rows: usize) {
+    pub fn record_output(&self, num_rows: usize, num_bytes: usize) {
         self.output_rows.add(num_rows);
+        self.output_bytes.add(num_bytes);
     }
 
     /// If not previously recorded `done()`, record
@@ -178,23 +191,16 @@ pub trait RecordOutput {
     fn record_output(self, bm: &BaselineMetrics) -> Self;
 }
 
-impl RecordOutput for usize {
-    fn record_output(self, bm: &BaselineMetrics) -> Self {
-        bm.record_output(self);
-        self
-    }
-}
-
 impl RecordOutput for RecordBatch {
     fn record_output(self, bm: &BaselineMetrics) -> Self {
-        bm.record_output(self.num_rows());
+        bm.record_output(self.num_rows(), get_record_batch_memory_size(&self));
         self
     }
 }
 
 impl RecordOutput for &RecordBatch {
     fn record_output(self, bm: &BaselineMetrics) -> Self {
-        bm.record_output(self.num_rows());
+        bm.record_output(self.num_rows(), get_record_batch_memory_size(self));
         self
     }
 }
