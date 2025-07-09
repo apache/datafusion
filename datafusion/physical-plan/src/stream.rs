@@ -575,6 +575,14 @@ impl BatchSplitStream {
 
         // Wrap slicing logic in a panic-safe block
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            // Assert slice boundary safety - offset should never exceed batch size
+            debug_assert!(
+                self.offset <= batch.num_rows(),
+                "Offset {} exceeds batch size {}",
+                self.offset,
+                batch.num_rows()
+            );
+
             let remaining = batch.num_rows() - self.offset;
             let to_take = remaining.min(self.batch_size);
             let out = batch.slice(self.offset, to_take);
@@ -585,10 +593,11 @@ impl BatchSplitStream {
             Ok((out, to_take)) => {
                 self.offset += to_take;
                 if self.offset < batch.num_rows() {
-                    // More data remains in this batch
+                    // More data remains in this batch, store it back
                     self.current_batch = Some(batch);
                 } else {
                     // Batch is exhausted, reset offset
+                    // Note: current_batch is already None since we took it at the start
                     self.offset = 0;
                 }
                 Some(Ok(out))
