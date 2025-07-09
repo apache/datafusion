@@ -51,7 +51,7 @@ async fn datasource_exact_batch_size_no_split() -> datafusion_common::Result<()>
 
 #[tokio::test]
 async fn datasource_small_batch_no_split() -> datafusion_common::Result<()> {
-    // Test with batch smaller than MIN_BATCH_SIZE threshold (1024)
+    // Test with batch smaller than the split threshold (1024)
     let small_batch_size = 512; // Less than 1024
 
     let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
@@ -62,7 +62,7 @@ async fn datasource_small_batch_no_split() -> datafusion_common::Result<()> {
     let stream = exec.execute(0, ctx)?;
     let batches = collect(stream).await?;
 
-    // Should not split small batches below MIN_BATCH_SIZE
+    // Should not split small batches below the threshold
     assert_eq!(batches.len(), 1);
     assert_eq!(batches[0].num_rows(), small_batch_size);
     Ok(())

@@ -22,7 +22,9 @@ use std::sync::Arc;
 use std::task::Context;
 use std::task::Poll;
 
-use super::metrics::BaselineMetrics;
+#[cfg(test)]
+use super::metrics::ExecutionPlanMetricsSet;
+use super::metrics::{BaselineMetrics, SplitMetrics};
 use super::{ExecutionPlan, RecordBatchStream, SendableRecordBatchStream};
 use crate::displayable;
 
@@ -540,27 +542,30 @@ pin_project! {
     /// - `offset` is always ≤ `current_batch.num_rows()` when `current_batch` is `Some`
     /// - When `current_batch` is `None`, `offset` is always 0
     /// - `batch_size` is always > 0
-    pub struct BatchSplitStream {
+pub struct BatchSplitStream {
         #[pin]
         input: SendableRecordBatchStream,
         schema: SchemaRef,
         batch_size: usize,
+        metrics: SplitMetrics,
         current_batch: Option<RecordBatch>,
         offset: usize,
     }
 }
 
 impl BatchSplitStream {
-    /// Minimum batch size required to enable splitting.
-    pub const MIN_BATCH_SIZE: usize = 1024;
-
     /// Create a new [`BatchSplitStream`]
-    pub fn new(input: SendableRecordBatchStream, batch_size: usize) -> Self {
+    pub fn new(
+        input: SendableRecordBatchStream,
+        batch_size: usize,
+        metrics: SplitMetrics,
+    ) -> Self {
         let schema = input.schema();
         Self {
             input,
             schema,
             batch_size,
+            metrics,
             current_batch: None,
             offset: 0,
         }
@@ -591,6 +596,7 @@ impl BatchSplitStream {
 
         match result {
             Ok((out, to_take)) => {
+                self.metrics.batches_splitted.add(1);
                 self.offset += to_take;
                 if self.offset < batch.num_rows() {
                     // More data remains in this batch, store it back
@@ -781,7 +787,9 @@ mod test {
         let batch_stream = Box::pin(adapter) as SendableRecordBatchStream;
 
         // Create a BatchSplitStream with batch_size = 500
-        let mut split_stream = BatchSplitStream::new(batch_stream, 500);
+        let metrics = ExecutionPlanMetricsSet::new();
+        let split_metrics = SplitMetrics::new(&metrics, 0);
+        let mut split_stream = BatchSplitStream::new(batch_stream, 500, split_metrics);
 
         let mut total_rows = 0;
         let mut batch_count = 0;

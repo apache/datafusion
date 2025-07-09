@@ -25,6 +25,7 @@ use std::sync::Arc;
 use datafusion_physical_plan::execution_plan::{
     Boundedness, EmissionType, SchedulingType,
 };
+use datafusion_physical_plan::metrics::SplitMetrics;
 use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::stream::BatchSplitStream;
@@ -264,8 +265,18 @@ impl ExecutionPlan for DataSourceExec {
     ) -> Result<SendableRecordBatchStream> {
         let stream = self.data_source.open(partition, Arc::clone(&context))?;
         let batch_size = context.session_config().batch_size();
-        if batch_size >= BatchSplitStream::MIN_BATCH_SIZE {
-            Ok(Box::pin(BatchSplitStream::new(stream, batch_size)))
+        let threshold = context.session_config().batch_split_threshold();
+        if threshold > 0 && batch_size >= threshold {
+            log::debug!(
+                "Batch splitting enabled for partition {partition}: batch_size={batch_size}, threshold={threshold}"
+            );
+            let metrics = self.data_source.metrics();
+            let split_metrics = SplitMetrics::new(&metrics, partition);
+            Ok(Box::pin(BatchSplitStream::new(
+                stream,
+                batch_size,
+                split_metrics,
+            )))
         } else {
             Ok(stream)
         }

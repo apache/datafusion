@@ -389,6 +389,19 @@ impl SessionConfig {
         self.options.execution.batch_size
     }
 
+    /// Configure the threshold at which incoming [`RecordBatch`]es
+    /// will be split into smaller batches. Set to `0` to disable
+    /// splitting.
+    pub fn with_batch_split_threshold(mut self, n: usize) -> Self {
+        self.options.execution.batch_split_threshold = n;
+        self
+    }
+
+    /// Return the current batch split threshold
+    pub fn batch_split_threshold(&self) -> usize {
+        self.options.execution.batch_split_threshold
+    }
+
     /// Enables or disables the coalescence of small batches into larger batches
     pub fn with_coalesce_batches(mut self, enabled: bool) -> Self {
         self.options.execution.coalesce_batches = enabled;
