@@ -979,9 +979,6 @@ impl OptimizerRule for RewriteDependentJoin {
         let mut transformer =
             DependentJoinRewriter::new(Arc::clone(config.alias_generator()));
         let rewrite_result = transformer.rewrite_subqueries_into_dependent_joins(plan)?;
-        if rewrite_result.transformed {
-            println!("dependent join plan {}", rewrite_result.data);
-        }
         Ok(rewrite_result)
     }
 
