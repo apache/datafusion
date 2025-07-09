@@ -499,6 +499,8 @@ fn push_down_filters(
             }
         }
 
+        let num_parent_filters = all_predicates.len() - num_self_filters;
+
         // Any filters that could not be pushed down to a child are marked as not-supported to our parents
         let result = push_down_filters(Arc::clone(child), all_predicates, config, phase)?;
 
@@ -514,13 +516,13 @@ fn push_down_filters(
         // from our parents and filters that the current node injected. We need to de-entangle
         // this since we do need to distinguish between them.
         let mut all_filters = result.filters.into_iter().collect_vec();
-        if all_filters.len() != num_self_filters + parent_predicates.len()
+        if all_filters.len() != num_self_filters + num_parent_filters
         {
             return Err(datafusion_common::DataFusionError::Internal(
                 format!(
                     "Filter pushdown did not return the expected number of filters: expected {num_self_filters} self filters and {num_parent_filters} parent filters, but got {num_filters_from_child}. Likely culprit is {child}",
                     num_self_filters = num_self_filters,
-                    num_parent_filters = parent_predicates.len(),
+                    num_parent_filters = num_parent_filters,
                     num_filters_from_child = all_filters.len(),
                     child = child.name(),
                 ),
