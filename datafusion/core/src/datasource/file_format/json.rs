@@ -31,7 +31,6 @@ mod tests {
     use arrow_schema::Schema;
     use bytes::Bytes;
     use datafusion_catalog::Session;
-    use datafusion_common::config::JsonOptions;
     use datafusion_common::test_util::batches_to_string;
     use datafusion_datasource::decoder::{
         BatchDeserializer, DecoderDeserializer, DeserializerOutput,
@@ -255,61 +254,6 @@ mod tests {
             ++
         "###);
 
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_json_write_empty_file() -> Result<()> {
-        // Case 1. write to a single file
-        // Expect: an empty file created
-        let tmp_dir = tempfile::TempDir::new().unwrap();
-        let path = format!("{}/empty.json", tmp_dir.path().to_string_lossy());
-
-        let ctx = SessionContext::new();
-
-        let df = ctx.sql("SELECT 1 limit 0").await?;
-
-        let cfg1 =
-            crate::dataframe::DataFrameWriteOptions::new().with_single_file_output(true);
-        let cfg2 = JsonOptions::default();
-
-        df.write_json(&path, cfg1, Some(cfg2)).await?;
-        assert!(std::path::Path::new(&path).exists());
-
-        // Case 2. write to a directory without partition columns
-        // Expect: under the directory, an empty file is created
-        let tmp_dir = tempfile::TempDir::new().unwrap();
-        let path = format!("{}", tmp_dir.path().to_string_lossy());
-
-        let cfg1 =
-            crate::dataframe::DataFrameWriteOptions::new().with_single_file_output(true);
-        let cfg2 = JsonOptions::default();
-
-        let df = ctx.sql("SELECT 1 limit 0").await?;
-
-        df.write_json(&path, cfg1, Some(cfg2)).await?;
-        assert!(std::path::Path::new(&path).exists());
-
-        let files = std::fs::read_dir(&path).unwrap();
-        assert!(files.count() == 1);
-
-        // Case 3. write to a directory with partition columns
-        // Expect: No file is created
-        let tmp_dir = tempfile::TempDir::new().unwrap();
-        let path = format!("{}", tmp_dir.path().to_string_lossy());
-
-        let df = ctx.sql("SELECT 1 as col1, 2 as col2 limit 0").await?;
-
-        let cfg1 = crate::dataframe::DataFrameWriteOptions::new()
-            .with_single_file_output(true)
-            .with_partition_by(vec!["col1".to_string()]);
-        let cfg2 = JsonOptions::default();
-
-        df.write_json(&path, cfg1, Some(cfg2)).await?;
-
-        assert!(std::path::Path::new(&path).exists());
-        let files = std::fs::read_dir(&path).unwrap();
-        assert!(files.count() == 0);
         Ok(())
     }
 

@@ -2512,18 +2512,33 @@ impl ScalarValue {
                 }
             },
             ScalarValue::List(arr) => {
+                if size == 1 {
+                    return Ok(Arc::clone(arr) as Arc<dyn Array>);
+                }
                 Self::list_to_array_of_size(arr.as_ref() as &dyn Array, size)?
             }
             ScalarValue::LargeList(arr) => {
+                if size == 1 {
+                    return Ok(Arc::clone(arr) as Arc<dyn Array>);
+                }
                 Self::list_to_array_of_size(arr.as_ref() as &dyn Array, size)?
             }
             ScalarValue::FixedSizeList(arr) => {
+                if size == 1 {
+                    return Ok(Arc::clone(arr) as Arc<dyn Array>);
+                }
                 Self::list_to_array_of_size(arr.as_ref() as &dyn Array, size)?
             }
             ScalarValue::Struct(arr) => {
+                if size == 1 {
+                    return Ok(Arc::clone(arr) as Arc<dyn Array>);
+                }
                 Self::list_to_array_of_size(arr.as_ref() as &dyn Array, size)?
             }
             ScalarValue::Map(arr) => {
+                if size == 1 {
+                    return Ok(Arc::clone(arr) as Arc<dyn Array>);
+                }
                 Self::list_to_array_of_size(arr.as_ref() as &dyn Array, size)?
             }
             ScalarValue::Date32(e) => {

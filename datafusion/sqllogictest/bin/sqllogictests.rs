@@ -689,6 +689,12 @@ struct Options {
         help = "IGNORED (for compatibility with built-in rust test runner)"
     )]
     nocapture: bool,
+
+    #[clap(
+        long,
+        help = "IGNORED (for compatibility with built-in rust test runner)"
+    )]
+    test_threads: Option<usize>,
 }
 
 impl Options {

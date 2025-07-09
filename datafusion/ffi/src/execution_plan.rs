@@ -205,7 +205,8 @@ impl DisplayAs for ForeignExecutionPlan {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(
                     f,
-                    "FFI_ExecutionPlan(number_of_children={})",
+                    "FFI_ExecutionPlan: {}, number_of_children={}",
+                    self.name,
                     self.children.len(),
                 )
             }
@@ -390,7 +391,10 @@ mod tests {
         );
 
         let buf = display.one_line().to_string();
-        assert_eq!(buf.trim(), "FFI_ExecutionPlan(number_of_children=0)");
+        assert_eq!(
+            buf.trim(),
+            "FFI_ExecutionPlan: empty-exec, number_of_children=0"
+        );
 
         Ok(())
     }

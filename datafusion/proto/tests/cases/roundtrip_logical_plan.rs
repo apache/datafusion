@@ -429,13 +429,13 @@ async fn roundtrip_logical_plan_copy_to_sql_options() -> Result<()> {
     let input = create_csv_scan(&ctx).await?;
     let file_type = format_as_file_type(Arc::new(CsvFormatFactory::new()));
 
-    let plan = LogicalPlan::Copy(CopyTo {
-        input: Arc::new(input),
-        output_url: "test.csv".to_string(),
-        partition_by: vec!["a".to_string(), "b".to_string(), "c".to_string()],
+    let plan = LogicalPlan::Copy(CopyTo::new(
+        Arc::new(input),
+        "test.csv".to_string(),
+        vec!["a".to_string(), "b".to_string(), "c".to_string()],
         file_type,
-        options: Default::default(),
-    });
+        Default::default(),
+    ));
 
     let codec = CsvLogicalExtensionCodec {};
     let bytes = logical_plan_to_bytes_with_extension_codec(&plan, &codec)?;
@@ -469,13 +469,13 @@ async fn roundtrip_logical_plan_copy_to_writer_options() -> Result<()> {
         ParquetFormatFactory::new_with_options(parquet_format),
     ));
 
-    let plan = LogicalPlan::Copy(CopyTo {
-        input: Arc::new(input),
-        output_url: "test.parquet".to_string(),
+    let plan = LogicalPlan::Copy(CopyTo::new(
+        Arc::new(input),
+        "test.parquet".to_string(),
+        vec!["a".to_string(), "b".to_string(), "c".to_string()],
         file_type,
-        partition_by: vec!["a".to_string(), "b".to_string(), "c".to_string()],
-        options: Default::default(),
-    });
+        Default::default(),
+    ));
 
     let codec = ParquetLogicalExtensionCodec {};
     let bytes = logical_plan_to_bytes_with_extension_codec(&plan, &codec)?;
@@ -501,13 +501,13 @@ async fn roundtrip_logical_plan_copy_to_arrow() -> Result<()> {
 
     let file_type = format_as_file_type(Arc::new(ArrowFormatFactory::new()));
 
-    let plan = LogicalPlan::Copy(CopyTo {
-        input: Arc::new(input),
-        output_url: "test.arrow".to_string(),
-        partition_by: vec!["a".to_string(), "b".to_string(), "c".to_string()],
+    let plan = LogicalPlan::Copy(CopyTo::new(
+        Arc::new(input),
+        "test.arrow".to_string(),
+        vec!["a".to_string(), "b".to_string(), "c".to_string()],
         file_type,
-        options: Default::default(),
-    });
+        Default::default(),
+    ));
 
     let codec = ArrowLogicalExtensionCodec {};
     let bytes = logical_plan_to_bytes_with_extension_codec(&plan, &codec)?;
@@ -548,13 +548,13 @@ async fn roundtrip_logical_plan_copy_to_csv() -> Result<()> {
         csv_format.clone(),
     )));
 
-    let plan = LogicalPlan::Copy(CopyTo {
-        input: Arc::new(input),
-        output_url: "test.csv".to_string(),
-        partition_by: vec!["a".to_string(), "b".to_string(), "c".to_string()],
+    let plan = LogicalPlan::Copy(CopyTo::new(
+        Arc::new(input),
+        "test.csv".to_string(),
+        vec!["a".to_string(), "b".to_string(), "c".to_string()],
         file_type,
-        options: Default::default(),
-    });
+        Default::default(),
+    ));
 
     let codec = CsvLogicalExtensionCodec {};
     let bytes = logical_plan_to_bytes_with_extension_codec(&plan, &codec)?;
@@ -614,13 +614,13 @@ async fn roundtrip_logical_plan_copy_to_json() -> Result<()> {
         json_format.clone(),
     )));
 
-    let plan = LogicalPlan::Copy(CopyTo {
-        input: Arc::new(input),
-        output_url: "test.json".to_string(),
-        partition_by: vec!["a".to_string(), "b".to_string(), "c".to_string()],
+    let plan = LogicalPlan::Copy(CopyTo::new(
+        Arc::new(input),
+        "test.json".to_string(),
+        vec!["a".to_string(), "b".to_string(), "c".to_string()],
         file_type,
-        options: Default::default(),
-    });
+        Default::default(),
+    ));
 
     // Assume JsonLogicalExtensionCodec is implemented similarly to CsvLogicalExtensionCodec
     let codec = JsonLogicalExtensionCodec {};
@@ -686,13 +686,13 @@ async fn roundtrip_logical_plan_copy_to_parquet() -> Result<()> {
         ParquetFormatFactory::new_with_options(parquet_format.clone()),
     ));
 
-    let plan = LogicalPlan::Copy(CopyTo {
-        input: Arc::new(input),
-        output_url: "test.parquet".to_string(),
-        partition_by: vec!["a".to_string(), "b".to_string(), "c".to_string()],
+    let plan = LogicalPlan::Copy(CopyTo::new(
+        Arc::new(input),
+        "test.parquet".to_string(),
+        vec!["a".to_string(), "b".to_string(), "c".to_string()],
         file_type,
-        options: Default::default(),
-    });
+        Default::default(),
+    ));
 
     // Assume ParquetLogicalExtensionCodec is implemented similarly to JsonLogicalExtensionCodec
     let codec = ParquetLogicalExtensionCodec {};

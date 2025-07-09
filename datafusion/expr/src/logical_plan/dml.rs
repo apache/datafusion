@@ -40,6 +40,8 @@ pub struct CopyTo {
     pub file_type: Arc<dyn FileType>,
     /// SQL Options that can affect the formats
     pub options: HashMap<String, String>,
+    /// The schema of the output (a single column "count")
+    pub output_schema: DFSchemaRef,
 }
 
 impl Debug for CopyTo {
@@ -50,6 +52,7 @@ impl Debug for CopyTo {
             .field("partition_by", &self.partition_by)
             .field("file_type", &"...")
             .field("options", &self.options)
+            .field("output_schema", &self.output_schema)
             .finish_non_exhaustive()
     }
 }
@@ -86,6 +89,26 @@ impl Hash for CopyTo {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.input.hash(state);
         self.output_url.hash(state);
+    }
+}
+
+impl CopyTo {
+    pub fn new(
+        input: Arc<LogicalPlan>,
+        output_url: String,
+        partition_by: Vec<String>,
+        file_type: Arc<dyn FileType>,
+        options: HashMap<String, String>,
+    ) -> Self {
+        Self {
+            input,
+            output_url,
+            partition_by,
+            file_type,
+            options,
+            // The output schema is always a single column "count" with the number of rows copied
+            output_schema: make_count_schema(),
+        }
     }
 }
 

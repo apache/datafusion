@@ -34,8 +34,8 @@ use datafusion_physical_plan::{
     displayable,
     filter::FilterExec,
     filter_pushdown::{
-        ChildPushdownResult, FilterDescription, FilterPushdownPropagation,
-        PredicateSupport, PredicateSupports,
+        ChildFilterDescription, ChildPushdownResult, FilterDescription,
+        FilterPushdownPropagation, PredicateSupport,
     },
     metrics::ExecutionPlanMetricsSet,
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
@@ -228,11 +228,19 @@ impl FileSource for TestSource {
                 ..self.clone()
             });
             Ok(FilterPushdownPropagation {
-                filters: PredicateSupports::all_supported(filters),
+                filters: filters
+                    .into_iter()
+                    .map(PredicateSupport::Supported)
+                    .collect(),
                 updated_node: Some(new_node),
             })
         } else {
-            Ok(FilterPushdownPropagation::unsupported(filters))
+            Ok(FilterPushdownPropagation::with_filters(
+                filters
+                    .into_iter()
+                    .map(PredicateSupport::Unsupported)
+                    .collect(),
+            ))
         }
     }
 
@@ -515,9 +523,12 @@ impl ExecutionPlan for TestNode {
         parent_filters: Vec<Arc<dyn PhysicalExpr>>,
         _config: &ConfigOptions,
     ) -> Result<FilterDescription> {
-        Ok(FilterDescription::new_with_child_count(1)
-            .all_parent_filters_supported(parent_filters)
-            .with_self_filter(Arc::clone(&self.predicate)))
+        // Since TestNode marks all parent filters as supported and adds its own filter,
+        // we use from_child to create a description with all parent filters supported
+        let child = &self.input;
+        let child_desc = ChildFilterDescription::from_child(&parent_filters, child)?
+            .with_self_filter(Arc::clone(&self.predicate));
+        Ok(FilterDescription::new().with_child(child_desc))
     }
 
     fn handle_child_pushdown_result(
@@ -534,7 +545,7 @@ impl ExecutionPlan for TestNode {
             let self_pushdown_result = child_pushdown_result.self_filters[0].clone();
             // And pushed down 1 filter
             assert_eq!(self_pushdown_result.len(), 1);
-            let self_pushdown_result = self_pushdown_result.into_inner();
+            let self_pushdown_result: Vec<_> = self_pushdown_result.into_iter().collect();
 
             match &self_pushdown_result[0] {
                 PredicateSupport::Unsupported(filter) => {
