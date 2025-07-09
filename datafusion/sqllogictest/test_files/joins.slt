@@ -5096,6 +5096,30 @@ LEFT ANTI JOIN t2 ON k1 = k2
 ----
 1
 
+# Both sides empty
+query TT
+EXPLAIN
+SELECT *
+FROM t1
+LEFT ANTI JOIN t2 ON k1 = k2
+WHERE k1 < 0
+----
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=3
+02)--HashJoinExec: mode=CollectLeft, join_type=RightAnti, on=[(k2@0, k1@0)]
+03)----DataSourceExec: partitions=1, partition_sizes=[0]
+04)----CoalesceBatchesExec: target_batch_size=3
+05)------FilterExec: k1@0 < 0
+06)--------DataSourceExec: partitions=1, partition_sizes=[10000]
+
+query II
+SELECT *
+FROM t1
+LEFT ANTI JOIN t2 ON k1 = k2
+WHERE k1 < 0
+----
+
+
 statement ok
 DROP TABLE t1;
 
