@@ -138,14 +138,37 @@ impl DisplayAs for OutputRequirementExec {
     ) -> std::fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                let order_cols = if let Some(reqs) = &self.order_requirement {
+                    let (lexes, _) = reqs.clone().into_alternatives();
+                    if let Some(lex) = lexes.first() {
+                        lex.iter()
+                            .map(|req| format!("{}", req.expr))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    } else {
+                        "".to_string()
+                    }
+                } else {
+                    "".to_string()
+                };
+
+                let dist_cols = match &self.dist_requirement {
+                    Distribution::SinglePartition => "single".to_string(),
+                    Distribution::HashPartitioned(exprs) => exprs
+                        .iter()
+                        .map(|expr| format!("{}", expr))
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                    Distribution::UnspecifiedDistribution => "unspecified".to_string(),
+                };
+
                 write!(
                     f,
-                    "OutputRequirementExec: order_requirement={:?}, dist_requirement={}",
-                    self.order_requirement, self.dist_requirement
+                    "OutputRequirementExec: order_by=[{}], dist_by=[{}]",
+                    order_cols, dist_cols
                 )
             }
             DisplayFormatType::TreeRender => {
-                // TODO: collect info
                 write!(f, "")
             }
         }
