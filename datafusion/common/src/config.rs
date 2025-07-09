@@ -352,7 +352,7 @@ config_namespace! {
         /// Minimum batch size before DataFusion will attempt to
         /// split oversized [`RecordBatch`]es coming from sources.
         /// Set to 0 to disable splitting entirely.
-        pub batch_split_threshold: usize, default = 1024
+        pub batch_split_threshold: usize, default = 8192
 
         /// When set to true, record batches will be examined between each operator and
         /// small batches will be coalesced into larger batches. This is helpful when there
