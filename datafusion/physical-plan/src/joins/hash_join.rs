@@ -17,13 +17,13 @@
 
 //! [`HashJoinExec`] Partitioned Hash Join Operator
 
+use arrow::array::new_empty_array;
+use arrow::compute::concat;
 use std::fmt;
 use std::mem::size_of;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::task::Poll;
-use arrow::array::new_empty_array;
-use arrow::compute::concat;
 use std::{any::Any, vec};
 
 use super::utils::{
@@ -72,7 +72,8 @@ use arrow::record_batch::RecordBatch;
 use arrow::util::bit_util;
 use datafusion_common::utils::memory::estimate_memory_size;
 use datafusion_common::{
-    internal_datafusion_err, internal_err, plan_err, project_schema, qualified_name, DataFusionError, JoinSide, JoinType, NullEquality, Result
+    internal_datafusion_err, internal_err, plan_err, project_schema, qualified_name,
+    DataFusionError, JoinSide, JoinType, NullEquality, Result,
 };
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
@@ -1012,10 +1013,13 @@ async fn collect_left_input(
     let batch_key_arrays: Vec<Vec<ArrayRef>> = batches_iter
         .clone()
         .map(|batch| {
-        on_left
-            .iter()
-            .map(|c| c.evaluate(batch).and_then(|v| v.into_array(batch.num_rows())))
-            .collect::<Result<_>>()
+            on_left
+                .iter()
+                .map(|c| {
+                    c.evaluate(batch)
+                        .and_then(|v| v.into_array(batch.num_rows()))
+                })
+                .collect::<Result<_>>()
         })
         .collect::<Result<_>>()?;
 
@@ -1054,7 +1058,7 @@ async fn collect_left_input(
     // concat() errors with empty array
     if batch_key_arrays.is_empty() {
         for expr in &on_left {
-            let dt = expr.data_type(&schema)?;  
+            let dt = expr.data_type(&schema)?;
             left_values.push(new_empty_array(&dt));
         }
     } else {

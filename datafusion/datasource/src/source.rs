@@ -342,12 +342,15 @@ impl ExecutionPlan for DataSourceExec {
                 new_node.cache =
                     Self::compute_properties(Arc::clone(&new_node.data_source));
                 // Recompute equivalence info using new filters
-                let filter = conjunction(res.filters.iter()
-                    .filter_map(|f| match f {
-                        PredicateSupport::Supported(expr) => Some(Arc::clone(expr)),
-                        PredicateSupport::Unsupported(_) => None,
-                    })
-                    .collect_vec());
+                let filter = conjunction(
+                    res.filters
+                        .iter()
+                        .filter_map(|f| match f {
+                            PredicateSupport::Supported(expr) => Some(Arc::clone(expr)),
+                            PredicateSupport::Unsupported(_) => None,
+                        })
+                        .collect_vec(),
+                );
                 new_node = new_node.add_filter_equivalence_info(filter)?;
                 Ok(FilterPushdownPropagation {
                     filters: res.filters,
