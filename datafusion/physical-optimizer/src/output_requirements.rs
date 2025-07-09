@@ -31,6 +31,7 @@ use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{Result, Statistics};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::Distribution;
+use datafusion_physical_expr_common::physical_expr::format_physical_expr_list;
 use datafusion_physical_expr_common::sort_expr::OrderingRequirements;
 use datafusion_physical_plan::projection::{
     make_with_child, update_expr, update_ordering_requirement, ProjectionExec,
@@ -144,7 +145,9 @@ impl DisplayAs for OutputRequirementExec {
                         let pairs: Vec<String> = lex
                             .iter()
                             .map(|req| {
-                                let expr_str = format!("{}", req.expr);
+                                let expr_str =
+                                    format_physical_expr_list([req.expr.as_ref()])
+                                        .to_string();
                                 if let Some(options) = &req.options {
                                     let direction =
                                         if options.descending { "desc" } else { "asc" };
