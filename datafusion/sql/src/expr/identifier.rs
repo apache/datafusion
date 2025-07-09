@@ -50,7 +50,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             // interpret names with '.' as if they were
             // compound identifiers, but this is not a compound
             // identifier. (e.g. it is "foo.bar" not foo.bar)
-            let normalize_ident = self.ident_normalizer.normalize(id);
+            // let normalize_ident = self.ident_normalizer.normalize(id);
+            let normalize_ident = id.value;
 
             // Check for qualified field with unqualified name
             if let Ok((qualifier, _)) =
@@ -76,7 +77,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     // Found an exact match on a qualified name in the outer plan schema, so this is an outer reference column
                     return Ok(Expr::OuterReferenceColumn(
                         field.data_type().clone(),
-                        Column::from((qualifier, field)),
+                        Column::new(qualifier.cloned(), normalize_ident),
                     ));
                 }
             }
@@ -101,17 +102,14 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         if ids.len() < 2 {
             return internal_err!("Not a compound identifier: {ids:?}");
         }
-
+        let col_name = ids.last().unwrap().clone();
         let ids_span = Span::union_iter(
             ids.iter()
                 .filter_map(|id| Span::try_from_sqlparser_span(id.span)),
         );
 
         if ids[0].value.starts_with('@') {
-            let var_names: Vec<_> = ids
-                .into_iter()
-                .map(|id| self.ident_normalizer.normalize(id))
-                .collect();
+            let var_names: Vec<_> = ids.into_iter().map(|id| id.value).collect();
             let ty = self
                 .context_provider
                 .get_variable_type(&var_names)
@@ -149,8 +147,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     plan_err!("could not parse compound identifier from {ids:?}")
                 }
                 // Found matching field with no spare identifier(s)
-                Some((field, qualifier, _nested_names)) => {
-                    let mut column = Column::from((qualifier, field));
+                Some((_field, qualifier, _nested_names)) => {
+                    let mut column = Column::new(qualifier.cloned(), col_name.value);
                     if self.options.collect_spans {
                         if let Some(span) = ids_span {
                             column.spans_mut().add_span(span);
@@ -183,7 +181,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                                     // Found an exact match on a qualified name in the outer plan schema, so this is an outer reference column
                                     Ok(Expr::OuterReferenceColumn(
                                         field.data_type().clone(),
-                                        Column::from((qualifier, field)),
+                                        Column::new(qualifier.cloned(), col_name.value),
                                     ))
                                 }
                                 // Found no matching field, will return a default

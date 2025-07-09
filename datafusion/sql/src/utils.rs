@@ -155,7 +155,12 @@ fn check_column_satisfies_expr(
     expr: &Expr,
     purpose: CheckColumnsSatisfyExprsPurpose,
 ) -> Result<()> {
-    if !columns.contains(expr) {
+    if !columns.iter().any(|c| match (c, expr) {
+        (Expr::Column(c), Expr::Column(c2)) => {
+            c.name.to_lowercase() == c2.name.to_lowercase() && c.relation == c2.relation
+        }
+        _ => false, // This should be unreachable
+    }) {
         let diagnostic = Diagnostic::new_error(
             purpose.diagnostic_message(expr),
             expr.spans().and_then(|spans| spans.first()),

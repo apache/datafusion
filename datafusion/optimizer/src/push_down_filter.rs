@@ -1352,7 +1352,7 @@ pub fn replace_cols_by_name(
 ) -> Result<Expr> {
     e.transform_up(|expr| {
         Ok(if let Expr::Column(c) = &expr {
-            match replace_map.get(&c.flat_name()) {
+            match replace_map.get(&c.flat_name().to_lowercase()) {
                 Some(new_c) => Transformed::yes(new_c.clone()),
                 None => Transformed::no(expr),
             }
