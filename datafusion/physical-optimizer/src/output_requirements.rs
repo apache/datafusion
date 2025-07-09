@@ -138,7 +138,7 @@ impl DisplayAs for OutputRequirementExec {
     ) -> std::fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(f, "OutputRequirementExec")
+                write!(f, "OutputRequirementExec: order_requirement={:?}, dist_requirement={}", self.order_requirement, self.dist_requirement)
             }
             DisplayFormatType::TreeRender => {
                 // TODO: collect info
