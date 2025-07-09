@@ -164,7 +164,7 @@ impl DisplayAs for OutputRequirementExec {
 
                 write!(
                     f,
-                    "OutputRequirementExec: order_by=[{}], dist_by=[{}]",
+                    "OutputRequirementExec: order_by={}, dist_by={}",
                     order_cols, self.dist_requirement
                 )
             }
