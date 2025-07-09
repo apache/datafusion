@@ -522,6 +522,83 @@ impl Stream for ObservedStream {
     }
 }
 
+pin_project! {
+    /// Stream wrapper that splits large [`RecordBatch`]es into smaller batches.
+    ///
+    /// This ensures upstream operators receive batches no larger than
+    /// `batch_size`, which can improve parallelism when data sources
+    /// generate very large batches.
+    pub struct BatchSplitStream {
+        #[pin]
+        input: SendableRecordBatchStream,
+        schema: SchemaRef,
+        batch_size: usize,
+        current: Option<RecordBatch>,
+        offset: usize,
+    }
+}
+
+impl BatchSplitStream {
+    /// Minimum batch size required to enable splitting.
+    pub const MIN_BATCH_SIZE: usize = 1024;
+
+    /// Create a new [`BatchSplitStream`]
+    pub fn new(input: SendableRecordBatchStream, batch_size: usize) -> Self {
+        let schema = input.schema();
+        Self {
+            input,
+            schema,
+            batch_size,
+            current: None,
+            offset: 0,
+        }
+    }
+}
+
+impl Stream for BatchSplitStream {
+    type Item = Result<RecordBatch>;
+
+    fn poll_next(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Self::Item>> {
+        loop {
+            if let Some(batch) = self.current.take() {
+                let remaining = batch.num_rows() - self.offset;
+                let to_take = remaining.min(self.batch_size);
+                let out = batch.slice(self.offset, to_take);
+                self.offset += to_take;
+                if self.offset < batch.num_rows() {
+                    self.current = Some(batch);
+                } else {
+                    self.offset = 0;
+                }
+                return Poll::Ready(Some(Ok(out)));
+            }
+
+            match self.input.as_mut().poll_next(cx) {
+                Poll::Ready(Some(Ok(batch))) => {
+                    if batch.num_rows() <= self.batch_size {
+                        return Poll::Ready(Some(Ok(batch)));
+                    } else {
+                        self.current = Some(batch);
+                        continue;
+                    }
+                }
+                Poll::Ready(Some(Err(e))) => return Poll::Ready(Some(Err(e))),
+                Poll::Ready(None) => return Poll::Ready(None),
+                Poll::Pending => return Poll::Pending,
+            }
+        }
+    }
+}
+
+impl RecordBatchStream for BatchSplitStream {
+    fn schema(&self) -> SchemaRef {
+        Arc::clone(&self.schema)
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
