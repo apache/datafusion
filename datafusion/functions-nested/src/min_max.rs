@@ -28,7 +28,7 @@ use datafusion_doc::Documentation;
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
-use datafusion_functions_aggregate::min_max;
+use datafusion_functions_aggregate_common::min_max::{max_batch, min_batch};
 use datafusion_macros::user_doc;
 use itertools::Itertools;
 use std::any::Any;
@@ -123,22 +123,102 @@ impl ScalarUDFImpl for ArrayMax {
 pub fn array_max_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     let [array] = take_function_args("array_max", args)?;
     match array.data_type() {
-        List(_) => general_array_max(as_list_array(array)?),
-        LargeList(_) => general_array_max(as_large_list_array(array)?),
+        List(_) => array_min_max_helper(as_list_array(array)?, max_batch),
+        LargeList(_) => array_min_max_helper(as_large_list_array(array)?, max_batch),
         arg_type => exec_err!("array_max does not support type: {arg_type}"),
     }
 }
 
-fn general_array_max<O: OffsetSizeTrait>(
+make_udf_expr_and_func!(
+    ArrayMin,
+    array_min,
+    array,
+    "returns the minimum value in the array",
+    array_min_udf
+);
+#[user_doc(
+    doc_section(label = "Array Functions"),
+    description = "Returns the minimum value in the array.",
+    syntax_example = "array_min(array)",
+    sql_example = r#"```sql
+> select array_min([3,1,4,2]);
++-----------------------------------------+
+| array_min(List([3,1,4,2]))              |
++-----------------------------------------+
+| 1                                       |
++-----------------------------------------+
+```"#,
+    argument(
+        name = "array",
+        description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
+    )
+)]
+#[derive(Debug)]
+struct ArrayMin {
+    signature: Signature,
+}
+
+impl Default for ArrayMin {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ArrayMin {
+    fn new() -> Self {
+        Self {
+            signature: Signature::array(Volatility::Immutable),
+        }
+    }
+}
+
+impl ScalarUDFImpl for ArrayMin {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        "array_min"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        let [array] = take_function_args(self.name(), arg_types)?;
+        match array {
+            List(field) | LargeList(field) => Ok(field.data_type().clone()),
+            arg_type => plan_err!("{} does not support type {}", self.name(), arg_type),
+        }
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        make_scalar_function(array_min_inner)(&args.args)
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
+    }
+}
+
+pub fn array_min_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+    let [array] = take_function_args("array_min", args)?;
+    match array.data_type() {
+        List(_) => array_min_max_helper(as_list_array(array)?, min_batch),
+        LargeList(_) => array_min_max_helper(as_large_list_array(array)?, min_batch),
+        arg_type => exec_err!("array_min does not support type: {arg_type}"),
+    }
+}
+
+fn array_min_max_helper<O: OffsetSizeTrait>(
     array: &GenericListArray<O>,
+    agg_fn: fn(&ArrayRef) -> Result<ScalarValue>,
 ) -> Result<ArrayRef> {
     let null_value = ScalarValue::try_from(array.value_type())?;
     let result_vec: Vec<ScalarValue> = array
         .iter()
-        .map(|arr| {
-            arr.as_ref()
-                .map_or_else(|| Ok(null_value.clone()), min_max::max_batch)
-        })
+        .map(|arr| arr.as_ref().map_or_else(|| Ok(null_value.clone()), agg_fn))
         .try_collect()?;
     ScalarValue::iter_to_array(result_vec)
 }

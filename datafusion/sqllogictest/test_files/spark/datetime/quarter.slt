@@ -25,4 +25,3 @@
 ## PySpark 3.5.5 Result: {'quarter(2016-08-31)': 3, 'typeof(quarter(2016-08-31))': 'int', 'typeof(2016-08-31)': 'string'}
 #query
 #SELECT quarter('2016-08-31'::string);
-

@@ -49,8 +49,8 @@ usage() {
 Orchestrates running benchmarks against DataFusion checkouts
 
 Usage:
-$0 data [benchmark] [query]
-$0 run [benchmark]
+$0 data [benchmark]
+$0 run [benchmark] [query]
 $0 compare <branch1> <branch2>
 $0 compare_detail <branch1> <branch2>
 $0 venv
@@ -89,6 +89,7 @@ tpch_mem10:             TPCH inspired benchmark on Scale Factor (SF) 10 (~10GB),
 
 # Extended TPC-H Benchmarks
 sort_tpch:              Benchmark of sorting speed for end-to-end sort queries on TPC-H dataset (SF=1)
+sort_tpch10:            Benchmark of sorting speed for end-to-end sort queries on TPC-H dataset (SF=10)
 topk_tpch:              Benchmark of top-k (sorting with limit) queries on TPC-H dataset (SF=1)
 external_aggr:          External aggregation benchmark on TPC-H dataset (SF=1)
 
@@ -250,6 +251,10 @@ main() {
                     # same data as for tpch
                     data_tpch "1"
                     ;;
+                sort_tpch10)
+                    # same data as for tpch10
+                    data_tpch "10"
+                    ;;
                 topk_tpch)
                     # same data as for tpch
                     data_tpch "1"
@@ -268,10 +273,15 @@ main() {
             RESULTS_NAME=${RESULTS_NAME:-"${BRANCH_NAME}"}
             RESULTS_DIR=${RESULTS_DIR:-"$SCRIPT_DIR/results/$RESULTS_NAME"}
 
+            # Optional query filter to run specific query
+            QUERY=${ARG3}
+            QUERY_ARG=$([ -n "$QUERY" ] && echo "--query ${QUERY}" || echo "")
+
             echo "***************************"
             echo "DataFusion Benchmark Script"
             echo "COMMAND: ${COMMAND}"
             echo "BENCHMARK: ${BENCHMARK}"
+            echo "QUERY: ${QUERY:-All}"
             echo "DATAFUSION_DIR: ${DATAFUSION_DIR}"
             echo "BRANCH_NAME: ${BRANCH_NAME}"
             echo "DATA_DIR: ${DATA_DIR}"
@@ -377,7 +387,10 @@ main() {
                     run_external_aggr
                     ;;
                 sort_tpch)
-                    run_sort_tpch
+                    run_sort_tpch "1"
+                    ;;
+                sort_tpch10)
+                    run_sort_tpch "10"
                     ;;
                 topk_tpch)
                     run_topk_tpch
@@ -486,11 +499,9 @@ run_tpch() {
     RESULTS_FILE="${RESULTS_DIR}/tpch_sf${SCALE_FACTOR}.json"
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running tpch benchmark..."
-    # Optional query filter to run specific query
-    QUERY=$([ -n "$ARG3" ] && echo "--query $ARG3" || echo "")
 
     FORMAT=$2
-    debug_run $CARGO_COMMAND --bin tpch -- benchmark datafusion --iterations 5 --path "${TPCH_DIR}" --prefer_hash_join "${PREFER_HASH_JOIN}" --format ${FORMAT} -o "${RESULTS_FILE}" $QUERY
+    debug_run $CARGO_COMMAND --bin tpch -- benchmark datafusion --iterations 5 --path "${TPCH_DIR}" --prefer_hash_join "${PREFER_HASH_JOIN}" --format ${FORMAT} -o "${RESULTS_FILE}" ${QUERY_ARG}
 }
 
 # Runs the tpch in memory
@@ -505,10 +516,8 @@ run_tpch_mem() {
     RESULTS_FILE="${RESULTS_DIR}/tpch_mem_sf${SCALE_FACTOR}.json"
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running tpch_mem benchmark..."
-    # Optional query filter to run specific query
-    QUERY=$([ -n "$ARG3" ] && echo "--query $ARG3" || echo "")
     # -m means in memory
-    debug_run $CARGO_COMMAND --bin tpch -- benchmark datafusion --iterations 5 --path "${TPCH_DIR}" --prefer_hash_join "${PREFER_HASH_JOIN}" -m --format parquet -o "${RESULTS_FILE}" $QUERY
+    debug_run $CARGO_COMMAND --bin tpch -- benchmark datafusion --iterations 5 --path "${TPCH_DIR}" --prefer_hash_join "${PREFER_HASH_JOIN}" -m --format parquet -o "${RESULTS_FILE}" ${QUERY_ARG}
 }
 
 # Runs the cancellation benchmark
@@ -586,7 +595,7 @@ run_clickbench_1() {
     RESULTS_FILE="${RESULTS_DIR}/clickbench_1.json"
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running clickbench (1 file) benchmark..."
-    debug_run $CARGO_COMMAND --bin dfbench -- clickbench  --iterations 5 --path "${DATA_DIR}/hits.parquet"  --queries-path "${SCRIPT_DIR}/queries/clickbench/queries.sql" -o "${RESULTS_FILE}"
+    debug_run $CARGO_COMMAND --bin dfbench -- clickbench  --iterations 5 --path "${DATA_DIR}/hits.parquet"  --queries-path "${SCRIPT_DIR}/queries/clickbench/queries" -o "${RESULTS_FILE}" ${QUERY_ARG}
 }
 
  # Runs the clickbench benchmark with the partitioned parquet files
@@ -594,7 +603,7 @@ run_clickbench_partitioned() {
     RESULTS_FILE="${RESULTS_DIR}/clickbench_partitioned.json"
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running clickbench (partitioned, 100 files) benchmark..."
-    debug_run $CARGO_COMMAND --bin dfbench -- clickbench  --iterations 5 --path "${DATA_DIR}/hits_partitioned" --queries-path "${SCRIPT_DIR}/queries/clickbench/queries.sql" -o "${RESULTS_FILE}"
+    debug_run $CARGO_COMMAND --bin dfbench -- clickbench  --iterations 5 --path "${DATA_DIR}/hits_partitioned" --queries-path "${SCRIPT_DIR}/queries/clickbench/queries" -o "${RESULTS_FILE}" ${QUERY_ARG}
 }
 
 # Runs the clickbench "extended" benchmark with a single large parquet file
@@ -602,7 +611,7 @@ run_clickbench_extended() {
     RESULTS_FILE="${RESULTS_DIR}/clickbench_extended.json"
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running clickbench (1 file) extended benchmark..."
-    debug_run $CARGO_COMMAND --bin dfbench -- clickbench  --iterations 5 --path "${DATA_DIR}/hits.parquet" --queries-path "${SCRIPT_DIR}/queries/clickbench/extended.sql" -o "${RESULTS_FILE}"
+    debug_run $CARGO_COMMAND --bin dfbench -- clickbench  --iterations 5 --path "${DATA_DIR}/hits.parquet" --queries-path "${SCRIPT_DIR}/queries/clickbench/extended" -o "${RESULTS_FILE}" ${QUERY_ARG}
 }
 
 # Downloads the csv.gz files IMDB datasets from Peter Boncz's homepage(one of the JOB paper authors)
@@ -717,7 +726,7 @@ run_imdb() {
     RESULTS_FILE="${RESULTS_DIR}/imdb.json"
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running imdb benchmark..."
-    debug_run $CARGO_COMMAND --bin imdb -- benchmark datafusion --iterations 5 --path "${IMDB_DIR}" --prefer_hash_join "${PREFER_HASH_JOIN}" --format parquet -o "${RESULTS_FILE}"
+    debug_run $CARGO_COMMAND --bin imdb -- benchmark datafusion --iterations 5 --path "${IMDB_DIR}" --prefer_hash_join "${PREFER_HASH_JOIN}" --format parquet -o "${RESULTS_FILE}" ${QUERY_ARG}
 }
 
 data_h2o() {
@@ -912,7 +921,8 @@ run_h2o() {
         --iterations 3 \
         --path "${H2O_DIR}/${FILE_NAME}" \
         --queries-path "${QUERY_FILE}" \
-        -o "${RESULTS_FILE}"
+        -o "${RESULTS_FILE}" \
+         ${QUERY_ARG}
 }
 
 # Utility function to run h2o join/window benchmark
@@ -963,7 +973,8 @@ h2o_runner() {
         --iterations 3 \
         --join-paths "${H2O_DIR}/${X_TABLE_FILE_NAME},${H2O_DIR}/${SMALL_TABLE_FILE_NAME},${H2O_DIR}/${MEDIUM_TABLE_FILE_NAME},${H2O_DIR}/${LARGE_TABLE_FILE_NAME}" \
         --queries-path "${QUERY_FILE}" \
-        -o "${RESULTS_FILE}"
+        -o "${RESULTS_FILE}" \
+         ${QUERY_ARG}
 }
 
 # Runners for h2o join benchmark
@@ -989,17 +1000,22 @@ run_external_aggr() {
     # number-of-partitions), and by default `--partitions` is set to number of
     # CPU cores, we set a constant number of partitions to prevent this
     # benchmark to fail on some machines.
-    debug_run $CARGO_COMMAND --bin external_aggr -- benchmark --partitions 4 --iterations 5 --path "${TPCH_DIR}" -o "${RESULTS_FILE}"
+    debug_run $CARGO_COMMAND --bin external_aggr -- benchmark --partitions 4 --iterations 5 --path "${TPCH_DIR}" -o "${RESULTS_FILE}" ${QUERY_ARG}
 }
 
 # Runs the sort integration benchmark
 run_sort_tpch() {
-    TPCH_DIR="${DATA_DIR}/tpch_sf1"
-    RESULTS_FILE="${RESULTS_DIR}/sort_tpch.json"
+    SCALE_FACTOR=$1
+    if [ -z "$SCALE_FACTOR" ] ; then
+        echo "Internal error: Scale factor not specified"
+        exit 1
+    fi
+    TPCH_DIR="${DATA_DIR}/tpch_sf${SCALE_FACTOR}"
+    RESULTS_FILE="${RESULTS_DIR}/sort_tpch${SCALE_FACTOR}.json"
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running sort tpch benchmark..."
 
-    debug_run $CARGO_COMMAND --bin dfbench -- sort-tpch --iterations 5 --path "${TPCH_DIR}" -o "${RESULTS_FILE}"
+    debug_run $CARGO_COMMAND --bin dfbench -- sort-tpch --iterations 5 --path "${TPCH_DIR}" -o "${RESULTS_FILE}" ${QUERY_ARG}
 }
 
 # Runs the sort tpch integration benchmark with limit 100 (topk)
@@ -1009,7 +1025,7 @@ run_topk_tpch() {
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running topk tpch benchmark..."
 
-    $CARGO_COMMAND --bin dfbench -- sort-tpch --iterations 5 --path "${TPCH_DIR}" -o "${RESULTS_FILE}" --limit 100
+    $CARGO_COMMAND --bin dfbench -- sort-tpch --iterations 5 --path "${TPCH_DIR}" -o "${RESULTS_FILE}" --limit 100 ${QUERY_ARG}
 }
 
 

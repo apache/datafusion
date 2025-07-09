@@ -22,9 +22,9 @@ use std::fmt;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use crate::execution_plan::{Boundedness, EmissionType};
+use crate::coop::cooperative;
+use crate::execution_plan::{Boundedness, EmissionType, SchedulingType};
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
-use crate::yield_stream::wrap_yield_stream;
 use crate::{
     DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
     RecordBatchStream, SendableRecordBatchStream, Statistics,
@@ -37,6 +37,7 @@ use datafusion_execution::memory_pool::MemoryReservation;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::EquivalenceProperties;
 
+use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 use futures::Stream;
 use parking_lot::RwLock;
 
@@ -133,6 +134,10 @@ impl RecordBatchStream for MemoryStream {
 }
 
 pub trait LazyBatchGenerator: Send + Sync + fmt::Debug + fmt::Display {
+    fn boundedness(&self) -> Boundedness {
+        Boundedness::Bounded
+    }
+
     /// Generate the next batch, return `None` when no more batches are available
     fn generate_next_batch(&mut self) -> Result<Option<RecordBatch>>;
 }
@@ -148,8 +153,6 @@ pub struct LazyMemoryExec {
     batch_generators: Vec<Arc<RwLock<dyn LazyBatchGenerator>>>,
     /// Plan properties cache storing equivalence properties, partitioning, and execution mode
     cache: PlanProperties,
-    /// Indicates whether to enable cooperative yielding mode (defaults to `true`).
-    cooperative: bool,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
 }
@@ -160,30 +163,61 @@ impl LazyMemoryExec {
         schema: SchemaRef,
         generators: Vec<Arc<RwLock<dyn LazyBatchGenerator>>>,
     ) -> Result<Self> {
+        let boundedness = generators
+            .iter()
+            .map(|g| g.read().boundedness())
+            .reduce(|acc, b| match acc {
+                Boundedness::Bounded => b,
+                Boundedness::Unbounded {
+                    requires_infinite_memory,
+                } => {
+                    let acc_infinite_memory = requires_infinite_memory;
+                    match b {
+                        Boundedness::Bounded => acc,
+                        Boundedness::Unbounded {
+                            requires_infinite_memory,
+                        } => Boundedness::Unbounded {
+                            requires_infinite_memory: requires_infinite_memory
+                                || acc_infinite_memory,
+                        },
+                    }
+                }
+            })
+            .unwrap_or(Boundedness::Bounded);
+
         let cache = PlanProperties::new(
             EquivalenceProperties::new(Arc::clone(&schema)),
             Partitioning::RoundRobinBatch(generators.len()),
             EmissionType::Incremental,
-            Boundedness::Bounded,
-        );
+            boundedness,
+        )
+        .with_scheduling_type(SchedulingType::Cooperative);
+
         Ok(Self {
             schema,
             batch_generators: generators,
             cache,
-            cooperative: true, // Cooperative yielding mode defaults to true
             metrics: ExecutionPlanMetricsSet::new(),
         })
     }
 
-    /// Set the Yielding mode for the execution plan
-    /// It defaults to `true`, meaning it will yield back to the runtime for cooperative scheduling.
-    pub fn with_cooperative_yielding(mut self, cooperative: bool) -> Self {
-        self.cooperative = cooperative;
-        self
+    pub fn try_set_partitioning(&mut self, partitioning: Partitioning) -> Result<()> {
+        if partitioning.partition_count() != self.batch_generators.len() {
+            internal_err!(
+                "Partition count must match generator count: {} != {}",
+                partitioning.partition_count(),
+                self.batch_generators.len()
+            )
+        } else {
+            self.cache.partitioning = partitioning;
+            Ok(())
+        }
     }
 
-    pub fn set_boundedness(&mut self, boundedness: Boundedness) {
-        self.cache.boundedness = boundedness;
+    pub fn add_ordering(&mut self, ordering: impl IntoIterator<Item = PhysicalSortExpr>) {
+        self.cache
+            .eq_properties
+            .add_orderings(std::iter::once(ordering));
     }
 }
 
@@ -263,7 +297,7 @@ impl ExecutionPlan for LazyMemoryExec {
     fn execute(
         &self,
         partition: usize,
-        context: Arc<TaskContext>,
+        _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         if partition >= self.batch_generators.len() {
             return internal_err!(
@@ -275,16 +309,12 @@ impl ExecutionPlan for LazyMemoryExec {
 
         let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
 
-        let stream = Box::pin(LazyMemoryStream {
+        let stream = LazyMemoryStream {
             schema: Arc::clone(&self.schema),
             generator: Arc::clone(&self.batch_generators[partition]),
             baseline_metrics,
-        });
-        Ok(wrap_yield_stream(stream, &context, self.cooperative))
-    }
-
-    fn with_cooperative_yields(self: Arc<Self>) -> Option<Arc<dyn ExecutionPlan>> {
-        self.cooperative.then_some(self)
+        };
+        Ok(Box::pin(cooperative(stream)))
     }
 
     fn metrics(&self) -> Option<MetricsSet> {

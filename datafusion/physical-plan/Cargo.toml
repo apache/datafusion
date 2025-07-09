@@ -36,7 +36,8 @@ workspace = true
 
 [features]
 force_hash_collisions = []
-bench = []
+tokio_coop = []
+tokio_coop_fallback = []
 
 [lib]
 name = "datafusion_physical_plan"
@@ -91,4 +92,3 @@ name = "spill_io"
 [[bench]]
 harness = false
 name = "sort_preserving_merge"
-required-features = ["bench"]

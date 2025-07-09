@@ -30,4 +30,3 @@
 ## PySpark 3.5.5 Result: {"abs(INTERVAL '-1-1' YEAR TO MONTH)": 13, "typeof(abs(INTERVAL '-1-1' YEAR TO MONTH))": 'interval year to month', "typeof(INTERVAL '-1-1' YEAR TO MONTH)": 'interval year to month'}
 #query
 #SELECT abs(INTERVAL '-1-1' YEAR TO MONTH::interval year to month);
-

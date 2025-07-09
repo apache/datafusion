@@ -6137,3 +6137,29 @@ async fn test_dataframe_macro() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn test_copy_schema() -> Result<()> {
+    let tmp_dir = TempDir::new()?;
+
+    let session_state = SessionStateBuilder::new_with_default_features().build();
+
+    let session_ctx = SessionContext::new_with_state(session_state);
+
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, true)]));
+
+    // Create and register the source table with the provided schema and data
+    let source_table = Arc::new(MemTable::try_new(schema.clone(), vec![vec![]])?);
+    session_ctx.register_table("source_table", source_table.clone())?;
+
+    let target_path = tmp_dir.path().join("target.csv");
+
+    let query = format!(
+        "COPY source_table TO '{:?}' STORED AS csv",
+        target_path.to_str().unwrap()
+    );
+
+    let result = session_ctx.sql(&query).await?;
+    assert_logical_expr_schema_eq_physical_expr_schema(result).await?;
+    Ok(())
+}

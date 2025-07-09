@@ -46,6 +46,7 @@ pub mod file_options;
 pub mod format;
 pub mod hash_utils;
 pub mod instant;
+pub mod nested_struct;
 mod null_equality;
 pub mod parsers;
 pub mod pruning;
@@ -138,10 +139,12 @@ pub mod __private {
     impl<T: Array + ?Sized> DowncastArrayHelper for T {
         fn downcast_array_helper<U: Any>(&self) -> Result<&U> {
             self.as_any().downcast_ref().ok_or_else(|| {
+                let actual_type = self.data_type();
+                let desired_type_name = type_name::<U>();
                 _internal_datafusion_err!(
                     "could not cast array of type {} to {}",
-                    self.data_type(),
-                    type_name::<U>()
+                    actual_type,
+                    desired_type_name
                 )
             })
         }
