@@ -762,6 +762,42 @@ mod test {
         assert!(stream.next().await.is_none());
     }
 
+    #[tokio::test]
+    async fn batch_split_stream_basic_functionality() {
+        use arrow::array::{Int32Array, RecordBatch};
+        use futures::stream::{self, StreamExt};
+
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+
+        // Create a large batch that should be split
+        let large_batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from((0..2000).collect::<Vec<_>>()))],
+        )
+        .unwrap();
+
+        // Create a stream with the large batch
+        let input_stream = stream::iter(vec![Ok(large_batch)]);
+        let adapter = RecordBatchStreamAdapter::new(Arc::clone(&schema), input_stream);
+        let batch_stream = Box::pin(adapter) as SendableRecordBatchStream;
+
+        // Create a BatchSplitStream with batch_size = 500
+        let mut split_stream = BatchSplitStream::new(batch_stream, 500);
+
+        let mut total_rows = 0;
+        let mut batch_count = 0;
+
+        while let Some(result) = split_stream.next().await {
+            let batch = result.unwrap();
+            assert!(batch.num_rows() <= 500, "Batch size should not exceed 500");
+            total_rows += batch.num_rows();
+            batch_count += 1;
+        }
+
+        assert_eq!(total_rows, 2000, "All rows should be preserved");
+        assert_eq!(batch_count, 4, "Should have 4 batches of 500 rows each");
+    }
+
     /// Consumes all the input's partitions into a
     /// RecordBatchReceiverStream and runs it to completion
     ///
