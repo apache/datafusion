@@ -325,7 +325,14 @@ impl ExecutionPlan for DataSourceExec {
     ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
         // Push any remaining filters into our data source
         let res = self.data_source.try_pushdown_filters(
-            collect_supported(&child_pushdown_result.parent_filters),
+            child_pushdown_result
+                .parent_filters
+                .into_iter()
+                .map(|f| match f {
+                    PredicateSupport::Supported(expr) => expr,
+                    PredicateSupport::Unsupported(expr) => expr,
+                })
+                .collect(),
             config,
         )?;
         match res.updated_node {
@@ -336,7 +343,15 @@ impl ExecutionPlan for DataSourceExec {
                     Self::compute_properties(Arc::clone(&new_node.data_source));
 
                 // Recompute equivalence info using new filters
-                let filter = conjunction(collect_supported(&res.filters));
+                let filter = conjunction(
+                    res.filters
+                        .iter()
+                        .filter_map(|f| match f {
+                            PredicateSupport::Supported(expr) => Some(Arc::clone(expr)),
+                            PredicateSupport::Unsupported(_) => None,
+                        })
+                        .collect_vec(),
+                );
                 new_node = new_node.add_filter_equivalence_info(filter)?;
                 Ok(FilterPushdownPropagation {
                     filters: res.filters,
@@ -349,20 +364,6 @@ impl ExecutionPlan for DataSourceExec {
             }),
         }
     }
-}
-
-// Collect supported filters into a Vec, without removing them from the original
-// [`PredicateSupport`].
-fn collect_supported(
-    predicate_supports: &Vec<PredicateSupport>,
-) -> Vec<Arc<dyn PhysicalExpr>> {
-    predicate_supports
-        .iter()
-        .filter_map(|f| match f {
-            PredicateSupport::Supported(expr) => Some(Arc::clone(expr)),
-            PredicateSupport::Unsupported(_) => None,
-        })
-        .collect_vec()
 }
 
 impl DataSourceExec {
