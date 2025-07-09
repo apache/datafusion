@@ -72,7 +72,7 @@ use arrow::record_batch::RecordBatch;
 use arrow::util::bit_util;
 use datafusion_common::utils::memory::estimate_memory_size;
 use datafusion_common::{
-    internal_datafusion_err, internal_err, plan_err, project_schema, qualified_name,
+    internal_datafusion_err, internal_err, plan_err, project_schema, 
     DataFusionError, JoinSide, JoinType, NullEquality, Result,
 };
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
@@ -1101,7 +1101,7 @@ pub fn update_hash(
     fifo_hashmap: bool,
 ) -> Result<()> {
     // calculate the hash values
-    let hash_values = create_hashes(&key_values, random_state, hashes_buffer)?;
+    let hash_values = create_hashes(key_values, random_state, hashes_buffer)?;
 
     // For usual JoinHashmap, the implementation is void.
     hash_map.extend_zero(key_values[0].len()); // number of rows in batch
