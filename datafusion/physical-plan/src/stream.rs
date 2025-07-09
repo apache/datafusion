@@ -608,7 +608,7 @@ impl BatchSplitStream {
     ///
     /// Returns the appropriate `Poll` result based on upstream state.
     /// Small batches are passed through directly, large batches are stored
-    /// for slicing.
+    /// for slicing and return the first slice immediately.
     fn poll_upstream(
         &mut self,
         cx: &mut Context<'_>,
@@ -619,10 +619,13 @@ impl BatchSplitStream {
                     // Small batch, pass through directly
                     Poll::Ready(Some(Ok(batch)))
                 } else {
-                    // Large batch, store for slicing
+                    // Large batch, store for slicing and return first slice
                     self.current_batch = Some(batch);
-                    // Signal that we need to continue the loop to slice
-                    Poll::Ready(None)
+                    // Immediately produce the first slice
+                    match self.next_sliced_batch() {
+                        Some(result) => Poll::Ready(Some(result)),
+                        None => Poll::Ready(None), // This should not happen
+                    }
                 }
             }
             Poll::Ready(Some(Err(e))) => Poll::Ready(Some(Err(e))),
@@ -645,20 +648,7 @@ impl Stream for BatchSplitStream {
         }
 
         // No current batch or current batch exhausted, poll upstream
-        loop {
-            match self.poll_upstream(cx) {
-                Poll::Ready(Some(batch)) => return Poll::Ready(Some(batch)),
-                Poll::Ready(None) => {
-                    // Large batch was stored for slicing, try to slice it
-                    if let Some(result) = self.next_sliced_batch() {
-                        return Poll::Ready(Some(result));
-                    }
-                    // This should not happen in normal operation
-                    continue;
-                }
-                Poll::Pending => return Poll::Pending,
-            }
-        }
+        self.poll_upstream(cx)
     }
 }
 
