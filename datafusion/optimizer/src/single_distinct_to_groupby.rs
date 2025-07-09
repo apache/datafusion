@@ -431,7 +431,7 @@ mod tests {
         assert_optimized_plan_equal!(
             plan,
             @r"
-        Projection: count(alias1) AS count(DISTINCT Int32(2) * test.b) [count(DISTINCT Int32(2) * test.b):Int64]
+        Projection: count(alias1) AS count(DISTINCT (Int32(2) * test.b)) [count(DISTINCT (Int32(2) * test.b)):Int64]
           Aggregate: groupBy=[[]], aggr=[[count(alias1)]] [count(alias1):Int64]
             Aggregate: groupBy=[[Int32(2) * test.b AS alias1]], aggr=[[]] [alias1:Int64]
               TableScan: test [a:UInt32, b:UInt32, c:UInt32]
@@ -536,7 +536,7 @@ mod tests {
         assert_optimized_plan_equal!(
             plan,
             @r"
-        Projection: group_alias_0 AS test.a + Int32(1), count(alias1) AS count(DISTINCT test.c) [test.a + Int32(1):Int64, count(DISTINCT test.c):Int64]
+        Projection: group_alias_0 AS (test.a + Int32(1)), count(alias1) AS count(DISTINCT test.c) [(test.a + Int32(1)):Int64, count(DISTINCT test.c):Int64]
           Aggregate: groupBy=[[group_alias_0]], aggr=[[count(alias1)]] [group_alias_0:Int64, count(alias1):Int64]
             Aggregate: groupBy=[[test.a + Int32(1) AS group_alias_0, test.c AS alias1]], aggr=[[]] [group_alias_0:Int64, alias1:UInt32]
               TableScan: test [a:UInt32, b:UInt32, c:UInt32]

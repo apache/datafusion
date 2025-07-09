@@ -1454,7 +1454,7 @@ fn select_aggregate_with_group_by_with_having_using_derived_column_aggregate_not
         plan,
         @r#"
         Projection: person.first_name, max(person.age)
-          Filter: max(person.age) > Int64(100) AND min(person.id - Int64(2)) < Int64(50)
+          Filter: max(person.age) > Int64(100) AND min((person.id - Int64(2))) < Int64(50)
             Aggregate: groupBy=[[person.first_name]], aggr=[[max(person.age), min(person.id - Int64(2))]]
               TableScan: person
         "#
@@ -1821,7 +1821,7 @@ fn select_simple_aggregate_with_groupby_non_column_expression_selected_and_resol
     assert_snapshot!(
         plan,
         @r#"
-        Projection: person.age + Int64(1), min(person.first_name)
+        Projection: (person.age + Int64(1)), min(person.first_name)
           Aggregate: groupBy=[[person.age + Int64(1)]], aggr=[[min(person.first_name)]]
             TableScan: person
         "#
@@ -1832,7 +1832,7 @@ fn select_simple_aggregate_with_groupby_non_column_expression_selected_and_resol
     assert_snapshot!(
         plan,
         @r#"
-        Projection: min(person.first_name), person.age + Int64(1)
+        Projection: min(person.first_name), (person.age + Int64(1))
           Aggregate: groupBy=[[person.age + Int64(1)]], aggr=[[min(person.first_name)]]
             TableScan: person
         "#
@@ -1847,7 +1847,7 @@ fn select_simple_aggregate_with_groupby_non_column_expression_nested_and_resolva
     assert_snapshot!(
         plan,
         @r#"
-        Projection: person.age + Int64(1) / Int64(2) * person.age + Int64(1), min(person.first_name)
+        Projection: (person.age + Int64(1)) / Int64(2) * (person.age + Int64(1)), min(person.first_name)
           Aggregate: groupBy=[[person.age + Int64(1)]], aggr=[[min(person.first_name)]]
             TableScan: person
         "#
@@ -1864,7 +1864,7 @@ fn select_simple_aggregate_with_groupby_non_column_expression_nested_and_not_res
     assert_snapshot!(
         err.strip_backtrace(),
         @r#"
-        Error during planning: Column in SELECT must be in GROUP BY or an aggregate function: While expanding wildcard, column "person.age" must appear in the GROUP BY clause or must be part of an aggregate function, currently only "person.age + Int64(1), min(person.first_name)" appears in the SELECT clause satisfies this requirement
+        Error during planning: Column in SELECT must be in GROUP BY or an aggregate function: While expanding wildcard, column "person.age" must appear in the GROUP BY clause or must be part of an aggregate function, currently only "(person.age + Int64(1)), min(person.first_name)" appears in the SELECT clause satisfies this requirement
         "#
     );
 }
@@ -1877,7 +1877,7 @@ fn select_simple_aggregate_with_groupby_non_column_expression_and_its_column_sel
     assert_snapshot!(
         err.strip_backtrace(),
         @r#"
-        Error during planning: Column in SELECT must be in GROUP BY or an aggregate function: While expanding wildcard, column "person.age" must appear in the GROUP BY clause or must be part of an aggregate function, currently only "person.age + Int64(1), min(person.first_name)" appears in the SELECT clause satisfies this requirement
+        Error during planning: Column in SELECT must be in GROUP BY or an aggregate function: While expanding wildcard, column "person.age" must appear in the GROUP BY clause or must be part of an aggregate function, currently only "(person.age + Int64(1)), min(person.first_name)" appears in the SELECT clause satisfies this requirement
         "#
     );
 }
@@ -1930,7 +1930,7 @@ fn select_aggregate_with_non_column_inner_expression_with_groupby() {
     assert_snapshot!(
         plan,
         @r#"
-        Projection: person.state, min(person.age + Int64(1))
+        Projection: person.state, min((person.age + Int64(1)))
           Aggregate: groupBy=[[person.state]], aggr=[[min(person.age + Int64(1))]]
             TableScan: person
         "#
@@ -2780,7 +2780,7 @@ fn empty_over_plus() {
     assert_snapshot!(
         plan,
         @r#"
-Projection: orders.order_id, max(orders.qty * Float64(1.1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+Projection: orders.order_id, max((orders.qty * Float64(1.1))) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
   WindowAggr: windowExpr=[[max(orders.qty * Float64(1.1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
     TableScan: orders
 "#
@@ -3230,7 +3230,7 @@ fn select_groupby_orderby() {
     assert_snapshot!(
         plan,
         @r#"
-Sort: avg(person.age) + avg(person.age) ASC NULLS LAST
+Sort: (avg(person.age) + avg(person.age)) ASC NULLS LAST
   Projection: avg(person.age) + avg(person.age), date_trunc(Utf8("month"), person.birth_date) AS birth_date
     Aggregate: groupBy=[[person.birth_date]], aggr=[[avg(person.age)]]
       TableScan: person
@@ -3690,7 +3690,7 @@ fn rank_partition_grouping() {
     assert_snapshot!(
         plan,
         @r#"
-Projection: sum(person.age) AS total_sum, person.state, person.last_name, grouping(person.state) + grouping(person.last_name) AS x, rank() PARTITION BY [grouping(person.state) + grouping(person.last_name), CASE WHEN grouping(person.last_name) = Int64(0) THEN person.state END] ORDER BY [sum(person.age) DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS the_rank
+Projection: sum(person.age) AS total_sum, person.state, person.last_name, grouping(person.state) + grouping(person.last_name) AS x, rank() PARTITION BY [(grouping(person.state) + grouping(person.last_name)), CASE WHEN (grouping(person.last_name) = Int64(0)) THEN person.state END] ORDER BY [sum(person.age) DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS the_rank
   WindowAggr: windowExpr=[[rank() PARTITION BY [grouping(person.state) + grouping(person.last_name), CASE WHEN grouping(person.last_name) = Int64(0) THEN person.state END] ORDER BY [sum(person.age) DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
     Aggregate: groupBy=[[ROLLUP (person.state, person.last_name)]], aggr=[[sum(person.age), grouping(person.state), grouping(person.last_name)]]
       TableScan: person

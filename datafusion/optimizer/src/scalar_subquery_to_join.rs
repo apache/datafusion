@@ -774,11 +774,11 @@ mod tests {
             plan,
             @r"
         Projection: customer.c_custkey [c_custkey:Int64]
-          Filter: customer.c_custkey = __scalar_sq_1.max(orders.o_custkey) + Int32(1) [c_custkey:Int64, c_name:Utf8, max(orders.o_custkey) + Int32(1):Int64;N, o_custkey:Int64;N, __always_true:Boolean;N]
-            Left Join:  Filter: customer.c_custkey = __scalar_sq_1.o_custkey [c_custkey:Int64, c_name:Utf8, max(orders.o_custkey) + Int32(1):Int64;N, o_custkey:Int64;N, __always_true:Boolean;N]
+          Filter: customer.c_custkey = __scalar_sq_1.(max(orders.o_custkey) + Int32(1)) [c_custkey:Int64, c_name:Utf8, (max(orders.o_custkey) + Int32(1)):Int64;N, o_custkey:Int64;N, __always_true:Boolean;N]
+            Left Join:  Filter: customer.c_custkey = __scalar_sq_1.o_custkey [c_custkey:Int64, c_name:Utf8, (max(orders.o_custkey) + Int32(1)):Int64;N, o_custkey:Int64;N, __always_true:Boolean;N]
               TableScan: customer [c_custkey:Int64, c_name:Utf8]
-              SubqueryAlias: __scalar_sq_1 [max(orders.o_custkey) + Int32(1):Int64;N, o_custkey:Int64, __always_true:Boolean]
-                Projection: max(orders.o_custkey) + Int32(1), orders.o_custkey, __always_true [max(orders.o_custkey) + Int32(1):Int64;N, o_custkey:Int64, __always_true:Boolean]
+              SubqueryAlias: __scalar_sq_1 [(max(orders.o_custkey) + Int32(1)):Int64;N, o_custkey:Int64, __always_true:Boolean]
+                Projection: max(orders.o_custkey) + Int32(1), orders.o_custkey, __always_true [(max(orders.o_custkey) + Int32(1)):Int64;N, o_custkey:Int64, __always_true:Boolean]
                   Aggregate: groupBy=[[orders.o_custkey, Boolean(true) AS __always_true]], aggr=[[max(orders.o_custkey)]] [o_custkey:Int64, __always_true:Boolean, max(orders.o_custkey):Int64;N]
                     TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
         "
