@@ -1013,16 +1013,9 @@ async fn collect_left_input(
     };
 
     let mut hashes_buffer = Vec::new();
-    let mut offset = 0;
-
-    // Updating hashmap starting from the last batch
 
     let batches_iter = batches.iter();
-    let mut coalescer = BatchCoalescer::new(schema, num_rows);
-    for batch in batches_iter {
-        coalescer.push_batch(batch.clone()).unwrap();
-    }
-    let single_batch = coalescer.next_completed_batch().unwrap();
+    let single_batch = concat_batches(&schema, batches_iter)?;
     let left_values = on_left
         .iter()
         .map(|c| {
