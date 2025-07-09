@@ -565,6 +565,71 @@ impl BatchSplitStream {
             offset: 0,
         }
     }
+
+    /// Attempt to produce the next sliced batch from the current batch.
+    ///
+    /// Returns `Some(batch)` if a slice was produced, `None` if the current batch
+    /// is exhausted and we need to poll upstream for more data.
+    fn next_sliced_batch(&mut self) -> Option<Result<RecordBatch>> {
+        let batch = self.current_batch.take()?;
+
+        // Wrap slicing logic in a panic-safe block
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let remaining = batch.num_rows() - self.offset;
+            let to_take = remaining.min(self.batch_size);
+            let out = batch.slice(self.offset, to_take);
+            (out, to_take)
+        }));
+
+        match result {
+            Ok((out, to_take)) => {
+                self.offset += to_take;
+                if self.offset < batch.num_rows() {
+                    // More data remains in this batch
+                    self.current_batch = Some(batch);
+                } else {
+                    // Batch is exhausted, reset offset
+                    self.offset = 0;
+                }
+                Some(Ok(out))
+            }
+            Err(_) => {
+                // Reset state on panic to avoid leaving the stream in an invalid state
+                self.current_batch = None;
+                self.offset = 0;
+                Some(Err(datafusion_common::DataFusionError::Internal(
+                    "Panic occurred during batch slicing operation".to_string(),
+                )))
+            }
+        }
+    }
+
+    /// Poll the upstream input for the next batch.
+    ///
+    /// Returns the appropriate `Poll` result based on upstream state.
+    /// Small batches are passed through directly, large batches are stored
+    /// for slicing.
+    fn poll_upstream(
+        &mut self,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<RecordBatch>>> {
+        match self.input.as_mut().poll_next(cx) {
+            Poll::Ready(Some(Ok(batch))) => {
+                if batch.num_rows() <= self.batch_size {
+                    // Small batch, pass through directly
+                    Poll::Ready(Some(Ok(batch)))
+                } else {
+                    // Large batch, store for slicing
+                    self.current_batch = Some(batch);
+                    // Signal that we need to continue the loop to slice
+                    Poll::Ready(None)
+                }
+            }
+            Poll::Ready(Some(Err(e))) => Poll::Ready(Some(Err(e))),
+            Poll::Ready(None) => Poll::Ready(None),
+            Poll::Pending => Poll::Pending,
+        }
+    }
 }
 
 impl Stream for BatchSplitStream {
@@ -574,31 +639,23 @@ impl Stream for BatchSplitStream {
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
-        loop {
-            if let Some(batch) = self.current_batch.take() {
-                let remaining = batch.num_rows() - self.offset;
-                let to_take = remaining.min(self.batch_size);
-                let out = batch.slice(self.offset, to_take);
-                self.offset += to_take;
-                if self.offset < batch.num_rows() {
-                    self.current_batch = Some(batch);
-                } else {
-                    self.offset = 0;
-                }
-                return Poll::Ready(Some(Ok(out)));
-            }
+        // First, try to produce a slice from the current batch
+        if let Some(result) = self.next_sliced_batch() {
+            return Poll::Ready(Some(result));
+        }
 
-            match self.input.as_mut().poll_next(cx) {
-                Poll::Ready(Some(Ok(batch))) => {
-                    if batch.num_rows() <= self.batch_size {
-                        return Poll::Ready(Some(Ok(batch)));
-                    } else {
-                        self.current_batch = Some(batch);
-                        continue;
+        // No current batch or current batch exhausted, poll upstream
+        loop {
+            match self.poll_upstream(cx) {
+                Poll::Ready(Some(batch)) => return Poll::Ready(Some(batch)),
+                Poll::Ready(None) => {
+                    // Large batch was stored for slicing, try to slice it
+                    if let Some(result) = self.next_sliced_batch() {
+                        return Poll::Ready(Some(result));
                     }
+                    // This should not happen in normal operation
+                    continue;
                 }
-                Poll::Ready(Some(Err(e))) => return Poll::Ready(Some(Err(e))),
-                Poll::Ready(None) => return Poll::Ready(None),
                 Poll::Pending => return Poll::Pending,
             }
         }
