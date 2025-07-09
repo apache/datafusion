@@ -351,6 +351,8 @@ impl ExecutionPlan for DataSourceExec {
     }
 }
 
+// Collect supported filters into a Vec, without removing them from the original
+// [`PredicateSupport`].
 fn collect_supported(
     predicate_supports: &Vec<PredicateSupport>,
 ) -> Vec<Arc<dyn PhysicalExpr>> {
