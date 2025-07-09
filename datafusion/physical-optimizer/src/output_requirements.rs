@@ -141,31 +141,31 @@ impl DisplayAs for OutputRequirementExec {
                 let order_cols = if let Some(reqs) = &self.order_requirement {
                     let (lexes, _) = reqs.clone().into_alternatives();
                     if let Some(lex) = lexes.first() {
-                        lex.iter()
-                            .map(|req| format!("{}", req.expr))
-                            .collect::<Vec<_>>()
-                            .join(", ")
+                        let pairs: Vec<String> = lex
+                            .iter()
+                            .map(|req| {
+                                let expr_str = format!("{}", req.expr);
+                                if let Some(options) = &req.options {
+                                    let direction =
+                                        if options.descending { "desc" } else { "asc" };
+                                    format!("({}, {})", expr_str, direction)
+                                } else {
+                                    format!("({}, unspecified)", expr_str)
+                                }
+                            })
+                            .collect();
+                        format!("[{}]", pairs.join(", "))
                     } else {
-                        "".to_string()
+                        "[]".to_string()
                     }
                 } else {
-                    "".to_string()
-                };
-
-                let dist_cols = match &self.dist_requirement {
-                    Distribution::SinglePartition => "single".to_string(),
-                    Distribution::HashPartitioned(exprs) => exprs
-                        .iter()
-                        .map(|expr| format!("{}", expr))
-                        .collect::<Vec<_>>()
-                        .join(", "),
-                    Distribution::UnspecifiedDistribution => "unspecified".to_string(),
+                    "[]".to_string()
                 };
 
                 write!(
                     f,
                     "OutputRequirementExec: order_by=[{}], dist_by=[{}]",
-                    order_cols, dist_cols
+                    order_cols, self.dist_requirement
                 )
             }
             DisplayFormatType::TreeRender => {
