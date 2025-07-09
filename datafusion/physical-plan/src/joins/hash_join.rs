@@ -1499,7 +1499,7 @@ impl HashJoinStream {
         let timer = self.join_metrics.join_time.timer();
 
         // if the left side is empty, we can skip the (potentially expensive) join operation
-        if build_side.left_data.hash_map.get_map().is_empty() && self.filter.is_none() {
+        if build_side.left_data.hash_map.is_empty() && self.filter.is_none() {
             let result = build_batch_empty_build_side(
                 &self.schema,
                 build_side.left_data.batch(),
