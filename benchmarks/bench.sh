@@ -95,7 +95,8 @@ external_aggr:          External aggregation benchmark on TPC-H dataset (SF=1)
 
 # ClickBench Benchmarks
 clickbench_1:           ClickBench queries against a single parquet file
-clickbench_partitioned: ClickBench queries against a partitioned (100 files) parquet
+clickbench_partitioned: ClickBench queries against partitioned (100 files) parquet
+clickbench_pushdown:    ClickBench queries against partitioned (100 files) parquet w/ filter_pushdown enabled
 clickbench_extended:    ClickBench \"inspired\" queries against a single parquet (DataFusion specific)
 
 # H2O.ai Benchmarks (Group By, Join, Window)
@@ -209,6 +210,9 @@ main() {
                 clickbench_partitioned)
                     data_clickbench_partitioned
                     ;;
+                clickbench_pushdown)
+                    data_clickbench_partitioned # same data as clickbench_partitioned
+                    ;;
                 clickbench_extended)
                     data_clickbench_1
                     ;;
@@ -307,6 +311,7 @@ main() {
                     run_sort
                     run_clickbench_1
                     run_clickbench_partitioned
+                    run_clickbench_pushdown
                     run_clickbench_extended
                     run_h2o "SMALL" "PARQUET" "groupby"
                     run_h2o "MEDIUM" "PARQUET" "groupby"
@@ -349,6 +354,9 @@ main() {
                     ;;
                 clickbench_partitioned)
                     run_clickbench_partitioned
+                    ;;
+                clickbench_pushdown)
+                    run_clickbench_pushdown
                     ;;
                 clickbench_extended)
                     run_clickbench_extended
@@ -598,13 +606,23 @@ run_clickbench_1() {
     debug_run $CARGO_COMMAND --bin dfbench -- clickbench  --iterations 5 --path "${DATA_DIR}/hits.parquet"  --queries-path "${SCRIPT_DIR}/queries/clickbench/queries" -o "${RESULTS_FILE}" ${QUERY_ARG}
 }
 
- # Runs the clickbench benchmark with the partitioned parquet files
+ # Runs the clickbench benchmark with the partitioned parquet dataset (100 files)
 run_clickbench_partitioned() {
     RESULTS_FILE="${RESULTS_DIR}/clickbench_partitioned.json"
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running clickbench (partitioned, 100 files) benchmark..."
     debug_run $CARGO_COMMAND --bin dfbench -- clickbench  --iterations 5 --path "${DATA_DIR}/hits_partitioned" --queries-path "${SCRIPT_DIR}/queries/clickbench/queries" -o "${RESULTS_FILE}" ${QUERY_ARG}
 }
+
+
+ # Runs the clickbench benchmark with the partitioned parquet files
+run_clickbench_pushdown() {
+    RESULTS_FILE="${RESULTS_DIR}/clickbench_partitioned.json"
+    echo "RESULTS_FILE: ${RESULTS_FILE}"
+    echo "Running clickbench (partitioned, 100 files) benchmark with pushdown_filters=true, reorder_filters=true..."
+    debug_run $CARGO_COMMAND --bin dfbench -- clickbench --pushdown --iterations 5 --path "${DATA_DIR}/hits_partitioned" --queries-path "${SCRIPT_DIR}/queries/clickbench/queries" -o "${RESULTS_FILE}" ${QUERY_ARG}
+}
+
 
 # Runs the clickbench "extended" benchmark with a single large parquet file
 run_clickbench_extended() {
