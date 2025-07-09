@@ -86,6 +86,7 @@ use ahash::RandomState;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use futures::{ready, Stream, StreamExt, TryStreamExt};
 use parking_lot::Mutex;
+use tokio::time::Instant;
 
 /// Hard-coded seed to ensure hash values from the hash join differ from `RepartitionExec`, avoiding collisions.
 const HASH_JOIN_SEED: RandomState =
@@ -1363,11 +1364,9 @@ pub fn equal_rows_arr(
 ) -> Result<(UInt64Array, UInt32Array)> {
     let mut iter = left_arrays.iter().zip(right_arrays.iter());
 
-    let (first_left, first_right) = iter.next().ok_or_else(|| {
-        DataFusionError::Internal(
-            "At least one array should be provided for both left and right".to_string(),
-        )
-    })?;
+    let Some((first_left, first_right)) = iter.next() else {
+        return Ok((Vec::<u64>::new().into(), Vec::<u32>::new().into()));
+    };
 
     let arr_left = take(first_left.as_ref(), indices_left, None)?;
     let arr_right = take(first_right.as_ref(), indices_right, None)?;
