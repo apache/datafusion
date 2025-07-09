@@ -339,26 +339,6 @@ impl DelimGet {
             });
         }
 
-        // let correlated_columns: Vec<CorrelatedColumnInfo> = correlated_columns
-        //     .into_iter()
-        //     .map(|info| {
-        //         // Add "_d" suffix to the relation name
-        //         let col = if let Some(ref relation) = info.col.relation {
-        //             let new_relation =
-        //                 Some(TableReference::bare(format!("{}_d", relation)));
-        //             Column::new(new_relation, info.col.name.clone())
-        //         } else {
-        //             info.col.clone()
-        //         };
-
-        //         CorrelatedColumnInfo {
-        //             col,
-        //             data_type: info.data_type.clone(),
-        //             depth: info.depth,
-        //         }
-        //     })
-        //     .collect();
-
         // Extract the first table reference to validate all columns come from the same table
         let first_table_ref = correlated_columns[0].col.relation.clone();
 
@@ -381,11 +361,7 @@ impl DelimGet {
             correlated_columns
                 .iter()
                 .map(|c| {
-                    let field = Field::new(
-                        c.col.flat_name().replace(".", "_"),
-                        c.data_type.clone(),
-                        true,
-                    );
+                    let field = Field::new(c.col.name(), c.data_type.clone(), true);
                     (Some(table_name.clone()), Arc::new(field))
                 })
                 .collect();

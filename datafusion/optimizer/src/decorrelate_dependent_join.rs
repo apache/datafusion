@@ -29,9 +29,9 @@ use datafusion_expr::expr::{
 };
 use datafusion_expr::utils::conjunction;
 use datafusion_expr::{
-    binary_expr, col, lit, not, when, Aggregate, BinaryExpr, CorrelatedColumnInfo,
-    DependentJoin, Expr, FetchType, Join, JoinType, LogicalPlan, LogicalPlanBuilder,
-    Operator, Projection, SkipType, WindowFrame, WindowFunctionDefinition,
+    binary_expr, col, lit, not, when, Aggregate, CorrelatedColumnInfo, DependentJoin,
+    Expr, FetchType, Join, JoinType, LogicalPlan, LogicalPlanBuilder, Operator,
+    Projection, SkipType, WindowFrame, WindowFunctionDefinition,
 };
 
 use datafusion_functions_window::row_number::row_number_udwf;
@@ -68,10 +68,10 @@ fn natural_join(
     mut builder: LogicalPlanBuilder,
     right: LogicalPlan,
     join_type: JoinType,
-    delim_join_conditions: Vec<(Column, Column)>,
+    conditions: Vec<(Column, Column)>,
 ) -> Result<LogicalPlanBuilder> {
     let mut exclude_cols = IndexSet::new();
-    let join_exprs: Vec<_> = delim_join_conditions
+    let join_exprs: Vec<_> = conditions
         .iter()
         .map(|(lhs, rhs)| {
             exclude_cols.insert(rhs);
@@ -120,7 +120,6 @@ impl DependentJoinDecorrelator {
 
     fn new(
         node: &DependentJoin,
-        // correlated_columns: &Vec<(usize, Column, DataType)>,
         correlated_columns_from_parent: &Vec<CorrelatedColumnInfo>,
         is_initial: bool,
         any_join: bool,
@@ -170,27 +169,6 @@ impl DependentJoinDecorrelator {
             dscan_cols: vec![],
         }
     }
-
-    #[allow(dead_code)]
-    fn subquery_dependent_filter(expr: &Expr) -> bool {
-        match expr {
-            Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
-                if *op == Operator::And {
-                    if Self::subquery_dependent_filter(left)
-                        || Self::subquery_dependent_filter(right)
-                    {
-                        return true;
-                    }
-                }
-            }
-            Expr::InSubquery(_) | Expr::ScalarSubquery(_) | Expr::Exists(_) => {
-                return true;
-            }
-            _ => {}
-        };
-        false
-    }
-    // fn has_correlated_exprs(node: DependentJoin) -> Result<bool> {}
 
     fn decorrelate_independent(&mut self, plan: &LogicalPlan) -> Result<LogicalPlan> {
         let mut decorrelator = DependentJoinDecorrelator::new_root();
@@ -254,12 +232,9 @@ impl DependentJoinDecorrelator {
             parent_propagate_nulls,
             lateral_depth,
         )?;
-        let (join_condition, join_type, post_join_expr) = self.delim_join_conditions(
-            node,
-            right.schema().columns(),
-            decorrelator.delim_scan_relation_name(),
-            perform_delim,
-        )?;
+
+        let (join_condition, join_type, post_join_expr) =
+            self.delim_join_conditions(node, right.schema().columns(), perform_delim)?;
 
         let mut builder = LogicalPlanBuilder::new(new_left).join(
             right,
@@ -289,6 +264,7 @@ impl DependentJoinDecorrelator {
         self.merge_child(&decorrelator);
         return builder.build();
     }
+
     fn merge_child(&mut self, child: &Self) {
         self.delim_scan_id = child.delim_scan_id;
         for entry in child.correlated_column_to_delim_column.iter() {
@@ -303,18 +279,12 @@ impl DependentJoinDecorrelator {
         &self,
         node: &DependentJoin,
         right_columns: Vec<Column>,
-        delim_join_relation_name_on_right: String,
-        perform_delim: bool,
+        _perform_delim: bool,
     ) -> Result<(Expr, JoinType, Option<Expr>)> {
         if node.lateral_join_condition.is_some() {
             unimplemented!()
         }
 
-        let _col_count = if perform_delim {
-            node.correlated_columns.len()
-        } else {
-            unimplemented!()
-        };
         let mut join_conditions = vec![];
         // if this is set, a new expr will be added to the parent projection
         // after delimJoin
@@ -379,19 +349,26 @@ impl DependentJoinDecorrelator {
             }
         }
 
-        for col in node
+        // TODO: natural join?
+        for (i, corr_col) in node
             .correlated_columns
             .iter()
-            .map(|info| info.col.clone())
-            .unique()
+            // .map(|info| info.col.clone())
+            // .unique()
+            .enumerate()
         {
-            let raw_name = col.flat_name().replace('.', "_");
+            let right_col = right_columns.get(i).ok_or_else(|| {
+                internal_datafusion_err!(
+                    "Right columns index {} out of bounds, right_columns length: {}",
+                    i,
+                    right_columns.len()
+                )
+            })?;
+
             join_conditions.push(binary_expr(
-                Expr::Column(col.clone()),
+                col(corr_col.col.clone()),
                 Operator::IsNotDistinctFrom,
-                Expr::Column(Column::from(format!(
-                    "{delim_join_relation_name_on_right}.{raw_name}"
-                ))),
+                col(right_col.clone()),
             ));
         }
         Ok((
@@ -451,10 +428,6 @@ impl DependentJoinDecorrelator {
         Self::rewrite_current_plan_outer_ref_columns(new_plan, correlated_map)
     }
 
-    fn delim_scan_relation_name(&self) -> String {
-        format!("delim_scan_{}", self.delim_scan_id)
-    }
-
     fn rewrite_into_delim_column(
         correlated_map: &IndexMap<Column, Column>,
         original: &Column,
@@ -501,20 +474,28 @@ impl DependentJoinDecorrelator {
             let delim_scan_name =
                 format!("{0}_dscan_{1}", table_ref.clone(), self.delim_scan_id);
 
+            let mut projection_exprs = vec![];
             table_domains.iter().for_each(|c| {
-                let field_name = c.col.flat_name().replace(".", "_");
+                let dcol_name = c.col.flat_name().replace(".", "_");
                 let dscan_col = Column::from_qualified_name(format!(
-                    "{}.{field_name}",
-                    delim_scan_name
+                    "{}.{dcol_name}",
+                    delim_scan_name.clone(),
                 ));
+
                 self.correlated_column_to_delim_column
                     .insert(c.col.clone(), dscan_col.clone());
                 self.dscan_cols.push(dscan_col);
+
+                // Construct alias for projection.
+                projection_exprs.push(
+                    col(c.col.clone()).alias_qualified(delim_scan_name.clone().into(), dcol_name),
+                );
             });
 
+            // Apply projection to rename columns and then alias the entire plan.
             delim_scans.push(
                 LogicalPlanBuilder::delim_get(&table_domains)?
-                    .alias(&delim_scan_name)?
+                    .project(projection_exprs)?
                     .build()?,
             );
         }
@@ -1574,6 +1555,7 @@ mod tests {
         // ");
         Ok(())
     }
+
     #[test]
     fn two_dependent_joins_at_the_same_depth() -> Result<()> {
         let outer_table = test_table_scan_with_name("outer_table")?;
@@ -1604,20 +1586,20 @@ mod tests {
         Projection: outer_table.a, outer_table.b, outer_table.c [a:UInt32, b:UInt32, c:UInt32]
           Filter: __exists_sq_1.output AND __exists_sq_2.output [a:UInt32, b:UInt32, c:UInt32, __exists_sq_1.output:Boolean, __exists_sq_2.output:Boolean]
             Projection: outer_table.a, outer_table.b, outer_table.c, __exists_sq_1.output, mark AS __exists_sq_2.output [a:UInt32, b:UInt32, c:UInt32, __exists_sq_1.output:Boolean, __exists_sq_2.output:Boolean]
-              LeftMark Join(ComparisonJoin):  Filter: outer_table.c IS NOT DISTINCT FROM delim_scan_2.outer_table_c [a:UInt32, b:UInt32, c:UInt32, __exists_sq_1.output:Boolean, mark:Boolean]
+              LeftMark Join(ComparisonJoin):  Filter: outer_table.c IS NOT DISTINCT FROM inner_table_lv1.a [a:UInt32, b:UInt32, c:UInt32, __exists_sq_1.output:Boolean, mark:Boolean]
                 Projection: outer_table.a, outer_table.b, outer_table.c, mark AS __exists_sq_1.output [a:UInt32, b:UInt32, c:UInt32, __exists_sq_1.output:Boolean]
-                  LeftMark Join(ComparisonJoin):  Filter: outer_table.b IS NOT DISTINCT FROM delim_scan_1.outer_table_b [a:UInt32, b:UInt32, c:UInt32, mark:Boolean]
+                  LeftMark Join(ComparisonJoin):  Filter: outer_table.b IS NOT DISTINCT FROM inner_table_lv1.a [a:UInt32, b:UInt32, c:UInt32, mark:Boolean]
                     TableScan: outer_table [a:UInt32, b:UInt32, c:UInt32]
                     Filter: inner_table_lv1.b = outer_table_dscan_1.outer_table_b [a:UInt32, b:UInt32, c:UInt32, outer_table_b:UInt32;N]
                       Inner Join(DelimJoin):  Filter: Boolean(true) [a:UInt32, b:UInt32, c:UInt32, outer_table_b:UInt32;N]
                         TableScan: inner_table_lv1 [a:UInt32, b:UInt32, c:UInt32]
-                        SubqueryAlias: outer_table_dscan_1 [outer_table_b:UInt32;N]
-                          DelimGet: outer_table.b [outer_table_b:UInt32;N]
+                        Projection: outer_table.b AS outer_table_dscan_1.outer_table_b [outer_table_b:UInt32;N]
+                          DelimGet: outer_table.b [b:UInt32;N]
                 Filter: inner_table_lv1.c = outer_table_dscan_2.outer_table_c [a:UInt32, b:UInt32, c:UInt32, outer_table_c:UInt32;N]
                   Inner Join(DelimJoin):  Filter: Boolean(true) [a:UInt32, b:UInt32, c:UInt32, outer_table_c:UInt32;N]
                     TableScan: inner_table_lv1 [a:UInt32, b:UInt32, c:UInt32]
-                    SubqueryAlias: outer_table_dscan_2 [outer_table_c:UInt32;N]
-                      DelimGet: outer_table.c [outer_table_c:UInt32;N]
+                    Projection: outer_table.c AS outer_table_dscan_2.outer_table_c [outer_table_c:UInt32;N]
+                      DelimGet: outer_table.c [c:UInt32;N]
         ");
         Ok(())
     }
@@ -1660,7 +1642,7 @@ mod tests {
         Projection: outer_table.a, outer_table.b, outer_table.c [a:UInt32, b:UInt32, c:UInt32]
           Filter: __scalar_sq_2.output = outer_table.a [a:UInt32, b:UInt32, c:UInt32, count(inner_table_lv1.a):Int64;N, outer_table_c:UInt32;N, outer_table_c:UInt32;N, __scalar_sq_2.output:Int64;N]
             Projection: outer_table.a, outer_table.b, outer_table.c, count(inner_table_lv1.a), outer_table_dscan_2.outer_table_c, outer_table_dscan_1.outer_table_c, count(inner_table_lv1.a) AS __scalar_sq_2.output [a:UInt32, b:UInt32, c:UInt32, count(inner_table_lv1.a):Int64;N, outer_table_c:UInt32;N, outer_table_c:UInt32;N, __scalar_sq_2.output:Int64;N]
-              Left Join(ComparisonJoin):  Filter: outer_table.a IS NOT DISTINCT FROM delim_scan_4.outer_table_a AND outer_table.c IS NOT DISTINCT FROM delim_scan_4.outer_table_c [a:UInt32, b:UInt32, c:UInt32, count(inner_table_lv1.a):Int64;N, outer_table_c:UInt32;N, outer_table_c:UInt32;N]
+              Left Join(ComparisonJoin):  Filter: outer_table.a IS NOT DISTINCT FROM count(inner_table_lv1.a) AND outer_table.c IS NOT DISTINCT FROM outer_table_dscan_2.outer_table_c [a:UInt32, b:UInt32, c:UInt32, count(inner_table_lv1.a):Int64;N, outer_table_c:UInt32;N, outer_table_c:UInt32;N]
                 TableScan: outer_table [a:UInt32, b:UInt32, c:UInt32]
                 Inner Join(DelimJoin):  Filter: Boolean(true) [count(inner_table_lv1.a):Int64, outer_table_c:UInt32;N, outer_table_c:UInt32;N]
                   Projection: CASE WHEN count(inner_table_lv1.a) IS NULL THEN Int32(0) ELSE count(inner_table_lv1.a) END, outer_table_dscan_2.outer_table_c [count(inner_table_lv1.a):Int64, outer_table_c:UInt32;N]
@@ -1677,14 +1659,14 @@ mod tests {
                                       Filter: inner_table_lv2.a = outer_table_dscan_4.outer_table_a [a:UInt32, b:UInt32, c:UInt32, outer_table_a:UInt32;N]
                                         Inner Join(DelimJoin):  Filter: Boolean(true) [a:UInt32, b:UInt32, c:UInt32, outer_table_a:UInt32;N]
                                           TableScan: inner_table_lv2 [a:UInt32, b:UInt32, c:UInt32]
-                                          SubqueryAlias: outer_table_dscan_4 [outer_table_a:UInt32;N]
-                                            DelimGet: outer_table.a [outer_table_a:UInt32;N]
-                                  SubqueryAlias: outer_table_dscan_3 [outer_table_a:UInt32;N]
-                                    DelimGet: outer_table.a [outer_table_a:UInt32;N]
-                            SubqueryAlias: outer_table_dscan_2 [outer_table_c:UInt32;N]
-                              DelimGet: outer_table.c [outer_table_c:UInt32;N]
-                  SubqueryAlias: outer_table_dscan_1 [outer_table_c:UInt32;N]
-                    DelimGet: outer_table.c [outer_table_c:UInt32;N]
+                                          Projection: outer_table.a AS outer_table_dscan_4.outer_table_a [outer_table_a:UInt32;N]
+                                            DelimGet: outer_table.a [a:UInt32;N]
+                                  Projection: outer_table.a AS outer_table_dscan_3.outer_table_a [outer_table_a:UInt32;N]
+                                    DelimGet: outer_table.a [a:UInt32;N]
+                            Projection: outer_table.c AS outer_table_dscan_2.outer_table_c [outer_table_c:UInt32;N]
+                              DelimGet: outer_table.c [c:UInt32;N]
+                  Projection: outer_table.c AS outer_table_dscan_1.outer_table_c [outer_table_c:UInt32;N]
+                    DelimGet: outer_table.c [c:UInt32;N]
         ");
         Ok(())
     }
@@ -1744,7 +1726,7 @@ mod tests {
         Projection: outer_table.a, outer_table.b, outer_table.c [a:UInt32, b:UInt32, c:UInt32]
           Filter: outer_table.a > Int32(1) AND __scalar_sq_2.output = outer_table.a [a:UInt32, b:UInt32, c:UInt32, count(inner_table_lv1.a):Int64;N, outer_table_c:UInt32;N, outer_table_c:UInt32;N, __scalar_sq_2.output:Int64;N]
             Projection: outer_table.a, outer_table.b, outer_table.c, count(inner_table_lv1.a), outer_table_dscan_2.outer_table_c, outer_table_dscan_1.outer_table_c, count(inner_table_lv1.a) AS __scalar_sq_2.output [a:UInt32, b:UInt32, c:UInt32, count(inner_table_lv1.a):Int64;N, outer_table_c:UInt32;N, outer_table_c:UInt32;N, __scalar_sq_2.output:Int64;N]
-              Left Join(ComparisonJoin):  Filter: outer_table.a IS NOT DISTINCT FROM delim_scan_6.outer_table_a AND outer_table.c IS NOT DISTINCT FROM delim_scan_6.outer_table_c [a:UInt32, b:UInt32, c:UInt32, count(inner_table_lv1.a):Int64;N, outer_table_c:UInt32;N, outer_table_c:UInt32;N]
+              Left Join(ComparisonJoin):  Filter: outer_table.a IS NOT DISTINCT FROM count(inner_table_lv1.a) AND outer_table.c IS NOT DISTINCT FROM outer_table_dscan_2.outer_table_c [a:UInt32, b:UInt32, c:UInt32, count(inner_table_lv1.a):Int64;N, outer_table_c:UInt32;N, outer_table_c:UInt32;N]
                 TableScan: outer_table [a:UInt32, b:UInt32, c:UInt32]
                 Inner Join(DelimJoin):  Filter: Boolean(true) [count(inner_table_lv1.a):Int64, outer_table_c:UInt32;N, outer_table_c:UInt32;N]
                   Projection: CASE WHEN count(inner_table_lv1.a) IS NULL THEN Int32(0) ELSE count(inner_table_lv1.a) END, outer_table_dscan_2.outer_table_c [count(inner_table_lv1.a):Int64, outer_table_c:UInt32;N]
@@ -1753,7 +1735,7 @@ mod tests {
                         Filter: inner_table_lv1.c = outer_table_dscan_2.outer_table_c AND __scalar_sq_1.output = Int32(1) [a:UInt32, b:UInt32, c:UInt32, count(inner_table_lv2.a):Int64;N, outer_table_a:UInt32;N, inner_table_lv1_b:UInt32;N, inner_table_lv1_b:UInt32;N, outer_table_a:UInt32;N, __scalar_sq_1.output:Int64;N, outer_table_c:UInt32;N]
                           Inner Join(DelimJoin):  Filter: Boolean(true) [a:UInt32, b:UInt32, c:UInt32, count(inner_table_lv2.a):Int64;N, outer_table_a:UInt32;N, inner_table_lv1_b:UInt32;N, inner_table_lv1_b:UInt32;N, outer_table_a:UInt32;N, __scalar_sq_1.output:Int64;N, outer_table_c:UInt32;N]
                             Projection: inner_table_lv1.a, inner_table_lv1.b, inner_table_lv1.c, count(inner_table_lv2.a), outer_table_dscan_6.outer_table_a, inner_table_lv1_dscan_5.inner_table_lv1_b, inner_table_lv1_dscan_3.inner_table_lv1_b, outer_table_dscan_4.outer_table_a, count(inner_table_lv2.a) AS __scalar_sq_1.output [a:UInt32, b:UInt32, c:UInt32, count(inner_table_lv2.a):Int64;N, outer_table_a:UInt32;N, inner_table_lv1_b:UInt32;N, inner_table_lv1_b:UInt32;N, outer_table_a:UInt32;N, __scalar_sq_1.output:Int64;N]
-                              Left Join(ComparisonJoin):  Filter: inner_table_lv1.b IS NOT DISTINCT FROM delim_scan_6.inner_table_lv1_b [a:UInt32, b:UInt32, c:UInt32, count(inner_table_lv2.a):Int64;N, outer_table_a:UInt32;N, inner_table_lv1_b:UInt32;N, inner_table_lv1_b:UInt32;N, outer_table_a:UInt32;N]
+                              Left Join(ComparisonJoin):  Filter: inner_table_lv1.b IS NOT DISTINCT FROM count(inner_table_lv2.a) [a:UInt32, b:UInt32, c:UInt32, count(inner_table_lv2.a):Int64;N, outer_table_a:UInt32;N, inner_table_lv1_b:UInt32;N, inner_table_lv1_b:UInt32;N, outer_table_a:UInt32;N]
                                 TableScan: inner_table_lv1 [a:UInt32, b:UInt32, c:UInt32]
                                 Inner Join(DelimJoin):  Filter: Boolean(true) [count(inner_table_lv2.a):Int64, outer_table_a:UInt32;N, inner_table_lv1_b:UInt32;N, inner_table_lv1_b:UInt32;N, outer_table_a:UInt32;N]
                                   Projection: CASE WHEN count(inner_table_lv2.a) IS NULL THEN Int32(0) ELSE count(inner_table_lv2.a) END, outer_table_dscan_6.outer_table_a, inner_table_lv1_dscan_5.inner_table_lv1_b [count(inner_table_lv2.a):Int64, outer_table_a:UInt32;N, inner_table_lv1_b:UInt32;N]
@@ -1762,19 +1744,19 @@ mod tests {
                                         Inner Join(DelimJoin):  Filter: Boolean(true) [a:UInt32, b:UInt32, c:UInt32, inner_table_lv1_b:UInt32;N, outer_table_a:UInt32;N]
                                           TableScan: inner_table_lv2 [a:UInt32, b:UInt32, c:UInt32]
                                           Cross Join(ComparisonJoin):  [inner_table_lv1_b:UInt32;N, outer_table_a:UInt32;N]
-                                            SubqueryAlias: inner_table_lv1_dscan_5 [inner_table_lv1_b:UInt32;N]
-                                              DelimGet: inner_table_lv1.b [inner_table_lv1_b:UInt32;N]
-                                            SubqueryAlias: outer_table_dscan_6 [outer_table_a:UInt32;N]
-                                              DelimGet: outer_table.a [outer_table_a:UInt32;N]
+                                            Projection: inner_table_lv1.b AS inner_table_lv1_dscan_5.inner_table_lv1_b [inner_table_lv1_b:UInt32;N]
+                                              DelimGet: inner_table_lv1.b [b:UInt32;N]
+                                            Projection: outer_table.a AS outer_table_dscan_6.outer_table_a [outer_table_a:UInt32;N]
+                                              DelimGet: outer_table.a [a:UInt32;N]
                                   Cross Join(ComparisonJoin):  [inner_table_lv1_b:UInt32;N, outer_table_a:UInt32;N]
-                                    SubqueryAlias: inner_table_lv1_dscan_3 [inner_table_lv1_b:UInt32;N]
-                                      DelimGet: inner_table_lv1.b [inner_table_lv1_b:UInt32;N]
-                                    SubqueryAlias: outer_table_dscan_4 [outer_table_a:UInt32;N]
-                                      DelimGet: outer_table.a [outer_table_a:UInt32;N]
-                            SubqueryAlias: outer_table_dscan_2 [outer_table_c:UInt32;N]
-                              DelimGet: outer_table.c [outer_table_c:UInt32;N]
-                  SubqueryAlias: outer_table_dscan_1 [outer_table_c:UInt32;N]
-                    DelimGet: outer_table.c [outer_table_c:UInt32;N]
+                                    Projection: inner_table_lv1.b AS inner_table_lv1_dscan_3.inner_table_lv1_b [inner_table_lv1_b:UInt32;N]
+                                      DelimGet: inner_table_lv1.b [b:UInt32;N]
+                                    Projection: outer_table.a AS outer_table_dscan_4.outer_table_a [outer_table_a:UInt32;N]
+                                      DelimGet: outer_table.a [a:UInt32;N]
+                            Projection: outer_table.c AS outer_table_dscan_2.outer_table_c [outer_table_c:UInt32;N]
+                              DelimGet: outer_table.c [c:UInt32;N]
+                  Projection: outer_table.c AS outer_table_dscan_1.outer_table_c [outer_table_c:UInt32;N]
+                    DelimGet: outer_table.c [c:UInt32;N]
         ");
         Ok(())
     }
@@ -1823,7 +1805,7 @@ mod tests {
         Projection: outer_table.a, outer_table.b, outer_table.c [a:UInt32, b:UInt32, c:UInt32]
           Filter: outer_table.a > Int32(1) AND __in_sq_1.output [a:UInt32, b:UInt32, c:UInt32, __in_sq_1.output:Boolean]
             Projection: outer_table.a, outer_table.b, outer_table.c, mark AS __in_sq_1.output [a:UInt32, b:UInt32, c:UInt32, __in_sq_1.output:Boolean]
-              LeftMark Join(ComparisonJoin):  Filter: outer_table.c = count(inner_table_lv1.a) AND outer_table.a IS NOT DISTINCT FROM delim_scan_2.outer_table_a AND outer_table.b IS NOT DISTINCT FROM delim_scan_2.outer_table_b [a:UInt32, b:UInt32, c:UInt32, mark:Boolean]
+              LeftMark Join(ComparisonJoin):  Filter: outer_table.c = count(inner_table_lv1.a) AND outer_table.a IS NOT DISTINCT FROM count(inner_table_lv1.a) AND outer_table.b IS NOT DISTINCT FROM outer_table_dscan_2.outer_table_b [a:UInt32, b:UInt32, c:UInt32, mark:Boolean]
                 TableScan: outer_table [a:UInt32, b:UInt32, c:UInt32]
                 Inner Join(DelimJoin):  Filter: Boolean(true) [count(inner_table_lv1.a):Int64, outer_table_b:UInt32;N, outer_table_a:UInt32;N, outer_table_a:UInt32;N, outer_table_b:UInt32;N]
                   Projection: CASE WHEN count(inner_table_lv1.a) IS NULL THEN Int32(0) ELSE count(inner_table_lv1.a) END, outer_table_dscan_2.outer_table_b, outer_table_dscan_2.outer_table_a [count(inner_table_lv1.a):Int64, outer_table_b:UInt32;N, outer_table_a:UInt32;N]
@@ -1831,10 +1813,10 @@ mod tests {
                       Filter: inner_table_lv1.a = outer_table_dscan_2.outer_table_a AND outer_table_dscan_2.outer_table_a > inner_table_lv1.c AND inner_table_lv1.b = Int32(1) AND outer_table_dscan_2.outer_table_b = inner_table_lv1.b [a:UInt32, b:UInt32, c:UInt32, outer_table_a:UInt32;N, outer_table_b:UInt32;N]
                         Inner Join(DelimJoin):  Filter: Boolean(true) [a:UInt32, b:UInt32, c:UInt32, outer_table_a:UInt32;N, outer_table_b:UInt32;N]
                           TableScan: inner_table_lv1 [a:UInt32, b:UInt32, c:UInt32]
-                          SubqueryAlias: outer_table_dscan_2 [outer_table_a:UInt32;N, outer_table_b:UInt32;N]
-                            DelimGet: outer_table.a, outer_table.b [outer_table_a:UInt32;N, outer_table_b:UInt32;N]
-                  SubqueryAlias: outer_table_dscan_1 [outer_table_a:UInt32;N, outer_table_b:UInt32;N]
-                    DelimGet: outer_table.a, outer_table.b [outer_table_a:UInt32;N, outer_table_b:UInt32;N]
+                          Projection: outer_table.a AS outer_table_dscan_2.outer_table_a, outer_table.b AS outer_table_dscan_2.outer_table_b [outer_table_a:UInt32;N, outer_table_b:UInt32;N]
+                            DelimGet: outer_table.a, outer_table.b [a:UInt32;N, b:UInt32;N]
+                  Projection: outer_table.a AS outer_table_dscan_1.outer_table_a, outer_table.b AS outer_table_dscan_1.outer_table_b [outer_table_a:UInt32;N, outer_table_b:UInt32;N]
+                    DelimGet: outer_table.a, outer_table.b [a:UInt32;N, b:UInt32;N]
         ");
         Ok(())
     }
@@ -1936,14 +1918,14 @@ mod tests {
         Projection: outer_table.a, outer_table.b, outer_table.c [a:UInt32, b:UInt32, c:UInt32]
           Filter: outer_table.a > Int32(1) AND __in_sq_1.output [a:UInt32, b:UInt32, c:UInt32, __in_sq_1.output:Boolean]
             Projection: outer_table.a, outer_table.b, outer_table.c, mark AS __in_sq_1.output [a:UInt32, b:UInt32, c:UInt32, __in_sq_1.output:Boolean]
-              LeftMark Join(ComparisonJoin):  Filter: outer_table.c = inner_table_lv1.b AND outer_table.a IS NOT DISTINCT FROM delim_scan_1.outer_table_a AND outer_table.b IS NOT DISTINCT FROM delim_scan_1.outer_table_b [a:UInt32, b:UInt32, c:UInt32, mark:Boolean]
+              LeftMark Join(ComparisonJoin):  Filter: outer_table.c = inner_table_lv1.b AND outer_table.a IS NOT DISTINCT FROM inner_table_lv1.b AND outer_table.b IS NOT DISTINCT FROM outer_table_dscan_1.outer_table_a [a:UInt32, b:UInt32, c:UInt32, mark:Boolean]
                 TableScan: outer_table [a:UInt32, b:UInt32, c:UInt32]
                 Projection: inner_table_lv1.b, outer_table_dscan_1.outer_table_a, outer_table_dscan_1.outer_table_b [b:UInt32, outer_table_a:UInt32;N, outer_table_b:UInt32;N]
                   Filter: inner_table_lv1.a = outer_table_dscan_1.outer_table_a AND outer_table_dscan_1.outer_table_a > inner_table_lv1.c AND inner_table_lv1.b = Int32(1) AND outer_table_dscan_1.outer_table_b = inner_table_lv1.b [a:UInt32, b:UInt32, c:UInt32, outer_table_a:UInt32;N, outer_table_b:UInt32;N]
                     Inner Join(DelimJoin):  Filter: Boolean(true) [a:UInt32, b:UInt32, c:UInt32, outer_table_a:UInt32;N, outer_table_b:UInt32;N]
                       TableScan: inner_table_lv1 [a:UInt32, b:UInt32, c:UInt32]
-                      SubqueryAlias: outer_table_dscan_1 [outer_table_a:UInt32;N, outer_table_b:UInt32;N]
-                        DelimGet: outer_table.a, outer_table.b [outer_table_a:UInt32;N, outer_table_b:UInt32;N]
+                      Projection: outer_table.a AS outer_table_dscan_1.outer_table_a, outer_table.b AS outer_table_dscan_1.outer_table_b [outer_table_a:UInt32;N, outer_table_b:UInt32;N]
+                        DelimGet: outer_table.a, outer_table.b [a:UInt32;N, b:UInt32;N]
         ");
 
         Ok(())
@@ -1999,37 +1981,37 @@ mod tests {
         //                   TableScan: t3 [a:UInt32, b:UInt32, c:UInt32]
 
         assert_decorrelate!(plan, @r"
-           Projection: t1.a, t1.b, t1.c [a:UInt32, b:UInt32, c:UInt32]
-             Filter: t1.c = Int32(123) AND __scalar_sq_2.output > Int32(5) [a:UInt32, b:UInt32, c:UInt32, count(t2.a):Int64;N, t1_a:UInt32;N, t1_a:UInt32;N, __scalar_sq_2.output:Int64;N]
-               Projection: t1.a, t1.b, t1.c, count(t2.a), t1_dscan_5.t1_a, t1_dscan_1.t1_a, count(t2.a) AS __scalar_sq_2.output [a:UInt32, b:UInt32, c:UInt32, count(t2.a):Int64;N, t1_a:UInt32;N, t1_a:UInt32;N, __scalar_sq_2.output:Int64;N]
-                 Left Join(ComparisonJoin):  Filter: t1.a IS NOT DISTINCT FROM delim_scan_5.t1_a [a:UInt32, b:UInt32, c:UInt32, count(t2.a):Int64;N, t1_a:UInt32;N, t1_a:UInt32;N]
-                   TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]
-                   Inner Join(DelimJoin):  Filter: Boolean(true) [count(t2.a):Int64, t1_a:UInt32;N, t1_a:UInt32;N]
-                     Projection: CASE WHEN count(t2.a) IS NULL THEN Int32(0) ELSE count(t2.a) END, t1_dscan_5.t1_a [count(t2.a):Int64, t1_a:UInt32;N]
-                       Aggregate: groupBy=[[t1_dscan_5.t1_a]], aggr=[[count(t2.a)]] [t1_a:UInt32;N, count(t2.a):Int64]
-                         Projection: t2.a, t2.b, t2.c, t1_dscan_5.t1_a [a:UInt32, b:UInt32, c:UInt32, t1_a:UInt32;N]
-                           Filter: t2.a = t1_dscan_5.t1_a AND __scalar_sq_1.output > Int32(300000) [a:UInt32, b:UInt32, c:UInt32, sum(t3.a):UInt64;N, t1_a:UInt32;N, t2_b:UInt32;N, t2_b:UInt32;N, t1_a:UInt32;N, __scalar_sq_1.output:UInt64;N]
-                             Projection: t2.a, t2.b, t2.c, sum(t3.a), t1_dscan_5.t1_a, t2_dscan_4.t2_b, t2_dscan_2.t2_b, t1_dscan_3.t1_a, sum(t3.a) AS __scalar_sq_1.output [a:UInt32, b:UInt32, c:UInt32, sum(t3.a):UInt64;N, t1_a:UInt32;N, t2_b:UInt32;N, t2_b:UInt32;N, t1_a:UInt32;N, __scalar_sq_1.output:UInt64;N]
-                               Left Join(ComparisonJoin):  Filter: t2.b IS NOT DISTINCT FROM delim_scan_5.t2_b [a:UInt32, b:UInt32, c:UInt32, sum(t3.a):UInt64;N, t1_a:UInt32;N, t2_b:UInt32;N, t2_b:UInt32;N, t1_a:UInt32;N]
-                                 TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]
-                                 Inner Join(DelimJoin):  Filter: Boolean(true) [sum(t3.a):UInt64;N, t1_a:UInt32;N, t2_b:UInt32;N, t2_b:UInt32;N, t1_a:UInt32;N]
-                                   Projection: sum(t3.a), t1_dscan_5.t1_a, t2_dscan_4.t2_b [sum(t3.a):UInt64;N, t1_a:UInt32;N, t2_b:UInt32;N]
-                                     Aggregate: groupBy=[[t2_dscan_4.t2_b, t1_dscan_5.t1_a, t1_dscan_5.t1_a]], aggr=[[sum(t3.a)]] [t2_b:UInt32;N, t1_a:UInt32;N, sum(t3.a):UInt64;N]
-                                       Filter: t3.b = t2_dscan_4.t2_b AND t3.a = t1_dscan_5.t1_a [a:UInt32, b:UInt32, c:UInt32, t2_b:UInt32;N, t1_a:UInt32;N]
-                                         Inner Join(DelimJoin):  Filter: Boolean(true) [a:UInt32, b:UInt32, c:UInt32, t2_b:UInt32;N, t1_a:UInt32;N]
-                                           TableScan: t3 [a:UInt32, b:UInt32, c:UInt32]
-                                           Cross Join(ComparisonJoin):  [t2_b:UInt32;N, t1_a:UInt32;N]
-                                             SubqueryAlias: t2_dscan_4 [t2_b:UInt32;N]
-                                               DelimGet: t2.b [t2_b:UInt32;N]
-                                             SubqueryAlias: t1_dscan_5 [t1_a:UInt32;N]
-                                               DelimGet: t1.a [t1_a:UInt32;N]
-                                   Cross Join(ComparisonJoin):  [t2_b:UInt32;N, t1_a:UInt32;N]
-                                     SubqueryAlias: t2_dscan_2 [t2_b:UInt32;N]
-                                       DelimGet: t2.b [t2_b:UInt32;N]
-                                     SubqueryAlias: t1_dscan_3 [t1_a:UInt32;N]
-                                       DelimGet: t1.a [t1_a:UInt32;N]
-                     SubqueryAlias: t1_dscan_1 [t1_a:UInt32;N]
-                       DelimGet: t1.a [t1_a:UInt32;N]
+        Projection: t1.a, t1.b, t1.c [a:UInt32, b:UInt32, c:UInt32]
+          Filter: t1.c = Int32(123) AND __scalar_sq_2.output > Int32(5) [a:UInt32, b:UInt32, c:UInt32, count(t2.a):Int64;N, t1_a:UInt32;N, t1_a:UInt32;N, __scalar_sq_2.output:Int64;N]
+            Projection: t1.a, t1.b, t1.c, count(t2.a), t1_dscan_5.t1_a, t1_dscan_1.t1_a, count(t2.a) AS __scalar_sq_2.output [a:UInt32, b:UInt32, c:UInt32, count(t2.a):Int64;N, t1_a:UInt32;N, t1_a:UInt32;N, __scalar_sq_2.output:Int64;N]
+              Left Join(ComparisonJoin):  Filter: t1.a IS NOT DISTINCT FROM count(t2.a) AND t1.a IS NOT DISTINCT FROM t1_dscan_5.t1_a [a:UInt32, b:UInt32, c:UInt32, count(t2.a):Int64;N, t1_a:UInt32;N, t1_a:UInt32;N]
+                TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]
+                Inner Join(DelimJoin):  Filter: Boolean(true) [count(t2.a):Int64, t1_a:UInt32;N, t1_a:UInt32;N]
+                  Projection: CASE WHEN count(t2.a) IS NULL THEN Int32(0) ELSE count(t2.a) END, t1_dscan_5.t1_a [count(t2.a):Int64, t1_a:UInt32;N]
+                    Aggregate: groupBy=[[t1_dscan_5.t1_a]], aggr=[[count(t2.a)]] [t1_a:UInt32;N, count(t2.a):Int64]
+                      Projection: t2.a, t2.b, t2.c, t1_dscan_5.t1_a [a:UInt32, b:UInt32, c:UInt32, t1_a:UInt32;N]
+                        Filter: t2.a = t1_dscan_5.t1_a AND __scalar_sq_1.output > Int32(300000) [a:UInt32, b:UInt32, c:UInt32, sum(t3.a):UInt64;N, t1_a:UInt32;N, t2_b:UInt32;N, t2_b:UInt32;N, t1_a:UInt32;N, __scalar_sq_1.output:UInt64;N]
+                          Projection: t2.a, t2.b, t2.c, sum(t3.a), t1_dscan_5.t1_a, t2_dscan_4.t2_b, t2_dscan_2.t2_b, t1_dscan_3.t1_a, sum(t3.a) AS __scalar_sq_1.output [a:UInt32, b:UInt32, c:UInt32, sum(t3.a):UInt64;N, t1_a:UInt32;N, t2_b:UInt32;N, t2_b:UInt32;N, t1_a:UInt32;N, __scalar_sq_1.output:UInt64;N]
+                            Left Join(ComparisonJoin):  Filter: t2.b IS NOT DISTINCT FROM sum(t3.a) [a:UInt32, b:UInt32, c:UInt32, sum(t3.a):UInt64;N, t1_a:UInt32;N, t2_b:UInt32;N, t2_b:UInt32;N, t1_a:UInt32;N]
+                              TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]
+                              Inner Join(DelimJoin):  Filter: Boolean(true) [sum(t3.a):UInt64;N, t1_a:UInt32;N, t2_b:UInt32;N, t2_b:UInt32;N, t1_a:UInt32;N]
+                                Projection: sum(t3.a), t1_dscan_5.t1_a, t2_dscan_4.t2_b [sum(t3.a):UInt64;N, t1_a:UInt32;N, t2_b:UInt32;N]
+                                  Aggregate: groupBy=[[t2_dscan_4.t2_b, t1_dscan_5.t1_a, t1_dscan_5.t1_a]], aggr=[[sum(t3.a)]] [t2_b:UInt32;N, t1_a:UInt32;N, sum(t3.a):UInt64;N]
+                                    Filter: t3.b = t2_dscan_4.t2_b AND t3.a = t1_dscan_5.t1_a [a:UInt32, b:UInt32, c:UInt32, t2_b:UInt32;N, t1_a:UInt32;N]
+                                      Inner Join(DelimJoin):  Filter: Boolean(true) [a:UInt32, b:UInt32, c:UInt32, t2_b:UInt32;N, t1_a:UInt32;N]
+                                        TableScan: t3 [a:UInt32, b:UInt32, c:UInt32]
+                                        Cross Join(ComparisonJoin):  [t2_b:UInt32;N, t1_a:UInt32;N]
+                                          Projection: t2.b AS t2_dscan_4.t2_b [t2_b:UInt32;N]
+                                            DelimGet: t2.b [b:UInt32;N]
+                                          Projection: t1.a AS t1_dscan_5.t1_a [t1_a:UInt32;N]
+                                            DelimGet: t1.a [a:UInt32;N]
+                                Cross Join(ComparisonJoin):  [t2_b:UInt32;N, t1_a:UInt32;N]
+                                  Projection: t2.b AS t2_dscan_2.t2_b [t2_b:UInt32;N]
+                                    DelimGet: t2.b [b:UInt32;N]
+                                  Projection: t1.a AS t1_dscan_3.t1_a [t1_a:UInt32;N]
+                                    DelimGet: t1.a [a:UInt32;N]
+                  Projection: t1.a AS t1_dscan_1.t1_a [t1_a:UInt32;N]
+                    DelimGet: t1.a [a:UInt32;N]
         ");
         Ok(())
     }
@@ -2086,14 +2068,14 @@ mod tests {
         Projection: outer_table.a, outer_table.b, outer_table.c [a:UInt32, b:UInt32, c:UInt32]
           Filter: outer_table.a > Int32(1) AND __in_sq_1.output [a:UInt32, b:UInt32, c:UInt32, __in_sq_1.output:Boolean]
             Projection: outer_table.a, outer_table.b, outer_table.c, mark AS __in_sq_1.output [a:UInt32, b:UInt32, c:UInt32, __in_sq_1.output:Boolean]
-              LeftMark Join(ComparisonJoin):  Filter: outer_table.c = inner_table_lv1.b AND outer_table.a IS NOT DISTINCT FROM delim_scan_1.outer_table_a AND outer_table.b IS NOT DISTINCT FROM delim_scan_1.outer_table_b [a:UInt32, b:UInt32, c:UInt32, mark:Boolean]
+              LeftMark Join(ComparisonJoin):  Filter: outer_table.c = inner_table_lv1.b AND outer_table.a IS NOT DISTINCT FROM inner_table_lv1.b AND outer_table.b IS NOT DISTINCT FROM outer_table_dscan_1.outer_table_a [a:UInt32, b:UInt32, c:UInt32, mark:Boolean]
                 TableScan: outer_table [a:UInt32, b:UInt32, c:UInt32]
                 Projection: inner_table_lv1.b, outer_table_dscan_1.outer_table_a, outer_table_dscan_1.outer_table_b [b:UInt32, outer_table_a:UInt32;N, outer_table_b:UInt32;N]
                   Inner Join(ComparisonJoin):  Filter: inner_table_lv1.a = outer_table_dscan_1.outer_table_a AND outer_table_dscan_1.outer_table_a > inner_table_lv1.c AND inner_table_lv1.b = Int32(1) AND outer_table_dscan_1.outer_table_b = inner_table_lv1.b AND inner_table_lv1.a = inner_table_lv2.a [a:UInt32, b:UInt32, c:UInt32, outer_table_a:UInt32;N, outer_table_b:UInt32;N, a:UInt32, b:UInt32, c:UInt32]
                     Inner Join(DelimJoin):  Filter: Boolean(true) [a:UInt32, b:UInt32, c:UInt32, outer_table_a:UInt32;N, outer_table_b:UInt32;N]
                       TableScan: inner_table_lv1 [a:UInt32, b:UInt32, c:UInt32]
-                      SubqueryAlias: outer_table_dscan_1 [outer_table_a:UInt32;N, outer_table_b:UInt32;N]
-                        DelimGet: outer_table.a, outer_table.b [outer_table_a:UInt32;N, outer_table_b:UInt32;N]
+                      Projection: outer_table.a AS outer_table_dscan_1.outer_table_a, outer_table.b AS outer_table_dscan_1.outer_table_b [outer_table_a:UInt32;N, outer_table_b:UInt32;N]
+                        DelimGet: outer_table.a, outer_table.b [a:UInt32;N, b:UInt32;N]
                     TableScan: inner_table_lv2 [a:UInt32, b:UInt32, c:UInt32]
         ");
 
@@ -2138,21 +2120,21 @@ mod tests {
         //                   TableScan: orders
 
         assert_decorrelate!(plan, @r"
-           Projection: customers.a, customers.b, customers.c [a:UInt32, b:UInt32, c:UInt32]
-             Filter: customers.a > Int32(100) AND __in_sq_1.output [a:UInt32, b:UInt32, c:UInt32, __in_sq_1.output:Boolean]
-               Projection: customers.a, customers.b, customers.c, mark AS __in_sq_1.output [a:UInt32, b:UInt32, c:UInt32, __in_sq_1.output:Boolean]
-                 LeftMark Join(ComparisonJoin):  Filter: customers.a = orders.c AND customers.a IS NOT DISTINCT FROM delim_scan_1.customers_a [a:UInt32, b:UInt32, c:UInt32, mark:Boolean]
-                   TableScan: customers [a:UInt32, b:UInt32, c:UInt32]
-                   Projection: orders.c, customers_dscan_1.customers_a [c:UInt32, customers_a:UInt32;N]
-                     Projection: orders.a, orders.b, orders.c, customers_dscan_1.customers_a [a:UInt32, b:UInt32, c:UInt32, customers_a:UInt32;N]
-                       Filter: row_number <= Int64(3) [a:UInt32, b:UInt32, c:UInt32, customers_a:UInt32;N, row_number:UInt64]
-                         WindowAggr: windowExpr=[[row_number() PARTITION BY [customers_dscan_1.customers_a] ORDER BY [orders.c DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS row_number]] [a:UInt32, b:UInt32, c:UInt32, customers_a:UInt32;N, row_number:UInt64]
-                           Filter: orders.a = customers_dscan_1.customers_a AND orders.b = Int32(1) [a:UInt32, b:UInt32, c:UInt32, customers_a:UInt32;N]
-                             Inner Join(DelimJoin):  Filter: Boolean(true) [a:UInt32, b:UInt32, c:UInt32, customers_a:UInt32;N]
-                               TableScan: orders [a:UInt32, b:UInt32, c:UInt32]
-                               SubqueryAlias: customers_dscan_1 [customers_a:UInt32;N]
-                                 DelimGet: customers.a [customers_a:UInt32;N]
-            ");
+        Projection: customers.a, customers.b, customers.c [a:UInt32, b:UInt32, c:UInt32]
+          Filter: customers.a > Int32(100) AND __in_sq_1.output [a:UInt32, b:UInt32, c:UInt32, __in_sq_1.output:Boolean]
+            Projection: customers.a, customers.b, customers.c, mark AS __in_sq_1.output [a:UInt32, b:UInt32, c:UInt32, __in_sq_1.output:Boolean]
+              LeftMark Join(ComparisonJoin):  Filter: customers.a = orders.c AND customers.a IS NOT DISTINCT FROM orders.c [a:UInt32, b:UInt32, c:UInt32, mark:Boolean]
+                TableScan: customers [a:UInt32, b:UInt32, c:UInt32]
+                Projection: orders.c, customers_dscan_1.customers_a [c:UInt32, customers_a:UInt32;N]
+                  Projection: orders.a, orders.b, orders.c, customers_dscan_1.customers_a [a:UInt32, b:UInt32, c:UInt32, customers_a:UInt32;N]
+                    Filter: row_number <= Int64(3) [a:UInt32, b:UInt32, c:UInt32, customers_a:UInt32;N, row_number:UInt64]
+                      WindowAggr: windowExpr=[[row_number() PARTITION BY [customers_dscan_1.customers_a] ORDER BY [orders.c DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS row_number]] [a:UInt32, b:UInt32, c:UInt32, customers_a:UInt32;N, row_number:UInt64]
+                        Filter: orders.a = customers_dscan_1.customers_a AND orders.b = Int32(1) [a:UInt32, b:UInt32, c:UInt32, customers_a:UInt32;N]
+                          Inner Join(DelimJoin):  Filter: Boolean(true) [a:UInt32, b:UInt32, c:UInt32, customers_a:UInt32;N]
+                            TableScan: orders [a:UInt32, b:UInt32, c:UInt32]
+                            Projection: customers.a AS customers_dscan_1.customers_a [customers_a:UInt32;N]
+                              DelimGet: customers.a [a:UInt32;N]
+        ");
 
         Ok(())
     }
@@ -2209,7 +2191,7 @@ mod tests {
         Projection: outer_table.a, outer_table.b, outer_table.c [a:UInt32, b:UInt32, c:UInt32]
           Filter: outer_table.a > Int32(1) AND __in_sq_1.output [a:UInt32, b:UInt32, c:UInt32, __in_sq_1.output:Boolean]
             Projection: outer_table.a, outer_table.b, outer_table.c, mark AS __in_sq_1.output [a:UInt32, b:UInt32, c:UInt32, __in_sq_1.output:Boolean]
-              LeftMark Join(ComparisonJoin):  Filter: outer_table.c = inner_table.b AND outer_table.a IS NOT DISTINCT FROM delim_scan_1.outer_table_a [a:UInt32, b:UInt32, c:UInt32, mark:Boolean]
+              LeftMark Join(ComparisonJoin):  Filter: outer_table.c = inner_table.b AND outer_table.a IS NOT DISTINCT FROM inner_table.b [a:UInt32, b:UInt32, c:UInt32, mark:Boolean]
                 TableScan: outer_table [a:UInt32, b:UInt32, c:UInt32]
                 Projection: inner_table.b, outer_table_dscan_1.outer_table_a [b:UInt32, outer_table_a:UInt32;N]
                   Filter: row_num = Int32(1) [a:UInt32, b:UInt32, c:UInt32, outer_table_a:UInt32;N, row_num:UInt64]
@@ -2217,8 +2199,8 @@ mod tests {
                       Filter: inner_table.a = outer_table_dscan_1.outer_table_a [a:UInt32, b:UInt32, c:UInt32, outer_table_a:UInt32;N]
                         Inner Join(DelimJoin):  Filter: Boolean(true) [a:UInt32, b:UInt32, c:UInt32, outer_table_a:UInt32;N]
                           TableScan: inner_table [a:UInt32, b:UInt32, c:UInt32]
-                          SubqueryAlias: outer_table_dscan_1 [outer_table_a:UInt32;N]
-                            DelimGet: outer_table.a [outer_table_a:UInt32;N]
+                          Projection: outer_table.a AS outer_table_dscan_1.outer_table_a [outer_table_a:UInt32;N]
+                            DelimGet: outer_table.a [a:UInt32;N]
         ");
 
         Ok(())

@@ -3204,7 +3204,18 @@ pub const UNNEST_COLUMN_PREFIX: &str = "UNNEST";
 impl Display for Expr {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match self {
-            Expr::Alias(Alias { expr, name, .. }) => write!(f, "{expr} AS {name}"),
+            Expr::Alias(Alias {
+                expr,
+                relation,
+                name,
+                ..
+            }) => {
+                if let Some(relation) = relation {
+                    write!(f, "{expr} AS {relation}.{name}")
+                } else {
+                    write!(f, "{expr} AS {name}")
+                }
+            }
             Expr::Column(c) => write!(f, "{c}"),
             Expr::OuterReferenceColumn(_, c) => {
                 write!(f, "{OUTER_REFERENCE_COLUMN_PREFIX}({c})")
