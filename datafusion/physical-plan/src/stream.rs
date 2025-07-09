@@ -528,12 +528,24 @@ pin_project! {
     /// This ensures upstream operators receive batches no larger than
     /// `batch_size`, which can improve parallelism when data sources
     /// generate very large batches.
+    ///
+    /// # Fields
+    ///
+    /// - `current_batch`: The batch currently being split, if any
+    /// - `offset`: Index of the next row to split from `current_batch`.
+    ///   This tracks our position within the current batch being split.
+    ///
+    /// # Invariants
+    ///
+    /// - `offset` is always ≤ `current_batch.num_rows()` when `current_batch` is `Some`
+    /// - When `current_batch` is `None`, `offset` is always 0
+    /// - `batch_size` is always > 0
     pub struct BatchSplitStream {
         #[pin]
         input: SendableRecordBatchStream,
         schema: SchemaRef,
         batch_size: usize,
-        current: Option<RecordBatch>,
+        current_batch: Option<RecordBatch>,
         offset: usize,
     }
 }
@@ -549,7 +561,7 @@ impl BatchSplitStream {
             input,
             schema,
             batch_size,
-            current: None,
+            current_batch: None,
             offset: 0,
         }
     }
@@ -563,13 +575,13 @@ impl Stream for BatchSplitStream {
         cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
         loop {
-            if let Some(batch) = self.current.take() {
+            if let Some(batch) = self.current_batch.take() {
                 let remaining = batch.num_rows() - self.offset;
                 let to_take = remaining.min(self.batch_size);
                 let out = batch.slice(self.offset, to_take);
                 self.offset += to_take;
                 if self.offset < batch.num_rows() {
-                    self.current = Some(batch);
+                    self.current_batch = Some(batch);
                 } else {
                     self.offset = 0;
                 }
@@ -581,7 +593,7 @@ impl Stream for BatchSplitStream {
                     if batch.num_rows() <= self.batch_size {
                         return Poll::Ready(Some(Ok(batch)));
                     } else {
-                        self.current = Some(batch);
+                        self.current_batch = Some(batch);
                         continue;
                     }
                 }
