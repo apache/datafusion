@@ -41,6 +41,7 @@ use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_physical_expr::conjunction;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+use datafusion_physical_plan::filter_pushdown::PredicateSupportDiscriminant;
 use datafusion_physical_plan::filter_pushdown::{
     FilterPushdownPropagation, PredicateSupport,
 };
@@ -622,11 +623,8 @@ impl FileSource for ParquetSource {
         config: &ConfigOptions,
     ) -> datafusion_common::Result<FilterPushdownPropagation<Arc<dyn FileSource>>> {
         let Some(file_schema) = self.file_schema.clone() else {
-            return Ok(FilterPushdownPropagation::with_filters(
-                filters
-                    .into_iter()
-                    .map(PredicateSupport::Unsupported)
-                    .collect(),
+            return Ok(FilterPushdownPropagation::with_parent_pushdown_result(
+                vec![PredicateSupportDiscriminant::Unsupported; filters.len()],
             ));
         };
         // Determine if based on configs we should push filters down.
@@ -657,7 +655,9 @@ impl FileSource for ParquetSource {
         {
             // No filters can be pushed down, so we can just return the remaining filters
             // and avoid replacing the source in the physical plan.
-            return Ok(FilterPushdownPropagation::with_filters(filters));
+            return Ok(FilterPushdownPropagation::with_parent_pushdown_result(
+                vec![PredicateSupportDiscriminant::Unsupported; filters.len()],
+            ));
         }
         let allowed_filters = filters
             .iter()
@@ -678,15 +678,15 @@ impl FileSource for ParquetSource {
         // If pushdown_filters is false we tell our parents that they still have to handle the filters,
         // even if we updated the predicate to include the filters (they will only be used for stats pruning).
         if !pushdown_filters {
-            return Ok(FilterPushdownPropagation::with_filters(
-                filters
-                    .into_iter()
-                    .map(|f| PredicateSupport::Unsupported(f.into_inner()))
-                    .collect_vec(),
+            return Ok(FilterPushdownPropagation::with_parent_pushdown_result(
+                vec![PredicateSupportDiscriminant::Unsupported; filters.len()],
             )
             .with_updated_node(source));
         }
-        Ok(FilterPushdownPropagation::with_filters(filters).with_updated_node(source))
+        Ok(FilterPushdownPropagation::with_parent_pushdown_result(
+            filters.iter().map(|f| f.discriminant()).collect(),
+        )
+        .with_updated_node(source))
     }
 
     fn with_schema_adapter_factory(

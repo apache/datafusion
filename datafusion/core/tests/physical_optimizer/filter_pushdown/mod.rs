@@ -506,6 +506,113 @@ fn schema() -> SchemaRef {
     Arc::clone(&TEST_SCHEMA)
 }
 
+#[tokio::test]
+async fn test_hashjoin_parent_filter_pushdown() {
+    use datafusion_common::JoinType;
+    use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
+
+    // Create build side with limited values
+    let build_batches = vec![record_batch!(
+        ("a", Utf8, ["aa", "ab"]),
+        ("b", Utf8, ["ba", "bb"]),
+        ("c", Float64, [1.0, 2.0])
+    )
+    .unwrap()];
+    let build_side_schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Utf8, false),
+        Field::new("b", DataType::Utf8, false),
+        Field::new("c", DataType::Float64, false),
+    ]));
+    let build_scan = TestScanBuilder::new(Arc::clone(&build_side_schema))
+        .with_support(true)
+        .with_batches(build_batches)
+        .build();
+
+    // Create probe side with more values
+    let probe_batches = vec![record_batch!(
+        ("d", Utf8, ["aa", "ab", "ac", "ad"]),
+        ("e", Utf8, ["ba", "bb", "bc", "bd"]),
+        ("f", Float64, [1.0, 2.0, 3.0, 4.0])
+    )
+    .unwrap()];
+    let probe_side_schema = Arc::new(Schema::new(vec![
+        Field::new("d", DataType::Utf8, false),
+        Field::new("e", DataType::Utf8, false),
+        Field::new("f", DataType::Float64, false),
+    ]));
+    let probe_scan = TestScanBuilder::new(Arc::clone(&probe_side_schema))
+        .with_support(true)
+        .with_batches(probe_batches)
+        .build();
+
+    // Create HashJoinExec
+    let on = vec![(
+        col("a", &build_side_schema).unwrap(),
+        col("d", &probe_side_schema).unwrap(),
+    )];
+    let join = Arc::new(
+        HashJoinExec::try_new(
+            build_scan,
+            probe_scan,
+            on,
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::Partitioned,
+            datafusion_common::NullEquality::NullEqualsNothing,
+        )
+        .unwrap(),
+    );
+
+    // Create filters that can be pushed down to different sides
+    // We need to create filters in the context of the join output schema
+    let join_schema = join.schema();
+
+    // Filter on build side column: a = 'aa'
+    let left_filter = col_lit_predicate("a", "aa", &join_schema);
+    // Filter on probe side column: e = 'ba'
+    let right_filter = col_lit_predicate("e", "ba", &join_schema);
+    // Filter that references both sides: a = d (should not be pushed down)
+    let cross_filter = Arc::new(BinaryExpr::new(
+        col("a", &join_schema).unwrap(),
+        Operator::Eq,
+        col("d", &join_schema).unwrap(),
+    )) as Arc<dyn PhysicalExpr>;
+    // Combine all filters into a single predicate using AND
+    // The left and right filters will be pushed down to their respective sides
+    // The cross filter will remain at the top level of the join
+    // and will not be pushed down.
+    let filter = Arc::new(BinaryExpr::new(
+        left_filter.clone(),
+        Operator::And,
+        right_filter.clone(),
+    )) as Arc<dyn PhysicalExpr>;
+    let filter = Arc::new(BinaryExpr::new(filter, Operator::And, cross_filter.clone()))
+        as Arc<dyn PhysicalExpr>;
+
+    let plan = Arc::new(FilterExec::try_new(filter, Arc::clone(&join) as _).unwrap())
+        as Arc<dyn ExecutionPlan>;
+
+    // Test that filters are pushed down correctly to each side of the join
+    insta::assert_snapshot!(
+        OptimizationTest::new(Arc::clone(&plan), FilterPushdown::new(), true),
+        @r"
+    OptimizationTest:
+      input:
+        - FilterExec: a@0 = aa AND e@4 = ba AND a@0 = d@3
+        -   HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, d@0)]
+        -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+        -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[d, e, f], file_type=test, pushdown_supported=true
+      output:
+        Ok:
+          - FilterExec: a@0 = d@3
+          -   HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, d@0)]
+          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@0 = aa
+          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[d, e, f], file_type=test, pushdown_supported=true, predicate=e@1 = ba
+    "
+    );
+}
+
 /// Returns a predicate that is a binary expression col = lit
 fn col_lit_predicate(
     column_name: &str,

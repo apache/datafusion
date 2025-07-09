@@ -29,7 +29,9 @@ use datafusion_datasource::{
 use datafusion_physical_expr::conjunction;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
-use datafusion_physical_plan::filter_pushdown::FilterPushdownPhase;
+use datafusion_physical_plan::filter_pushdown::{
+    FilterPushdownPhase, PredicateSupportDiscriminant,
+};
 use datafusion_physical_plan::{
     displayable,
     filter::FilterExec,
@@ -227,19 +229,13 @@ impl FileSource for TestSource {
                 predicate: Some(conjunction(filters.clone())),
                 ..self.clone()
             });
-            Ok(FilterPushdownPropagation {
-                filters: filters
-                    .into_iter()
-                    .map(PredicateSupport::Supported)
-                    .collect(),
-                updated_node: Some(new_node),
-            })
+            Ok(FilterPushdownPropagation::with_parent_pushdown_result(
+                vec![PredicateSupportDiscriminant::Supported; filters.len()],
+            )
+            .with_updated_node(new_node))
         } else {
-            Ok(FilterPushdownPropagation::with_filters(
-                filters
-                    .into_iter()
-                    .map(PredicateSupport::Unsupported)
-                    .collect(),
+            Ok(FilterPushdownPropagation::with_parent_pushdown_result(
+                vec![PredicateSupportDiscriminant::Unsupported; filters.len()],
             ))
         }
     }
@@ -554,19 +550,17 @@ impl ExecutionPlan for TestNode {
                         FilterExec::try_new(Arc::clone(filter), Arc::clone(&self.input))?;
                     let new_self =
                         TestNode::new(false, Arc::new(new_child), self.predicate.clone());
-                    let mut res =
-                        FilterPushdownPropagation::transparent(child_pushdown_result);
+                    let mut res = FilterPushdownPropagation::all(child_pushdown_result);
                     res.updated_node = Some(Arc::new(new_self) as Arc<dyn ExecutionPlan>);
                     Ok(res)
                 }
                 PredicateSupport::Supported(_) => {
-                    let res =
-                        FilterPushdownPropagation::transparent(child_pushdown_result);
+                    let res = FilterPushdownPropagation::all(child_pushdown_result);
                     Ok(res)
                 }
             }
         } else {
-            let res = FilterPushdownPropagation::transparent(child_pushdown_result);
+            let res = FilterPushdownPropagation::all(child_pushdown_result);
             Ok(res)
         }
     }

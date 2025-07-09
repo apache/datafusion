@@ -563,7 +563,7 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     ///   they have been handled.
     /// - A `HashJoinExec` might ignore the pushdown result if filters need to
     ///   be applied during the join operation. It passes the parent filters back
-    ///   up wrapped in [`FilterPushdownPropagation::transparent`], discarding
+    ///   up wrapped in [`FilterPushdownPropagation::any`], discarding
     ///   any self-filters from children.
     ///
     /// **Example Walkthrough:**
@@ -620,9 +620,7 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
         child_pushdown_result: ChildPushdownResult,
         _config: &ConfigOptions,
     ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
-        Ok(FilterPushdownPropagation::transparent(
-            child_pushdown_result,
-        ))
+        Ok(FilterPushdownPropagation::all(child_pushdown_result))
     }
 
     /// Injects arbitrary run-time state into this execution plan, returning a new plan
