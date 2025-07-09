@@ -63,7 +63,7 @@ use arrow::array::{
     UInt32Array, UInt64Array,
 };
 use arrow::compute::kernels::cmp::{eq, not_distinct};
-use arrow::compute::{and, concat_batches, take, FilterBuilder};
+use arrow::compute::{and, concat_batches, take, BatchCoalescer, FilterBuilder};
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
@@ -980,6 +980,17 @@ async fn collect_left_input(
         })
         .await?;
 
+    if batches.len() == 0 {
+        return Ok(JoinLeftData::new(
+            Box::new(JoinHashMapU32::with_capacity(0)),
+            RecordBatch::new_empty(schema),
+            Vec::new(),
+            Mutex::new(BooleanBufferBuilder::new(0)),
+            AtomicUsize::new(probe_threads_count),
+            reservation,
+        ));
+    };
+
     // Estimation of memory size, required for hashtable, prior to allocation.
     // Final result can be verified using `RawTable.allocation_info()`
     let fixed_size_u32 = size_of::<JoinHashMapU32>();
@@ -1005,38 +1016,13 @@ async fn collect_left_input(
     let mut offset = 0;
 
     // Updating hashmap starting from the last batch
-    let batches_iter = batches.iter().rev();
-    for batch in batches_iter.clone() {
-        hashes_buffer.clear();
-        hashes_buffer.resize(batch.num_rows(), 0);
-        update_hash(
-            &on_left,
-            batch,
-            &mut *hashmap,
-            offset,
-            &random_state,
-            &mut hashes_buffer,
-            0,
-            true,
-        )?;
-        offset += batch.num_rows();
+
+    let batches_iter = batches.iter();
+    let mut coalescer = BatchCoalescer::new(schema, num_rows);
+    for batch in batches_iter {
+        coalescer.push_batch(batch.clone()).unwrap();
     }
-    // Merge all batches into a single batch, so we can directly index into the arrays
-    let single_batch = concat_batches(&schema, batches_iter)?;
-
-    // Reserve additional memory for visited indices bitmap and create shared builder
-    let visited_indices_bitmap = if with_visited_indices_bitmap {
-        let bitmap_size = bit_util::ceil(single_batch.num_rows(), 8);
-        reservation.try_grow(bitmap_size)?;
-        metrics.build_mem_used.add(bitmap_size);
-
-        let mut bitmap_buffer = BooleanBufferBuilder::new(single_batch.num_rows());
-        bitmap_buffer.append_n(num_rows, false);
-        bitmap_buffer
-    } else {
-        BooleanBufferBuilder::new(0)
-    };
-
+    let single_batch = coalescer.next_completed_batch().unwrap();
     let left_values = on_left
         .iter()
         .map(|c| {
@@ -1044,6 +1030,31 @@ async fn collect_left_input(
                 .into_array(single_batch.num_rows())
         })
         .collect::<Result<Vec<_>>>()?;
+
+    hashes_buffer.clear();
+    hashes_buffer.resize(single_batch.num_rows(), 0);
+    update_hash(
+        &left_values,
+        &mut *hashmap,
+        0, // we pass in 0 offset since it is a single batch
+        &random_state,
+        &mut hashes_buffer,
+        0,
+        true,
+    )?;
+
+    // Reserve additional memory for visited indices bitmap and create shared builder
+    let visited_indices_bitmap = if with_visited_indices_bitmap {
+        let bitmap_size = bit_util::ceil(num_rows, 8);
+        reservation.try_grow(bitmap_size)?;
+        metrics.build_mem_used.add(bitmap_size);
+
+        let mut bitmap_buffer = BooleanBufferBuilder::new(num_rows);
+        bitmap_buffer.append_n(num_rows, false);
+        bitmap_buffer
+    } else {
+        BooleanBufferBuilder::new(0)
+    };
 
     let data = JoinLeftData::new(
         hashmap,
@@ -1065,8 +1076,7 @@ async fn collect_left_input(
 /// as a chain head for rows with equal hash values.
 #[allow(clippy::too_many_arguments)]
 pub fn update_hash(
-    on: &[PhysicalExprRef],
-    batch: &RecordBatch,
+    key_values: &Vec<Arc<dyn Array>>,
     hash_map: &mut dyn JoinHashMapType,
     offset: usize,
     random_state: &RandomState,
@@ -1074,17 +1084,11 @@ pub fn update_hash(
     deleted_offset: usize,
     fifo_hashmap: bool,
 ) -> Result<()> {
-    // evaluate the keys
-    let keys_values = on
-        .iter()
-        .map(|c| c.evaluate(batch)?.into_array(batch.num_rows()))
-        .collect::<Result<Vec<_>>>()?;
-
     // calculate the hash values
-    let hash_values = create_hashes(&keys_values, random_state, hashes_buffer)?;
+    let hash_values = create_hashes(key_values, random_state, hashes_buffer)?;
 
     // For usual JoinHashmap, the implementation is void.
-    hash_map.extend_zero(batch.num_rows());
+    hash_map.extend_zero(key_values[0].len());
 
     // Updating JoinHashMap from hash values iterator
     let hash_values_iter = hash_values
