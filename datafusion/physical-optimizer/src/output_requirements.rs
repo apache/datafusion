@@ -151,9 +151,9 @@ impl DisplayAs for OutputRequirementExec {
                                 if let Some(options) = &req.options {
                                     let direction =
                                         if options.descending { "desc" } else { "asc" };
-                                    format!("({}, {})", expr_str, direction)
+                                    format!("({expr_str}, {direction})")
                                 } else {
-                                    format!("({}, unspecified)", expr_str)
+                                    format!("({expr_str}, unspecified)")
                                 }
                             })
                             .collect();
