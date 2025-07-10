@@ -69,6 +69,8 @@ futures = { workspace = true }
 log = { workspace = true }
 mimalloc = { version = "0.1", default-features = false }
 object_store = { workspace = true, features = ["aws", "http"] }
+parquet = { workspace = true, features = ["encryption"] }
+parquet-key-management = {  version = "0.1", features = ["_test_utils"] }
 prost = { workspace = true }
 tempfile = { workspace = true }
 test-utils = { path = "../test-utils" }
