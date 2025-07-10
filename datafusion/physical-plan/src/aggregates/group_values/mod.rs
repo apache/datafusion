@@ -121,11 +121,13 @@ pub trait GroupValues: Send {
 ///     will be chosen.
 ///   
 ///   - If group by multiple columns, and all column types have the specific
-///     [`GroupColumn`] implementations, [`GroupValuesColumn`] will be chosen.
+///     `GroupColumn` implementations, `GroupValuesColumn` will be chosen.
 ///
-///   - Otherwise, the general implementation [`GroupValuesRows`] will be chosen.
+///   - Otherwise, the general implementation `GroupValuesRows` will be chosen.
 ///
-/// [`GroupColumn`]:  crate::aggregates::group_values::multi_group_by::GroupColumn
+/// `GroupColumn`:  crate::aggregates::group_values::multi_group_by::GroupColumn
+/// `GroupValuesColumn`: crate::aggregates::group_values::multi_group_by::GroupValuesColumn
+/// `GroupValuesRows`: crate::aggregates::group_values::row::GroupValuesRows
 ///
 pub fn new_group_values(
     schema: SchemaRef,
