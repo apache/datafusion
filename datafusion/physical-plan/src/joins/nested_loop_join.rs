@@ -52,7 +52,6 @@ use arrow::array::{BooleanBufferBuilder, PrimitiveArray, UInt32Array, UInt64Arra
 use arrow::compute::concat_batches;
 use arrow::datatypes::{Schema, SchemaRef, UInt32Type, UInt64Type};
 use arrow::record_batch::RecordBatch;
-use datafusion_common::instant::Instant;
 use datafusion_common::{
     exec_datafusion_err, internal_datafusion_err, internal_err, project_schema, JoinSide,
     Result, Statistics,
@@ -672,10 +671,15 @@ enum NestedLoopJoinStreamState {
     /// Indicates that a non-empty batch has been fetched from probe-side, and
     /// is ready to be processed
     ProcessProbeBatch(RecordBatch),
-    /// Indicates that probe-side has been fully processed
-    ExhaustedProbeSide,
-    /// Output unmatched build-side rows
-    OutputUnmatchedBuildRows(RecordBatch), // RecordBatch::new_empty(self.outer_table.schema())
+    /// Preparation phase: Gathers the indices of unmatched rows from the build-side.
+    /// This state is entered for join types that emit unmatched build-side rows
+    /// (e.g., LEFT and FULL joins) after the entire probe-side input has been consumed.
+    PrepareUnmatchedBuildRows,
+    /// Output unmatched build-side rows.
+    /// The indices for rows to output has already been calculated in the previous
+    /// `PrepareUnmatchedBuildRows` state. In this state the final batch will be materialized incrementally.
+    // The inner `RecordBatch` is an empty dummy batch used to get right schema.
+    OutputUnmatchedBuildRows(RecordBatch),
     /// Indicates that NestedLoopJoinStream execution is completed
     Completed,
 }
@@ -692,7 +696,17 @@ impl NestedLoopJoinStreamState {
     }
 }
 
-/// Tracks progress when building join result batches incrementally.
+/// Tracks incremental output of join result batches.
+///
+/// Initialized with all matching pairs that satisfy the join predicate.
+/// Pairs are stored as indices in `build_indices` and `probe_indices`
+/// Each poll outputs a batch within the configured size limit and updates
+/// processed_count until all pairs are consumed.
+///
+/// Example: 5000 matches, batch size limit is 100
+/// - Poll 1: output batch[0..100], processed_count = 100  
+/// - Poll 2: output batch[100..200], processed_count = 200
+/// - ...continues until processed_count = 5000
 struct JoinResultStatus {
     /// Row indices from build-side table (left table).
     build_indices: PrimitiveArray<UInt64Type>,
@@ -829,15 +843,13 @@ impl NestedLoopJoinStream {
                 }
                 NestedLoopJoinStreamState::ProcessProbeBatch(_) => {
                     let poll = handle_state!(self.process_probe_batch());
-                    self.join_metrics.output_batches.add(1);
                     self.join_metrics.baseline.record_poll(poll)
                 }
-                NestedLoopJoinStreamState::ExhaustedProbeSide => {
+                NestedLoopJoinStreamState::PrepareUnmatchedBuildRows => {
                     handle_state!(self.prepare_unmatched_output_indices())
                 }
                 NestedLoopJoinStreamState::OutputUnmatchedBuildRows(_) => {
                     let poll = handle_state!(self.build_unmatched_output());
-                    self.join_metrics.output_batches.add(1);
                     self.join_metrics.baseline.record_poll(poll)
                 }
                 NestedLoopJoinStreamState::Completed => Poll::Ready(None),
@@ -845,6 +857,9 @@ impl NestedLoopJoinStream {
         }
     }
 
+    // This 's main job is to construct an output `RecordBatch` based on pre-calculated join indices.
+    // It operates in a chunk-based manner, meaning it processes a portion of the results in each call,
+    // making it suitable for streaming large datasets without high memory consumption.
     fn get_next_join_result(&mut self) -> Result<Option<RecordBatch>> {
         let status = self.join_result_status.as_mut().ok_or_else(|| {
             internal_datafusion_err!(
@@ -973,7 +988,7 @@ impl NestedLoopJoinStream {
     ) -> Poll<Result<StatefulStreamResult<Option<RecordBatch>>>> {
         match ready!(self.outer_table.poll_next_unpin(cx)) {
             None => {
-                self.state = NestedLoopJoinStreamState::ExhaustedProbeSide;
+                self.state = NestedLoopJoinStreamState::PrepareUnmatchedBuildRows;
             }
             Some(Ok(right_batch)) => {
                 self.join_metrics.input_batches.add(1);
@@ -1024,7 +1039,10 @@ impl NestedLoopJoinStream {
         let join_result = self.get_next_join_result()?;
 
         match join_result {
-            Some(res) => Ok(StatefulStreamResult::Ready(Some(res))),
+            Some(res) => {
+                self.join_metrics.output_batches.add(1);
+                Ok(StatefulStreamResult::Ready(Some(res)))
+            }
             None => {
                 self.state = NestedLoopJoinStreamState::FetchProbeBatch;
                 self.join_result_status = None;
@@ -1036,11 +1054,15 @@ impl NestedLoopJoinStream {
     fn build_unmatched_output(
         &mut self,
     ) -> Result<StatefulStreamResult<Option<RecordBatch>>> {
-        let start = Instant::now();
+        let binding = self.join_metrics.join_time.clone();
+        let _timer = binding.timer();
+
         let res = self.get_next_join_result()?;
-        self.join_metrics.join_time.add_elapsed(start);
         match res {
-            Some(res) => Ok(StatefulStreamResult::Ready(Some(res))),
+            Some(res) => {
+                self.join_metrics.output_batches.add(1);
+                Ok(StatefulStreamResult::Ready(Some(res)))
+            }
             None => {
                 self.state = NestedLoopJoinStreamState::Completed;
                 Ok(StatefulStreamResult::Ready(None))
@@ -1048,6 +1070,8 @@ impl NestedLoopJoinStream {
         }
     }
 
+    /// This function's primary purpose is to handle the final output stage required by specific join types after all right-side (probe) data has been exhausted.
+    /// It is critically important for LEFT*/FULL joins, which must emit left-side (build) rows that found no match. For these cases, it identifies the unmatched rows and prepares the necessary state to output them.
     fn prepare_unmatched_output_indices(
         &mut self,
     ) -> Result<StatefulStreamResult<Option<RecordBatch>>> {
