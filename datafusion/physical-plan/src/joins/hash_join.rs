@@ -17,6 +17,8 @@
 
 //! [`HashJoinExec`] Partitioned Hash Join Operator
 
+use arrow::array::new_empty_array;
+use arrow::compute::concat;
 use std::fmt;
 use std::mem::size_of;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -1006,12 +1008,26 @@ async fn collect_left_input(
 
     // Updating hashmap starting from the last batch
     let batches_iter = batches.iter().rev();
-    for batch in batches_iter.clone() {
+
+    // Evauate each batch up front and pass them into update_hash
+    let batch_key_arrays: Vec<Vec<ArrayRef>> = batches_iter
+        .clone()
+        .map(|batch| {
+            on_left
+                .iter()
+                .map(|c| {
+                    c.evaluate(batch)
+                        .and_then(|v| v.into_array(batch.num_rows()))
+                })
+                .collect::<Result<_>>()
+        })
+        .collect::<Result<_>>()?;
+
+    for batch_values in batch_key_arrays.iter() {
         hashes_buffer.clear();
-        hashes_buffer.resize(batch.num_rows(), 0);
+        hashes_buffer.resize(batch_values[0].len(), 0);
         update_hash(
-            &on_left,
-            batch,
+            batch_values,
             &mut *hashmap,
             offset,
             &random_state,
@@ -1019,7 +1035,7 @@ async fn collect_left_input(
             0,
             true,
         )?;
-        offset += batch.num_rows();
+        offset += batch_values[0].len();
     }
     // Merge all batches into a single batch, so we can directly index into the arrays
     let single_batch = concat_batches(&schema, batches_iter)?;
@@ -1037,13 +1053,24 @@ async fn collect_left_input(
         BooleanBufferBuilder::new(0)
     };
 
-    let left_values = on_left
-        .iter()
-        .map(|c| {
-            c.evaluate(&single_batch)?
-                .into_array(single_batch.num_rows())
-        })
-        .collect::<Result<Vec<_>>>()?;
+    let mut left_values = Vec::with_capacity(on_left.len());
+
+    // concat() errors with empty array
+    if batch_key_arrays.is_empty() {
+        for expr in &on_left {
+            let dt = expr.data_type(&schema)?;
+            left_values.push(new_empty_array(&dt));
+        }
+    } else {
+        for key_idx in 0..on_left.len() {
+            let slices: Vec<&dyn Array> = batch_key_arrays
+                .iter()
+                .map(|arrays| arrays[key_idx].as_ref())
+                .collect();
+            let concatenated = concat(&slices)?;
+            left_values.push(concatenated);
+        }
+    }
 
     let data = JoinLeftData::new(
         hashmap,
@@ -1065,8 +1092,7 @@ async fn collect_left_input(
 /// as a chain head for rows with equal hash values.
 #[allow(clippy::too_many_arguments)]
 pub fn update_hash(
-    on: &[PhysicalExprRef],
-    batch: &RecordBatch,
+    key_values: &[ArrayRef],
     hash_map: &mut dyn JoinHashMapType,
     offset: usize,
     random_state: &RandomState,
@@ -1074,17 +1100,11 @@ pub fn update_hash(
     deleted_offset: usize,
     fifo_hashmap: bool,
 ) -> Result<()> {
-    // evaluate the keys
-    let keys_values = on
-        .iter()
-        .map(|c| c.evaluate(batch)?.into_array(batch.num_rows()))
-        .collect::<Result<Vec<_>>>()?;
-
     // calculate the hash values
-    let hash_values = create_hashes(&keys_values, random_state, hashes_buffer)?;
+    let hash_values = create_hashes(key_values, random_state, hashes_buffer)?;
 
     // For usual JoinHashmap, the implementation is void.
-    hash_map.extend_zero(batch.num_rows());
+    hash_map.extend_zero(key_values[0].len()); // number of rows in batch
 
     // Updating JoinHashMap from hash values iterator
     let hash_values_iter = hash_values
