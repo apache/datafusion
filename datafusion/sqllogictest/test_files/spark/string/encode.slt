@@ -25,4 +25,3 @@
 ## PySpark 3.5.5 Result: {'encode(abc, utf-8)': bytearray(b'abc'), 'typeof(encode(abc, utf-8))': 'binary', 'typeof(abc)': 'string', 'typeof(utf-8)': 'string'}
 #query
 #SELECT encode('abc'::string, 'utf-8'::string);
-

@@ -25,4 +25,3 @@
 ## PySpark 3.5.5 Result: {'rtrim(    SparkSQL   )': '    SparkSQL', 'typeof(rtrim(    SparkSQL   ))': 'string', 'typeof(    SparkSQL   )': 'string'}
 #query
 #SELECT rtrim('    SparkSQL   '::string);
-

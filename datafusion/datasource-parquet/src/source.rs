@@ -41,8 +41,9 @@ use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_physical_expr::conjunction;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
-use datafusion_physical_plan::filter_pushdown::FilterPushdownPropagation;
-use datafusion_physical_plan::filter_pushdown::PredicateSupports;
+use datafusion_physical_plan::filter_pushdown::{
+    FilterPushdownPropagation, PredicateSupport,
+};
 use datafusion_physical_plan::metrics::Count;
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion_physical_plan::DisplayFormatType;
@@ -345,9 +346,7 @@ impl ParquetSource {
     }
 
     /// If true, the predicate will be used during the parquet scan.
-    /// Defaults to false
-    ///
-    /// [`Expr`]: datafusion_expr::Expr
+    /// Defaults to false.
     pub fn with_pushdown_filters(mut self, pushdown_filters: bool) -> Self {
         self.table_parquet_options.global.pushdown_filters = pushdown_filters;
         self
@@ -623,36 +622,67 @@ impl FileSource for ParquetSource {
         config: &ConfigOptions,
     ) -> datafusion_common::Result<FilterPushdownPropagation<Arc<dyn FileSource>>> {
         let Some(file_schema) = self.file_schema.clone() else {
-            return Ok(FilterPushdownPropagation::unsupported(filters));
+            return Ok(FilterPushdownPropagation::with_filters(
+                filters
+                    .into_iter()
+                    .map(PredicateSupport::Unsupported)
+                    .collect(),
+            ));
         };
-        // Can we push down the filters themselves into the scan or only use stats pruning?
+        // Determine if based on configs we should push filters down.
+        // If either the table / scan itself or the config has pushdown enabled,
+        // we will push down the filters.
+        // If both are disabled, we will not push down the filters.
+        // By default they are both disabled.
+        // Regardless of pushdown, we will update the predicate to include the filters
+        // because even if scan pushdown is disabled we can still use the filters for stats pruning.
         let config_pushdown_enabled = config.execution.parquet.pushdown_filters;
         let table_pushdown_enabled = self.pushdown_filters();
         let pushdown_filters = table_pushdown_enabled || config_pushdown_enabled;
 
         let mut source = self.clone();
-        let filters = PredicateSupports::new_with_supported_check(filters, |filter| {
-            can_expr_be_pushed_down_with_schemas(filter, &file_schema)
-        });
-        if filters.is_all_unsupported() {
+        let filters: Vec<PredicateSupport> = filters
+            .into_iter()
+            .map(|filter| {
+                if can_expr_be_pushed_down_with_schemas(&filter, &file_schema) {
+                    PredicateSupport::Supported(filter)
+                } else {
+                    PredicateSupport::Unsupported(filter)
+                }
+            })
+            .collect();
+        if filters
+            .iter()
+            .all(|f| matches!(f, PredicateSupport::Unsupported(_)))
+        {
             // No filters can be pushed down, so we can just return the remaining filters
             // and avoid replacing the source in the physical plan.
             return Ok(FilterPushdownPropagation::with_filters(filters));
         }
-        let allowed_filters = filters.collect_supported();
+        let allowed_filters = filters
+            .iter()
+            .filter_map(|f| match f {
+                PredicateSupport::Supported(expr) => Some(Arc::clone(expr)),
+                PredicateSupport::Unsupported(_) => None,
+            })
+            .collect_vec();
         let predicate = match source.predicate {
-            Some(predicate) => conjunction(
-                std::iter::once(predicate).chain(allowed_filters.iter().cloned()),
-            ),
-            None => conjunction(allowed_filters.iter().cloned()),
+            Some(predicate) => {
+                conjunction(std::iter::once(predicate).chain(allowed_filters))
+            }
+            None => conjunction(allowed_filters),
         };
         source.predicate = Some(predicate);
+        source = source.with_pushdown_filters(pushdown_filters);
         let source = Arc::new(source);
         // If pushdown_filters is false we tell our parents that they still have to handle the filters,
         // even if we updated the predicate to include the filters (they will only be used for stats pruning).
         if !pushdown_filters {
             return Ok(FilterPushdownPropagation::with_filters(
-                filters.make_unsupported(),
+                filters
+                    .into_iter()
+                    .map(|f| PredicateSupport::Unsupported(f.into_inner()))
+                    .collect_vec(),
             )
             .with_updated_node(source));
         }

@@ -45,4 +45,3 @@
 ## PySpark 3.5.5 Result: {'to_number(454.00, 000.00)': Decimal('454.00'), 'typeof(to_number(454.00, 000.00))': 'decimal(5,2)', 'typeof(454.00)': 'string', 'typeof(000.00)': 'string'}
 #query
 #SELECT to_number('454.00'::string, '000.00'::string);
-

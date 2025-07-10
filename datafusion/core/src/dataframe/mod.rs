@@ -2036,10 +2036,11 @@ impl DataFrame {
             match self.plan.schema().qualified_field_from_column(&old_column) {
                 Ok(qualifier_and_field) => qualifier_and_field,
                 // no-op if field not found
-                Err(DataFusionError::SchemaError(
-                    SchemaError::FieldNotFound { .. },
-                    _,
-                )) => return Ok(self),
+                Err(DataFusionError::SchemaError(e, _))
+                    if matches!(*e, SchemaError::FieldNotFound { .. }) =>
+                {
+                    return Ok(self);
+                }
                 Err(err) => return Err(err),
             };
         let projection = self

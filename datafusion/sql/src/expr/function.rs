@@ -93,6 +93,8 @@ struct FunctionArgs {
     distinct: bool,
     /// WITHIN GROUP clause, if any
     within_group: Vec<OrderByExpr>,
+    /// Was the function called without parenthesis, i.e. could this also be a column reference?
+    function_without_paranthesis: bool,
 }
 
 impl FunctionArgs {
@@ -118,6 +120,7 @@ impl FunctionArgs {
                 null_treatment,
                 distinct: false,
                 within_group,
+                function_without_paranthesis: matches!(args, FunctionArguments::None),
             });
         };
 
@@ -199,6 +202,7 @@ impl FunctionArgs {
             null_treatment,
             distinct,
             within_group,
+            function_without_paranthesis: false,
         })
     }
 }
@@ -212,7 +216,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     ) -> Result<Expr> {
         let function_args = FunctionArgs::try_new(function)?;
         let FunctionArgs {
-            name,
+            name: object_name,
             args,
             order_by,
             over,
@@ -220,6 +224,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             null_treatment,
             distinct,
             within_group,
+            function_without_paranthesis,
         } = function_args;
 
         if over.is_some() && !within_group.is_empty() {
@@ -235,18 +240,18 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         // it shouldn't have ordering requirement as function argument
         // required ordering should be defined in OVER clause.
         let is_function_window = over.is_some();
-        let sql_parser_span = name.0[0].span();
-        let name = if name.0.len() > 1 {
+        let sql_parser_span = object_name.0[0].span();
+        let name = if object_name.0.len() > 1 {
             // DF doesn't handle compound identifiers
             // (e.g. "foo.bar") for function names yet
-            name.to_string()
+            object_name.to_string()
         } else {
-            match name.0[0].as_ident() {
+            match object_name.0[0].as_ident() {
                 Some(ident) => crate::utils::normalize_ident(ident.clone()),
                 None => {
                     return plan_err!(
                         "Expected an identifier in function name, but found {:?}",
-                        name.0[0]
+                        object_name.0[0]
                     )
                 }
             }
@@ -406,21 +411,20 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                             .chain(args)
                             .collect::<Vec<_>>();
                     }
-                    (!within_group.is_empty()).then_some(within_group)
+                    within_group
                 } else {
                     let order_by = if !order_by.is_empty() {
                         order_by
                     } else {
                         within_group
                     };
-                    let order_by = self.order_by_to_sort_expr(
+                    self.order_by_to_sort_expr(
                         order_by,
                         schema,
                         planner_context,
                         true,
                         None,
-                    )?;
-                    (!order_by.is_empty()).then_some(order_by)
+                    )?
                 };
 
                 let filter: Option<Box<Expr>> = filter
@@ -462,6 +466,31 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 )));
             }
         }
+
+        // workaround for https://github.com/apache/datafusion-sqlparser-rs/issues/1909
+        if function_without_paranthesis {
+            let maybe_ids = object_name
+                .0
+                .iter()
+                .map(|part| part.as_ident().cloned().ok_or(()))
+                .collect::<Result<Vec<_>, ()>>();
+            if let Ok(ids) = maybe_ids {
+                if ids.len() == 1 {
+                    return self.sql_identifier_to_expr(
+                        ids.into_iter().next().unwrap(),
+                        schema,
+                        planner_context,
+                    );
+                } else {
+                    return self.sql_compound_identifier_to_expr(
+                        ids,
+                        schema,
+                        planner_context,
+                    );
+                }
+            }
+        }
+
         // Could not find the relevant function, so return an error
         if let Some(suggested_func_name) =
             suggest_valid_function(&name, is_function_window, self.context_provider)
