@@ -171,11 +171,16 @@ impl ChildFitlerPushdownResult {
     /// If all children support the filter, it is considered supported.
     /// If no child supports the filter, it is considered unsupported.
     pub fn any(&self) -> PredicateSupportDiscriminant {
-        self.child_results
-            .iter()
-            .fold(PredicateSupportDiscriminant::Unsupported, |acc, result| {
-                acc.or(*result)
-            })
+        if self.child_results.is_empty() {
+            // If there are no children, filters cannot be supported
+            PredicateSupportDiscriminant::Unsupported
+        } else {
+            self.child_results
+                .iter()
+                .fold(PredicateSupportDiscriminant::Unsupported, |acc, result| {
+                    acc.or(*result)
+                })
+        }
     }
 
     /// Combine all child results into a single [`PredicateSupport`].
@@ -183,11 +188,16 @@ impl ChildFitlerPushdownResult {
     /// If any child supports the filter, it is considered supported.
     /// If no child supports the filter, it is considered unsupported.
     pub fn all(&self) -> PredicateSupportDiscriminant {
-        self.child_results
-            .iter()
-            .fold(PredicateSupportDiscriminant::Supported, |acc, result| {
-                acc.and(*result)
-            })
+        if self.child_results.is_empty() {
+            // If there are no children, filters cannot be supported
+            PredicateSupportDiscriminant::Unsupported
+        } else {
+            self.child_results
+                .iter()
+                .fold(PredicateSupportDiscriminant::Supported, |acc, result| {
+                    acc.and(*result)
+                })
+        }
     }
 }
 
