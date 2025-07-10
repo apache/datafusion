@@ -133,7 +133,7 @@ impl DependentJoinRewriter {
                 ),
             )?;
 
-            let subquery_input = unwrap_subquery_input_from_expr(subquery_expr);
+            let (splan, sexpr) = unwrap_subquery_input_from_expr(subquery_expr);
 
             let correlated_columns = column_accesses
                 .iter()
@@ -146,9 +146,9 @@ impl DependentJoinRewriter {
                 .collect();
 
             current_plan = current_plan.dependent_join(
-                subquery_input.deref().clone(),
+                splan,
                 correlated_columns,
-                Some(subquery_expr.clone()),
+                Some(sexpr),
                 current_subquery_depth,
                 alias.clone(),
                 None,
@@ -528,11 +528,16 @@ impl SubqueryType {
         .to_string()
     }
 }
-fn unwrap_subquery_input_from_expr(expr: &Expr) -> Arc<LogicalPlan> {
+
+fn unwrap_subquery_input_from_expr(expr: &Expr) -> (LogicalPlan, Expr) {
     match expr {
-        Expr::ScalarSubquery(sq) => Arc::clone(&sq.subquery),
-        Expr::Exists(exists) => Arc::clone(&exists.subquery.subquery),
-        Expr::InSubquery(in_sq) => Arc::clone(&in_sq.subquery.subquery),
+        Expr::ScalarSubquery(sq) => (sq.subquery.as_ref().clone(), expr.clone()),
+        Expr::Exists(exists) => {
+            (exists.subquery.subquery.as_ref().clone(), expr.clone())
+        }
+        Expr::InSubquery(in_sq) => {
+            (in_sq.subquery.subquery.as_ref().clone(), expr.clone())
+        }
         _ => unreachable!(),
     }
 }

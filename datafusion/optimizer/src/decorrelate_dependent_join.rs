@@ -1453,7 +1453,8 @@ impl OptimizerRule for DecorrelateDependentJoin {
         let mut transformer =
             DependentJoinRewriter::new(Arc::clone(config.alias_generator()));
         let rewrite_result = transformer.rewrite_subqueries_into_dependent_joins(plan)?;
-        // println!("{}", rewrite_result.data.display_indent_schema());
+
+        println!("{}", rewrite_result.data.display_indent_schema());
 
         if rewrite_result.transformed {
             let mut decorrelator = DependentJoinDecorrelator::new_root();
@@ -1477,7 +1478,7 @@ impl OptimizerRule for DecorrelateDependentJoin {
 mod tests {
 
     use crate::decorrelate_dependent_join::DecorrelateDependentJoin;
-    use crate::test::test_table_scan_with_name;
+    use crate::test::{test_table_scan_with_name, test_table_with_columns};
     use crate::Optimizer;
     use crate::{
         assert_optimized_plan_eq_display_indent_snapshot, OptimizerConfig,
@@ -1487,10 +1488,12 @@ mod tests {
     use datafusion_common::{Column, Result};
     use datafusion_expr::expr::{WindowFunction, WindowFunctionParams};
     use datafusion_expr::{
+        binary_expr, not, JoinType, Operator, WindowFrame, WindowFunctionDefinition,
+    };
+    use datafusion_expr::{
         exists, expr_fn::col, in_subquery, lit, out_ref_col, scalar_subquery, Expr,
         LogicalPlan, LogicalPlanBuilder,
     };
-    use datafusion_expr::{JoinType, WindowFrame, WindowFunctionDefinition};
     use datafusion_functions_aggregate::{count::count, sum::sum};
     use datafusion_functions_window::row_number::row_number_udwf;
     use std::sync::Arc;
@@ -2212,6 +2215,119 @@ mod tests {
                           Projection: outer_table.a AS outer_table_dscan_1.outer_table_a [outer_table_a:UInt32;N]
                             DelimGet: outer_table.a [a:UInt32;N]
         ");
+
+        Ok(())
+    }
+
+    // TODO: support uncorrelated subquery
+    // #[test]
+    fn subquery_slt_test1() -> Result<()> {
+        // Create test tables with custom column names
+        let t1 = test_table_with_columns(
+            "t1",
+            &[
+                ("t1_id", ArrowDataType::UInt32),
+                ("t1_name", ArrowDataType::Utf8),
+                ("t1_int", ArrowDataType::Int32),
+            ],
+        )?;
+
+        let t2 = test_table_with_columns(
+            "t2",
+            &[
+                ("t2_id", ArrowDataType::UInt32),
+                ("t2_value", ArrowDataType::Utf8),
+            ],
+        )?;
+
+        // Create the subquery plan (SELECT t2_id FROM t2)
+        let subquery = Arc::new(
+            LogicalPlanBuilder::from(t2)
+                .project(vec![col("t2_id")])?
+                .build()?,
+        );
+
+        // Create the main query plan
+        // SELECT t1_id, t1_name, t1_int FROM t1 WHERE t1_id IN (SELECT t2_id FROM t2)
+        let plan = LogicalPlanBuilder::from(t1)
+            .filter(in_subquery(col("t1_id"), subquery))?
+            .project(vec![col("t1_id"), col("t1_name"), col("t1_int")])?
+            .build()?;
+
+        // Test the decorrelation transformation
+        assert_decorrelate!(plan, @r"");
+
+        Ok(())
+    }
+
+    #[test]
+    fn subquery_slt_test2() -> Result<()> {
+        // Create test tables with custom column names
+        let t1 = test_table_with_columns(
+            "t1",
+            &[
+                ("t1_id", ArrowDataType::UInt32),
+                ("t1_name", ArrowDataType::Utf8),
+                ("t1_int", ArrowDataType::Int32),
+            ],
+        )?;
+
+        let t2 = test_table_with_columns(
+            "t2",
+            &[
+                ("t2_id", ArrowDataType::UInt32),
+                ("t2_value", ArrowDataType::Utf8),
+            ],
+        )?;
+
+        // Create the subquery plan
+        // SELECT t2_id + 1 FROM t2 WHERE t1.t1_int > 0
+        let subquery = Arc::new(
+            LogicalPlanBuilder::from(t2)
+                .filter(out_ref_col(ArrowDataType::Int32, "t1.t1_int").gt(lit(0)))?
+                .project(vec![binary_expr(col("t2_id"), Operator::Plus, lit(1))])?
+                .build()?,
+        );
+
+        // Create the main query plan
+        // SELECT t1_id, t1_name, t1_int FROM t1 WHERE t1_id + 12 NOT IN (SELECT t2_id + 1 FROM t2 WHERE t1.t1_int > 0)
+        let plan = LogicalPlanBuilder::from(t1)
+            .filter(not(in_subquery(
+                binary_expr(col("t1_id"), Operator::Plus, lit(12)),
+                subquery,
+            )))?
+            .project(vec![col("t1_id"), col("t1_name"), col("t1_int")])?
+            .build()?;
+
+        // select t1.t1_id,
+        //        t1.t1_name,
+        //        t1.t1_int
+        // from t1
+        // where t1.t1_id + 12 not in (select t2.t2_id + 1 from t2 where t1.t1_int > 0);
+
+        // Projection: t1.t1_id, t1.t1_name, t1.t1_int [t1_id:UInt32, t1_name:Utf8, t1_int:Int32]
+        //   Projection: t1.t1_id, t1.t1_name, t1.t1_int [t1_id:UInt32, t1_name:Utf8, t1_int:Int32]
+        //     Filter: NOT __in_sq_1.output [t1_id:UInt32, t1_name:Utf8, t1_int:Int32, output:Boolean]
+        //       DependentJoin on [t1.t1_int lvl 1] with expr t1.t1_id + Int32(12) IN (<subquery>) depth 1 [t1_id:UInt32, t1_name:Utf8, t1_int:Int32, output:Boolean]
+        //         TableScan: t1 [t1_id:UInt32, t1_name:Utf8, t1_int:Int32]
+        //         Projection: t2.t2_id + Int32(1) [t2.t2_id + Int32(1):Int64]
+        //           Filter: outer_ref(t1.t1_int) > Int32(0) [t2_id:UInt32, t2_value:Utf8]
+        //             TableScan: t2 [t2_id:UInt32, t2_value:Utf8]
+
+        assert_decorrelate!(plan, @r"
+           Projection: t1.t1_id, t1.t1_name, t1.t1_int [t1_id:UInt32, t1_name:Utf8, t1_int:Int32]
+             Projection: t1.t1_id, t1.t1_name, t1.t1_int [t1_id:UInt32, t1_name:Utf8, t1_int:Int32]
+               Filter: NOT __in_sq_1.output [t1_id:UInt32, t1_name:Utf8, t1_int:Int32, __in_sq_1.output:Boolean]
+                 Projection: t1.t1_id, t1.t1_name, t1.t1_int, t1_dscan_1.mark AS __in_sq_1.output [t1_id:UInt32, t1_name:Utf8, t1_int:Int32, __in_sq_1.output:Boolean]
+                   LeftMark Join(ComparisonJoin):  Filter: t1.t1_id + Int32(12) = t2.t2_id + Int32(1) AND t1.t1_int IS NOT DISTINCT FROM t1_dscan_1.t1_t1_int [t1_id:UInt32, t1_name:Utf8, t1_int:Int32, mark:Boolean]
+                     TableScan: t1 [t1_id:UInt32, t1_name:Utf8, t1_int:Int32]
+                     Projection: t2.t2_id + Int32(1), t1_dscan_1.t1_t1_int [t2.t2_id + Int32(1):Int64, t1_t1_int:Int32;N]
+                       Filter: t1_dscan_1.t1_t1_int > Int32(0) [t2_id:UInt32, t2_value:Utf8, t1_t1_int:Int32;N]
+                         Inner Join(DelimJoin):  Filter: Boolean(true) [t2_id:UInt32, t2_value:Utf8, t1_t1_int:Int32;N]
+                           TableScan: t2 [t2_id:UInt32, t2_value:Utf8]
+                           Projection: t1.t1_int AS t1_dscan_1.t1_t1_int [t1_t1_int:Int32;N]
+                             DelimGet: t1.t1_int [t1_int:Int32;N]
+            ");
 
         Ok(())
     }

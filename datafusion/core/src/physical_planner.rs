@@ -1293,7 +1293,6 @@ impl DefaultPhysicalPlanner {
                 projected_schema,
                 ..
             }) => {
-                // TODO add agg to eliminate duplicated rows.
                 let resolved = session_state.resolve_table_ref(table_name.clone());
                 if let Ok(schema) = session_state.schema_for_ref(resolved.clone()) {
                     if let Some(table) = schema.table(&resolved.table).await? {
@@ -1306,7 +1305,34 @@ impl DefaultPhysicalPlanner {
                             }
                         }
 
-                        table.scan(session_state, Some(&proj), &[], None).await?
+                        // First create the scan execution plan.
+                        let scan_plan =
+                            table.scan(session_state, Some(&proj), &[], None).await?;
+
+                        // Now add aggregation to eliminate duplicated rows.
+                        // Create a PhysicalGroupBy with empty expressions, which means we're grouping by all columns
+                        let schema = &scan_plan.schema();
+                        let group_exprs: Vec<(Arc<dyn PhysicalExpr>, String)> = (0
+                            ..schema.fields().len())
+                            .map(|i| {
+                                let name = schema.field(i).name().to_string();
+                                let expr = Arc::new(Column::new(&name, i))
+                                    as Arc<dyn PhysicalExpr>;
+                                (expr, name)
+                            })
+                            .collect();
+
+                        let group_by = PhysicalGroupBy::new_single(group_exprs);
+
+                        // Create the AggregateExec with no aggregate expressions to deduplicate the rows
+                        Arc::new(AggregateExec::try_new(
+                            AggregateMode::Final,
+                            group_by,
+                            vec![], // No aggregate expressions, just grouping to deduplicate
+                            vec![], // No filters
+                            scan_plan.clone(),
+                            scan_plan.schema(),
+                        )?)
                     } else {
                         return internal_err!("no table provider");
                     }
