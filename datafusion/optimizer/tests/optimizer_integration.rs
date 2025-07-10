@@ -69,14 +69,14 @@ fn recursive_query_column_pruning() -> Result<()> {
             RecursiveQuery: is_distinct=false
               Projection: test.col_int32 AS id, Int64(1) AS level
                 Filter: test.col_int32 = Int32(1)
-                  TableScan: test projection=[col_int32]
+                  TableScan: test
               Projection: t.col_int32, numbers.level + Int64(1)
                 Inner Join: CAST(t.col_int32 AS Int64) = CAST(numbers.id AS Int64) + Int64(1)
                   SubqueryAlias: t
                     Filter: CAST(test.col_int32 AS Int64) IS NOT NULL
-                      TableScan: test projection=[col_int32]
+                      TableScan: test
                   Filter: CAST(numbers.id AS Int64) + Int64(1) IS NOT NULL
-                    TableScan: numbers projection=[id, level]
+                    TableScan: numbers
         "#
     );
     Ok(())
@@ -534,12 +534,13 @@ fn recursive_cte_projection_pushdown() -> Result<()> {
     assert_snapshot!(
         format!("{plan}"),
         @r#"SubqueryAlias: nodes
-  RecursiveQuery: is_distinct=false
-    Projection: test.col_int32 AS id
-      TableScan: test projection=[col_int32]
-    Projection: CAST(CAST(nodes.id AS Int64) + Int64(1) AS Int32)
-      Filter: nodes.id < Int32(3)
-        TableScan: nodes projection=[id]
+  Projection: id
+    RecursiveQuery: is_distinct=false
+      Projection: test.col_int32 AS id, test.col_utf8 AS name, test.col_uint32 AS extra
+        TableScan: test
+      Projection: CAST(CAST(nodes.id AS Int64) + Int64(1) AS Int32), nodes.name, nodes.extra
+        Filter: nodes.id < Int32(3)
+          TableScan: nodes
 "#
     );
     Ok(())
@@ -560,15 +561,15 @@ fn recursive_cte_with_unused_columns() -> Result<()> {
     // but this shows the current behavior
     assert_snapshot!(
         format!("{plan}"),
-        @r#"Projection: series.n
-  SubqueryAlias: series
+        @r#"SubqueryAlias: series
+  Projection: n
     RecursiveQuery: is_distinct=false
-      Projection: Int32(1) AS n, test.col_utf8, test.col_uint32, test.col_date32
+      Projection: Int64(1) AS n, test.col_utf8, test.col_uint32, test.col_date32
         Filter: test.col_int32 = Int32(1)
-          TableScan: test projection=[col_int32, col_utf8, col_uint32, col_date32]
-      Projection: CAST(CAST(series.n AS Int64) + Int64(1) AS Int32), series.col_utf8, series.col_uint32, series.col_date32
-        Filter: series.n < Int32(3)
-          TableScan: series projection=[n, col_utf8, col_uint32, col_date32]
+          TableScan: test
+      Projection: series.n + Int64(1), series.col_utf8, series.col_uint32, series.col_date32
+        Filter: series.n < Int64(3)
+          TableScan: series
 "#
     );
     Ok(())
@@ -593,10 +594,10 @@ fn recursive_cte_true_projection_pushdown() -> Result<()> {
   RecursiveQuery: is_distinct=false
     Projection: test.col_int32 AS n
       Filter: test.col_int32 = Int32(5)
-        TableScan: test projection=[col_int32]
+        TableScan: test
     Projection: CAST(CAST(countdown.n AS Int64) - Int64(1) AS Int32)
       Filter: countdown.n > Int32(1)
-        TableScan: countdown projection=[n]
+        TableScan: countdown
 "#
     );
     Ok(())
