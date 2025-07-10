@@ -25,4 +25,3 @@
 ## PySpark 3.5.5 Result: {'named_struct(a, 1, b, 2, c, 3)': Row(a=1, b=2, c=3), 'typeof(named_struct(a, 1, b, 2, c, 3))': 'struct<a:int,b:int,c:int>', 'typeof(a)': 'string', 'typeof(1)': 'int', 'typeof(b)': 'string', 'typeof(2)': 'int', 'typeof(c)': 'string', 'typeof(3)': 'int'}
 #query
 #SELECT named_struct('a'::string, 1::int, 'b'::string, 2::int, 'c'::string, 3::int);
-

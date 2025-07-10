@@ -15,13 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::logical_plan::consumer::utils::requalify_sides_if_needed;
 use crate::logical_plan::consumer::SubstraitConsumer;
 use datafusion::common::{not_impl_err, plan_err, Column, JoinType, NullEquality};
+use datafusion::logical_expr::requalify_sides_if_needed;
 use datafusion::logical_expr::utils::split_conjunction;
 use datafusion::logical_expr::{
     BinaryExpr, Expr, LogicalPlan, LogicalPlanBuilder, Operator,
 };
+
 use substrait::proto::{join_rel, JoinRel};
 
 pub async fn from_join_rel(
@@ -38,7 +39,7 @@ pub async fn from_join_rel(
     let right = LogicalPlanBuilder::from(
         consumer.consume_rel(join.right.as_ref().unwrap()).await?,
     );
-    let (left, right) = requalify_sides_if_needed(left, right)?;
+    let (left, right, _requalified) = requalify_sides_if_needed(left, right)?;
 
     let join_type = from_substrait_jointype(join.r#type)?;
     // The join condition expression needs full input schema and not the output schema from join since we lose columns from
