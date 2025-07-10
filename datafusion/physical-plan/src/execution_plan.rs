@@ -563,7 +563,7 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     ///   they have been handled.
     /// - A `HashJoinExec` might ignore the pushdown result if filters need to
     ///   be applied during the join operation. It passes the parent filters back
-    ///   up wrapped in [`FilterPushdownPropagation::any`], discarding
+    ///   up wrapped in [`FilterPushdownPropagation::if_any`], discarding
     ///   any self-filters from children.
     ///
     /// **Example Walkthrough:**
@@ -597,9 +597,9 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     ///
     /// **Helper Methods for Customization:**
     /// There are various helper methods to simplify implementing this method:
-    /// - [`FilterPushdownPropagation::any`]: Marks all parent filters as
+    /// - [`FilterPushdownPropagation::if_any`]: Marks all parent filters as
     ///   supported as long as at least one child supports them.
-    /// - [`FilterPushdownPropagation::all`]: Marks all parent filters as
+    /// - [`FilterPushdownPropagation::if_all`]: Marks all parent filters as
     ///   supported as long as all children support them.
     /// - [`FilterPushdownPropagation::with_parent_pushdown_result`]: Allows adding filters
     ///   to the propagation result, indicating which filters are supported by
