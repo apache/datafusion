@@ -90,12 +90,14 @@ impl std::fmt::Display for FilterPushdownPhase {
 /// could not handle.
 #[derive(Debug, Clone)]
 pub enum PredicateSupport {
+    /// The predicate was successfully pushed down into the child node.
     Supported(Arc<dyn PhysicalExpr>),
+    /// The predicate could not be pushed down into the child node.
     Unsupported(Arc<dyn PhysicalExpr>),
 }
 
 impl PredicateSupport {
-    /// Return the wrapped expression, discarding whether it is supported or unsupported.
+    /// Return the wrapped [`PhysicalExpr`], discarding whether it is supported or unsupported.
     pub fn into_inner(self) -> Arc<dyn PhysicalExpr> {
         match self {
             PredicateSupport::Supported(expr) | PredicateSupport::Unsupported(expr) => {
@@ -113,11 +115,16 @@ impl PredicateSupport {
     }
 }
 
-/// Discriminant for the result of pushing down a filter into a child node.
+/// Used by [`FilterPushdownPropagation`] and [`PredicateSupport`] to
+/// communicate the result of attempting to push down a filter into a child
+/// node.
+///
 /// This is the same as [`PredicateSupport`], but without the wrapped expression.
 #[derive(Debug, Clone, Copy)]
 pub enum PredicateSupportDiscriminant {
+    /// The predicate was successfully pushed down into the child node.
     Supported,
+    /// The predicate could not be pushed down into the child node.
     Unsupported,
 }
 
@@ -202,6 +209,7 @@ impl ChildFilterPushdownResult {
 }
 
 /// The result of pushing down filters into a child node.
+///
 /// This is the result provided to nodes in [`ExecutionPlan::handle_child_pushdown_result`].
 /// Nodes process this result and convert it into a [`FilterPushdownPropagation`]
 /// that is returned to their parent.
@@ -222,17 +230,20 @@ pub struct ChildPushdownResult {
     pub self_filters: Vec<Vec<PredicateSupport>>,
 }
 
-/// The result of pushing down filters into a node that it returns to its parent.
-/// This is what nodes return from [`ExecutionPlan::handle_child_pushdown_result`] to communicate
+/// The result of pushing down filters into a node.
+///
+/// Returned from [`ExecutionPlan::handle_child_pushdown_result`] to communicate
 /// to the optimizer:
 ///
-/// 1. What to do with any parent filters that were not completely handled by the children.
+/// 1. What to do with any parent filters that were could not be pushed down into the children.
 /// 2. If the node needs to be replaced in the execution plan with a new node or not.
 ///
 /// [`ExecutionPlan::handle_child_pushdown_result`]: crate::ExecutionPlan::handle_child_pushdown_result
 #[derive(Debug, Clone)]
 pub struct FilterPushdownPropagation<T> {
+    /// What filters were pushed into the parent node.
     pub filters: Vec<PredicateSupportDiscriminant>,
+    /// The updated node, if it was updated during pushdown
     pub updated_node: Option<T>,
 }
 
