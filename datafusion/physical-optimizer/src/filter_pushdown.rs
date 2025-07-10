@@ -38,7 +38,7 @@ use crate::PhysicalOptimizerRule;
 use datafusion_common::{config::ConfigOptions, Result};
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_plan::filter_pushdown::{
-    ChildFitlerPushdownResult, ChildPushdownResult, FilterPushdownPhase,
+    ChildFilterPushdownResult, ChildPushdownResult, FilterPushdownPhase,
     FilterPushdownPropagation, PredicateSupport, PredicateSupportDiscriminant,
 };
 use datafusion_physical_plan::{with_new_children_if_necessary, ExecutionPlan};
@@ -549,11 +549,11 @@ fn push_down_filters(
         );
 
         // Start by marking all parent filters as unsupported for this child
-        for original_parent_idx in 0..parent_predicates.len() {
-            parent_filter_pushdown_supports[original_parent_idx]
+        for parent_filter_pushdown_support in parent_filter_pushdown_supports.iter_mut() {
+            parent_filter_pushdown_support
                 .push(PredicateSupportDiscriminant::Unsupported);
             assert_eq!(
-                parent_filter_pushdown_supports[original_parent_idx].len(),
+                parent_filter_pushdown_support.len(),
                 child_idx + 1,
                 "Parent filter pushdown supports should have the same length as the number of children"
             );
@@ -580,7 +580,7 @@ fn push_down_filters(
                 .into_iter()
                 .enumerate()
                 .map(
-                    |(parent_filter_idx, parent_filter)| ChildFitlerPushdownResult {
+                    |(parent_filter_idx, parent_filter)| ChildFilterPushdownResult {
                         filter: parent_filter,
                         child_results: parent_filter_pushdown_supports[parent_filter_idx]
                             .clone(),

@@ -597,10 +597,11 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     ///
     /// **Helper Methods for Customization:**
     /// There are various helper methods to simplify implementing this method:
-    /// - [`FilterPushdownPropagation::transparent`]: Indicates that the node
-    ///   supports filter pushdown but does not modify it, simply transmitting
-    ///   the children's pushdown results back up to its parent.
-    /// - [`FilterPushdownPropagation::with_filters`]: Allows adding filters
+    /// - [`FilterPushdownPropagation::any`]: Marks all parent filters as
+    ///   supported as long as at least one child supports them.
+    /// - [`FilterPushdownPropagation::all`]: Marks all parent filters as
+    ///   supported as long as all children support them.
+    /// - [`FilterPushdownPropagation::with_parent_pushdown_result`]: Allows adding filters
     ///   to the propagation result, indicating which filters are supported by
     ///   the current node.
     /// - [`FilterPushdownPropagation::with_updated_node`]: Allows updating the

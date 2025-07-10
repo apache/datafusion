@@ -160,12 +160,12 @@ impl PredicateSupportDiscriminant {
 
 /// The result of pushing down a single parent filter into all children.
 #[derive(Debug, Clone)]
-pub struct ChildFitlerPushdownResult {
+pub struct ChildFilterPushdownResult {
     pub filter: Arc<dyn PhysicalExpr>,
     pub child_results: Vec<PredicateSupportDiscriminant>,
 }
 
-impl ChildFitlerPushdownResult {
+impl ChildFilterPushdownResult {
     /// Combine all child results into a single [`PredicateSupport`].
     /// If any child supports the filter, it is considered supported.
     /// If all children support the filter, it is considered supported.
@@ -213,8 +213,8 @@ pub struct ChildPushdownResult {
     /// Note that this may *not* be the same as the filters that were passed to the children as the current node may have modified them
     /// (e.g. by reassigning column indices) when it returned them from [`ExecutionPlan::gather_filters_for_pushdown`](crate::ExecutionPlan::handle_child_pushdown_result) in a [`FilterDescription`].
     /// Attached to each filter is a [`PredicateSupportDiscriminant`] *per child* that indicates whether the filter was supported or unsupported by each child.
-    /// To get combined results see [`ChildFitlerPushdownResult::any`] and [`ChildFitlerPushdownResult::all`].
-    pub parent_filters: Vec<ChildFitlerPushdownResult>,
+    /// To get combined results see [`ChildFilterPushdownResult::any`] and [`ChildFilterPushdownResult::all`].
+    pub parent_filters: Vec<ChildFilterPushdownResult>,
     /// The result of pushing down each filter this node provided into each of it's children.
     /// The outer vector corresponds to each child, and the inner vector corresponds to each filter.
     /// Since this node may have generated a different filter for each child the inner vector may have different lengths or the expressions may not match at all.
