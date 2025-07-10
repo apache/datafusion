@@ -47,6 +47,42 @@ fn init() {
 }
 
 #[test]
+fn recursive_query_column_pruning() -> Result<()> {
+    let sql = r#"
+        WITH RECURSIVE numbers(id, level) AS (
+            SELECT col_int32 AS id, 1 AS level FROM test WHERE col_int32 = 1
+            UNION ALL
+            SELECT t.col_int32, numbers.level + 1
+            FROM test t
+            JOIN numbers ON t.col_int32 = numbers.id + 1
+        )
+        SELECT id, level FROM numbers
+    "#;
+
+    let plan = test_sql(sql)?;
+
+    assert_snapshot!(
+        format!("{plan}"),
+        @r#"
+        SubqueryAlias: numbers
+          Projection: id AS id, level AS level
+            RecursiveQuery: is_distinct=false
+              Projection: test.col_int32 AS id, Int64(1) AS level
+                Filter: test.col_int32 = Int32(1)
+                  TableScan: test projection=[col_int32]
+              Projection: t.col_int32, numbers.level + Int64(1)
+                Inner Join: CAST(t.col_int32 AS Int64) = CAST(numbers.id AS Int64) + Int64(1)
+                  SubqueryAlias: t
+                    Filter: CAST(test.col_int32 AS Int64) IS NOT NULL
+                      TableScan: test projection=[col_int32]
+                  Filter: CAST(numbers.id AS Int64) + Int64(1) IS NOT NULL
+                    TableScan: numbers projection=[id, level]
+        "#
+    );
+    Ok(())
+}
+
+#[test]
 fn case_when() -> Result<()> {
     let sql = "SELECT CASE WHEN col_int32 > 0 THEN 1 ELSE 0 END FROM test";
     let plan = test_sql(sql)?;
@@ -587,6 +623,14 @@ impl ContextProvider for MyContextProvider {
 
     fn get_window_meta(&self, _name: &str) -> Option<Arc<WindowUDF>> {
         None
+    }
+
+    fn create_cte_work_table(
+        &self,
+        _name: &str,
+        schema: SchemaRef,
+    ) -> Result<Arc<dyn TableSource>> {
+        Ok(Arc::new(MyTableSource { schema }))
     }
 
     fn options(&self) -> &ConfigOptions {
