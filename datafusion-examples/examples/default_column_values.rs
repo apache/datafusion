@@ -289,9 +289,15 @@ impl PhysicalExprAdapter for DefaultValuePhysicalExprAdapter {
         partition_values: &[(FieldRef, ScalarValue)],
     ) -> Result<Arc<dyn PhysicalExpr>> {
         // First try our custom default value injection for missing columns
-        let rewritten = expr.transform(|expr| {
-            self.inject_default_values(expr, logical_file_schema, physical_file_schema)
-        }).data()?;
+        let rewritten = expr
+            .transform(|expr| {
+                self.inject_default_values(
+                    expr,
+                    logical_file_schema,
+                    physical_file_schema,
+                )
+            })
+            .data()?;
 
         // Then apply the default adapter as a fallback to handle standard schema differences
         // like type casting, partition column handling, etc.
