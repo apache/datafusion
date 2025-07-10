@@ -25,4 +25,3 @@
 ## PySpark 3.5.5 Result: {'(1 IS NULL)': False, 'typeof((1 IS NULL))': 'boolean', 'typeof(1)': 'int'}
 #query
 #SELECT isnull(1::int);
-

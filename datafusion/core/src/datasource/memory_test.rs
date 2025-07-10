@@ -130,12 +130,15 @@ mod tests {
             .scan(&session_ctx.state(), Some(&projection), &[], None)
             .await
         {
-            Err(DataFusionError::ArrowError(ArrowError::SchemaError(e), _)) => {
-                assert_eq!(
-                    "\"project index 4 out of bounds, max field 3\"",
-                    format!("{e:?}")
-                )
-            }
+            Err(DataFusionError::ArrowError(err, _)) => match err.as_ref() {
+                ArrowError::SchemaError(e) => {
+                    assert_eq!(
+                        "\"project index 4 out of bounds, max field 3\"",
+                        format!("{e:?}")
+                    )
+                }
+                _ => panic!("unexpected error"),
+            },
             res => panic!("Scan should failed on invalid projection, got {res:?}"),
         };
 

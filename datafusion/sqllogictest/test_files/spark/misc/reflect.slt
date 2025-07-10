@@ -25,4 +25,3 @@
 ## PySpark 3.5.5 Result: {'reflect(java.util.UUID, randomUUID)': 'bcf8f6e4-0d46-41a1-bc3c-9f793c8f8aa8', 'typeof(reflect(java.util.UUID, randomUUID))': 'string', 'typeof(java.util.UUID)': 'string', 'typeof(randomUUID)': 'string'}
 #query
 #SELECT reflect('java.util.UUID'::string, 'randomUUID'::string);
-

@@ -50,4 +50,3 @@
 ## PySpark 3.5.5 Result: {"try_subtract(TIMESTAMP '2021-01-02 00:00:00', INTERVAL '1' DAY)": datetime.datetime(2021, 1, 1, 0, 0), "typeof(try_subtract(TIMESTAMP '2021-01-02 00:00:00', INTERVAL '1' DAY))": 'timestamp', "typeof(TIMESTAMP '2021-01-02 00:00:00')": 'timestamp', "typeof(INTERVAL '1' DAY)": 'interval day'}
 #query
 #SELECT try_subtract(TIMESTAMP '2021-01-02 00:00:00'::timestamp, INTERVAL '1' DAY::interval day);
-

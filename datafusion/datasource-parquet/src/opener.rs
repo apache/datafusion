@@ -33,6 +33,7 @@ use arrow::datatypes::{FieldRef, SchemaRef, TimeUnit};
 use arrow::error::ArrowError;
 use datafusion_common::{exec_err, DataFusionError, Result};
 use datafusion_datasource::PartitionedFile;
+use datafusion_physical_expr::simplifier::PhysicalExprSimplifier;
 use datafusion_physical_expr::PhysicalExprSchemaRewriter;
 use datafusion_physical_expr_common::physical_expr::{
     is_dynamic_physical_expr, PhysicalExpr,
@@ -45,6 +46,7 @@ use log::debug;
 use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
 use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::{ParquetRecordBatchStreamBuilder, ProjectionMask};
+use parquet::encryption::decrypt::FileDecryptionProperties;
 use parquet::file::metadata::ParquetMetaDataReader;
 
 /// Implements [`FileOpener`] for a parquet file
@@ -88,13 +90,12 @@ pub(super) struct ParquetOpener {
     pub enable_row_group_stats_pruning: bool,
     /// Coerce INT96 timestamps to specific TimeUnit
     pub coerce_int96: Option<TimeUnit>,
+    /// Optional parquet FileDecryptionProperties
+    pub file_decryption_properties: Option<Arc<FileDecryptionProperties>>,
 }
 
 impl FileOpener for ParquetOpener {
     fn open(&self, file_meta: FileMeta, file: PartitionedFile) -> Result<FileOpenFuture> {
-        let predicate_creation_errors = MetricBuilder::new(&self.metrics)
-            .global_counter("num_predicate_creation_errors");
-
         let file_range = file_meta.range.clone();
         let extensions = file_meta.extensions.clone();
         let file_name = file_meta.location().to_string();
@@ -128,7 +129,17 @@ impl FileOpener for ParquetOpener {
         let enable_row_group_stats_pruning = self.enable_row_group_stats_pruning;
         let limit = self.limit;
 
-        let enable_page_index = self.enable_page_index;
+        let predicate_creation_errors = MetricBuilder::new(&self.metrics)
+            .global_counter("num_predicate_creation_errors");
+
+        let mut enable_page_index = self.enable_page_index;
+        let file_decryption_properties = self.file_decryption_properties.clone();
+
+        // For now, page index does not work with encrypted files. See:
+        // https://github.com/apache/arrow-rs/issues/7629
+        if file_decryption_properties.is_some() {
+            enable_page_index = false;
+        }
 
         Ok(Box::pin(async move {
             // Prune this file using the file level statistics and partition values.
@@ -171,6 +182,9 @@ impl FileOpener for ParquetOpener {
             // pruning predicates. Thus default to not requesting if from the
             // underlying reader.
             let mut options = ArrowReaderOptions::new().with_page_index(false);
+            if let Some(fd_val) = file_decryption_properties {
+                options = options.with_file_decryption_properties((*fd_val).clone());
+            }
             let mut metadata_timer = file_metrics.metadata_load_time.timer();
 
             // Begin by loading the metadata from the underlying reader (note
@@ -233,7 +247,16 @@ impl FileOpener for ParquetOpener {
                     )
                     .rewrite(p)
                     .map_err(ArrowError::from)
+                    .map(|p| {
+                        // After rewriting to the file schema, further simplifications may be possible.
+                        // For example, if `'a' = col_that_is_missing` becomes `'a' = NULL` that can then be simplified to `FALSE`
+                        // and we can avoid doing any more work on the file (bloom filters, loading the page index, etc.).
+                        PhysicalExprSimplifier::new(&physical_file_schema)
+                            .simplify(p)
+                            .map_err(ArrowError::from)
+                    })
                 })
+                .transpose()?
                 .transpose()?;
 
             // Build predicates for this specific file
@@ -607,6 +630,7 @@ mod test {
                 schema_adapter_factory: Arc::new(DefaultSchemaAdapterFactory),
                 enable_row_group_stats_pruning: true,
                 coerce_int96: None,
+                file_decryption_properties: None,
             }
         };
 
@@ -691,6 +715,7 @@ mod test {
                 schema_adapter_factory: Arc::new(DefaultSchemaAdapterFactory),
                 enable_row_group_stats_pruning: true,
                 coerce_int96: None,
+                file_decryption_properties: None,
             }
         };
 
@@ -791,6 +816,7 @@ mod test {
                 schema_adapter_factory: Arc::new(DefaultSchemaAdapterFactory),
                 enable_row_group_stats_pruning: true,
                 coerce_int96: None,
+                file_decryption_properties: None,
             }
         };
         let make_meta = || FileMeta {
@@ -901,6 +927,7 @@ mod test {
                 schema_adapter_factory: Arc::new(DefaultSchemaAdapterFactory),
                 enable_row_group_stats_pruning: false, // note that this is false!
                 coerce_int96: None,
+                file_decryption_properties: None,
             }
         };
 
@@ -1012,6 +1039,7 @@ mod test {
                 schema_adapter_factory: Arc::new(DefaultSchemaAdapterFactory),
                 enable_row_group_stats_pruning: true,
                 coerce_int96: None,
+                file_decryption_properties: None,
             }
         };
 

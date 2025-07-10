@@ -25,4 +25,3 @@
 ## PySpark 3.5.5 Result: {'schema_of_csv(1,abc)': 'STRUCT<_c0: INT, _c1: STRING>', 'typeof(schema_of_csv(1,abc))': 'string', 'typeof(1,abc)': 'string'}
 #query
 #SELECT schema_of_csv('1,abc'::string);
-

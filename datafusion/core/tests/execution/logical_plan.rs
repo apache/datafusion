@@ -68,7 +68,7 @@ async fn count_only_nulls() -> Result<()> {
                 args: vec![input_col_ref],
                 distinct: false,
                 filter: None,
-                order_by: None,
+                order_by: vec![],
                 null_treatment: None,
             },
         })],

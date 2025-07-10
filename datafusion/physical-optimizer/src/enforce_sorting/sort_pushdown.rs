@@ -35,6 +35,7 @@ use datafusion_physical_expr_common::sort_expr::{
     LexOrdering, LexRequirement, OrderingRequirements, PhysicalSortExpr,
     PhysicalSortRequirement,
 };
+use datafusion_physical_plan::execution_plan::CardinalityEffect;
 use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::joins::utils::{
     calculate_join_output_ordering, ColumnIndex,
@@ -190,6 +191,7 @@ fn pushdown_sorts_helper(
     } else if let Some(adjusted) = pushdown_requirement_to_children(
         &sort_push_down.plan,
         parent_requirement.clone(),
+        parent_fetch,
     )? {
         // For operators that can take a sort pushdown, continue with updated
         // requirements:
@@ -216,7 +218,41 @@ fn pushdown_sorts_helper(
 fn pushdown_requirement_to_children(
     plan: &Arc<dyn ExecutionPlan>,
     parent_required: OrderingRequirements,
+    parent_fetch: Option<usize>,
 ) -> Result<Option<Vec<Option<OrderingRequirements>>>> {
+    // If there is a limit on the parent plan we cannot push it down through operators that change the cardinality.
+    // E.g. consider if LIMIT 2 is applied below a FilteExec that filters out 1/2 of the rows we'll end up with 1 row instead of 2.
+    // If the LIMIT is applied after the FilterExec and the FilterExec returns > 2 rows we'll end up with 2 rows (correct).
+    if parent_fetch.is_some() && !plan.supports_limit_pushdown() {
+        return Ok(None);
+    }
+    // Note: we still need to check the cardinality effect of the plan here, because the
+    // limit pushdown is not always safe, even if the plan supports it. Here's an example:
+    //
+    // UnionExec advertises `supports_limit_pushdown() == true` because it can
+    // forward a LIMIT k to each of its children—i.e. apply “LIMIT k” separately
+    // on each branch before merging them together.
+    //
+    // However, UnionExec’s `cardinality_effect() == GreaterEqual` (it sums up
+    // all child row counts), so pushing a global TopK/LIMIT through it would
+    // break the semantics of “take the first k rows of the combined result.”
+    //
+    // For example, with two branches A and B and k = 3:
+    //   — Global LIMIT: take the first 3 rows from (A ∪ B) after merging.
+    //   — Pushed down: take 3 from A, 3 from B, then merge → up to 6 rows!
+    //
+    // That’s why we still block on cardinality: even though UnionExec can
+    // push a LIMIT to its children, its GreaterEqual effect means it cannot
+    // preserve the global TopK semantics.
+    if parent_fetch.is_some() {
+        match plan.cardinality_effect() {
+            CardinalityEffect::Equal => {
+                // safe: only true sources (e.g. CoalesceBatchesExec, ProjectionExec) pass
+            }
+            _ => return Ok(None),
+        }
+    }
+
     let maintains_input_order = plan.maintains_input_order();
     if is_window(plan) {
         let mut required_input_ordering = plan.required_input_ordering();
