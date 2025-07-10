@@ -216,7 +216,9 @@ pub fn rename_data_type(
         | DataType::Decimal32(_, _)
         | DataType::Decimal64(_, _)
         | DataType::Decimal128(_, _)
-        | DataType::Decimal256(_, _) => Ok(data_type.clone()),
+        | DataType::Decimal256(_, _)
+        | DataType::Decimal32(_, _)
+        | DataType::Decimal64(_, _) => Ok(data_type.clone()),
     }
 }
 
