@@ -83,7 +83,7 @@ use datafusion_expr::Operator;
 use datafusion_physical_expr::equivalence::{
     join_equivalence_properties, ProjectionMapping,
 };
-use datafusion_physical_expr::{PhysicalExpr, PhysicalExprRef};
+use datafusion_physical_expr::PhysicalExprRef;
 use datafusion_physical_expr_common::datum::compare_op_for_nested;
 
 use ahash::RandomState;
@@ -947,24 +947,6 @@ impl ExecutionPlan for HashJoinExec {
         } else {
             try_embed_projection(projection, self)
         }
-    }
-
-    fn gather_filters_for_pushdown(
-        &self,
-        _phase: FilterPushdownPhase,
-        parent_filters: Vec<Arc<dyn PhysicalExpr>>,
-        _config: &datafusion_common::config::ConfigOptions,
-    ) -> Result<FilterDescription> {
-        FilterDescription::from_children(parent_filters, &self.children())
-    }
-
-    fn handle_child_pushdown_result(
-        &self,
-        _phase: FilterPushdownPhase,
-        child_pushdown_result: ChildPushdownResult,
-        _config: &datafusion_common::config::ConfigOptions,
-    ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
-        Ok(FilterPushdownPropagation::any(child_pushdown_result))
     }
 }
 
