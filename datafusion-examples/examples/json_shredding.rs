@@ -19,7 +19,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::{RecordBatch, StringArray};
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use arrow::datatypes::{DataType, Field, FieldRef, Schema, SchemaRef};
 use async_trait::async_trait;
 
 use datafusion::assert_batches_eq;
@@ -40,7 +40,9 @@ use datafusion::logical_expr::{
 };
 use datafusion::parquet::arrow::ArrowWriter;
 use datafusion::parquet::file::properties::WriterProperties;
-use datafusion::physical_expr::schema_rewriter::PhysicalSchemaExprRewriter;
+use datafusion::physical_expr::schema_rewriter::{
+    DefaultPhysicalExprAdapter, PhysicalExprAdapter,
+};
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_expr::{expressions, ScalarFunctionExpr};
 use datafusion::physical_plan::ExecutionPlan;
@@ -61,7 +63,7 @@ use object_store::{ObjectStore, PutPayload};
 // - Original JSON data: data: '{"age": 30}'
 // - Shredded flat columns: _data.name: "Alice" (extracted from JSON)
 //
-// Our custom TableProvider uses a PhysicalSchemaExprRewriter to rewrite
+// Our custom TableProvider uses a PhysicalExprAdapter to rewrite
 // expressions like `json_get_str('name', data)` to use the pre-computed
 // flat column `_data.name` when available. This allows the query engine to:
 // 1. Push down predicates for better filtering
@@ -245,7 +247,9 @@ impl TableProvider for ExampleTableProvider {
             .with_predicate(filter)
             .with_pushdown_filters(true)
             // if the rewriter needs a reference to the table schema you can bind self.schema() here
-            .with_predicate_rewrite_hook(Arc::new(ShreddedJsonRewriter) as _);
+            .with_expr_adapter(Arc::new(ShreddedJsonRewriter {
+                default_adapter: DefaultPhysicalExprAdapter,
+            }) as _);
 
         let object_store_url = ObjectStoreUrl::parse("memory://")?;
 
@@ -360,17 +364,32 @@ impl ScalarUDFImpl for JsonGetStr {
 }
 
 /// Rewriter that converts json_get_str calls to direct flat column references
+/// and wraps DefaultPhysicalExprAdapter for standard schema adaptation
 #[derive(Debug)]
-struct ShreddedJsonRewriter;
+struct ShreddedJsonRewriter {
+    default_adapter: DefaultPhysicalExprAdapter,
+}
 
-impl PhysicalSchemaExprRewriter for ShreddedJsonRewriter {
-    fn rewrite(
+impl PhysicalExprAdapter for ShreddedJsonRewriter {
+    fn rewrite_to_file_schema(
         &self,
         expr: Arc<dyn PhysicalExpr>,
+        logical_file_schema: &Schema,
         physical_file_schema: &Schema,
+        partition_values: &[(FieldRef, ScalarValue)],
     ) -> Result<Arc<dyn PhysicalExpr>> {
-        expr.transform(|expr| self.rewrite_impl(expr, physical_file_schema))
-            .data()
+        // First try our custom JSON shredding rewrite
+        let rewritten =
+            expr.transform(|expr| self.rewrite_impl(expr, physical_file_schema))?;
+
+        // Then apply the default adapter as a fallback to handle standard schema differences
+        // like type casting, missing columns, and partition column handling
+        self.default_adapter.rewrite_to_file_schema(
+            rewritten,
+            logical_file_schema,
+            physical_file_schema,
+            partition_values,
+        )
     }
 }
 

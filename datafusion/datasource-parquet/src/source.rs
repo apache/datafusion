@@ -39,7 +39,8 @@ use datafusion_common::{DataFusionError, Statistics};
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_physical_expr::conjunction;
-use datafusion_physical_expr::schema_rewriter::PhysicalSchemaExprRewriter;
+use datafusion_physical_expr::schema_rewriter::PhysicalExprAdapter;
+use datafusion_physical_expr::DefaultPhysicalExprAdapter;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_plan::filter_pushdown::{
@@ -279,7 +280,7 @@ pub struct ParquetSource {
     /// Optional hint for the size of the parquet metadata
     pub(crate) metadata_size_hint: Option<usize>,
     pub(crate) projected_statistics: Option<Statistics>,
-    pub(crate) predicate_rewrite_hook: Option<Arc<dyn PhysicalSchemaExprRewriter>>,
+    pub(crate) expr_adapter: Option<Arc<dyn PhysicalExprAdapter>>,
 }
 
 impl ParquetSource {
@@ -318,14 +319,17 @@ impl ParquetSource {
         conf
     }
 
-    /// Register a predicate rewrite hook to transform predicates in the context of each file's physical file schema.
-    /// This can be used to optimize predicates to take advantage of shredded variant columns or pre-computed expressions
-    /// that vary on a per-file basis.
-    pub fn with_predicate_rewrite_hook(
+    /// Register an expression adapter used to adapt filters and projections that are pushed down into the scan
+    /// from the logical schema to the physical schema of the parquet file.
+    /// This can include things like:
+    /// - Column ordering changes
+    /// - Handling of missing columns
+    /// - Rewriting expression to use pre-computed values or file format specific optimizations
+    pub fn with_expr_adapter(
         mut self,
-        predicate_rewrite_hook: Arc<dyn PhysicalSchemaExprRewriter>,
+        expr_adapter: Arc<dyn PhysicalExprAdapter>,
     ) -> Self {
-        self.predicate_rewrite_hook = Some(predicate_rewrite_hook);
+        self.expr_adapter = Some(expr_adapter);
         self
     }
 
@@ -522,7 +526,10 @@ impl FileSource for ParquetSource {
             schema_adapter_factory,
             coerce_int96,
             file_decryption_properties,
-            predicate_rewrite_hook: self.predicate_rewrite_hook.clone(),
+            expr_adapter: self
+                .expr_adapter
+                .clone()
+                .unwrap_or(Arc::new(DefaultPhysicalExprAdapter)),
         })
     }
 
