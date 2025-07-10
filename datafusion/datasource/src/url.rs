@@ -268,7 +268,7 @@ impl ListingTableUrl {
                 let glob_match = self.contains(path, ignore_subdirectory);
                 futures::future::ready(extension_match && glob_match)
             })
-            .map_err(DataFusionError::ObjectStore)
+            .map_err(|e| DataFusionError::ObjectStore(Box::new(e)))
             .boxed())
     }
 

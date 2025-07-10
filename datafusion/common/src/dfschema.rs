@@ -206,6 +206,25 @@ impl DFSchema {
         Ok(dfschema)
     }
 
+    /// Return the same schema, where all fields have a given qualifier.
+    pub fn with_field_specific_qualified_schema(
+        &self,
+        qualifiers: Vec<Option<TableReference>>,
+    ) -> Result<Self> {
+        if qualifiers.len() != self.fields().len() {
+            return _plan_err!(
+                "Number of qualifiers must match number of fields. Expected {}, got {}",
+                self.fields().len(),
+                qualifiers.len()
+            );
+        }
+        Ok(DFSchema {
+            inner: Arc::clone(&self.inner),
+            field_qualifiers: qualifiers,
+            functional_dependencies: self.functional_dependencies.clone(),
+        })
+    }
+
     /// Check if the schema have some fields with the same name
     pub fn check_names(&self) -> Result<()> {
         let mut qualified_names = BTreeSet::new();
@@ -229,7 +248,7 @@ impl DFSchema {
         for (qualifier, name) in qualified_names {
             if unqualified_names.contains(name) {
                 return _schema_err!(SchemaError::AmbiguousReference {
-                    field: Column::new(Some(qualifier.clone()), name)
+                    field: Box::new(Column::new(Some(qualifier.clone()), name))
                 });
             }
         }
@@ -489,7 +508,7 @@ impl DFSchema {
                     Ok((fields_without_qualifier[0].0, fields_without_qualifier[0].1))
                 } else {
                     _schema_err!(SchemaError::AmbiguousReference {
-                        field: Column::new_unqualified(name.to_string(),),
+                        field: Box::new(Column::new_unqualified(name.to_string()))
                     })
                 }
             }

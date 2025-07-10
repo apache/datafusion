@@ -48,16 +48,14 @@ use crate::{
 };
 
 use super::dml::InsertOp;
-use super::plan::ColumnUnnestList;
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
 use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::{
-    exec_err, get_target_functional_dependencies, internal_err, not_impl_err,
-    plan_datafusion_err, plan_err, Column, Constraints, DFSchema, DFSchemaRef,
-    DataFusionError, NullEquality, Result, ScalarValue, TableReference, ToDFSchema,
-    UnnestOptions,
+    exec_err, get_target_functional_dependencies, not_impl_err, plan_datafusion_err,
+    plan_err, Column, Constraints, DFSchema, DFSchemaRef, DataFusionError, NullEquality,
+    Result, ScalarValue, TableReference, ToDFSchema, UnnestOptions,
 };
 use datafusion_expr_common::type_coercion::binary::type_union_resolution;
 
@@ -407,13 +405,13 @@ impl LogicalPlanBuilder {
         options: HashMap<String, String>,
         partition_by: Vec<String>,
     ) -> Result<Self> {
-        Ok(Self::new(LogicalPlan::Copy(CopyTo {
-            input: Arc::new(input),
+        Ok(Self::new(LogicalPlan::Copy(CopyTo::new(
+            Arc::new(input),
             output_url,
             partition_by,
             file_type,
             options,
-        })))
+        ))))
     }
 
     /// Create a [`DmlStatement`] for inserting the contents of this builder into the named table.
@@ -1675,6 +1673,38 @@ pub fn build_join_schema(
     dfschema.with_functional_dependencies(func_dependencies)
 }
 
+/// (Re)qualify the sides of a join if needed, i.e. if the columns from one side would otherwise
+/// conflict with the columns from the other.
+/// This is especially useful for queries that come as Substrait, since Substrait doesn't currently allow specifying
+/// aliases, neither for columns nor for tables.  DataFusion requires columns to be uniquely identifiable, in some
+/// places (see e.g. DFSchema::check_names).
+/// The function returns:
+/// - The requalified or original left logical plan
+/// - The requalified or original right logical plan
+/// - If a requalification was needed or not
+pub fn requalify_sides_if_needed(
+    left: LogicalPlanBuilder,
+    right: LogicalPlanBuilder,
+) -> Result<(LogicalPlanBuilder, LogicalPlanBuilder, bool)> {
+    let left_cols = left.schema().columns();
+    let right_cols = right.schema().columns();
+    if left_cols.iter().any(|l| {
+        right_cols.iter().any(|r| {
+            l == r || (l.name == r.name && (l.relation.is_none() || r.relation.is_none()))
+        })
+    }) {
+        // These names have no connection to the original plan, but they'll make the columns
+        // (mostly) unique.
+        Ok((
+            left.alias(TableReference::bare("left"))?,
+            right.alias(TableReference::bare("right"))?,
+            true,
+        ))
+    } else {
+        Ok((left, right, false))
+    }
+}
+
 /// Add additional "synthetic" group by expressions based on functional
 /// dependencies.
 ///
@@ -2057,27 +2087,6 @@ pub fn unnest(input: LogicalPlan, columns: Vec<Column>) -> Result<LogicalPlan> {
     unnest_with_options(input, columns, UnnestOptions::default())
 }
 
-// Get the data type of a multi-dimensional type after unnesting it
-// with a given depth
-fn get_unnested_list_datatype_recursive(
-    data_type: &DataType,
-    depth: usize,
-) -> Result<DataType> {
-    match data_type {
-        DataType::List(field)
-        | DataType::FixedSizeList(field, _)
-        | DataType::LargeList(field) => {
-            if depth == 1 {
-                return Ok(field.data_type().clone());
-            }
-            return get_unnested_list_datatype_recursive(field.data_type(), depth - 1);
-        }
-        _ => {}
-    };
-
-    internal_err!("trying to unnest on invalid data type {:?}", data_type)
-}
-
 pub fn get_struct_unnested_columns(
     col_name: &String,
     inner_fields: &Fields,
@@ -2086,53 +2095,6 @@ pub fn get_struct_unnested_columns(
         .iter()
         .map(|f| Column::from_name(format!("{}.{}", col_name, f.name())))
         .collect()
-}
-
-// Based on data type, either struct or a variant of list
-// return a set of columns as the result of unnesting
-// the input columns.
-// For example, given a column with name "a",
-// - List(Element) returns ["a"] with data type Element
-// - Struct(field1, field2) returns ["a.field1","a.field2"]
-// For list data type, an argument depth is used to specify
-// the recursion level
-pub fn get_unnested_columns(
-    col_name: &String,
-    data_type: &DataType,
-    depth: usize,
-) -> Result<Vec<(Column, Arc<Field>)>> {
-    let mut qualified_columns = Vec::with_capacity(1);
-
-    match data_type {
-        DataType::List(_) | DataType::FixedSizeList(_, _) | DataType::LargeList(_) => {
-            let data_type = get_unnested_list_datatype_recursive(data_type, depth)?;
-            let new_field = Arc::new(Field::new(
-                col_name, data_type,
-                // Unnesting may produce NULLs even if the list is not null.
-                // For example: unnest([1], []) -> 1, null
-                true,
-            ));
-            let column = Column::from_name(col_name);
-            // let column = Column::from((None, &new_field));
-            qualified_columns.push((column, new_field));
-        }
-        DataType::Struct(fields) => {
-            qualified_columns.extend(fields.iter().map(|f| {
-                let new_name = format!("{}.{}", col_name, f.name());
-                let column = Column::from_name(&new_name);
-                let new_field = f.as_ref().clone().with_name(new_name);
-                // let column = Column::from((None, &f));
-                (column, Arc::new(new_field))
-            }))
-        }
-        _ => {
-            return internal_err!(
-                "trying to unnest on invalid data type {:?}",
-                data_type
-            );
-        }
-    };
-    Ok(qualified_columns)
 }
 
 /// Create a [`LogicalPlan::Unnest`] plan with options
@@ -2169,126 +2131,11 @@ pub fn unnest_with_options(
     columns_to_unnest: Vec<Column>,
     options: UnnestOptions,
 ) -> Result<LogicalPlan> {
-    let mut list_columns: Vec<(usize, ColumnUnnestList)> = vec![];
-    let mut struct_columns = vec![];
-    let indices_to_unnest = columns_to_unnest
-        .iter()
-        .map(|c| Ok((input.schema().index_of_column(c)?, c)))
-        .collect::<Result<HashMap<usize, &Column>>>()?;
-
-    let input_schema = input.schema();
-
-    let mut dependency_indices = vec![];
-    // Transform input schema into new schema
-    // Given this comprehensive example
-    //
-    // input schema:
-    // 1.col1_unnest_placeholder: list[list[int]],
-    // 2.col1: list[list[int]]
-    // 3.col2: list[int]
-    // with unnest on unnest(col1,depth=2), unnest(col1,depth=1) and unnest(col2,depth=1)
-    // output schema:
-    // 1.unnest_col1_depth_2: int
-    // 2.unnest_col1_depth_1: list[int]
-    // 3.col1: list[list[int]]
-    // 4.unnest_col2_depth_1: int
-    // Meaning the placeholder column will be replaced by its unnested variation(s), note
-    // the plural.
-    let fields = input_schema
-        .iter()
-        .enumerate()
-        .map(|(index, (original_qualifier, original_field))| {
-            match indices_to_unnest.get(&index) {
-                Some(column_to_unnest) => {
-                    let recursions_on_column = options
-                        .recursions
-                        .iter()
-                        .filter(|p| -> bool { &p.input_column == *column_to_unnest })
-                        .collect::<Vec<_>>();
-                    let mut transformed_columns = recursions_on_column
-                        .iter()
-                        .map(|r| {
-                            list_columns.push((
-                                index,
-                                ColumnUnnestList {
-                                    output_column: r.output_column.clone(),
-                                    depth: r.depth,
-                                },
-                            ));
-                            Ok(get_unnested_columns(
-                                &r.output_column.name,
-                                original_field.data_type(),
-                                r.depth,
-                            )?
-                            .into_iter()
-                            .next()
-                            .unwrap()) // because unnesting a list column always result into one result
-                        })
-                        .collect::<Result<Vec<(Column, Arc<Field>)>>>()?;
-                    if transformed_columns.is_empty() {
-                        transformed_columns = get_unnested_columns(
-                            &column_to_unnest.name,
-                            original_field.data_type(),
-                            1,
-                        )?;
-                        match original_field.data_type() {
-                            DataType::Struct(_) => {
-                                struct_columns.push(index);
-                            }
-                            DataType::List(_)
-                            | DataType::FixedSizeList(_, _)
-                            | DataType::LargeList(_) => {
-                                list_columns.push((
-                                    index,
-                                    ColumnUnnestList {
-                                        output_column: Column::from_name(
-                                            &column_to_unnest.name,
-                                        ),
-                                        depth: 1,
-                                    },
-                                ));
-                            }
-                            _ => {}
-                        };
-                    }
-
-                    // new columns dependent on the same original index
-                    dependency_indices
-                        .extend(std::iter::repeat_n(index, transformed_columns.len()));
-                    Ok(transformed_columns
-                        .iter()
-                        .map(|(col, field)| (col.relation.to_owned(), field.to_owned()))
-                        .collect())
-                }
-                None => {
-                    dependency_indices.push(index);
-                    Ok(vec![(
-                        original_qualifier.cloned(),
-                        Arc::clone(original_field),
-                    )])
-                }
-            }
-        })
-        .collect::<Result<Vec<_>>>()?
-        .into_iter()
-        .flatten()
-        .collect::<Vec<_>>();
-
-    let metadata = input_schema.metadata().clone();
-    let df_schema = DFSchema::new_with_metadata(fields, metadata)?;
-    // We can use the existing functional dependencies:
-    let deps = input_schema.functional_dependencies().clone();
-    let schema = Arc::new(df_schema.with_functional_dependencies(deps)?);
-
-    Ok(LogicalPlan::Unnest(Unnest {
-        input: Arc::new(input),
-        exec_columns: columns_to_unnest,
-        list_type_columns: list_columns,
-        struct_type_columns: struct_columns,
-        dependency_indices,
-        schema,
+    Ok(LogicalPlan::Unnest(Unnest::try_new(
+        Arc::new(input),
+        columns_to_unnest,
         options,
-    }))
+    )?))
 }
 
 #[cfg(test)]
@@ -2534,20 +2381,24 @@ mod tests {
         .project(vec![col("id"), col("first_name").alias("id")]);
 
         match plan {
-            Err(DataFusionError::SchemaError(
-                SchemaError::AmbiguousReference {
-                    field:
-                        Column {
-                            relation: Some(TableReference::Bare { table }),
-                            name,
-                            spans: _,
-                        },
-                },
-                _,
-            )) => {
-                assert_eq!(*"employee_csv", *table);
-                assert_eq!("id", &name);
-                Ok(())
+            Err(DataFusionError::SchemaError(err, _)) => {
+                if let SchemaError::AmbiguousReference { field } = *err {
+                    let Column {
+                        relation,
+                        name,
+                        spans: _,
+                    } = *field;
+                    let Some(TableReference::Bare { table }) = relation else {
+                        return plan_err!(
+                            "wrong relation: {relation:?}, expected table name"
+                        );
+                    };
+                    assert_eq!(*"employee_csv", *table);
+                    assert_eq!("id", &name);
+                    Ok(())
+                } else {
+                    plan_err!("Plan should have returned an DataFusionError::SchemaError")
+                }
             }
             _ => plan_err!("Plan should have returned an DataFusionError::SchemaError"),
         }

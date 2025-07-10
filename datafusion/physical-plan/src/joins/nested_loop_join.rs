@@ -825,10 +825,12 @@ impl<T: BatchTransformer> NestedLoopJoinStream<T> {
                     handle_state!(ready!(self.fetch_probe_batch(cx)))
                 }
                 NestedLoopJoinStreamState::ProcessProbeBatch(_) => {
-                    handle_state!(self.process_probe_batch())
+                    let poll = handle_state!(self.process_probe_batch());
+                    self.join_metrics.baseline.record_poll(poll)
                 }
                 NestedLoopJoinStreamState::ExhaustedProbeSide => {
-                    handle_state!(self.process_unmatched_build_batch())
+                    let poll = handle_state!(self.process_unmatched_build_batch());
+                    self.join_metrics.baseline.record_poll(poll)
                 }
                 NestedLoopJoinStreamState::Completed => Poll::Ready(None),
             };
@@ -912,7 +914,6 @@ impl<T: BatchTransformer> NestedLoopJoinStream<T> {
                 }
 
                 self.join_metrics.output_batches.add(1);
-                self.join_metrics.output_rows.add(batch.num_rows());
                 Ok(StatefulStreamResult::Ready(Some(batch)))
             }
         }
@@ -962,6 +963,8 @@ impl<T: BatchTransformer> NestedLoopJoinStream<T> {
             if result.is_ok() {
                 timer.done();
             }
+
+            self.join_metrics.output_batches.add(1);
 
             Ok(StatefulStreamResult::Ready(Some(result?)))
         } else {
@@ -1062,7 +1065,7 @@ impl EmbeddedProjection for NestedLoopJoinExec {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use crate::test::TestMemoryExec;
+    use crate::test::{assert_join_metrics, TestMemoryExec};
     use crate::{
         common, expressions::Column, repartition::RepartitionExec, test::build_table_i32,
     };
@@ -1195,7 +1198,7 @@ pub(crate) mod tests {
         join_type: &JoinType,
         join_filter: Option<JoinFilter>,
         context: Arc<TaskContext>,
-    ) -> Result<(Vec<String>, Vec<RecordBatch>)> {
+    ) -> Result<(Vec<String>, Vec<RecordBatch>, MetricsSet)> {
         let partition_count = 4;
 
         // Redistributing right input
@@ -1219,7 +1222,10 @@ pub(crate) mod tests {
                     .collect::<Vec<_>>(),
             );
         }
-        Ok((columns, batches))
+
+        let metrics = nested_loop_join.metrics().unwrap();
+
+        Ok((columns, batches, metrics))
     }
 
     #[tokio::test]
@@ -1228,7 +1234,7 @@ pub(crate) mod tests {
         let left = build_left_table();
         let right = build_right_table();
         let filter = prepare_join_filter();
-        let (columns, batches) = multi_partitioned_join_collect(
+        let (columns, batches, metrics) = multi_partitioned_join_collect(
             left,
             right,
             &JoinType::Inner,
@@ -1245,6 +1251,8 @@ pub(crate) mod tests {
             +----+----+----+----+----+----+
             "#);
 
+        assert_join_metrics!(metrics, 1);
+
         Ok(())
     }
 
@@ -1255,7 +1263,7 @@ pub(crate) mod tests {
         let right = build_right_table();
 
         let filter = prepare_join_filter();
-        let (columns, batches) = multi_partitioned_join_collect(
+        let (columns, batches, metrics) = multi_partitioned_join_collect(
             left,
             right,
             &JoinType::Left,
@@ -1274,6 +1282,8 @@ pub(crate) mod tests {
             +----+----+-----+----+----+----+
             "#);
 
+        assert_join_metrics!(metrics, 3);
+
         Ok(())
     }
 
@@ -1284,7 +1294,7 @@ pub(crate) mod tests {
         let right = build_right_table();
 
         let filter = prepare_join_filter();
-        let (columns, batches) = multi_partitioned_join_collect(
+        let (columns, batches, metrics) = multi_partitioned_join_collect(
             left,
             right,
             &JoinType::Right,
@@ -1303,6 +1313,8 @@ pub(crate) mod tests {
             +----+----+----+----+----+-----+
             "#);
 
+        assert_join_metrics!(metrics, 3);
+
         Ok(())
     }
 
@@ -1313,7 +1325,7 @@ pub(crate) mod tests {
         let right = build_right_table();
 
         let filter = prepare_join_filter();
-        let (columns, batches) = multi_partitioned_join_collect(
+        let (columns, batches, metrics) = multi_partitioned_join_collect(
             left,
             right,
             &JoinType::Full,
@@ -1334,6 +1346,8 @@ pub(crate) mod tests {
             +----+----+-----+----+----+-----+
             "#);
 
+        assert_join_metrics!(metrics, 5);
+
         Ok(())
     }
 
@@ -1344,7 +1358,7 @@ pub(crate) mod tests {
         let right = build_right_table();
 
         let filter = prepare_join_filter();
-        let (columns, batches) = multi_partitioned_join_collect(
+        let (columns, batches, metrics) = multi_partitioned_join_collect(
             left,
             right,
             &JoinType::LeftSemi,
@@ -1361,6 +1375,8 @@ pub(crate) mod tests {
             +----+----+----+
             "#);
 
+        assert_join_metrics!(metrics, 1);
+
         Ok(())
     }
 
@@ -1371,7 +1387,7 @@ pub(crate) mod tests {
         let right = build_right_table();
 
         let filter = prepare_join_filter();
-        let (columns, batches) = multi_partitioned_join_collect(
+        let (columns, batches, metrics) = multi_partitioned_join_collect(
             left,
             right,
             &JoinType::LeftAnti,
@@ -1389,6 +1405,8 @@ pub(crate) mod tests {
             +----+----+-----+
             "#);
 
+        assert_join_metrics!(metrics, 2);
+
         Ok(())
     }
 
@@ -1399,7 +1417,7 @@ pub(crate) mod tests {
         let right = build_right_table();
 
         let filter = prepare_join_filter();
-        let (columns, batches) = multi_partitioned_join_collect(
+        let (columns, batches, metrics) = multi_partitioned_join_collect(
             left,
             right,
             &JoinType::RightSemi,
@@ -1416,6 +1434,8 @@ pub(crate) mod tests {
             +----+----+----+
             "#);
 
+        assert_join_metrics!(metrics, 1);
+
         Ok(())
     }
 
@@ -1426,7 +1446,7 @@ pub(crate) mod tests {
         let right = build_right_table();
 
         let filter = prepare_join_filter();
-        let (columns, batches) = multi_partitioned_join_collect(
+        let (columns, batches, metrics) = multi_partitioned_join_collect(
             left,
             right,
             &JoinType::RightAnti,
@@ -1444,6 +1464,8 @@ pub(crate) mod tests {
             +----+----+-----+
             "#);
 
+        assert_join_metrics!(metrics, 2);
+
         Ok(())
     }
 
@@ -1454,7 +1476,7 @@ pub(crate) mod tests {
         let right = build_right_table();
 
         let filter = prepare_join_filter();
-        let (columns, batches) = multi_partitioned_join_collect(
+        let (columns, batches, metrics) = multi_partitioned_join_collect(
             left,
             right,
             &JoinType::LeftMark,
@@ -1473,6 +1495,8 @@ pub(crate) mod tests {
             +----+----+-----+-------+
             "#);
 
+        assert_join_metrics!(metrics, 3);
+
         Ok(())
     }
 
@@ -1483,7 +1507,7 @@ pub(crate) mod tests {
         let right = build_right_table();
 
         let filter = prepare_join_filter();
-        let (columns, batches) = multi_partitioned_join_collect(
+        let (columns, batches, metrics) = multi_partitioned_join_collect(
             left,
             right,
             &JoinType::RightMark,
@@ -1502,6 +1526,8 @@ pub(crate) mod tests {
             | 2  | 2  | 80  | true  |
             +----+----+-----+-------+
             "#);
+
+        assert_join_metrics!(metrics, 3);
 
         Ok(())
     }
