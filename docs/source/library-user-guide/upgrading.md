@@ -24,24 +24,45 @@
 **Note:** DataFusion `49.0.0` has not been released yet. The information provided in this section pertains to features and changes that have already been merged to the main branch and are awaiting release in this version.
 You can see the current [status of the `49.0.0 `release here](https://github.com/apache/datafusion/issues/16235)
 
-### `datafusion.execution.collect_statistics` now defaults to `true`
+### `DataFusionError` variants are now `Box`ed
 
-The default value of the `datafusion.execution.collect_statistics` configuration
-setting is now true. This change impacts users that use that value directly and relied
-on its default value being `false`.
+To reduce the size of `DataFusionError`, several variants that were previously stored inline are now `Box`ed. This reduces the size of `Result<T, DataFusionError>` and thus stack usage and async state machine size. Please see [#16652] for more details.
 
-This change also restores the default behavior of `ListingTable` to its previous. If you use it directly
-you can maintain the current behavior by overriding the default value in your code.
+The following variants of `DataFusionError` are now boxed:
+
+- `ArrowError`
+- `SQL`
+- `SchemaError`
+
+This is a breaking change. Code that constructs or matches on these variants will need to be updated.
+
+For example, to create a `SchemaError`, instead of:
 
 ```rust
 # /* comment to avoid running
-ListingOptions::new(Arc::new(ParquetFormat::default()))
-    .with_collect_stat(false)
-    // other options
+use datafusion_common::{DataFusionError, SchemaError};
+DataFusionError::SchemaError(
+  SchemaError::DuplicateUnqualifiedField { name: "foo".to_string() },
+  Box::new(None)
+)
 # */
 ```
 
-### Metadata is now represented by `FieldMetadata`
+You now need to `Box` the inner error:
+
+```rust
+# /* comment to avoid running
+use datafusion_common::{DataFusionError, SchemaError};
+DataFusionError::SchemaError(
+  Box::new(SchemaError::DuplicateUnqualifiedField { name: "foo".to_string() }),
+  Box::new(None)
+)
+# */
+```
+
+[#16652]: https://github.com/apache/datafusion/issues/16652
+
+### Metadata on Arrow Types is now represented by `FieldMetadata`
 
 Metadata from the Arrow `Field` is now stored using the `FieldMetadata`
 structure. In prior versions it was stored as both a `HashMap<String, String>`
@@ -98,6 +119,25 @@ SET datafusion.execution.spill_compression = 'zstd';
 ```
 
 For more details about this configuration option, including performance trade-offs between different compression codecs, see the [Configuration Settings](../user-guide/configs.md) documentation.
+
+## DataFusion `48.0.1`
+
+### `datafusion.execution.collect_statistics` now defaults to `true`
+
+The default value of the `datafusion.execution.collect_statistics` configuration
+setting is now true. This change impacts users that use that value directly and relied
+on its default value being `false`.
+
+This change also restores the default behavior of `ListingTable` to its previous. If you use it directly
+you can maintain the current behavior by overriding the default value in your code.
+
+```rust
+# /* comment to avoid running
+ListingOptions::new(Arc::new(ParquetFormat::default()))
+    .with_collect_stat(false)
+    // other options
+# */
+```
 
 ## DataFusion `48.0.0`
 

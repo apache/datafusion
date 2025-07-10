@@ -30,6 +30,7 @@ use arrow::{
 };
 // pub use for backwards compatibility
 pub use datafusion_common::pruning::PruningStatistics;
+use datafusion_physical_expr::simplifier::PhysicalExprSimplifier;
 use datafusion_physical_plan::metrics::Count;
 use log::{debug, trace};
 
@@ -468,6 +469,10 @@ impl PruningPredicate {
             &mut required_columns,
             &unhandled_hook,
         );
+        let predicate_schema = required_columns.schema();
+        // Simplify the newly created predicate to get rid of redundant casts, comparisons, etc.
+        let predicate_expr =
+            PhysicalExprSimplifier::new(&predicate_schema).simplify(predicate_expr)?;
 
         let literal_guarantees = LiteralGuarantee::analyze(&expr);
 
@@ -735,6 +740,21 @@ impl RequiredColumns {
         }
     }
 
+    /// Returns a schema that describes the columns required to evaluate this
+    /// pruning predicate.
+    /// The schema contains the fields for each column in `self.columns` with
+    /// the appropriate data type for the statistics.
+    /// Order matters, this same order is used to evaluate the
+    /// pruning predicate.
+    fn schema(&self) -> Schema {
+        let fields = self
+            .columns
+            .iter()
+            .map(|(_c, _t, f)| f.clone())
+            .collect::<Vec<_>>();
+        Schema::new(fields)
+    }
+
     /// Returns an iterator over items in columns (see doc on
     /// `self.columns` for details)
     pub(crate) fn iter(
@@ -883,7 +903,6 @@ fn build_statistics_record_batch<S: PruningStatistics + ?Sized>(
     statistics: &S,
     required_columns: &RequiredColumns,
 ) -> Result<RecordBatch> {
-    let mut fields = Vec::<Field>::new();
     let mut arrays = Vec::<ArrayRef>::new();
     // For each needed statistics column:
     for (column, statistics_type, stat_field) in required_columns.iter() {
@@ -912,11 +931,10 @@ fn build_statistics_record_batch<S: PruningStatistics + ?Sized>(
         // provides timestamp statistics as "Int64")
         let array = arrow::compute::cast(&array, data_type)?;
 
-        fields.push(stat_field.clone());
         arrays.push(array);
     }
 
-    let schema = Arc::new(Schema::new(fields));
+    let schema = Arc::new(required_columns.schema());
     // provide the count in case there were no needed statistics
     let mut options = RecordBatchOptions::default();
     options.row_count = Some(statistics.num_containers());

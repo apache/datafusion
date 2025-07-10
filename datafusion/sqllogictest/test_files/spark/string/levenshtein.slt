@@ -30,4 +30,3 @@
 ## PySpark 3.5.5 Result: {'levenshtein(kitten, sitting, 2)': -1, 'typeof(levenshtein(kitten, sitting, 2))': 'int', 'typeof(kitten)': 'string', 'typeof(sitting)': 'string', 'typeof(2)': 'int'}
 #query
 #SELECT levenshtein('kitten'::string, 'sitting'::string, 2::int);
-

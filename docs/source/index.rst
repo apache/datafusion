@@ -126,6 +126,7 @@ To get started, see
    :caption: Library User Guide
    
    library-user-guide/index
+   library-user-guide/upgrading
    library-user-guide/extensions
    library-user-guide/using-the-sql-api
    library-user-guide/working-with-exprs
@@ -138,7 +139,6 @@ To get started, see
    library-user-guide/extending-operators
    library-user-guide/profiling
    library-user-guide/query-optimizer
-   library-user-guide/upgrading
 
 .. .. _toc.contributor-guide:
 

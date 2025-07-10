@@ -43,14 +43,10 @@ pub fn from_aggregate_function(
                 null_treatment: _null_treatment,
             },
     } = agg_fn;
-    let sorts = if let Some(order_by) = order_by {
-        order_by
-            .iter()
-            .map(|expr| to_substrait_sort_field(producer, expr, schema))
-            .collect::<datafusion::common::Result<Vec<_>>>()?
-    } else {
-        vec![]
-    };
+    let sorts = order_by
+        .iter()
+        .map(|expr| to_substrait_sort_field(producer, expr, schema))
+        .collect::<datafusion::common::Result<Vec<_>>>()?;
     let mut arguments: Vec<FunctionArgument> = vec![];
     for arg in args {
         arguments.push(FunctionArgument {

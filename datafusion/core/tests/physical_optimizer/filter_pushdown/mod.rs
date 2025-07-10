@@ -289,7 +289,7 @@ fn test_no_pushdown_through_aggregates() {
         Ok:
           - FilterExec: b@1 = bar
           -   CoalesceBatchesExec: target_batch_size=100
-          -     AggregateExec: mode=Final, gby=[a@0 as a, b@1 as b], aggr=[cnt]
+          -     AggregateExec: mode=Final, gby=[a@0 as a, b@1 as b], aggr=[cnt], ordering_mode=PartiallySorted([0])
           -       CoalesceBatchesExec: target_batch_size=10
           -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@0 = foo
     "

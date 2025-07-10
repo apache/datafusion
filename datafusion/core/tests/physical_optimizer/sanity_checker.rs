@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use insta::assert_snapshot;
 use std::sync::Arc;
 
 use crate::physical_optimizer::test_utils::{
@@ -398,14 +399,6 @@ fn assert_sanity_check(plan: &Arc<dyn ExecutionPlan>, is_sane: bool) {
     );
 }
 
-/// Check if the plan we created is as expected by comparing the plan
-/// formatted as a string.
-fn assert_plan(plan: &dyn ExecutionPlan, expected_lines: Vec<&str>) {
-    let plan_str = displayable(plan).indent(true).to_string();
-    let actual_lines: Vec<&str> = plan_str.trim().lines().collect();
-    assert_eq!(actual_lines, expected_lines);
-}
-
 #[tokio::test]
 /// Tests that plan is valid when the sort requirements are satisfied.
 async fn test_bounded_window_agg_sort_requirement() -> Result<()> {
@@ -422,11 +415,16 @@ async fn test_bounded_window_agg_sort_requirement() -> Result<()> {
     .into();
     let sort = sort_exec(ordering.clone(), source);
     let bw = bounded_window_exec("c9", ordering, sort);
-    assert_plan(bw.as_ref(), vec![
-        "BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(UInt64(NULL)), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
-        "  SortExec: expr=[c9@0 ASC NULLS LAST], preserve_partitioning=[false]",
-        "    DataSourceExec: partitions=1, partition_sizes=[0]"
-    ]);
+    let plan_str = displayable(bw.as_ref()).indent(true).to_string();
+    let actual = plan_str.trim();
+    assert_snapshot!(
+        actual,
+        @r#"
+    BoundedWindowAggExec: wdw=[count: Field { name: "count", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+      SortExec: expr=[c9@0 ASC NULLS LAST], preserve_partitioning=[false]
+        DataSourceExec: partitions=1, partition_sizes=[0]
+    "#
+    );
     assert_sanity_check(&bw, true);
     Ok(())
 }
@@ -445,10 +443,15 @@ async fn test_bounded_window_agg_no_sort_requirement() -> Result<()> {
         },
     )];
     let bw = bounded_window_exec("c9", sort_exprs, source);
-    assert_plan(bw.as_ref(), vec![
-        "BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(UInt64(NULL)), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
-        "  DataSourceExec: partitions=1, partition_sizes=[0]"
-    ]);
+    let plan_str = displayable(bw.as_ref()).indent(true).to_string();
+    let actual = plan_str.trim();
+    assert_snapshot!(
+        actual,
+        @r#"
+    BoundedWindowAggExec: wdw=[count: Field { name: "count", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+      DataSourceExec: partitions=1, partition_sizes=[0]
+    "#
+    );
     // Order requirement of the `BoundedWindowAggExec` is not satisfied. We expect to receive error during sanity check.
     assert_sanity_check(&bw, false);
     Ok(())
@@ -462,12 +465,14 @@ async fn test_global_limit_single_partition() -> Result<()> {
     let source = memory_exec(&schema);
     let limit = global_limit_exec(source, 0, Some(100));
 
-    assert_plan(
-        limit.as_ref(),
-        vec![
-            "GlobalLimitExec: skip=0, fetch=100",
-            "  DataSourceExec: partitions=1, partition_sizes=[0]",
-        ],
+    let plan_str = displayable(limit.as_ref()).indent(true).to_string();
+    let actual = plan_str.trim();
+    assert_snapshot!(
+        actual,
+        @r"
+    GlobalLimitExec: skip=0, fetch=100
+      DataSourceExec: partitions=1, partition_sizes=[0]
+    "
     );
     assert_sanity_check(&limit, true);
     Ok(())
@@ -481,13 +486,15 @@ async fn test_global_limit_multi_partition() -> Result<()> {
     let source = memory_exec(&schema);
     let limit = global_limit_exec(repartition_exec(source), 0, Some(100));
 
-    assert_plan(
-        limit.as_ref(),
-        vec![
-            "GlobalLimitExec: skip=0, fetch=100",
-            "  RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-            "    DataSourceExec: partitions=1, partition_sizes=[0]",
-        ],
+    let plan_str = displayable(limit.as_ref()).indent(true).to_string();
+    let actual = plan_str.trim();
+    assert_snapshot!(
+        actual,
+        @r"
+    GlobalLimitExec: skip=0, fetch=100
+      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
+        DataSourceExec: partitions=1, partition_sizes=[0]
+    "
     );
     // Distribution requirement of the `GlobalLimitExec` is not satisfied. We expect to receive error during sanity check.
     assert_sanity_check(&limit, false);
@@ -501,12 +508,14 @@ async fn test_local_limit() -> Result<()> {
     let source = memory_exec(&schema);
     let limit = local_limit_exec(source, 100);
 
-    assert_plan(
-        limit.as_ref(),
-        vec![
-            "LocalLimitExec: fetch=100",
-            "  DataSourceExec: partitions=1, partition_sizes=[0]",
-        ],
+    let plan_str = displayable(limit.as_ref()).indent(true).to_string();
+    let actual = plan_str.trim();
+    assert_snapshot!(
+        actual,
+        @r"
+    LocalLimitExec: fetch=100
+      DataSourceExec: partitions=1, partition_sizes=[0]
+    "
     );
     assert_sanity_check(&limit, true);
     Ok(())
@@ -540,17 +549,19 @@ async fn test_sort_merge_join_satisfied() -> Result<()> {
     let join_ty = JoinType::Inner;
     let smj = sort_merge_join_exec(left, right, &join_on, &join_ty);
 
-    assert_plan(
-        smj.as_ref(),
-        vec![
-            "SortMergeJoin: join_type=Inner, on=[(c9@0, a@0)]",
-            "  RepartitionExec: partitioning=Hash([c9@0], 10), input_partitions=1",
-            "    SortExec: expr=[c9@0 ASC], preserve_partitioning=[false]",
-            "      DataSourceExec: partitions=1, partition_sizes=[0]",
-            "  RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=1",
-            "    SortExec: expr=[a@0 ASC], preserve_partitioning=[false]",
-            "      DataSourceExec: partitions=1, partition_sizes=[0]",
-        ],
+    let plan_str = displayable(smj.as_ref()).indent(true).to_string();
+    let actual = plan_str.trim();
+    assert_snapshot!(
+        actual,
+        @r"
+    SortMergeJoin: join_type=Inner, on=[(c9@0, a@0)]
+      RepartitionExec: partitioning=Hash([c9@0], 10), input_partitions=1
+        SortExec: expr=[c9@0 ASC], preserve_partitioning=[false]
+          DataSourceExec: partitions=1, partition_sizes=[0]
+      RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=1
+        SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
+          DataSourceExec: partitions=1, partition_sizes=[0]
+    "
     );
     assert_sanity_check(&smj, true);
     Ok(())
@@ -588,16 +599,18 @@ async fn test_sort_merge_join_order_missing() -> Result<()> {
     let join_ty = JoinType::Inner;
     let smj = sort_merge_join_exec(left, right, &join_on, &join_ty);
 
-    assert_plan(
-        smj.as_ref(),
-        vec![
-            "SortMergeJoin: join_type=Inner, on=[(c9@0, a@0)]",
-            "  RepartitionExec: partitioning=Hash([c9@0], 10), input_partitions=1",
-            "    SortExec: expr=[c9@0 ASC], preserve_partitioning=[false]",
-            "      DataSourceExec: partitions=1, partition_sizes=[0]",
-            "  RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=1",
-            "    DataSourceExec: partitions=1, partition_sizes=[0]",
-        ],
+    let plan_str = displayable(smj.as_ref()).indent(true).to_string();
+    let actual = plan_str.trim();
+    assert_snapshot!(
+        actual,
+        @r"
+    SortMergeJoin: join_type=Inner, on=[(c9@0, a@0)]
+      RepartitionExec: partitioning=Hash([c9@0], 10), input_partitions=1
+        SortExec: expr=[c9@0 ASC], preserve_partitioning=[false]
+          DataSourceExec: partitions=1, partition_sizes=[0]
+      RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=1
+        DataSourceExec: partitions=1, partition_sizes=[0]
+    "
     );
     // Order requirement for the `SortMergeJoin` is not satisfied for right child. We expect to receive error during sanity check.
     assert_sanity_check(&smj, false);
@@ -634,17 +647,19 @@ async fn test_sort_merge_join_dist_missing() -> Result<()> {
     let join_ty = JoinType::Inner;
     let smj = sort_merge_join_exec(left, right, &join_on, &join_ty);
 
-    assert_plan(
-        smj.as_ref(),
-        vec![
-            "SortMergeJoin: join_type=Inner, on=[(c9@0, a@0)]",
-            "  RepartitionExec: partitioning=Hash([c9@0], 10), input_partitions=1",
-            "    SortExec: expr=[c9@0 ASC], preserve_partitioning=[false]",
-            "      DataSourceExec: partitions=1, partition_sizes=[0]",
-            "  RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-            "    SortExec: expr=[a@0 ASC], preserve_partitioning=[false]",
-            "      DataSourceExec: partitions=1, partition_sizes=[0]",
-        ],
+    let plan_str = displayable(smj.as_ref()).indent(true).to_string();
+    let actual = plan_str.trim();
+    assert_snapshot!(
+        actual,
+        @r"
+    SortMergeJoin: join_type=Inner, on=[(c9@0, a@0)]
+      RepartitionExec: partitioning=Hash([c9@0], 10), input_partitions=1
+        SortExec: expr=[c9@0 ASC], preserve_partitioning=[false]
+          DataSourceExec: partitions=1, partition_sizes=[0]
+      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
+        SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
+          DataSourceExec: partitions=1, partition_sizes=[0]
+    "
     );
     // Distribution requirement for the `SortMergeJoin` is not satisfied for right child (has round-robin partitioning). We expect to receive error during sanity check.
     assert_sanity_check(&smj, false);
