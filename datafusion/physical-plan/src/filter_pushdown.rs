@@ -166,7 +166,7 @@ pub struct ChildFitlerPushdownResult {
 }
 
 impl ChildFitlerPushdownResult {
-    /// Combien all child results into a single [`PredicateSupport`].
+    /// Combine all child results into a single [`PredicateSupport`].
     /// If any child supports the filter, it is considered supported.
     /// If all children support the filter, it is considered supported.
     /// If no child supports the filter, it is considered unsupported.
