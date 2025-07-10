@@ -857,7 +857,7 @@ impl NestedLoopJoinStream {
         }
     }
 
-    // This 's main job is to construct an output `RecordBatch` based on pre-calculated join indices.
+    // This function's main job is to construct an output `RecordBatch` based on pre-calculated join indices.
     // It operates in a chunk-based manner, meaning it processes a portion of the results in each call,
     // making it suitable for streaming large datasets without high memory consumption.
     fn get_next_join_result(&mut self) -> Result<Option<RecordBatch>> {
