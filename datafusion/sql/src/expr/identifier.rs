@@ -458,8 +458,10 @@ mod test {
     #[test]
     fn test_form_identifier() -> Result<()> {
         let err = form_identifier(&[]).expect_err("empty identifiers didn't fail");
-        let expected = "Internal error: Incorrect number of identifiers: 0.";
-        assert!(&err.strip_backtrace().starts_with(expected));
+        let expected = "Internal error: Incorrect number of identifiers: 0.\n\
+         This issue was likely caused by a bug in DataFusion's code. Please help us to resolve this \
+         by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues";
+        assert!(expected.starts_with(&err.strip_backtrace()));
 
         let ids = vec!["a".to_string()];
         let (qualifier, column) = form_identifier(&ids)?;
@@ -494,8 +496,10 @@ mod test {
             "e".to_string(),
         ])
         .expect_err("too many identifiers didn't fail");
-        let expected = "Internal error: Incorrect number of identifiers: 5.";
-        assert!(&err.strip_backtrace().starts_with(expected));
+        let expected = "Internal error: Incorrect number of identifiers: 5.\n\
+         This issue was likely caused by a bug in DataFusion's code. Please help us to resolve this \
+         by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues";
+        assert!(expected.starts_with(&err.strip_backtrace()));
 
         Ok(())
     }

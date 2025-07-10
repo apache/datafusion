@@ -213,8 +213,10 @@ mod test {
         let schema = Schema::new(vec![Field::new("foo", DataType::Utf8, true)]);
         let col = Column::new("id", 9);
         let error = col.data_type(&schema).expect_err("error").strip_backtrace();
-        assert!(error.starts_with("Internal error: PhysicalExpr Column references column 'id' at index 9 (zero-based) \
-            but input schema only has 1 columns: [\"foo\"]."))
+        assert!("Internal error: PhysicalExpr Column references column 'id' at index 9 (zero-based) \
+             but input schema only has 1 columns: [\"foo\"].\nThis issue was likely caused by a bug \
+             in DataFusion's code. Please help us to resolve this by filing a bug report \
+             in our issue tracker: https://github.com/apache/datafusion/issues".starts_with(&error))
     }
 
     #[test]
@@ -222,19 +224,22 @@ mod test {
         let schema = Schema::new(vec![Field::new("foo", DataType::Utf8, true)]);
         let col = Column::new("id", 9);
         let error = col.nullable(&schema).expect_err("error").strip_backtrace();
-        assert!(error.starts_with("Internal error: PhysicalExpr Column references column 'id' at index 9 (zero-based) \
-            but input schema only has 1 columns: [\"foo\"]."))
+        assert!("Internal error: PhysicalExpr Column references column 'id' at index 9 (zero-based) \
+             but input schema only has 1 columns: [\"foo\"].\nThis issue was likely caused by a bug \
+             in DataFusion's code. Please help us to resolve this by filing a bug report \
+             in our issue tracker: https://github.com/apache/datafusion/issues".starts_with(&error));
     }
 
     #[test]
-    fn out_of_bounds_evaluate() -> Result<()> {
+    fn out_of_bounds_evaluate() {
         let schema = Schema::new(vec![Field::new("foo", DataType::Utf8, true)]);
         let data: StringArray = vec!["data"].into();
-        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(data)])?;
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(data)]).unwrap();
         let col = Column::new("id", 9);
         let error = col.evaluate(&batch).expect_err("error").strip_backtrace();
-        assert!(error.starts_with("Internal error: PhysicalExpr Column references column 'id' at index 9 (zero-based) \
-            but input schema only has 1 columns: [\"foo\"]."));
-        Ok(())
+        assert!("Internal error: PhysicalExpr Column references column 'id' at index 9 (zero-based) \
+             but input schema only has 1 columns: [\"foo\"].\nThis issue was likely caused by a bug \
+             in DataFusion's code. Please help us to resolve this by filing a bug report \
+             in our issue tracker: https://github.com/apache/datafusion/issues".starts_with(&error));
     }
 }
