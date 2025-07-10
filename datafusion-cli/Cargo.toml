@@ -31,7 +31,7 @@ rust-version = { workspace = true }
 all-features = true
 
 [features]
-default = []
+default = ["backtrace"]
 backtrace = ["datafusion/backtrace"]
 
 [dependencies]

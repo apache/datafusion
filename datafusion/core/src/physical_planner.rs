@@ -78,8 +78,8 @@ use datafusion_expr::expr::{
 use datafusion_expr::expr_rewriter::unnormalize_cols;
 use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessary;
 use datafusion_expr::{
-    Analyze, DescribeTable, DmlStatement, Explain, ExplainFormat, Extension, FetchType,
-    Filter, JoinType, RecursiveQuery, SkipType, StringifiedPlan, WindowFrame,
+    Analyze, DelimGet, DescribeTable, DmlStatement, Explain, ExplainFormat, Extension,
+    FetchType, Filter, JoinType, RecursiveQuery, SkipType, StringifiedPlan, WindowFrame,
     WindowFrameBound, WriteOp,
 };
 use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
@@ -1288,8 +1288,31 @@ impl DefaultPhysicalPlanner {
                     "Optimizors have not completely remove dependent join"
                 )
             }
-            LogicalPlan::DelimGet(_) => {
-                return internal_err!("Optimizors have not completely remove delim get")
+            LogicalPlan::DelimGet(DelimGet {
+                table_name,
+                projected_schema,
+                ..
+            }) => {
+                // TODO add agg to eliminate duplicated rows.
+                let resolved = session_state.resolve_table_ref(table_name.clone());
+                if let Ok(schema) = session_state.schema_for_ref(resolved.clone()) {
+                    if let Some(table) = schema.table(&resolved.table).await? {
+                        let mut proj = vec![];
+                        for (i, field) in table.schema().fields().iter().enumerate() {
+                            for iter in projected_schema.as_ref().iter() {
+                                if iter.1 == field {
+                                    proj.push(i);
+                                }
+                            }
+                        }
+
+                        table.scan(session_state, Some(&proj), &[], None).await?
+                    } else {
+                        return internal_err!("no table provider");
+                    }
+                } else {
+                    return internal_err!("empty schema");
+                }
             }
         };
         Ok(exec_node)
