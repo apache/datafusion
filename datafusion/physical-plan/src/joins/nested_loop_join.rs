@@ -259,10 +259,10 @@ impl NestedLoopJoinExec {
             None,
             // No on columns in nested loop join
             &[],
-        );
+        )?;
 
         let mut output_partitioning =
-            asymmetric_join_output_partitioning(left, right, &join_type);
+            asymmetric_join_output_partitioning(left, right, &join_type)?;
 
         let emission_type = if left.boundedness().is_unbounded() {
             EmissionType::Final
@@ -274,7 +274,8 @@ impl NestedLoopJoinExec {
                 | JoinType::LeftSemi
                 | JoinType::RightSemi
                 | JoinType::Right
-                | JoinType::RightAnti => EmissionType::Incremental,
+                | JoinType::RightAnti
+                | JoinType::RightMark => EmissionType::Incremental,
                 // If we need to generate unmatched rows from the *build side*,
                 // we need to emit them at the end.
                 JoinType::Left
@@ -719,7 +720,7 @@ struct NestedLoopJoinStream<T> {
     /// Information of index and left / right placement of columns
     column_indices: Vec<ColumnIndex>,
     // TODO: support null aware equal
-    // null_equals_null: bool
+    // null_equality: NullEquality,
     /// Join execution metrics
     join_metrics: BuildProbeJoinMetrics,
     /// Cache for join indices calculations
@@ -824,10 +825,12 @@ impl<T: BatchTransformer> NestedLoopJoinStream<T> {
                     handle_state!(ready!(self.fetch_probe_batch(cx)))
                 }
                 NestedLoopJoinStreamState::ProcessProbeBatch(_) => {
-                    handle_state!(self.process_probe_batch())
+                    let poll = handle_state!(self.process_probe_batch());
+                    self.join_metrics.baseline.record_poll(poll)
                 }
                 NestedLoopJoinStreamState::ExhaustedProbeSide => {
-                    handle_state!(self.process_unmatched_build_batch())
+                    let poll = handle_state!(self.process_unmatched_build_batch());
+                    self.join_metrics.baseline.record_poll(poll)
                 }
                 NestedLoopJoinStreamState::Completed => Poll::Ready(None),
             };
@@ -911,7 +914,6 @@ impl<T: BatchTransformer> NestedLoopJoinStream<T> {
                 }
 
                 self.join_metrics.output_batches.add(1);
-                self.join_metrics.output_rows.add(batch.num_rows());
                 Ok(StatefulStreamResult::Ready(Some(batch)))
             }
         }
@@ -962,6 +964,8 @@ impl<T: BatchTransformer> NestedLoopJoinStream<T> {
                 timer.done();
             }
 
+            self.join_metrics.output_batches.add(1);
+
             Ok(StatefulStreamResult::Ready(Some(result?)))
         } else {
             // end of the join loop
@@ -1009,15 +1013,30 @@ fn join_left_and_right_batch(
         right_side_ordered,
     )?;
 
-    build_batch_from_indices(
-        schema,
-        left_batch,
-        right_batch,
-        &left_side,
-        &right_side,
-        column_indices,
-        JoinSide::Left,
-    )
+    // Switch around the build side and probe side for `JoinType::RightMark`
+    // because in a RightMark join, we want to mark rows on the right table
+    // by looking for matches in the left.
+    if join_type == JoinType::RightMark {
+        build_batch_from_indices(
+            schema,
+            right_batch,
+            left_batch,
+            &left_side,
+            &right_side,
+            column_indices,
+            JoinSide::Right,
+        )
+    } else {
+        build_batch_from_indices(
+            schema,
+            left_batch,
+            right_batch,
+            &left_side,
+            &right_side,
+            column_indices,
+            JoinSide::Left,
+        )
+    }
 }
 
 impl<T: BatchTransformer + Unpin + Send> Stream for NestedLoopJoinStream<T> {
@@ -1046,7 +1065,7 @@ impl EmbeddedProjection for NestedLoopJoinExec {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use crate::test::TestMemoryExec;
+    use crate::test::{assert_join_metrics, TestMemoryExec};
     use crate::{
         common, expressions::Column, repartition::RepartitionExec, test::build_table_i32,
     };
@@ -1088,22 +1107,18 @@ pub(crate) mod tests {
             vec![batch]
         };
 
-        let mut source =
-            TestMemoryExec::try_new(&[batches], Arc::clone(&schema), None).unwrap();
-        if !sorted_column_names.is_empty() {
-            let mut sort_info = LexOrdering::default();
-            for name in sorted_column_names {
-                let index = schema.index_of(name).unwrap();
-                let sort_expr = PhysicalSortExpr {
-                    expr: Arc::new(Column::new(name, index)),
-                    options: SortOptions {
-                        descending: false,
-                        nulls_first: false,
-                    },
-                };
-                sort_info.push(sort_expr);
-            }
-            source = source.try_with_sort_information(vec![sort_info]).unwrap();
+        let mut sort_info = vec![];
+        for name in sorted_column_names {
+            let index = schema.index_of(name).unwrap();
+            let sort_expr = PhysicalSortExpr::new(
+                Arc::new(Column::new(name, index)),
+                SortOptions::new(false, false),
+            );
+            sort_info.push(sort_expr);
+        }
+        let mut source = TestMemoryExec::try_new(&[batches], schema, None).unwrap();
+        if let Some(ordering) = LexOrdering::new(sort_info) {
+            source = source.try_with_sort_information(vec![ordering]).unwrap();
         }
 
         Arc::new(TestMemoryExec::update_cache(Arc::new(source)))
@@ -1183,7 +1198,7 @@ pub(crate) mod tests {
         join_type: &JoinType,
         join_filter: Option<JoinFilter>,
         context: Arc<TaskContext>,
-    ) -> Result<(Vec<String>, Vec<RecordBatch>)> {
+    ) -> Result<(Vec<String>, Vec<RecordBatch>, MetricsSet)> {
         let partition_count = 4;
 
         // Redistributing right input
@@ -1207,7 +1222,10 @@ pub(crate) mod tests {
                     .collect::<Vec<_>>(),
             );
         }
-        Ok((columns, batches))
+
+        let metrics = nested_loop_join.metrics().unwrap();
+
+        Ok((columns, batches, metrics))
     }
 
     #[tokio::test]
@@ -1216,7 +1234,7 @@ pub(crate) mod tests {
         let left = build_left_table();
         let right = build_right_table();
         let filter = prepare_join_filter();
-        let (columns, batches) = multi_partitioned_join_collect(
+        let (columns, batches, metrics) = multi_partitioned_join_collect(
             left,
             right,
             &JoinType::Inner,
@@ -1233,6 +1251,8 @@ pub(crate) mod tests {
             +----+----+----+----+----+----+
             "#);
 
+        assert_join_metrics!(metrics, 1);
+
         Ok(())
     }
 
@@ -1243,7 +1263,7 @@ pub(crate) mod tests {
         let right = build_right_table();
 
         let filter = prepare_join_filter();
-        let (columns, batches) = multi_partitioned_join_collect(
+        let (columns, batches, metrics) = multi_partitioned_join_collect(
             left,
             right,
             &JoinType::Left,
@@ -1262,6 +1282,8 @@ pub(crate) mod tests {
             +----+----+-----+----+----+----+
             "#);
 
+        assert_join_metrics!(metrics, 3);
+
         Ok(())
     }
 
@@ -1272,7 +1294,7 @@ pub(crate) mod tests {
         let right = build_right_table();
 
         let filter = prepare_join_filter();
-        let (columns, batches) = multi_partitioned_join_collect(
+        let (columns, batches, metrics) = multi_partitioned_join_collect(
             left,
             right,
             &JoinType::Right,
@@ -1291,6 +1313,8 @@ pub(crate) mod tests {
             +----+----+----+----+----+-----+
             "#);
 
+        assert_join_metrics!(metrics, 3);
+
         Ok(())
     }
 
@@ -1301,7 +1325,7 @@ pub(crate) mod tests {
         let right = build_right_table();
 
         let filter = prepare_join_filter();
-        let (columns, batches) = multi_partitioned_join_collect(
+        let (columns, batches, metrics) = multi_partitioned_join_collect(
             left,
             right,
             &JoinType::Full,
@@ -1322,6 +1346,8 @@ pub(crate) mod tests {
             +----+----+-----+----+----+-----+
             "#);
 
+        assert_join_metrics!(metrics, 5);
+
         Ok(())
     }
 
@@ -1332,7 +1358,7 @@ pub(crate) mod tests {
         let right = build_right_table();
 
         let filter = prepare_join_filter();
-        let (columns, batches) = multi_partitioned_join_collect(
+        let (columns, batches, metrics) = multi_partitioned_join_collect(
             left,
             right,
             &JoinType::LeftSemi,
@@ -1349,6 +1375,8 @@ pub(crate) mod tests {
             +----+----+----+
             "#);
 
+        assert_join_metrics!(metrics, 1);
+
         Ok(())
     }
 
@@ -1359,7 +1387,7 @@ pub(crate) mod tests {
         let right = build_right_table();
 
         let filter = prepare_join_filter();
-        let (columns, batches) = multi_partitioned_join_collect(
+        let (columns, batches, metrics) = multi_partitioned_join_collect(
             left,
             right,
             &JoinType::LeftAnti,
@@ -1377,6 +1405,8 @@ pub(crate) mod tests {
             +----+----+-----+
             "#);
 
+        assert_join_metrics!(metrics, 2);
+
         Ok(())
     }
 
@@ -1387,7 +1417,7 @@ pub(crate) mod tests {
         let right = build_right_table();
 
         let filter = prepare_join_filter();
-        let (columns, batches) = multi_partitioned_join_collect(
+        let (columns, batches, metrics) = multi_partitioned_join_collect(
             left,
             right,
             &JoinType::RightSemi,
@@ -1404,6 +1434,8 @@ pub(crate) mod tests {
             +----+----+----+
             "#);
 
+        assert_join_metrics!(metrics, 1);
+
         Ok(())
     }
 
@@ -1414,7 +1446,7 @@ pub(crate) mod tests {
         let right = build_right_table();
 
         let filter = prepare_join_filter();
-        let (columns, batches) = multi_partitioned_join_collect(
+        let (columns, batches, metrics) = multi_partitioned_join_collect(
             left,
             right,
             &JoinType::RightAnti,
@@ -1432,6 +1464,8 @@ pub(crate) mod tests {
             +----+----+-----+
             "#);
 
+        assert_join_metrics!(metrics, 2);
+
         Ok(())
     }
 
@@ -1442,7 +1476,7 @@ pub(crate) mod tests {
         let right = build_right_table();
 
         let filter = prepare_join_filter();
-        let (columns, batches) = multi_partitioned_join_collect(
+        let (columns, batches, metrics) = multi_partitioned_join_collect(
             left,
             right,
             &JoinType::LeftMark,
@@ -1460,6 +1494,40 @@ pub(crate) mod tests {
             | 9  | 8  | 90  | false |
             +----+----+-----+-------+
             "#);
+
+        assert_join_metrics!(metrics, 3);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn join_right_mark_with_filter() -> Result<()> {
+        let task_ctx = Arc::new(TaskContext::default());
+        let left = build_left_table();
+        let right = build_right_table();
+
+        let filter = prepare_join_filter();
+        let (columns, batches, metrics) = multi_partitioned_join_collect(
+            left,
+            right,
+            &JoinType::RightMark,
+            Some(filter),
+            task_ctx,
+        )
+        .await?;
+        assert_eq!(columns, vec!["a2", "b2", "c2", "mark"]);
+
+        assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            +----+----+-----+-------+
+            | a2 | b2 | c2  | mark  |
+            +----+----+-----+-------+
+            | 10 | 10 | 100 | false |
+            | 12 | 10 | 40  | false |
+            | 2  | 2  | 80  | true  |
+            +----+----+-----+-------+
+            "#);
+
+        assert_join_metrics!(metrics, 3);
 
         Ok(())
     }
@@ -1492,6 +1560,7 @@ pub(crate) mod tests {
             JoinType::LeftMark,
             JoinType::RightSemi,
             JoinType::RightAnti,
+            JoinType::RightMark,
         ];
 
         for join_type in join_types {

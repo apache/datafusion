@@ -116,7 +116,6 @@ To get started, see
    user-guide/expressions
    user-guide/sql/index
    user-guide/configs
-   user-guide/runtime_configs
    user-guide/explain-usage
    user-guide/faq
 
@@ -127,18 +126,19 @@ To get started, see
    :caption: Library User Guide
    
    library-user-guide/index
+   library-user-guide/upgrading
    library-user-guide/extensions
    library-user-guide/using-the-sql-api
    library-user-guide/working-with-exprs
    library-user-guide/using-the-dataframe-api
    library-user-guide/building-logical-plans
    library-user-guide/catalogs
-   library-user-guide/adding-udfs
+   library-user-guide/functions/index
    library-user-guide/custom-table-providers
+   library-user-guide/table-constraints
    library-user-guide/extending-operators
    library-user-guide/profiling
    library-user-guide/query-optimizer
-   library-user-guide/upgrading
 
 .. .. _toc.contributor-guide:
 

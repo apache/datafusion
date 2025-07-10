@@ -1067,9 +1067,9 @@ LEFT JOIN join_t2 on join_t1.t1_id = join_t2.t2_id
 WHERE join_t2.t2_int < 10 or (join_t1.t1_int > 2 and join_t2.t2_name != 'w')
 ----
 logical_plan
-01)Inner Join: join_t1.t1_id = join_t2.t2_id Filter: join_t2.t2_int < UInt32(10) OR join_t1.t1_int > UInt32(2) AND join_t2.t2_name != Utf8("w")
+01)Inner Join: join_t1.t1_id = join_t2.t2_id Filter: join_t2.t2_int < UInt32(10) OR join_t1.t1_int > UInt32(2) AND join_t2.t2_name != Utf8View("w")
 02)--TableScan: join_t1 projection=[t1_id, t1_name, t1_int]
-03)--Filter: join_t2.t2_int < UInt32(10) OR join_t2.t2_name != Utf8("w")
+03)--Filter: join_t2.t2_int < UInt32(10) OR join_t2.t2_name != Utf8View("w")
 04)----TableScan: join_t2 projection=[t2_id, t2_name, t2_int]
 
 # Reduce left join 3 (to inner join)
@@ -1153,7 +1153,7 @@ WHERE join_t1.t1_name != 'b'
 ----
 logical_plan
 01)Left Join: join_t1.t1_id = join_t2.t2_id
-02)--Filter: join_t1.t1_name != Utf8("b")
+02)--Filter: join_t1.t1_name != Utf8View("b")
 03)----TableScan: join_t1 projection=[t1_id, t1_name, t1_int]
 04)--TableScan: join_t2 projection=[t2_id, t2_name, t2_int]
 
@@ -1168,9 +1168,9 @@ WHERE join_t1.t1_name != 'b' and join_t2.t2_name = 'x'
 ----
 logical_plan
 01)Inner Join: join_t1.t1_id = join_t2.t2_id
-02)--Filter: join_t1.t1_name != Utf8("b")
+02)--Filter: join_t1.t1_name != Utf8View("b")
 03)----TableScan: join_t1 projection=[t1_id, t1_name, t1_int]
-04)--Filter: join_t2.t2_name = Utf8("x")
+04)--Filter: join_t2.t2_name = Utf8View("x")
 05)----TableScan: join_t2 projection=[t2_id, t2_name, t2_int]
 
 ###
@@ -1373,7 +1373,7 @@ inner join join_t4 on join_t3.s3 = join_t4.s4
 {id: 2} {id: 2}
 
 # join with struct key and nulls
-# Note that intersect or except applies `null_equals_null` as true for Join.
+# Note that intersect or except applies `null_equality` as `NullEquality::NullEqualsNull` for Join.
 query ?
 SELECT * FROM join_t3
 EXCEPT
@@ -3195,7 +3195,7 @@ physical_plan
 04)------RepartitionExec: partitioning=Hash([a@1], 2), input_partitions=2, preserve_order=true, sort_exprs=a@1 ASC, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST, rn1@5 ASC NULLS LAST
 05)--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 06)----------ProjectionExec: expr=[a0@0 as a0, a@1 as a, b@2 as b, c@3 as c, d@4 as d, row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@5 as rn1]
-07)------------BoundedWindowAggExec: wdw=[row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }], mode=[Sorted]
+07)------------BoundedWindowAggExec: wdw=[row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Field { name: "row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING], mode=[Sorted]
 08)--------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], file_type=csv, has_header=true
 09)----CoalesceBatchesExec: target_batch_size=2
 10)------RepartitionExec: partitioning=Hash([a@1], 2), input_partitions=2, preserve_order=true, sort_exprs=a@1 ASC, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST
@@ -3233,7 +3233,7 @@ physical_plan
 08)------RepartitionExec: partitioning=Hash([a@1], 2), input_partitions=2, preserve_order=true, sort_exprs=a@1 ASC, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST, rn1@5 ASC NULLS LAST
 09)--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 10)----------ProjectionExec: expr=[a0@0 as a0, a@1 as a, b@2 as b, c@3 as c, d@4 as d, row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@5 as rn1]
-11)------------BoundedWindowAggExec: wdw=[row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }], mode=[Sorted]
+11)------------BoundedWindowAggExec: wdw=[row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Field { name: "row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING], mode=[Sorted]
 12)--------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], file_type=csv, has_header=true
 
 statement ok
@@ -3272,14 +3272,14 @@ physical_plan
 06)----------RepartitionExec: partitioning=Hash([a@1], 2), input_partitions=2
 07)------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 08)--------------ProjectionExec: expr=[a0@0 as a0, a@1 as a, b@2 as b, c@3 as c, d@4 as d, row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@5 as rn1]
-09)----------------BoundedWindowAggExec: wdw=[row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }], mode=[Sorted]
+09)----------------BoundedWindowAggExec: wdw=[row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Field { name: "row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING], mode=[Sorted]
 10)------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], file_type=csv, has_header=true
 11)------SortExec: expr=[a@1 ASC], preserve_partitioning=[true]
 12)--------CoalesceBatchesExec: target_batch_size=2
 13)----------RepartitionExec: partitioning=Hash([a@1], 2), input_partitions=2
 14)------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 15)--------------ProjectionExec: expr=[a0@0 as a0, a@1 as a, b@2 as b, c@3 as c, d@4 as d, row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@5 as rn1]
-16)----------------BoundedWindowAggExec: wdw=[row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }], mode=[Sorted]
+16)----------------BoundedWindowAggExec: wdw=[row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Field { name: "row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING], mode=[Sorted]
 17)------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], file_type=csv, has_header=true
 
 statement ok
@@ -3314,7 +3314,7 @@ physical_plan
 02)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(a@1, a@1)]
 03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], file_type=csv, has_header=true
 04)----ProjectionExec: expr=[a0@0 as a0, a@1 as a, b@2 as b, c@3 as c, d@4 as d, row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@5 as rn1]
-05)------BoundedWindowAggExec: wdw=[row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }], mode=[Sorted]
+05)------BoundedWindowAggExec: wdw=[row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Field { name: "row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING], mode=[Sorted]
 06)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], file_type=csv, has_header=true
 
 # hash join should propagate ordering equivalence of the right side for RIGHT ANTI join.
@@ -3341,7 +3341,7 @@ physical_plan
 02)--HashJoinExec: mode=CollectLeft, join_type=RightAnti, on=[(a@0, a@1)]
 03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a], output_ordering=[a@0 ASC], file_type=csv, has_header=true
 04)----ProjectionExec: expr=[a0@0 as a0, a@1 as a, b@2 as b, c@3 as c, d@4 as d, row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@5 as rn1]
-05)------BoundedWindowAggExec: wdw=[row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }], mode=[Sorted]
+05)------BoundedWindowAggExec: wdw=[row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Field { name: "row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING], mode=[Sorted]
 06)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], file_type=csv, has_header=true
 
 query TT
@@ -3416,7 +3416,7 @@ physical_plan
 04)------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(d@1, d@1)], filter=CAST(a@0 AS Int64) >= CAST(a@1 AS Int64) - 10, projection=[a@0, d@1, row_n@4]
 05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, d], output_ordering=[a@0 ASC NULLS LAST], file_type=csv, has_header=true
 06)--------ProjectionExec: expr=[a@0 as a, d@1 as d, row_number() ORDER BY [r.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as row_n]
-07)----------BoundedWindowAggExec: wdw=[row_number() ORDER BY [r.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Ok(Field { name: "row_number() ORDER BY [r.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int32(NULL)), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]
+07)----------BoundedWindowAggExec: wdw=[row_number() ORDER BY [r.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { name: "row_number() ORDER BY [r.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
 08)------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, d], output_ordering=[a@0 ASC NULLS LAST], file_type=csv, has_header=true
 
 # run query above in multiple partitions
@@ -4087,7 +4087,7 @@ logical_plan
 07)------------TableScan: sales_global projection=[ts, sn, amount, currency]
 08)----------SubqueryAlias: e
 09)------------Projection: exchange_rates.ts, exchange_rates.currency_from, exchange_rates.rate
-10)--------------Filter: exchange_rates.currency_to = Utf8("USD")
+10)--------------Filter: exchange_rates.currency_to = Utf8View("USD")
 11)----------------TableScan: exchange_rates projection=[ts, currency_from, currency_to, rate]
 physical_plan
 01)SortExec: expr=[sn@1 ASC NULLS LAST], preserve_partitioning=[false]
@@ -4385,7 +4385,7 @@ JOIN my_catalog.my_schema.table_with_many_types AS r ON l.binary_col = r.binary_
 logical_plan
 01)Projection: count(Int64(1)) AS count(*)
 02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
-03)----Projection: 
+03)----Projection:
 04)------Inner Join: l.binary_col = r.binary_col
 05)--------SubqueryAlias: l
 06)----------TableScan: my_catalog.my_schema.table_with_many_types projection=[binary_col]
@@ -4644,7 +4644,7 @@ logical_plan
 08)----Subquery:
 09)------Filter: j3.j3_string = outer_ref(j2.j2_string)
 10)--------TableScan: j3 projection=[j3_string, j3_id]
-physical_plan_error This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn(Utf8, Column { relation: Some(Bare { table: "j2" }), name: "j2_string" })
+physical_plan_error This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn(Utf8View, Column { relation: Some(Bare { table: "j2" }), name: "j2_string" })
 
 query TT
 explain SELECT * FROM j1, LATERAL (SELECT * FROM j1, LATERAL (SELECT * FROM j2 WHERE j1_id = j2_id) as j2) as j2;
@@ -4790,3 +4790,71 @@ DROP TABLE compound_field_table_t;
 
 statement ok
 DROP TABLE compound_field_table_u;
+
+
+statement ok
+CREATE TABLE t1 (k INT, v INT);
+
+statement ok
+CREATE TABLE t2 (k INT, v INT);
+
+statement ok
+INSERT INTO t1
+  SELECT value AS k, value AS v
+  FROM range(1, 10001) AS t(value);
+
+statement ok
+INSERT INTO t2 VALUES (1, 1);
+
+## The TopK(Sort with fetch) should not be pushed down to the hash join
+query TT
+explain
+SELECT *
+FROM t1
+LEFT ANTI JOIN t2 ON t1.k = t2.k
+ORDER BY t1.k
+LIMIT 2;
+----
+logical_plan
+01)Sort: t1.k ASC NULLS LAST, fetch=2
+02)--LeftAnti Join: t1.k = t2.k
+03)----TableScan: t1 projection=[k, v]
+04)----TableScan: t2 projection=[k]
+physical_plan
+01)SortExec: TopK(fetch=2), expr=[k@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--CoalesceBatchesExec: target_batch_size=3
+03)----HashJoinExec: mode=CollectLeft, join_type=RightAnti, on=[(k@0, k@0)]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+05)------DataSourceExec: partitions=1, partition_sizes=[3334]
+
+
+query II
+SELECT *
+FROM t1
+LEFT ANTI JOIN t2 ON t1.k = t2.k
+ORDER BY t1.k
+LIMIT 2;
+----
+2 2
+3 3
+
+
+## Test left anti join without limit, we should support push down sort to the left side
+query TT
+explain
+SELECT *
+FROM t1
+LEFT ANTI JOIN t2 ON t1.k = t2.k
+ORDER BY t1.k;
+----
+logical_plan
+01)Sort: t1.k ASC NULLS LAST
+02)--LeftAnti Join: t1.k = t2.k
+03)----TableScan: t1 projection=[k, v]
+04)----TableScan: t2 projection=[k]
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=3
+02)--HashJoinExec: mode=CollectLeft, join_type=RightAnti, on=[(k@0, k@0)]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)----SortExec: expr=[k@0 ASC NULLS LAST], preserve_partitioning=[false]
+05)------DataSourceExec: partitions=1, partition_sizes=[3334]

@@ -136,7 +136,7 @@ pub async fn from_read_rel(
                                 lit,
                                 &named_struct.names,
                                 &mut name_idx,
-                            )?))
+                            )?, None))
                         })
                         .collect::<datafusion::common::Result<_>>()?;
                     if name_idx != named_struct.names.len() {

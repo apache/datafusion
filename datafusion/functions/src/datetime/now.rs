@@ -17,7 +17,7 @@
 
 use arrow::datatypes::DataType::Timestamp;
 use arrow::datatypes::TimeUnit::Nanosecond;
-use arrow::datatypes::{DataType, Field};
+use arrow::datatypes::{DataType, Field, FieldRef};
 use std::any::Any;
 
 use datafusion_common::{internal_err, Result, ScalarValue};
@@ -77,12 +77,13 @@ impl ScalarUDFImpl for NowFunc {
         &self.signature
     }
 
-    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<Field> {
+    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
         Ok(Field::new(
             self.name(),
             Timestamp(Nanosecond, Some("+00:00".into())),
             false,
-        ))
+        )
+        .into())
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
@@ -107,6 +108,7 @@ impl ScalarUDFImpl for NowFunc {
             .timestamp_nanos_opt();
         Ok(ExprSimplifyResult::Simplified(Expr::Literal(
             ScalarValue::TimestampNanosecond(now_ts, Some("+00:00".into())),
+            None,
         )))
     }
 

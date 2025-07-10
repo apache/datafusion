@@ -24,4 +24,9 @@
 This crate contains functions for working with arrays, maps and structs, such as `array_append` that work with
 `ListArray`, `LargeListArray` and `FixedListArray` types from the `arrow` crate.
 
+Most projects should use the [`datafusion`] crate directly, which re-exports
+this module. If you are already using the [`datafusion`] crate, there is no
+reason to use this crate directly in your project as well.
+
 [df]: https://crates.io/crates/datafusion
+[`datafusion`]: https://crates.io/crates/datafusion

@@ -408,7 +408,7 @@ VALUES (1,2,3,4,5,6,7,8,9,10,11,12,13,NULL,'F',3.5)
 
 # Test non-literal expressions in VALUES
 query II
-VALUES (1, CASE WHEN RANDOM() > 0.5 THEN 1 ELSE 1 END), 
+VALUES (1, CASE WHEN RANDOM() > 0.5 THEN 1 ELSE 1 END),
        (2, CASE WHEN RANDOM() > 0.5 THEN 2 ELSE 2 END);
 ----
 1 1
@@ -558,7 +558,7 @@ EXPLAIN SELECT * FROM ((SELECT column1 FROM foo) "T1" CROSS JOIN (SELECT column2
 ----
 logical_plan
 01)SubqueryAlias: F
-02)--Cross Join: 
+02)--Cross Join:
 03)----SubqueryAlias: T1
 04)------TableScan: foo projection=[column1]
 05)----SubqueryAlias: T2
@@ -1641,7 +1641,7 @@ query II
 SELECT
 CASE WHEN B.x > 0 THEN A.x / B.x ELSE 0 END AS value1,
 CASE WHEN B.x > 0 AND B.y > 0 THEN A.x / B.x ELSE 0 END AS value3
-FROM t AS A, (SELECT * FROM t WHERE x = 0) AS B; 
+FROM t AS A, (SELECT * FROM t WHERE x = 0) AS B;
 ----
 0 0
 0 0
@@ -1871,3 +1871,61 @@ select *, count(*) over() as ta from t;
 
 statement count 0
 drop table t;
+
+# test "user" column
+# See https://github.com/apache/datafusion/issues/14141
+statement count 0
+create table t_with_user(a int, user text) as values (1,'test'), (2,null), (3,'foo');
+
+query T
+select t_with_user.user from t_with_user;
+----
+test
+NULL
+foo
+
+query IT
+select * from t_with_user where t_with_user.user = 'foo';
+----
+3 foo
+
+query T
+select user from t_with_user;
+----
+test
+NULL
+foo
+
+query IT
+select * from t_with_user where user = 'foo';
+----
+3 foo
+
+# test "current_time" column
+# See https://github.com/apache/datafusion/issues/14141
+statement count 0
+create table t_with_current_time(a int, current_time text) as values (1,'now'), (2,null), (3,'later');
+
+# here it's clear the the column was meant
+query B
+select t_with_current_time.current_time is not null from t_with_current_time;
+----
+true
+false
+true
+
+# here it's the function
+query B
+select current_time is not null from t_with_current_time;
+----
+true
+true
+true
+
+# and here it's the column again
+query B
+select "current_time" is not null from t_with_current_time;
+----
+true
+false
+true

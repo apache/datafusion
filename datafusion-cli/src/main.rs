@@ -17,15 +17,17 @@
 
 use std::collections::HashMap;
 use std::env;
+use std::num::NonZeroUsize;
 use std::path::Path;
 use std::process::ExitCode;
 use std::sync::{Arc, LazyLock};
 
 use datafusion::error::{DataFusionError, Result};
 use datafusion::execution::context::SessionConfig;
-use datafusion::execution::memory_pool::{FairSpillPool, GreedyMemoryPool, MemoryPool};
+use datafusion::execution::memory_pool::{
+    FairSpillPool, GreedyMemoryPool, MemoryPool, TrackConsumersPool,
+};
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
-use datafusion::execution::DiskManager;
 use datafusion::prelude::SessionContext;
 use datafusion_cli::catalog::DynamicObjectStoreCatalog;
 use datafusion_cli::functions::ParquetMetadataFunc;
@@ -40,7 +42,7 @@ use datafusion_cli::{
 use clap::Parser;
 use datafusion::common::config_err;
 use datafusion::config::ConfigOptions;
-use datafusion::execution::disk_manager::DiskManagerConfig;
+use datafusion::execution::disk_manager::{DiskManagerBuilder, DiskManagerMode};
 use mimalloc::MiMalloc;
 
 #[global_allocator]
@@ -120,6 +122,13 @@ struct Args {
 
     #[clap(
         long,
+        help = "The number of top memory consumers to display when query fails due to memory exhaustion. To disable memory consumer tracking, set this value to 0",
+        default_value = "3"
+    )]
+    top_memory_consumers: usize,
+
+    #[clap(
+        long,
         help = "The max number of rows to display for 'Table' format\n[possible values: numbers(0/10/...), inf(no limit)]",
         default_value = "40"
     )]
@@ -169,23 +178,31 @@ async fn main_inner() -> Result<()> {
     if let Some(memory_limit) = args.memory_limit {
         // set memory pool type
         let pool: Arc<dyn MemoryPool> = match args.mem_pool_type {
-            PoolType::Fair => Arc::new(FairSpillPool::new(memory_limit)),
-            PoolType::Greedy => Arc::new(GreedyMemoryPool::new(memory_limit)),
+            PoolType::Fair if args.top_memory_consumers == 0 => {
+                Arc::new(FairSpillPool::new(memory_limit))
+            }
+            PoolType::Fair => Arc::new(TrackConsumersPool::new(
+                FairSpillPool::new(memory_limit),
+                NonZeroUsize::new(args.top_memory_consumers).unwrap(),
+            )),
+            PoolType::Greedy if args.top_memory_consumers == 0 => {
+                Arc::new(GreedyMemoryPool::new(memory_limit))
+            }
+            PoolType::Greedy => Arc::new(TrackConsumersPool::new(
+                GreedyMemoryPool::new(memory_limit),
+                NonZeroUsize::new(args.top_memory_consumers).unwrap(),
+            )),
         };
+
         rt_builder = rt_builder.with_memory_pool(pool)
     }
 
     // set disk limit
     if let Some(disk_limit) = args.disk_limit {
-        let mut disk_manager = DiskManager::try_new(DiskManagerConfig::NewOs)?;
-
-        DiskManager::set_arc_max_temp_directory_size(
-            &mut disk_manager,
-            disk_limit.try_into().unwrap(),
-        )?;
-
-        let disk_config = DiskManagerConfig::new_existing(disk_manager);
-        rt_builder = rt_builder.with_disk_manager(disk_config);
+        let builder = DiskManagerBuilder::default()
+            .with_mode(DiskManagerMode::OsTmpDirectory)
+            .with_max_temp_directory_size(disk_limit.try_into().unwrap());
+        rt_builder = rt_builder.with_disk_manager_builder(builder);
     }
 
     let runtime_env = rt_builder.build_arc()?;

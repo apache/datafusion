@@ -140,7 +140,8 @@ pub mod expr_fn {
         "returns uuid v4 as a string value",
     ), (
         contains,
-        "Return true if search_string is found within string.",
+        "Return true if `search_string` is found within `string`.",
+        string search_string
     ));
 
     #[doc = "Removes all characters, spaces by default, from both sides of a string"]

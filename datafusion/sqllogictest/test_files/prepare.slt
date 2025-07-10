@@ -92,7 +92,7 @@ DEALLOCATE my_plan
 statement ok
 PREPARE my_plan AS SELECT * FROM person WHERE id < $1;
 
-statement error No value found for placeholder with id \$1
+statement error Prepared statement 'my_plan' expects 1 parameters, but 0 provided
 EXECUTE my_plan
 
 statement ok

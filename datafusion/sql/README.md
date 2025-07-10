@@ -25,6 +25,13 @@ project that requires a SQL query planner and does not make any assumptions abou
 will be translated to a physical plan. For example, there is no concept of row-based versus columnar execution in the
 logical plan.
 
+Note that the [`datafusion`] crate re-exports this module. If you are already
+using the [`datafusion`] crate in your project, there is no reason to use this
+crate directly in your project as well.
+
+[df]: https://crates.io/crates/datafusion
+[`datafusion`]: https://crates.io/crates/datafusion
+
 ## Example Usage
 
 See the [examples](examples) directory for fully working examples.

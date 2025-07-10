@@ -23,4 +23,9 @@
 
 This crate contains table functions that can be used in DataFusion queries.
 
+Most projects should use the [`datafusion`] crate directly, which re-exports
+this module. If you are already using the [`datafusion`] crate, there is no
+reason to use this crate directly in your project as well.
+
 [df]: https://crates.io/crates/datafusion
+[`datafusion`]: https://crates.io/crates/datafusion

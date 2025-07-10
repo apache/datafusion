@@ -28,10 +28,10 @@ use arrow::compute::SortOptions;
 use arrow::datatypes::{Int32Type, SchemaRef};
 use arrow_schema::{DataType, Field, Schema};
 use datafusion::assert_batches_eq;
+use datafusion::config::SpillCompression;
 use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::datasource::source::DataSourceExec;
 use datafusion::datasource::{MemTable, TableProvider};
-use datafusion::execution::disk_manager::DiskManagerConfig;
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
@@ -41,11 +41,12 @@ use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_catalog::streaming::StreamingTable;
 use datafusion_catalog::Session;
 use datafusion_common::{assert_contains, Result};
+use datafusion_execution::disk_manager::{DiskManagerBuilder, DiskManagerMode};
 use datafusion_execution::memory_pool::{
     FairSpillPool, GreedyMemoryPool, MemoryPool, TrackConsumersPool,
 };
 use datafusion_execution::runtime_env::RuntimeEnv;
-use datafusion_execution::{DiskManager, TaskContext};
+use datafusion_execution::TaskContext;
 use datafusion_expr::{Expr, TableType};
 use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion_physical_optimizer::join_selection::JoinSelection;
@@ -204,7 +205,7 @@ async fn sort_merge_join_spill() {
         )
         .with_memory_limit(1_000)
         .with_config(config)
-        .with_disk_manager_config(DiskManagerConfig::NewOs)
+        .with_disk_manager_builder(DiskManagerBuilder::default())
         .with_scenario(Scenario::AccessLogStreaming)
         .run()
         .await
@@ -288,7 +289,7 @@ async fn sort_spill_reservation() {
         .with_memory_limit(mem_limit)
     // use a single partition so only a sort is needed
         .with_scenario(scenario)
-        .with_disk_manager_config(DiskManagerConfig::NewOs)
+        .with_disk_manager_builder(DiskManagerBuilder::default())
         .with_expected_plan(
             // It is important that this plan only has a SortExec, not
             // also merge, so we can ensure the sort could finish
@@ -354,7 +355,7 @@ async fn oom_recursive_cte() {
 #[tokio::test]
 async fn oom_parquet_sink() {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.into_path().join("test.parquet");
+    let path = dir.path().join("test.parquet");
     let _ = File::create(path.clone()).await.unwrap();
 
     TestCase::new()
@@ -378,7 +379,7 @@ async fn oom_parquet_sink() {
 #[tokio::test]
 async fn oom_with_tracked_consumer_pool() {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.into_path().join("test.parquet");
+    let path = dir.path().join("test.parquet");
     let _ = File::create(path.clone()).await.unwrap();
 
     TestCase::new()
@@ -408,6 +409,19 @@ async fn oom_with_tracked_consumer_pool() {
         .await
 }
 
+#[tokio::test]
+async fn oom_grouped_hash_aggregate() {
+    TestCase::new()
+        .with_query("SELECT COUNT(*), SUM(request_bytes) FROM t GROUP BY host")
+        .with_expected_errors(vec![
+            "Failed to allocate additional",
+            "GroupedHashAggregateStream[0] (count(1), sum(t.request_bytes))",
+        ])
+        .with_memory_limit(1_000)
+        .run()
+        .await
+}
+
 /// For regression case: if spilled `StringViewArray`'s buffer will be referenced by
 /// other batches which are also need to be spilled, then the spill writer will
 /// repeatedly write out the same buffer, and after reading back, each batch's size
@@ -417,7 +431,7 @@ async fn oom_with_tracked_consumer_pool() {
 /// If there is memory explosion for spilled record batch, this test will fail.
 #[tokio::test]
 async fn test_stringview_external_sort() {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let array_length = 1000;
     let num_batches = 200;
     // Batches contain two columns: random 100-byte string, and random i32
@@ -427,7 +441,7 @@ async fn test_stringview_external_sort() {
         let strings: Vec<String> = (0..array_length)
             .map(|_| {
                 (0..100)
-                    .map(|_| rng.gen_range(0..=u8::MAX) as char)
+                    .map(|_| rng.random_range(0..=u8::MAX) as char)
                     .collect()
             })
             .collect();
@@ -435,8 +449,9 @@ async fn test_stringview_external_sort() {
         let string_array = StringViewArray::from(strings);
         let array_ref: ArrayRef = Arc::new(string_array);
 
-        let random_numbers: Vec<i32> =
-            (0..array_length).map(|_| rng.gen_range(0..=1000)).collect();
+        let random_numbers: Vec<i32> = (0..array_length)
+            .map(|_| rng.random_range(0..=1000))
+            .collect();
         let int_array = Int32Array::from(random_numbers);
         let int_array_ref: ArrayRef = Arc::new(int_array);
 
@@ -531,14 +546,16 @@ async fn test_external_sort_zero_merge_reservation() {
 // Tests for disk limit (`max_temp_directory_size` in `DiskManager`)
 // ------------------------------------------------------------------
 
-// Create a new `SessionContext` with speicified disk limit and memory pool limit
+// Create a new `SessionContext` with speicified disk limit, memory pool limit, and spill compression codec
 async fn setup_context(
     disk_limit: u64,
     memory_pool_limit: usize,
+    spill_compression: SpillCompression,
 ) -> Result<SessionContext> {
-    let mut disk_manager = DiskManager::try_new(DiskManagerConfig::NewOs)?;
-
-    DiskManager::set_arc_max_temp_directory_size(&mut disk_manager, disk_limit)?;
+    let disk_manager = DiskManagerBuilder::default()
+        .with_mode(DiskManagerMode::OsTmpDirectory)
+        .with_max_temp_directory_size(disk_limit)
+        .build()?;
 
     let runtime = RuntimeEnvBuilder::new()
         .with_memory_pool(Arc::new(FairSpillPool::new(memory_pool_limit)))
@@ -547,7 +564,7 @@ async fn setup_context(
 
     let runtime = Arc::new(RuntimeEnv {
         memory_pool: runtime.memory_pool.clone(),
-        disk_manager,
+        disk_manager: Arc::new(disk_manager),
         cache_manager: runtime.cache_manager.clone(),
         object_store_registry: runtime.object_store_registry.clone(),
     });
@@ -555,6 +572,7 @@ async fn setup_context(
     let config = SessionConfig::new()
         .with_sort_spill_reservation_bytes(64 * 1024) // 256KB
         .with_sort_in_place_threshold_bytes(0)
+        .with_spill_compression(spill_compression)
         .with_batch_size(64) // To reduce test memory usage
         .with_target_partitions(1);
 
@@ -565,7 +583,8 @@ async fn setup_context(
 /// (specified by `max_temp_directory_size` in `DiskManager`)
 #[tokio::test]
 async fn test_disk_spill_limit_reached() -> Result<()> {
-    let ctx = setup_context(1024 * 1024, 1024 * 1024).await?; // 1MB disk limit, 1MB memory limit
+    let spill_compression = SpillCompression::Uncompressed;
+    let ctx = setup_context(1024 * 1024, 1024 * 1024, spill_compression).await?; // 1MB disk limit, 1MB memory limit
 
     let df = ctx
         .sql("select * from generate_series(1, 1000000000000) as t1(v1) order by v1")
@@ -587,7 +606,8 @@ async fn test_disk_spill_limit_reached() -> Result<()> {
 #[tokio::test]
 async fn test_disk_spill_limit_not_reached() -> Result<()> {
     let disk_spill_limit = 1024 * 1024; // 1MB
-    let ctx = setup_context(disk_spill_limit, 128 * 1024).await?; // 1MB disk limit, 128KB memory limit
+    let spill_compression = SpillCompression::Uncompressed;
+    let ctx = setup_context(disk_spill_limit, 128 * 1024, spill_compression).await?; // 1MB disk limit, 128KB memory limit
 
     let df = ctx
         .sql("select * from generate_series(1, 10000) as t1(v1) order by v1")
@@ -615,6 +635,77 @@ async fn test_disk_spill_limit_not_reached() -> Result<()> {
     Ok(())
 }
 
+/// External query should succeed using zstd as spill compression codec and
+/// and all temporary spill files are properly cleaned up after execution.
+/// Note: This test does not inspect file contents (e.g. magic number),
+/// as spill files are automatically deleted on drop.
+#[tokio::test]
+async fn test_spill_file_compressed_with_zstd() -> Result<()> {
+    let disk_spill_limit = 1024 * 1024; // 1MB
+    let spill_compression = SpillCompression::Zstd;
+    let ctx = setup_context(disk_spill_limit, 128 * 1024, spill_compression).await?; // 1MB disk limit, 128KB memory limit, zstd
+
+    let df = ctx
+        .sql("select * from generate_series(1, 100000) as t1(v1) order by v1")
+        .await
+        .unwrap();
+    let plan = df.create_physical_plan().await.unwrap();
+
+    let task_ctx = ctx.task_ctx();
+    let _ = collect_batches(Arc::clone(&plan), task_ctx)
+        .await
+        .expect("Query execution failed");
+
+    let spill_count = plan.metrics().unwrap().spill_count().unwrap();
+    let spilled_bytes = plan.metrics().unwrap().spilled_bytes().unwrap();
+
+    println!("spill count {spill_count}");
+    assert!(spill_count > 0);
+    assert!((spilled_bytes as u64) < disk_spill_limit);
+
+    // Verify that all temporary files have been properly cleaned up by checking
+    // that the total disk usage tracked by the disk manager is zero
+    let current_disk_usage = ctx.runtime_env().disk_manager.used_disk_space();
+    assert_eq!(current_disk_usage, 0);
+
+    Ok(())
+}
+
+/// External query should succeed using lz4_frame as spill compression codec and
+/// and all temporary spill files are properly cleaned up after execution.
+/// Note: This test does not inspect file contents (e.g. magic number),
+/// as spill files are automatically deleted on drop.
+#[tokio::test]
+async fn test_spill_file_compressed_with_lz4_frame() -> Result<()> {
+    let disk_spill_limit = 1024 * 1024; // 1MB
+    let spill_compression = SpillCompression::Lz4Frame;
+    let ctx = setup_context(disk_spill_limit, 128 * 1024, spill_compression).await?; // 1MB disk limit, 128KB memory limit, lz4_frame
+
+    let df = ctx
+        .sql("select * from generate_series(1, 100000) as t1(v1) order by v1")
+        .await
+        .unwrap();
+    let plan = df.create_physical_plan().await.unwrap();
+
+    let task_ctx = ctx.task_ctx();
+    let _ = collect_batches(Arc::clone(&plan), task_ctx)
+        .await
+        .expect("Query execution failed");
+
+    let spill_count = plan.metrics().unwrap().spill_count().unwrap();
+    let spilled_bytes = plan.metrics().unwrap().spilled_bytes().unwrap();
+
+    println!("spill count {spill_count}");
+    assert!(spill_count > 0);
+    assert!((spilled_bytes as u64) < disk_spill_limit);
+
+    // Verify that all temporary files have been properly cleaned up by checking
+    // that the total disk usage tracked by the disk manager is zero
+    let current_disk_usage = ctx.runtime_env().disk_manager.used_disk_space();
+    assert_eq!(current_disk_usage, 0);
+
+    Ok(())
+}
 /// Run the query with the specified memory limit,
 /// and verifies the expected errors are returned
 #[derive(Clone, Debug)]
@@ -627,7 +718,7 @@ struct TestCase {
     scenario: Scenario,
     /// How should the disk manager (that allows spilling) be
     /// configured? Defaults to `Disabled`
-    disk_manager_config: DiskManagerConfig,
+    disk_manager_builder: DiskManagerBuilder,
     /// Expected explain plan, if non-empty
     expected_plan: Vec<String>,
     /// Is the plan expected to pass? Defaults to false
@@ -643,7 +734,8 @@ impl TestCase {
             config: SessionConfig::new(),
             memory_pool: None,
             scenario: Scenario::AccessLog,
-            disk_manager_config: DiskManagerConfig::Disabled,
+            disk_manager_builder: DiskManagerBuilder::default()
+                .with_mode(DiskManagerMode::Disabled),
             expected_plan: vec![],
             expected_success: false,
         }
@@ -700,11 +792,11 @@ impl TestCase {
 
     /// Specify if the disk manager should be enabled. If true,
     /// operators that support it can spill
-    pub fn with_disk_manager_config(
+    pub fn with_disk_manager_builder(
         mut self,
-        disk_manager_config: DiskManagerConfig,
+        disk_manager_builder: DiskManagerBuilder,
     ) -> Self {
-        self.disk_manager_config = disk_manager_config;
+        self.disk_manager_builder = disk_manager_builder;
         self
     }
 
@@ -723,7 +815,7 @@ impl TestCase {
             memory_pool,
             config,
             scenario,
-            disk_manager_config,
+            disk_manager_builder,
             expected_plan,
             expected_success,
         } = self;
@@ -732,7 +824,7 @@ impl TestCase {
 
         let mut builder = RuntimeEnvBuilder::new()
             // disk manager setting controls the spilling
-            .with_disk_manager(disk_manager_config)
+            .with_disk_manager_builder(disk_manager_builder)
             .with_memory_limit(memory_limit, MEMORY_FRACTION);
 
         if let Some(pool) = memory_pool {
@@ -874,16 +966,11 @@ impl Scenario {
                     descending: false,
                     nulls_first: false,
                 };
-                let sort_information = vec![LexOrdering::new(vec![
-                    PhysicalSortExpr {
-                        expr: col("a", &schema).unwrap(),
-                        options,
-                    },
-                    PhysicalSortExpr {
-                        expr: col("b", &schema).unwrap(),
-                        options,
-                    },
-                ])];
+                let sort_information = vec![[
+                    PhysicalSortExpr::new(col("a", &schema).unwrap(), options),
+                    PhysicalSortExpr::new(col("b", &schema).unwrap(), options),
+                ]
+                .into()];
 
                 let table = SortedTableProvider::new(batches, sort_information);
                 Arc::new(table)

@@ -19,7 +19,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use super::{get_imdb_table_schema, get_query_sql, IMDB_TABLES};
-use crate::util::{BenchmarkRun, CommonOpt};
+use crate::util::{BenchmarkRun, CommonOpt, QueryResult};
 
 use arrow::record_batch::RecordBatch;
 use arrow::util::pretty::{self, pretty_format_batches};
@@ -473,11 +473,6 @@ impl RunOpt {
             .partitions
             .unwrap_or_else(get_available_parallelism)
     }
-}
-
-struct QueryResult {
-    elapsed: std::time::Duration,
-    row_count: usize,
 }
 
 #[cfg(test)]
