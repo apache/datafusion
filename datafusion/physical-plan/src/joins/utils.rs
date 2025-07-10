@@ -791,9 +791,10 @@ pub(crate) fn need_produce_result_in_final(join_type: JoinType) -> bool {
 pub(crate) fn get_final_indices_from_shared_bitmap(
     shared_bitmap: &SharedBitmapBuilder,
     join_type: JoinType,
+    piecewise: bool,
 ) -> (UInt64Array, UInt32Array) {
     let bitmap = shared_bitmap.lock();
-    get_final_indices_from_bit_map(&bitmap, join_type)
+    get_final_indices_from_bit_map(&bitmap, join_type, piecewise)
 }
 
 /// In the end of join execution, need to use bit map of the matched
@@ -808,16 +809,22 @@ pub(crate) fn get_final_indices_from_shared_bitmap(
 pub(crate) fn get_final_indices_from_bit_map(
     left_bit_map: &BooleanBufferBuilder,
     join_type: JoinType,
+    // We add a flag for whether this is being passed from the `PiecewiseMergeJoin`
+    // because the bitmap can be for left + right `JoinType`s
+    piecewise: bool,
 ) -> (UInt64Array, UInt32Array) {
     let left_size = left_bit_map.len();
-    if join_type == JoinType::LeftMark {
+    if join_type == JoinType::LeftMark || (join_type == JoinType::RightMark && piecewise)
+    {
         let left_indices = (0..left_size as u64).collect::<UInt64Array>();
         let right_indices = (0..left_size)
             .map(|idx| left_bit_map.get_bit(idx).then_some(0))
             .collect::<UInt32Array>();
         return (left_indices, right_indices);
     }
-    let left_indices = if join_type == JoinType::LeftSemi {
+    let left_indices = if join_type == JoinType::LeftSemi
+        || (join_type == JoinType::RightSemi && piecewise)
+    {
         (0..left_size)
             .filter_map(|idx| (left_bit_map.get_bit(idx)).then_some(idx as u64))
             .collect::<UInt64Array>()
