@@ -26,7 +26,7 @@ use async_trait::async_trait;
 use datafusion::assert_batches_eq;
 use datafusion::catalog::memory::DataSourceExec;
 use datafusion::catalog::{Session, TableProvider};
-use datafusion::common::tree_node::{Transformed, TreeNode};
+use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion::common::DFSchema;
 use datafusion::common::{Result, ScalarValue};
 use datafusion::datasource::listing::PartitionedFile;
@@ -291,12 +291,12 @@ impl PhysicalExprAdapter for DefaultValuePhysicalExprAdapter {
         // First try our custom default value injection for missing columns
         let rewritten = expr.transform(|expr| {
             self.inject_default_values(expr, logical_file_schema, physical_file_schema)
-        })?;
+        }).data()?;
 
         // Then apply the default adapter as a fallback to handle standard schema differences
         // like type casting, partition column handling, etc.
         self.default_adapter.rewrite_to_file_schema(
-            rewritten.data,
+            rewritten,
             logical_file_schema,
             physical_file_schema,
             partition_values,

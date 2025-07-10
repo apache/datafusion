@@ -25,9 +25,7 @@ use async_trait::async_trait;
 use datafusion::assert_batches_eq;
 use datafusion::catalog::memory::DataSourceExec;
 use datafusion::catalog::{Session, TableProvider};
-use datafusion::common::tree_node::{
-    Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
-};
+use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRecursion};
 use datafusion::common::{assert_contains, DFSchema, Result};
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::physical_plan::{FileScanConfigBuilder, ParquetSource};
@@ -380,7 +378,7 @@ impl PhysicalExprAdapter for ShreddedJsonRewriter {
     ) -> Result<Arc<dyn PhysicalExpr>> {
         // First try our custom JSON shredding rewrite
         let rewritten =
-            expr.transform(|expr| self.rewrite_impl(expr, physical_file_schema))?;
+            expr.transform(|expr| self.rewrite_impl(expr, physical_file_schema)).data()?;
 
         // Then apply the default adapter as a fallback to handle standard schema differences
         // like type casting, missing columns, and partition column handling
