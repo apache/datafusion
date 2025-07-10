@@ -30,15 +30,19 @@ use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
 };
+use itertools::Itertools;
 
 use crate::file_scan_config::FileScanConfig;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{Constraints, Result, Statistics};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
-use datafusion_physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr};
+use datafusion_physical_expr::{
+    conjunction, EquivalenceProperties, Partitioning, PhysicalExpr,
+};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
+use datafusion_physical_plan::filter::collect_columns_from_predicate;
 use datafusion_physical_plan::filter_pushdown::{
-    ChildPushdownResult, FilterPushdownPhase, FilterPushdownPropagation,
+    ChildPushdownResult, FilterPushdownPhase, FilterPushdownPropagation, PredicateSupport,
 };
 
 /// A source of data, typically a list of files or memory
@@ -168,7 +172,12 @@ pub trait DataSource: Send + Sync + Debug {
         filters: Vec<Arc<dyn PhysicalExpr>>,
         _config: &ConfigOptions,
     ) -> Result<FilterPushdownPropagation<Arc<dyn DataSource>>> {
-        Ok(FilterPushdownPropagation::unsupported(filters))
+        Ok(FilterPushdownPropagation::with_filters(
+            filters
+                .into_iter()
+                .map(PredicateSupport::Unsupported)
+                .collect(),
+        ))
     }
 }
 
@@ -316,7 +325,14 @@ impl ExecutionPlan for DataSourceExec {
     ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
         // Push any remaining filters into our data source
         let res = self.data_source.try_pushdown_filters(
-            child_pushdown_result.parent_filters.collect_all(),
+            child_pushdown_result
+                .parent_filters
+                .into_iter()
+                .map(|f| match f {
+                    PredicateSupport::Supported(expr) => expr,
+                    PredicateSupport::Unsupported(expr) => expr,
+                })
+                .collect(),
             config,
         )?;
         match res.updated_node {
@@ -325,6 +341,18 @@ impl ExecutionPlan for DataSourceExec {
                 new_node.data_source = data_source;
                 new_node.cache =
                     Self::compute_properties(Arc::clone(&new_node.data_source));
+
+                // Recompute equivalence info using new filters
+                let filter = conjunction(
+                    res.filters
+                        .iter()
+                        .filter_map(|f| match f {
+                            PredicateSupport::Supported(expr) => Some(Arc::clone(expr)),
+                            PredicateSupport::Unsupported(_) => None,
+                        })
+                        .collect_vec(),
+                );
+                new_node = new_node.add_filter_equivalence_info(filter)?;
                 Ok(FilterPushdownPropagation {
                     filters: res.filters,
                     updated_node: Some(Arc::new(new_node)),
@@ -370,6 +398,20 @@ impl DataSourceExec {
     pub fn with_partitioning(mut self, partitioning: Partitioning) -> Self {
         self.cache = self.cache.with_partitioning(partitioning);
         self
+    }
+
+    /// Add filters' equivalence info
+    fn add_filter_equivalence_info(
+        mut self,
+        filter: Arc<dyn PhysicalExpr>,
+    ) -> Result<Self> {
+        let (equal_pairs, _) = collect_columns_from_predicate(&filter);
+        for (lhs, rhs) in equal_pairs {
+            self.cache
+                .eq_properties
+                .add_equal_conditions(Arc::clone(lhs), Arc::clone(rhs))?
+        }
+        Ok(self)
     }
 
     fn compute_properties(data_source: Arc<dyn DataSource>) -> PlanProperties {
