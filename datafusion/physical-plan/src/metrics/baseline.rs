@@ -169,7 +169,7 @@ impl SpillMetrics {
     }
 }
 
-/// Metrics for tracking [`BatchSplitStream`] activity
+/// Metrics for tracking [`crate::stream::BatchSplitStream`] activity
 #[derive(Debug, Clone)]
 pub struct SplitMetrics {
     /// Number of times an input [`RecordBatch`] was split

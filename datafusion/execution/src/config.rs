@@ -389,7 +389,7 @@ impl SessionConfig {
         self.options.execution.batch_size
     }
 
-    /// Configure the threshold at which incoming [`RecordBatch`]es
+    /// Configure the threshold at which incoming record batches
     /// will be split into smaller batches. Set to `0` to disable
     /// splitting.
     pub fn with_batch_split_threshold(mut self, n: usize) -> Self {
