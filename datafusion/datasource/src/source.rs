@@ -42,7 +42,8 @@ use datafusion_physical_expr::{
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::filter::collect_columns_from_predicate;
 use datafusion_physical_plan::filter_pushdown::{
-    ChildPushdownResult, FilterPushdownPhase, FilterPushdownPropagation, PredicateSupport, PredicateSupportDiscriminant
+    ChildPushdownResult, FilterPushdownPhase, FilterPushdownPropagation,
+    PredicateSupportDiscriminant,
 };
 
 /// A source of data, typically a list of files or memory
@@ -328,7 +329,7 @@ impl ExecutionPlan for DataSourceExec {
             .collect_vec();
         let res = self
             .data_source
-            .try_pushdown_filters(parent_filters, config)?;
+            .try_pushdown_filters(parent_filters.clone(), config)?;
         match res.updated_node {
             Some(data_source) => {
                 let mut new_node = self.clone();
@@ -340,9 +341,10 @@ impl ExecutionPlan for DataSourceExec {
                 let filter = conjunction(
                     res.filters
                         .iter()
-                        .filter_map(|f| match f {
-                            PredicateSupport::Supported(expr) => Some(Arc::clone(expr)),
-                            PredicateSupport::Unsupported(_) => None,
+                        .zip(parent_filters)
+                        .filter_map(|(s, f)| match s {
+                            PredicateSupportDiscriminant::Supported => Some(f),
+                            PredicateSupportDiscriminant::Unsupported => None,
                         })
                         .collect_vec(),
                 );
