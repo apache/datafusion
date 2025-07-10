@@ -86,81 +86,63 @@ impl std::fmt::Display for FilterPushdownPhase {
 /// The result of a plan for pushing down a filter into a child node.
 /// This contains references to filters so that nodes can mutate a filter
 /// before pushing it down to a child node (e.g. to adjust a projection)
-/// or can directly take ownership of `Unsupported` filters that their children
+/// or can directly take ownership of filters that their children
 /// could not handle.
 #[derive(Debug, Clone)]
-pub enum PredicateSupport {
-    /// The predicate was successfully pushed down into the child node.
-    Supported(Arc<dyn PhysicalExpr>),
-    /// The predicate could not be pushed down into the child node.
-    Unsupported(Arc<dyn PhysicalExpr>),
+pub struct PushedDownPredicate {
+    pub discriminant: PushedDown,
+    pub predicate: Arc<dyn PhysicalExpr>,
 }
 
-impl PredicateSupport {
-    /// Return the wrapped [`PhysicalExpr`], discarding whether it is supported or unsupported.
+impl PushedDownPredicate {
+    /// Return the wrapped expression, discarding whether it is supported or unsupported.
     pub fn into_inner(self) -> Arc<dyn PhysicalExpr> {
-        match self {
-            PredicateSupport::Supported(expr) | PredicateSupport::Unsupported(expr) => {
-                expr
-            }
+        self.predicate
+    }
+
+    /// Create a new [`PushedDownPredicate`] with supported pushdown.
+    pub fn supported(predicate: Arc<dyn PhysicalExpr>) -> Self {
+        Self {
+            discriminant: PushedDown::Yes,
+            predicate,
         }
     }
 
-    /// Convert the [`PredicateSupport`] into a [`PredicateSupportDiscriminant`].
-    pub fn discriminant(&self) -> PredicateSupportDiscriminant {
-        match self {
-            PredicateSupport::Supported(_) => PredicateSupportDiscriminant::Supported,
-            PredicateSupport::Unsupported(_) => PredicateSupportDiscriminant::Unsupported,
+    /// Create a new [`PushedDownPredicate`] with unsupported pushdown.
+    pub fn unsupported(predicate: Arc<dyn PhysicalExpr>) -> Self {
+        Self {
+            discriminant: PushedDown::No,
+            predicate,
         }
     }
 }
 
-/// Used by [`FilterPushdownPropagation`] and [`PredicateSupport`] to
-/// communicate the result of attempting to push down a filter into a child
-/// node.
-///
-/// This is the same as [`PredicateSupport`], but without the wrapped expression.
+/// Discriminant for the result of pushing down a filter into a child node.
 #[derive(Debug, Clone, Copy)]
-pub enum PredicateSupportDiscriminant {
-    /// The predicate was successfully pushed down into the child node.
-    Supported,
-    /// The predicate could not be pushed down into the child node.
-    Unsupported,
+pub enum PushedDown {
+    Yes,
+    No,
 }
 
-impl PredicateSupportDiscriminant {
-    pub fn and(
-        self,
-        other: PredicateSupportDiscriminant,
-    ) -> PredicateSupportDiscriminant {
+impl PushedDown {
+    pub fn and(self, other: PushedDown) -> PushedDown {
         match (self, other) {
-            (
-                PredicateSupportDiscriminant::Supported,
-                PredicateSupportDiscriminant::Supported,
-            ) => PredicateSupportDiscriminant::Supported,
-            _ => PredicateSupportDiscriminant::Unsupported,
+            (PushedDown::Yes, PushedDown::Yes) => PushedDown::Yes,
+            _ => PushedDown::No,
         }
     }
 
-    pub fn or(self, other: PredicateSupportDiscriminant) -> PredicateSupportDiscriminant {
+    pub fn or(self, other: PushedDown) -> PushedDown {
         match (self, other) {
-            (PredicateSupportDiscriminant::Supported, _)
-            | (_, PredicateSupportDiscriminant::Supported) => {
-                PredicateSupportDiscriminant::Supported
-            }
-            (
-                PredicateSupportDiscriminant::Unsupported,
-                PredicateSupportDiscriminant::Unsupported,
-            ) => PredicateSupportDiscriminant::Unsupported,
+            (PushedDown::Yes, _) | (_, PushedDown::Yes) => PushedDown::Yes,
+            (PushedDown::No, PushedDown::No) => PushedDown::No,
         }
     }
 
-    pub fn wrap_expression(self, expr: Arc<dyn PhysicalExpr>) -> PredicateSupport {
-        match self {
-            PredicateSupportDiscriminant::Supported => PredicateSupport::Supported(expr),
-            PredicateSupportDiscriminant::Unsupported => {
-                PredicateSupport::Unsupported(expr)
-            }
+    pub fn wrap_expression(self, expr: Arc<dyn PhysicalExpr>) -> PushedDownPredicate {
+        PushedDownPredicate {
+            discriminant: self,
+            predicate: expr,
         }
     }
 }
@@ -169,7 +151,7 @@ impl PredicateSupportDiscriminant {
 #[derive(Debug, Clone)]
 pub struct ChildFilterPushdownResult {
     pub filter: Arc<dyn PhysicalExpr>,
-    pub child_results: Vec<PredicateSupportDiscriminant>,
+    pub child_results: Vec<PushedDown>,
 }
 
 impl ChildFilterPushdownResult {
@@ -177,16 +159,14 @@ impl ChildFilterPushdownResult {
     /// If any child supports the filter, it is considered supported.
     /// If all children support the filter, it is considered supported.
     /// If no child supports the filter, it is considered unsupported.
-    pub fn any(&self) -> PredicateSupportDiscriminant {
+    pub fn any(&self) -> PushedDown {
         if self.child_results.is_empty() {
             // If there are no children, filters cannot be supported
-            PredicateSupportDiscriminant::Unsupported
+            PushedDown::No
         } else {
             self.child_results
                 .iter()
-                .fold(PredicateSupportDiscriminant::Unsupported, |acc, result| {
-                    acc.or(*result)
-                })
+                .fold(PushedDown::No, |acc, result| acc.or(*result))
         }
     }
 
@@ -194,16 +174,14 @@ impl ChildFilterPushdownResult {
     /// If all children support the filter, it is considered supported.
     /// If any child supports the filter, it is considered supported.
     /// If no child supports the filter, it is considered unsupported.
-    pub fn all(&self) -> PredicateSupportDiscriminant {
+    pub fn all(&self) -> PushedDown {
         if self.child_results.is_empty() {
             // If there are no children, filters cannot be supported
-            PredicateSupportDiscriminant::Unsupported
+            PushedDown::No
         } else {
             self.child_results
                 .iter()
-                .fold(PredicateSupportDiscriminant::Supported, |acc, result| {
-                    acc.and(*result)
-                })
+                .fold(PushedDown::Yes, |acc, result| acc.and(*result))
         }
     }
 }
@@ -220,14 +198,14 @@ pub struct ChildPushdownResult {
     /// The parent filters that were pushed down as received by the current node when [`ExecutionPlan::gather_filters_for_pushdown`](crate::ExecutionPlan::handle_child_pushdown_result) was called.
     /// Note that this may *not* be the same as the filters that were passed to the children as the current node may have modified them
     /// (e.g. by reassigning column indices) when it returned them from [`ExecutionPlan::gather_filters_for_pushdown`](crate::ExecutionPlan::handle_child_pushdown_result) in a [`FilterDescription`].
-    /// Attached to each filter is a [`PredicateSupportDiscriminant`] *per child* that indicates whether the filter was supported or unsupported by each child.
+    /// Attached to each filter is a [`PushedDown`] *per child* that indicates whether the filter was supported or unsupported by each child.
     /// To get combined results see [`ChildFilterPushdownResult::any`] and [`ChildFilterPushdownResult::all`].
     pub parent_filters: Vec<ChildFilterPushdownResult>,
     /// The result of pushing down each filter this node provided into each of it's children.
     /// The outer vector corresponds to each child, and the inner vector corresponds to each filter.
     /// Since this node may have generated a different filter for each child the inner vector may have different lengths or the expressions may not match at all.
     /// It is up to each node to interpret this result based on the filters it provided for each child in [`ExecutionPlan::gather_filters_for_pushdown`](crate::ExecutionPlan::handle_child_pushdown_result).
-    pub self_filters: Vec<Vec<PredicateSupport>>,
+    pub self_filters: Vec<Vec<PushedDownPredicate>>,
 }
 
 /// The result of pushing down filters into a node.
@@ -241,9 +219,13 @@ pub struct ChildPushdownResult {
 /// [`ExecutionPlan::handle_child_pushdown_result`]: crate::ExecutionPlan::handle_child_pushdown_result
 #[derive(Debug, Clone)]
 pub struct FilterPushdownPropagation<T> {
+<<<<<<< HEAD
     /// What filters were pushed into the parent node.
     pub filters: Vec<PredicateSupportDiscriminant>,
     /// The updated node, if it was updated during pushdown
+=======
+    pub filters: Vec<PushedDown>,
+>>>>>>> ecbe71f8c (refactor to a struct with a field instead of enum)
     pub updated_node: Option<T>,
 }
 
@@ -278,9 +260,7 @@ impl<T> FilterPushdownPropagation<T> {
 
     /// Create a new [`FilterPushdownPropagation`] with the specified filter support.
     /// This transmits up to our parent node what the result of pushing down the filters into our node and possibly our subtree was.
-    pub fn with_parent_pushdown_result(
-        filters: Vec<PredicateSupportDiscriminant>,
-    ) -> Self {
+    pub fn with_parent_pushdown_result(filters: Vec<PushedDown>) -> Self {
         Self {
             filters,
             updated_node: None,
@@ -301,7 +281,7 @@ pub struct ChildFilterDescription {
     /// Description of which parent filters can be pushed down into this node.
     /// Since we need to transmit filter pushdown results back to this node's parent
     /// we need to track each parent filter for each child, even those that are unsupported / won't be pushed down.
-    pub(crate) parent_filters: Vec<PredicateSupport>,
+    pub(crate) parent_filters: Vec<PushedDownPredicate>,
     /// Description of which filters this node is pushing down to its children.
     /// Since this is not transmitted back to the parents we can have variable sized inner arrays
     /// instead of having to track supported/unsupported.
@@ -342,11 +322,12 @@ impl ChildFilterDescription {
                 // Need to reassign column indices to match child schema
                 let reassigned_filter =
                     reassign_predicate_columns(Arc::clone(filter), &child_schema, false)?;
-                child_parent_filters.push(PredicateSupport::Supported(reassigned_filter));
+                child_parent_filters
+                    .push(PushedDownPredicate::supported(reassigned_filter));
             } else {
                 // Some columns don't exist in child - cannot push down
                 child_parent_filters
-                    .push(PredicateSupport::Unsupported(Arc::clone(filter)));
+                    .push(PushedDownPredicate::unsupported(Arc::clone(filter)));
             }
         }
 
@@ -419,7 +400,7 @@ impl FilterDescription {
         Ok(desc)
     }
 
-    pub fn parent_filters(&self) -> Vec<Vec<PredicateSupport>> {
+    pub fn parent_filters(&self) -> Vec<Vec<PushedDownPredicate>> {
         self.child_filter_descriptions
             .iter()
             .map(|d| &d.parent_filters)

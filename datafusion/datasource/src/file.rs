@@ -30,9 +30,7 @@ use arrow::datatypes::SchemaRef;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{not_impl_err, Result, Statistics};
 use datafusion_physical_expr::{LexOrdering, PhysicalExpr};
-use datafusion_physical_plan::filter_pushdown::{
-    FilterPushdownPropagation, PredicateSupportDiscriminant,
-};
+use datafusion_physical_plan::filter_pushdown::{FilterPushdownPropagation, PushedDown};
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion_physical_plan::DisplayFormatType;
 
@@ -123,7 +121,7 @@ pub trait FileSource: Send + Sync {
         _config: &ConfigOptions,
     ) -> Result<FilterPushdownPropagation<Arc<dyn FileSource>>> {
         Ok(FilterPushdownPropagation::with_parent_pushdown_result(
-            vec![PredicateSupportDiscriminant::Unsupported; filters.len()],
+            vec![PushedDown::No; filters.len()],
         ))
     }
 

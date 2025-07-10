@@ -39,7 +39,7 @@ use datafusion_common::{config::ConfigOptions, Result};
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_plan::filter_pushdown::{
     ChildFilterPushdownResult, ChildPushdownResult, FilterPushdownPhase,
-    FilterPushdownPropagation, PredicateSupport, PredicateSupportDiscriminant,
+    FilterPushdownPropagation, PushedDown,
 };
 use datafusion_physical_plan::{with_new_children_if_necessary, ExecutionPlan};
 
@@ -441,7 +441,7 @@ fn push_down_filters(
     config: &ConfigOptions,
     phase: FilterPushdownPhase,
 ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
-    let mut parent_filter_pushdown_supports: Vec<Vec<PredicateSupportDiscriminant>> =
+    let mut parent_filter_pushdown_supports: Vec<Vec<PushedDown>> =
         vec![vec![]; parent_predicates.len()];
     let mut self_filters_pushdown_supports = vec![];
     let mut new_children = Vec::with_capacity(node.children().len());
@@ -495,13 +495,13 @@ fn push_down_filters(
         for (parent_filter_idx, filter) in parent_filters.into_iter().enumerate() {
             // Check if we can push this filter down to our child.
             // These supports are defined in `gather_filters_for_pushdown()`
-            match filter {
-                PredicateSupport::Supported(predicate) => {
+            match filter.discriminant {
+                PushedDown::Yes => {
                     // Queue this filter up for pushdown to this child
-                    all_predicates.push(predicate);
+                    all_predicates.push(filter.predicate);
                     parent_filter_indices.push(parent_filter_idx);
                 }
-                PredicateSupport::Unsupported(_) => {
+                PushedDown::No => {
                     // This filter won't be pushed down to this child
                     // Will be marked as unsupported later in the initialization loop
                 }
@@ -550,8 +550,7 @@ fn push_down_filters(
 
         // Start by marking all parent filters as unsupported for this child
         for parent_filter_pushdown_support in parent_filter_pushdown_supports.iter_mut() {
-            parent_filter_pushdown_support
-                .push(PredicateSupportDiscriminant::Unsupported);
+            parent_filter_pushdown_support.push(PushedDown::No);
             assert_eq!(
                 parent_filter_pushdown_support.len(),
                 child_idx + 1,

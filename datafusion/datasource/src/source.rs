@@ -42,8 +42,7 @@ use datafusion_physical_expr::{
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::filter::collect_columns_from_predicate;
 use datafusion_physical_plan::filter_pushdown::{
-    ChildPushdownResult, FilterPushdownPhase, FilterPushdownPropagation,
-    PredicateSupportDiscriminant,
+    ChildPushdownResult, FilterPushdownPhase, FilterPushdownPropagation, PushedDown,
 };
 
 /// A source of data, typically a list of files or memory
@@ -174,7 +173,7 @@ pub trait DataSource: Send + Sync + Debug {
         _config: &ConfigOptions,
     ) -> Result<FilterPushdownPropagation<Arc<dyn DataSource>>> {
         Ok(FilterPushdownPropagation::with_parent_pushdown_result(
-            vec![PredicateSupportDiscriminant::Unsupported; filters.len()],
+            vec![PushedDown::No; filters.len()],
         ))
     }
 }
@@ -343,8 +342,8 @@ impl ExecutionPlan for DataSourceExec {
                         .iter()
                         .zip(parent_filters)
                         .filter_map(|(s, f)| match s {
-                            PredicateSupportDiscriminant::Supported => Some(f),
-                            PredicateSupportDiscriminant::Unsupported => None,
+                            PushedDown::Yes => Some(f),
+                            PushedDown::No => None,
                         })
                         .collect_vec(),
                 );
