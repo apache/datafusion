@@ -798,18 +798,6 @@ mod schema_rewriter_tests {
         }
     }
 
-    /// Test that custom rewrite hooks work with ParquetSource
-    #[test]
-    fn test_parquet_source_with_custom_rewrite_hook() {
-        let hook = Arc::new(TestRewriteHook);
-        let _parquet_source =
-            ParquetSource::default().with_predicate_rewrite_hook(hook.clone());
-
-        // Test that the hook can be configured (we can't easily verify it's stored without accessing private fields)
-        // This test ensures the API works correctly
-        assert!(true); // Simple test to verify compilation
-    }
-
     /// Test that rewriter handles expressions with columns that exist only in physical schema
     #[test]
     fn test_schema_rewriter_physical_only_columns() {
