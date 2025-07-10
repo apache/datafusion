@@ -55,6 +55,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: "amd-ci-check" # this job uses it's own cache becase check has a separate cache and we need it to be fast as it blocks other jobs
+          save-if: ${{ github.ref_name == 'main' }}
       - name: Prepare cargo build
         run: |
           # Adding `--locked` here to assert that the `Cargo.lock` file is up to
@@ -302,7 +303,7 @@ jobs:
     runs-on: ubuntu-latest
     # should be uncommented once https://github.com/apache/datafusion/pull/16644 is merged
     # and cache should be added
-    #container:
+    # container:
     #  image: amd64/rust
     steps:
       - uses: actions/checkout@v4
