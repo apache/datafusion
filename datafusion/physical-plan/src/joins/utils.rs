@@ -26,14 +26,14 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use crate::joins::SharedBitmapBuilder;
-use crate::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder};
+use crate::metrics::{self, BaselineMetrics, ExecutionPlanMetricsSet, MetricBuilder};
 use crate::projection::ProjectionExec;
 use crate::{
     ColumnStatistics, ExecutionPlan, ExecutionPlanProperties, Partitioning, Statistics,
 };
 // compatibility
 pub use super::join_filter::JoinFilter;
-pub use super::join_hash_map::{JoinHashMap, JoinHashMapType};
+pub use super::join_hash_map::JoinHashMapType;
 pub use crate::joins::{JoinOn, JoinOnRef};
 
 use arrow::array::{
@@ -1196,6 +1196,7 @@ fn append_probe_indices_in_order(
 /// Metrics for build & probe joins
 #[derive(Clone, Debug)]
 pub(crate) struct BuildProbeJoinMetrics {
+    pub(crate) baseline: BaselineMetrics,
     /// Total time for collecting build-side of join
     pub(crate) build_time: metrics::Time,
     /// Number of batches consumed by build-side
@@ -1212,12 +1213,31 @@ pub(crate) struct BuildProbeJoinMetrics {
     pub(crate) input_rows: metrics::Count,
     /// Number of batches produced by this operator
     pub(crate) output_batches: metrics::Count,
-    /// Number of rows produced by this operator
-    pub(crate) output_rows: metrics::Count,
+}
+
+// This Drop implementation updates the elapsed compute part of the metrics.
+//
+// Why is this in a Drop?
+// - We keep track of build_time and join_time separately, but baseline metrics have
+// a total elapsed_compute time. Instead of remembering to update both the metrics
+// at the same time, we chose to update elapsed_compute once at the end - summing up
+// both the parts.
+//
+// How does this work?
+// - The elapsed_compute `Time` is represented by an `Arc<AtomicUsize>`. So even when
+// this `BuildProbeJoinMetrics` is dropped, the elapsed_compute is usable through the
+// Arc reference.
+impl Drop for BuildProbeJoinMetrics {
+    fn drop(&mut self) {
+        self.baseline.elapsed_compute().add(&self.build_time);
+        self.baseline.elapsed_compute().add(&self.join_time);
+    }
 }
 
 impl BuildProbeJoinMetrics {
     pub fn new(partition: usize, metrics: &ExecutionPlanMetricsSet) -> Self {
+        let baseline = BaselineMetrics::new(metrics, partition);
+
         let join_time = MetricBuilder::new(metrics).subset_time("join_time", partition);
 
         let build_time = MetricBuilder::new(metrics).subset_time("build_time", partition);
@@ -1239,8 +1259,6 @@ impl BuildProbeJoinMetrics {
         let output_batches =
             MetricBuilder::new(metrics).counter("output_batches", partition);
 
-        let output_rows = MetricBuilder::new(metrics).output_rows(partition);
-
         Self {
             build_time,
             build_input_batches,
@@ -1250,7 +1268,7 @@ impl BuildProbeJoinMetrics {
             input_batches,
             input_rows,
             output_batches,
-            output_rows,
+            baseline,
         }
     }
 }

@@ -31,37 +31,41 @@
 //! metadata because the footer must be read and parsed by all readers,
 //! even those that do not use the index.
 //!
+//! This example uses a file level index for skipping entire files, but any
+//! index can be stored using the same techniques and used skip row groups,
+//! data pages, or rows using the APIs on [`TableProvider`] and [`ParquetSource`].
+//!
 //! The resulting Parquet file layout is as follows:
 //!
 //! ```text
-//!                   ┌──────────────────────┐                           
-//!                   │┌───────────────────┐ │                           
-//!                   ││     DataPage      │ │                           
-//!                   │└───────────────────┘ │                           
-//!  Standard Parquet │┌───────────────────┐ │                           
-//!  Data Pages       ││     DataPage      │ │                           
-//!                   │└───────────────────┘ │                           
-//!                   │        ...           │                           
-//!                   │┌───────────────────┐ │                           
-//!                   ││     DataPage      │ │                           
-//!                   │└───────────────────┘ │                           
-//!                   │┏━━━━━━━━━━━━━━━━━━━┓ │                           
-//! Non standard      │┃                   ┃ │                           
-//! index (ignored by │┃Custom Binary Index┃ │                           
-//! other Parquet     │┃ (Distinct Values) ┃◀│─ ─ ─                      
-//! readers)          │┃                   ┃ │     │                     
-//!                   │┗━━━━━━━━━━━━━━━━━━━┛ │                           
+//!                   ┌──────────────────────┐
+//!                   │┌───────────────────┐ │
+//!                   ││     DataPage      │ │
+//!                   │└───────────────────┘ │
+//!  Standard Parquet │┌───────────────────┐ │
+//!  Data Pages       ││     DataPage      │ │
+//!                   │└───────────────────┘ │
+//!                   │        ...           │
+//!                   │┌───────────────────┐ │
+//!                   ││     DataPage      │ │
+//!                   │└───────────────────┘ │
+//!                   │┏━━━━━━━━━━━━━━━━━━━┓ │
+//! Non standard      │┃                   ┃ │
+//! index (ignored by │┃Custom Binary Index┃ │
+//! other Parquet     │┃ (Distinct Values) ┃◀│─ ─ ─
+//! readers)          │┃                   ┃ │     │
+//!                   │┗━━━━━━━━━━━━━━━━━━━┛ │
 //! Standard Parquet  │┏━━━━━━━━━━━━━━━━━━━┓ │     │  key/value metadata
-//! Page Index        │┃    Page Index     ┃ │        contains location  
-//!                   │┗━━━━━━━━━━━━━━━━━━━┛ │     │  of special index   
-//!                   │╔═══════════════════╗ │                           
-//!                   │║ Parquet Footer w/ ║ │     │                     
-//!                   │║     Metadata      ║ ┼ ─ ─                       
-//!                   │║ (Thrift Encoded)  ║ │                           
-//!                   │╚═══════════════════╝ │                           
-//!                   └──────────────────────┘                           
-//!                                                                      
-//!                         Parquet File                                 
+//! Page Index        │┃    Page Index     ┃ │        contains location
+//!                   │┗━━━━━━━━━━━━━━━━━━━┛ │     │  of special index
+//!                   │╔═══════════════════╗ │
+//!                   │║ Parquet Footer w/ ║ │     │
+//!                   │║     Metadata      ║ ┼ ─ ─
+//!                   │║ (Thrift Encoded)  ║ │
+//!                   │╚═══════════════════╝ │
+//!                   └──────────────────────┘
+//!
+//!                         Parquet File
 //!
 //! # High Level Flow
 //!
@@ -420,17 +424,19 @@ impl TableProvider for DistinctIndexTable {
 
         println!("Scanning only files: {files_to_scan:?}");
 
-        // Build ParquetSource to sctually read the files
+        // Build ParquetSource to actually read the files
         let url = ObjectStoreUrl::parse("file://")?;
         let source = Arc::new(ParquetSource::default().with_enable_page_index(true));
         let mut builder = FileScanConfigBuilder::new(url, self.schema.clone(), source);
         for file in files_to_scan {
             let path = self.dir.join(file);
             let len = std::fs::metadata(&path)?.len();
-            builder = builder.with_file(PartitionedFile::new(
-                path.to_str().unwrap().to_string(),
-                len,
-            ));
+            // If the index contained information about row groups or pages,
+            // you could also pass that information here to further prune
+            // the data read from the file.
+            let partitioned_file =
+                PartitionedFile::new(path.to_str().unwrap().to_string(), len);
+            builder = builder.with_file(partitioned_file);
         }
         Ok(DataSourceExec::from_data_source(builder.build()))
     }

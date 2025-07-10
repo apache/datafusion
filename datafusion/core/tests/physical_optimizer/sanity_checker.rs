@@ -420,7 +420,7 @@ async fn test_bounded_window_agg_sort_requirement() -> Result<()> {
     assert_snapshot!(
         actual,
         @r#"
-    BoundedWindowAggExec: wdw=[count: Ok(Field { name: "count", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(UInt64(NULL)), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]
+    BoundedWindowAggExec: wdw=[count: Field { name: "count", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
       SortExec: expr=[c9@0 ASC NULLS LAST], preserve_partitioning=[false]
         DataSourceExec: partitions=1, partition_sizes=[0]
     "#
@@ -448,7 +448,7 @@ async fn test_bounded_window_agg_no_sort_requirement() -> Result<()> {
     assert_snapshot!(
         actual,
         @r#"
-    BoundedWindowAggExec: wdw=[count: Ok(Field { name: "count", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(UInt64(NULL)), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]
+    BoundedWindowAggExec: wdw=[count: Field { name: "count", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
       DataSourceExec: partitions=1, partition_sizes=[0]
     "#
     );
