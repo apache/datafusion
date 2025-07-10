@@ -29,7 +29,7 @@ use datafusion_common::{
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 
 use crate::expressions::{self, CastExpr, Column};
-pub trait PhysicalExprSchemaRewriteHook: Send + Sync + std::fmt::Debug {
+pub trait PhysicalSchemaExprRewriter: Send + Sync + std::fmt::Debug {
     /// Rewrite a physical expression to match the target schema
     ///
     /// This method should return a transformed expression that matches the target schema.

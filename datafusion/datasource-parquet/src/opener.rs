@@ -33,7 +33,7 @@ use arrow::datatypes::{FieldRef, SchemaRef, TimeUnit};
 use arrow::error::ArrowError;
 use datafusion_common::{exec_err, DataFusionError, Result};
 use datafusion_datasource::PartitionedFile;
-use datafusion_physical_expr::schema_rewriter::PhysicalExprSchemaRewriteHook;
+use datafusion_physical_expr::schema_rewriter::PhysicalSchemaExprRewriter;
 use datafusion_physical_expr::simplifier::PhysicalExprSimplifier;
 use datafusion_physical_expr::PhysicalExprSchemaRewriter;
 use datafusion_physical_expr_common::physical_expr::{
@@ -94,7 +94,7 @@ pub(super) struct ParquetOpener {
     /// Optional parquet FileDecryptionProperties
     pub file_decryption_properties: Option<Arc<FileDecryptionProperties>>,
     /// Rewrite expressions in the context of the file schema
-    pub predicate_rewrite_hook: Option<Arc<dyn PhysicalExprSchemaRewriteHook>>,
+    pub predicate_rewrite_hook: Option<Arc<dyn PhysicalSchemaExprRewriter>>,
 }
 
 impl FileOpener for ParquetOpener {

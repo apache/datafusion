@@ -39,7 +39,7 @@ use datafusion_common::{DataFusionError, Statistics};
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_physical_expr::conjunction;
-use datafusion_physical_expr::schema_rewriter::PhysicalExprSchemaRewriteHook;
+use datafusion_physical_expr::schema_rewriter::PhysicalSchemaExprRewriter;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_plan::filter_pushdown::{
@@ -279,7 +279,7 @@ pub struct ParquetSource {
     /// Optional hint for the size of the parquet metadata
     pub(crate) metadata_size_hint: Option<usize>,
     pub(crate) projected_statistics: Option<Statistics>,
-    pub(crate) predicate_rewrite_hook: Option<Arc<dyn PhysicalExprSchemaRewriteHook>>,
+    pub(crate) predicate_rewrite_hook: Option<Arc<dyn PhysicalSchemaExprRewriter>>,
 }
 
 impl ParquetSource {
@@ -323,7 +323,7 @@ impl ParquetSource {
     /// that vary on a per-file basis.
     pub fn with_predicate_rewrite_hook(
         mut self,
-        predicate_rewrite_hook: Arc<dyn PhysicalExprSchemaRewriteHook>,
+        predicate_rewrite_hook: Arc<dyn PhysicalSchemaExprRewriter>,
     ) -> Self {
         self.predicate_rewrite_hook = Some(predicate_rewrite_hook);
         self
