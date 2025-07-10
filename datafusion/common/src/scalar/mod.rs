@@ -2386,7 +2386,9 @@ impl ScalarValue {
             | DataType::Time64(TimeUnit::Millisecond)
             | DataType::RunEndEncoded(_, _)
             | DataType::ListView(_)
-            | DataType::LargeListView(_) => {
+            | DataType::LargeListView(_)
+            | DataType::Decimal32(_, _)
+            | DataType::Decimal64(_, _) => {
                 return _not_impl_err!(
                     "Unsupported creation of {:?} array from ScalarValue {:?}",
                     data_type,

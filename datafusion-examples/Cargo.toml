@@ -33,18 +33,6 @@ rust-version = { workspace = true }
 workspace = true
 
 [[example]]
-name = "flight_sql_server"
-path = "examples/flight/flight_sql_server.rs"
-
-[[example]]
-name = "flight_server"
-path = "examples/flight/flight_server.rs"
-
-[[example]]
-name = "flight_client"
-path = "examples/flight/flight_client.rs"
-
-[[example]]
 name = "dataframe_to_s3"
 path = "examples/external_dependency/dataframe-to-s3.rs"
 

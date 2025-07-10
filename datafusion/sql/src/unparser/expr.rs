@@ -1725,7 +1725,9 @@ impl Unparser<'_> {
                 not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
             }
             DataType::Decimal128(precision, scale)
-            | DataType::Decimal256(precision, scale) => {
+            | DataType::Decimal256(precision, scale)
+            | DataType::Decimal32(precision, scale)
+            | DataType::Decimal64(precision, scale) => {
                 let mut new_precision = *precision as u64;
                 let mut new_scale = *scale as u64;
                 if *scale < 0 {
