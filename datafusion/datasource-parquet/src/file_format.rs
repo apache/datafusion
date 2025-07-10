@@ -958,8 +958,7 @@ pub async fn fetch_parquet_metadata(
     let file_size = meta.size;
     let fetch = ObjectStoreFetch::new(store, meta);
 
-    #[allow(unused_mut)]
-    let mut reader = ParquetMetaDataReader::new().with_prefetch_hint(size_hint);
+    let reader = ParquetMetaDataReader::new().with_prefetch_hint(size_hint);
 
     #[cfg(feature = "parquet_encryption")]
     let reader = reader.with_decryption_properties(decryption_properties);
