@@ -481,7 +481,7 @@ impl ExecutionPlan for FilterExec {
         _config: &ConfigOptions,
     ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
         if !matches!(phase, FilterPushdownPhase::Pre) {
-            return Ok(FilterPushdownPropagation::all(child_pushdown_result));
+            return Ok(FilterPushdownPropagation::if_all(child_pushdown_result));
         }
         // We absorb any parent filters that were not handled by our children
         let unsupported_parent_filters =

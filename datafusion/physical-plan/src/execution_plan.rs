@@ -621,7 +621,7 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
         child_pushdown_result: ChildPushdownResult,
         _config: &ConfigOptions,
     ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
-        Ok(FilterPushdownPropagation::all(child_pushdown_result))
+        Ok(FilterPushdownPropagation::if_all(child_pushdown_result))
     }
 
     /// Injects arbitrary run-time state into this execution plan, returning a new plan

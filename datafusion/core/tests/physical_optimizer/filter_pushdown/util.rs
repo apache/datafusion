@@ -552,17 +552,18 @@ impl ExecutionPlan for TestNode {
                     )?;
                     let new_self =
                         TestNode::new(false, Arc::new(new_child), self.predicate.clone());
-                    let mut res = FilterPushdownPropagation::all(child_pushdown_result);
+                    let mut res =
+                        FilterPushdownPropagation::if_all(child_pushdown_result);
                     res.updated_node = Some(Arc::new(new_self) as Arc<dyn ExecutionPlan>);
                     Ok(res)
                 }
                 PushedDown::Yes => {
-                    let res = FilterPushdownPropagation::all(child_pushdown_result);
+                    let res = FilterPushdownPropagation::if_all(child_pushdown_result);
                     Ok(res)
                 }
             }
         } else {
-            let res = FilterPushdownPropagation::all(child_pushdown_result);
+            let res = FilterPushdownPropagation::if_all(child_pushdown_result);
             Ok(res)
         }
     }
