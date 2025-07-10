@@ -127,14 +127,11 @@ impl PredicateSupportDiscriminant {
         other: PredicateSupportDiscriminant,
     ) -> PredicateSupportDiscriminant {
         match (self, other) {
-            (PredicateSupportDiscriminant::Supported, _)
-            | (_, PredicateSupportDiscriminant::Supported) => {
-                PredicateSupportDiscriminant::Supported
-            }
             (
-                PredicateSupportDiscriminant::Unsupported,
-                PredicateSupportDiscriminant::Unsupported,
-            ) => PredicateSupportDiscriminant::Unsupported,
+                PredicateSupportDiscriminant::Supported,
+                PredicateSupportDiscriminant::Supported,
+            ) => PredicateSupportDiscriminant::Supported,
+            _ => PredicateSupportDiscriminant::Unsupported,
         }
     }
 

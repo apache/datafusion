@@ -449,7 +449,7 @@ fn push_down_filters(
     let children = node.children();
     let filter_description =
         node.gather_filters_for_pushdown(phase, parent_predicates.clone(), config)?;
-    
+
     let filter_description_parent_filters = filter_description.parent_filters();
     let filter_description_self_filters = filter_description.self_filters();
     if filter_description_parent_filters.len() != children.len() {
@@ -473,11 +473,13 @@ fn push_down_filters(
         ));
     }
 
-    for (child, parent_filters, self_filters) in izip!(
+    for (child_idx, (child, parent_filters, self_filters)) in izip!(
         children,
         filter_description.parent_filters(),
         filter_description.self_filters()
-    ) {
+    )
+    .enumerate()
+    {
         // Here, `parent_filters` are the predicates which are provided by the parent node of
         // the current node, and tried to be pushed down over the child which the loop points
         // currently. `self_filters` are the predicates which are provided by the current node,
@@ -486,16 +488,23 @@ fn push_down_filters(
         let num_self_filters = self_filters.len();
         let mut all_predicates = self_filters.clone();
 
+        // Track which parent filters are supported for this child
+        let mut parent_filter_indices = vec![];
+
         // Iterate over each predicate coming from the parent
-        for filter in parent_filters.into_iter() {
+        for (parent_filter_idx, filter) in parent_filters.into_iter().enumerate() {
             // Check if we can push this filter down to our child.
             // These supports are defined in `gather_filters_for_pushdown()`
             match filter {
                 PredicateSupport::Supported(predicate) => {
                     // Queue this filter up for pushdown to this child
                     all_predicates.push(predicate);
+                    parent_filter_indices.push(parent_filter_idx);
                 }
-                PredicateSupport::Unsupported(_) => {}
+                PredicateSupport::Unsupported(_) => {
+                    // This filter won't be pushed down to this child
+                    // Will be marked as unsupported later in the initialization loop
+                }
             }
         }
 
@@ -516,8 +525,7 @@ fn push_down_filters(
         // from our parents and filters that the current node injected. We need to de-entangle
         // this since we do need to distinguish between them.
         let mut all_filters = result.filters.into_iter().collect_vec();
-        if all_filters.len() != num_self_filters + num_parent_filters
-        {
+        if all_filters.len() != num_self_filters + num_parent_filters {
             return Err(datafusion_common::DataFusionError::Internal(
                 format!(
                     "Filter pushdown did not return the expected number of filters: expected {num_self_filters} self filters and {num_parent_filters} parent filters, but got {num_filters_from_child}. Likely culprit is {child}",
@@ -532,11 +540,30 @@ fn push_down_filters(
             .split_off(num_self_filters)
             .into_iter()
             .collect_vec();
-        self_filters_pushdown_supports.push(all_filters.into_iter().zip(self_filters).map(|(s, f)| s.wrap_expression(f)).collect());
-        for (parent_filter_idx, parent_filter_support) in parent_filters.into_iter().enumerate()
+        self_filters_pushdown_supports.push(
+            all_filters
+                .into_iter()
+                .zip(self_filters)
+                .map(|(s, f)| s.wrap_expression(f))
+                .collect(),
+        );
+
+        // Start by marking all parent filters as unsupported for this child
+        for original_parent_idx in 0..parent_predicates.len() {
+            parent_filter_pushdown_supports[original_parent_idx]
+                .push(PredicateSupportDiscriminant::Unsupported);
+            assert_eq!(
+                parent_filter_pushdown_supports[original_parent_idx].len(),
+                child_idx + 1,
+                "Parent filter pushdown supports should have the same length as the number of children"
+            );
+        }
+        // Map results from pushed-down filters back to original parent filter indices
+        for (result_idx, parent_filter_support) in parent_filters.into_iter().enumerate()
         {
-            parent_filter_pushdown_supports[parent_filter_idx]
-                .push(parent_filter_support);
+            let original_parent_idx = parent_filter_indices[result_idx];
+            parent_filter_pushdown_supports[original_parent_idx][child_idx] =
+                parent_filter_support;
         }
     }
 
