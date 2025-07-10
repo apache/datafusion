@@ -204,7 +204,6 @@ mod test {
     use arrow::array::StringArray;
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
-    use datafusion_common::Result;
 
     use std::sync::Arc;
 
