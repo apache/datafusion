@@ -127,24 +127,72 @@ impl ScalarUDFImpl for MyUdf {
 
 [#16677] https://github.com/apache/datafusion/issues/16677
 
-### `datafusion.execution.collect_statistics` now defaults to `true`
+#### `ScalarUDFImpl::equals` Default Implementation 
 
-The default value of the `datafusion.execution.collect_statistics` configuration
-setting is now true. This change impacts users that use that value directly and relied
-on its default value being `false`.
+The default implementation of the `equals` method in the `ScalarUDFImpl` trait has been updated. Previously, it compared only the type IDs, names, and signatures of UDFs. Now, it assumes UDFs are not equal unless their pointers are the same.
 
-This change also restores the default behavior of `ListingTable` to its previous. If you use it directly
-you can maintain the current behavior by overriding the default value in your code.
+**Impact:**
+
+- This change may affect any custom UDF implementations relying on the default `equals` behavior.
+- If your UDFs have internal state or additional properties that should be considered for equality, you must override the `equals` method to include those comparisons.
+
+**Action Required:**
+
+- Review your UDF implementations and ensure the `equals` method is overridden where necessary.
+- Update any tests or logic that depend on the previous default behavior.
+
+**Example:**
 
 ```rust
-# /* comment to avoid running
-ListingOptions::new(Arc::new(ParquetFormat::default()))
-    .with_collect_stat(false)
-    // other options
-# */
+# use datafusion::logical_expr::{ScalarUDFImpl, Signature, Volatility};
+# use datafusion_common::{DataFusionError, Result};
+# use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
+# use arrow::datatypes::DataType;
+# use std::any::Any;
+#
+# #[derive(Debug)]
+# struct MyUdf {
+#     param: i32,
+# }
+#
+# impl MyUdf {
+#     fn name(&self) -> &str { "my_udf" }
+# }
+#
+impl ScalarUDFImpl for MyUdf {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        "my_udf"
+    }
+
+    fn signature(&self) -> &Signature {
+        todo!()
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        todo!()
+    }
+
+    fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        todo!()
+    }
+
+    fn equals(&self, other: &dyn ScalarUDFImpl) -> bool {
+        if let Some(other) = other.as_any().downcast_ref::<Self>() {
+            self.param == other.param && self.name() == other.name()
+        } else {
+            false
+        }
+    }
+}
 ```
 
-### Metadata is now represented by `FieldMetadata`
+[#16677] https://github.com/apache/datafusion/issues/16677
+
+### Metadata on Arrow Types is now represented by `FieldMetadata`
 
 Metadata from the Arrow `Field` is now stored using the `FieldMetadata`
 structure. In prior versions it was stored as both a `HashMap<String, String>`
@@ -201,6 +249,25 @@ SET datafusion.execution.spill_compression = 'zstd';
 ```
 
 For more details about this configuration option, including performance trade-offs between different compression codecs, see the [Configuration Settings](../user-guide/configs.md) documentation.
+
+## DataFusion `48.0.1`
+
+### `datafusion.execution.collect_statistics` now defaults to `true`
+
+The default value of the `datafusion.execution.collect_statistics` configuration
+setting is now true. This change impacts users that use that value directly and relied
+on its default value being `false`.
+
+This change also restores the default behavior of `ListingTable` to its previous. If you use it directly
+you can maintain the current behavior by overriding the default value in your code.
+
+```rust
+# /* comment to avoid running
+ListingOptions::new(Arc::new(ParquetFormat::default()))
+    .with_collect_stat(false)
+    // other options
+# */
+```
 
 ## DataFusion `48.0.0`
 
