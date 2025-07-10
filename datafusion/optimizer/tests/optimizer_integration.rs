@@ -735,18 +735,6 @@ impl ContextProvider for MyContextProvider {
         Vec::new()
     }
 
-    fn create_cte_work_table(
-        &self,
-        name: &str,
-        schema: SchemaRef,
-    ) -> Result<Arc<dyn TableSource>> {
-        use datafusion_catalog::cte_worktable::CteWorkTable;
-        use datafusion_catalog::default_table_source::DefaultTableSource;
-        Ok(Arc::new(DefaultTableSource::new(Arc::new(
-            CteWorkTable::new(name, schema),
-        ))))
-    }
-
     fn get_expr_planners(&self) -> &[Arc<dyn ExprPlanner>] {
         &self.expr_planners
     }
