@@ -493,7 +493,7 @@ impl ExecutionPlan for FilterExec {
             .self_filters
             .first()
             .expect("we have exactly one child")
-            .into_iter()
+            .iter()
             .filter_map(|f| match f {
                 PredicateSupport::Supported(_) => None,
                 PredicateSupport::Unsupported(inner) => Some(inner),
