@@ -42,8 +42,7 @@ use datafusion_physical_expr::{
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::filter::collect_columns_from_predicate;
 use datafusion_physical_plan::filter_pushdown::{
-    ChildPushdownResult, FilterPushdownPhase, FilterPushdownPropagation,
-    PredicateSupportDiscriminant,
+    ChildPushdownResult, FilterPushdownPhase, FilterPushdownPropagation, PredicateSupport, PredicateSupportDiscriminant
 };
 
 /// A source of data, typically a list of files or memory
