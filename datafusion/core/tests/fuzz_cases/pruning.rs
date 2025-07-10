@@ -314,7 +314,7 @@ async fn execute_with_predicate(
 }
 
 async fn write_parquet_file(
-    truncation_length: Option<usize>,
+    _truncation_length: Option<usize>,
     schema: Arc<Schema>,
     row_groups: Vec<Vec<String>>,
 ) -> Bytes {
