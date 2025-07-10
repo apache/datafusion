@@ -25,6 +25,10 @@ pub enum AggregateOrderSensitivity {
     /// The aggregator can not produce a correct result unless its ordering
     /// requirement is satisfied.
     HardRequirement,
+    /// Indicates that the aggregate expression strongly prefers the input to be ordered.
+    /// The aggregator can produce its result correctly regardless of the input ordering,
+    /// This is a similar to, but stronger than, `Beneficial`.
+    SoftRequirement,
     /// Indicates that ordering is beneficial for the aggregate expression in terms
     /// of evaluation efficiency. The aggregator can produce its result efficiently
     /// when its required ordering is satisfied; however, it can still produce the
@@ -38,7 +42,7 @@ impl AggregateOrderSensitivity {
     }
 
     pub fn is_beneficial(&self) -> bool {
-        self.eq(&AggregateOrderSensitivity::Beneficial)
+        matches!(self, Self::SoftRequirement | Self::Beneficial)
     }
 
     pub fn hard_requires(&self) -> bool {
