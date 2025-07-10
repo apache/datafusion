@@ -127,7 +127,6 @@ impl ScalarUDFImpl for MyUdf {
 
 [#16677] https://github.com/apache/datafusion/issues/16677
 
-
 ### Metadata on Arrow Types is now represented by `FieldMetadata`
 
 Metadata from the Arrow `Field` is now stored using the `FieldMetadata`
