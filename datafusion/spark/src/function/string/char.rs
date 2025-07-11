@@ -100,13 +100,6 @@ fn spark_chr(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     }
 }
 
-/// Examples
-///
-/// ```
-/// assert_eq!(char(65), 'A');
-/// assert_eq!(char(97), 'a');
-/// assert_eq!(char(8364), '€'); // Euro symbol
-/// ```
 fn chr(args: &[ArrayRef]) -> Result<ArrayRef> {
     let integer_array = as_int64_array(&args[0])?;
 
