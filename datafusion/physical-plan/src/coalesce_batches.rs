@@ -243,9 +243,7 @@ impl ExecutionPlan for CoalesceBatchesExec {
         child_pushdown_result: ChildPushdownResult,
         _config: &ConfigOptions,
     ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
-        Ok(FilterPushdownPropagation::transparent(
-            child_pushdown_result,
-        ))
+        Ok(FilterPushdownPropagation::if_all(child_pushdown_result))
     }
 }
 
