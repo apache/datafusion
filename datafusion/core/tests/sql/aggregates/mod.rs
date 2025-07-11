@@ -17,5 +17,18 @@
 
 //! Aggregate function tests
 
+use super::*;
+use arrow::datatypes::TimeUnit;
+use datafusion::common::test_util::batches_to_string;
+use datafusion_catalog::MemTable;
+use datafusion_common::ScalarValue;
+use insta::assert_snapshot;
+use std::cmp::min;
+
+/// Helper function to create the commonly used UInt32 indexed UTF-8 dictionary data type
+pub fn string_dict_type() -> DataType {
+    DataType::Dictionary(Box::new(DataType::UInt32), Box::new(DataType::Utf8))
+}
+
 pub mod basic;
 pub mod dict_nulls;
