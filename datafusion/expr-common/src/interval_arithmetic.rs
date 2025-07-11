@@ -1329,7 +1329,9 @@ pub fn satisfy_greater(
     // side can change after propagating the greater-than operation.
     let new_left_lower = if left.lower.is_null() || left.lower <= right.lower {
         if strict {
-            next_value(right.lower.clone())
+            let next_val = next_value(right.lower.clone());
+            // Use the smaller of next_val or left.upper to avoid invalid intervals
+            min_of_bounds(&next_val, &left.upper)
         } else {
             right.lower.clone()
         }
@@ -1342,7 +1344,9 @@ pub fn satisfy_greater(
         || (!left.upper.is_null() && left.upper <= right.upper)
     {
         if strict {
-            prev_value(left.upper.clone())
+            let prev_val = prev_value(left.upper.clone());
+            // Use the larger of prev_value or right.lower to avoid invalid intervals
+            max_of_bounds(&prev_val, &right.lower)
         } else {
             left.upper.clone()
         }
@@ -3687,6 +3691,48 @@ mod tests {
                 Interval::make(Some(-500.0_f64), Some(1000.0_f64))?,
                 Interval::make(Some(-500.0_f64), Some(500.0_f64))?,
             ),
+            (
+                Interval::make(Some(0_i64), Some(0_i64))?,
+                Interval::make(Some(-0_i64), Some(0_i64))?,
+                true,
+                Interval::make(Some(0_i64), Some(0_i64))?,
+                Interval::make(Some(-0_i64), Some(0_i64))?,
+            ),
+            (
+                Interval::make(Some(-0_i64), Some(0_i64))?,
+                Interval::make(Some(-0_i64), Some(-0_i64))?,
+                true,
+                Interval::make(Some(-0_i64), Some(0_i64))?,
+                Interval::make(Some(-0_i64), Some(-0_i64))?,
+            ),
+            (
+                Interval::make(Some(0.0_f64), Some(0.0_f64))?,
+                Interval::make(Some(-0.0_f64), Some(0.0_f64))?,
+                true,
+                Interval::make(Some(0.0_f64), Some(0.0_f64))?,
+                Interval::make(Some(-0.0_f64), Some(0.0_f64))?,
+            ),
+            (
+                Interval::make(Some(0.0_f64), Some(0.0_f64))?,
+                Interval::make(Some(-0.0_f64), Some(0.0_f64))?,
+                false,
+                Interval::make(Some(0.0_f64), Some(0.0_f64))?,
+                Interval::make(Some(-0.0_f64), Some(-0.0_f64))?,
+            ),
+            (
+                Interval::make(Some(-0.0_f64), Some(0.0_f64))?,
+                Interval::make(Some(-0.0_f64), Some(-0.0_f64))?,
+                true,
+                Interval::make(Some(-0.0_f64), Some(0.0_f64))?,
+                Interval::make(Some(-0.0_f64), Some(-0.0_f64))?,
+            ),
+            (
+                Interval::make(Some(-0.0_f64), Some(0.0_f64))?,
+                Interval::make(Some(-0.0_f64), Some(-0.0_f64))?,
+                false,
+                Interval::make(Some(0.0_f64), Some(0.0_f64))?,
+                Interval::make(Some(-0.0_f64), Some(-0.0_f64))?,
+            ),
         ];
         for (first, second, includes_endpoints, left_modified, right_modified) in cases {
             assert_eq!(
@@ -3704,6 +3750,16 @@ mod tests {
             (
                 Interval::make(Some(-1000.0_f32), Some(1000.0_f32))?,
                 Interval::make(Some(1500.0_f32), Some(2000.0_f32))?,
+                false,
+            ),
+            (
+                Interval::make(Some(0_i64), Some(0_i64))?,
+                Interval::make(Some(-0_i64), Some(0_i64))?,
+                false,
+            ),
+            (
+                Interval::make(Some(-0_i64), Some(0_i64))?,
+                Interval::make(Some(-0_i64), Some(-0_i64))?,
                 false,
             ),
         ];
