@@ -211,9 +211,16 @@ impl DependentJoinRewriter {
         current_plan: LogicalPlanBuilder,
         subquery_alias_by_offset: HashMap<usize, String>,
     ) -> Result<LogicalPlanBuilder> {
+        // Normalize negated subquries in projection expressions.
+        let normalized_exprs: Vec<Expr> = original_proj
+            .expr
+            .iter()
+            .map(normalize_negated_subqueries)
+            .collect::<Result<Vec<Expr>>>()?;
+
         let (transformed_plan, transformed_exprs) =
             Self::rewrite_exprs_into_dependent_join_plan(
-                vec![original_proj.expr.iter().collect::<Vec<&Expr>>()],
+                vec![normalized_exprs.iter().collect()],
                 dependent_join_node,
                 current_subquery_depth,
                 current_plan,
@@ -244,11 +251,23 @@ impl DependentJoinRewriter {
             .map(|c| col(c.clone()))
             .collect();
 
+        // Normalize negated subqueries in group and aggregate expressions
+        let normalized_group_exprs: Vec<Expr> = aggregate
+            .group_expr
+            .iter()
+            .map(normalize_negated_subqueries)
+            .collect::<Result<Vec<Expr>>>()?;
+        let normalized_aggr_exprs: Vec<Expr> = aggregate
+            .aggr_expr
+            .iter()
+            .map(normalize_negated_subqueries)
+            .collect::<Result<Vec<Expr>>>()?;
+
         let (transformed_plan, transformed_exprs) =
             Self::rewrite_exprs_into_dependent_join_plan(
                 vec![
-                    aggregate.group_expr.iter().collect::<Vec<&Expr>>(),
-                    aggregate.aggr_expr.iter().collect::<Vec<&Expr>>(),
+                    normalized_group_exprs.iter().collect(),
+                    normalized_aggr_exprs.iter().collect(),
                 ],
                 dependent_join_node,
                 current_subquery_depth,
@@ -346,9 +365,12 @@ impl DependentJoinRewriter {
 
         new_join.filter = None;
 
+        // Normalize negated subqueries in join filter
+        let normalized_filter = normalize_negated_subqueries(filter)?;
+
         let (transformed_plan, transformed_exprs) =
             Self::rewrite_exprs_into_dependent_join_plan(
-                vec![vec![filter]],
+                vec![vec![&normalized_filter]],
                 dependent_join_node,
                 current_subquery_depth,
                 LogicalPlanBuilder::new(LogicalPlan::Join(new_join)),
@@ -964,6 +986,11 @@ fn normalize_negated_subqueries(expr: &Expr) -> Result<Expr> {
                     // Convert negated InSubquery to NOT(InSubquery{negated: false})
                     in_subquery.negated = false;
                     Ok(Transformed::yes(not(Expr::InSubquery(in_subquery))))
+                }
+                Expr::Exists(mut exists_subuqery) if exists_subuqery.negated => {
+                    // Convert negated ExistsSubquery to NOT(ExistsSubquery{negated: false})
+                    exists_subuqery.negated = false;
+                    Ok(Transformed::yes(not(Expr::Exists(exists_subuqery))))
                 }
                 _ => Ok(Transformed::no(e)),
             }
