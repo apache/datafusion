@@ -176,6 +176,9 @@ tempfile = "3"
 tokio = { version = "1.46", features = ["macros", "rt", "sync"] }
 url = "2.5.4"
 
+[patch.crates-io]
+tokio = { git = "https://github.com/tokio-rs/tokio.git" }
+
 [profile.release]
 codegen-units = 1
 lto = true
