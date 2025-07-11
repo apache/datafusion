@@ -226,6 +226,20 @@ TableParquetOptions {
 # */
 ```
 
+### `LogicalExtensionCodec` now considers `TableSource` instances
+
+Implementations of `LogicalExtensionCodec` must now implement `try_encode_table_source` instead of `try_encode_table_provider`, and `try_decode_table_source` instead of `try_decode_table_provider`. Because a given `TableProvider` can be wrapped as a `TableSource`, this allows serializing and deserializing logical plans using either one.
+
+To migrate code that is serializing and deserializing custom `TableProvider` instances, use `DefaultTableProvider::unwrap_provider` to downcast:
+
+```rust
+# /* comment to avoid running
+if let Some(my_table_provider) = DefaultTableProvider::unwrap_provider::<MyTableProvider>(source) {
+    // serialization code here...
+}
+# */
+```
+
 ## DataFusion `48.0.1`
 
 ### `datafusion.execution.collect_statistics` now defaults to `true`

@@ -43,6 +43,26 @@ impl DefaultTableSource {
     pub fn new(table_provider: Arc<dyn TableProvider>) -> Self {
         Self { table_provider }
     }
+
+    /// Attempt to downcast a TableSource to DefaultTableSource and access the
+    /// TableProvider. This will only work with a TableSource created by DataFusion.
+    pub fn unwrap_provider<T: TableProvider + 'static>(
+        source: &Arc<dyn TableSource>,
+    ) -> datafusion_common::Result<&T> {
+        if let Some(source) = source
+            .as_ref()
+            .as_any()
+            .downcast_ref::<DefaultTableSource>()
+        {
+            if let Some(provider) =
+                source.table_provider.as_ref().as_any().downcast_ref::<T>()
+            {
+                return Ok(provider);
+            }
+        }
+
+        internal_err!("TableSource was not expected type")
+    }
 }
 
 impl TableSource for DefaultTableSource {
@@ -85,7 +105,7 @@ impl TableSource for DefaultTableSource {
     }
 }
 
-/// Wrap TableProvider in TableSource
+/// Wrap a TableProvider as a TableSource.
 pub fn provider_as_source(
     table_provider: Arc<dyn TableProvider>,
 ) -> Arc<dyn TableSource> {

@@ -28,6 +28,7 @@ use datafusion::datasource::file_format::json::{JsonFormat, JsonFormatFactory};
 use datafusion::datasource::listing::{
     ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
 };
+use datafusion::datasource::{provider_as_source, DefaultTableSource};
 use datafusion::execution::options::ArrowReadOptions;
 use datafusion::optimizer::eliminate_nested_union::EliminateNestedUnion;
 use datafusion::optimizer::Optimizer;
@@ -40,7 +41,7 @@ use std::mem::size_of_val;
 use std::sync::Arc;
 use std::vec;
 
-use datafusion::catalog::{TableProvider, TableProviderFactory};
+use datafusion::catalog::TableProviderFactory;
 use datafusion::datasource::file_format::arrow::ArrowFormatFactory;
 use datafusion::datasource::file_format::csv::CsvFormatFactory;
 use datafusion::datasource::file_format::parquet::ParquetFormatFactory;
@@ -76,9 +77,9 @@ use datafusion_expr::expr::{
 use datafusion_expr::logical_plan::{Extension, UserDefinedLogicalNodeCore};
 use datafusion_expr::{
     Accumulator, AggregateUDF, ColumnarValue, ExprFunctionExt, ExprSchemable, Literal,
-    LogicalPlan, Operator, PartitionEvaluator, ScalarUDF, Signature, TryCast, Volatility,
-    WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition, WindowUDF,
-    WindowUDFImpl,
+    LogicalPlan, Operator, PartitionEvaluator, ScalarUDF, Signature, TableSource,
+    TryCast, Volatility, WindowFrame, WindowFrameBound, WindowFrameUnits,
+    WindowFunctionDefinition, WindowUDF, WindowUDFImpl,
 };
 use datafusion_functions_aggregate::average::avg_udaf;
 use datafusion_functions_aggregate::expr_fn::{
@@ -102,7 +103,10 @@ use datafusion_proto::logical_plan::{
 };
 use datafusion_proto::protobuf;
 
-use crate::cases::{MyAggregateUDF, MyAggregateUdfNode, MyRegexUdf, MyRegexUdfNode};
+use crate::cases::{
+    MyAggregateUDF, MyAggregateUdfNode, MyCustomTableSource,
+    MyCustomTableSourceExtensionCodec, MyRegexUdf, MyRegexUdfNode,
+};
 
 #[cfg(feature = "json")]
 fn roundtrip_json_test(proto: &protobuf::LogicalExprNode) {
@@ -183,13 +187,13 @@ impl LogicalExtensionCodec for TestTableProviderCodec {
         not_impl_err!("No extension codec provided")
     }
 
-    fn try_decode_table_provider(
+    fn try_decode_table_source(
         &self,
         buf: &[u8],
         table_ref: &TableReference,
         schema: SchemaRef,
         _ctx: &SessionContext,
-    ) -> Result<Arc<dyn TableProvider>> {
+    ) -> Result<Arc<dyn TableSource>> {
         let msg = TestTableProto::decode(buf).map_err(|_| {
             DataFusionError::Internal("Error decoding test table".to_string())
         })?;
@@ -198,19 +202,16 @@ impl LogicalExtensionCodec for TestTableProviderCodec {
             url: msg.url,
             schema,
         };
-        Ok(Arc::new(provider))
+        Ok(provider_as_source(Arc::new(provider)))
     }
 
-    fn try_encode_table_provider(
+    fn try_encode_table_source(
         &self,
         table_ref: &TableReference,
-        node: Arc<dyn TableProvider>,
+        node: Arc<dyn TableSource>,
         buf: &mut Vec<u8>,
     ) -> Result<()> {
-        let table = node
-            .as_ref()
-            .as_any()
-            .downcast_ref::<TestTableProvider>()
+        let table = DefaultTableSource::unwrap_provider::<TestTableProvider>(&node)
             .expect("Can't encode non-test tables");
         let msg = TestTableProto {
             url: table.url.clone(),
@@ -1187,20 +1188,20 @@ impl LogicalExtensionCodec for TopKExtensionCodec {
         }
     }
 
-    fn try_decode_table_provider(
+    fn try_decode_table_source(
         &self,
         _buf: &[u8],
         _table_ref: &TableReference,
         _schema: SchemaRef,
         _ctx: &SessionContext,
-    ) -> Result<Arc<dyn TableProvider>> {
+    ) -> Result<Arc<dyn TableSource>> {
         internal_err!("unsupported plan type")
     }
 
-    fn try_encode_table_provider(
+    fn try_encode_table_source(
         &self,
         _table_ref: &TableReference,
-        _node: Arc<dyn TableProvider>,
+        _node: Arc<dyn TableSource>,
         _buf: &mut Vec<u8>,
     ) -> Result<()> {
         internal_err!("unsupported plan type")
@@ -1224,20 +1225,20 @@ impl LogicalExtensionCodec for UDFExtensionCodec {
         not_impl_err!("No extension codec provided")
     }
 
-    fn try_decode_table_provider(
+    fn try_decode_table_source(
         &self,
         _buf: &[u8],
         _table_ref: &TableReference,
         _schema: SchemaRef,
         _ctx: &SessionContext,
-    ) -> Result<Arc<dyn TableProvider>> {
+    ) -> Result<Arc<dyn TableSource>> {
         internal_err!("unsupported plan type")
     }
 
-    fn try_encode_table_provider(
+    fn try_encode_table_source(
         &self,
         _table_ref: &TableReference,
-        _node: Arc<dyn TableProvider>,
+        _node: Arc<dyn TableSource>,
         _buf: &mut Vec<u8>,
     ) -> Result<()> {
         internal_err!("unsupported plan type")
@@ -2242,20 +2243,20 @@ fn roundtrip_scalar_udf() {
             not_impl_err!("LogicalExtensionCodec is not provided")
         }
 
-        fn try_decode_table_provider(
+        fn try_decode_table_source(
             &self,
             _buf: &[u8],
             _table_ref: &TableReference,
             _schema: SchemaRef,
             _ctx: &SessionContext,
-        ) -> Result<Arc<dyn TableProvider>> {
+        ) -> Result<Arc<dyn TableSource>> {
             not_impl_err!("LogicalExtensionCodec is not provided")
         }
 
-        fn try_encode_table_provider(
+        fn try_encode_table_source(
             &self,
             _table_ref: &TableReference,
-            _node: Arc<dyn TableProvider>,
+            _node: Arc<dyn TableSource>,
             _buf: &mut Vec<u8>,
         ) -> Result<()> {
             not_impl_err!("LogicalExtensionCodec is not provided")
@@ -2668,5 +2669,22 @@ async fn roundtrip_arrow_scan() -> Result<()> {
     let bytes = logical_plan_to_bytes(&plan)?;
     let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
     assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_custom_table_source_query() -> Result<()> {
+    let ctx = SessionContext::new();
+    let table_source = Arc::new(MyCustomTableSource {});
+    let plan =
+        datafusion_expr::LogicalPlanBuilder::scan("custom_table", table_source, None)?
+            .project(vec![col("id")])?
+            .build()?;
+
+    let codec = MyCustomTableSourceExtensionCodec {};
+    let bytes = logical_plan_to_bytes_with_extension_codec(&plan, &codec)?;
+    let new_plan = logical_plan_from_bytes_with_extension_codec(&bytes, &ctx, &codec)?;
+    assert_eq!(plan, new_plan);
     Ok(())
 }
