@@ -64,7 +64,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         args: args.clone(),
                         arg_fields: arg_fields.clone(),
                         number_rows: size,
-                        return_field: &Field::new("f", DataType::Utf8, true),
+                        return_field: Arc::new(Field::new("f", DataType::Utf8, true)),
                     })
                     .unwrap(),
             )
