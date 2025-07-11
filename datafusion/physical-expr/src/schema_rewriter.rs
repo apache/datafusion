@@ -84,7 +84,7 @@ pub trait PhysicalExprAdapter: Send + Sync + std::fmt::Debug {
     /// - `logical_file_schema`: The logical schema of the table being queried, excluding any partition columns.
     /// - `physical_file_schema`: The physical schema of the file being scanned.
     /// - `partition_values`: Optional partition values to use for rewriting partition column references.
-    ///    These are handled as if they were columns appended onto the logical file schema.
+    ///   These are handled as if they were columns appended onto the logical file schema.
     ///
     /// Returns:
     /// - `Arc<dyn PhysicalExpr>`: The rewritten physical expression that can be evaluated against the physical schema.

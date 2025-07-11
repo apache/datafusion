@@ -513,7 +513,7 @@ impl FileSource for ParquetSource {
             expr_adapter: base_config
                 .expr_adapter
                 .clone()
-                .unwrap_or(Arc::new(DefaultPhysicalExprAdapter)),
+                .unwrap_or_else(|| Arc::new(DefaultPhysicalExprAdapter)),
         })
     }
 

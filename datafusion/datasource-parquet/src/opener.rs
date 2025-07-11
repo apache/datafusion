@@ -135,7 +135,7 @@ impl FileOpener for ParquetOpener {
         let predicate_creation_errors = MetricBuilder::new(&self.metrics)
             .global_counter("num_predicate_creation_errors");
 
-        let expr_adapter = self.expr_adapter.clone();
+        let expr_adapter = Arc::clone(&self.expr_adapter);
 
         let mut enable_page_index = self.enable_page_index;
         let file_decryption_properties = self.file_decryption_properties.clone();
