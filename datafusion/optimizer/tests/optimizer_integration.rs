@@ -518,9 +518,11 @@ fn select_correlated_predicate_subquery_with_uppercase_ident() {
 
 #[test]
 fn recursive_cte_projection_pushdown() -> Result<()> {
-    // Test that projection pushdown works with recursive CTEs by ensuring
-    // only the required columns are projected from the base table, even when
-    // the CTE definition includes unused columns
+    // Test projection pushdown behavior with recursive CTEs in various scenarios
+
+    // Scenario 1: CTE defines extra columns but recursive part references them
+    // In this case, projection pushdown cannot eliminate the unused columns because
+    // the recursive part still references them, even if the final SELECT doesn't use them
     let sql = "WITH RECURSIVE nodes AS (\
         SELECT col_int32 AS id, col_utf8 AS name, col_uint32 AS extra FROM test \
         UNION ALL \
@@ -528,9 +530,6 @@ fn recursive_cte_projection_pushdown() -> Result<()> {
     ) SELECT id FROM nodes";
     let plan = test_sql(sql)?;
 
-    // The key insight: even though the CTE defines 'name' and 'extra' columns,
-    // projection pushdown successfully optimizes this to only select 'id' since that's
-    // all that's ultimately needed. The unused columns are completely eliminated!
     assert_snapshot!(
         format!("{plan}"),
         @r#"SubqueryAlias: nodes
@@ -543,13 +542,10 @@ fn recursive_cte_projection_pushdown() -> Result<()> {
           TableScan: nodes
 "#
     );
-    Ok(())
-}
 
-#[test]
-fn recursive_cte_with_unused_columns() -> Result<()> {
-    // Test projection pushdown with a recursive CTE where the base case
-    // includes columns that are never used in the recursive part or final result
+    // Scenario 2: Unused columns in both base and recursive parts
+    // Even when columns are never used in final result, they're still projected
+    // because the recursive part references them
     let sql = "WITH RECURSIVE series AS (\
         SELECT 1 AS n, col_utf8, col_uint32, col_date32 FROM test WHERE col_int32 = 1 \
         UNION ALL \
@@ -557,8 +553,6 @@ fn recursive_cte_with_unused_columns() -> Result<()> {
     ) SELECT n FROM series";
     let plan = test_sql(sql)?;
 
-    // All columns are still projected because the recursive part references them,
-    // but this shows the current behavior
     assert_snapshot!(
         format!("{plan}"),
         @r#"SubqueryAlias: series
@@ -572,13 +566,10 @@ fn recursive_cte_with_unused_columns() -> Result<()> {
           TableScan: series
 "#
     );
-    Ok(())
-}
 
-#[test]
-fn recursive_cte_true_projection_pushdown() -> Result<()> {
-    // Test case that truly demonstrates projection pushdown working:
-    // The base case only selects needed columns
+    // Scenario 3: Optimal case - only needed columns are selected
+    // This demonstrates true projection pushdown working when the recursive part
+    // only uses columns that are actually needed in the final result
     let sql = "WITH RECURSIVE countdown AS (\
         SELECT col_int32 AS n FROM test WHERE col_int32 = 5 \
         UNION ALL \
@@ -586,8 +577,6 @@ fn recursive_cte_true_projection_pushdown() -> Result<()> {
     ) SELECT n FROM countdown";
     let plan = test_sql(sql)?;
 
-    // This should show that only col_int32 is projected from the base table,
-    // demonstrating true projection pushdown
     assert_snapshot!(
         format!("{plan}"),
         @r#"SubqueryAlias: countdown
@@ -600,6 +589,7 @@ fn recursive_cte_true_projection_pushdown() -> Result<()> {
         TableScan: countdown
 "#
     );
+
     Ok(())
 }
 
@@ -753,114 +743,4 @@ impl TableSource for MyTableSource {
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
     }
-}
-
-#[tokio::test]
-async fn recursive_cte_alias_stability() -> Result<()> {
-    // This test checks that the recursive CTE alias is stable across runs.
-    // the sql is from datafusion/sqllogictest/test_files/cte.slt
-    let ctx = SessionContext::new();
-    let testdata = datafusion_test_data();
-    let csv_path = format!("{testdata}/recursive_cte/prices.csv");
-    ctx.register_csv("prices", &csv_path, CsvReadOptions::new().has_header(true))
-        .await?;
-
-    let sql = r#"
-WITH RECURSIVE "recursive_cte" AS (
-  (
-    WITH "min_prices_row_num_cte" AS (
-      SELECT
-        MIN("prices"."prices_row_num") AS "prices_row_num"
-      FROM
-        "prices"
-    ),
-    "min_prices_row_num_cte_second" AS (
-      SELECT
-        MIN("prices"."prices_row_num") AS "prices_row_num_advancement"
-      FROM
-        "prices"
-      WHERE
-        "prices"."prices_row_num" > (
-          SELECT
-            "prices_row_num"
-          FROM
-            "min_prices_row_num_cte"
-        )
-    )
-    SELECT
-      0.0 AS "beg",
-      (0.0 + 50) AS "end",
-      (
-        SELECT
-          "prices_row_num"
-        FROM
-          "min_prices_row_num_cte"
-      ) AS "prices_row_num",
-      (
-        SELECT
-          "prices_row_num_advancement"
-        FROM
-          "min_prices_row_num_cte_second"
-      ) AS "prices_row_num_advancement"
-    FROM
-      "prices"
-    WHERE
-      "prices"."prices_row_num" = (
-        SELECT
-          DISTINCT "prices_row_num"
-        FROM
-          "min_prices_row_num_cte"
-      )
-  )
-  UNION ALL (
-    WITH "min_prices_row_num_cte" AS (
-      SELECT
-        "prices"."prices_row_num" AS "prices_row_num",
-        LEAD("prices"."prices_row_num", 1) OVER (
-          ORDER BY "prices_row_num"
-        ) AS "prices_row_num_advancement"
-      FROM
-        (
-          SELECT
-            DISTINCT "prices_row_num"
-          FROM
-            "prices"
-        ) AS "prices"
-    )
-    SELECT
-      "recursive_cte"."end" AS "beg",
-      ("recursive_cte"."end" + 50) AS "end",
-      "min_prices_row_num_cte"."prices_row_num" AS "prices_row_num",
-      "min_prices_row_num_cte"."prices_row_num_advancement" AS "prices_row_num_advancement"
-    FROM
-      "recursive_cte"
-      FULL JOIN "prices" ON "prices"."prices_row_num" = "recursive_cte"."prices_row_num_advancement"
-      FULL JOIN "min_prices_row_num_cte" ON "min_prices_row_num_cte"."prices_row_num" = COALESCE(
-        "prices"."prices_row_num",
-        "recursive_cte"."prices_row_num_advancement"
-      )
-    WHERE
-      "recursive_cte"."prices_row_num_advancement" IS NOT NULL
-  )
-)
-SELECT
-  DISTINCT *
-FROM
-  "recursive_cte"
-ORDER BY
-  "prices_row_num" ASC;
-"#;
-
-    println!("Creating logical plan...");
-    let df = ctx.sql(sql).await?;
-
-    let result = df.collect().await;
-
-    // Assert that no error occurs
-    assert!(
-        result.is_ok(),
-        "Expected no error, but got: {:?}",
-        result.err()
-    );
-    Ok(())
 }
