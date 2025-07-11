@@ -234,7 +234,10 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
         let input_view = array.views()[rhs_row];
 
         // Fast path when data buffers are empty
-        if self.completed.is_empty() && self.in_progress.is_empty() && array.data_buffers().is_empty() {
+        if self.completed.is_empty()
+            && self.in_progress.is_empty()
+            && array.data_buffers().is_empty()
+        {
             // For eq case, we can directly compare the inlined bytes
             return exist_view == input_view;
         }
@@ -256,7 +259,7 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
             return true;
         }
 
-        if exist_view_len <= 12  && input_view_len <= 12 {
+        if exist_view_len <= 12 && input_view_len <= 12 {
             // When all inlined, we can directly compare the views
             exist_view == input_view
         } else {
@@ -265,7 +268,7 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
             let pref_existed = byte_view.prefix.swap_bytes();
             let pref_input = ByteView::from(input_view).prefix.swap_bytes();
             if pref_existed != pref_input {
-               return false;
+                return false;
             }
 
             // If the prefix is equal, we can check the value in buffer
