@@ -22,6 +22,7 @@ use std::sync::Arc;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
 
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::test_util::datafusion_test_data;
 use datafusion_common::{plan_err, Result, TableReference};
 use datafusion_expr::planner::ExprPlanner;
 use datafusion_expr::test::function_stub::sum_udaf;
@@ -38,6 +39,8 @@ use datafusion_sql::sqlparser::ast::Statement;
 use datafusion_sql::sqlparser::dialect::GenericDialect;
 use datafusion_sql::sqlparser::parser::Parser;
 use insta::assert_snapshot;
+
+use datafusion::prelude::{CsvReadOptions, SessionContext};
 
 #[cfg(test)]
 #[ctor::ctor]
@@ -240,14 +243,11 @@ fn where_exists_distinct() -> Result<()> {
     assert_snapshot!(
     format!("{plan}"),
     @r#"
-LeftSemi Join: test.col_int32 = __correlated_sq_1.col_int32
+LeftSemi Join: test.col_int32 = t2.col_int32
   Filter: test.col_int32 IS NOT NULL
     TableScan: test projection=[col_int32]
-  SubqueryAlias: __correlated_sq_1
-    Aggregate: groupBy=[[t2.col_int32]], aggr=[[]]
-      SubqueryAlias: t2
-        Filter: test.col_int32 IS NOT NULL
-          TableScan: test projection=[col_int32]
+  SubqueryAlias: t2
+    TableScan: test projection=[col_int32]
 "#
 
     );
@@ -753,4 +753,114 @@ impl TableSource for MyTableSource {
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
     }
+}
+
+#[tokio::test]
+async fn recursive_cte_alias_stability() -> Result<()> {
+    // This test checks that the recursive CTE alias is stable across runs.
+    // the sql is from datafusion/sqllogictest/test_files/cte.slt
+    let ctx = SessionContext::new();
+    let testdata = datafusion_test_data();
+    let csv_path = format!("{testdata}/recursive_cte/prices.csv");
+    ctx.register_csv("prices", &csv_path, CsvReadOptions::new().has_header(true))
+        .await?;
+
+    let sql = r#"
+WITH RECURSIVE "recursive_cte" AS (
+  (
+    WITH "min_prices_row_num_cte" AS (
+      SELECT
+        MIN("prices"."prices_row_num") AS "prices_row_num"
+      FROM
+        "prices"
+    ),
+    "min_prices_row_num_cte_second" AS (
+      SELECT
+        MIN("prices"."prices_row_num") AS "prices_row_num_advancement"
+      FROM
+        "prices"
+      WHERE
+        "prices"."prices_row_num" > (
+          SELECT
+            "prices_row_num"
+          FROM
+            "min_prices_row_num_cte"
+        )
+    )
+    SELECT
+      0.0 AS "beg",
+      (0.0 + 50) AS "end",
+      (
+        SELECT
+          "prices_row_num"
+        FROM
+          "min_prices_row_num_cte"
+      ) AS "prices_row_num",
+      (
+        SELECT
+          "prices_row_num_advancement"
+        FROM
+          "min_prices_row_num_cte_second"
+      ) AS "prices_row_num_advancement"
+    FROM
+      "prices"
+    WHERE
+      "prices"."prices_row_num" = (
+        SELECT
+          DISTINCT "prices_row_num"
+        FROM
+          "min_prices_row_num_cte"
+      )
+  )
+  UNION ALL (
+    WITH "min_prices_row_num_cte" AS (
+      SELECT
+        "prices"."prices_row_num" AS "prices_row_num",
+        LEAD("prices"."prices_row_num", 1) OVER (
+          ORDER BY "prices_row_num"
+        ) AS "prices_row_num_advancement"
+      FROM
+        (
+          SELECT
+            DISTINCT "prices_row_num"
+          FROM
+            "prices"
+        ) AS "prices"
+    )
+    SELECT
+      "recursive_cte"."end" AS "beg",
+      ("recursive_cte"."end" + 50) AS "end",
+      "min_prices_row_num_cte"."prices_row_num" AS "prices_row_num",
+      "min_prices_row_num_cte"."prices_row_num_advancement" AS "prices_row_num_advancement"
+    FROM
+      "recursive_cte"
+      FULL JOIN "prices" ON "prices"."prices_row_num" = "recursive_cte"."prices_row_num_advancement"
+      FULL JOIN "min_prices_row_num_cte" ON "min_prices_row_num_cte"."prices_row_num" = COALESCE(
+        "prices"."prices_row_num",
+        "recursive_cte"."prices_row_num_advancement"
+      )
+    WHERE
+      "recursive_cte"."prices_row_num_advancement" IS NOT NULL
+  )
+)
+SELECT
+  DISTINCT *
+FROM
+  "recursive_cte"
+ORDER BY
+  "prices_row_num" ASC;
+"#;
+
+    println!("Creating logical plan...");
+    let df = ctx.sql(sql).await?;
+
+    let result = df.collect().await;
+
+    // Assert that no error occurs
+    assert!(
+        result.is_ok(),
+        "Expected no error, but got: {:?}",
+        result.err()
+    );
+    Ok(())
 }
