@@ -41,8 +41,10 @@ use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_physical_expr::conjunction;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
-use datafusion_physical_plan::filter_pushdown::FilterPushdownPropagation;
-use datafusion_physical_plan::filter_pushdown::PredicateSupports;
+use datafusion_physical_plan::filter_pushdown::PushedDown;
+use datafusion_physical_plan::filter_pushdown::{
+    FilterPushdownPropagation, PushedDownPredicate,
+};
 use datafusion_physical_plan::metrics::Count;
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion_physical_plan::DisplayFormatType;
@@ -621,7 +623,9 @@ impl FileSource for ParquetSource {
         config: &ConfigOptions,
     ) -> datafusion_common::Result<FilterPushdownPropagation<Arc<dyn FileSource>>> {
         let Some(file_schema) = self.file_schema.clone() else {
-            return Ok(FilterPushdownPropagation::unsupported(filters));
+            return Ok(FilterPushdownPropagation::with_parent_pushdown_result(
+                vec![PushedDown::No; filters.len()],
+            ));
         };
         // Determine if based on configs we should push filters down.
         // If either the table / scan itself or the config has pushdown enabled,
@@ -635,20 +639,38 @@ impl FileSource for ParquetSource {
         let pushdown_filters = table_pushdown_enabled || config_pushdown_enabled;
 
         let mut source = self.clone();
-        let filters = PredicateSupports::new_with_supported_check(filters, |filter| {
-            can_expr_be_pushed_down_with_schemas(filter, &file_schema)
-        });
-        if filters.is_all_unsupported() {
+        let filters: Vec<PushedDownPredicate> = filters
+            .into_iter()
+            .map(|filter| {
+                if can_expr_be_pushed_down_with_schemas(&filter, &file_schema) {
+                    PushedDownPredicate::supported(filter)
+                } else {
+                    PushedDownPredicate::unsupported(filter)
+                }
+            })
+            .collect();
+        if filters
+            .iter()
+            .all(|f| matches!(f.discriminant, PushedDown::No))
+        {
             // No filters can be pushed down, so we can just return the remaining filters
             // and avoid replacing the source in the physical plan.
-            return Ok(FilterPushdownPropagation::with_filters(filters));
+            return Ok(FilterPushdownPropagation::with_parent_pushdown_result(
+                vec![PushedDown::No; filters.len()],
+            ));
         }
-        let allowed_filters = filters.collect_supported();
+        let allowed_filters = filters
+            .iter()
+            .filter_map(|f| match f.discriminant {
+                PushedDown::Yes => Some(Arc::clone(&f.predicate)),
+                PushedDown::No => None,
+            })
+            .collect_vec();
         let predicate = match source.predicate {
-            Some(predicate) => conjunction(
-                std::iter::once(predicate).chain(allowed_filters.iter().cloned()),
-            ),
-            None => conjunction(allowed_filters.iter().cloned()),
+            Some(predicate) => {
+                conjunction(std::iter::once(predicate).chain(allowed_filters))
+            }
+            None => conjunction(allowed_filters),
         };
         source.predicate = Some(predicate);
         source = source.with_pushdown_filters(pushdown_filters);
@@ -656,12 +678,15 @@ impl FileSource for ParquetSource {
         // If pushdown_filters is false we tell our parents that they still have to handle the filters,
         // even if we updated the predicate to include the filters (they will only be used for stats pruning).
         if !pushdown_filters {
-            return Ok(FilterPushdownPropagation::with_filters(
-                filters.make_unsupported(),
+            return Ok(FilterPushdownPropagation::with_parent_pushdown_result(
+                vec![PushedDown::No; filters.len()],
             )
             .with_updated_node(source));
         }
-        Ok(FilterPushdownPropagation::with_filters(filters).with_updated_node(source))
+        Ok(FilterPushdownPropagation::with_parent_pushdown_result(
+            filters.iter().map(|f| f.discriminant).collect(),
+        )
+        .with_updated_node(source))
     }
 
     fn with_schema_adapter_factory(
