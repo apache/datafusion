@@ -18,22 +18,21 @@
 //! Aggregate function tests
 
 use super::*;
-use arrow::array::types::UInt32Type;
-use arrow::array::{
-    Decimal128Array, DictionaryArray, DurationNanosecondArray, Int32Array,
-    LargeBinaryArray, StringArray, TimestampMicrosecondArray, UInt16Array, UInt32Array,
-    UInt64Array, UInt8Array,
+use arrow::{
+    array::{
+        types::UInt32Type, Decimal128Array, DictionaryArray, DurationNanosecondArray,
+        Int32Array, LargeBinaryArray, StringArray, TimestampMicrosecondArray,
+        UInt16Array, UInt32Array, UInt64Array, UInt8Array,
+    },
+    datatypes::{DataType, Field, Schema, TimeUnit},
+    record_batch::RecordBatch,
 };
-use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
-use arrow::record_batch::RecordBatch;
-use datafusion::common::test_util::batches_to_string;
-use datafusion::common::Result;
-use datafusion::execution::config::SessionConfig;
-use datafusion::execution::context::SessionContext;
+use datafusion::{
+    common::{test_util::batches_to_string, Result},
+    execution::{config::SessionConfig, context::SessionContext},
+};
 use datafusion_catalog::MemTable;
-use std::cmp::min;
-use std::sync::Arc;
-
+use std::{cmp::min, sync::Arc};
 /// Helper function to create the commonly used UInt32 indexed UTF-8 dictionary data type
 pub fn string_dict_type() -> DataType {
     DataType::Dictionary(Box::new(DataType::UInt32), Box::new(DataType::Utf8))
