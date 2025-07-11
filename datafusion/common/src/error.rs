@@ -542,8 +542,9 @@ impl DataFusionError {
             DataFusionError::Configuration(ref desc) => Cow::Owned(desc.to_string()),
             DataFusionError::NotImplemented(ref desc) => Cow::Owned(desc.to_string()),
             DataFusionError::Internal(ref desc) => Cow::Owned(format!(
-                "{desc}.\nThis was likely caused by a bug in DataFusion's \
-            code and we would welcome that you file an bug report in our issue tracker"
+                "{desc}.\nThis issue was likely caused by a bug in DataFusion's code. \
+                Please help us to resolve this by filing a bug report in our issue tracker: \
+                https://github.com/apache/datafusion/issues"
             )),
             DataFusionError::Plan(ref desc) => Cow::Owned(desc.to_string()),
             DataFusionError::SchemaError(ref desc, ref backtrace) => {
