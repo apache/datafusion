@@ -245,11 +245,7 @@ impl TableProvider for ExampleTableProvider {
 
         let parquet_source = ParquetSource::default()
             .with_predicate(filter)
-            .with_pushdown_filters(true)
-            // if the rewriter needs a reference to the table schema you can bind self.schema() here
-            .with_expr_adapter(Arc::new(ShreddedJsonRewriter {
-                default_adapter: DefaultPhysicalExprAdapter,
-            }) as _);
+            .with_pushdown_filters(true);
 
         let object_store_url = ObjectStoreUrl::parse("memory://")?;
 
@@ -275,7 +271,11 @@ impl TableProvider for ExampleTableProvider {
         )
         .with_projection(projection.cloned())
         .with_limit(limit)
-        .with_file_group(file_group);
+        .with_file_group(file_group)
+        // if the rewriter needs a reference to the table schema you can bind self.schema() here
+        .with_expr_adapter(Arc::new(ShreddedJsonRewriter {
+            default_adapter: DefaultPhysicalExprAdapter,
+        }) as _);
 
         Ok(Arc::new(DataSourceExec::new(Arc::new(
             file_scan_config.build(),

@@ -39,7 +39,6 @@ use datafusion_common::{DataFusionError, Statistics};
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_physical_expr::conjunction;
-use datafusion_physical_expr::schema_rewriter::PhysicalExprAdapter;
 use datafusion_physical_expr::DefaultPhysicalExprAdapter;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
@@ -280,7 +279,6 @@ pub struct ParquetSource {
     /// Optional hint for the size of the parquet metadata
     pub(crate) metadata_size_hint: Option<usize>,
     pub(crate) projected_statistics: Option<Statistics>,
-    pub(crate) expr_adapter: Option<Arc<dyn PhysicalExprAdapter>>,
 }
 
 impl ParquetSource {
@@ -317,20 +315,6 @@ impl ParquetSource {
         conf = conf.with_metrics(metrics);
         conf.predicate = Some(Arc::clone(&predicate));
         conf
-    }
-
-    /// Register an expression adapter used to adapt filters and projections that are pushed down into the scan
-    /// from the logical schema to the physical schema of the parquet file.
-    /// This can include things like:
-    /// - Column ordering changes
-    /// - Handling of missing columns
-    /// - Rewriting expression to use pre-computed values or file format specific optimizations
-    pub fn with_expr_adapter(
-        mut self,
-        expr_adapter: Arc<dyn PhysicalExprAdapter>,
-    ) -> Self {
-        self.expr_adapter = Some(expr_adapter);
-        self
     }
 
     /// Options passed to the parquet reader for this scan
@@ -526,7 +510,7 @@ impl FileSource for ParquetSource {
             schema_adapter_factory,
             coerce_int96,
             file_decryption_properties,
-            expr_adapter: self
+            expr_adapter: base_config
                 .expr_adapter
                 .clone()
                 .unwrap_or(Arc::new(DefaultPhysicalExprAdapter)),

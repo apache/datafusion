@@ -237,10 +237,7 @@ impl TableProvider for DefaultValueTableProvider {
 
         let parquet_source = ParquetSource::default()
             .with_predicate(filter)
-            .with_pushdown_filters(true)
-            .with_expr_adapter(Arc::new(DefaultValuePhysicalExprAdapter {
-                default_adapter: DefaultPhysicalExprAdapter,
-            }) as _);
+            .with_pushdown_filters(true);
 
         let object_store_url = ObjectStoreUrl::parse("memory://")?;
         let store = state.runtime_env().object_store(object_store_url)?;
@@ -265,7 +262,10 @@ impl TableProvider for DefaultValueTableProvider {
         )
         .with_projection(projection.cloned())
         .with_limit(limit)
-        .with_file_group(file_group);
+        .with_file_group(file_group)
+        .with_expr_adapter(Arc::new(DefaultValuePhysicalExprAdapter {
+            default_adapter: DefaultPhysicalExprAdapter,
+        }) as _);
 
         Ok(Arc::new(DataSourceExec::new(Arc::new(
             file_scan_config.build(),
