@@ -365,7 +365,7 @@ impl DependentJoinDecorrelator {
 
         // TODO: natural join?
         for corr_col in curr_lv_correlated_cols.iter().unique() {
-            let right_col = Self::rewrite_into_delim_column(
+            let right_col = Self::fetch_dscan_col_from_correlated_col(
                 &decorrelator.correlated_map,
                 &corr_col.col,
             )?;
@@ -433,7 +433,7 @@ impl DependentJoinDecorrelator {
         Self::rewrite_current_plan_outer_ref_columns(new_plan, correlated_map)
     }
 
-    fn rewrite_into_delim_column(
+    fn fetch_dscan_col_from_correlated_col(
         correlated_map: &IndexMap<Column, Column>,
         original: &Column,
     ) -> Result<Column> {
@@ -649,7 +649,7 @@ impl DependentJoinDecorrelator {
                 //}
 
                 for domain_col in self.domains.iter() {
-                    proj.expr.push(col(Self::rewrite_into_delim_column(
+                    proj.expr.push(col(Self::fetch_dscan_col_from_correlated_col(
                         &self.correlated_map,
                         &domain_col.col,
                     )?));
@@ -712,7 +712,7 @@ impl DependentJoinDecorrelator {
 
                 for c in self.domains.iter() {
                     let dcol =
-                        Self::rewrite_into_delim_column(&self.correlated_map, &c.col)?;
+                        Self::fetch_dscan_col_from_correlated_col(&self.correlated_map, &c.col)?;
 
                     for expr in &mut group_expr {
                         if let Expr::GroupingSet(grouping_set) = expr {
@@ -726,7 +726,7 @@ impl DependentJoinDecorrelator {
                 }
 
                 for c in self.domains.iter() {
-                    group_expr.push(col(Self::rewrite_into_delim_column(
+                    group_expr.push(col(Self::fetch_dscan_col_from_correlated_col(
                         &self.correlated_map,
                         &c.col,
                     )?));
@@ -747,7 +747,7 @@ impl DependentJoinDecorrelator {
                     // Construct delim join condition.
                     let mut join_conditions = vec![];
                     for corr in self.domains.iter() {
-                        let delim_col = Self::rewrite_into_delim_column(
+                        let delim_col = Self::fetch_dscan_col_from_correlated_col(
                             &self.correlated_map,
                             &corr.col,
                         )?;
@@ -1033,7 +1033,7 @@ impl DependentJoinDecorrelator {
                 let partition_count = self.domains.len();
                 for i in 0..partition_count {
                     if let Some(corr_col) = self.domains.get_index(i) {
-                        let delim_col = Self::rewrite_into_delim_column(
+                        let delim_col = Self::fetch_dscan_col_from_correlated_col(
                             &self.correlated_map,
                             &corr_col.col,
                         )?;
@@ -1137,7 +1137,7 @@ impl DependentJoinDecorrelator {
 
                 // Add correlated columns as additional columns for grouping
                 for domain_col in self.domains.iter() {
-                    let delim_col = Self::rewrite_into_delim_column(
+                    let delim_col = Self::fetch_dscan_col_from_correlated_col(
                         &self.correlated_map,
                         &domain_col.col,
                     )?;
@@ -1174,7 +1174,7 @@ impl DependentJoinDecorrelator {
 
                 // Add delim columns to projection
                 for domain_col in self.domains.iter() {
-                    let delim_col = Self::rewrite_into_delim_column(
+                    let delim_col = Self::fetch_dscan_col_from_correlated_col(
                         &self.correlated_map,
                         &domain_col.col,
                     )?;
@@ -1227,7 +1227,7 @@ impl DependentJoinDecorrelator {
 
                     // Add correlated columns to the partition by clause
                     for domain_col in self.domains.iter() {
-                        let delim_col = Self::rewrite_into_delim_column(
+                        let delim_col = Self::fetch_dscan_col_from_correlated_col(
                             &self.correlated_map,
                             &domain_col.col,
                         )?;
