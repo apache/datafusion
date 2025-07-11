@@ -227,3 +227,8 @@ unexpected_cfgs = { level = "warn", check-cfg = [
     "cfg(tarpaulin_include)",
 ] }
 unused_qualifications = "deny"
+
+## Temporary object_store patch until release
+## https://github.com/apache/arrow-rs-object-store/issues/428
+[patch.crates-io]
+object_store = { git = "https://github.com/apache/arrow-rs-object-store.git", tag = "v0.12.3" }
