@@ -18,4 +18,4 @@ Error: Not enough memory to continue external sort. Consider increasing the memo
 caused by
 Resources exhausted: Failed to allocate
 
------ stderr -----
+[BACKTRACE]
