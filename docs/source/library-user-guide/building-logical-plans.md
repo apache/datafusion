@@ -181,7 +181,7 @@ async fn main() -> Result<(), DataFusionError> {
     // TableProvider. For this example, we don't provide any data
     // but in production code, this would have `RecordBatch`es with
     // in memory data
-    let table_provider = Arc::new(MemTable::try_new(Arc::new(schema), vec![])?);
+    let table_provider = Arc::new(MemTable::try_new(Arc::new(schema), vec![vec![]])?);
     // Use the provider_as_source function to convert the TableProvider to a table source
     let table_source = provider_as_source(table_provider);
 
