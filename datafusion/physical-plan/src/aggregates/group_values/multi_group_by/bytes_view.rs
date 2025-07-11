@@ -94,9 +94,7 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
         self.do_equal_to_inner(lhs_row, array, rhs_row)
     }
 
-    fn append_val_inner(&mut self, array: &ArrayRef, row: usize) {
-        let arr = array.as_byte_view::<B>();
-
+    fn append_val_inner(&mut self, arr: &GenericByteViewArray<B>, row: usize) {
         // Null row case, set and return
         if arr.is_null(row) {
             self.nulls.append(true);
@@ -148,15 +146,26 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
 
         match all_null_or_non_null {
             None => {
-                for &row in rows {
-                    self.append_val_inner(array, row);
+                if arr.data_buffers().is_empty() {
+                    for &row in rows {
+                        self.nulls.append(arr.is_null(row));
+                    }
+                    self.views.extend(rows.iter().map(|&row| arr.views()[row]));
+                } else {
+                    for &row in rows {
+                        self.append_val_inner(arr, row);
+                    }
                 }
             }
 
             Some(true) => {
                 self.nulls.append_n(rows.len(), false);
-                for &row in rows {
-                    self.do_append_val_inner(arr, row);
+                if arr.data_buffers().is_empty() {
+                    self.views.extend(rows.iter().map(|&row| arr.views()[row]));
+                } else {
+                    for &row in rows {
+                        self.do_append_val_inner(arr, row);
+                    }
                 }
             }
 
@@ -220,12 +229,17 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
         if let Some(result) = nulls_equal_to(exist_null, input_null) {
             return result;
         }
-
         // Otherwise, we need to check their values
         let exist_view = self.views[lhs_row];
-        let exist_view_len = exist_view as u32;
-
         let input_view = array.views()[rhs_row];
+
+        // Fast path when data buffers are empty
+        if self.completed.is_empty() && self.in_progress.is_empty() && array.data_buffers().is_empty() {
+            // For eq case, we can directly compare the inlined bytes
+            return exist_view == input_view;
+        }
+
+        let exist_view_len = exist_view as u32;
         let input_view_len = input_view as u32;
 
         // The check logic
@@ -237,38 +251,32 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
             return false;
         }
 
-        if exist_view_len <= 12 {
-            let exist_inline = unsafe {
-                GenericByteViewArray::<B>::inline_value(
-                    &exist_view,
-                    exist_view_len as usize,
-                )
-            };
-            let input_inline = unsafe {
-                GenericByteViewArray::<B>::inline_value(
-                    &input_view,
-                    input_view_len as usize,
-                )
-            };
-            exist_inline == input_inline
-        } else {
-            let exist_prefix =
-                unsafe { GenericByteViewArray::<B>::inline_value(&exist_view, 4) };
-            let input_prefix =
-                unsafe { GenericByteViewArray::<B>::inline_value(&input_view, 4) };
+        // Fast path for empty views
+        if exist_view_len == 0 && input_view_len == 0 {
+            return true;
+        }
 
-            if exist_prefix != input_prefix {
-                return false;
+        if exist_view_len <= 12  && input_view_len <= 12 {
+            // When all inlined, we can directly compare the views
+            exist_view == input_view
+        } else {
+            let byte_view = ByteView::from(exist_view);
+            // Fast path for 4 bytes prefix equality, change &[u8] to u32
+            let pref_existed = byte_view.prefix.swap_bytes();
+            let pref_input = ByteView::from(input_view).prefix.swap_bytes();
+            if pref_existed != pref_input {
+               return false;
             }
 
+            // If the prefix is equal, we can check the value in buffer
             let exist_full = {
-                let byte_view = ByteView::from(exist_view);
                 self.value(
                     byte_view.buffer_index as usize,
                     byte_view.offset as usize,
                     byte_view.length as usize,
                 )
             };
+
             let input_full: &[u8] = unsafe { array.value_unchecked(rhs_row).as_ref() };
             exist_full == input_full
         }
@@ -488,7 +496,8 @@ impl<B: ByteViewType> GroupColumn for ByteViewGroupValueBuilder<B> {
     }
 
     fn append_val(&mut self, array: &ArrayRef, row: usize) -> Result<()> {
-        self.append_val_inner(array, row);
+        let arr = array.as_byte_view::<B>();
+        self.append_val_inner(arr, row);
         Ok(())
     }
 
