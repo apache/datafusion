@@ -4108,7 +4108,7 @@ impl Join {
                 join_constraint: original_join.join_constraint,
                 schema: Arc::new(join_schema),
                 null_equality: original_join.null_equality,
-            join_kind: JoinKind::ComparisonJoin,
+                join_kind: JoinKind::ComparisonJoin,
             },
             requalified,
         ))

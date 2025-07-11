@@ -658,7 +658,7 @@ impl DependentJoinDecorrelator {
             }
             LogicalPlan::Filter(old_filter) => {
                 // todo: define if any join is need
-                let new_input = self.push_down_dependent_join(
+                let new_input = self.push_down_dependent_join_internal(
                     old_filter.input.as_ref(),
                     parent_propagate_nulls,
                     lateral_depth,
@@ -1488,7 +1488,8 @@ mod tests {
     use datafusion_common::{Column, Result};
     use datafusion_expr::expr::{WindowFunction, WindowFunctionParams};
     use datafusion_expr::{
-        binary_expr, not, JoinType, Operator, WindowFrame, WindowFunctionDefinition,
+        binary_expr, not_in_subquery, JoinType, Operator, WindowFrame,
+        WindowFunctionDefinition,
     };
     use datafusion_expr::{
         exists, expr_fn::col, in_subquery, lit, out_ref_col, scalar_subquery, Expr,
@@ -2292,10 +2293,10 @@ mod tests {
         // Create the main query plan
         // SELECT t1_id, t1_name, t1_int FROM t1 WHERE t1_id + 12 NOT IN (SELECT t2_id + 1 FROM t2 WHERE t1.t1_int > 0)
         let plan = LogicalPlanBuilder::from(t1)
-            .filter(not(in_subquery(
+            .filter(not_in_subquery(
                 binary_expr(col("t1_id"), Operator::Plus, lit(12)),
                 subquery,
-            )))?
+            ))?
             .project(vec![col("t1_id"), col("t1_name"), col("t1_int")])?
             .build()?;
 
@@ -2306,28 +2307,36 @@ mod tests {
         // where t1.t1_id + 12 not in (select t2.t2_id + 1 from t2 where t1.t1_int > 0);
 
         // Projection: t1.t1_id, t1.t1_name, t1.t1_int [t1_id:UInt32, t1_name:Utf8, t1_int:Int32]
+        //   Filter: t1.t1_id + Int32(12) NOT IN (<subquery>) [t1_id:UInt32, t1_name:Utf8, t1_int:Int32]
+        //     Subquery: [t2.t2_id + Int32(1):Int64]
+        //       Projection: t2.t2_id + Int32(1) [t2.t2_id + Int32(1):Int64]
+        //         Filter: outer_ref(t1.t1_int) > Int32(0) [t2_id:UInt32, t2_value:Utf8]
+        //           TableScan: t2 [t2_id:UInt32, t2_value:Utf8]
+        //     TableScan: t1 [t1_id:UInt32, t1_name:Utf8, t1_int:Int32]
+
+        // Projection: t1.t1_id, t1.t1_name, t1.t1_int [t1_id:UInt32, t1_name:Utf8, t1_int:Int32]
         //   Projection: t1.t1_id, t1.t1_name, t1.t1_int [t1_id:UInt32, t1_name:Utf8, t1_int:Int32]
-        //     Filter: NOT __in_sq_1.output [t1_id:UInt32, t1_name:Utf8, t1_int:Int32, output:Boolean]
-        //       DependentJoin on [t1.t1_int lvl 1] with expr t1.t1_id + Int32(12) IN (<subquery>) depth 1 [t1_id:UInt32, t1_name:Utf8, t1_int:Int32, output:Boolean]
+        //     Filter: __in_sq_1.output [t1_id:UInt32, t1_name:Utf8, t1_int:Int32, output:Boolean]
+        //       DependentJoin on [t1.t1_int lvl 1] with expr t1.t1_id + Int32(12) NOT IN (<subquery>) depth 1 [t1_id:UInt32, t1_name:Utf8, t1_int:Int32, output:Boolean]
         //         TableScan: t1 [t1_id:UInt32, t1_name:Utf8, t1_int:Int32]
         //         Projection: t2.t2_id + Int32(1) [t2.t2_id + Int32(1):Int64]
         //           Filter: outer_ref(t1.t1_int) > Int32(0) [t2_id:UInt32, t2_value:Utf8]
         //             TableScan: t2 [t2_id:UInt32, t2_value:Utf8]
 
         assert_decorrelate!(plan, @r"
-           Projection: t1.t1_id, t1.t1_name, t1.t1_int [t1_id:UInt32, t1_name:Utf8, t1_int:Int32]
-             Projection: t1.t1_id, t1.t1_name, t1.t1_int [t1_id:UInt32, t1_name:Utf8, t1_int:Int32]
-               Filter: NOT __in_sq_1.output [t1_id:UInt32, t1_name:Utf8, t1_int:Int32, __in_sq_1.output:Boolean]
-                 Projection: t1.t1_id, t1.t1_name, t1.t1_int, t1_dscan_1.mark AS __in_sq_1.output [t1_id:UInt32, t1_name:Utf8, t1_int:Int32, __in_sq_1.output:Boolean]
-                   LeftMark Join(ComparisonJoin):  Filter: t1.t1_id + Int32(12) = t2.t2_id + Int32(1) AND t1.t1_int IS NOT DISTINCT FROM t1_dscan_1.t1_t1_int [t1_id:UInt32, t1_name:Utf8, t1_int:Int32, mark:Boolean]
-                     TableScan: t1 [t1_id:UInt32, t1_name:Utf8, t1_int:Int32]
-                     Projection: t2.t2_id + Int32(1), t1_dscan_1.t1_t1_int [t2.t2_id + Int32(1):Int64, t1_t1_int:Int32;N]
-                       Filter: t1_dscan_1.t1_t1_int > Int32(0) [t2_id:UInt32, t2_value:Utf8, t1_t1_int:Int32;N]
-                         Inner Join(DelimJoin):  Filter: Boolean(true) [t2_id:UInt32, t2_value:Utf8, t1_t1_int:Int32;N]
-                           TableScan: t2 [t2_id:UInt32, t2_value:Utf8]
-                           Projection: t1.t1_int AS t1_dscan_1.t1_t1_int [t1_t1_int:Int32;N]
-                             DelimGet: t1.t1_int [t1_int:Int32;N]
-            ");
+        Projection: t1.t1_id, t1.t1_name, t1.t1_int [t1_id:UInt32, t1_name:Utf8, t1_int:Int32]
+          Projection: t1.t1_id, t1.t1_name, t1.t1_int [t1_id:UInt32, t1_name:Utf8, t1_int:Int32]
+            Filter: NOT __in_sq_1.output [t1_id:UInt32, t1_name:Utf8, t1_int:Int32, __in_sq_1.output:Boolean]
+              Projection: t1.t1_id, t1.t1_name, t1.t1_int, t1_dscan_1.mark AS __in_sq_1.output [t1_id:UInt32, t1_name:Utf8, t1_int:Int32, __in_sq_1.output:Boolean]
+                LeftMark Join(ComparisonJoin):  Filter: t1.t1_id + Int32(12) = t2.t2_id + Int32(1) AND t1.t1_int IS NOT DISTINCT FROM t1_dscan_1.t1_t1_int [t1_id:UInt32, t1_name:Utf8, t1_int:Int32, mark:Boolean]
+                  TableScan: t1 [t1_id:UInt32, t1_name:Utf8, t1_int:Int32]
+                  Projection: t2.t2_id + Int32(1), t1_dscan_1.t1_t1_int [t2.t2_id + Int32(1):Int64, t1_t1_int:Int32;N]
+                    Filter: t1_dscan_1.t1_t1_int > Int32(0) [t2_id:UInt32, t2_value:Utf8, t1_t1_int:Int32;N]
+                      Inner Join(DelimJoin):  Filter: Boolean(true) [t2_id:UInt32, t2_value:Utf8, t1_t1_int:Int32;N]
+                        TableScan: t2 [t2_id:UInt32, t2_value:Utf8]
+                        Projection: t1.t1_int AS t1_dscan_1.t1_t1_int [t1_t1_int:Int32;N]
+                          DelimGet: t1.t1_int [t1_int:Int32;N]
+        ");
 
         Ok(())
     }

@@ -31,7 +31,7 @@ use datafusion_common::{
     internal_datafusion_err, internal_err, not_impl_err, Column, HashMap, Result,
 };
 use datafusion_expr::{
-    col, lit, Aggregate, CorrelatedColumnInfo, Expr, Filter, Join, LogicalPlan,
+    col, lit, not, Aggregate, CorrelatedColumnInfo, Expr, Filter, Join, LogicalPlan,
     LogicalPlanBuilder, Projection,
 };
 
@@ -175,9 +175,13 @@ impl DependentJoinRewriter {
             .iter()
             .map(|c| col(c.clone()))
             .collect();
+
+        // Extract NOT from negated subqueries before processing.
+        let normalized_predicate = normalize_negated_subqueries(&filter.predicate)?;
+
         let (transformed_plan, transformed_exprs) =
             Self::rewrite_exprs_into_dependent_join_plan(
-                vec![vec![&filter.predicate]],
+                vec![vec![&normalized_predicate]],
                 dependent_join_node,
                 current_subquery_depth,
                 current_plan,
@@ -532,9 +536,7 @@ impl SubqueryType {
 fn unwrap_subquery_input_from_expr(expr: &Expr) -> (LogicalPlan, Expr) {
     match expr {
         Expr::ScalarSubquery(sq) => (sq.subquery.as_ref().clone(), expr.clone()),
-        Expr::Exists(exists) => {
-            (exists.subquery.subquery.as_ref().clone(), expr.clone())
-        }
+        Expr::Exists(exists) => (exists.subquery.subquery.as_ref().clone(), expr.clone()),
         Expr::InSubquery(in_sq) => {
             (in_sq.subquery.subquery.as_ref().clone(), expr.clone())
         }
@@ -950,6 +952,23 @@ impl TreeNodeRewriter for DependentJoinRewriter {
         }
         Ok(Transformed::yes(current_plan.build()?))
     }
+}
+
+/// Normalize negated subqueries by extracting the NOT to the top level
+/// For example: `InSubquery{negated: true, ...}` becomes `NOT(InSubquery{negated: false, ...})`
+fn normalize_negated_subqueries(expr: &Expr) -> Result<Expr> {
+    expr.clone()
+        .transform(|e| {
+            match e {
+                Expr::InSubquery(mut in_subquery) if in_subquery.negated => {
+                    // Convert negated InSubquery to NOT(InSubquery{negated: false})
+                    in_subquery.negated = false;
+                    Ok(Transformed::yes(not(Expr::InSubquery(in_subquery))))
+                }
+                _ => Ok(Transformed::no(e)),
+            }
+        })
+        .map(|t| t.data)
 }
 
 /// Optimizer rule for rewriting subqueries to dependent join.
