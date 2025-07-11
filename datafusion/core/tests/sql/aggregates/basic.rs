@@ -16,12 +16,10 @@
 // under the License.
 
 use super::*;
-use arrow::datatypes::TimeUnit;
 use datafusion::common::test_util::batches_to_string;
 use datafusion_catalog::MemTable;
 use datafusion_common::ScalarValue;
 use insta::assert_snapshot;
-use std::cmp::min;
 
 #[tokio::test]
 async fn csv_query_array_agg_distinct() -> Result<()> {
