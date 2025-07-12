@@ -1329,9 +1329,7 @@ pub fn satisfy_greater(
     // side can change after propagating the greater-than operation.
     let new_left_lower = if left.lower.is_null() || left.lower <= right.lower {
         if strict {
-            let next_val = next_value(right.lower.clone());
-            // Use the smaller of next_val or left.upper to avoid invalid intervals
-            min_of_bounds(&next_val, &left.upper)
+            next_value(right.lower.clone())
         } else {
             right.lower.clone()
         }
@@ -1344,14 +1342,7 @@ pub fn satisfy_greater(
         || (!left.upper.is_null() && left.upper <= right.upper)
     {
         if strict {
-            let prev_val = prev_value(left.upper.clone());
-            // Use the larger of prev_value or right.lower to avoid invalid intervals
-            // Need to check if prev_val is null because `None` compares less than `Some` in Rust.
-            if prev_val.is_null() {
-                prev_val
-            } else {
-                max_of_bounds(&prev_val, &right.lower)
-            }
+            prev_value(left.upper.clone())
         } else {
             left.upper.clone()
         }

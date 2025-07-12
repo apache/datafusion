@@ -78,6 +78,9 @@ pub trait FloatBits {
     /// The integer value 0, used in bitwise operations.
     const ZERO: Self::Item;
 
+    /// The integer value -0, used in bitwise operations.
+    const NEG_ZERO: Self::Item;
+
     /// Converts the floating-point value to its bitwise representation.
     fn to_bits(self) -> Self::Item;
 
@@ -101,6 +104,7 @@ impl FloatBits for f32 {
     const CLEAR_SIGN_MASK: u32 = 0x7fff_ffff;
     const ONE: Self::Item = 1;
     const ZERO: Self::Item = 0;
+    const NEG_ZERO: Self::Item = 0x8000_0000; // -0.0 in f32 bit representation
 
     fn to_bits(self) -> Self::Item {
         self.to_bits()
@@ -130,6 +134,7 @@ impl FloatBits for f64 {
     const CLEAR_SIGN_MASK: u64 = 0x7fff_ffff_ffff_ffff;
     const ONE: Self::Item = 1;
     const ZERO: Self::Item = 0;
+    const NEG_ZERO: Self::Item = 0x8000_0000_0000_0000; // -0.0 in f64 bit representation
 
     fn to_bits(self) -> Self::Item {
         self.to_bits()
@@ -174,6 +179,11 @@ pub fn next_up<F: FloatBits + Copy>(float: F) -> F {
         return float;
     }
 
+    // Special case: -0.0 → +0.0
+    if bits == F::NEG_ZERO {
+        return F::from_bits(F::ZERO);
+    }
+
     let abs = bits & F::CLEAR_SIGN_MASK;
     let next_bits = if abs == F::ZERO {
         F::TINY_BITS
@@ -206,6 +216,12 @@ pub fn next_down<F: FloatBits + Copy>(float: F) -> F {
     if float.float_is_nan() || bits == F::neg_infinity().to_bits() {
         return float;
     }
+
+    // Special case: +0.0 → -0.0
+    if bits == F::ZERO {
+        return F::from_bits(F::NEG_ZERO);
+    }
+
     let abs = bits & F::CLEAR_SIGN_MASK;
     let next_bits = if abs == F::ZERO {
         F::NEG_TINY_BITS
@@ -395,5 +411,33 @@ mod tests {
         let value: f32 = f32::NAN;
         let result = next_down(value);
         assert!(result.is_nan());
+    }
+
+    #[test]
+    fn test_next_up_neg_zero_f32() {
+        let value: f32 = -0.0;
+        let result = next_up(value);
+        assert_eq!(result, 0.0);
+    }
+
+    #[test]
+    fn test_next_down_zero_f32() {
+        let value: f32 = 0.0;
+        let result = next_down(value);
+        assert_eq!(result, -0.0);
+    }
+
+    #[test]
+    fn test_next_up_neg_zero_f64() {
+        let value: f64 = -0.0;
+        let result = next_up(value);
+        assert_eq!(result, 0.0);
+    }
+
+    #[test]
+    fn test_next_down_zero_f64() {
+        let value: f64 = 0.0;
+        let result = next_down(value);
+        assert_eq!(result, -0.0);
     }
 }
