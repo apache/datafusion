@@ -54,7 +54,7 @@ use datafusion_physical_expr_common::sort_expr::{
 
 use itertools::Itertools;
 
-pub(crate) mod group_values;
+pub mod group_values;
 mod no_grouping;
 pub mod order;
 mod row_hash;
@@ -268,7 +268,7 @@ impl PhysicalGroupBy {
     }
 
     /// Returns the number expression as grouping keys.
-    fn num_group_exprs(&self) -> usize {
+    pub fn num_group_exprs(&self) -> usize {
         if self.is_single() {
             self.expr.len()
         } else {
@@ -1318,7 +1318,7 @@ fn evaluate(
 }
 
 /// Evaluates expressions against a record batch.
-pub(crate) fn evaluate_many(
+pub fn evaluate_many(
     expr: &[Vec<Arc<dyn PhysicalExpr>>],
     batch: &RecordBatch,
 ) -> Result<Vec<Vec<ArrayRef>>> {
@@ -1372,7 +1372,7 @@ fn group_id_array(group: &[bool], batch: &RecordBatch) -> Result<ArrayRef> {
 /// The outer Vec appears to be for grouping sets
 /// The inner Vec contains the results per expression
 /// The inner-inner Array contains the results per row
-pub(crate) fn evaluate_group_by(
+pub fn evaluate_group_by(
     group_by: &PhysicalGroupBy,
     batch: &RecordBatch,
 ) -> Result<Vec<Vec<ArrayRef>>> {
