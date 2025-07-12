@@ -2613,6 +2613,7 @@ name = "datafusion-spark"
 version = "48.0.0"
 dependencies = [
  "arrow",
+ "criterion",
  "datafusion-catalog",
  "datafusion-common",
  "datafusion-execution",
@@ -2620,6 +2621,7 @@ dependencies = [
  "datafusion-functions",
  "datafusion-macros",
  "log",
+ "rand 0.9.1",
 ]
 
 [[package]]
