@@ -29,7 +29,7 @@ use datafusion_common::exec_datafusion_err;
 use datafusion_common::instant::Instant;
 use structopt::StructOpt;
 
-/// Run the clickbench benchmark
+/// Driver program to run the ClickBench benchmark
 ///
 /// The ClickBench[1] benchmarks are widely cited in the industry and
 /// focus on grouping / aggregation / filtering. This runner uses the
@@ -43,6 +43,14 @@ pub struct RunOpt {
     /// Query number (between 0 and 42). If not specified, runs all queries
     #[structopt(short, long)]
     query: Option<usize>,
+
+    /// If specified, enables Parquet Filter Pushdown.
+    ///
+    /// Specifically, it enables:
+    /// * `pushdown_filters = true`
+    /// * `reorder_filters = true`
+    #[structopt(long = "pushdown")]
+    pushdown: bool,
 
     /// Common options
     #[structopt(flatten)]
@@ -122,6 +130,12 @@ impl RunOpt {
             // The hits_partitioned dataset specifies string columns
             // as binary due to how it was written. Force it to strings
             parquet_options.binary_as_string = true;
+
+            // Turn on Parquet filter pushdown if requested
+            if self.pushdown {
+                parquet_options.pushdown_filters = true;
+                parquet_options.reorder_filters = true;
+            }
         }
 
         let rt_builder = self.common.runtime_env_builder()?;
