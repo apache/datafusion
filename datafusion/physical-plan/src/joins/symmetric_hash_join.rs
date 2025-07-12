@@ -34,7 +34,7 @@ use std::vec;
 
 use crate::common::SharedMemoryReservation;
 use crate::execution_plan::{boundedness_from_children, emission_type_from_children};
-use crate::joins::hash_join::{equal_rows_arr, update_hash};
+use crate::joins::hash_join::equal_rows_arr;
 use crate::joins::stream_join_utils::{
     calculate_filter_expr_intervals, combine_two_batches,
     convert_sort_expr_with_filter_schema, get_pruning_anti_indices,
@@ -1277,6 +1277,44 @@ impl OneSideHashJoiner {
         self.deleted_offset += prune_length;
         Ok(())
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn update_hash(
+    on: &[PhysicalExprRef],
+    batch: &RecordBatch,
+    hash_map: &mut dyn JoinHashMapType,
+    offset: usize,
+    random_state: &RandomState,
+    hashes_buffer: &mut Vec<u64>,
+    deleted_offset: usize,
+    fifo_hashmap: bool,
+) -> Result<()> {
+    // evaluate the keys
+    let keys_values = on
+        .iter()
+        .map(|c| c.evaluate(batch)?.into_array(batch.num_rows()))
+        .collect::<Result<Vec<_>>>()?;
+
+    // calculate the hash values
+    let hash_values = create_hashes(&keys_values, random_state, hashes_buffer)?;
+
+    // For usual JoinHashmap, the implementation is void.
+    hash_map.extend_zero(batch.num_rows());
+
+    // Updating JoinHashMap from hash values iterator
+    let hash_values_iter = hash_values
+        .iter()
+        .enumerate()
+        .map(|(i, val)| (i + offset, val));
+
+    if fifo_hashmap {
+        hash_map.update_from_iter(Box::new(hash_values_iter.rev()), deleted_offset);
+    } else {
+        hash_map.update_from_iter(Box::new(hash_values_iter), deleted_offset);
+    }
+
+    Ok(())
 }
 
 /// `SymmetricHashJoinStream` manages incremental join operations between two
