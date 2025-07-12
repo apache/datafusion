@@ -70,7 +70,7 @@ pub use datafusion_physical_expr_common::sort_expr::{
 
 pub use planner::{create_physical_expr, create_physical_exprs};
 pub use scalar_function::ScalarFunctionExpr;
-pub use schema_rewriter::PhysicalExprSchemaRewriter;
+pub use schema_rewriter::DefaultPhysicalExprAdapter;
 pub use utils::{conjunction, conjunction_opt, split_conjunction};
 
 // For backwards compatibility
