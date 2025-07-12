@@ -52,8 +52,8 @@ pub struct ParserOptions {
     pub enable_options_value_normalization: bool,
     /// Whether to collect spans
     pub collect_spans: bool,
-    /// Whether `VARCHAR` is mapped to `Utf8View` during SQL planning.
-    pub map_varchar_to_utf8view: bool,
+    /// Whether string types (VARCHAR, CHAR, Text, and String) are mapped to `Utf8View` during SQL planning.
+    pub map_string_types_to_utf8view: bool,
 }
 
 impl ParserOptions {
@@ -72,7 +72,7 @@ impl ParserOptions {
             parse_float_as_decimal: false,
             enable_ident_normalization: true,
             support_varchar_with_length: true,
-            map_varchar_to_utf8view: true,
+            map_string_types_to_utf8view: true,
             enable_options_value_normalization: false,
             collect_spans: false,
         }
@@ -112,9 +112,9 @@ impl ParserOptions {
         self
     }
 
-    /// Sets the `map_varchar_to_utf8view` option.
-    pub fn with_map_varchar_to_utf8view(mut self, value: bool) -> Self {
-        self.map_varchar_to_utf8view = value;
+    /// Sets the `map_string_types_to_utf8view` option.
+    pub fn with_map_string_types_to_utf8view(mut self, value: bool) -> Self {
+        self.map_string_types_to_utf8view = value;
         self
     }
 
@@ -143,7 +143,7 @@ impl From<&SqlParserOptions> for ParserOptions {
             parse_float_as_decimal: options.parse_float_as_decimal,
             enable_ident_normalization: options.enable_ident_normalization,
             support_varchar_with_length: options.support_varchar_with_length,
-            map_varchar_to_utf8view: options.map_varchar_to_utf8view,
+            map_string_types_to_utf8view: options.map_string_types_to_utf8view,
             enable_options_value_normalization: options
                 .enable_options_value_normalization,
             collect_spans: options.collect_spans,
@@ -391,7 +391,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // Default expressions are restricted, column references are not allowed
         let empty_schema = DFSchema::empty();
         let error_desc = |e: DataFusionError| match e {
-            DataFusionError::SchemaError(SchemaError::FieldNotFound { .. }, _) => {
+            DataFusionError::SchemaError(ref err, _)
+                if matches!(**err, SchemaError::FieldNotFound { .. }) =>
+            {
                 plan_datafusion_err!(
                     "Column reference is not allowed in the DEFAULT expression : {}",
                     e
@@ -483,13 +485,19 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     }
                 }
                 .map_err(|err: DataFusionError| match &err {
-                    DataFusionError::SchemaError(
-                        SchemaError::FieldNotFound {
+                    DataFusionError::SchemaError(inner, _)
+                        if matches!(
+                            inner.as_ref(),
+                            SchemaError::FieldNotFound { .. }
+                        ) =>
+                    {
+                        let SchemaError::FieldNotFound {
                             field,
                             valid_fields,
-                        },
-                        _,
-                    ) => {
+                        } = inner.as_ref()
+                        else {
+                            unreachable!()
+                        };
                         let mut diagnostic = if let Some(relation) = &col.relation {
                             Diagnostic::new_error(
                                 format!(
@@ -577,7 +585,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     please set `support_varchar_with_length` to be true"
                     ),
                     _ => {
-                        if self.options.map_varchar_to_utf8view {
+                        if self.options.map_string_types_to_utf8view {
                             Ok(DataType::Utf8View)
                         } else {
                             Ok(DataType::Utf8)
@@ -601,7 +609,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 )
             }
             SQLDataType::Char(_) | SQLDataType::Text | SQLDataType::String(_) => {
-                Ok(DataType::Utf8)
+                if self.options.map_string_types_to_utf8view {
+                    Ok(DataType::Utf8View)
+                } else {
+                    Ok(DataType::Utf8)
+                }
             }
             SQLDataType::Timestamp(precision, tz_info)
                 if precision.is_none() || [0, 3, 6, 9].contains(&precision.unwrap()) =>
@@ -612,7 +624,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     // Timestamp With Time Zone
                     // INPUT : [SQLDataType]   TimestampTz + [Config] Time Zone
                     // OUTPUT: [ArrowDataType] Timestamp<TimeUnit, Some(Time Zone)>
-                    self.context_provider.options().execution.time_zone.clone()
+                    Some(self.context_provider.options().execution.time_zone.clone())
                 } else {
                     // Timestamp Without Time zone
                     None

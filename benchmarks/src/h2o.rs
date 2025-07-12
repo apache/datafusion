@@ -21,6 +21,7 @@
 //! - [Extended window function benchmark](https://duckdb.org/2024/06/26/benchmarks-over-time.html#window-functions-benchmark)
 
 use crate::util::{BenchmarkRun, CommonOpt};
+use datafusion::logical_expr::{ExplainFormat, ExplainOption};
 use datafusion::{error::Result, prelude::SessionContext};
 use datafusion_common::{
     exec_datafusion_err, instant::Instant, internal_err, DataFusionError,
@@ -132,7 +133,13 @@ impl RunOpt {
             println!("Query {query_id} avg time: {avg:.2} ms");
 
             if self.common.debug {
-                ctx.sql(sql).await?.explain(false, false)?.show().await?;
+                ctx.sql(sql)
+                    .await?
+                    .explain_with_options(
+                        ExplainOption::default().with_format(ExplainFormat::Tree),
+                    )?
+                    .show()
+                    .await?;
             }
             benchmark_run.maybe_write_json(self.output_path.as_ref())?;
         }

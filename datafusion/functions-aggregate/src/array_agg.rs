@@ -23,12 +23,14 @@ use std::mem::{size_of, size_of_val};
 use std::sync::Arc;
 
 use arrow::array::{
-    new_empty_array, Array, ArrayRef, AsArray, BooleanArray, ListArray, StructArray,
+    make_array, new_empty_array, Array, ArrayRef, AsArray, BooleanArray, ListArray,
+    StructArray,
 };
 use arrow::compute::{filter, SortOptions};
 use arrow::datatypes::{DataType, Field, FieldRef, Fields};
 
 use datafusion_common::cast::as_list_array;
+use datafusion_common::scalar::copy_array_data;
 use datafusion_common::utils::{get_row_at_idx, SingleRowListArrayBuilder};
 use datafusion_common::{exec_err, internal_err, Result, ScalarValue};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
@@ -313,7 +315,11 @@ impl Accumulator for ArrayAggAccumulator {
         };
 
         if !val.is_empty() {
-            self.values.push(val);
+            // The ArrayRef might be holding a reference to its original input buffer, so
+            // storing it here directly copied/compacted avoids over accounting memory
+            // not used here.
+            self.values
+                .push(make_array(copy_array_data(&val.to_data())));
         }
 
         Ok(())
@@ -423,7 +429,8 @@ impl Accumulator for DistinctArrayAggAccumulator {
         if nulls.is_none_or(|nulls| nulls.null_count() < val.len()) {
             for i in 0..val.len() {
                 if nulls.is_none_or(|nulls| nulls.is_valid(i)) {
-                    self.values.insert(ScalarValue::try_from_array(val, i)?);
+                    self.values
+                        .insert(ScalarValue::try_from_array(val, i)?.compacted());
                 }
             }
         }
@@ -454,6 +461,7 @@ impl Accumulator for DistinctArrayAggAccumulator {
         }
 
         if let Some(opts) = self.sort_options {
+            let mut delayed_cmp_err = Ok(());
             values.sort_by(|a, b| {
                 if a.is_null() {
                     return match opts.nulls_first {
@@ -468,10 +476,15 @@ impl Accumulator for DistinctArrayAggAccumulator {
                     };
                 }
                 match opts.descending {
-                    true => b.partial_cmp(a).unwrap_or(Ordering::Equal),
-                    false => a.partial_cmp(b).unwrap_or(Ordering::Equal),
+                    true => b.try_cmp(a),
+                    false => a.try_cmp(b),
                 }
+                .unwrap_or_else(|err| {
+                    delayed_cmp_err = Err(err);
+                    Ordering::Equal
+                })
             });
+            delayed_cmp_err?;
         };
 
         let arr = ScalarValue::new_list(&values, &self.datatype, true);
@@ -577,8 +590,14 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
         if nulls.is_none_or(|nulls| nulls.null_count() < val.len()) {
             for i in 0..val.len() {
                 if nulls.is_none_or(|nulls| nulls.is_valid(i)) {
-                    self.values.push(ScalarValue::try_from_array(val, i)?);
-                    self.ordering_values.push(get_row_at_idx(ord, i)?)
+                    self.values
+                        .push(ScalarValue::try_from_array(val, i)?.compacted());
+                    self.ordering_values.push(
+                        get_row_at_idx(ord, i)?
+                            .into_iter()
+                            .map(|v| v.compacted())
+                            .collect(),
+                    )
                 }
             }
         }
@@ -714,6 +733,7 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow::array::{ListBuilder, StringBuilder};
     use arrow::datatypes::{FieldRef, Schema};
     use datafusion_common::cast::as_generic_string_array;
     use datafusion_common::internal_err;
@@ -980,6 +1000,56 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn does_not_over_account_memory() -> Result<()> {
+        let (mut acc1, mut acc2) = ArrayAggAccumulatorBuilder::string().build_two()?;
+
+        acc1.update_batch(&[data(["a", "c", "b"])])?;
+        acc2.update_batch(&[data(["b", "c", "a"])])?;
+        acc1 = merge(acc1, acc2)?;
+
+        // without compaction, the size is 2652.
+        assert_eq!(acc1.size(), 732);
+
+        Ok(())
+    }
+    #[test]
+    fn does_not_over_account_memory_distinct() -> Result<()> {
+        let (mut acc1, mut acc2) = ArrayAggAccumulatorBuilder::string()
+            .distinct()
+            .build_two()?;
+
+        acc1.update_batch(&[string_list_data([
+            vec!["a", "b", "c"],
+            vec!["d", "e", "f"],
+        ])])?;
+        acc2.update_batch(&[string_list_data([vec!["e", "f", "g"]])])?;
+        acc1 = merge(acc1, acc2)?;
+
+        // without compaction, the size is 16660
+        assert_eq!(acc1.size(), 1660);
+
+        Ok(())
+    }
+
+    #[test]
+    fn does_not_over_account_memory_ordered() -> Result<()> {
+        let mut acc = ArrayAggAccumulatorBuilder::string()
+            .order_by_col("col", SortOptions::new(false, false))
+            .build()?;
+
+        acc.update_batch(&[string_list_data([
+            vec!["a", "b", "c"],
+            vec!["c", "d", "e"],
+            vec!["b", "c", "d"],
+        ])])?;
+
+        // without compaction, the size is 17112
+        assert_eq!(acc.size(), 2112);
+
+        Ok(())
+    }
+
     struct ArrayAggAccumulatorBuilder {
         return_field: FieldRef,
         distinct: bool,
@@ -1057,6 +1127,15 @@ mod tests {
         sort.into_iter()
             .map(|v| v.unwrap_or_else(|| "NULL".to_string()))
             .collect()
+    }
+
+    fn string_list_data<'a>(data: impl IntoIterator<Item = Vec<&'a str>>) -> ArrayRef {
+        let mut builder = ListBuilder::new(StringBuilder::new());
+        for string_list in data.into_iter() {
+            builder.append_value(string_list.iter().map(Some).collect::<Vec<_>>());
+        }
+
+        Arc::new(builder.finish())
     }
 
     fn data<T, const N: usize>(list: [T; N]) -> ArrayRef

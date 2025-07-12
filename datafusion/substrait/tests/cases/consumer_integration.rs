@@ -584,4 +584,33 @@ mod tests {
 
         Ok(())
     }
+
+    #[tokio::test]
+    async fn test_join_with_expression_key() -> Result<()> {
+        let plan_str = test_plan_to_string("join_with_expression_key.json").await?;
+        assert_snapshot!(
+        plan_str,
+        @r#"
+        Projection: left.index_name AS index, right.upper(host) AS host, left.max(size_bytes) AS idx_size, right.max(total_bytes) AS db_size, CAST(left.max(size_bytes) AS Float64) / CAST(right.max(total_bytes) AS Float64) * Float64(100) AS pct_of_db
+          Inner Join: left.upper(host) = right.upper(host)
+            SubqueryAlias: left
+              Aggregate: groupBy=[[index_name, upper(host)]], aggr=[[max(size_bytes)]]
+                Projection: size_bytes, index_name, upper(host)
+                  Filter: index_name = Utf8("aaa")
+                    Values: (Utf8("aaa"), Utf8("host-a"), Int64(128)), (Utf8("bbb"), Utf8("host-b"), Int64(256))
+            SubqueryAlias: right
+              Aggregate: groupBy=[[upper(host)]], aggr=[[max(total_bytes)]]
+                Projection: total_bytes, upper(host)
+                  Inner Join:  Filter: upper(host) = upper(host)
+                    Values: (Utf8("host-a"), Int64(107)), (Utf8("host-b"), Int64(214))
+                    Projection: upper(host)
+                      Aggregate: groupBy=[[index_name, upper(host)]], aggr=[[max(size_bytes)]]
+                        Projection: size_bytes, index_name, upper(host)
+                          Filter: index_name = Utf8("aaa")
+                            Values: (Utf8("aaa"), Utf8("host-a"), Int64(128)), (Utf8("bbb"), Utf8("host-b"), Int64(256))
+        "#
+        );
+
+        Ok(())
+    }
 }

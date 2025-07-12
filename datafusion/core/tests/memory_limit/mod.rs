@@ -28,6 +28,7 @@ use arrow::compute::SortOptions;
 use arrow::datatypes::{Int32Type, SchemaRef};
 use arrow_schema::{DataType, Field, Schema};
 use datafusion::assert_batches_eq;
+use datafusion::config::SpillCompression;
 use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::datasource::source::DataSourceExec;
 use datafusion::datasource::{MemTable, TableProvider};
@@ -545,10 +546,11 @@ async fn test_external_sort_zero_merge_reservation() {
 // Tests for disk limit (`max_temp_directory_size` in `DiskManager`)
 // ------------------------------------------------------------------
 
-// Create a new `SessionContext` with speicified disk limit and memory pool limit
+// Create a new `SessionContext` with speicified disk limit, memory pool limit, and spill compression codec
 async fn setup_context(
     disk_limit: u64,
     memory_pool_limit: usize,
+    spill_compression: SpillCompression,
 ) -> Result<SessionContext> {
     let disk_manager = DiskManagerBuilder::default()
         .with_mode(DiskManagerMode::OsTmpDirectory)
@@ -570,6 +572,7 @@ async fn setup_context(
     let config = SessionConfig::new()
         .with_sort_spill_reservation_bytes(64 * 1024) // 256KB
         .with_sort_in_place_threshold_bytes(0)
+        .with_spill_compression(spill_compression)
         .with_batch_size(64) // To reduce test memory usage
         .with_target_partitions(1);
 
@@ -580,7 +583,8 @@ async fn setup_context(
 /// (specified by `max_temp_directory_size` in `DiskManager`)
 #[tokio::test]
 async fn test_disk_spill_limit_reached() -> Result<()> {
-    let ctx = setup_context(1024 * 1024, 1024 * 1024).await?; // 1MB disk limit, 1MB memory limit
+    let spill_compression = SpillCompression::Uncompressed;
+    let ctx = setup_context(1024 * 1024, 1024 * 1024, spill_compression).await?; // 1MB disk limit, 1MB memory limit
 
     let df = ctx
         .sql("select * from generate_series(1, 1000000000000) as t1(v1) order by v1")
@@ -602,7 +606,8 @@ async fn test_disk_spill_limit_reached() -> Result<()> {
 #[tokio::test]
 async fn test_disk_spill_limit_not_reached() -> Result<()> {
     let disk_spill_limit = 1024 * 1024; // 1MB
-    let ctx = setup_context(disk_spill_limit, 128 * 1024).await?; // 1MB disk limit, 128KB memory limit
+    let spill_compression = SpillCompression::Uncompressed;
+    let ctx = setup_context(disk_spill_limit, 128 * 1024, spill_compression).await?; // 1MB disk limit, 128KB memory limit
 
     let df = ctx
         .sql("select * from generate_series(1, 10000) as t1(v1) order by v1")
@@ -630,6 +635,77 @@ async fn test_disk_spill_limit_not_reached() -> Result<()> {
     Ok(())
 }
 
+/// External query should succeed using zstd as spill compression codec and
+/// and all temporary spill files are properly cleaned up after execution.
+/// Note: This test does not inspect file contents (e.g. magic number),
+/// as spill files are automatically deleted on drop.
+#[tokio::test]
+async fn test_spill_file_compressed_with_zstd() -> Result<()> {
+    let disk_spill_limit = 1024 * 1024; // 1MB
+    let spill_compression = SpillCompression::Zstd;
+    let ctx = setup_context(disk_spill_limit, 128 * 1024, spill_compression).await?; // 1MB disk limit, 128KB memory limit, zstd
+
+    let df = ctx
+        .sql("select * from generate_series(1, 100000) as t1(v1) order by v1")
+        .await
+        .unwrap();
+    let plan = df.create_physical_plan().await.unwrap();
+
+    let task_ctx = ctx.task_ctx();
+    let _ = collect_batches(Arc::clone(&plan), task_ctx)
+        .await
+        .expect("Query execution failed");
+
+    let spill_count = plan.metrics().unwrap().spill_count().unwrap();
+    let spilled_bytes = plan.metrics().unwrap().spilled_bytes().unwrap();
+
+    println!("spill count {spill_count}");
+    assert!(spill_count > 0);
+    assert!((spilled_bytes as u64) < disk_spill_limit);
+
+    // Verify that all temporary files have been properly cleaned up by checking
+    // that the total disk usage tracked by the disk manager is zero
+    let current_disk_usage = ctx.runtime_env().disk_manager.used_disk_space();
+    assert_eq!(current_disk_usage, 0);
+
+    Ok(())
+}
+
+/// External query should succeed using lz4_frame as spill compression codec and
+/// and all temporary spill files are properly cleaned up after execution.
+/// Note: This test does not inspect file contents (e.g. magic number),
+/// as spill files are automatically deleted on drop.
+#[tokio::test]
+async fn test_spill_file_compressed_with_lz4_frame() -> Result<()> {
+    let disk_spill_limit = 1024 * 1024; // 1MB
+    let spill_compression = SpillCompression::Lz4Frame;
+    let ctx = setup_context(disk_spill_limit, 128 * 1024, spill_compression).await?; // 1MB disk limit, 128KB memory limit, lz4_frame
+
+    let df = ctx
+        .sql("select * from generate_series(1, 100000) as t1(v1) order by v1")
+        .await
+        .unwrap();
+    let plan = df.create_physical_plan().await.unwrap();
+
+    let task_ctx = ctx.task_ctx();
+    let _ = collect_batches(Arc::clone(&plan), task_ctx)
+        .await
+        .expect("Query execution failed");
+
+    let spill_count = plan.metrics().unwrap().spill_count().unwrap();
+    let spilled_bytes = plan.metrics().unwrap().spilled_bytes().unwrap();
+
+    println!("spill count {spill_count}");
+    assert!(spill_count > 0);
+    assert!((spilled_bytes as u64) < disk_spill_limit);
+
+    // Verify that all temporary files have been properly cleaned up by checking
+    // that the total disk usage tracked by the disk manager is zero
+    let current_disk_usage = ctx.runtime_env().disk_manager.used_disk_space();
+    assert_eq!(current_disk_usage, 0);
+
+    Ok(())
+}
 /// Run the query with the specified memory limit,
 /// and verifies the expected errors are returned
 #[derive(Clone, Debug)]

@@ -170,7 +170,7 @@ statement error DataFusion error: This feature is not implemented: Only a single
 SELECT approx_percentile_cont(0.95) WITHIN GROUP (ORDER BY c5, c12) FROM aggregate_test_100
 
 # Not supported over sliding windows
-query error DataFusion error: Error during planning: OVER and WITHIN GROUP clause are can not be used together. OVER is for window function, whereas WITHIN GROUP is for ordered set aggregate function
+query error DataFusion error: Error during planning: OVER and WITHIN GROUP clause cannot be used together. OVER is for window functions, whereas WITHIN GROUP is for ordered set aggregate functions
 SELECT approx_percentile_cont(0.5)
 WITHIN GROUP (ORDER BY c3)
 OVER (ROWS BETWEEN 4 PRECEDING AND CURRENT ROW)
@@ -2278,10 +2278,10 @@ create table t (c string) as values
 query T
 select arrow_typeof(c) from t;
 ----
-Utf8
-Utf8
-Utf8
-Utf8
+Utf8View
+Utf8View
+Utf8View
+Utf8View
 
 query IT
 select count(c), arrow_typeof(count(c)) from t;
@@ -7040,3 +7040,19 @@ VALUES
 ) GROUP BY 1 ORDER BY 1;
 ----
 x 1
+
+query ?
+SELECT array_agg(a_varchar) WITHIN GROUP (ORDER BY a_varchar)
+FROM (VALUES ('a'), ('d'), ('c'), ('a')) t(a_varchar);
+----
+[a, a, c, d]
+
+query ?
+SELECT array_agg(DISTINCT a_varchar) WITHIN GROUP (ORDER BY a_varchar)
+FROM (VALUES ('a'), ('d'), ('c'), ('a')) t(a_varchar);
+----
+[a, c, d]
+
+query error Error during planning: ORDER BY and WITHIN GROUP clauses cannot be used together in the same aggregate function
+SELECT array_agg(a_varchar order by a_varchar) WITHIN GROUP (ORDER BY a_varchar)
+FROM (VALUES ('a'), ('d'), ('c'), ('a')) t(a_varchar);

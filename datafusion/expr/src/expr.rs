@@ -27,10 +27,10 @@ use std::sync::Arc;
 use crate::expr_fn::binary_expr;
 use crate::function::WindowFunctionSimplification;
 use crate::logical_plan::Subquery;
-use crate::Volatility;
-use crate::{udaf, ExprSchemable, Operator, Signature, WindowFrame, WindowUDF};
+use crate::{AggregateUDF, Volatility};
+use crate::{ExprSchemable, Operator, Signature, WindowFrame, WindowUDF};
 
-use arrow::datatypes::{DataType, FieldRef};
+use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::cse::{HashNode, NormalizeEq, Normalizeable};
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeContainer, TreeNodeRecursion,
@@ -284,8 +284,8 @@ pub enum Expr {
     Column(Column),
     /// A named reference to a variable in a registry.
     ScalarVariable(DataType, Vec<String>),
-    /// A constant value along with associated metadata
-    Literal(ScalarValue, Option<BTreeMap<String, String>>),
+    /// A constant value along with associated [`FieldMetadata`].
+    Literal(ScalarValue, Option<FieldMetadata>),
     /// A binary expression such as "age > 21"
     BinaryExpr(BinaryExpr),
     /// LIKE expression
@@ -413,6 +413,192 @@ impl<'a> TreeNodeContainer<'a, Self> for Expr {
     }
 }
 
+/// Literal metadata
+///
+/// Stores metadata associated with a literal expressions
+/// and is designed to be fast to `clone`.
+///
+/// This structure is used to store metadata associated with a literal expression, and it
+/// corresponds to the `metadata` field on [`Field`].
+///
+/// # Example: Create [`FieldMetadata`] from a [`Field`]
+/// ```
+/// # use std::collections::HashMap;
+/// # use datafusion_expr::expr::FieldMetadata;
+/// # use arrow::datatypes::{Field, DataType};
+/// # let field = Field::new("c1", DataType::Int32, true)
+/// #  .with_metadata(HashMap::from([("foo".to_string(), "bar".to_string())]));
+/// // Create a new `FieldMetadata` instance from a `Field`
+/// let metadata = FieldMetadata::new_from_field(&field);
+/// // There is also a `From` impl:
+/// let metadata = FieldMetadata::from(&field);
+/// ```
+///
+/// # Example: Update a [`Field`] with [`FieldMetadata`]
+/// ```
+/// # use datafusion_expr::expr::FieldMetadata;
+/// # use arrow::datatypes::{Field, DataType};
+/// # let field = Field::new("c1", DataType::Int32, true);
+/// # let metadata = FieldMetadata::new_from_field(&field);
+/// // Add any metadata from `FieldMetadata` to `Field`
+/// let updated_field = metadata.add_to_field(field);
+/// ```
+///
+#[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
+pub struct FieldMetadata {
+    /// The inner metadata of a literal expression, which is a map of string
+    /// keys to string values.
+    ///
+    /// Note this is not a `HashMap because `HashMap` does not provide
+    /// implementations for traits like `Debug` and `Hash`.
+    inner: Arc<BTreeMap<String, String>>,
+}
+
+impl Default for FieldMetadata {
+    fn default() -> Self {
+        Self::new_empty()
+    }
+}
+
+impl FieldMetadata {
+    /// Create a new empty metadata instance.
+    pub fn new_empty() -> Self {
+        Self {
+            inner: Arc::new(BTreeMap::new()),
+        }
+    }
+
+    /// Merges two optional `FieldMetadata` instances, overwriting any existing
+    /// keys in `m` with keys from `n` if present
+    pub fn merge_options(
+        m: Option<&FieldMetadata>,
+        n: Option<&FieldMetadata>,
+    ) -> Option<FieldMetadata> {
+        match (m, n) {
+            (Some(m), Some(n)) => {
+                let mut merged = m.clone();
+                merged.extend(n.clone());
+                Some(merged)
+            }
+            (Some(m), None) => Some(m.clone()),
+            (None, Some(n)) => Some(n.clone()),
+            (None, None) => None,
+        }
+    }
+
+    /// Create a new metadata instance from a `Field`'s metadata.
+    pub fn new_from_field(field: &Field) -> Self {
+        let inner = field
+            .metadata()
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        Self {
+            inner: Arc::new(inner),
+        }
+    }
+
+    /// Create a new metadata instance from a map of string keys to string values.
+    pub fn new(inner: BTreeMap<String, String>) -> Self {
+        Self {
+            inner: Arc::new(inner),
+        }
+    }
+
+    /// Get the inner metadata as a reference to a `BTreeMap`.
+    pub fn inner(&self) -> &BTreeMap<String, String> {
+        &self.inner
+    }
+
+    /// Return the inner metadata
+    pub fn into_inner(self) -> Arc<BTreeMap<String, String>> {
+        self.inner
+    }
+
+    /// Adds metadata from `other` into `self`, overwriting any existing keys.
+    pub fn extend(&mut self, other: Self) {
+        if other.is_empty() {
+            return;
+        }
+        let other = Arc::unwrap_or_clone(other.into_inner());
+        Arc::make_mut(&mut self.inner).extend(other);
+    }
+
+    /// Returns true if the metadata is empty.
+    pub fn is_empty(&self) -> bool {
+        self.inner.is_empty()
+    }
+
+    /// Returns the number of key-value pairs in the metadata.
+    pub fn len(&self) -> usize {
+        self.inner.len()
+    }
+
+    /// Convert this `FieldMetadata` into a `HashMap<String, String>`
+    pub fn to_hashmap(&self) -> std::collections::HashMap<String, String> {
+        self.inner
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    /// Updates the metadata on the Field with this metadata, if it is not empty.
+    pub fn add_to_field(&self, field: Field) -> Field {
+        if self.inner.is_empty() {
+            return field;
+        }
+
+        field.with_metadata(self.to_hashmap())
+    }
+}
+
+impl From<&Field> for FieldMetadata {
+    fn from(field: &Field) -> Self {
+        Self::new_from_field(field)
+    }
+}
+
+impl From<BTreeMap<String, String>> for FieldMetadata {
+    fn from(inner: BTreeMap<String, String>) -> Self {
+        Self::new(inner)
+    }
+}
+
+impl From<std::collections::HashMap<String, String>> for FieldMetadata {
+    fn from(map: std::collections::HashMap<String, String>) -> Self {
+        Self::new(map.into_iter().collect())
+    }
+}
+
+/// From reference
+impl From<&std::collections::HashMap<String, String>> for FieldMetadata {
+    fn from(map: &std::collections::HashMap<String, String>) -> Self {
+        let inner = map
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        Self::new(inner)
+    }
+}
+
+/// From hashbrown map
+impl From<HashMap<String, String>> for FieldMetadata {
+    fn from(map: HashMap<String, String>) -> Self {
+        let inner = map.into_iter().collect();
+        Self::new(inner)
+    }
+}
+
+impl From<&HashMap<String, String>> for FieldMetadata {
+    fn from(map: &HashMap<String, String>) -> Self {
+        let inner = map
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        Self::new(inner)
+    }
+}
+
 /// UNNEST expression.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
 pub struct Unnest {
@@ -439,7 +625,7 @@ pub struct Alias {
     pub expr: Box<Expr>,
     pub relation: Option<TableReference>,
     pub name: String,
-    pub metadata: Option<std::collections::HashMap<String, String>>,
+    pub metadata: Option<FieldMetadata>,
 }
 
 impl Hash for Alias {
@@ -479,10 +665,7 @@ impl Alias {
         }
     }
 
-    pub fn with_metadata(
-        mut self,
-        metadata: Option<std::collections::HashMap<String, String>>,
-    ) -> Self {
+    pub fn with_metadata(mut self, metadata: Option<FieldMetadata>) -> Self {
         self.metadata = metadata;
         self
     }
@@ -799,7 +982,7 @@ impl<'a> TreeNodeContainer<'a, Expr> for Sort {
 #[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
 pub struct AggregateFunction {
     /// Name of the function
-    pub func: Arc<crate::AggregateUDF>,
+    pub func: Arc<AggregateUDF>,
     pub params: AggregateFunctionParams,
 }
 
@@ -811,18 +994,18 @@ pub struct AggregateFunctionParams {
     /// Optional filter
     pub filter: Option<Box<Expr>>,
     /// Optional ordering
-    pub order_by: Option<Vec<Sort>>,
+    pub order_by: Vec<Sort>,
     pub null_treatment: Option<NullTreatment>,
 }
 
 impl AggregateFunction {
     /// Create a new AggregateFunction expression with a user-defined function (UDF)
     pub fn new_udf(
-        func: Arc<crate::AggregateUDF>,
+        func: Arc<AggregateUDF>,
         args: Vec<Expr>,
         distinct: bool,
         filter: Option<Box<Expr>>,
-        order_by: Option<Vec<Sort>>,
+        order_by: Vec<Sort>,
         null_treatment: Option<NullTreatment>,
     ) -> Self {
         Self {
@@ -846,7 +1029,7 @@ impl AggregateFunction {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub enum WindowFunctionDefinition {
     /// A user defined aggregate function
-    AggregateUDF(Arc<crate::AggregateUDF>),
+    AggregateUDF(Arc<AggregateUDF>),
     /// A user defined aggregate function
     WindowUDF(Arc<WindowUDF>),
 }
@@ -905,8 +1088,8 @@ impl Display for WindowFunctionDefinition {
     }
 }
 
-impl From<Arc<crate::AggregateUDF>> for WindowFunctionDefinition {
-    fn from(value: Arc<crate::AggregateUDF>) -> Self {
+impl From<Arc<AggregateUDF>> for WindowFunctionDefinition {
+    fn from(value: Arc<AggregateUDF>) -> Self {
         Self::AggregateUDF(value)
     }
 }
@@ -987,38 +1170,6 @@ impl Exists {
     // Create a new Exists expression.
     pub fn new(subquery: Subquery, negated: bool) -> Self {
         Self { subquery, negated }
-    }
-}
-
-/// User Defined Aggregate Function
-///
-/// See [`udaf::AggregateUDF`] for more information.
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub struct AggregateUDF {
-    /// The function
-    pub fun: Arc<udaf::AggregateUDF>,
-    /// List of expressions to feed to the functions as arguments
-    pub args: Vec<Expr>,
-    /// Optional filter
-    pub filter: Option<Box<Expr>>,
-    /// Optional ORDER BY applied prior to aggregating
-    pub order_by: Option<Vec<Expr>>,
-}
-
-impl AggregateUDF {
-    /// Create a new AggregateUDF expression
-    pub fn new(
-        fun: Arc<udaf::AggregateUDF>,
-        args: Vec<Expr>,
-        filter: Option<Box<Expr>>,
-        order_by: Option<Vec<Expr>>,
-    ) -> Self {
-        Self {
-            fun,
-            args,
-            filter,
-            order_by,
-        }
     }
 }
 
@@ -1429,15 +1580,17 @@ impl Expr {
     /// # Example
     /// ```
     /// # use datafusion_expr::col;
-    /// use std::collections::HashMap;
+    /// # use std::collections::HashMap;
+    /// # use datafusion_expr::expr::FieldMetadata;
     /// let metadata = HashMap::from([("key".to_string(), "value".to_string())]);
+    /// let metadata = FieldMetadata::from(metadata);
     /// let expr = col("foo").alias_with_metadata("bar", Some(metadata));
     /// ```
     ///
     pub fn alias_with_metadata(
         self,
         name: impl Into<String>,
-        metadata: Option<std::collections::HashMap<String, String>>,
+        metadata: Option<FieldMetadata>,
     ) -> Expr {
         Expr::Alias(Alias::new(self, None::<&str>, name.into()).with_metadata(metadata))
     }
@@ -1459,8 +1612,10 @@ impl Expr {
     /// # Example
     /// ```
     /// # use datafusion_expr::col;
-    /// use std::collections::HashMap;
+    /// # use std::collections::HashMap;
+    /// # use datafusion_expr::expr::FieldMetadata;
     /// let metadata = HashMap::from([("key".to_string(), "value".to_string())]);
+    /// let metadata = FieldMetadata::from(metadata);
     /// let expr = col("foo").alias_qualified_with_metadata(Some("tbl"), "bar", Some(metadata));
     /// ```
     ///
@@ -1468,7 +1623,7 @@ impl Expr {
         self,
         relation: Option<impl Into<TableReference>>,
         name: impl Into<String>,
-        metadata: Option<std::collections::HashMap<String, String>>,
+        metadata: Option<FieldMetadata>,
     ) -> Expr {
         Expr::Alias(Alias::new(self, relation, name.into()).with_metadata(metadata))
     }
@@ -1882,6 +2037,15 @@ impl Expr {
             _ => None,
         }
     }
+
+    /// Check if the Expr is literal and get the literal value if it is.
+    pub fn as_literal(&self) -> Option<&ScalarValue> {
+        if let Expr::Literal(lit, _) = self {
+            Some(lit)
+        } else {
+            None
+        }
+    }
 }
 
 impl Normalizeable for Expr {
@@ -2107,18 +2271,15 @@ impl NormalizeEq for Expr {
                         (None, None) => true,
                         _ => false,
                     }
-                    && match (self_order_by, other_order_by) {
-                        (Some(self_order_by), Some(other_order_by)) => self_order_by
-                            .iter()
-                            .zip(other_order_by.iter())
-                            .all(|(a, b)| {
-                                a.asc == b.asc
-                                    && a.nulls_first == b.nulls_first
-                                    && a.expr.normalize_eq(&b.expr)
-                            }),
-                        (None, None) => true,
-                        _ => false,
-                    }
+                    && self_order_by
+                        .iter()
+                        .zip(other_order_by.iter())
+                        .all(|(a, b)| {
+                            a.asc == b.asc
+                                && a.nulls_first == b.nulls_first
+                                && a.expr.normalize_eq(&b.expr)
+                        })
+                    && self_order_by.len() == other_order_by.len()
             }
             (Expr::WindowFunction(left), Expr::WindowFunction(other)) => {
                 let WindowFunction {
@@ -3657,7 +3818,7 @@ mod test {
         // If this test fails when you change `Expr`, please try
         // `Box`ing the fields to make `Expr` smaller
         // See https://github.com/apache/datafusion/issues/16199 for details
-        assert_eq!(size_of::<Expr>(), 144);
+        assert_eq!(size_of::<Expr>(), 128);
         assert_eq!(size_of::<ScalarValue>(), 64);
         assert_eq!(size_of::<DataType>(), 24); // 3 ptrs
         assert_eq!(size_of::<Vec<Expr>>(), 24);

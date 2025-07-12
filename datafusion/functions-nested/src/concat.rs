@@ -23,7 +23,7 @@ use std::sync::Arc;
 use crate::make_array::make_array_inner;
 use crate::utils::{align_array_dimensions, check_datatypes, make_scalar_function};
 use arrow::array::{
-    Array, ArrayRef, Capacities, GenericListArray, MutableArrayData, NullArray,
+    Array, ArrayData, ArrayRef, Capacities, GenericListArray, MutableArrayData,
     NullBufferBuilder, OffsetSizeTrait,
 };
 use arrow::buffer::OffsetBuffer;
@@ -42,6 +42,7 @@ use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_macros::user_doc;
+use itertools::Itertools;
 
 make_udf_expr_and_func!(
     ArrayAppend,
@@ -364,12 +365,23 @@ pub(crate) fn array_concat_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
             DataType::LargeList(_) => large_list = true,
             _ => (),
         }
-
-        all_null = false
+        if arg.null_count() < arg.len() {
+            all_null = false;
+        }
     }
 
     if all_null {
-        Ok(Arc::new(NullArray::new(args[0].len())))
+        // Return a null array with the same type as the first non-null-type argument
+        let return_type = args
+            .iter()
+            .map(|arg| arg.data_type())
+            .find_or_first(|d| !d.is_null())
+            .unwrap(); // Safe because args is non-empty
+
+        Ok(arrow::array::make_array(ArrayData::new_null(
+            return_type,
+            args[0].len(),
+        )))
     } else if large_list {
         concat_internal::<i64>(args)
     } else {

@@ -274,7 +274,7 @@ impl RunOpt {
                     (Arc::new(format), path, ".tbl")
                 }
                 "csv" => {
-                    let path = format!("{path}/{table}");
+                    let path = format!("{path}/csv/{table}");
                     let format = CsvFormat::default()
                         .with_delimiter(b',')
                         .with_has_header(true);

@@ -26,14 +26,14 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use crate::joins::SharedBitmapBuilder;
-use crate::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder};
+use crate::metrics::{self, BaselineMetrics, ExecutionPlanMetricsSet, MetricBuilder};
 use crate::projection::ProjectionExec;
 use crate::{
     ColumnStatistics, ExecutionPlan, ExecutionPlanProperties, Partitioning, Statistics,
 };
 // compatibility
 pub use super::join_filter::JoinFilter;
-pub use super::join_hash_map::{JoinHashMap, JoinHashMapType};
+pub use super::join_hash_map::JoinHashMapType;
 pub use crate::joins::{JoinOn, JoinOnRef};
 
 use arrow::array::{
@@ -41,6 +41,7 @@ use arrow::array::{
     BooleanBufferBuilder, NativeAdapter, PrimitiveArray, RecordBatch, RecordBatchOptions,
     UInt32Array, UInt32Builder, UInt64Array,
 };
+use arrow::buffer::NullBuffer;
 use arrow::compute;
 use arrow::datatypes::{
     ArrowNativeType, Field, Schema, SchemaBuilder, UInt32Type, UInt64Type,
@@ -216,6 +217,7 @@ fn output_join_field(old_field: &Field, join_type: &JoinType, is_left: bool) -> 
         JoinType::LeftAnti => false, // doesn't introduce nulls (or can it??)
         JoinType::RightAnti => false, // doesn't introduce nulls (or can it??)
         JoinType::LeftMark => false,
+        JoinType::RightMark => false,
     };
 
     if force_nullable {
@@ -282,6 +284,16 @@ pub fn build_join_schema(
             left_fields().chain(right_field).unzip()
         }
         JoinType::RightSemi | JoinType::RightAnti => right_fields().unzip(),
+        JoinType::RightMark => {
+            let left_field = once((
+                Field::new("mark", arrow_schema::DataType::Boolean, false),
+                ColumnIndex {
+                    index: 0,
+                    side: JoinSide::None,
+                },
+            ));
+            right_fields().chain(left_field).unzip()
+        }
     };
 
     let (schema1, schema2) = match join_type {
@@ -503,6 +515,15 @@ fn estimate_join_cardinality(
         JoinType::LeftMark => {
             let num_rows = *left_stats.num_rows.get_value()?;
             let mut column_statistics = left_stats.column_statistics;
+            column_statistics.push(ColumnStatistics::new_unknown());
+            Some(PartialJoinStatistics {
+                num_rows,
+                column_statistics,
+            })
+        }
+        JoinType::RightMark => {
+            let num_rows = *right_stats.num_rows.get_value()?;
+            let mut column_statistics = right_stats.column_statistics;
             column_statistics.push(ColumnStatistics::new_unknown());
             Some(PartialJoinStatistics {
                 num_rows,
@@ -880,7 +901,7 @@ pub(crate) fn build_batch_from_indices(
 
     for column_index in column_indices {
         let array = if column_index.side == JoinSide::None {
-            // LeftMark join, the mark column is a true if the indices is not null, otherwise it will be false
+            // For mark joins, the mark column is a true if the indices is not null, otherwise it will be false
             Arc::new(compute::is_not_null(probe_indices)?)
         } else if column_index.side == build_side {
             let array = build_input_buffer.column(column_index.index);
@@ -949,6 +970,12 @@ pub(crate) fn adjust_indices_by_join_type(
             // get the anti index for the right side
             let right_indices = get_anti_indices(adjust_range, &right_indices);
             // the left_indices will not be used later for the `right anti` join
+            Ok((left_indices, right_indices))
+        }
+        JoinType::RightMark => {
+            let right_indices = get_mark_indices(&adjust_range, &right_indices);
+            let left_indices_vec: Vec<u64> = adjust_range.map(|i| i as u64).collect();
+            let left_indices = UInt64Array::from(left_indices_vec);
             Ok((left_indices, right_indices))
         }
         JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark => {
@@ -1052,17 +1079,7 @@ pub(crate) fn get_anti_indices<T: ArrowPrimitiveType>(
 where
     NativeAdapter<T>: From<<T as ArrowPrimitiveType>::Native>,
 {
-    let mut bitmap = BooleanBufferBuilder::new(range.len());
-    bitmap.append_n(range.len(), false);
-    input_indices
-        .iter()
-        .flatten()
-        .map(|v| v.as_usize())
-        .filter(|v| range.contains(v))
-        .for_each(|v| {
-            bitmap.set_bit(v - range.start, true);
-        });
-
+    let bitmap = build_range_bitmap(&range, input_indices);
     let offset = range.start;
 
     // get the anti index
@@ -1081,25 +1098,45 @@ pub(crate) fn get_semi_indices<T: ArrowPrimitiveType>(
 where
     NativeAdapter<T>: From<<T as ArrowPrimitiveType>::Native>,
 {
-    let mut bitmap = BooleanBufferBuilder::new(range.len());
-    bitmap.append_n(range.len(), false);
-    input_indices
-        .iter()
-        .flatten()
-        .map(|v| v.as_usize())
-        .filter(|v| range.contains(v))
-        .for_each(|v| {
-            bitmap.set_bit(v - range.start, true);
-        });
-
+    let bitmap = build_range_bitmap(&range, input_indices);
     let offset = range.start;
-
     // get the semi index
     (range)
         .filter_map(|idx| {
             (bitmap.get_bit(idx - offset)).then_some(T::Native::from_usize(idx))
         })
         .collect()
+}
+
+pub(crate) fn get_mark_indices<T: ArrowPrimitiveType>(
+    range: &Range<usize>,
+    input_indices: &PrimitiveArray<T>,
+) -> PrimitiveArray<UInt32Type>
+where
+    NativeAdapter<T>: From<<T as ArrowPrimitiveType>::Native>,
+{
+    let mut bitmap = build_range_bitmap(range, input_indices);
+    PrimitiveArray::new(
+        vec![0; range.len()].into(),
+        Some(NullBuffer::new(bitmap.finish())),
+    )
+}
+
+fn build_range_bitmap<T: ArrowPrimitiveType>(
+    range: &Range<usize>,
+    input: &PrimitiveArray<T>,
+) -> BooleanBufferBuilder {
+    let mut builder = BooleanBufferBuilder::new(range.len());
+    builder.append_n(range.len(), false);
+
+    input.iter().flatten().for_each(|v| {
+        let idx = v.as_usize();
+        if range.contains(&idx) {
+            builder.set_bit(idx - range.start, true);
+        }
+    });
+
+    builder
 }
 
 /// Appends probe indices in order by considering the given build indices.
@@ -1159,6 +1196,7 @@ fn append_probe_indices_in_order(
 /// Metrics for build & probe joins
 #[derive(Clone, Debug)]
 pub(crate) struct BuildProbeJoinMetrics {
+    pub(crate) baseline: BaselineMetrics,
     /// Total time for collecting build-side of join
     pub(crate) build_time: metrics::Time,
     /// Number of batches consumed by build-side
@@ -1175,12 +1213,31 @@ pub(crate) struct BuildProbeJoinMetrics {
     pub(crate) input_rows: metrics::Count,
     /// Number of batches produced by this operator
     pub(crate) output_batches: metrics::Count,
-    /// Number of rows produced by this operator
-    pub(crate) output_rows: metrics::Count,
+}
+
+// This Drop implementation updates the elapsed compute part of the metrics.
+//
+// Why is this in a Drop?
+// - We keep track of build_time and join_time separately, but baseline metrics have
+// a total elapsed_compute time. Instead of remembering to update both the metrics
+// at the same time, we chose to update elapsed_compute once at the end - summing up
+// both the parts.
+//
+// How does this work?
+// - The elapsed_compute `Time` is represented by an `Arc<AtomicUsize>`. So even when
+// this `BuildProbeJoinMetrics` is dropped, the elapsed_compute is usable through the
+// Arc reference.
+impl Drop for BuildProbeJoinMetrics {
+    fn drop(&mut self) {
+        self.baseline.elapsed_compute().add(&self.build_time);
+        self.baseline.elapsed_compute().add(&self.join_time);
+    }
 }
 
 impl BuildProbeJoinMetrics {
     pub fn new(partition: usize, metrics: &ExecutionPlanMetricsSet) -> Self {
+        let baseline = BaselineMetrics::new(metrics, partition);
+
         let join_time = MetricBuilder::new(metrics).subset_time("join_time", partition);
 
         let build_time = MetricBuilder::new(metrics).subset_time("build_time", partition);
@@ -1202,8 +1259,6 @@ impl BuildProbeJoinMetrics {
         let output_batches =
             MetricBuilder::new(metrics).counter("output_batches", partition);
 
-        let output_rows = MetricBuilder::new(metrics).output_rows(partition);
-
         Self {
             build_time,
             build_input_batches,
@@ -1213,7 +1268,7 @@ impl BuildProbeJoinMetrics {
             input_batches,
             input_rows,
             output_batches,
-            output_rows,
+            baseline,
         }
     }
 }
@@ -1277,7 +1332,9 @@ pub(crate) fn symmetric_join_output_partitioning(
         JoinType::Left | JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark => {
             left_partitioning.clone()
         }
-        JoinType::RightSemi | JoinType::RightAnti => right_partitioning.clone(),
+        JoinType::RightSemi | JoinType::RightAnti | JoinType::RightMark => {
+            right_partitioning.clone()
+        }
         JoinType::Inner | JoinType::Right => {
             adjust_right_output_partitioning(right_partitioning, left_columns_len)?
         }
@@ -1299,7 +1356,9 @@ pub(crate) fn asymmetric_join_output_partitioning(
             right.output_partitioning(),
             left.schema().fields().len(),
         )?,
-        JoinType::RightSemi | JoinType::RightAnti => right.output_partitioning().clone(),
+        JoinType::RightSemi | JoinType::RightAnti | JoinType::RightMark => {
+            right.output_partitioning().clone()
+        }
         JoinType::Left
         | JoinType::LeftSemi
         | JoinType::LeftAnti

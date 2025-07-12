@@ -651,6 +651,57 @@ select map_extract(column1, 1), map_extract(column1, 5), map_extract(column1, 7)
 [NULL] [[4, NULL, 6]] [NULL]
 [NULL] [NULL] [[1, NULL, 3]]
 
+# Tests for map_entries
+
+query ?
+SELECT map_entries(MAP { 'a': 1, 'b': 3 });
+----
+[{key: a, value: 1}, {key: b, value: 3}]
+
+query error DataFusion error: Arrow error: Cast error: Cannot cast string 'a' to value of Int64 type
+SELECT map_entries(MAP { 'a': 1, 2: 3 });
+
+query ?
+SELECT map_entries(MAP {'a':1, 'b':2, 'c':3 }) FROM t;
+----
+[{key: a, value: 1}, {key: b, value: 2}, {key: c, value: 3}]
+[{key: a, value: 1}, {key: b, value: 2}, {key: c, value: 3}]
+[{key: a, value: 1}, {key: b, value: 2}, {key: c, value: 3}]
+
+query ?
+SELECT map_entries(Map{column1: column2, column3: column4}) FROM t;
+----
+[{key: a, value: 1}, {key: k1, value: 10}]
+[{key: b, value: 2}, {key: k3, value: 30}]
+[{key: d, value: 4}, {key: k5, value: 50}]
+
+query ?
+SELECT map_entries(map(column5, column6)) FROM t;
+----
+[{key: k1, value: 1}, {key: k2, value: 2}]
+[{key: k3, value: 3}]
+[{key: k5, value: 5}]
+
+query ?
+SELECT map_entries(map(column8, column9)) FROM t;
+----
+[{key: [1, 2, 3], value: a}]
+[{key: [4], value: b}]
+[{key: [1, 2], value: c}]
+
+query ?
+SELECT map_entries(Map{});
+----
+[]
+
+query ?
+SELECT map_entries(column1) from map_array_table_1;
+----
+[{key: 1, value: [1, NULL, 3]}, {key: 2, value: [4, NULL, 6]}, {key: 3, value: [7, 8, 9]}]
+[{key: 4, value: [1, NULL, 3]}, {key: 5, value: [4, NULL, 6]}, {key: 6, value: [7, 8, 9]}]
+[{key: 7, value: [1, NULL, 3]}, {key: 8, value: [9, NULL, 6]}, {key: 9, value: [7, 8, 9]}]
+NULL
+
 # Tests for map_keys
 
 query ?

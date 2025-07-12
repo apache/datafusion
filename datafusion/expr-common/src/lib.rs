@@ -33,6 +33,7 @@
 #![deny(clippy::clone_on_ref_ptr)]
 
 pub mod accumulator;
+pub mod casts;
 pub mod columnar_value;
 pub mod groups_accumulator;
 pub mod interval_arithmetic;

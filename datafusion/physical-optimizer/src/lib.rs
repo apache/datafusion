@@ -25,19 +25,20 @@
 #![deny(clippy::clone_on_ref_ptr)]
 
 pub mod aggregate_statistics;
+pub mod coalesce_async_exec_input;
 pub mod coalesce_batches;
 pub mod combine_partial_final_agg;
 pub mod enforce_distribution;
 pub mod enforce_sorting;
+pub mod ensure_coop;
 pub mod filter_pushdown;
-pub mod insert_yield_exec;
 pub mod join_selection;
 pub mod limit_pushdown;
 pub mod limited_distinct_aggregation;
 pub mod optimizer;
 pub mod output_requirements;
 pub mod projection_pushdown;
-pub mod pruning;
+pub use datafusion_pruning as pruning;
 pub mod sanity_checker;
 pub mod topk_aggregation;
 pub mod update_aggr_exprs;

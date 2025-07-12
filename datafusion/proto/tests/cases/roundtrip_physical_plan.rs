@@ -18,6 +18,7 @@
 use std::any::Any;
 use std::fmt::{Display, Formatter};
 use std::ops::Deref;
+
 use std::sync::Arc;
 use std::vec;
 
@@ -98,7 +99,7 @@ use datafusion_common::file_options::json_writer::JsonWriterOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
-    internal_err, not_impl_err, DataFusionError, Result, UnnestOptions,
+    internal_err, not_impl_err, DataFusionError, NullEquality, Result, UnnestOptions,
 };
 use datafusion_expr::{
     Accumulator, AccumulatorFactoryFunction, AggregateUDF, ColumnarValue, ScalarUDF,
@@ -268,7 +269,7 @@ fn roundtrip_hash_join() -> Result<()> {
                 join_type,
                 None,
                 *partition_mode,
-                false,
+                NullEquality::NullEqualsNothing,
             )?))?;
         }
     }
@@ -1494,7 +1495,7 @@ fn roundtrip_sym_hash_join() -> Result<()> {
                         on.clone(),
                         None,
                         join_type,
-                        false,
+                        NullEquality::NullEqualsNothing,
                         left_order.clone(),
                         right_order,
                         *partition_mode,
@@ -1735,4 +1736,47 @@ async fn roundtrip_physical_plan_node() {
         .unwrap();
 
     let _ = plan.execute(0, ctx.task_ctx()).unwrap();
+}
+
+// Failing due to https://github.com/apache/datafusion/pull/16662
+#[ignore]
+#[tokio::test]
+async fn test_tpch_part_in_list_query_with_real_parquet_data() -> Result<()> {
+    // Test the specific query: SELECT p_size FROM part WHERE p_size IN (14, 6, 5, 31)
+    //
+    // NOTE: This test uses a minimal subset of TPC-H part.parquet data (tpch_part_small.parquet)
+    // which contains only 20 rows with p_size values in [14, 6, 5, 31] to reproduce the bug.
+    // Using alltypes_plain.parquet does NOT reproduce the issue, suggesting the bug
+    // is specific to certain characteristics of TPC-H parquet files or their schema.
+
+    use datafusion_common::test_util::datafusion_test_data;
+
+    let ctx = SessionContext::new();
+
+    // Register the TPC-H part table using the local test data
+    let test_data = datafusion_test_data();
+    let table_sql = format!(
+        "CREATE EXTERNAL TABLE part STORED AS PARQUET LOCATION '{test_data}/tpch_part_small.parquet'"
+
+    );
+    ctx.sql(&table_sql).await.map_err(|e| {
+        DataFusionError::External(format!("Failed to create part table: {e}").into())
+    })?;
+
+    // Test the exact problematic query
+    let sql = "SELECT p_size FROM part WHERE p_size IN (14, 6, 5, 31)";
+
+    let logical_plan = ctx.sql(sql).await?.into_unoptimized_plan();
+    let optimized_plan = ctx.state().optimize(&logical_plan)?;
+    let physical_plan = ctx.state().create_physical_plan(&optimized_plan).await?;
+
+    // Serialize the physical plan - bug may happen here already but not necessarily manifests
+    let codec = DefaultPhysicalExtensionCodec {};
+    let proto = PhysicalPlanNode::try_from_physical_plan(physical_plan.clone(), &codec)?;
+
+    // This will fail with the bug, but should succeed when fixed
+    let _deserialized_plan =
+        proto.try_into_physical_plan(&ctx, ctx.runtime_env().as_ref(), &codec)?;
+
+    Ok(())
 }

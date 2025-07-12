@@ -18,7 +18,6 @@
 //! Literal expressions for physical operations
 
 use std::any::Any;
-use std::collections::HashMap;
 use std::hash::Hash;
 use std::sync::Arc;
 
@@ -30,6 +29,7 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use datafusion_common::{Result, ScalarValue};
+use datafusion_expr::expr::FieldMetadata;
 use datafusion_expr::Expr;
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::interval_arithmetic::Interval;
@@ -64,14 +64,12 @@ impl Literal {
     /// Create a literal value expression
     pub fn new_with_metadata(
         value: ScalarValue,
-        metadata: impl Into<Option<HashMap<String, String>>>,
+        metadata: Option<FieldMetadata>,
     ) -> Self {
-        let metadata = metadata.into();
-        let mut field =
-            Field::new(format!("{value}"), value.data_type(), value.is_null());
+        let mut field = Field::new("lit".to_string(), value.data_type(), value.is_null());
 
         if let Some(metadata) = metadata {
-            field = field.with_metadata(metadata);
+            field = metadata.add_to_field(field);
         }
 
         Self {

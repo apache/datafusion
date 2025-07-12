@@ -15,6 +15,22 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Filter Pushdown Optimization Process
+//!
+//! The filter pushdown mechanism involves four key steps:
+//! 1. **Optimizer Asks Parent for a Filter Pushdown Plan**: The optimizer calls [`ExecutionPlan::gather_filters_for_pushdown`]
+//!    on the parent node, passing in parent predicates and phase. The parent node creates a [`FilterDescription`]
+//!    by inspecting its logic and children's schemas, determining which filters can be pushed to each child.
+//! 2. **Optimizer Executes Pushdown**: The optimizer recursively calls `push_down_filters` in this module on each child,
+//!    passing the appropriate filters (`Vec<Arc<dyn PhysicalExpr>>`) for that child.
+//! 3. **Optimizer Gathers Results**: The optimizer collects [`FilterPushdownPropagation`] results from children,
+//!    containing information about which filters were successfully pushed down vs. unsupported.
+//! 4. **Parent Responds**: The optimizer calls [`ExecutionPlan::handle_child_pushdown_result`] on the parent,
+//!    passing a [`ChildPushdownResult`] containing the aggregated pushdown outcomes. The parent decides
+//!    how to handle filters that couldn't be pushed down (e.g., keep them as FilterExec nodes).
+//!
+//! [`FilterDescription`]: datafusion_physical_plan::filter_pushdown::FilterDescription
+
 use std::sync::Arc;
 
 use crate::PhysicalOptimizerRule;
@@ -22,11 +38,11 @@ use crate::PhysicalOptimizerRule;
 use datafusion_common::{config::ConfigOptions, Result};
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_plan::filter_pushdown::{
-    ChildPushdownResult, FilterPushdownPropagation, PredicateSupport, PredicateSupports,
+    ChildPushdownResult, FilterPushdownPhase, FilterPushdownPropagation, PredicateSupport,
 };
 use datafusion_physical_plan::{with_new_children_if_necessary, ExecutionPlan};
 
-use itertools::izip;
+use itertools::{izip, Itertools};
 
 /// Attempts to recursively push given filters from the top of the tree into leafs.
 ///
@@ -362,11 +378,31 @@ use itertools::izip;
 /// [`ProjectionExec`]: datafusion_physical_plan::projection::ProjectionExec
 /// [`AggregateExec`]: datafusion_physical_plan::aggregates::AggregateExec
 #[derive(Debug)]
-pub struct FilterPushdown {}
+pub struct FilterPushdown {
+    phase: FilterPushdownPhase,
+    name: String,
+}
 
 impl FilterPushdown {
+    fn new_with_phase(phase: FilterPushdownPhase) -> Self {
+        let name = match phase {
+            FilterPushdownPhase::Pre => "FilterPushdown",
+            FilterPushdownPhase::Post => "FilterPushdown(Post)",
+        }
+        .to_string();
+        Self { phase, name }
+    }
+
+    /// Create a new [`FilterPushdown`] optimizer rule that runs in the pre-optimization phase.
+    /// See [`FilterPushdownPhase`] for more details.
     pub fn new() -> Self {
-        Self {}
+        Self::new_with_phase(FilterPushdownPhase::Pre)
+    }
+
+    /// Create a new [`FilterPushdown`] optimizer rule that runs in the post-optimization phase.
+    /// See [`FilterPushdownPhase`] for more details.
+    pub fn new_post_optimization() -> Self {
+        Self::new_with_phase(FilterPushdownPhase::Post)
     }
 }
 
@@ -382,13 +418,15 @@ impl PhysicalOptimizerRule for FilterPushdown {
         plan: Arc<dyn ExecutionPlan>,
         config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(push_down_filters(Arc::clone(&plan), vec![], config)?
-            .updated_node
-            .unwrap_or(plan))
+        Ok(
+            push_down_filters(Arc::clone(&plan), vec![], config, self.phase)?
+                .updated_node
+                .unwrap_or(plan),
+        )
     }
 
     fn name(&self) -> &str {
-        "FilterPushdown"
+        &self.name
     }
 
     fn schema_check(&self) -> bool {
@@ -409,6 +447,7 @@ fn push_down_filters(
     node: Arc<dyn ExecutionPlan>,
     parent_predicates: Vec<Arc<dyn PhysicalExpr>>,
     config: &ConfigOptions,
+    phase: FilterPushdownPhase,
 ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
     // If the node has any child, these will be rewritten as supported or unsupported
     let mut parent_predicates_pushdown_states =
@@ -418,7 +457,7 @@ fn push_down_filters(
 
     let children = node.children();
     let filter_description =
-        node.gather_filters_for_pushdown(parent_predicates.clone(), config)?;
+        node.gather_filters_for_pushdown(phase, parent_predicates.clone(), config)?;
 
     for (child, parent_filters, self_filters) in izip!(
         children,
@@ -460,7 +499,7 @@ fn push_down_filters(
         }
 
         // Any filters that could not be pushed down to a child are marked as not-supported to our parents
-        let result = push_down_filters(Arc::clone(child), all_predicates, config)?;
+        let result = push_down_filters(Arc::clone(child), all_predicates, config, phase)?;
 
         if let Some(new_child) = result.updated_node {
             // If we have a filter pushdown result, we need to update our children
@@ -473,10 +512,10 @@ fn push_down_filters(
         // Our child doesn't know the difference between filters that were passed down
         // from our parents and filters that the current node injected. We need to de-entangle
         // this since we do need to distinguish between them.
-        let mut all_filters = result.filters.into_inner();
+        let mut all_filters = result.filters.into_iter().collect_vec();
         let parent_predicates = all_filters.split_off(num_self_filters);
         let self_predicates = all_filters;
-        self_filters_pushdown_supports.push(PredicateSupports::new(self_predicates));
+        self_filters_pushdown_supports.push(self_predicates);
 
         for (idx, result) in parent_supported_predicate_indices
             .iter()
@@ -509,23 +548,20 @@ fn push_down_filters(
     let updated_node = with_new_children_if_necessary(Arc::clone(&node), new_children)?;
     // Remap the result onto the parent filters as they were given to us.
     // Any filters that were not pushed down to any children are marked as unsupported.
-    let parent_pushdown_result = PredicateSupports::new(
-        parent_predicates_pushdown_states
-            .into_iter()
-            .zip(parent_predicates)
-            .map(|(state, filter)| match state {
-                ParentPredicateStates::NoChildren => {
-                    PredicateSupport::Unsupported(filter)
-                }
-                ParentPredicateStates::Unsupported => {
-                    PredicateSupport::Unsupported(filter)
-                }
-                ParentPredicateStates::Supported => PredicateSupport::Supported(filter),
-            })
-            .collect(),
-    );
-    // Check what the current node wants to do given the result of pushdown to it's children
+    let parent_pushdown_result = parent_predicates_pushdown_states
+        .into_iter()
+        .zip(parent_predicates)
+        .map(|(state, filter)| match state {
+            ParentPredicateStates::NoChildren => PredicateSupport::Unsupported(filter),
+            ParentPredicateStates::Unsupported => PredicateSupport::Unsupported(filter),
+            ParentPredicateStates::Supported => PredicateSupport::Supported(filter),
+        })
+        .collect();
+    // TODO: by calling `handle_child_pushdown_result` we are assuming that the
+    // `ExecutionPlan` implementation will not change the plan itself.
+    // Should we have a separate method for dynamic pushdown that does not allow modifying the plan?
     let mut res = updated_node.handle_child_pushdown_result(
+        phase,
         ChildPushdownResult {
             parent_filters: parent_pushdown_result,
             self_filters: self_filters_pushdown_supports,

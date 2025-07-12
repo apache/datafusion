@@ -66,7 +66,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         .get_table_function_source(&tbl_func_name, args)?;
                     let plan = LogicalPlanBuilder::scan(
                         TableReference::Bare {
-                            table: "tmp_table".into(),
+                            table: format!("{tbl_func_name}()").into(),
                         },
                         provider,
                         None,
@@ -153,6 +153,35 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 return not_impl_err!(
                     "UNNEST table factor with offset is not supported yet"
                 );
+            }
+            TableFactor::Function {
+                name, args, alias, ..
+            } => {
+                let tbl_func_ref = self.object_name_to_table_reference(name)?;
+                let schema = planner_context
+                    .outer_query_schema()
+                    .cloned()
+                    .unwrap_or_else(DFSchema::empty);
+                let func_args = args
+                    .into_iter()
+                    .map(|arg| match arg {
+                        FunctionArg::Unnamed(FunctionArgExpr::Expr(expr))
+                        | FunctionArg::Named {
+                            arg: FunctionArgExpr::Expr(expr),
+                            ..
+                        } => {
+                            self.sql_expr_to_logical_expr(expr, &schema, planner_context)
+                        }
+                        _ => plan_err!("Unsupported function argument: {arg:?}"),
+                    })
+                    .collect::<Result<Vec<Expr>>>()?;
+                let provider = self
+                    .context_provider
+                    .get_table_function_source(tbl_func_ref.table(), func_args)?;
+                let plan =
+                    LogicalPlanBuilder::scan(tbl_func_ref.table(), provider, None)?
+                        .build()?;
+                (plan, alias)
             }
             // @todo Support TableFactory::TableFunction?
             _ => {
