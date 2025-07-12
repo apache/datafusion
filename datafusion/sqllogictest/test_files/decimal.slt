@@ -747,3 +747,31 @@ SELECT
     cast(cast('5.20' as decimal(4,2)) as decimal(3,2))
 ----
 0 5.2
+
+query RR
+SELECT
+    arrow_cast(1.23,'Decimal128(3,2)') -  arrow_cast(123, 'UInt64') as subtration_uint,
+    arrow_cast(1.23,'Decimal128(3,2)') -  arrow_cast(123, 'Int64') as subtration_int
+----
+-121.77 -121.77
+
+query RR
+SELECT
+    arrow_cast(1.23,'Decimal128(3,2)') +  arrow_cast(123, 'UInt64') as addition_uint,
+    arrow_cast(1.23,'Decimal128(3,2)') +  arrow_cast(123, 'Int64') as addition_int
+----
+124.23 124.23
+
+query RR
+SELECT
+    arrow_cast(1.23,'Decimal128(3,2)') *  arrow_cast(123, 'UInt64') as mulitplication_uint,
+    arrow_cast(1.23,'Decimal128(3,2)') *  arrow_cast(123, 'Int64') as multiplication_int
+----
+151.29 151.29
+
+query RR
+SELECT
+    arrow_cast(1.23,'Decimal128(3,2)') /  arrow_cast(123, 'UInt64') as divison_uint,
+    arrow_cast(1.23,'Decimal128(3,2)') /  arrow_cast(123, 'Int64') as divison_int
+----
+0.01 0.01
