@@ -100,6 +100,7 @@ impl ScalarUDFImpl for DummyUDF {
 
 #[test]
 fn test_update_matching_exprs() -> Result<()> {
+    let udf = Arc::new(ScalarUDF::new_from_impl(DummyUDF::new()));
     let exprs: Vec<Arc<dyn PhysicalExpr>> = vec![
         Arc::new(BinaryExpr::new(
             Arc::new(Column::new("a", 3)),
@@ -114,7 +115,7 @@ fn test_update_matching_exprs() -> Result<()> {
         Arc::new(NegativeExpr::new(Arc::new(Column::new("f", 4)))),
         Arc::new(ScalarFunctionExpr::new(
             "scalar_expr",
-            Arc::new(ScalarUDF::new_from_impl(DummyUDF::new())),
+            udf.clone(),
             vec![
                 Arc::new(BinaryExpr::new(
                     Arc::new(Column::new("b", 1)),
@@ -179,7 +180,7 @@ fn test_update_matching_exprs() -> Result<()> {
         Arc::new(NegativeExpr::new(Arc::new(Column::new("f", 5)))),
         Arc::new(ScalarFunctionExpr::new(
             "scalar_expr",
-            Arc::new(ScalarUDF::new_from_impl(DummyUDF::new())),
+            udf,
             vec![
                 Arc::new(BinaryExpr::new(
                     Arc::new(Column::new("b", 1)),
@@ -232,7 +233,18 @@ fn test_update_matching_exprs() -> Result<()> {
 }
 
 #[test]
+fn test_scalar_udf_pointer_equality() {
+    let udf_a = ScalarUDF::new_from_impl(DummyUDF::new());
+    let udf_b = ScalarUDF::new_from_impl(DummyUDF::new());
+    assert_ne!(udf_a, udf_b);
+
+    let udf_a_clone = udf_a.clone();
+    assert_eq!(udf_a, udf_a_clone);
+}
+
+#[test]
 fn test_update_projected_exprs() -> Result<()> {
+    let udf = Arc::new(ScalarUDF::new_from_impl(DummyUDF::new()));
     let exprs: Vec<Arc<dyn PhysicalExpr>> = vec![
         Arc::new(BinaryExpr::new(
             Arc::new(Column::new("a", 3)),
@@ -247,7 +259,7 @@ fn test_update_projected_exprs() -> Result<()> {
         Arc::new(NegativeExpr::new(Arc::new(Column::new("f", 4)))),
         Arc::new(ScalarFunctionExpr::new(
             "scalar_expr",
-            Arc::new(ScalarUDF::new_from_impl(DummyUDF::new())),
+            udf.clone(),
             vec![
                 Arc::new(BinaryExpr::new(
                     Arc::new(Column::new("b", 1)),
@@ -312,7 +324,7 @@ fn test_update_projected_exprs() -> Result<()> {
         Arc::new(NegativeExpr::new(Arc::new(Column::new("f_new", 5)))),
         Arc::new(ScalarFunctionExpr::new(
             "scalar_expr",
-            Arc::new(ScalarUDF::new_from_impl(DummyUDF::new())),
+            udf,
             vec![
                 Arc::new(BinaryExpr::new(
                     Arc::new(Column::new("b_new", 1)),
