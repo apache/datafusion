@@ -1346,7 +1346,12 @@ pub fn satisfy_greater(
         if strict {
             let prev_val = prev_value(left.upper.clone());
             // Use the larger of prev_value or right.lower to avoid invalid intervals
-            max_of_bounds(&prev_val, &right.lower)
+            // Need to check if prev_val is null because `None` compares less than `Some` in Rust.
+            if prev_val.is_null() {
+                prev_val
+            } else {
+                max_of_bounds(&prev_val, &right.lower)
+            }
         } else {
             left.upper.clone()
         }
@@ -3732,6 +3737,34 @@ mod tests {
                 false,
                 Interval::make(Some(0.0_f64), Some(0.0_f64))?,
                 Interval::make(Some(-0.0_f64), Some(-0.0_f64))?,
+            ),
+            (
+                Interval::make(Some(0_i64), None)?,
+                Interval::make(Some(-0_i64), None)?,
+                true,
+                Interval::make(Some(0_i64), None)?,
+                Interval::make(Some(-0_i64), None)?,
+            ),
+            (
+                Interval::make(Some(0_i64), None)?,
+                Interval::make(Some(-0_i64), None)?,
+                false,
+                Interval::make(Some(1_i64), None)?,
+                Interval::make(Some(-0_i64), None)?,
+            ),
+            (
+                Interval::make(Some(0.0_f64), None)?,
+                Interval::make(Some(-0.0_f64), None)?,
+                true,
+                Interval::make(Some(0.0_f64), None)?,
+                Interval::make(Some(-0.0_f64), None)?,
+            ),
+            (
+                Interval::make(Some(0.0_f64), None)?,
+                Interval::make(Some(-0.0_f64), None)?,
+                false,
+                Interval::make(Some(0.0_f64), None)?,
+                Interval::make(Some(-0.0_f64), None)?,
             ),
         ];
         for (first, second, includes_endpoints, left_modified, right_modified) in cases {
