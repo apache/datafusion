@@ -227,3 +227,20 @@ unexpected_cfgs = { level = "warn", check-cfg = [
     "cfg(tarpaulin_include)",
 ] }
 unused_qualifications = "deny"
+
+## Temporary arrow-rs patch until 56.0.0 is released
+
+[patch.crates-io]
+arrow       = { git = "https://github.com/zhuqi-lucas/arrow-rs.git", rev = "135cbebf8b2a649756bd7d69b1a6c778f8a3f154" }
+arrow-array = { git = "https://github.com/zhuqi-lucas/arrow-rs.git", rev = "135cbebf8b2a649756bd7d69b1a6c778f8a3f154" }
+arrow-buffer= { git = "https://github.com/zhuqi-lucas/arrow-rs.git", rev = "135cbebf8b2a649756bd7d69b1a6c778f8a3f154" }
+arrow-cast  = { git = "https://github.com/zhuqi-lucas/arrow-rs.git", rev = "135cbebf8b2a649756bd7d69b1a6c778f8a3f154" }
+arrow-data  = { git = "https://github.com/zhuqi-lucas/arrow-rs.git", rev = "135cbebf8b2a649756bd7d69b1a6c778f8a3f154" }
+arrow-ipc   = { git = "https://github.com/zhuqi-lucas/arrow-rs.git", rev = "135cbebf8b2a649756bd7d69b1a6c778f8a3f154" }
+arrow-schema= { git = "https://github.com/zhuqi-lucas/arrow-rs.git", rev = "135cbebf8b2a649756bd7d69b1a6c778f8a3f154" }
+arrow-select= { git = "https://github.com/zhuqi-lucas/arrow-rs.git", rev = "135cbebf8b2a649756bd7d69b1a6c778f8a3f154" }
+arrow-string= { git = "https://github.com/zhuqi-lucas/arrow-rs.git", rev = "135cbebf8b2a649756bd7d69b1a6c778f8a3f154" }
+arrow-ord   = { git = "https://github.com/zhuqi-lucas/arrow-rs.git", rev = "135cbebf8b2a649756bd7d69b1a6c778f8a3f154" }
+arrow-flight= { git = "https://github.com/zhuqi-lucas/arrow-rs.git", rev = "135cbebf8b2a649756bd7d69b1a6c778f8a3f154" }
+parquet     = { git = "https://github.com/zhuqi-lucas/arrow-rs.git", rev = "135cbebf8b2a649756bd7d69b1a6c778f8a3f154" }
+
