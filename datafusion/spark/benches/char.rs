@@ -17,14 +17,13 @@
 
 extern crate criterion;
 
+use arrow::datatypes::{DataType, Field};
 use arrow::{array::PrimitiveArray, datatypes::Int64Type};
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
-use datafusion_functions::string::char;
-use rand::{Rng, SeedableRng};
-
-use arrow::datatypes::{DataType, Field};
+use datafusion_spark::function::string::char;
 use rand::rngs::StdRng;
+use rand::{Rng, SeedableRng};
 use std::sync::Arc;
 
 /// Returns fixed seedable RNG
