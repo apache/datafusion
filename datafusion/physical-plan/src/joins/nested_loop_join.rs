@@ -707,7 +707,7 @@ impl NestedLoopJoinStreamState {
 /// - Poll 1: output batch[0..100], processed_count = 100  
 /// - Poll 2: output batch[100..200], processed_count = 200
 /// - ...continues until processed_count = 5000
-struct JoinResultStatus {
+struct JoinResultProgress {
     /// Row indices from build-side table (left table).
     build_indices: PrimitiveArray<UInt64Type>,
     /// Row indices from probe-side table (right table).
@@ -745,7 +745,7 @@ struct NestedLoopJoinStream {
     left_data: Option<Arc<JoinLeftData>>,
 
     /// Tracks progress when building join result batches incrementally.
-    join_result_status: Option<JoinResultStatus>,
+    join_result_status: Option<JoinResultProgress>,
 
     intermediate_batch_size: usize,
 }
@@ -860,6 +860,8 @@ impl NestedLoopJoinStream {
     // This function's main job is to construct an output `RecordBatch` based on pre-calculated join indices.
     // It operates in a chunk-based manner, meaning it processes a portion of the results in each call,
     // making it suitable for streaming large datasets without high memory consumption.
+    // This function behaves like an iterator. It returns `Ok(None)`
+    // to signal that the result stream is exhausted and there is no more data.
     fn get_next_join_result(&mut self) -> Result<Option<RecordBatch>> {
         let status = self.join_result_status.as_mut().ok_or_else(|| {
             internal_datafusion_err!(
@@ -892,6 +894,7 @@ impl NestedLoopJoinStream {
         };
 
         if left_indices.is_empty() && right_indices.is_empty() && current_start == 0 {
+            // To match the behavior of the previous implementation, return an empty RecordBatch.
             let res = RecordBatch::new_empty(Arc::clone(&self.schema));
             status.processed_count = 1;
             return Ok(Some(res));
@@ -1029,7 +1032,7 @@ impl NestedLoopJoinStream {
                 self.right_side_ordered,
                 self.intermediate_batch_size,
             )?;
-            self.join_result_status = Some(JoinResultStatus {
+            self.join_result_status = Some(JoinResultProgress {
                 build_indices: left_side_indices,
                 probe_indices: right_side_indices,
                 processed_count: 0,
@@ -1098,7 +1101,7 @@ impl NestedLoopJoinStream {
             let (left_side, right_side) =
                 get_final_indices_from_shared_bitmap(visited_left_side, self.join_type);
 
-            self.join_result_status = Some(JoinResultStatus {
+            self.join_result_status = Some(JoinResultProgress {
                 build_indices: left_side,
                 probe_indices: right_side,
                 processed_count: 0,
