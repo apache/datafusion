@@ -114,8 +114,6 @@ imdb:                   Join Order Benchmark (JOB) using the IMDB dataset conver
 
 # Micro-Benchmarks (specific operators and features)
 cancellation:           How long cancelling a query takes
-parquet:                Benchmark of parquet reader's filtering speed
-sort:                   Benchmark of sorting speed
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Supported Configuration (Environment Variables)
@@ -303,8 +301,6 @@ main() {
                     run_tpch "10" "csv"
                     run_tpch_mem "10"
                     run_cancellation
-                    run_parquet
-                    run_sort
                     run_clickbench_1
                     run_clickbench_partitioned
                     run_clickbench_extended
@@ -337,12 +333,6 @@ main() {
                     ;;
                 cancellation)
                     run_cancellation
-                    ;;
-                parquet)
-                    run_parquet
-                    ;;
-                sort)
-                    run_sort
                     ;;
                 clickbench_1)
                     run_clickbench_1
@@ -526,22 +516,6 @@ run_cancellation() {
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running cancellation benchmark..."
     debug_run $CARGO_COMMAND --bin dfbench -- cancellation --iterations 5 --path "${DATA_DIR}/cancellation" -o "${RESULTS_FILE}"
-}
-
-# Runs the parquet filter benchmark
-run_parquet() {
-    RESULTS_FILE="${RESULTS_DIR}/parquet.json"
-    echo "RESULTS_FILE: ${RESULTS_FILE}"
-    echo "Running parquet filter benchmark..."
-    debug_run $CARGO_COMMAND --bin parquet -- filter --path "${DATA_DIR}" --scale-factor 1.0 --iterations 5 -o "${RESULTS_FILE}"
-}
-
-# Runs the sort benchmark
-run_sort() {
-    RESULTS_FILE="${RESULTS_DIR}/sort.json"
-    echo "RESULTS_FILE: ${RESULTS_FILE}"
-    echo "Running sort benchmark..."
-    debug_run $CARGO_COMMAND --bin parquet -- sort --path "${DATA_DIR}" --scale-factor 1.0 --iterations 5 -o "${RESULTS_FILE}"
 }
 
 
