@@ -31,6 +31,7 @@ use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{Result, Statistics};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::Distribution;
+use datafusion_physical_expr_common::physical_expr::format_physical_expr_list;
 use datafusion_physical_expr_common::sort_expr::OrderingRequirements;
 use datafusion_physical_plan::projection::{
     make_with_child, update_expr, update_ordering_requirement, ProjectionExec,
@@ -138,10 +139,39 @@ impl DisplayAs for OutputRequirementExec {
     ) -> std::fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(f, "OutputRequirementExec")
+                let order_cols = if let Some(reqs) = &self.order_requirement {
+                    let (lexes, _) = reqs.clone().into_alternatives();
+                    if let Some(lex) = lexes.first() {
+                        let pairs: Vec<String> = lex
+                            .iter()
+                            .map(|req| {
+                                let expr_str =
+                                    format_physical_expr_list([req.expr.as_ref()])
+                                        .to_string();
+                                if let Some(options) = &req.options {
+                                    let direction =
+                                        if options.descending { "desc" } else { "asc" };
+                                    format!("({expr_str}, {direction})")
+                                } else {
+                                    format!("({expr_str}, unspecified)")
+                                }
+                            })
+                            .collect();
+                        format!("[{}]", pairs.join(", "))
+                    } else {
+                        "[]".to_string()
+                    }
+                } else {
+                    "[]".to_string()
+                };
+
+                write!(
+                    f,
+                    "OutputRequirementExec: order_by={}, dist_by={}",
+                    order_cols, self.dist_requirement
+                )
             }
             DisplayFormatType::TreeRender => {
-                // TODO: collect info
                 write!(f, "")
             }
         }
