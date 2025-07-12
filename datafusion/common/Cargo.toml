@@ -65,7 +65,7 @@ log = { workspace = true }
 object_store = { workspace = true, optional = true }
 parquet = { workspace = true, optional = true, default-features = true }
 paste = "1.0.15"
-pyo3 = { version = "0.24.2", optional = true }
+pyo3 = { version = "0.25.1", optional = true }
 recursive = { workspace = true, optional = true }
 sqlparser = { workspace = true }
 tokio = { workspace = true }
