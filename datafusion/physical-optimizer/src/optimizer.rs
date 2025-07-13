@@ -23,6 +23,7 @@ use std::sync::Arc;
 use crate::aggregate_statistics::AggregateStatistics;
 use crate::coalesce_batches::CoalesceBatches;
 use crate::combine_partial_final_agg::CombinePartialFinalAggregate;
+use crate::compact::CompactBatches;
 use crate::enforce_distribution::EnforceDistribution;
 use crate::enforce_sorting::EnforceSorting;
 use crate::ensure_coop::EnsureCooperative;
@@ -123,6 +124,7 @@ impl PhysicalOptimizer {
             // whole plan tree. Therefore, to avoid influencing other rules, it should run last.
             Arc::new(CoalesceBatches::new()),
             Arc::new(CoalesceAsyncExecInput::new()),
+            Arc::new(CompactBatches::new()),
             // Remove the ancillary output requirement operator since we are done with the planning
             // phase.
             Arc::new(OutputRequirements::new_remove_mode()),

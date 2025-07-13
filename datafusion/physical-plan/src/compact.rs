@@ -28,7 +28,7 @@ use crate::{
 };
 
 #[derive(Clone, Debug)]
-struct CompactExec {
+pub struct CompactExec {
     compact_threshold: f64,
     metrics: ExecutionPlanMetricsSet,
     cache: PlanProperties,
@@ -61,7 +61,7 @@ impl DisplayAs for CompactExec {
 }
 
 impl CompactExec {
-    fn new(compact_threshold: f64, input: Arc<dyn ExecutionPlan>) -> Self {
+    pub fn new(compact_threshold: f64, input: Arc<dyn ExecutionPlan>) -> Self {
         let cache = Self::compute_properties(&input);
 
         Self {

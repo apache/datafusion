@@ -28,6 +28,7 @@ pub mod aggregate_statistics;
 pub mod coalesce_async_exec_input;
 pub mod coalesce_batches;
 pub mod combine_partial_final_agg;
+pub mod compact;
 pub mod enforce_distribution;
 pub mod enforce_sorting;
 pub mod ensure_coop;

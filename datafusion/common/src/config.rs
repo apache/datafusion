@@ -355,6 +355,14 @@ config_namespace! {
         /// target batch size is determined by the configuration setting
         pub coalesce_batches: bool, default = true
 
+        /// When set to true, record batches will be examined between operators and their backing
+        /// data buffers compacted if found to be too large. This helps reduce memory usage when processing
+        /// large string data.
+        pub compact_batches: bool, default = true
+
+        /// How empty may the data buffers be for compaction to trigger?
+        pub compact_threshold: f64, default = 0.3
+
         /// Should DataFusion collect statistics when first creating a table.
         /// Has no effect after the table is created. Applies to the default
         /// `ListingTableProvider` in DataFusion. Defaults to true.
