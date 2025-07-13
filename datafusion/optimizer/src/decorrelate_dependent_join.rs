@@ -70,11 +70,11 @@ fn natural_join(
     join_type: JoinType,
     conditions: Vec<(Column, Column)>,
 ) -> Result<LogicalPlanBuilder> {
-    let mut exclude_cols = IndexSet::new();
+    // let mut exclude_cols = IndexSet::new();
     let join_exprs: Vec<_> = conditions
         .iter()
         .map(|(lhs, rhs)| {
-            exclude_cols.insert(rhs);
+            // exclude_cols.insert(rhs);
             binary_expr(
                 Expr::Column(lhs.clone()),
                 Operator::IsNotDistinctFrom,
@@ -82,7 +82,7 @@ fn natural_join(
             )
         })
         .collect();
-    let require_dedup = !join_exprs.is_empty();
+    // let require_dedup = !join_exprs.is_empty();
 
     builder = builder.delim_join(
         right,
@@ -171,97 +171,111 @@ impl DependentJoinDecorrelator {
     fn decorrelate_independent(&mut self, plan: &LogicalPlan) -> Result<LogicalPlan> {
         let mut decorrelator = DependentJoinDecorrelator::new_root();
 
-        decorrelator.decorrelate_plan(plan.clone())
+        decorrelator.decorrelate(plan, true, 0)
     }
 
     fn decorrelate(
         &mut self,
-        node: &DependentJoin,
+        plan: &LogicalPlan,
         parent_propagate_nulls: bool,
         lateral_depth: usize,
     ) -> Result<LogicalPlan> {
-        let perform_delim = true;
-        let left = node.left.as_ref();
+        if let LogicalPlan::DependentJoin(djoin) = plan {
+            let perform_delim = true;
+            let left = djoin.left.as_ref();
 
-        let new_left = if !self.is_initial {
-            let mut has_correlated_expr = false;
-            detect_correlated_expressions(left, &self.domains, &mut has_correlated_expr)?;
-            let new_left = if !has_correlated_expr {
-                // self.decorrelate_plan(left.clone())?
-                // TODO: fix me
-                self.decorrelate_independent(left)?
-            } else {
-                self.push_down_dependent_join(
+            let new_left = if !self.is_initial {
+                let mut has_correlated_expr = false;
+                detect_correlated_expressions(
                     left,
-                    parent_propagate_nulls,
-                    lateral_depth,
-                )?
+                    &self.domains,
+                    &mut has_correlated_expr,
+                )?;
+                let new_left = if !has_correlated_expr {
+                    self.decorrelate_independent(left)?
+                } else {
+                    self.push_down_dependent_join(
+                        left,
+                        parent_propagate_nulls,
+                        lateral_depth,
+                    )?
+                };
+
+                // TODO: duckdb does this redundant rewrite for no reason???
+                // let mut new_plan = Self::rewrite_outer_ref_columns(
+                //     new_left,
+                //     &self.correlated_map,
+                //     false,
+                // )?;
+
+                let new_plan = Self::rewrite_outer_ref_columns(
+                    new_left,
+                    &self.correlated_map,
+                    true,
+                )?;
+                new_plan
+            } else {
+                self.decorrelate(left, true, 0)?
             };
+            let lateral_depth = 0;
+            // let propagate_null_values = node.propagate_null_value();
+            let _propagate_null_values = true;
+            let mut decorrelator = DependentJoinDecorrelator::new(
+                djoin,
+                &self.correlated_columns,
+                false,
+                false,
+                self.delim_scan_id,
+                djoin.subquery_depth,
+            );
+            let right = decorrelator.push_down_dependent_join(
+                &djoin.right,
+                parent_propagate_nulls,
+                lateral_depth,
+            )?;
 
-            // TODO: duckdb does this redundant rewrite for no reason???
-            // let mut new_plan = Self::rewrite_outer_ref_columns(
-            //     new_left,
-            //     &self.correlated_map,
-            //     false,
-            // )?;
+            let (join_condition, join_type, post_join_expr) = self
+                .delim_join_conditions(
+                    djoin,
+                    &decorrelator,
+                    right.schema().columns(),
+                    perform_delim,
+                )?;
 
-            let new_plan =
-                Self::rewrite_outer_ref_columns(new_left, &self.correlated_map, true)?;
-            new_plan
+            let mut builder = LogicalPlanBuilder::new(new_left).join(
+                right,
+                join_type,
+                (Vec::<Column>::new(), Vec::<Column>::new()),
+                Some(join_condition),
+            )?;
+            if let Some(subquery_proj_expr) = post_join_expr {
+                let new_exprs: Vec<Expr> = builder
+                    .schema()
+                    .columns()
+                    .into_iter()
+                    // remove any "mark" columns output by the markjoin
+                    .filter_map(|c| {
+                        if c.name == "mark" {
+                            None
+                        } else {
+                            Some(Expr::Column(c))
+                        }
+                    })
+                    .chain(std::iter::once(subquery_proj_expr))
+                    .collect();
+                builder = builder.project(new_exprs)?;
+            }
+
+            self.delim_scan_id = decorrelator.delim_scan_id;
+            self.merge_child(&decorrelator);
+
+            builder.build()
         } else {
-            self.decorrelate_plan(left.clone())?
-        };
-        let lateral_depth = 0;
-        // let propagate_null_values = node.propagate_null_value();
-        let _propagate_null_values = true;
-        let mut decorrelator = DependentJoinDecorrelator::new(
-            node,
-            &self.correlated_columns,
-            false,
-            false,
-            self.delim_scan_id,
-            node.subquery_depth,
-        );
-        let right = decorrelator.push_down_dependent_join(
-            &node.right,
-            parent_propagate_nulls,
-            lateral_depth,
-        )?;
-
-        let (join_condition, join_type, post_join_expr) = self.delim_join_conditions(
-            node,
-            &decorrelator,
-            right.schema().columns(),
-            perform_delim,
-        )?;
-
-        let mut builder = LogicalPlanBuilder::new(new_left).join(
-            right,
-            join_type,
-            (Vec::<Column>::new(), Vec::<Column>::new()),
-            Some(join_condition),
-        )?;
-        if let Some(subquery_proj_expr) = post_join_expr {
-            let new_exprs: Vec<Expr> = builder
-                .schema()
-                .columns()
-                .into_iter()
-                // remove any "mark" columns output by the markjoin
-                .filter_map(|c| {
-                    if c.name == "mark" {
-                        None
-                    } else {
-                        Some(Expr::Column(c))
-                    }
-                })
-                .chain(std::iter::once(subquery_proj_expr))
-                .collect();
-            builder = builder.project(new_exprs)?;
+            Ok(plan
+                .clone()
+                .map_children(|n| Ok(Transformed::yes(self.decorrelate(&n, true, 0)?)))?
+                .data)
         }
-
-        self.delim_scan_id = decorrelator.delim_scan_id;
-        self.merge_child(&decorrelator);
-        return builder.build();
     }
 
     fn merge_child(&mut self, child: &Self) {
@@ -561,13 +575,13 @@ impl DependentJoinDecorrelator {
     // TODO: make all of the delim join natural join
     fn push_down_dependent_join_internal(
         &mut self,
-        node: &LogicalPlan,
+        plan: &LogicalPlan,
         parent_propagate_nulls: bool,
         lateral_depth: usize,
     ) -> Result<LogicalPlan> {
         // First check if the logical plan has correlated expressions.
         let mut has_correlated_expr = false;
-        detect_correlated_expressions(node, &self.domains, &mut has_correlated_expr)?;
+        detect_correlated_expressions(plan, &self.domains, &mut has_correlated_expr)?;
 
         let mut exit_projection = false;
 
@@ -575,7 +589,7 @@ impl DependentJoinDecorrelator {
             // We reached a node without correlated expressions.
             // We can eliminate the dependent join now and create a simple cross product.
             // Now create the duplicate eliminated scan for this node.
-            match node {
+            match plan {
                 LogicalPlan::Projection(_) => {
                     // We want to keep the logical projection for positionality.
                     exit_projection = true;
@@ -586,7 +600,7 @@ impl DependentJoinDecorrelator {
                 }
                 other => {
                     let delim_scan = self.build_delim_scan()?;
-                    let left = self.decorrelate_plan(other.clone())?;
+                    let left = self.decorrelate(other, true, 0)?;
                     return Ok(natural_join(
                         LogicalPlanBuilder::new(left),
                         delim_scan,
@@ -597,7 +611,7 @@ impl DependentJoinDecorrelator {
                 }
             }
         }
-        match node {
+        match plan {
             LogicalPlan::Filter(old_filter) => {
                 // TODO: any join support
 
@@ -624,7 +638,7 @@ impl DependentJoinDecorrelator {
                 let mut proj = old_proj.clone();
                 proj.input = Arc::new(if exit_projection {
                     let delim_scan = self.build_delim_scan()?;
-                    let new_left = self.decorrelate_plan(proj.input.deref().clone())?;
+                    let new_left = self.decorrelate(proj.input.deref(), true, 0)?;
                     LogicalPlanBuilder::new(new_left)
                         .join(
                             delim_scan,
@@ -813,8 +827,8 @@ impl DependentJoinDecorrelator {
                     unimplemented!()
                 }
             }
-            LogicalPlan::DependentJoin(djoin) => {
-                return self.decorrelate(djoin, parent_propagate_nulls, lateral_depth);
+            LogicalPlan::DependentJoin(_) => {
+                return self.decorrelate(plan, parent_propagate_nulls, lateral_depth);
             }
             LogicalPlan::Join(old_join) => {
                 let mut left_has_correlation = false;
@@ -1303,17 +1317,6 @@ impl DependentJoinDecorrelator {
         Ok(new_plan)
     }
 
-    fn decorrelate_plan(&mut self, node: LogicalPlan) -> Result<LogicalPlan> {
-        match node {
-            LogicalPlan::DependentJoin(mut djoin) => {
-                self.decorrelate(&mut djoin, true, 0)
-            }
-            _ => Ok(node
-                .map_children(|n| Ok(Transformed::yes(self.decorrelate_plan(n)?)))?
-                .data),
-        }
-    }
-
     fn join_without_correlation(
         &mut self,
         left: LogicalPlan,
@@ -1469,9 +1472,11 @@ impl OptimizerRule for DecorrelateDependentJoin {
         if rewrite_result.transformed {
             // println!("{}", rewrite_result.data.display_indent_schema());
             let mut decorrelator = DependentJoinDecorrelator::new_root();
-            return Ok(Transformed::yes(
-                decorrelator.decorrelate_plan(rewrite_result.data)?,
-            ));
+            return Ok(Transformed::yes(decorrelator.decorrelate(
+                &rewrite_result.data,
+                true,
+                0,
+            )?));
         }
         Ok(rewrite_result)
     }
