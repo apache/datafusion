@@ -257,7 +257,7 @@ pub fn min_batch(values: &ArrayRef) -> Result<ScalarValue> {
         DataType::FixedSizeBinary(size) => {
             let array = downcast_value!(&values, FixedSizeBinaryArray);
             let value = compute::min_fixed_size_binary(array);
-            let value = value.and_then(|e| Some(e.to_vec()));
+            let value = value.map(|e| e.to_vec());
             ScalarValue::FixedSizeBinary(*size, value)
         }
         DataType::BinaryView => {
@@ -348,7 +348,7 @@ pub fn max_batch(values: &ArrayRef) -> Result<ScalarValue> {
         DataType::FixedSizeBinary(size) => {
             let array = downcast_value!(&values, FixedSizeBinaryArray);
             let value = compute::max_fixed_size_binary(array);
-            let value = value.and_then(|e| Some(e.to_vec()));
+            let value = value.map(|e| e.to_vec());
             ScalarValue::FixedSizeBinary(*size, value)
         }
         DataType::Struct(_) => min_max_batch_generic(values, Ordering::Less)?,
