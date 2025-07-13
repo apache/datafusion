@@ -114,6 +114,11 @@ SELECT NULL - DATE '1984-02-28';
 ----
 NULL
 
+query ?
+SELECT DATE '1984-02-28' - NULL
+----
+NULL
+
 # to_date_test
 statement ok
 create table to_date_t1(ts bigint) as VALUES
