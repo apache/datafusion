@@ -423,8 +423,6 @@ fn push_down_all_join(
     mut join: Join,
     on_filter: Vec<Expr>,
 ) -> Result<Transformed<LogicalPlan>> {
-    dbg!("{:?}", &predicates);
-
     let is_inner_join = join.join_type == JoinType::Inner;
     // Get pushable predicates from current optimizer state
     let (left_preserved, right_preserved) = lr_is_preserved(join.join_type);

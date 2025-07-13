@@ -783,7 +783,7 @@ config_namespace! {
         pub skip_failed_rules: bool, default = false
 
         /// Number of times that the optimizer will attempt to optimize the plan
-        pub max_passes: usize, default = 3
+        pub max_passes: usize, default = 1
 
         /// When set to true, the physical plan optimizer will run a top down
         /// process to reorder the join keys
