@@ -1662,18 +1662,20 @@ fn subquery_output_field(
 ) -> (Option<TableReference>, Arc<Field>) {
     // TODO: check nullability
     let field = match subquery_expr {
-        Expr::InSubquery(_) => Arc::new(Field::new("output", DataType::Boolean, false)),
-        Expr::Exists(_) => Arc::new(Field::new("output", DataType::Boolean, false)),
+        Expr::InSubquery(_) => {
+            Arc::new(Field::new(subquery_alias, DataType::Boolean, false))
+        }
+        Expr::Exists(_) => Arc::new(Field::new(subquery_alias, DataType::Boolean, false)),
         Expr::ScalarSubquery(sq) => {
             let data_type = sq.subquery.schema().field(0).data_type().clone();
-            Arc::new(Field::new("output", data_type, false))
+            Arc::new(Field::new(subquery_alias, data_type, false))
         }
         _ => {
             unreachable!()
         }
     };
 
-    (Some(TableReference::bare(subquery_alias)), field)
+    (None, field)
 }
 
 /// Creates a schema for a join operation.
