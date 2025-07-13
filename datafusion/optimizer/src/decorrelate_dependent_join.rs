@@ -1038,7 +1038,7 @@ impl DependentJoinDecorrelator {
             LogicalPlan::Limit(old_limit) => {
                 let mut sort = None;
 
-                // Check if the direct child of this LIMIT node is an ORDER BY node, if so, keep is
+                // Check if the direct child of this LIMIT node is an ORDER BY node, if so, keep it
                 // separate. This is done for an optimization to avoid having to compute the total
                 // order.
                 let new_input = if let LogicalPlan::Sort(child) = old_limit.input.as_ref()
@@ -1062,15 +1062,12 @@ impl DependentJoinDecorrelator {
                 // We push a row_number() OVER (PARTITION BY [correlated columns])
                 // TODO: take perform delim into consideration
                 let mut partition_by = vec![];
-                let partition_count = self.domains.len();
-                for i in 0..partition_count {
-                    if let Some(corr_col) = self.domains.get_index(i) {
-                        let delim_col = Self::fetch_dscan_col_from_correlated_col(
-                            &self.correlated_map,
-                            &corr_col.col,
-                        )?;
-                        partition_by.push(Expr::Column(delim_col));
-                    }
+                for corr_col in self.domains.iter() {
+                    let delim_col = Self::fetch_dscan_col_from_correlated_col(
+                        &self.correlated_map,
+                        &corr_col.col,
+                    )?;
+                    partition_by.push(Expr::Column(delim_col));
                 }
 
                 let order_by = if let Some(LogicalPlan::Sort(sort)) = &sort {
@@ -1117,14 +1114,13 @@ impl DependentJoinDecorrelator {
                         };
 
                     filter_conditions
-                        .push(col("row_number").lt_eq(lit(upper_bound as i64)));
+                        .push(col("row_number").lt_eq(lit(upper_bound as u64)));
                 }
 
-                // We only need to add "row_number >= offset + 1" if offset is bigger than 0.
-
+                // We only need to add "row_number > offset" if offset is bigger than 0.
                 if let SkipType::Literal(skip) = old_limit.get_skip_type()? {
                     if skip > 0 {
-                        filter_conditions.push(col("row_number").gt(lit(skip as i64)));
+                        filter_conditions.push(col("row_number").gt(lit(skip as u64)));
                     }
                 }
 
@@ -2421,6 +2417,65 @@ mod tests {
                 Projection: t1.t1_id AS t1_dscan_2.t1_t1_id [t1_t1_id:UInt32;N]
                   DelimGet: t1.t1_id [t1_id:UInt32;N]
         ");
+
+        Ok(())
+    }
+
+    #[test]
+    fn subquery_slt_test4() -> Result<()> {
+        // Test case for: SELECT t1_id, t1_name FROM t1 WHERE EXISTS (SELECT * FROM t2 WHERE t2_id = t1_id LIMIT 1);
+
+        // Create test tables matching the SQL schema
+        let t1 = test_table_with_columns(
+            "t1",
+            &[
+                ("t1_id", ArrowDataType::Int32),
+                ("t1_name", ArrowDataType::Utf8),
+                ("t1_int", ArrowDataType::Int32),
+            ],
+        )?;
+
+        let t2 = test_table_with_columns(
+            "t2",
+            &[
+                ("t2_id", ArrowDataType::Int32),
+                ("t2_name", ArrowDataType::Utf8),
+                ("t2_int", ArrowDataType::Int32),
+            ],
+        )?;
+
+        // Create the EXISTS subquery: SELECT * FROM t2 WHERE t2_id = t1_id LIMIT 1
+        let exists_subquery = Arc::new(
+            LogicalPlanBuilder::from(t2)
+                .filter(
+                    col("t2.t2_id").eq(out_ref_col(ArrowDataType::Int32, "t1.t1_id")),
+                )?
+                .limit(0, Some(1))? // LIMIT 1
+                .build()?,
+        );
+
+        // Create the main query plan: SELECT t1_id, t1_name FROM t1 WHERE EXISTS (subquery)
+        let plan = LogicalPlanBuilder::from(t1)
+            .filter(exists(exists_subquery))?
+            .project(vec![col("t1_id"), col("t1_name")])?
+            .build()?;
+
+        assert_decorrelate!(plan, @r"
+           Projection: t1.t1_id, t1.t1_name [t1_id:Int32, t1_name:Utf8]
+             Projection: t1.t1_id, t1.t1_name, t1.t1_int [t1_id:Int32, t1_name:Utf8, t1_int:Int32]
+               Filter: __exists_sq_1 [t1_id:Int32, t1_name:Utf8, t1_int:Int32, __exists_sq_1:Boolean]
+                 Projection: t1.t1_id, t1.t1_name, t1.t1_int, mark AS __exists_sq_1 [t1_id:Int32, t1_name:Utf8, t1_int:Int32, __exists_sq_1:Boolean]
+                   LeftMark Join(ComparisonJoin):  Filter: t1.t1_id IS NOT DISTINCT FROM t1_dscan_1.t1_t1_id [t1_id:Int32, t1_name:Utf8, t1_int:Int32, mark:Boolean]
+                     TableScan: t1 [t1_id:Int32, t1_name:Utf8, t1_int:Int32]
+                     Projection: t2.t2_id, t2.t2_name, t2.t2_int, t1_dscan_1.t1_t1_id [t2_id:Int32, t2_name:Utf8, t2_int:Int32, t1_t1_id:Int32;N]
+                       Filter: row_number <= Int64(1) [t2_id:Int32, t2_name:Utf8, t2_int:Int32, t1_t1_id:Int32;N, row_number:UInt64]
+                         WindowAggr: windowExpr=[[row_number() PARTITION BY [t1_dscan_1.t1_t1_id] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS row_number]] [t2_id:Int32, t2_name:Utf8, t2_int:Int32, t1_t1_id:Int32;N, row_number:UInt64]
+                           Filter: t2.t2_id = t1_dscan_1.t1_t1_id [t2_id:Int32, t2_name:Utf8, t2_int:Int32, t1_t1_id:Int32;N]
+                             Inner Join(DelimJoin):  Filter: Boolean(true) [t2_id:Int32, t2_name:Utf8, t2_int:Int32, t1_t1_id:Int32;N]
+                               TableScan: t2 [t2_id:Int32, t2_name:Utf8, t2_int:Int32]
+                               Projection: t1.t1_id AS t1_dscan_1.t1_t1_id [t1_t1_id:Int32;N]
+                                 DelimGet: t1.t1_id [t1_id:Int32;N]
+            ");
 
         Ok(())
     }
