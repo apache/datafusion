@@ -244,6 +244,12 @@ impl FileCompressionType {
     }
 }
 
+/// Trait for extending the functionality of the `FileType` enum.
+pub trait FileTypeExt {
+    /// Given a `FileCompressionType`, return the `FileType`'s extension with compression suffix
+    fn get_ext_with_compression(&self, c: FileCompressionType) -> Result<String>;
+}
+
 #[cfg(test)]
 mod tests {
     use std::str::FromStr;
