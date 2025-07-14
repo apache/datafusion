@@ -29,7 +29,9 @@ cargo test
 
 ## Running Storage Integration Tests
 
-By default, storage integration tests are not run. To run them you will need to set `TEST_STORAGE_INTEGRATION`:
+By default, storage integration tests are not run. These test use the `testcontainers` crate to start up a local MinIO server using docker on port 9000.
+
+To run them you will need to set `TEST_STORAGE_INTEGRATION`:
 
 ```shell
 TEST_STORAGE_INTEGRATION=1 cargo test
