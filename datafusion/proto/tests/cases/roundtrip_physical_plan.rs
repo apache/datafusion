@@ -1819,11 +1819,9 @@ async fn test_serialize_deserialize_tpch_queries() -> Result<()> {
     Ok(())
 }
 
+// bug: https://github.com/apache/datafusion/issues/16772
 // Only 4 queries pass: q3, q5, q10, q12
-// The rest fails with 2 different reasons:
-//  - q16 fails at deserialization step: https://github.com/apache/datafusion/issues/16665
-//  - Other queries fails due to mismatch between the serialized and deserialized physical plans
-// Ignore the test until the bugs are fixed
+// Ignore the test until the bug is fixed
 #[ignore]
 #[tokio::test]
 async fn test_round_trip_tpch_queries() -> Result<()> {
