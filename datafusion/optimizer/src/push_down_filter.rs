@@ -829,7 +829,7 @@ impl OptimizerRule for PushDownFilter {
                     let (sub_qualifier, sub_field) =
                         subquery_alias.schema.qualified_field(i);
                     replace_map.insert(
-                        qualified_name(sub_qualifier, sub_field.name()),
+                        qualified_name(sub_qualifier, sub_field.name()).to_lowercase(),
                         Expr::Column(Column::new(qualifier.cloned(), field.name())),
                     );
                 }
