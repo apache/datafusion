@@ -44,12 +44,12 @@ For some of the tests, [snapshots](https://datafusion.apache.org/contributor-gui
 S3 integration is tested against [Minio](https://github.com/minio/minio) with [TestContainers](https://github.com/testcontainers/testcontainers-rs)
 This requires Docker to be running on your machine and port 9000 to be free.
 
-If you see an error about " failed to load IMDS session token" such as
+If you see an error mentioning "failed to load IMDS session token" such as
 
 > ---- object_storage::tests::s3_object_store_builder_resolves_region_when_none_provided stdout ----
 > Error: ObjectStore(Generic { store: "S3", source: "Error getting credentials from provider: an error occurred while loading credentials: failed to load IMDS session token" })
 
-You my need to disable trying to fetch S3 credentials from the environment using the `AWS_EC2_METADATA_DISABLED`, for example
+You my need to disable trying to fetch S3 credentials from the environment using the `AWS_EC2_METADATA_DISABLED`, for example:
 
 
-$ AWS_EC2_METADATA_DISABLED=true TEST_STORAGE_INTEGRATION=1 cargo test
+> $ AWS_EC2_METADATA_DISABLED=true TEST_STORAGE_INTEGRATION=1 cargo test
