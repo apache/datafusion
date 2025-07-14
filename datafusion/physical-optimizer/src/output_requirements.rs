@@ -138,28 +138,27 @@ impl DisplayAs for OutputRequirementExec {
     ) -> std::fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                let order_cols = if let Some(reqs) = &self.order_requirement {
-                    let (lexes, _) = reqs.clone().into_alternatives();
-                    if let Some(lex) = lexes.first() {
+                let order_cols = self
+                    .order_requirement
+                    .as_ref()
+                    .map(|reqs| reqs.first())
+                    .map(|lex| {
                         let pairs: Vec<String> = lex
                             .iter()
                             .map(|req| {
-                                if let Some(options) = &req.options {
-                                    let direction =
-                                        if options.descending { "desc" } else { "asc" };
-                                    format!("({}, {direction})", req.expr)
-                                } else {
-                                    format!("({}, unspecified)", req.expr)
-                                }
+                                let direction = req
+                                    .options
+                                    .as_ref()
+                                    .map(
+                                        |opt| if opt.descending { "desc" } else { "asc" },
+                                    )
+                                    .unwrap_or("unspecified");
+                                format!("({}, {direction})", req.expr)
                             })
                             .collect();
                         format!("[{}]", pairs.join(", "))
-                    } else {
-                        "[]".to_string()
-                    }
-                } else {
-                    "[]".to_string()
-                };
+                    })
+                    .unwrap_or_else(|| "[]".to_string());
 
                 write!(
                     f,
