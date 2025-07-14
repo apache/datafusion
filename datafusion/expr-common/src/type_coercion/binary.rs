@@ -129,23 +129,7 @@ impl<'a> BinaryTypeCoercer<'a> {
             if matches!(self.op, Plus | Minus | Multiply | Divide | Modulo)
                 && !coerced.is_temporal()
             {
-                let get_result = |lhs, rhs| {
-                    use arrow::compute::kernels::numeric::*;
-                    let l = new_empty_array(lhs);
-                    let r = new_empty_array(rhs);
-
-                    let result = match self.op {
-                        Plus => add_wrapping(&l, &r),
-                        Minus => sub_wrapping(&l, &r),
-                        Multiply => mul_wrapping(&l, &r),
-                        Divide => div(&l, &r),
-                        Modulo => rem(&l, &r),
-                        _ => unreachable!(),
-                    };
-                    result.map(|x| x.data_type().clone())
-                };
-
-                let ret = get_result(&coerced, &coerced).map_err(|e| {
+                let ret = self.get_result(&coerced, &coerced).map_err(|e| {
                     plan_datafusion_err!(
                         "Cannot get result type for arithmetic operation {coerced} {} {coerced}: {e}",
                         self.op
@@ -161,6 +145,27 @@ impl<'a> BinaryTypeCoercer<'a> {
             return self.signature_inner(&coerced, &coerced);
         }
         self.signature_inner(self.lhs, self.rhs)
+    }
+
+    /// Returns the result type for arithmetic operations
+    fn get_result(
+        &self,
+        lhs: &DataType,
+        rhs: &DataType,
+    ) -> arrow::error::Result<DataType> {
+        use arrow::compute::kernels::numeric::*;
+        let l = new_empty_array(lhs);
+        let r = new_empty_array(rhs);
+
+        let result = match self.op {
+            Operator::Plus => add_wrapping(&l, &r),
+            Operator::Minus => sub_wrapping(&l, &r),
+            Operator::Multiply => mul_wrapping(&l, &r),
+            Operator::Divide => div(&l, &r),
+            Operator::Modulo => rem(&l, &r),
+            _ => unreachable!(),
+        };
+        result.map(|x| x.data_type().clone())
     }
 
     fn signature_inner(&'a self, lhs: &DataType, rhs: &DataType) -> Result<Signature> {
@@ -239,23 +244,7 @@ impl<'a> BinaryTypeCoercer<'a> {
             })
         }
         Plus | Minus | Multiply | Divide | Modulo  =>  {
-            let get_result = |lhs, rhs| {
-                use arrow::compute::kernels::numeric::*;
-                let l = new_empty_array(lhs);
-                let r = new_empty_array(rhs);
-
-                let result = match self.op {
-                    Plus => add_wrapping(&l, &r),
-                    Minus => sub_wrapping(&l, &r),
-                    Multiply => mul_wrapping(&l, &r),
-                    Divide => div(&l, &r),
-                    Modulo => rem(&l, &r),
-                    _ => unreachable!(),
-                };
-                result.map(|x| x.data_type().clone())
-            };
-
-            if let Ok(ret) = get_result(lhs, rhs) {
+            if let Ok(ret) = self.get_result(lhs, rhs) {
                 // Temporal arithmetic, e.g. Date32 + Interval
                 Ok(Signature{
                     lhs: lhs.clone(),
@@ -265,7 +254,7 @@ impl<'a> BinaryTypeCoercer<'a> {
             } else if let Some(coerced) = temporal_coercion_strict_timezone(lhs, rhs) {
                 // Temporal arithmetic by first coercing to a common time representation
                 // e.g. Date32 - Timestamp
-                let ret = get_result(&coerced, &coerced).map_err(|e| {
+                let ret = self.get_result(&coerced, &coerced).map_err(|e| {
                     plan_datafusion_err!(
                         "Cannot get result type for temporal operation {coerced} {} {coerced}: {e}", self.op
                     )
@@ -277,7 +266,7 @@ impl<'a> BinaryTypeCoercer<'a> {
                 })
             } else if let Some((lhs, rhs)) = math_decimal_coercion(lhs, rhs) {
                 // Decimal arithmetic, e.g. Decimal(10, 2) + Decimal(10, 0)
-                let ret = get_result(&lhs, &rhs).map_err(|e| {
+                let ret = self.get_result(&lhs, &rhs).map_err(|e| {
                     plan_datafusion_err!(
                         "Cannot get result type for decimal operation {} {} {}: {e}", self.lhs, self.op, self.rhs
                     )
