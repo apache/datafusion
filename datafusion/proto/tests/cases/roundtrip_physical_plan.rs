@@ -1738,49 +1738,6 @@ async fn roundtrip_physical_plan_node() {
     let _ = plan.execute(0, ctx.task_ctx()).unwrap();
 }
 
-// Failing due to https://github.com/apache/datafusion/pull/16662
-// Fixed: Column index mismatch during protobuf deserialization
-#[tokio::test]
-async fn test_tpch_part_in_list_query_with_real_parquet_data() -> Result<()> {
-    // Test the specific query: SELECT p_size FROM part WHERE p_size IN (14, 6, 5, 31)
-    //
-    // NOTE: This test uses a minimal subset of TPC-H part.parquet data (tpch_part_small.parquet)
-    // which contains only 20 rows with p_size values in [14, 6, 5, 31] to reproduce the bug.
-    // Using alltypes_plain.parquet does NOT reproduce the issue, suggesting the bug
-    // is specific to certain characteristics of TPC-H parquet files or their schema.
-
-    use datafusion_common::test_util::datafusion_test_data;
-
-    let ctx = SessionContext::new();
-
-    // Register the TPC-H part table using the local test data
-    let test_data = datafusion_test_data();
-    let table_sql = format!(
-        "CREATE EXTERNAL TABLE part STORED AS PARQUET LOCATION '{test_data}/tpch_part_small.parquet'"
-
-    );
-    ctx.sql(&table_sql).await.map_err(|e| {
-        DataFusionError::External(format!("Failed to create part table: {e}").into())
-    })?;
-
-    // Test the exact problematic query
-    let sql = "SELECT p_size FROM part WHERE p_size IN (14, 6, 5, 31)";
-
-    let logical_plan = ctx.sql(sql).await?.into_unoptimized_plan();
-    let optimized_plan = ctx.state().optimize(&logical_plan)?;
-    let physical_plan = ctx.state().create_physical_plan(&optimized_plan).await?;
-
-    // Serialize the physical plan - bug may happen here already but not necessarily manifests
-    let codec = DefaultPhysicalExtensionCodec {};
-    let proto = PhysicalPlanNode::try_from_physical_plan(physical_plan.clone(), &codec)?;
-
-    // This will fail with the bug, but should succeed when fixed
-    let _deserialized_plan =
-        proto.try_into_physical_plan(&ctx, ctx.runtime_env().as_ref(), &codec)?;
-
-    Ok(())
-}
-
 /// Helper function to create a SessionContext with all TPC-H tables registered as external tables
 async fn tpch_context() -> Result<SessionContext> {
     use datafusion_common::test_util::datafusion_test_data;
@@ -1834,17 +1791,13 @@ fn get_tpch_query_sql(query: usize) -> Result<Vec<String>> {
         .collect())
 }
 
-// Skip q16 until https://github.com/apache/datafusion/issues/16665 is fixed
 #[tokio::test]
 async fn test_serialize_deserialize_tpch_queries() -> Result<()> {
     // Create context with TPC-H tables
     let ctx = tpch_context().await?;
 
-    // repeat to run all 22 queries except q16 due to bug above
+    // repeat to run all 22 queries
     for query in 1..=22 {
-        if query == 16 {
-            continue;
-        }
         // run all statements in the query
         let sql = get_tpch_query_sql(query)?;
         for stmt in sql {
