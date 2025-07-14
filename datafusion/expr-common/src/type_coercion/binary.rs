@@ -124,6 +124,19 @@ impl<'a> BinaryTypeCoercer<'a> {
 
     /// Returns a [`Signature`] for applying `op` to arguments of type `lhs` and `rhs`
     fn signature(&'a self) -> Result<Signature> {
+        if let Some(coerced) = null_coercion(self.lhs, self.rhs) {
+            use Operator::*;
+            if matches!(self.op, Plus | Minus | Multiply | Divide | Modulo)
+                && !coerced.is_temporal()
+            {
+                return Ok(Signature::uniform(coerced));
+            }
+            return self.signature_inner(&coerced, &coerced);
+        }
+        self.signature_inner(self.lhs, self.rhs)
+    }
+
+    fn signature_inner(&'a self, lhs: &DataType, rhs: &DataType) -> Result<Signature> {
         use arrow::datatypes::DataType::*;
         use Operator::*;
         let result = match self.op {
@@ -135,7 +148,7 @@ impl<'a> BinaryTypeCoercer<'a> {
         GtEq |
         IsDistinctFrom |
         IsNotDistinctFrom => {
-            comparison_coercion(self.lhs, self.rhs).map(Signature::comparison).ok_or_else(|| {
+            comparison_coercion(lhs, rhs).map(Signature::comparison).ok_or_else(|| {
                 plan_datafusion_err!(
                     "Cannot infer common argument type for comparison operation {} {} {}",
                     self.lhs,
@@ -144,7 +157,7 @@ impl<'a> BinaryTypeCoercer<'a> {
                 )
             })
         }
-        And | Or => if matches!((self.lhs, self.rhs), (Boolean | Null, Boolean | Null)) {
+        And | Or => if matches!((lhs, rhs), (Boolean | Null, Boolean | Null)) {
             // Logical binary boolean operators can only be evaluated for
             // boolean or null arguments.                   
             Ok(Signature::uniform(Boolean))
@@ -154,28 +167,28 @@ impl<'a> BinaryTypeCoercer<'a> {
             )
         }
         RegexMatch | RegexIMatch | RegexNotMatch | RegexNotIMatch => {
-            regex_coercion(self.lhs, self.rhs).map(Signature::comparison).ok_or_else(|| {
+            regex_coercion(lhs, rhs).map(Signature::comparison).ok_or_else(|| {
                 plan_datafusion_err!(
                     "Cannot infer common argument type for regex operation {} {} {}", self.lhs, self.op, self.rhs
                 )
             })
         }
         LikeMatch | ILikeMatch | NotLikeMatch | NotILikeMatch => {
-            regex_coercion(self.lhs, self.rhs).map(Signature::comparison).ok_or_else(|| {
+            regex_coercion(lhs, rhs).map(Signature::comparison).ok_or_else(|| {
                 plan_datafusion_err!(
                     "Cannot infer common argument type for regex operation {} {} {}", self.lhs, self.op, self.rhs
                 )
             })
         }
         BitwiseAnd | BitwiseOr | BitwiseXor | BitwiseShiftRight | BitwiseShiftLeft => {
-            bitwise_coercion(self.lhs, self.rhs).map(Signature::uniform).ok_or_else(|| {
+            bitwise_coercion(lhs, rhs).map(Signature::uniform).ok_or_else(|| {
                 plan_datafusion_err!(
                     "Cannot infer common type for bitwise operation {} {} {}", self.lhs, self.op, self.rhs
                 )
             })
         }
         StringConcat => {
-            string_concat_coercion(self.lhs, self.rhs).map(Signature::uniform).ok_or_else(|| {
+            string_concat_coercion(lhs, rhs).map(Signature::uniform).ok_or_else(|| {
                 plan_datafusion_err!(
                     "Cannot infer common string type for string concat operation {} {} {}", self.lhs, self.op, self.rhs
                 )
@@ -183,8 +196,8 @@ impl<'a> BinaryTypeCoercer<'a> {
         }
         AtArrow | ArrowAt => {
             // Array contains or search (similar to LIKE) operation
-            array_coercion(self.lhs, self.rhs)
-                .or_else(|| like_coercion(self.lhs, self.rhs)).map(Signature::comparison).ok_or_else(|| {
+            array_coercion(lhs, rhs)
+                .or_else(|| like_coercion(lhs, rhs)).map(Signature::comparison).ok_or_else(|| {
                     plan_datafusion_err!(
                         "Cannot infer common argument type for operation {} {} {}", self.lhs, self.op, self.rhs
                     )
@@ -192,7 +205,7 @@ impl<'a> BinaryTypeCoercer<'a> {
         }
         AtAt => {
             // text search has similar signature to LIKE
-            like_coercion(self.lhs, self.rhs).map(Signature::comparison).ok_or_else(|| {
+            like_coercion(lhs, rhs).map(Signature::comparison).ok_or_else(|| {
                 plan_datafusion_err!(
                     "Cannot infer common argument type for AtAt operation {} {} {}", self.lhs, self.op, self.rhs
                 )
@@ -215,14 +228,14 @@ impl<'a> BinaryTypeCoercer<'a> {
                 result.map(|x| x.data_type().clone())
             };
 
-            if let Ok(ret) = get_result(self.lhs, self.rhs) {
+            if let Ok(ret) = get_result(lhs, rhs) {
                 // Temporal arithmetic, e.g. Date32 + Interval
                 Ok(Signature{
-                    lhs: self.lhs.clone(),
-                    rhs: self.rhs.clone(),
+                    lhs: lhs.clone(),
+                    rhs: rhs.clone(),
                     ret,
                 })
-            } else if let Some(coerced) = temporal_coercion_strict_timezone(self.lhs, self.rhs) {
+            } else if let Some(coerced) = temporal_coercion_strict_timezone(lhs, rhs) {
                 // Temporal arithmetic by first coercing to a common time representation
                 // e.g. Date32 - Timestamp
                 let ret = get_result(&coerced, &coerced).map_err(|e| {
@@ -235,7 +248,7 @@ impl<'a> BinaryTypeCoercer<'a> {
                     rhs: coerced,
                     ret,
                 })
-            } else if let Some((lhs, rhs)) = math_decimal_coercion(self.lhs, self.rhs) {
+            } else if let Some((lhs, rhs)) = math_decimal_coercion(lhs, rhs) {
                 // Decimal arithmetic, e.g. Decimal(10, 2) + Decimal(10, 0)
                 let ret = get_result(&lhs, &rhs).map_err(|e| {
                     plan_datafusion_err!(
@@ -247,7 +260,7 @@ impl<'a> BinaryTypeCoercer<'a> {
                     rhs,
                     ret,
                 })
-            } else if let Some(numeric) = mathematics_numerical_coercion(self.lhs, self.rhs) {
+            } else if let Some(numeric) = mathematics_numerical_coercion(lhs, rhs) {
                 // Numeric arithmetic, e.g. Int32 + Int32
                 Ok(Signature::uniform(numeric))
             } else if let Some(coerced) = null_coercion(self.lhs, self.rhs) {
