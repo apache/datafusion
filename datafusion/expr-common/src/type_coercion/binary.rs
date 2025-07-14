@@ -129,7 +129,18 @@ impl<'a> BinaryTypeCoercer<'a> {
             if matches!(self.op, Plus | Minus | Multiply | Divide | Modulo)
                 && !coerced.is_temporal()
             {
-                return Ok(Signature::uniform(coerced));
+                let ret = get_result(&coerced, &coerced).map_err(|e| {
+                    plan_datafusion_err!(
+                        "Cannot get result type for arithmetic operation {coerced} {} {coerced}: {e}",
+                        self.op
+                    )
+                })?;
+
+                Ok(Signature {
+                    lhs: coerced.clone(),
+                    rhs: coerced,
+                    ret,
+                })
             }
             return self.signature_inner(&coerced, &coerced);
         }
