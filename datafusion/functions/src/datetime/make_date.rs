@@ -122,9 +122,10 @@ impl ScalarUDFImpl for MakeDateFunc {
 
         let [years, months, days] = take_function_args(self.name(), args)?;
 
-        if matches!(years, ColumnarValue::Scalar(ScalarValue::Null)) 
+        if matches!(years, ColumnarValue::Scalar(ScalarValue::Null))
             || matches!(months, ColumnarValue::Scalar(ScalarValue::Null))
-            || matches!(days, ColumnarValue::Scalar(ScalarValue::Null)) {
+            || matches!(days, ColumnarValue::Scalar(ScalarValue::Null))
+        {
             return Ok(ColumnarValue::Scalar(ScalarValue::Null));
         }
 
