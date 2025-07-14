@@ -25,7 +25,7 @@ use std::path::PathBuf;
 use std::{env, fs};
 use testcontainers::core::{CmdWaitFor, ExecCommand, Mount};
 use testcontainers::runners::AsyncRunner;
-use testcontainers::{ContainerAsync, ImageExt};
+use testcontainers::{ContainerAsync, ImageExt, TestcontainersError};
 use testcontainers_modules::minio;
 
 fn cli() -> Command {
@@ -59,46 +59,62 @@ async fn setup_minio_container() -> ContainerAsync<minio::MinIO> {
             "/source",
         ))
         .start()
-        .await
-        .expect("Failed to start MinIO container");
+        .await;
 
-    // We wait for MinIO to be healthy and preprare test files. We do it via CLI to avoid s3 dependency
-    let commands = [
-        ExecCommand::new(["/usr/bin/mc", "ready", "local"]),
-        ExecCommand::new([
-            "/usr/bin/mc",
-            "alias",
-            "set",
-            "localminio",
-            "http://localhost:9000",
-            MINIO_ROOT_USER,
-            MINIO_ROOT_PASSWORD,
-        ]),
-        ExecCommand::new(["/usr/bin/mc", "mb", "localminio/data"]),
-        ExecCommand::new(["/usr/bin/mc", "cp", "-r", "/source/", "localminio/data/"]),
-    ];
+    match container {
+        Ok(container) => {
+            // We wait for MinIO to be healthy and preprare test files. We do it via CLI to avoid s3 dependency
+            let commands = [
+                ExecCommand::new(["/usr/bin/mc", "ready", "local"]),
+                ExecCommand::new([
+                    "/usr/bin/mc",
+                    "alias",
+                    "set",
+                    "localminio",
+                    "http://localhost:9000",
+                    MINIO_ROOT_USER,
+                    MINIO_ROOT_PASSWORD,
+                ]),
+                ExecCommand::new(["/usr/bin/mc", "mb", "localminio/data"]),
+                ExecCommand::new([
+                    "/usr/bin/mc",
+                    "cp",
+                    "-r",
+                    "/source/",
+                    "localminio/data/",
+                ]),
+            ];
 
-    for command in commands {
-        let command =
-            command.with_cmd_ready_condition(CmdWaitFor::Exit { code: Some(0) });
+            for command in commands {
+                let command =
+                    command.with_cmd_ready_condition(CmdWaitFor::Exit { code: Some(0) });
 
-        let cmd_ref = format!("{command:?}");
+                let cmd_ref = format!("{command:?}");
 
-        if let Err(e) = container.exec(command).await {
-            let stdout = container.stdout_to_vec().await.unwrap_or_default();
-            let stderr = container.stderr_to_vec().await.unwrap_or_default();
+                if let Err(e) = container.exec(command).await {
+                    let stdout = container.stdout_to_vec().await.unwrap_or_default();
+                    let stderr = container.stderr_to_vec().await.unwrap_or_default();
 
-            panic!(
-                "Failed to execute command: {}\nError: {}\nStdout: {:?}\nStderr: {:?}",
-                cmd_ref,
-                e,
-                String::from_utf8_lossy(&stdout),
-                String::from_utf8_lossy(&stderr)
-            );
+                    panic!(
+                        "Failed to execute command: {}\nError: {}\nStdout: {:?}\nStderr: {:?}",
+                        cmd_ref,
+                        e,
+                        String::from_utf8_lossy(&stdout),
+                        String::from_utf8_lossy(&stderr)
+                    );
+                }
+            }
+
+            container
+        }
+
+        Err(TestcontainersError::Client(e)) => {
+            panic!("Failed to start MinIO container. Ensure Docker is running and accessible: {e}");
+        }
+        Err(e) => {
+            panic!("Failed to start MinIO container: {e}");
         }
     }
-
-    container
 }
 
 #[cfg(test)]

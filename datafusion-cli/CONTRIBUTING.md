@@ -51,5 +51,4 @@ If you see an error mentioning "failed to load IMDS session token" such as
 
 You my need to disable trying to fetch S3 credentials from the environment using the `AWS_EC2_METADATA_DISABLED`, for example:
 
-
 > $ AWS_EC2_METADATA_DISABLED=true TEST_STORAGE_INTEGRATION=1 cargo test
