@@ -446,7 +446,7 @@ mod tests {
             .unwrap_err();
         // Ensure that there is a descriptive error message
         assert_eq!(
-            "Error during planning: Cannot insert into MemTable with zero partitions",
+            "Error during planning: No partitions provided, expected at least one partition",
             experiment_result.strip_backtrace()
         );
         Ok(())

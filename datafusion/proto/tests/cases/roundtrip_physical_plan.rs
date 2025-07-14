@@ -1739,7 +1739,7 @@ async fn roundtrip_physical_plan_node() {
 }
 
 // Failing due to https://github.com/apache/datafusion/pull/16662
-#[ignore]
+// Fixed: Column index mismatch during protobuf deserialization
 #[tokio::test]
 async fn test_tpch_part_in_list_query_with_real_parquet_data() -> Result<()> {
     // Test the specific query: SELECT p_size FROM part WHERE p_size IN (14, 6, 5, 31)
