@@ -2432,7 +2432,7 @@ mod tests {
 
     #[test]
     fn test_simplify_multiply_by_null() {
-        let null = lit(ScalarValue::Boolean(None));
+        let null = lit(ScalarValue::Null);
         // A * null --> null
         {
             let expr = col("c2") * null.clone();
@@ -2496,7 +2496,7 @@ mod tests {
     #[test]
     fn test_simplify_divide_null() {
         // A / null --> null
-        let null = lit(ScalarValue::Utf8(None));
+        let null = lit(ScalarValue::Null);
         {
             let expr = col("c1") / null.clone();
             assert_eq!(simplify(expr), null);
