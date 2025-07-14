@@ -120,6 +120,7 @@ Default features:
 - `datetime_expressions`: date and time functions such as `to_timestamp`
 - `encoding_expressions`: `encode` and `decode` functions
 - `parquet`: support for reading the [Apache Parquet] format
+- `parquet_encryption`: support for using [Parquet Modular Encryption]
 - `regex_expressions`: regular expression functions, such as `regexp_match`
 - `unicode_expressions`: Include unicode aware functions such as `character_length`
 - `unparser`: enables support to reverse LogicalPlans back into SQL
@@ -134,6 +135,7 @@ Optional features:
 
 [apache avro]: https://avro.apache.org/
 [apache parquet]: https://parquet.apache.org/
+[parquet modular encryption]: https://parquet.apache.org/docs/file-format/data-pages/encryption/
 
 ## DataFusion API Evolution and Deprecation Guidelines
 
