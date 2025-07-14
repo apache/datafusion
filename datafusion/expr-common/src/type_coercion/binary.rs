@@ -263,18 +263,6 @@ impl<'a> BinaryTypeCoercer<'a> {
             } else if let Some(numeric) = mathematics_numerical_coercion(lhs, rhs) {
                 // Numeric arithmetic, e.g. Int32 + Int32
                 Ok(Signature::uniform(numeric))
-            } else if let Some(coerced) = null_coercion(self.lhs, self.rhs) {
-                // One side is NULL, cast it to the other's type
-                let ret = get_result(&coerced, &coerced).map_err(|e| {
-                    plan_datafusion_err!(
-                        "Cannot get result type for null arithmetic {coerced} {} {coerced}: {e}", self.op
-                    )
-                })?;
-                Ok(Signature {
-                    lhs: coerced.clone(),
-                    rhs: coerced,
-                    ret,
-                })
             } else {
                 plan_err!(
                     "Cannot coerce arithmetic expression {} {} {} to valid types", self.lhs, self.op, self.rhs
