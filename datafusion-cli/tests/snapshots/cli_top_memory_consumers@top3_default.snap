@@ -18,4 +18,6 @@ Resources exhausted: Additional allocation failed with top memory consumers (acr
   Consumer(can spill: bool) consumed XB,
   Consumer(can spill: bool) consumed XB,
   Consumer(can spill: bool) consumed XB.
-Error: Failed to allocate
+Error: Failed to allocate 
+
+----- stderr -----
