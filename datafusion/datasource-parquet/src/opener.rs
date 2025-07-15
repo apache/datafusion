@@ -641,7 +641,7 @@ mod test {
                 enable_row_group_stats_pruning: true,
                 coerce_int96: None,
                 file_decryption_properties: None,
-                expr_adapter_factory: Arc::new(DefaultPhysicalExprAdapterFactory),
+                expr_adapter_factory: Some(Arc::new(DefaultPhysicalExprAdapterFactory)),
             }
         };
 
@@ -727,7 +727,7 @@ mod test {
                 enable_row_group_stats_pruning: true,
                 coerce_int96: None,
                 file_decryption_properties: None,
-                expr_adapter_factory: Arc::new(DefaultPhysicalExprAdapterFactory),
+                expr_adapter_factory: Some(Arc::new(DefaultPhysicalExprAdapterFactory)),
             }
         };
 
@@ -829,7 +829,7 @@ mod test {
                 enable_row_group_stats_pruning: true,
                 coerce_int96: None,
                 file_decryption_properties: None,
-                expr_adapter_factory: Arc::new(DefaultPhysicalExprAdapterFactory),
+                expr_adapter_factory: Some(Arc::new(DefaultPhysicalExprAdapterFactory)),
             }
         };
         let make_meta = || FileMeta {
@@ -941,7 +941,7 @@ mod test {
                 enable_row_group_stats_pruning: false, // note that this is false!
                 coerce_int96: None,
                 file_decryption_properties: None,
-                expr_adapter_factory: Arc::new(DefaultPhysicalExprAdapterFactory),
+                expr_adapter_factory: Some(Arc::new(DefaultPhysicalExprAdapterFactory)),
             }
         };
 
@@ -1054,7 +1054,7 @@ mod test {
                 enable_row_group_stats_pruning: true,
                 coerce_int96: None,
                 file_decryption_properties: None,
-                expr_adapter_factory: Arc::new(DefaultPhysicalExprAdapterFactory),
+                expr_adapter_factory: Some(Arc::new(DefaultPhysicalExprAdapterFactory)),
             }
         };
 
