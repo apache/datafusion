@@ -4354,9 +4354,6 @@ NULL
 NULL
 NULL
 
-statement ok
-set datafusion.execution.batch_size = 100;
-
 # Test for ignore nulls in FIRST_VALUE
 statement ok
 CREATE TABLE t AS VALUES (null::bigint), (3), (4);
