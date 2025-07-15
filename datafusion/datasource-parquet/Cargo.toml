@@ -48,6 +48,7 @@ datafusion-physical-plan = { workspace = true }
 datafusion-pruning = { workspace = true }
 datafusion-session = { workspace = true }
 futures = { workspace = true }
+hex = { workspace = true, optional = true }
 itertools = { workspace = true }
 log = { workspace = true }
 object_store = { workspace = true }
@@ -65,3 +66,10 @@ workspace = true
 [lib]
 name = "datafusion_datasource_parquet"
 path = "src/mod.rs"
+
+[features]
+parquet_encryption = [
+    "parquet/encryption",
+    "datafusion-common/parquet_encryption",
+    "dep:hex",
+]

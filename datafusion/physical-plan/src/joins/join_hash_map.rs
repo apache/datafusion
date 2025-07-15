@@ -114,6 +114,9 @@ pub trait JoinHashMapType: Send + Sync {
         limit: usize,
         offset: JoinHashMapOffset,
     ) -> (Vec<u32>, Vec<u64>, Option<JoinHashMapOffset>);
+
+    /// Returns `true` if the join hash map contains no entries.
+    fn is_empty(&self) -> bool;
 }
 
 pub struct JoinHashMapU32 {
@@ -176,6 +179,10 @@ impl JoinHashMapType for JoinHashMapU32 {
             offset,
         )
     }
+
+    fn is_empty(&self) -> bool {
+        self.map.is_empty()
+    }
 }
 
 pub struct JoinHashMapU64 {
@@ -237,6 +244,10 @@ impl JoinHashMapType for JoinHashMapU64 {
             limit,
             offset,
         )
+    }
+
+    fn is_empty(&self) -> bool {
+        self.map.is_empty()
     }
 }
 
