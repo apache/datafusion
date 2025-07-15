@@ -60,7 +60,6 @@ use crate::schema_equivalence::schema_satisfied_by;
 use arrow::array::{builder::StringBuilder, RecordBatch};
 use arrow::compute::SortOptions;
 use arrow::datatypes::{Schema, SchemaRef};
-use datafusion_catalog::default_table_source::source_as_provider;
 use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeVisitor,
@@ -455,7 +454,15 @@ impl DefaultPhysicalPlanner {
                 fetch,
                 ..
             }) => {
-                let source = source_as_provider(source)?;
+                let Some(source) = source.as_any().downcast_ref::<DefaultTableSource>()
+                else {
+                    return Err(DataFusionError::Plan(
+                        "TableSource can only be used for logical planning".to_string(),
+                    ));
+                };
+
+                let source = Arc::clone(&source.table_provider);
+
                 // Remove all qualifiers from the scan as the provider
                 // doesn't know (nor should care) how the relation was
                 // referred to in the query

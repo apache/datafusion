@@ -28,7 +28,7 @@ use datafusion::datasource::file_format::json::{JsonFormat, JsonFormatFactory};
 use datafusion::datasource::listing::{
     ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
 };
-use datafusion::datasource::provider_as_source;
+use datafusion::datasource::DefaultTableSource;
 use datafusion::optimizer::eliminate_nested_union::EliminateNestedUnion;
 use datafusion::optimizer::Optimizer;
 use datafusion_common::parsers::CompressionTypeVariant;
@@ -201,7 +201,7 @@ impl LogicalExtensionCodec for TestTableProviderCodec {
             url: msg.url,
             schema,
         };
-        Ok(provider_as_source(Arc::new(provider)))
+        Ok(DefaultTableSource::wrap(Arc::new(provider)))
     }
 
     fn try_encode_table_source(
