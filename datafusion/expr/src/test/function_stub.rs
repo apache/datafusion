@@ -19,11 +19,11 @@
 //!
 //! These are used to avoid a dependence on `datafusion-functions-aggregate` which live in a different crate
 
-use std::any::Any;
-
 use arrow::datatypes::{
     DataType, FieldRef, DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION,
 };
+use std::any::Any;
+use std::hash::{DefaultHasher, Hash, Hasher};
 
 use datafusion_common::{exec_err, not_impl_err, utils::take_function_args, Result};
 
@@ -272,6 +272,23 @@ impl AggregateUDFImpl for Count {
     fn reverse_expr(&self) -> ReversedUDAF {
         ReversedUDAF::Identical
     }
+
+    fn equals(&self, other: &dyn AggregateUDFImpl) -> bool {
+        let Some(other) = other.as_any().downcast_ref::<Self>() else {
+            return false;
+        };
+        let Self { signature, aliases } = self;
+        signature == &other.signature && aliases == &other.aliases
+    }
+
+    fn hash_value(&self) -> u64 {
+        let Self { signature, aliases } = self;
+        let mut hasher = DefaultHasher::new();
+        std::any::type_name::<Self>().hash(&mut hasher);
+        signature.hash(&mut hasher);
+        aliases.hash(&mut hasher);
+        hasher.finish()
+    }
 }
 
 create_func!(Min, min_udaf);
@@ -489,5 +506,22 @@ impl AggregateUDFImpl for Avg {
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         coerce_avg_type(self.name(), arg_types)
+    }
+
+    fn equals(&self, other: &dyn AggregateUDFImpl) -> bool {
+        let Some(other) = other.as_any().downcast_ref::<Self>() else {
+            return false;
+        };
+        let Self { signature, aliases } = self;
+        signature == &other.signature && aliases == &other.aliases
+    }
+
+    fn hash_value(&self) -> u64 {
+        let Self { signature, aliases } = self;
+        let mut hasher = DefaultHasher::new();
+        std::any::type_name::<Self>().hash(&mut hasher);
+        signature.hash(&mut hasher);
+        aliases.hash(&mut hasher);
+        hasher.finish()
     }
 }

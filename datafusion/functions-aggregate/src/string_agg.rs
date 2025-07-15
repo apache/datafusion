@@ -18,6 +18,7 @@
 //! [`StringAgg`] accumulator for the `string_agg` function
 
 use std::any::Any;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::mem::size_of_val;
 
 use crate::array_agg::ArrayAgg;
@@ -179,6 +180,29 @@ impl AggregateUDFImpl for StringAgg {
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
+    }
+
+    fn equals(&self, other: &dyn AggregateUDFImpl) -> bool {
+        let Some(other) = other.as_any().downcast_ref::<Self>() else {
+            return false;
+        };
+        let Self {
+            signature,
+            array_agg,
+        } = self;
+        signature == &other.signature && array_agg.equals(&other.array_agg)
+    }
+
+    fn hash_value(&self) -> u64 {
+        let Self {
+            signature,
+            array_agg,
+        } = self;
+        let mut hasher = DefaultHasher::new();
+        std::any::type_name::<Self>().hash(&mut hasher);
+        signature.hash(&mut hasher);
+        hasher.write_u64(array_agg.hash_value());
+        hasher.finish()
     }
 }
 

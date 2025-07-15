@@ -15,11 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
-
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::Date32;
 use chrono::{Datelike, NaiveDate};
+use std::any::Any;
+use std::hash::{DefaultHasher, Hash, Hasher};
 
 use datafusion_common::{internal_err, Result, ScalarValue};
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
@@ -114,5 +114,22 @@ impl ScalarUDFImpl for CurrentDateFunc {
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
+    }
+
+    fn equals(&self, other: &dyn ScalarUDFImpl) -> bool {
+        let Some(other) = other.as_any().downcast_ref::<Self>() else {
+            return false;
+        };
+        let Self { signature, aliases } = self;
+        signature == &other.signature && aliases == &other.aliases
+    }
+
+    fn hash_value(&self) -> u64 {
+        let Self { signature, aliases } = self;
+        let mut hasher = DefaultHasher::new();
+        std::any::type_name::<Self>().hash(&mut hasher);
+        signature.hash(&mut hasher);
+        aliases.hash(&mut hasher);
+        hasher.finish()
     }
 }

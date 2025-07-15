@@ -29,8 +29,6 @@ use datafusion_common::{
     internal_datafusion_err, not_impl_err, plan_err, DataFusionError, Result,
 };
 
-use std::any::Any;
-
 use crate::utils::make_scalar_function;
 use arrow::array::{
     builder::{ArrayBuilder, LargeStringBuilder, StringViewBuilder},
@@ -50,6 +48,8 @@ use datafusion_expr::{
 };
 use datafusion_functions::{downcast_arg, downcast_named_arg};
 use datafusion_macros::user_doc;
+use std::any::Any;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 
 macro_rules! call_array_function {
@@ -207,6 +207,23 @@ impl ScalarUDFImpl for ArrayToString {
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }
+
+    fn equals(&self, other: &dyn ScalarUDFImpl) -> bool {
+        let Some(other) = other.as_any().downcast_ref::<Self>() else {
+            return false;
+        };
+        let Self { signature, aliases } = self;
+        signature == &other.signature && aliases == &other.aliases
+    }
+
+    fn hash_value(&self) -> u64 {
+        let Self { signature, aliases } = self;
+        let mut hasher = DefaultHasher::new();
+        std::any::type_name::<Self>().hash(&mut hasher);
+        signature.hash(&mut hasher);
+        aliases.hash(&mut hasher);
+        hasher.finish()
+    }
 }
 
 make_udf_expr_and_func!(
@@ -316,6 +333,23 @@ impl ScalarUDFImpl for StringToArray {
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
+    }
+
+    fn equals(&self, other: &dyn ScalarUDFImpl) -> bool {
+        let Some(other) = other.as_any().downcast_ref::<Self>() else {
+            return false;
+        };
+        let Self { signature, aliases } = self;
+        signature == &other.signature && aliases == &other.aliases
+    }
+
+    fn hash_value(&self) -> u64 {
+        let Self { signature, aliases } = self;
+        let mut hasher = DefaultHasher::new();
+        std::any::type_name::<Self>().hash(&mut hasher);
+        signature.hash(&mut hasher);
+        aliases.hash(&mut hasher);
+        hasher.finish()
     }
 }
 

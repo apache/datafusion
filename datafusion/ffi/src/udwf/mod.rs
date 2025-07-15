@@ -15,8 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{ffi::c_void, sync::Arc};
-
 use abi_stable::{
     std_types::{ROption, RResult, RString, RVec},
     StableAbi,
@@ -42,6 +40,8 @@ use partition_evaluator::{FFI_PartitionEvaluator, ForeignPartitionEvaluator};
 use partition_evaluator_args::{
     FFI_PartitionEvaluatorArgs, ForeignPartitionEvaluatorArgs,
 };
+use std::hash::{DefaultHasher, Hash, Hasher};
+use std::{ffi::c_void, sync::Arc};
 mod partition_evaluator;
 mod partition_evaluator_args;
 mod range;
@@ -333,6 +333,38 @@ impl WindowUDFImpl for ForeignWindowUDF {
     fn sort_options(&self) -> Option<SortOptions> {
         let options: Option<&FFI_SortOptions> = self.udf.sort_options.as_ref().into();
         options.map(|s| s.into())
+    }
+
+    fn equals(&self, other: &dyn WindowUDFImpl) -> bool {
+        let Some(other) = other.as_any().downcast_ref::<Self>() else {
+            return false;
+        };
+        let Self {
+            name,
+            aliases,
+            udf,
+            signature,
+        } = self;
+        name == &other.name
+            && aliases == &other.aliases
+            && std::ptr::eq(udf, &other.udf)
+            && signature == &other.signature
+    }
+
+    fn hash_value(&self) -> u64 {
+        let Self {
+            name,
+            aliases,
+            udf,
+            signature,
+        } = self;
+        let mut hasher = DefaultHasher::new();
+        std::any::type_name::<Self>().hash(&mut hasher);
+        name.hash(&mut hasher);
+        aliases.hash(&mut hasher);
+        std::ptr::hash(udf, &mut hasher);
+        signature.hash(&mut hasher);
+        hasher.finish()
     }
 }
 

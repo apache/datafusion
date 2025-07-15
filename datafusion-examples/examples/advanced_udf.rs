@@ -16,6 +16,7 @@
 // under the License.
 
 use std::any::Any;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 
 use arrow::array::{
@@ -196,6 +197,23 @@ impl ScalarUDFImpl for PowUdf {
     fn output_ordering(&self, input: &[ExprProperties]) -> Result<SortProperties> {
         // The POW function preserves the order of its argument.
         Ok(input[0].sort_properties)
+    }
+
+    fn equals(&self, other: &dyn ScalarUDFImpl) -> bool {
+        let Some(other) = other.as_any().downcast_ref::<Self>() else {
+            return false;
+        };
+        let Self { signature, aliases } = self;
+        signature == &other.signature && aliases == &other.aliases
+    }
+
+    fn hash_value(&self) -> u64 {
+        let Self { signature, aliases } = self;
+        let mut hasher = DefaultHasher::new();
+        std::any::type_name::<Self>().hash(&mut hasher);
+        signature.hash(&mut hasher);
+        aliases.hash(&mut hasher);
+        hasher.finish()
     }
 }
 

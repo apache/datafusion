@@ -39,7 +39,7 @@
 /// thus all text should be in English.
 ///
 /// [SQL function documentation]: https://datafusion.apache.org/user-guide/sql/index.html
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Hash)]
 pub struct Documentation {
     /// The section in the documentation where the UDF will be documented
     pub doc_section: DocSection,
@@ -158,7 +158,7 @@ impl Documentation {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Hash)]
 pub struct DocSection {
     /// True to include this doc section in the public
     /// documentation, false otherwise

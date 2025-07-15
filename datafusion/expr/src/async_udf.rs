@@ -111,6 +111,19 @@ impl ScalarUDFImpl for AsyncScalarUDF {
     fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         internal_err!("async functions should not be called directly")
     }
+
+    fn equals(&self, other: &dyn ScalarUDFImpl) -> bool {
+        let Some(other) = other.as_any().downcast_ref::<Self>() else {
+            return false;
+        };
+        let Self { inner } = self;
+        inner.equals(other.inner.as_ref())
+    }
+
+    fn hash_value(&self) -> u64 {
+        let Self { inner } = self;
+        inner.hash_value()
+    }
 }
 
 impl Display for AsyncScalarUDF {

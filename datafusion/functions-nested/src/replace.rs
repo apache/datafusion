@@ -37,6 +37,7 @@ use crate::utils::compare_element_to_list;
 use crate::utils::make_scalar_function;
 
 use std::any::Any;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 
 // Create static instances of ScalarUDFs for each function
@@ -142,6 +143,23 @@ impl ScalarUDFImpl for ArrayReplace {
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }
+
+    fn equals(&self, other: &dyn ScalarUDFImpl) -> bool {
+        let Some(other) = other.as_any().downcast_ref::<Self>() else {
+            return false;
+        };
+        let Self { signature, aliases } = self;
+        signature == &other.signature && aliases == &other.aliases
+    }
+
+    fn hash_value(&self) -> u64 {
+        let Self { signature, aliases } = self;
+        let mut hasher = DefaultHasher::new();
+        std::any::type_name::<Self>().hash(&mut hasher);
+        signature.hash(&mut hasher);
+        aliases.hash(&mut hasher);
+        hasher.finish()
+    }
 }
 
 #[user_doc(
@@ -223,6 +241,23 @@ impl ScalarUDFImpl for ArrayReplaceN {
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }
+
+    fn equals(&self, other: &dyn ScalarUDFImpl) -> bool {
+        let Some(other) = other.as_any().downcast_ref::<Self>() else {
+            return false;
+        };
+        let Self { signature, aliases } = self;
+        signature == &other.signature && aliases == &other.aliases
+    }
+
+    fn hash_value(&self) -> u64 {
+        let Self { signature, aliases } = self;
+        let mut hasher = DefaultHasher::new();
+        std::any::type_name::<Self>().hash(&mut hasher);
+        signature.hash(&mut hasher);
+        aliases.hash(&mut hasher);
+        hasher.finish()
+    }
 }
 
 #[user_doc(
@@ -301,6 +336,23 @@ impl ScalarUDFImpl for ArrayReplaceAll {
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
+    }
+
+    fn equals(&self, other: &dyn ScalarUDFImpl) -> bool {
+        let Some(other) = other.as_any().downcast_ref::<Self>() else {
+            return false;
+        };
+        let Self { signature, aliases } = self;
+        signature == &other.signature && aliases == &other.aliases
+    }
+
+    fn hash_value(&self) -> u64 {
+        let Self { signature, aliases } = self;
+        let mut hasher = DefaultHasher::new();
+        std::any::type_name::<Self>().hash(&mut hasher);
+        signature.hash(&mut hasher);
+        aliases.hash(&mut hasher);
+        hasher.finish()
     }
 }
 

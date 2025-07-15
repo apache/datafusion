@@ -23,12 +23,12 @@ use arrow::datatypes::{
     DataType::{FixedSizeList, LargeList, List, Null, UInt64},
     UInt64Type,
 };
-use std::any::Any;
-
 use datafusion_common::cast::{
     as_fixed_size_list_array, as_large_list_array, as_list_array,
 };
 use datafusion_common::{exec_err, utils::take_function_args, Result};
+use std::any::Any;
+use std::hash::{DefaultHasher, Hash, Hasher};
 
 use crate::utils::{compute_array_dims, make_scalar_function};
 use datafusion_common::utils::list_ndims;
@@ -115,6 +115,23 @@ impl ScalarUDFImpl for ArrayDims {
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }
+
+    fn equals(&self, other: &dyn ScalarUDFImpl) -> bool {
+        let Some(other) = other.as_any().downcast_ref::<Self>() else {
+            return false;
+        };
+        let Self { signature, aliases } = self;
+        signature == &other.signature && aliases == &other.aliases
+    }
+
+    fn hash_value(&self) -> u64 {
+        let Self { signature, aliases } = self;
+        let mut hasher = DefaultHasher::new();
+        std::any::type_name::<Self>().hash(&mut hasher);
+        signature.hash(&mut hasher);
+        aliases.hash(&mut hasher);
+        hasher.finish()
+    }
 }
 
 make_udf_expr_and_func!(
@@ -186,6 +203,23 @@ impl ScalarUDFImpl for ArrayNdims {
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
+    }
+
+    fn equals(&self, other: &dyn ScalarUDFImpl) -> bool {
+        let Some(other) = other.as_any().downcast_ref::<Self>() else {
+            return false;
+        };
+        let Self { signature, aliases } = self;
+        signature == &other.signature && aliases == &other.aliases
+    }
+
+    fn hash_value(&self) -> u64 {
+        let Self { signature, aliases } = self;
+        let mut hasher = DefaultHasher::new();
+        std::any::type_name::<Self>().hash(&mut hasher);
+        signature.hash(&mut hasher);
+        aliases.hash(&mut hasher);
+        hasher.finish()
     }
 }
 

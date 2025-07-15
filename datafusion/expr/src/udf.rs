@@ -832,6 +832,7 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
 
     fn hash_value(&self) -> u64 {
         let hasher = &mut DefaultHasher::new();
+        std::any::type_name::<Self>().hash(hasher);
         self.inner.hash_value().hash(hasher);
         self.aliases.hash(hasher);
         hasher.finish()

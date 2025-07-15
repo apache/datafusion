@@ -34,6 +34,7 @@ use datafusion_common::{
 use datafusion_expr::Signature;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Volatility};
 use std::fmt::Write;
+use std::hash::{DefaultHasher, Hash, Hasher};
 
 /// <https://spark.apache.org/docs/latest/api/sql/index.html#hex>
 #[derive(Debug)]
@@ -134,6 +135,23 @@ impl ScalarUDFImpl for SparkHex {
                 }
             }
         }
+    }
+
+    fn equals(&self, other: &dyn ScalarUDFImpl) -> bool {
+        let Some(other) = other.as_any().downcast_ref::<Self>() else {
+            return false;
+        };
+        let Self { signature, aliases } = self;
+        signature == &other.signature && aliases == &other.aliases
+    }
+
+    fn hash_value(&self) -> u64 {
+        let Self { signature, aliases } = self;
+        let mut hasher = DefaultHasher::new();
+        std::any::type_name::<Self>().hash(&mut hasher);
+        signature.hash(&mut hasher);
+        aliases.hash(&mut hasher);
+        hasher.finish()
     }
 }
 
