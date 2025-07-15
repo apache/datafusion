@@ -2106,7 +2106,7 @@ SELECT join_t1.t1_id, join_t2.t2_id
 FROM (select t1_id from join_t1 where join_t1.t1_id > 22) as join_t1
 RIGHT JOIN (select t2_id from join_t2 where join_t2.t2_id > 11) as join_t2
         ON join_t1.t1_id < join_t2.t2_id
-ORDER BY 1        
+ORDER BY 1, 2        
 ----
 33 44
 33 55
@@ -4458,7 +4458,6 @@ physical_plan
 07)------------DataSourceExec: partitions=2, partition_sizes=[1, 1]
 08)------SortExec: expr=[c@2 DESC NULLS LAST], preserve_partitioning=[true]
 09)--------DataSourceExec: partitions=2, partition_sizes=[1, 1]
-
 
 query III
 select * from test where a in (select a from test where b > 3) order by c desc nulls first;
