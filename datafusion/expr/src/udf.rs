@@ -766,24 +766,36 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     /// - This method must be consistent with [`Self::hash_value`]. If `equals` returns true for two UDFs,
     ///   their hash values must also be the same.
     /// - Ensure that the implementation does not panic or cause undefined behavior for any input.
-    fn equals(&self, other: &dyn ScalarUDFImpl) -> bool {
-        // if the pointers are the same, the UDFs are the same
-        if std::ptr::eq(self.as_any(), other.as_any()) {
-            return true;
-        }
+    use std::{any::TypeId, mem, ptr, slice};
 
-        // if the types, names and signatures are the same, we can't know if they are the same so we
-        // assume they are not.
-        // If a UDF has internal state that should be compared, it should implement this method
-        //
-        // Alternative approach: we could potentially do bit-by-bit comparison if both objects
-        // are the same concrete type, but this requires:
-        // 1. Both objects to have identical TypeId
-        // 2. Careful handling of potential padding bytes in structs
-        // 3. The concrete type to be safely comparable via memcmp
-        // For now, we use the conservative approach of returning false
-        false
+fn equals(&self, other: &dyn ScalarUDFImpl) -> bool {
+    // 1. If the pointers are identical, it’s definitely the same UDF.
+    if ptr::eq(self.as_any(), other.as_any()) {
+        return true;
     }
+
+    // 2. Otherwise, check that they’re the same concrete Rust type.
+    let self_any = self.as_any();
+    let other_any = other.as_any();
+    if TypeId::of_val(self_any) != TypeId::of_val(other_any) {
+        // Different types can never be equal.
+        return false;
+    }
+
+    // 3. Now we know they're the same struct type. In theory, since Rust moves
+    //    values by `memcpy`-ing their bytes, we could `memcmp` them byte-for-byte:
+    //
+    //    However, Rust doesn't guarantee that padding bytes are set the same way,
+    //    so two equal structs might have different padding and compare as not equal.
+    //
+    //    If your UDF type has no padding, or you make sure all padding is zeroed
+    //    (for example, with #[repr(C)] and a safe initializer), you can use memcmp
+    //    Otherwise, it's safer to just return false.
+
+    // 4. Fallback: we can’t prove they’re identical, so we say “not equal.”
+    false
+}
+
 
     /// Returns a hash value for this scalar UDF.
     ///
