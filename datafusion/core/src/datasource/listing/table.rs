@@ -2059,12 +2059,12 @@ mod tests {
             "datafusion.execution.parquet.write_batch_size".into(),
             "5".into(),
         );
-        config_map.insert("datafusion.execution.batch_size".into(), "1".into());
+        config_map.insert("datafusion.execution.batch_size".into(), "10".into());
         helper_test_append_new_files_to_table(
             ParquetFormat::default().get_ext(),
             FileCompressionType::UNCOMPRESSED,
             Some(config_map),
-            4,
+            2,
         )
         .await?;
         Ok(())
