@@ -473,6 +473,22 @@ impl FileSource for ParquetSource {
             .clone()
             .unwrap_or_else(|| Arc::new(DefaultSchemaAdapterFactory));
 
+        let expr_adapter_factory = match (
+            self.schema_adapter_factory.as_ref(),
+            base_config.expr_adapter.as_ref(),
+        ) {
+            (Some(_), Some(_)) => {
+                log::warn!(
+                    "ParquetSource: both schema_adapter_factory and expr_adapter are set. \
+                     Using schema_adapter_factory only."
+                );
+                None
+            }
+            (None, Some(expr_adapter)) => Some(Arc::clone(expr_adapter)),
+            (Some(_), None) => None,
+            (None, None) => Some(Arc::new(DefaultPhysicalExprAdapterFactory) as _),
+        };
+
         let parquet_file_reader_factory =
             self.parquet_file_reader_factory.clone().unwrap_or_else(|| {
                 Arc::new(DefaultParquetFileReaderFactory::new(object_store)) as _
@@ -511,10 +527,7 @@ impl FileSource for ParquetSource {
             schema_adapter_factory,
             coerce_int96,
             file_decryption_properties,
-            expr_adapter: base_config
-                .expr_adapter
-                .clone()
-                .unwrap_or_else(|| Arc::new(DefaultPhysicalExprAdapterFactory)),
+            expr_adapter_factory,
         })
     }
 
