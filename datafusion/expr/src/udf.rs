@@ -25,12 +25,14 @@ use crate::{ColumnarValue, Documentation, Expr, Signature};
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::{not_impl_err, ExprSchema, Result, ScalarValue};
 use datafusion_expr_common::interval_arithmetic::Interval;
-use std::any::Any;
-use std::cmp::Ordering;
-use std::fmt::Debug;
-use std::hash::{DefaultHasher, Hash, Hasher};
-use std::sync::Arc;
-
+use std::{
+    any::Any,
+    cmp::Ordering,
+    fmt::Debug,
+    hash::{DefaultHasher, Hash, Hasher},
+    ptr,
+    sync::Arc,
+};
 /// Logical representation of a Scalar User Defined Function.
 ///
 /// A scalar function produces a single row output for each row of input. This
@@ -766,36 +768,34 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     /// - This method must be consistent with [`Self::hash_value`]. If `equals` returns true for two UDFs,
     ///   their hash values must also be the same.
     /// - Ensure that the implementation does not panic or cause undefined behavior for any input.
-    use std::{any::TypeId, mem, ptr, slice};
 
-fn equals(&self, other: &dyn ScalarUDFImpl) -> bool {
-    // 1. If the pointers are identical, it’s definitely the same UDF.
-    if ptr::eq(self.as_any(), other.as_any()) {
-        return true;
+    fn equals(&self, other: &dyn ScalarUDFImpl) -> bool {
+        // 1. If the pointers are identical, it’s definitely the same UDF.
+        if ptr::eq(self.as_any(), other.as_any()) {
+            return true;
+        }
+
+        // 2. Otherwise, check that they’re the same concrete Rust type.
+        let self_any = self.as_any();
+        let other_any = other.as_any();
+        if self_any.type_id() != other_any.type_id() {
+            // Different types can never be equal.
+            return false;
+        }
+
+        // 3. Now we know they're the same struct type. In theory, since Rust moves
+        //    values by `memcpy`-ing their bytes, we could `memcmp` them byte-for-byte:
+        //
+        //    However, Rust doesn't guarantee that padding bytes are set the same way,
+        //    so two equal structs might have different padding and compare as not equal.
+        //
+        //    If your UDF type has no padding, or you make sure all padding is zeroed
+        //    (for example, with #[repr(C)] and a safe initializer), you can use memcmp
+        //    Otherwise, it's safer to just return false.
+
+        // 4. Fallback: we can’t prove they’re identical, so we say “not equal.”
+        false
     }
-
-    // 2. Otherwise, check that they’re the same concrete Rust type.
-    let self_any = self.as_any();
-    let other_any = other.as_any();
-    if TypeId::of_val(self_any) != TypeId::of_val(other_any) {
-        // Different types can never be equal.
-        return false;
-    }
-
-    // 3. Now we know they're the same struct type. In theory, since Rust moves
-    //    values by `memcpy`-ing their bytes, we could `memcmp` them byte-for-byte:
-    //
-    //    However, Rust doesn't guarantee that padding bytes are set the same way,
-    //    so two equal structs might have different padding and compare as not equal.
-    //
-    //    If your UDF type has no padding, or you make sure all padding is zeroed
-    //    (for example, with #[repr(C)] and a safe initializer), you can use memcmp
-    //    Otherwise, it's safer to just return false.
-
-    // 4. Fallback: we can’t prove they’re identical, so we say “not equal.”
-    false
-}
-
 
     /// Returns a hash value for this scalar UDF.
     ///
