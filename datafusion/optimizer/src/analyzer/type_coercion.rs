@@ -1599,7 +1599,7 @@ mod test {
             vec![lit(10i64)],
             false,
             None,
-            None,
+            vec![],
             None,
         ));
         let plan = LogicalPlan::Projection(Projection::try_new(vec![udaf], empty)?);
@@ -1634,7 +1634,7 @@ mod test {
             vec![lit("10")],
             false,
             None,
-            None,
+            vec![],
             None,
         ));
 
@@ -1653,7 +1653,7 @@ mod test {
             vec![lit(12f64)],
             false,
             None,
-            None,
+            vec![],
             None,
         ));
         let plan = LogicalPlan::Projection(Projection::try_new(vec![agg_expr], empty)?);
@@ -1672,7 +1672,7 @@ mod test {
             vec![cast(col("a"), DataType::Float64)],
             false,
             None,
-            None,
+            vec![],
             None,
         ));
         let plan = LogicalPlan::Projection(Projection::try_new(vec![agg_expr], empty)?);
@@ -1694,7 +1694,7 @@ mod test {
             vec![lit("1")],
             false,
             None,
-            None,
+            vec![],
             None,
         ));
         let err = Projection::try_new(vec![agg_expr], empty)
@@ -1729,7 +1729,7 @@ mod test {
         let empty = empty_with_type(DataType::Int64);
         let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty)?);
         assert_analyzed_plan_eq!(
-            plan, 
+            plan,
             @r"
         Projection: a IN ([CAST(Int32(1) AS Int64), CAST(Int8(4) AS Int64), Int64(8)])
           EmptyRelation
@@ -1746,7 +1746,7 @@ mod test {
         }));
         let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty)?);
         assert_analyzed_plan_eq!(
-            plan, 
+            plan,
             @r"
         Projection: CAST(a AS Decimal128(24, 4)) IN ([CAST(Int32(1) AS Decimal128(24, 4)), CAST(Int8(4) AS Decimal128(24, 4)), CAST(Int64(8) AS Decimal128(24, 4))])
           EmptyRelation

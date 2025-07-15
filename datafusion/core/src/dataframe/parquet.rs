@@ -246,4 +246,73 @@ mod tests {
 
         Ok(())
     }
+
+    #[cfg(feature = "parquet_encryption")]
+    #[tokio::test]
+    async fn roundtrip_parquet_with_encryption() -> Result<()> {
+        use parquet::encryption::decrypt::FileDecryptionProperties;
+        use parquet::encryption::encrypt::FileEncryptionProperties;
+
+        let test_df = test_util::test_table().await?;
+
+        let schema = test_df.schema();
+        let footer_key = b"0123456789012345".to_vec(); // 128bit/16
+        let column_key = b"1234567890123450".to_vec(); // 128bit/16
+
+        let mut encrypt = FileEncryptionProperties::builder(footer_key.clone());
+        let mut decrypt = FileDecryptionProperties::builder(footer_key.clone());
+
+        for field in schema.fields().iter() {
+            encrypt = encrypt.with_column_key(field.name().as_str(), column_key.clone());
+            decrypt = decrypt.with_column_key(field.name().as_str(), column_key.clone());
+        }
+
+        let encrypt = encrypt.build()?;
+        let decrypt = decrypt.build()?;
+
+        let df = test_df.clone();
+        let tmp_dir = TempDir::new()?;
+        let tempfile = tmp_dir.path().join("roundtrip.parquet");
+        let tempfile_str = tempfile.into_os_string().into_string().unwrap();
+
+        // Write encrypted parquet using write_parquet
+        let mut options = TableParquetOptions::default();
+        options.crypto.file_encryption = Some((&encrypt).into());
+
+        df.write_parquet(
+            tempfile_str.as_str(),
+            DataFrameWriteOptions::new().with_single_file_output(true),
+            Some(options),
+        )
+        .await?;
+        let num_rows_written = test_df.count().await?;
+
+        // Read encrypted parquet
+        let ctx: SessionContext = SessionContext::new();
+        let read_options =
+            ParquetReadOptions::default().file_decryption_properties((&decrypt).into());
+
+        ctx.register_parquet("roundtrip_parquet", &tempfile_str, read_options.clone())
+            .await?;
+
+        let df_enc = ctx.sql("SELECT * FROM roundtrip_parquet").await?;
+        let num_rows_read = df_enc.count().await?;
+
+        assert_eq!(num_rows_read, num_rows_written);
+
+        // Read encrypted parquet and subset rows + columns
+        let encrypted_parquet_df = ctx.read_parquet(tempfile_str, read_options).await?;
+
+        // Select three columns and filter the results
+        // Test that the filter works as expected
+        let selected = encrypted_parquet_df
+            .clone()
+            .select_columns(&["c1", "c2", "c3"])?
+            .filter(col("c2").gt(lit(4)))?;
+
+        let num_rows_selected = selected.count().await?;
+        assert_eq!(num_rows_selected, 14);
+
+        Ok(())
+    }
 }

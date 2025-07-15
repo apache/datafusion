@@ -25,4 +25,3 @@
 ## PySpark 3.5.5 Result: {'hour(2009-07-30 12:58:59)': 12, 'typeof(hour(2009-07-30 12:58:59))': 'int', 'typeof(2009-07-30 12:58:59)': 'string'}
 #query
 #SELECT hour('2009-07-30 12:58:59'::string);
-

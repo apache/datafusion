@@ -263,6 +263,15 @@ pub trait AggregateWindowExpr: WindowExpr {
 
     /// Calculates the window expression result for the given record batch.
     /// Assumes that `record_batch` belongs to a single partition.
+    ///
+    /// # Arguments
+    /// * `accumulator`: The accumulator to use for the calculation.
+    /// * `record_batch`: batch belonging to the current partition (see [`PartitionBatchState`]).
+    /// * `most_recent_row`: the batch that contains the most recent row, if available (see [`PartitionBatchState`]).
+    /// * `last_range`: The last range of rows that were processed (see [`WindowAggState`]).
+    /// * `window_frame_ctx`: Details about the window frame (see [`WindowFrameContext`]).
+    /// * `idx`: The index of the current row in the record batch.
+    /// * `not_end`: is the current row not the end of the partition (see [`PartitionBatchState`]).
     #[allow(clippy::too_many_arguments)]
     fn get_result_column(
         &self,

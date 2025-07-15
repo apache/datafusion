@@ -61,6 +61,7 @@ default = [
     "unicode_expressions",
     "compression",
     "parquet",
+    "parquet_encryption",
     "recursive_protection",
 ]
 encoding_expressions = ["datafusion-functions/encoding_expressions"]
@@ -68,6 +69,13 @@ encoding_expressions = ["datafusion-functions/encoding_expressions"]
 force_hash_collisions = ["datafusion-physical-plan/force_hash_collisions", "datafusion-common/force_hash_collisions"]
 math_expressions = ["datafusion-functions/math_expressions"]
 parquet = ["datafusion-common/parquet", "dep:parquet", "datafusion-datasource-parquet"]
+parquet_encryption = [
+    "dep:parquet",
+    "parquet/encryption",
+    "datafusion-common/parquet_encryption",
+    "datafusion-datasource-parquet/parquet_encryption",
+    "dep:hex",
+]
 pyarrow = ["datafusion-common/pyarrow", "parquet"]
 regex_expressions = [
     "datafusion-functions/regex_expressions",
@@ -127,6 +135,7 @@ datafusion-session = { workspace = true }
 datafusion-sql = { workspace = true }
 flate2 = { version = "1.1.2", optional = true }
 futures = { workspace = true }
+hex = { workspace = true, optional = true }
 itertools = { workspace = true }
 log = { workspace = true }
 object_store = { workspace = true }
@@ -154,6 +163,7 @@ datafusion-macros = { workspace = true }
 datafusion-physical-optimizer = { workspace = true }
 doc-comment = { workspace = true }
 env_logger = { workspace = true }
+glob = { version = "0.3.0" }
 insta = { workspace = true }
 paste = "^1.0"
 rand = { workspace = true, features = ["small_rng"] }

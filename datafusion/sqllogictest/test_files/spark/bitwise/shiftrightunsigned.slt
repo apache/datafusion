@@ -25,4 +25,3 @@
 ## PySpark 3.5.5 Result: {'shiftrightunsigned(4, 1)': 2, 'typeof(shiftrightunsigned(4, 1))': 'int', 'typeof(4)': 'int', 'typeof(1)': 'int'}
 #query
 #SELECT shiftrightunsigned(4::int, 1::int);
-

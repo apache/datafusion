@@ -18,8 +18,8 @@
 //! TopK: Combination of Sort / LIMIT
 
 use arrow::{
-    array::Array,
-    compute::interleave_record_batch,
+    array::{Array, AsArray},
+    compute::{interleave_record_batch, prep_null_mask_filter, FilterBuilder},
     row::{RowConverter, Rows, SortField},
 };
 use datafusion_expr::{ColumnarValue, Operator};
@@ -203,7 +203,7 @@ impl TopK {
         let baseline = self.metrics.baseline.clone();
         let _timer = baseline.elapsed_compute().timer();
 
-        let sort_keys: Vec<ArrayRef> = self
+        let mut sort_keys: Vec<ArrayRef> = self
             .expr
             .iter()
             .map(|expr| {
@@ -212,6 +212,43 @@ impl TopK {
             })
             .collect::<Result<Vec<_>>>()?;
 
+        let mut selected_rows = None;
+
+        if let Some(filter) = self.filter.as_ref() {
+            // If a filter is provided, update it with the new rows
+            let filter = filter.current()?;
+            let filtered = filter.evaluate(&batch)?;
+            let num_rows = batch.num_rows();
+            let array = filtered.into_array(num_rows)?;
+            let mut filter = array.as_boolean().clone();
+            let true_count = filter.true_count();
+            if true_count == 0 {
+                // nothing to filter, so no need to update
+                return Ok(());
+            }
+            // only update the keys / rows if the filter does not match all rows
+            if true_count < num_rows {
+                // Indices in `set_indices` should be correct if filter contains nulls
+                // So we prepare the filter here. Note this is also done in the `FilterBuilder`
+                // so there is no overhead to do this here.
+                if filter.nulls().is_some() {
+                    filter = prep_null_mask_filter(&filter);
+                }
+
+                let filter_predicate = FilterBuilder::new(&filter);
+                let filter_predicate = if sort_keys.len() > 1 {
+                    // Optimize filter when it has multiple sort keys
+                    filter_predicate.optimize().build()
+                } else {
+                    filter_predicate.build()
+                };
+                selected_rows = Some(filter);
+                sort_keys = sort_keys
+                    .iter()
+                    .map(|key| filter_predicate.filter(key).map_err(|x| x.into()))
+                    .collect::<Result<Vec<_>>>()?;
+            }
+        };
         // reuse existing `Rows` to avoid reallocations
         let rows = &mut self.scratch_rows;
         rows.clear();
@@ -219,8 +256,12 @@ impl TopK {
 
         let mut batch_entry = self.heap.register_batch(batch.clone());
 
-        let replacements =
-            self.find_new_topk_items(0..sort_keys[0].len(), &mut batch_entry);
+        let replacements = match selected_rows {
+            Some(filter) => {
+                self.find_new_topk_items(filter.values().set_indices(), &mut batch_entry)
+            }
+            None => self.find_new_topk_items(0..sort_keys[0].len(), &mut batch_entry),
+        };
 
         if replacements > 0 {
             self.metrics.row_replacements.add(replacements);

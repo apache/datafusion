@@ -89,6 +89,7 @@ tpch_mem10:             TPCH inspired benchmark on Scale Factor (SF) 10 (~10GB),
 
 # Extended TPC-H Benchmarks
 sort_tpch:              Benchmark of sorting speed for end-to-end sort queries on TPC-H dataset (SF=1)
+sort_tpch10:            Benchmark of sorting speed for end-to-end sort queries on TPC-H dataset (SF=10)
 topk_tpch:              Benchmark of top-k (sorting with limit) queries on TPC-H dataset (SF=1)
 external_aggr:          External aggregation benchmark on TPC-H dataset (SF=1)
 
@@ -113,8 +114,6 @@ imdb:                   Join Order Benchmark (JOB) using the IMDB dataset conver
 
 # Micro-Benchmarks (specific operators and features)
 cancellation:           How long cancelling a query takes
-parquet:                Benchmark of parquet reader's filtering speed
-sort:                   Benchmark of sorting speed
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Supported Configuration (Environment Variables)
@@ -250,6 +249,10 @@ main() {
                     # same data as for tpch
                     data_tpch "1"
                     ;;
+                sort_tpch10)
+                    # same data as for tpch10
+                    data_tpch "10"
+                    ;;
                 topk_tpch)
                     # same data as for tpch
                     data_tpch "1"
@@ -298,8 +301,6 @@ main() {
                     run_tpch "10" "csv"
                     run_tpch_mem "10"
                     run_cancellation
-                    run_parquet
-                    run_sort
                     run_clickbench_1
                     run_clickbench_partitioned
                     run_clickbench_extended
@@ -332,12 +333,6 @@ main() {
                     ;;
                 cancellation)
                     run_cancellation
-                    ;;
-                parquet)
-                    run_parquet
-                    ;;
-                sort)
-                    run_sort
                     ;;
                 clickbench_1)
                     run_clickbench_1
@@ -382,7 +377,10 @@ main() {
                     run_external_aggr
                     ;;
                 sort_tpch)
-                    run_sort_tpch
+                    run_sort_tpch "1"
+                    ;;
+                sort_tpch10)
+                    run_sort_tpch "10"
                     ;;
                 topk_tpch)
                     run_topk_tpch
@@ -518,22 +516,6 @@ run_cancellation() {
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running cancellation benchmark..."
     debug_run $CARGO_COMMAND --bin dfbench -- cancellation --iterations 5 --path "${DATA_DIR}/cancellation" -o "${RESULTS_FILE}"
-}
-
-# Runs the parquet filter benchmark
-run_parquet() {
-    RESULTS_FILE="${RESULTS_DIR}/parquet.json"
-    echo "RESULTS_FILE: ${RESULTS_FILE}"
-    echo "Running parquet filter benchmark..."
-    debug_run $CARGO_COMMAND --bin parquet -- filter --path "${DATA_DIR}" --scale-factor 1.0 --iterations 5 -o "${RESULTS_FILE}"
-}
-
-# Runs the sort benchmark
-run_sort() {
-    RESULTS_FILE="${RESULTS_DIR}/sort.json"
-    echo "RESULTS_FILE: ${RESULTS_FILE}"
-    echo "Running sort benchmark..."
-    debug_run $CARGO_COMMAND --bin parquet -- sort --path "${DATA_DIR}" --scale-factor 1.0 --iterations 5 -o "${RESULTS_FILE}"
 }
 
 
@@ -997,8 +979,13 @@ run_external_aggr() {
 
 # Runs the sort integration benchmark
 run_sort_tpch() {
-    TPCH_DIR="${DATA_DIR}/tpch_sf1"
-    RESULTS_FILE="${RESULTS_DIR}/sort_tpch.json"
+    SCALE_FACTOR=$1
+    if [ -z "$SCALE_FACTOR" ] ; then
+        echo "Internal error: Scale factor not specified"
+        exit 1
+    fi
+    TPCH_DIR="${DATA_DIR}/tpch_sf${SCALE_FACTOR}"
+    RESULTS_FILE="${RESULTS_DIR}/sort_tpch${SCALE_FACTOR}.json"
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running sort tpch benchmark..."
 

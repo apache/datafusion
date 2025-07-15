@@ -245,6 +245,7 @@ impl AsyncMapper {
     pub fn find_references(
         &mut self,
         physical_expr: &Arc<dyn PhysicalExpr>,
+        schema: &Schema,
     ) -> Result<()> {
         // recursively look for references to async functions
         physical_expr.apply(|expr| {
@@ -256,6 +257,7 @@ impl AsyncMapper {
                     self.async_exprs.push(Arc::new(AsyncFuncExpr::try_new(
                         next_name,
                         Arc::clone(expr),
+                        schema,
                     )?));
                 }
             }

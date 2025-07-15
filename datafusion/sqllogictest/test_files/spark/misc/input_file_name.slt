@@ -25,4 +25,3 @@
 ## PySpark 3.5.5 Result: {'input_file_name()': '', 'typeof(input_file_name())': 'string'}
 #query
 #SELECT input_file_name();
-

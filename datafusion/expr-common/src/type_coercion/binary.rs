@@ -124,6 +124,57 @@ impl<'a> BinaryTypeCoercer<'a> {
 
     /// Returns a [`Signature`] for applying `op` to arguments of type `lhs` and `rhs`
     fn signature(&'a self) -> Result<Signature> {
+        if let Some(coerced) = null_coercion(self.lhs, self.rhs) {
+            use Operator::*;
+            // Special handling for arithmetic + null coercion:
+            // For arithmetic operators on non-temporal types, we must handle the result type here using Arrow's numeric kernel.
+            // This is because Arrow expects concrete numeric types, and this ensures the correct result type (e.g., for NULL + Int32, result is Int32).
+            // For all other cases (including temporal arithmetic and non-arithmetic operators),
+            // we can delegate to signature_inner(&coerced, &coerced), which handles the necessary logic for those operators.
+            // In those cases, signature_inner is designed to work with the coerced type, even if it originated from a NULL.
+            if matches!(self.op, Plus | Minus | Multiply | Divide | Modulo)
+                && !coerced.is_temporal()
+            {
+                let ret = self.get_result(&coerced, &coerced).map_err(|e| {
+                    plan_datafusion_err!(
+                        "Cannot get result type for arithmetic operation {coerced} {} {coerced}: {e}",
+                        self.op
+                    )
+                })?;
+
+                return Ok(Signature {
+                    lhs: coerced.clone(),
+                    rhs: coerced,
+                    ret,
+                });
+            }
+            return self.signature_inner(&coerced, &coerced);
+        }
+        self.signature_inner(self.lhs, self.rhs)
+    }
+
+    /// Returns the result type for arithmetic operations
+    fn get_result(
+        &self,
+        lhs: &DataType,
+        rhs: &DataType,
+    ) -> arrow::error::Result<DataType> {
+        use arrow::compute::kernels::numeric::*;
+        let l = new_empty_array(lhs);
+        let r = new_empty_array(rhs);
+
+        let result = match self.op {
+            Operator::Plus => add_wrapping(&l, &r),
+            Operator::Minus => sub_wrapping(&l, &r),
+            Operator::Multiply => mul_wrapping(&l, &r),
+            Operator::Divide => div(&l, &r),
+            Operator::Modulo => rem(&l, &r),
+            _ => unreachable!(),
+        };
+        result.map(|x| x.data_type().clone())
+    }
+
+    fn signature_inner(&'a self, lhs: &DataType, rhs: &DataType) -> Result<Signature> {
         use arrow::datatypes::DataType::*;
         use Operator::*;
         let result = match self.op {
@@ -135,7 +186,7 @@ impl<'a> BinaryTypeCoercer<'a> {
         GtEq |
         IsDistinctFrom |
         IsNotDistinctFrom => {
-            comparison_coercion(self.lhs, self.rhs).map(Signature::comparison).ok_or_else(|| {
+            comparison_coercion(lhs, rhs).map(Signature::comparison).ok_or_else(|| {
                 plan_datafusion_err!(
                     "Cannot infer common argument type for comparison operation {} {} {}",
                     self.lhs,
@@ -144,7 +195,7 @@ impl<'a> BinaryTypeCoercer<'a> {
                 )
             })
         }
-        And | Or => if matches!((self.lhs, self.rhs), (Boolean | Null, Boolean | Null)) {
+        And | Or => if matches!((lhs, rhs), (Boolean | Null, Boolean | Null)) {
             // Logical binary boolean operators can only be evaluated for
             // boolean or null arguments.                   
             Ok(Signature::uniform(Boolean))
@@ -154,28 +205,28 @@ impl<'a> BinaryTypeCoercer<'a> {
             )
         }
         RegexMatch | RegexIMatch | RegexNotMatch | RegexNotIMatch => {
-            regex_coercion(self.lhs, self.rhs).map(Signature::comparison).ok_or_else(|| {
+            regex_coercion(lhs, rhs).map(Signature::comparison).ok_or_else(|| {
                 plan_datafusion_err!(
                     "Cannot infer common argument type for regex operation {} {} {}", self.lhs, self.op, self.rhs
                 )
             })
         }
         LikeMatch | ILikeMatch | NotLikeMatch | NotILikeMatch => {
-            regex_coercion(self.lhs, self.rhs).map(Signature::comparison).ok_or_else(|| {
+            regex_coercion(lhs, rhs).map(Signature::comparison).ok_or_else(|| {
                 plan_datafusion_err!(
                     "Cannot infer common argument type for regex operation {} {} {}", self.lhs, self.op, self.rhs
                 )
             })
         }
         BitwiseAnd | BitwiseOr | BitwiseXor | BitwiseShiftRight | BitwiseShiftLeft => {
-            bitwise_coercion(self.lhs, self.rhs).map(Signature::uniform).ok_or_else(|| {
+            bitwise_coercion(lhs, rhs).map(Signature::uniform).ok_or_else(|| {
                 plan_datafusion_err!(
                     "Cannot infer common type for bitwise operation {} {} {}", self.lhs, self.op, self.rhs
                 )
             })
         }
         StringConcat => {
-            string_concat_coercion(self.lhs, self.rhs).map(Signature::uniform).ok_or_else(|| {
+            string_concat_coercion(lhs, rhs).map(Signature::uniform).ok_or_else(|| {
                 plan_datafusion_err!(
                     "Cannot infer common string type for string concat operation {} {} {}", self.lhs, self.op, self.rhs
                 )
@@ -183,8 +234,8 @@ impl<'a> BinaryTypeCoercer<'a> {
         }
         AtArrow | ArrowAt => {
             // Array contains or search (similar to LIKE) operation
-            array_coercion(self.lhs, self.rhs)
-                .or_else(|| like_coercion(self.lhs, self.rhs)).map(Signature::comparison).ok_or_else(|| {
+            array_coercion(lhs, rhs)
+                .or_else(|| like_coercion(lhs, rhs)).map(Signature::comparison).ok_or_else(|| {
                     plan_datafusion_err!(
                         "Cannot infer common argument type for operation {} {} {}", self.lhs, self.op, self.rhs
                     )
@@ -192,40 +243,24 @@ impl<'a> BinaryTypeCoercer<'a> {
         }
         AtAt => {
             // text search has similar signature to LIKE
-            like_coercion(self.lhs, self.rhs).map(Signature::comparison).ok_or_else(|| {
+            like_coercion(lhs, rhs).map(Signature::comparison).ok_or_else(|| {
                 plan_datafusion_err!(
                     "Cannot infer common argument type for AtAt operation {} {} {}", self.lhs, self.op, self.rhs
                 )
             })
         }
         Plus | Minus | Multiply | Divide | Modulo  =>  {
-            let get_result = |lhs, rhs| {
-                use arrow::compute::kernels::numeric::*;
-                let l = new_empty_array(lhs);
-                let r = new_empty_array(rhs);
-
-                let result = match self.op {
-                    Plus => add_wrapping(&l, &r),
-                    Minus => sub_wrapping(&l, &r),
-                    Multiply => mul_wrapping(&l, &r),
-                    Divide => div(&l, &r),
-                    Modulo => rem(&l, &r),
-                    _ => unreachable!(),
-                };
-                result.map(|x| x.data_type().clone())
-            };
-
-            if let Ok(ret) = get_result(self.lhs, self.rhs) {
+            if let Ok(ret) = self.get_result(lhs, rhs) {
                 // Temporal arithmetic, e.g. Date32 + Interval
                 Ok(Signature{
-                    lhs: self.lhs.clone(),
-                    rhs: self.rhs.clone(),
+                    lhs: lhs.clone(),
+                    rhs: rhs.clone(),
                     ret,
                 })
-            } else if let Some(coerced) = temporal_coercion_strict_timezone(self.lhs, self.rhs) {
+            } else if let Some(coerced) = temporal_coercion_strict_timezone(lhs, rhs) {
                 // Temporal arithmetic by first coercing to a common time representation
                 // e.g. Date32 - Timestamp
-                let ret = get_result(&coerced, &coerced).map_err(|e| {
+                let ret = self.get_result(&coerced, &coerced).map_err(|e| {
                     plan_datafusion_err!(
                         "Cannot get result type for temporal operation {coerced} {} {coerced}: {e}", self.op
                     )
@@ -235,9 +270,9 @@ impl<'a> BinaryTypeCoercer<'a> {
                     rhs: coerced,
                     ret,
                 })
-            } else if let Some((lhs, rhs)) = math_decimal_coercion(self.lhs, self.rhs) {
+            } else if let Some((lhs, rhs)) = math_decimal_coercion(lhs, rhs) {
                 // Decimal arithmetic, e.g. Decimal(10, 2) + Decimal(10, 0)
-                let ret = get_result(&lhs, &rhs).map_err(|e| {
+                let ret = self.get_result(&lhs, &rhs).map_err(|e| {
                     plan_datafusion_err!(
                         "Cannot get result type for decimal operation {} {} {}: {e}", self.lhs, self.op, self.rhs
                     )
@@ -247,7 +282,7 @@ impl<'a> BinaryTypeCoercer<'a> {
                     rhs,
                     ret,
                 })
-            } else if let Some(numeric) = mathematics_numerical_coercion(self.lhs, self.rhs) {
+            } else if let Some(numeric) = mathematics_numerical_coercion(lhs, rhs) {
                 // Numeric arithmetic, e.g. Int32 + Int32
                 Ok(Signature::uniform(numeric))
             } else {
@@ -307,17 +342,25 @@ fn math_decimal_coercion(
         }
         // Unlike with comparison we don't coerce to a decimal in the case of floating point
         // numbers, instead falling back to floating point arithmetic instead
-        (Decimal128(_, _), Int8 | Int16 | Int32 | Int64) => {
-            Some((lhs_type.clone(), coerce_numeric_type_to_decimal(rhs_type)?))
-        }
-        (Int8 | Int16 | Int32 | Int64, Decimal128(_, _)) => {
-            Some((coerce_numeric_type_to_decimal(lhs_type)?, rhs_type.clone()))
-        }
-        (Decimal256(_, _), Int8 | Int16 | Int32 | Int64) => Some((
+        (
+            Decimal128(_, _),
+            Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64,
+        ) => Some((lhs_type.clone(), coerce_numeric_type_to_decimal(rhs_type)?)),
+        (
+            Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64,
+            Decimal128(_, _),
+        ) => Some((coerce_numeric_type_to_decimal(lhs_type)?, rhs_type.clone())),
+        (
+            Decimal256(_, _),
+            Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64,
+        ) => Some((
             lhs_type.clone(),
             coerce_numeric_type_to_decimal256(rhs_type)?,
         )),
-        (Int8 | Int16 | Int32 | Int64, Decimal256(_, _)) => Some((
+        (
+            Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64,
+            Decimal256(_, _),
+        ) => Some((
             coerce_numeric_type_to_decimal256(lhs_type)?,
             rhs_type.clone(),
         )),
@@ -2197,6 +2240,19 @@ mod tests {
             DataType::Decimal128(10, 2),
             DataType::Decimal128(10, 0),
             DataType::Decimal128(10, 2),
+        );
+
+        test_math_decimal_coercion_rule(
+            DataType::UInt32,
+            DataType::Decimal128(10, 2),
+            DataType::Decimal128(10, 0),
+            DataType::Decimal128(10, 2),
+        );
+        test_math_decimal_coercion_rule(
+            DataType::Decimal128(10, 2),
+            DataType::UInt32,
+            DataType::Decimal128(10, 2),
+            DataType::Decimal128(10, 0),
         );
 
         Ok(())

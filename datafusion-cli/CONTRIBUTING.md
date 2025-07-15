@@ -29,47 +29,26 @@ cargo test
 
 ## Running Storage Integration Tests
 
-By default, storage integration tests are not run. To run them you will need to set `TEST_STORAGE_INTEGRATION=1` and
-then provide the necessary configuration for that object store.
+By default, storage integration tests are not run. These test use the `testcontainers` crate to start up a local MinIO server using docker on port 9000.
+
+To run them you will need to set `TEST_STORAGE_INTEGRATION`:
+
+```shell
+TEST_STORAGE_INTEGRATION=1 cargo test
+```
 
 For some of the tests, [snapshots](https://datafusion.apache.org/contributor-guide/testing.html#snapshot-testing) are used.
 
 ### AWS
 
-To test the S3 integration against [Minio](https://github.com/minio/minio)
+S3 integration is tested against [Minio](https://github.com/minio/minio) with [TestContainers](https://github.com/testcontainers/testcontainers-rs)
+This requires Docker to be running on your machine and port 9000 to be free.
 
-First start up a container with Minio and load test files.
+If you see an error mentioning "failed to load IMDS session token" such as
 
-```shell
-docker run -d \
-  --name datafusion-test-minio \
-  -p 9000:9000 \
-  -e MINIO_ROOT_USER=TEST-DataFusionLogin \
-  -e MINIO_ROOT_PASSWORD=TEST-DataFusionPassword \
-  -v $(pwd)/../datafusion/core/tests/data:/source \
-  quay.io/minio/minio server /data
+> ---- object_storage::tests::s3_object_store_builder_resolves_region_when_none_provided stdout ----
+> Error: ObjectStore(Generic { store: "S3", source: "Error getting credentials from provider: an error occurred while loading credentials: failed to load IMDS session token" })
 
-docker exec datafusion-test-minio /bin/sh -c "\
-  mc ready local
-  mc alias set localminio http://localhost:9000 TEST-DataFusionLogin TEST-DataFusionPassword && \
-  mc mb localminio/data && \
-  mc cp -r /source/* localminio/data"
-```
+You my need to disable trying to fetch S3 credentials from the environment using the `AWS_EC2_METADATA_DISABLED`, for example:
 
-Setup environment
-
-```shell
-export TEST_STORAGE_INTEGRATION=1
-export AWS_ACCESS_KEY_ID=TEST-DataFusionLogin
-export AWS_SECRET_ACCESS_KEY=TEST-DataFusionPassword
-export AWS_ENDPOINT=http://127.0.0.1:9000
-export AWS_ALLOW_HTTP=true
-```
-
-Note that `AWS_ENDPOINT` is set without slash at the end.
-
-Run tests
-
-```shell
-cargo test
-```
+> $ AWS_EC2_METADATA_DISABLED=true TEST_STORAGE_INTEGRATION=1 cargo test

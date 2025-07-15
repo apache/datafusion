@@ -93,6 +93,7 @@ use datafusion_physical_plan::execution_plan::InvariantLevel;
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_physical_plan::recursive_query::RecursiveQueryExec;
 use datafusion_physical_plan::unnest::ListUnnest;
+use datafusion_sql::TableReference;
 use sqlparser::ast::NullTreatment;
 
 use async_trait::async_trait;
@@ -504,6 +505,7 @@ impl DefaultPhysicalPlanner {
                 file_type,
                 partition_by,
                 options: source_option_tuples,
+                output_schema: _,
             }) => {
                 let original_url = output_url.clone();
                 let input_exec = children.one()?;
@@ -533,6 +535,14 @@ impl DefaultPhysicalPlanner {
                 let sink_format = file_type_to_format(file_type)?
                     .create(session_state, source_option_tuples)?;
 
+                // Determine extension based on format extension and compression
+                let file_extension = match sink_format.compression_type() {
+                    Some(compression_type) => sink_format
+                        .get_ext_with_compression(&compression_type)
+                        .unwrap_or_else(|_| sink_format.get_ext()),
+                    None => sink_format.get_ext(),
+                };
+
                 // Set file sink related options
                 let config = FileSinkConfig {
                     original_url,
@@ -543,7 +553,7 @@ impl DefaultPhysicalPlanner {
                     table_partition_cols,
                     insert_op: InsertOp::Append,
                     keep_partition_by_columns,
-                    file_extension: sink_format.get_ext(),
+                    file_extension,
                 };
 
                 sink_format
@@ -779,9 +789,11 @@ impl DefaultPhysicalPlanner {
                 let runtime_expr =
                     self.create_physical_expr(predicate, input_dfschema, session_state)?;
 
+                let input_schema = input.schema();
                 let filter = match self.try_plan_async_exprs(
-                    input.schema().fields().len(),
+                    input_schema.fields().len(),
                     PlannedExprResult::Expr(vec![runtime_expr]),
+                    input_schema.as_arrow(),
                 )? {
                     PlanAsyncExpr::Sync(PlannedExprResult::Expr(runtime_expr)) => {
                         FilterExec::try_new(Arc::clone(&runtime_expr[0]), physical_input)?
@@ -945,8 +957,8 @@ impl DefaultPhysicalPlanner {
 
             // 2 Children
             LogicalPlan::Join(Join {
-                left,
-                right,
+                left: original_left,
+                right: original_right,
                 on: keys,
                 filter,
                 join_type,
@@ -969,23 +981,25 @@ impl DefaultPhysicalPlanner {
                     let (left, left_col_keys, left_projected) =
                         wrap_projection_for_join_if_necessary(
                             &left_keys,
-                            left.as_ref().clone(),
+                            original_left.as_ref().clone(),
                         )?;
                     let (right, right_col_keys, right_projected) =
                         wrap_projection_for_join_if_necessary(
                             &right_keys,
-                            right.as_ref().clone(),
+                            original_right.as_ref().clone(),
                         )?;
                     let column_on = (left_col_keys, right_col_keys);
 
                     let left = Arc::new(left);
                     let right = Arc::new(right);
-                    let new_join = LogicalPlan::Join(Join::try_new_with_project_input(
+                    let (new_join, requalified) = Join::try_new_with_project_input(
                         node,
                         Arc::clone(&left),
                         Arc::clone(&right),
                         column_on,
-                    )?);
+                    )?;
+
+                    let new_join = LogicalPlan::Join(new_join);
 
                     // If inputs were projected then create ExecutionPlan for these new
                     // LogicalPlan nodes.
@@ -1018,8 +1032,24 @@ impl DefaultPhysicalPlanner {
 
                     // Remove temporary projected columns
                     if left_projected || right_projected {
-                        let final_join_result =
-                            join_schema.iter().map(Expr::from).collect::<Vec<_>>();
+                        // Re-qualify the join schema only if the inputs were previously requalified in
+                        // `try_new_with_project_input`. This ensures that when building the Projection
+                        // it can correctly resolve field nullability and data types
+                        // by disambiguating fields from the left and right sides of the join.
+                        let qualified_join_schema = if requalified {
+                            Arc::new(qualify_join_schema_sides(
+                                join_schema,
+                                original_left,
+                                original_right,
+                            )?)
+                        } else {
+                            Arc::clone(join_schema)
+                        };
+
+                        let final_join_result = qualified_join_schema
+                            .iter()
+                            .map(Expr::from)
+                            .collect::<Vec<_>>();
                         let projection = LogicalPlan::Projection(Projection::try_new(
                             final_join_result,
                             Arc::new(new_join),
@@ -1516,6 +1546,64 @@ fn get_null_physical_expr_pair(
     Ok((Arc::new(null_value), physical_name))
 }
 
+/// Qualifies the fields in a join schema with "left" and "right" qualifiers
+/// without mutating the original schema. This function should only be used when
+/// the join inputs have already been requalified earlier in `try_new_with_project_input`.
+///
+/// The purpose is to avoid ambiguity errors later in planning (e.g., in nullability or data type resolution)
+/// when converting expressions to fields.
+fn qualify_join_schema_sides(
+    join_schema: &DFSchema,
+    left: &LogicalPlan,
+    right: &LogicalPlan,
+) -> Result<DFSchema> {
+    let left_fields = left.schema().fields();
+    let right_fields = right.schema().fields();
+    let join_fields = join_schema.fields();
+
+    // Validate lengths
+    if join_fields.len() != left_fields.len() + right_fields.len() {
+        return internal_err!(
+            "Join schema field count must match left and right field count."
+        );
+    }
+
+    // Validate field names match
+    for (i, (field, expected)) in join_fields
+        .iter()
+        .zip(left_fields.iter().chain(right_fields.iter()))
+        .enumerate()
+    {
+        if field.name() != expected.name() {
+            return internal_err!(
+                "Field name mismatch at index {}: expected '{}', found '{}'",
+                i,
+                expected.name(),
+                field.name()
+            );
+        }
+    }
+
+    // qualify sides
+    let qualifiers = join_fields
+        .iter()
+        .enumerate()
+        .map(|(i, _)| {
+            if i < left_fields.len() {
+                Some(TableReference::Bare {
+                    table: Arc::from("left"),
+                })
+            } else {
+                Some(TableReference::Bare {
+                    table: Arc::from("right"),
+                })
+            }
+        })
+        .collect();
+
+    join_schema.with_field_specific_qualified_schema(qualifiers)
+}
+
 fn get_physical_expr_pair(
     expr: &Expr,
     input_dfschema: &DFSchema,
@@ -1665,14 +1753,11 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                 == NullTreatment::IgnoreNulls;
 
             let (agg_expr, filter, order_bys) = {
-                let order_bys = match order_by {
-                    Some(exprs) => create_physical_sort_exprs(
-                        exprs,
-                        logical_input_schema,
-                        execution_props,
-                    )?,
-                    None => vec![],
-                };
+                let order_bys = create_physical_sort_exprs(
+                    order_by,
+                    logical_input_schema,
+                    execution_props,
+                )?;
 
                 let agg_expr =
                     AggregateExprBuilder::new(func.to_owned(), physical_args.to_vec())
@@ -2098,6 +2183,7 @@ impl DefaultPhysicalPlanner {
         match self.try_plan_async_exprs(
             num_input_columns,
             PlannedExprResult::ExprWithName(physical_exprs),
+            input_physical_schema.as_ref(),
         )? {
             PlanAsyncExpr::Sync(PlannedExprResult::ExprWithName(physical_exprs)) => Ok(
                 Arc::new(ProjectionExec::try_new(physical_exprs, input_exec)?),
@@ -2120,18 +2206,19 @@ impl DefaultPhysicalPlanner {
         &self,
         num_input_columns: usize,
         physical_expr: PlannedExprResult,
+        schema: &Schema,
     ) -> Result<PlanAsyncExpr> {
         let mut async_map = AsyncMapper::new(num_input_columns);
         match &physical_expr {
             PlannedExprResult::ExprWithName(exprs) => {
                 exprs
                     .iter()
-                    .try_for_each(|(expr, _)| async_map.find_references(expr))?;
+                    .try_for_each(|(expr, _)| async_map.find_references(expr, schema))?;
             }
             PlannedExprResult::Expr(exprs) => {
                 exprs
                     .iter()
-                    .try_for_each(|expr| async_map.find_references(expr))?;
+                    .try_for_each(|expr| async_map.find_references(expr, schema))?;
             }
         }
 

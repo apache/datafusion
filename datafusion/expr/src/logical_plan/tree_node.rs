@@ -253,6 +253,7 @@ impl TreeNode for LogicalPlan {
                 partition_by,
                 file_type,
                 options,
+                output_schema,
             }) => input.map_elements(f)?.update_data(|input| {
                 LogicalPlan::Copy(CopyTo {
                     input,
@@ -260,6 +261,7 @@ impl TreeNode for LogicalPlan {
                     partition_by,
                     file_type,
                     options,
+                    output_schema,
                 })
             }),
             LogicalPlan::Ddl(ddl) => {
@@ -323,9 +325,9 @@ impl TreeNode for LogicalPlan {
                 LogicalPlan::Unnest(Unnest {
                     input,
                     exec_columns: input_columns,
-                    dependency_indices,
                     list_type_columns,
                     struct_type_columns,
+                    dependency_indices,
                     schema,
                     options,
                 })

@@ -35,4 +35,3 @@
 ## PySpark 3.5.5 Result: {'try_to_timestamp(foo, yyyy-MM-dd)': None, 'typeof(try_to_timestamp(foo, yyyy-MM-dd))': 'timestamp', 'typeof(foo)': 'string', 'typeof(yyyy-MM-dd)': 'string'}
 #query
 #SELECT try_to_timestamp('foo'::string, 'yyyy-MM-dd'::string);
-

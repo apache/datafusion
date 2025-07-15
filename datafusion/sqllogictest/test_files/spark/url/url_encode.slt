@@ -25,4 +25,3 @@
 ## PySpark 3.5.5 Result: {'url_encode(https://spark.apache.org)': 'https%3A%2F%2Fspark.apache.org', 'typeof(url_encode(https://spark.apache.org))': 'string', 'typeof(https://spark.apache.org)': 'string'}
 #query
 #SELECT url_encode('https://spark.apache.org'::string);
-
