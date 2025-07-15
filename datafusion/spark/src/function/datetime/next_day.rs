@@ -18,12 +18,14 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use chrono::{Datelike, Duration, Weekday};
 use arrow::array::{new_null_array, ArrayRef, AsArray, Date32Array, StringArrayType};
 use arrow::datatypes::{DataType, Date32Type};
+use chrono::{Datelike, Duration, Weekday};
 use datafusion_common::types::NativeType;
 use datafusion_common::{exec_err, plan_err, Result, ScalarValue};
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+};
 
 /// <https://spark.apache.org/docs/latest/api/sql/index.html#next_day>
 #[derive(Debug)]
@@ -110,24 +112,32 @@ impl ScalarUDFImpl for SparkNextDay {
                     _ => exec_err!("Spark `next_day` function: first arg must be date, second arg must be string. Got {args:?}"),
                 }
             }
-            (ColumnarValue::Array(date_array), ColumnarValue::Array(day_of_week_array)) => {
-                let result = match (date_array.data_type(), day_of_week_array.data_type()) {
+            (
+                ColumnarValue::Array(date_array),
+                ColumnarValue::Array(day_of_week_array),
+            ) => {
+                let result = match (date_array.data_type(), day_of_week_array.data_type())
+                {
                     (
                         DataType::Date32,
                         DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
                     ) => {
-                        let date_array: &Date32Array = date_array.as_primitive::<Date32Type>();
+                        let date_array: &Date32Array =
+                            date_array.as_primitive::<Date32Type>();
                         match day_of_week_array.data_type() {
                             DataType::Utf8 => {
-                                let day_of_week_array = day_of_week_array.as_string::<i32>();
+                                let day_of_week_array =
+                                    day_of_week_array.as_string::<i32>();
                                 process_next_day_arrays(date_array, day_of_week_array)
                             }
                             DataType::LargeUtf8 => {
-                                let day_of_week_array = day_of_week_array.as_string::<i64>();
+                                let day_of_week_array =
+                                    day_of_week_array.as_string::<i64>();
                                 process_next_day_arrays(date_array, day_of_week_array)
                             }
                             DataType::Utf8View => {
-                                let day_of_week_array = day_of_week_array.as_string_view();
+                                let day_of_week_array =
+                                    day_of_week_array.as_string_view();
                                 process_next_day_arrays(date_array, day_of_week_array)
                             }
                             other => {
@@ -229,7 +239,9 @@ fn spark_next_day(days: i32, day_of_week: &str) -> Option<i32> {
         let day_of_week = day_of_week.parse::<Weekday>();
         match day_of_week {
             Ok(day_of_week) => Some(Date32Type::from_naive_date(
-                date + Duration::days((7 - date.weekday().days_since(day_of_week)) as i64),
+                date + Duration::days(
+                    (7 - date.weekday().days_since(day_of_week)) as i64,
+                ),
             )),
             Err(_) => {
                 // TODO: if spark.sql.ansi.enabled is false,
