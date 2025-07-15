@@ -756,10 +756,15 @@ jobs:
           # `rust-version` key of `Cargo.toml`.
           #
           # To reproduce:
-          # 1. Install the version of Rust that is failing. Example:
-          #    rustup install 1.80.1
-          # 2. Run the command that failed with that version. Example:
-          #    cargo +1.80.1 check -p datafusion
+          # 1. Install the version of Rust that is failing.
+          # 2. Run the command that failed with that version.
+          #
+          # Example:
+          #    # MSRV looks like "1.80.0" and is specified in Cargo.toml. We can read the value with the following command:
+          #    msrv="$(cargo metadata --format-version=1 | jq '.packages[] | select( .name == "datafusion" ) | .rust_version' -r)"
+          #    echo "MSRV: ${msrv}"
+          #    rustup install "${msrv}"
+          #    cargo "+${msrv}" check
           #
           # To resolve, either:
           # 1. Change your code to use older Rust features,
