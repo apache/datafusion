@@ -23,7 +23,7 @@ use crate::variation_const::{
     DEFAULT_CONTAINER_TYPE_VARIATION_REF, DEFAULT_INTERVAL_DAY_TYPE_VARIATION_REF,
     DEFAULT_MAP_TYPE_VARIATION_REF, DEFAULT_TYPE_VARIATION_REF,
     DICTIONARY_MAP_TYPE_VARIATION_REF, DURATION_INTERVAL_DAY_TYPE_VARIATION_REF,
-    LARGE_CONTAINER_TYPE_VARIATION_REF, TIME_32_TYPE_VARIATION_REF,
+    FLOAT16_TYPE_VARIATION_REF, LARGE_CONTAINER_TYPE_VARIATION_REF, TIME_32_TYPE_VARIATION_REF,
     TIME_64_TYPE_VARIATION_REF, UNSIGNED_INTEGER_TYPE_VARIATION_REF,
     VIEW_CONTAINER_TYPE_VARIATION_REF,
 };
@@ -96,10 +96,10 @@ pub(crate) fn to_substrait_type(
                 nullability,
             })),
         }),
-        // Float16 is not supported in Substrait, cast to Float32
+        // Float16 is not supported in Substrait, cast to Float32 with special variation
         DataType::Float16 => Ok(substrait::proto::Type {
             kind: Some(r#type::Kind::Fp32(r#type::Fp32 {
-                type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
+                type_variation_reference: FLOAT16_TYPE_VARIATION_REF,
                 nullability,
             })),
         }),
@@ -381,6 +381,7 @@ mod tests {
         round_trip_type(DataType::UInt32)?;
         round_trip_type(DataType::Int64)?;
         round_trip_type(DataType::UInt64)?;
+        round_trip_type(DataType::Float16)?;
         round_trip_type(DataType::Float32)?;
         round_trip_type(DataType::Float64)?;
 
