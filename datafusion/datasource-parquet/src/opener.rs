@@ -33,7 +33,7 @@ use arrow::datatypes::{FieldRef, SchemaRef, TimeUnit};
 use arrow::error::ArrowError;
 use datafusion_common::{exec_err, DataFusionError, Result};
 use datafusion_datasource::PartitionedFile;
-use datafusion_physical_expr::schema_rewriter::PhysicalExprAdapter;
+use datafusion_physical_expr::schema_rewriter::PhysicalExprAdapterFactory;
 use datafusion_physical_expr::simplifier::PhysicalExprSimplifier;
 use datafusion_physical_expr_common::physical_expr::{
     is_dynamic_physical_expr, PhysicalExpr,
@@ -94,7 +94,7 @@ pub(super) struct ParquetOpener {
     /// Optional parquet FileDecryptionProperties
     pub file_decryption_properties: Option<Arc<FileDecryptionProperties>>,
     /// Rewrite expressions in the context of the file schema
-    pub expr_adapter: Arc<dyn PhysicalExprAdapter>,
+    pub expr_adapter: Arc<dyn PhysicalExprAdapterFactory>,
 }
 
 impl FileOpener for ParquetOpener {
@@ -247,22 +247,20 @@ impl FileOpener for ParquetOpener {
                         .cloned()
                         .zip(file.partition_values)
                         .collect_vec();
-                    expr_adapter
-                        .rewrite_to_file_schema(
-                            p,
-                            &logical_file_schema,
-                            &physical_file_schema,
-                            &partition_values,
+                    let adapter = expr_adapter
+                        .create(
+                            Arc::clone(&logical_file_schema),
+                            Arc::clone(&physical_file_schema),
                         )
-                        .map_err(ArrowError::from)
-                        .map(|p| {
-                            // After rewriting to the file schema, further simplifications may be possible.
-                            // For example, if `'a' = col_that_is_missing` becomes `'a' = NULL` that can then be simplified to `FALSE`
-                            // and we can avoid doing any more work on the file (bloom filters, loading the page index, etc.).
-                            PhysicalExprSimplifier::new(&physical_file_schema)
-                                .simplify(p)
-                                .map_err(ArrowError::from)
-                        })
+                        .with_partition_values(partition_values);
+                    adapter.rewrite(p).map_err(ArrowError::from).map(|p| {
+                        // After rewriting to the file schema, further simplifications may be possible.
+                        // For example, if `'a' = col_that_is_missing` becomes `'a' = NULL` that can then be simplified to `FALSE`
+                        // and we can avoid doing any more work on the file (bloom filters, loading the page index, etc.).
+                        PhysicalExprSimplifier::new(&physical_file_schema)
+                            .simplify(p)
+                            .map_err(ArrowError::from)
+                    })
                 })
                 .transpose()?
                 .transpose()?;
@@ -534,7 +532,7 @@ mod test {
     use datafusion_expr::{col, lit};
     use datafusion_physical_expr::{
         expressions::DynamicFilterPhysicalExpr, planner::logical2physical,
-        DefaultPhysicalExprAdapter, PhysicalExpr,
+        schema_rewriter::DefaultPhysicalExprAdapterFactory, PhysicalExpr,
     };
     use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
     use futures::{Stream, StreamExt};
@@ -640,7 +638,7 @@ mod test {
                 enable_row_group_stats_pruning: true,
                 coerce_int96: None,
                 file_decryption_properties: None,
-                expr_adapter: Arc::new(DefaultPhysicalExprAdapter),
+                expr_adapter: Arc::new(DefaultPhysicalExprAdapterFactory),
             }
         };
 
@@ -726,7 +724,7 @@ mod test {
                 enable_row_group_stats_pruning: true,
                 coerce_int96: None,
                 file_decryption_properties: None,
-                expr_adapter: Arc::new(DefaultPhysicalExprAdapter),
+                expr_adapter: Arc::new(DefaultPhysicalExprAdapterFactory),
             }
         };
 
@@ -828,7 +826,7 @@ mod test {
                 enable_row_group_stats_pruning: true,
                 coerce_int96: None,
                 file_decryption_properties: None,
-                expr_adapter: Arc::new(DefaultPhysicalExprAdapter),
+                expr_adapter: Arc::new(DefaultPhysicalExprAdapterFactory),
             }
         };
         let make_meta = || FileMeta {
@@ -940,7 +938,7 @@ mod test {
                 enable_row_group_stats_pruning: false, // note that this is false!
                 coerce_int96: None,
                 file_decryption_properties: None,
-                expr_adapter: Arc::new(DefaultPhysicalExprAdapter),
+                expr_adapter: Arc::new(DefaultPhysicalExprAdapterFactory),
             }
         };
 
@@ -1053,7 +1051,7 @@ mod test {
                 enable_row_group_stats_pruning: true,
                 coerce_int96: None,
                 file_decryption_properties: None,
-                expr_adapter: Arc::new(DefaultPhysicalExprAdapter),
+                expr_adapter: Arc::new(DefaultPhysicalExprAdapterFactory),
             }
         };
 

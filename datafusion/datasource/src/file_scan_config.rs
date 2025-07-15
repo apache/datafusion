@@ -53,7 +53,7 @@ use datafusion_execution::{
     object_store::ObjectStoreUrl, SendableRecordBatchStream, TaskContext,
 };
 use datafusion_physical_expr::expressions::Column;
-use datafusion_physical_expr::schema_rewriter::PhysicalExprAdapter;
+use datafusion_physical_expr::schema_rewriter::PhysicalExprAdapterFactory;
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
@@ -191,7 +191,7 @@ pub struct FileScanConfig {
     pub batch_size: Option<usize>,
     /// Expression adapter used to adapt filters and projections that are pushed down into the scan
     /// from the logical schema to the physical schema of the file.
-    pub expr_adapter: Option<Arc<dyn PhysicalExprAdapter>>,
+    pub expr_adapter: Option<Arc<dyn PhysicalExprAdapterFactory>>,
 }
 
 /// A builder for [`FileScanConfig`]'s.
@@ -269,7 +269,7 @@ pub struct FileScanConfigBuilder {
     file_compression_type: Option<FileCompressionType>,
     new_lines_in_values: Option<bool>,
     batch_size: Option<usize>,
-    expr_adapter: Option<Arc<dyn PhysicalExprAdapter>>,
+    expr_adapter: Option<Arc<dyn PhysicalExprAdapterFactory>>,
 }
 
 impl FileScanConfigBuilder {
@@ -415,7 +415,7 @@ impl FileScanConfigBuilder {
     /// - Rewriting expression to use pre-computed values or file format specific optimizations
     pub fn with_expr_adapter(
         mut self,
-        expr_adapter: Arc<dyn PhysicalExprAdapter>,
+        expr_adapter: Arc<dyn PhysicalExprAdapterFactory>,
     ) -> Self {
         self.expr_adapter = Some(expr_adapter);
         self
