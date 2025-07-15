@@ -4062,6 +4062,211 @@ impl PartialOrd for Unnest {
     }
 }
 
+impl Unnest {
+    pub fn try_new(
+        input: Arc<LogicalPlan>,
+        exec_columns: Vec<Column>,
+        options: UnnestOptions,
+    ) -> Result<Self> {
+        if exec_columns.is_empty() {
+            return plan_err!("unnest plan requires at least 1 column to unnest");
+        }
+
+        let mut list_columns: Vec<(usize, ColumnUnnestList)> = vec![];
+        let mut struct_columns = vec![];
+        let indices_to_unnest = exec_columns
+            .iter()
+            .map(|c| Ok((input.schema().index_of_column(c)?, c)))
+            .collect::<Result<HashMap<usize, &Column>>>()?;
+
+        let input_schema = input.schema();
+
+        let mut dependency_indices = vec![];
+        // Transform input schema into new schema
+        // Given this comprehensive example
+        //
+        // input schema:
+        // 1.col1_unnest_placeholder: list[list[int]],
+        // 2.col1: list[list[int]]
+        // 3.col2: list[int]
+        // with unnest on unnest(col1,depth=2), unnest(col1,depth=1) and unnest(col2,depth=1)
+        // output schema:
+        // 1.unnest_col1_depth_2: int
+        // 2.unnest_col1_depth_1: list[int]
+        // 3.col1: list[list[int]]
+        // 4.unnest_col2_depth_1: int
+        // Meaning the placeholder column will be replaced by its unnested variation(s), note
+        // the plural.
+        let fields = input_schema
+            .iter()
+            .enumerate()
+            .map(|(index, (original_qualifier, original_field))| {
+                match indices_to_unnest.get(&index) {
+                    Some(column_to_unnest) => {
+                        let recursions_on_column = options
+                            .recursions
+                            .iter()
+                            .filter(|p| -> bool { &p.input_column == *column_to_unnest })
+                            .collect::<Vec<_>>();
+                        let mut transformed_columns = recursions_on_column
+                            .iter()
+                            .map(|r| {
+                                list_columns.push((
+                                    index,
+                                    ColumnUnnestList {
+                                        output_column: r.output_column.clone(),
+                                        depth: r.depth,
+                                    },
+                                ));
+                                Ok(get_unnested_columns(
+                                    &r.output_column.name,
+                                    original_field.data_type(),
+                                    r.depth,
+                                )?
+                                .into_iter()
+                                .next()
+                                .unwrap()) // because unnesting a list column always result into one result
+                            })
+                            .collect::<Result<Vec<(Column, Arc<Field>)>>>()?;
+                        if transformed_columns.is_empty() {
+                            transformed_columns = get_unnested_columns(
+                                &column_to_unnest.name,
+                                original_field.data_type(),
+                                1,
+                            )?;
+                            match original_field.data_type() {
+                                DataType::Struct(_) => {
+                                    struct_columns.push(index);
+                                }
+                                DataType::List(_)
+                                | DataType::FixedSizeList(_, _)
+                                | DataType::LargeList(_) => {
+                                    list_columns.push((
+                                        index,
+                                        ColumnUnnestList {
+                                            output_column: Column::from_name(
+                                                &column_to_unnest.name,
+                                            ),
+                                            depth: 1,
+                                        },
+                                    ));
+                                }
+                                _ => {}
+                            };
+                        }
+
+                        // new columns dependent on the same original index
+                        dependency_indices.extend(std::iter::repeat_n(
+                            index,
+                            transformed_columns.len(),
+                        ));
+                        Ok(transformed_columns
+                            .iter()
+                            .map(|(col, field)| {
+                                (col.relation.to_owned(), field.to_owned())
+                            })
+                            .collect())
+                    }
+                    None => {
+                        dependency_indices.push(index);
+                        Ok(vec![(
+                            original_qualifier.cloned(),
+                            Arc::clone(original_field),
+                        )])
+                    }
+                }
+            })
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
+
+        let metadata = input_schema.metadata().clone();
+        let df_schema = DFSchema::new_with_metadata(fields, metadata)?;
+        // We can use the existing functional dependencies:
+        let deps = input_schema.functional_dependencies().clone();
+        let schema = Arc::new(df_schema.with_functional_dependencies(deps)?);
+
+        Ok(Unnest {
+            input,
+            exec_columns,
+            list_type_columns: list_columns,
+            struct_type_columns: struct_columns,
+            dependency_indices,
+            schema,
+            options,
+        })
+    }
+}
+
+// Based on data type, either struct or a variant of list
+// return a set of columns as the result of unnesting
+// the input columns.
+// For example, given a column with name "a",
+// - List(Element) returns ["a"] with data type Element
+// - Struct(field1, field2) returns ["a.field1","a.field2"]
+// For list data type, an argument depth is used to specify
+// the recursion level
+fn get_unnested_columns(
+    col_name: &String,
+    data_type: &DataType,
+    depth: usize,
+) -> Result<Vec<(Column, Arc<Field>)>> {
+    let mut qualified_columns = Vec::with_capacity(1);
+
+    match data_type {
+        DataType::List(_) | DataType::FixedSizeList(_, _) | DataType::LargeList(_) => {
+            let data_type = get_unnested_list_datatype_recursive(data_type, depth)?;
+            let new_field = Arc::new(Field::new(
+                col_name, data_type,
+                // Unnesting may produce NULLs even if the list is not null.
+                // For example: unnest([1], []) -> 1, null
+                true,
+            ));
+            let column = Column::from_name(col_name);
+            // let column = Column::from((None, &new_field));
+            qualified_columns.push((column, new_field));
+        }
+        DataType::Struct(fields) => {
+            qualified_columns.extend(fields.iter().map(|f| {
+                let new_name = format!("{}.{}", col_name, f.name());
+                let column = Column::from_name(&new_name);
+                let new_field = f.as_ref().clone().with_name(new_name);
+                // let column = Column::from((None, &f));
+                (column, Arc::new(new_field))
+            }))
+        }
+        _ => {
+            return internal_err!(
+                "trying to unnest on invalid data type {:?}",
+                data_type
+            );
+        }
+    };
+    Ok(qualified_columns)
+}
+
+// Get the data type of a multi-dimensional type after unnesting it
+// with a given depth
+fn get_unnested_list_datatype_recursive(
+    data_type: &DataType,
+    depth: usize,
+) -> Result<DataType> {
+    match data_type {
+        DataType::List(field)
+        | DataType::FixedSizeList(field, _)
+        | DataType::LargeList(field) => {
+            if depth == 1 {
+                return Ok(field.data_type().clone());
+            }
+            return get_unnested_list_datatype_recursive(field.data_type(), depth - 1);
+        }
+        _ => {}
+    };
+
+    internal_err!("trying to unnest on invalid data type {:?}", data_type)
+}
+
 #[cfg(test)]
 mod tests {
 

@@ -39,17 +39,21 @@ use datafusion_common::{DataFusionError, Statistics};
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_physical_expr::conjunction;
+use datafusion_physical_expr::schema_rewriter::DefaultPhysicalExprAdapterFactory;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+use datafusion_physical_plan::filter_pushdown::PushedDown;
 use datafusion_physical_plan::filter_pushdown::{
-    FilterPushdownPropagation, PredicateSupport,
+    FilterPushdownPropagation, PushedDownPredicate,
 };
 use datafusion_physical_plan::metrics::Count;
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion_physical_plan::DisplayFormatType;
 
+use datafusion_common::encryption::map_config_decryption_to_decryption;
 use itertools::Itertools;
 use object_store::ObjectStore;
+
 /// Execution plan for reading one or more Parquet files.
 ///
 /// ```text
@@ -474,12 +478,10 @@ impl FileSource for ParquetSource {
                 Arc::new(DefaultParquetFileReaderFactory::new(object_store)) as _
             });
 
-        let file_decryption_properties = self
-            .table_parquet_options()
-            .crypto
-            .file_decryption
-            .as_ref()
-            .map(|props| Arc::new(props.clone().into()));
+        let file_decryption_properties = map_config_decryption_to_decryption(
+            self.table_parquet_options().crypto.file_decryption.as_ref(),
+        )
+        .map(Arc::new);
 
         let coerce_int96 = self
             .table_parquet_options
@@ -509,6 +511,10 @@ impl FileSource for ParquetSource {
             schema_adapter_factory,
             coerce_int96,
             file_decryption_properties,
+            expr_adapter: base_config
+                .expr_adapter
+                .clone()
+                .unwrap_or_else(|| Arc::new(DefaultPhysicalExprAdapterFactory)),
         })
     }
 
@@ -622,11 +628,8 @@ impl FileSource for ParquetSource {
         config: &ConfigOptions,
     ) -> datafusion_common::Result<FilterPushdownPropagation<Arc<dyn FileSource>>> {
         let Some(file_schema) = self.file_schema.clone() else {
-            return Ok(FilterPushdownPropagation::with_filters(
-                filters
-                    .into_iter()
-                    .map(PredicateSupport::Unsupported)
-                    .collect(),
+            return Ok(FilterPushdownPropagation::with_parent_pushdown_result(
+                vec![PushedDown::No; filters.len()],
             ));
         };
         // Determine if based on configs we should push filters down.
@@ -641,29 +644,31 @@ impl FileSource for ParquetSource {
         let pushdown_filters = table_pushdown_enabled || config_pushdown_enabled;
 
         let mut source = self.clone();
-        let filters: Vec<PredicateSupport> = filters
+        let filters: Vec<PushedDownPredicate> = filters
             .into_iter()
             .map(|filter| {
                 if can_expr_be_pushed_down_with_schemas(&filter, &file_schema) {
-                    PredicateSupport::Supported(filter)
+                    PushedDownPredicate::supported(filter)
                 } else {
-                    PredicateSupport::Unsupported(filter)
+                    PushedDownPredicate::unsupported(filter)
                 }
             })
             .collect();
         if filters
             .iter()
-            .all(|f| matches!(f, PredicateSupport::Unsupported(_)))
+            .all(|f| matches!(f.discriminant, PushedDown::No))
         {
             // No filters can be pushed down, so we can just return the remaining filters
             // and avoid replacing the source in the physical plan.
-            return Ok(FilterPushdownPropagation::with_filters(filters));
+            return Ok(FilterPushdownPropagation::with_parent_pushdown_result(
+                vec![PushedDown::No; filters.len()],
+            ));
         }
         let allowed_filters = filters
             .iter()
-            .filter_map(|f| match f {
-                PredicateSupport::Supported(expr) => Some(Arc::clone(expr)),
-                PredicateSupport::Unsupported(_) => None,
+            .filter_map(|f| match f.discriminant {
+                PushedDown::Yes => Some(Arc::clone(&f.predicate)),
+                PushedDown::No => None,
             })
             .collect_vec();
         let predicate = match source.predicate {
@@ -678,15 +683,15 @@ impl FileSource for ParquetSource {
         // If pushdown_filters is false we tell our parents that they still have to handle the filters,
         // even if we updated the predicate to include the filters (they will only be used for stats pruning).
         if !pushdown_filters {
-            return Ok(FilterPushdownPropagation::with_filters(
-                filters
-                    .into_iter()
-                    .map(|f| PredicateSupport::Unsupported(f.into_inner()))
-                    .collect_vec(),
+            return Ok(FilterPushdownPropagation::with_parent_pushdown_result(
+                vec![PushedDown::No; filters.len()],
             )
             .with_updated_node(source));
         }
-        Ok(FilterPushdownPropagation::with_filters(filters).with_updated_node(source))
+        Ok(FilterPushdownPropagation::with_parent_pushdown_result(
+            filters.iter().map(|f| f.discriminant).collect(),
+        )
+        .with_updated_node(source))
     }
 
     fn with_schema_adapter_factory(
