@@ -98,7 +98,7 @@ async fn get_filter_results(
     filter: Expr,
     pushdown_filters: bool,
 ) -> Vec<RecordBatch> {
-    let parquet_exec = get_parquet_exec(&state, filter, pushdown_filters).await;
+    let parquet_exec = get_parquet_exec(state, filter, pushdown_filters).await;
     let task_ctx = state.task_ctx();
     let mut results = parquet_exec.execute(0, task_ctx.clone()).unwrap();
     let mut batches = Vec::new();
