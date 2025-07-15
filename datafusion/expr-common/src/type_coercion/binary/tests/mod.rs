@@ -18,6 +18,14 @@
 use super::*;
 
 // Common test macros
+
+/// Tests that coercion for a binary operator between two types yields the expected result type for both sides.
+///
+/// Usage: test_coercion_binary_rule!(lhs_type, rhs_type, op, expected_type)
+/// - lhs_type: The left-hand side data type
+/// - rhs_type: The right-hand side data type
+/// - op: The binary operator (e.g., "+", "-", etc.)
+/// - expected_type: The type both sides should be coerced to
 macro_rules! test_coercion_binary_rule {
     ($LHS_TYPE:expr, $RHS_TYPE:expr, $OP:expr, $RESULT_TYPE:expr) => {{
         let (lhs, rhs) =
@@ -27,6 +35,14 @@ macro_rules! test_coercion_binary_rule {
     }};
 }
 
+/// Tests that coercion for a binary operator between one type and multiple right-hand side types
+/// yields the expected result type for both sides, in both lhs/rhs and rhs/lhs order.
+///
+/// Usage: test_coercion_binary_rule_multiple!(lhs_type, rhs_types, op, expected_type)
+/// - lhs_type: The left-hand side data type
+/// - rhs_types: An iterable of right-hand side data types
+/// - op: The binary operator
+/// - expected_type: The type both sides should be coerced to
 macro_rules! test_coercion_binary_rule_multiple {
     ($LHS_TYPE:expr, $RHS_TYPES:expr, $OP:expr, $RESULT_TYPE:expr) => {{
         for rh_type in $RHS_TYPES {
@@ -42,6 +58,12 @@ macro_rules! test_coercion_binary_rule_multiple {
     }};
 }
 
+/// Tests that the like_coercion function returns the expected result type for both lhs/rhs and rhs/lhs order.
+///
+/// Usage: test_like_rule!(lhs_type, rhs_type, expected_type)
+/// - lhs_type: The left-hand side data type
+/// - rhs_type: The right-hand side data type
+/// - expected_type: The expected result type from like_coercion
 macro_rules! test_like_rule {
     ($LHS_TYPE:expr, $RHS_TYPE:expr, $RESULT_TYPE:expr) => {{
         let result = like_coercion(&$LHS_TYPE, &$RHS_TYPE);
