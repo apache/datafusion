@@ -19,6 +19,4 @@ caused by
 Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:
   Consumer(can spill: bool) consumed XB,
   Consumer(can spill: bool) consumed XB.
-Error: Failed to allocate 
-
------ stderr -----
+Error: Failed to allocate
