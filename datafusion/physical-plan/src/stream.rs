@@ -578,45 +578,29 @@ impl BatchSplitStream {
     fn next_sliced_batch(&mut self) -> Option<Result<RecordBatch>> {
         let batch = self.current_batch.take()?;
 
-        // Wrap slicing logic in a panic-safe block
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            // Assert slice boundary safety - offset should never exceed batch size
-            debug_assert!(
-                self.offset <= batch.num_rows(),
-                "Offset {} exceeds batch size {}",
-                self.offset,
-                batch.num_rows()
-            );
+        // Assert slice boundary safety - offset should never exceed batch size
+        debug_assert!(
+            self.offset <= batch.num_rows(),
+            "Offset {} exceeds batch size {}",
+            self.offset,
+            batch.num_rows()
+        );
 
-            let remaining = batch.num_rows() - self.offset;
-            let to_take = remaining.min(self.batch_size);
-            let out = batch.slice(self.offset, to_take);
-            (out, to_take)
-        }));
+        let remaining = batch.num_rows() - self.offset;
+        let to_take = remaining.min(self.batch_size);
+        let out = batch.slice(self.offset, to_take);
 
-        match result {
-            Ok((out, to_take)) => {
-                self.metrics.batches_splitted.add(1);
-                self.offset += to_take;
-                if self.offset < batch.num_rows() {
-                    // More data remains in this batch, store it back
-                    self.current_batch = Some(batch);
-                } else {
-                    // Batch is exhausted, reset offset
-                    // Note: current_batch is already None since we took it at the start
-                    self.offset = 0;
-                }
-                Some(Ok(out))
-            }
-            Err(_) => {
-                // Reset state on panic to avoid leaving the stream in an invalid state
-                self.current_batch = None;
-                self.offset = 0;
-                Some(Err(datafusion_common::DataFusionError::Internal(
-                    "Panic occurred during batch slicing operation".to_string(),
-                )))
-            }
+        self.metrics.batches_splitted.add(1);
+        self.offset += to_take;
+        if self.offset < batch.num_rows() {
+            // More data remains in this batch, store it back
+            self.current_batch = Some(batch);
+        } else {
+            // Batch is exhausted, reset offset
+            // Note: current_batch is already None since we took it at the start
+            self.offset = 0;
         }
+        Some(Ok(out))
     }
 
     /// Poll the upstream input for the next batch.
