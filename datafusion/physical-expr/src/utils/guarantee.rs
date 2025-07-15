@@ -450,19 +450,13 @@ impl<'a> ColInList<'a> {
         let col = inlist
             .expr()
             .as_any()
-            .downcast_ref::<crate::expressions::Column>();
-        let Some(col) = col else {
-            return None;
-        };
+            .downcast_ref::<crate::expressions::Column>()?;
 
         let literals = inlist
             .list()
             .iter()
             .map(|e| e.as_any().downcast_ref::<crate::expressions::Literal>())
-            .collect::<Option<Vec<_>>>();
-        let Some(literals) = literals else {
-            return None;
-        };
+            .collect::<Option<Vec<_>>>()?;
 
         let guarantee = if inlist.negated() {
             Guarantee::NotIn
