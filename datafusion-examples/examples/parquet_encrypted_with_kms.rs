@@ -42,6 +42,12 @@ use tempfile::TempDir;
 /// This example demonstrates reading and writing Parquet files that
 /// are encrypted using Parquet Modular Encryption, and uses the
 /// parquet-key-management crate to integrate with a Key Management Server (KMS).
+///
+/// Compared to the `parquet_encrypted` example, where AES keys
+/// are specified directly, this example uses an `EncryptionFactory` so that
+/// encryption keys can be dynamically generated per file,
+/// and the encryption key metadata stored in files can be used to determine
+/// the decryption keys when reading.
 
 const ENCRYPTION_FACTORY_ID: &'static str = "example.memory_kms_encryption";
 
@@ -73,24 +79,24 @@ async fn main() -> Result<()> {
     {
         // Write and read with the programmatic API
         let tmpdir = TempDir::new()?;
-        write_encrypted(&ctx, &tmpdir).await?;
-        let file_path = std::fs::read_dir(&tmpdir)?.next().unwrap()?.path();
-        read_encrypted(&ctx, &file_path).await?;
+        let table_path = format!("{}/", tmpdir.path().to_str().unwrap());
+        write_encrypted(&ctx, &table_path).await?;
+        read_encrypted(&ctx, &table_path).await?;
     }
 
     {
         // Write and read with the SQL API
         let tmpdir = TempDir::new()?;
-        write_encrypted_with_sql(&ctx, &tmpdir).await?;
-        let file_path = std::fs::read_dir(&tmpdir)?.next().unwrap()?.path();
-        read_encrypted_with_sql(&ctx, &file_path).await?;
+        let table_path = format!("{}/", tmpdir.path().to_str().unwrap());
+        write_encrypted_with_sql(&ctx, &table_path).await?;
+        read_encrypted_with_sql(&ctx, &table_path).await?;
     }
 
     Ok(())
 }
 
 /// Write an encrypted Parquet file
-async fn write_encrypted(ctx: &SessionContext, tmpdir: &TempDir) -> Result<()> {
+async fn write_encrypted(ctx: &SessionContext, table_path: &str) -> Result<()> {
     let df = ctx.table("test_data").await?;
 
     let mut parquet_options = TableParquetOptions::new();
@@ -106,30 +112,28 @@ async fn write_encrypted(ctx: &SessionContext, tmpdir: &TempDir) -> Result<()> {
         .configure_factory(ENCRYPTION_FACTORY_ID, &encryption_config);
 
     df.write_parquet(
-        tmpdir.path().to_str().unwrap(),
+        table_path,
         DataFrameWriteOptions::new(),
         Some(parquet_options),
     )
     .await?;
 
-    println!("Encrypted Parquet written to {:?}", tmpdir.path());
+    println!("Encrypted Parquet written to {table_path}");
     Ok(())
 }
 
 /// Read from an encrypted Parquet file
-async fn read_encrypted(ctx: &SessionContext, file_path: &std::path::Path) -> Result<()> {
+async fn read_encrypted(ctx: &SessionContext, table_path: &str) -> Result<()> {
     let mut parquet_options = TableParquetOptions::new();
     // Specify the encryption factory to use for decrypting Parquet.
     // In this example, we don't require any additional configuration options when reading
-    // as key identifiers are stored in the key metadata.
+    // as master key identifiers are stored in the key metadata within Parquet files.
     parquet_options
         .crypto
         .configure_factory(ENCRYPTION_FACTORY_ID, &KmsEncryptionConfig::default());
 
     let file_format = ParquetFormat::default().with_options(parquet_options);
     let listing_options = ListingOptions::new(Arc::new(file_format));
-
-    let table_path = format!("file://{}", file_path.to_str().unwrap());
 
     ctx.register_listing_table(
         "encrypted_parquet_table",
@@ -156,11 +160,10 @@ async fn read_encrypted(ctx: &SessionContext, file_path: &std::path::Path) -> Re
 }
 
 /// Write an encrypted Parquet file using only SQL syntax with string configuration
-async fn write_encrypted_with_sql(ctx: &SessionContext, tmpdir: &TempDir) -> Result<()> {
-    let output_path = tmpdir.path().to_str().unwrap();
+async fn write_encrypted_with_sql(ctx: &SessionContext, table_path: &str) -> Result<()> {
     let query = format!(
         "COPY test_data \
-        TO '{output_path}' \
+        TO '{table_path}' \
         STORED AS parquet
         OPTIONS (\
             'format.crypto.factory_id' '{ENCRYPTION_FACTORY_ID}', \
@@ -170,19 +173,15 @@ async fn write_encrypted_with_sql(ctx: &SessionContext, tmpdir: &TempDir) -> Res
     );
     let _ = ctx.sql(&query).await?.collect().await?;
 
-    println!("Encrypted Parquet written to {:?}", tmpdir.path());
+    println!("Encrypted Parquet written to {table_path}");
     Ok(())
 }
 
 /// Read from an encrypted Parquet file using only the SQL API and string based configuration
-async fn read_encrypted_with_sql(
-    ctx: &SessionContext,
-    file_path: &std::path::Path,
-) -> Result<()> {
-    let file_path = file_path.to_str().unwrap();
+async fn read_encrypted_with_sql(ctx: &SessionContext, table_path: &str) -> Result<()> {
     let ddl = format!(
         "CREATE EXTERNAL TABLE encrypted_parquet_table_2 \
-        STORED AS PARQUET LOCATION '{file_path}' OPTIONS (\
+        STORED AS PARQUET LOCATION '{table_path}' OPTIONS (\
         'format.crypto.factory_id' '{ENCRYPTION_FACTORY_ID}' \
         )"
     );
@@ -221,15 +220,15 @@ impl std::fmt::Debug for KmsEncryptionFactory {
     }
 }
 
-/// `EncryptionFactory` is a trait defined by DataFusion that allows generating
+/// `EncryptionFactory` is DataFusion trait for types that generate
 /// file encryption and decryption properties.
 impl EncryptionFactory for KmsEncryptionFactory {
     /// Generate file encryption properties to use when writing a Parquet file.
-    /// The `FileSinkConfig` is provided so that the schema may be used to dynamically configure
+    /// The `schema` is provided so that it may be used to dynamically configure
     /// per-column encryption keys.
-    /// Because `FileSinkConfig` can represent multiple output files, we also provide a
-    /// single file path so that external key material may be used (where key metadata is
-    /// stored in a JSON file alongside Parquet files).
+    /// The file path is also provided, so that it may be used to set an
+    /// AAD prefix for the file, or to allow use of external key material
+    /// (where key metadata is stored in a JSON file alongside Parquet files).
     fn get_file_encryption_properties(
         &self,
         options: &EncryptionFactoryOptions,
@@ -265,6 +264,7 @@ impl EncryptionFactory for KmsEncryptionFactory {
         // but this example just uses the default options.
         let kms_config = Arc::new(KmsConnectionConfig::default());
 
+        // Use the `CryptoFactory` to generate file encryption properties
         Ok(Some(self.crypto_factory.file_encryption_properties(
             kms_config,
             &encryption_config,
@@ -272,7 +272,6 @@ impl EncryptionFactory for KmsEncryptionFactory {
     }
 
     /// Generate file decryption properties to use when reading a Parquet file.
-    /// The `file_path` needs to be known to support encryption factories that use external key material.
     fn get_file_decryption_properties(
         &self,
         _options: &EncryptionFactoryOptions,
