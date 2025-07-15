@@ -372,8 +372,9 @@ impl PhysicalExprAdapterFactory for ShreddedJsonRewriterFactory {
         physical_file_schema: SchemaRef,
     ) -> Arc<dyn PhysicalExprAdapter> {
         let default_factory = DefaultPhysicalExprAdapterFactory;
-        let default_adapter = default_factory.create(logical_file_schema.clone(), physical_file_schema.clone());
-        
+        let default_adapter = default_factory
+            .create(logical_file_schema.clone(), physical_file_schema.clone());
+
         Arc::new(ShreddedJsonRewriter {
             logical_file_schema,
             physical_file_schema,
@@ -403,14 +404,15 @@ impl PhysicalExprAdapter for ShreddedJsonRewriter {
         // Then apply the default adapter as a fallback to handle standard schema differences
         // like type casting, missing columns, and partition column handling
         let default_adapter = if !self.partition_values.is_empty() {
-            self.default_adapter.with_partition_values(self.partition_values.clone())
+            self.default_adapter
+                .with_partition_values(self.partition_values.clone())
         } else {
             self.default_adapter.clone()
         };
-        
+
         default_adapter.rewrite(rewritten)
     }
-    
+
     fn with_partition_values(
         &self,
         partition_values: Vec<(FieldRef, ScalarValue)>,
