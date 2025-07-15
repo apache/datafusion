@@ -567,6 +567,10 @@ async fn setup_context(
         disk_manager: Arc::new(disk_manager),
         cache_manager: runtime.cache_manager.clone(),
         object_store_registry: runtime.object_store_registry.clone(),
+        #[cfg(feature = "parquet_encryption")]
+        parquet_encryption_factory_registry: runtime
+            .parquet_encryption_factory_registry
+            .clone(),
     });
 
     let config = SessionConfig::new()

@@ -61,7 +61,7 @@ async-trait = { workspace = true }
 bytes = { workspace = true }
 dashmap = { workspace = true }
 # note only use main datafusion crate for examples
-datafusion = { workspace = true, default-features = true }
+datafusion = { workspace = true, default-features = true, features = ["parquet_encryption"] }
 datafusion-ffi = { workspace = true }
 datafusion-proto = { workspace = true }
 env_logger = { workspace = true }
@@ -69,6 +69,8 @@ futures = { workspace = true }
 log = { workspace = true }
 mimalloc = { version = "0.1", default-features = false }
 object_store = { workspace = true, features = ["aws", "http"] }
+parquet = { workspace = true, features = ["encryption"] }
+parquet-key-management = {  version = "0.3", features = ["_test_utils"] }
 prost = { workspace = true }
 tempfile = { workspace = true }
 test-utils = { path = "../test-utils" }

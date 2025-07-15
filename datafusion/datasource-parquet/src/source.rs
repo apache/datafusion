@@ -27,6 +27,8 @@ use crate::row_filter::can_expr_be_pushed_down_with_schemas;
 use crate::DefaultParquetFileReaderFactory;
 use crate::ParquetFileReaderFactory;
 use datafusion_common::config::ConfigOptions;
+#[cfg(feature = "parquet_encryption")]
+use datafusion_common::config::EncryptionFactoryOptions;
 use datafusion_datasource::as_file_source;
 use datafusion_datasource::file_stream::FileOpener;
 use datafusion_datasource::schema_adapter::{
@@ -50,6 +52,8 @@ use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion_physical_plan::DisplayFormatType;
 
 use datafusion_common::encryption::map_config_decryption_to_decryption;
+#[cfg(feature = "parquet_encryption")]
+use datafusion_execution::parquet_encryption::DynEncryptionFactory;
 use itertools::Itertools;
 use object_store::ObjectStore;
 
@@ -281,6 +285,8 @@ pub struct ParquetSource {
     /// Optional hint for the size of the parquet metadata
     pub(crate) metadata_size_hint: Option<usize>,
     pub(crate) projected_statistics: Option<Statistics>,
+    #[cfg(feature = "parquet_encryption")]
+    pub(crate) encryption_factory: Option<Arc<dyn DynEncryptionFactory>>,
 }
 
 impl ParquetSource {
@@ -317,6 +323,16 @@ impl ParquetSource {
         conf = conf.with_metrics(metrics);
         conf.predicate = Some(Arc::clone(&predicate));
         conf
+    }
+
+    /// Set the encryption factory to use to generate file decryption properties
+    #[cfg(feature = "parquet_encryption")]
+    pub fn with_encryption_factory(
+        mut self,
+        encryption_factory: Arc<dyn DynEncryptionFactory>,
+    ) -> Self {
+        self.encryption_factory = Some(encryption_factory);
+        self
     }
 
     /// Options passed to the parquet reader for this scan
@@ -430,6 +446,19 @@ impl ParquetSource {
             Ok(file_source)
         }
     }
+
+    #[cfg(feature = "parquet_encryption")]
+    fn get_encryption_factory_with_config(
+        &self,
+    ) -> Option<(Arc<dyn DynEncryptionFactory>, EncryptionFactoryOptions)> {
+        match &self.encryption_factory {
+            None => None,
+            Some(factory) => Some((
+                Arc::clone(factory),
+                self.table_parquet_options.crypto.factory_options.clone(),
+            )),
+        }
+    }
 }
 
 /// Parses datafusion.common.config.ParquetOptions.coerce_int96 String to a arrow_schema.datatype.TimeUnit
@@ -477,10 +506,13 @@ impl FileSource for ParquetSource {
                 Arc::new(DefaultParquetFileReaderFactory::new(object_store)) as _
             });
 
-        let file_decryption_properties = map_config_decryption_to_decryption(
-            self.table_parquet_options().crypto.file_decryption.as_ref(),
-        )
-        .map(Arc::new);
+        let file_decryption_properties = self
+            .table_parquet_options()
+            .crypto
+            .file_decryption
+            .as_ref()
+            .map(map_config_decryption_to_decryption)
+            .map(Arc::new);
 
         let coerce_int96 = self
             .table_parquet_options
@@ -510,6 +542,8 @@ impl FileSource for ParquetSource {
             schema_adapter_factory,
             coerce_int96,
             file_decryption_properties,
+            #[cfg(feature = "parquet_encryption")]
+            encryption_factory: self.get_encryption_factory_with_config(),
         })
     }
 
