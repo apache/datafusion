@@ -480,12 +480,18 @@ impl FileSource for ParquetSource {
             (Some(_), Some(_)) => {
                 log::warn!(
                     "ParquetSource: both schema_adapter_factory and expr_adapter are set. \
-                     Using schema_adapter_factory only."
+                     Using schema_adapter_factory only. \
+                     See https://datafusion.apache.org/library-user-guide/upgrading.html#datafusion-49-0-0 for more details.",
                 );
                 None
             }
             (None, Some(expr_adapter)) => Some(Arc::clone(expr_adapter)),
-            (Some(_), None) => None,
+            (Some(_), None) => {
+                log::warn!("The SchemaAdapter API will be removed from ParquetSource in a future release. \
+                Use PhysicalExprAdapterFactory API instead. \
+                See https://datafusion.apache.org/library-user-guide/upgrading.html#datafusion-49-0-0 for more details.");
+                None
+            }
             (None, None) => Some(Arc::new(DefaultPhysicalExprAdapterFactory) as _),
         };
 
