@@ -23,7 +23,7 @@ use datafusion::common::{
     not_impl_err, plan_err, substrait_datafusion_err, substrait_err, DFSchema,
     DFSchemaRef, TableReference,
 };
-use datafusion::datasource::provider_as_source;
+use datafusion::datasource::DefaultTableSource;
 use datafusion::logical_expr::utils::split_conjunction_owned;
 use datafusion::logical_expr::{
     EmptyRelation, Expr, LogicalPlan, LogicalPlanBuilder, Values,
@@ -64,7 +64,7 @@ pub async fn from_read_rel(
 
             LogicalPlanBuilder::scan_with_filters(
                 table_ref,
-                provider_as_source(Arc::clone(&provider)),
+                DefaultTableSource::wrap(Arc::clone(&provider)),
                 None,
                 filters,
             )?

@@ -230,11 +230,11 @@ TableParquetOptions {
 
 Implementations of `LogicalExtensionCodec` must now implement `try_encode_table_source` instead of `try_encode_table_provider`, and `try_decode_table_source` instead of `try_decode_table_provider`. Because a given `TableProvider` can be wrapped as a `TableSource`, this allows serializing and deserializing logical plans using either one.
 
-To migrate code that is serializing and deserializing custom `TableProvider` instances, use `DefaultTableProvider::unwrap_provider` to downcast:
+To migrate code that is serializing and deserializing custom `TableProvider` instances, use `DefaultTableProvider::unwrap` and `DefaultTableProvider::wrap` to downcast:
 
 ```rust
 # /* comment to avoid running
-if let Some(my_table_provider) = DefaultTableProvider::unwrap_provider::<MyTableProvider>(source) {
+if let Some(my_table_provider) = DefaultTableProvider::unwrap::<MyTableProvider>(source) {
     // serialization code here...
 }
 # */

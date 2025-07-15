@@ -39,14 +39,90 @@ pub struct DefaultTableSource {
 }
 
 impl DefaultTableSource {
-    /// Create a new DefaultTableSource to wrap a TableProvider
-    pub fn new(table_provider: Arc<dyn TableProvider>) -> Self {
-        Self { table_provider }
+    /// Wraps a [TableProvider] as a [TableSource], to be used in planning.
+    ///
+    /// # Example
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use std::any::Any;
+    /// # use arrow::datatypes::{Schema, SchemaRef};
+    /// # use datafusion_expr::{Expr, TableType, TableSource};
+    /// # use datafusion_physical_plan::ExecutionPlan;
+    /// # use datafusion_common::Result;
+    /// # use datafusion_catalog::{TableProvider, default_table_source::DefaultTableSource};
+    /// # use datafusion_session::Session;
+    /// # use async_trait::async_trait;
+    ///
+    /// # #[derive(Debug, Eq, PartialEq)]
+    /// # struct MyTableProvider {};
+    ///
+    /// # #[async_trait]
+    /// # impl TableProvider for MyTableProvider {
+    /// #    fn as_any(&self) -> &dyn Any { self }
+    /// #    fn schema(&self) -> SchemaRef { Arc::new(Schema::empty()) }
+    /// #    fn table_type(&self) -> TableType { TableType::Base }
+    /// #    async fn scan(
+    /// #        &self,
+    /// #        _: &dyn Session,
+    /// #        _: Option<&Vec<usize>>,
+    /// #        _: &[Expr],
+    /// #        _: Option<usize>,
+    /// #    ) -> Result<Arc<dyn ExecutionPlan>> {
+    /// #        unimplemented!()
+    /// #    }
+    /// # }
+    ///
+    /// let provider = Arc::new(MyTableProvider {});
+    /// let table_source = DefaultTableSource::wrap(provider);
+    /// ```
+    pub fn wrap(table_provider: Arc<dyn TableProvider>) -> Arc<Self> {
+        Arc::new(Self { table_provider })
     }
 
-    /// Attempt to downcast a TableSource to DefaultTableSource and access the
-    /// TableProvider. This will only work with a TableSource created by DataFusion.
-    pub fn unwrap_provider<T: TableProvider + 'static>(
+    /// Attempt to downcast a `TableSource` to `DefaultTableSource` and access
+    /// the [TableProvider]. This will only work with a [TableSource] created
+    /// by [`DefaultTableSource::wrap`].
+    ///
+    /// # Example
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use std::any::Any;
+    /// # use arrow::datatypes::{Schema, SchemaRef};
+    /// # use datafusion_common::Result;
+    /// # use datafusion_expr::{Expr, TableType, TableSource};
+    /// # use datafusion_physical_plan::ExecutionPlan;
+    /// # use datafusion_catalog::{TableProvider, default_table_source::DefaultTableSource};
+    /// # use datafusion_session::Session;
+    /// # use async_trait::async_trait;
+    ///
+    /// # #[derive(Debug, Eq, PartialEq)]
+    /// # struct MyTableProvider {}
+    ///
+    /// # #[async_trait]
+    /// # impl TableProvider for MyTableProvider {
+    /// #    fn as_any(&self) -> &dyn Any { self }
+    /// #    fn schema(&self) -> SchemaRef { Arc::new(Schema::empty()) }
+    /// #    fn table_type(&self) -> TableType { TableType::Base }
+    /// #    async fn scan(
+    /// #        &self,
+    /// #        _: &dyn Session,
+    /// #        _: Option<&Vec<usize>>,
+    /// #        _: &[Expr],
+    /// #        _: Option<usize>,
+    /// #    ) -> Result<Arc<dyn ExecutionPlan>> {
+    /// #        unimplemented!()
+    /// #    }
+    /// # }
+    ///
+    /// # fn example() -> Result<()> {
+    /// let provider = Arc::new(MyTableProvider {});
+    /// let table_source: Arc<dyn TableSource> = DefaultTableSource::wrap(provider.clone());
+    /// let unwrapped = DefaultTableSource::unwrap::<MyTableProvider>(&table_source)?;
+    /// assert_eq!(provider.as_ref(), unwrapped);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn unwrap<T: TableProvider + 'static>(
         source: &Arc<dyn TableSource>,
     ) -> datafusion_common::Result<&T> {
         if let Some(source) = source
@@ -106,14 +182,16 @@ impl TableSource for DefaultTableSource {
 }
 
 /// Wrap a TableProvider as a TableSource.
+#[deprecated(note = "use DefaultTableSource::wrap instead")]
 pub fn provider_as_source(
     table_provider: Arc<dyn TableProvider>,
 ) -> Arc<dyn TableSource> {
-    Arc::new(DefaultTableSource::new(table_provider))
+    DefaultTableSource::wrap(table_provider)
 }
 
 /// Attempt to downcast a TableSource to DefaultTableSource and access the
 /// TableProvider. This will only work with a TableSource created by DataFusion.
+#[deprecated(note = "use DefaultTableSource::unwrap instead")]
 pub fn source_as_provider(
     source: &Arc<dyn TableSource>,
 ) -> datafusion_common::Result<Arc<dyn TableProvider>> {
@@ -161,6 +239,6 @@ fn preserves_table_type() {
         }
     }
 
-    let table_source = DefaultTableSource::new(Arc::new(TestTempTable));
+    let table_source = DefaultTableSource::wrap(Arc::new(TestTempTable));
     assert_eq!(table_source.table_type(), TableType::Temporary);
 }

@@ -20,7 +20,8 @@
 
 use arrow::array::Int64Array;
 use arrow::datatypes::{DataType, Field, Schema};
-use datafusion::datasource::{provider_as_source, ViewTable};
+use datafusion::datasource::DefaultTableSource;
+use datafusion::datasource::ViewTable;
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion_common::{Column, DFSchema, DFSchemaRef, Result, ScalarValue, Spans};
 use datafusion_execution::TaskContext;
@@ -119,7 +120,7 @@ fn inline_scan_projection_test() -> Result<()> {
         }),
         None,
     );
-    let source = provider_as_source(Arc::new(provider));
+    let source = DefaultTableSource::wrap(Arc::new(provider));
 
     let plan = LogicalPlanBuilder::scan(name, source, Some(projection))?.build()?;
 

@@ -30,7 +30,7 @@ pub mod provider;
 mod view_test;
 
 // backwards compatibility
-pub use self::default_table_source::{provider_as_source, DefaultTableSource};
+pub use self::default_table_source::DefaultTableSource;
 pub use self::memory::MemTable;
 pub use self::view::ViewTable;
 pub use crate::catalog::TableProvider;

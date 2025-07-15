@@ -28,10 +28,9 @@ use datafusion::datasource::file_format::json::{JsonFormat, JsonFormatFactory};
 use datafusion::datasource::listing::{
     ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
 };
-use datafusion::datasource::{provider_as_source, DefaultTableSource};
-use datafusion::execution::options::ArrowReadOptions;
 use datafusion::optimizer::eliminate_nested_union::EliminateNestedUnion;
 use datafusion::optimizer::Optimizer;
+use datafusion::{datasource::DefaultTableSource, execution::options::ArrowReadOptions};
 use datafusion_common::parsers::CompressionTypeVariant;
 use prost::Message;
 use std::any::Any;
@@ -202,7 +201,7 @@ impl LogicalExtensionCodec for TestTableProviderCodec {
             url: msg.url,
             schema,
         };
-        Ok(provider_as_source(Arc::new(provider)))
+        Ok(DefaultTableSource::wrap(Arc::new(provider)))
     }
 
     fn try_encode_table_source(
@@ -211,7 +210,7 @@ impl LogicalExtensionCodec for TestTableProviderCodec {
         node: Arc<dyn TableSource>,
         buf: &mut Vec<u8>,
     ) -> Result<()> {
-        let table = DefaultTableSource::unwrap_provider::<TestTableProvider>(&node)
+        let table = DefaultTableSource::unwrap::<TestTableProvider>(&node)
             .expect("Can't encode non-test tables");
         let msg = TestTableProto {
             url: table.url.clone(),

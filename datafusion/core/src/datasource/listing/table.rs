@@ -1517,7 +1517,7 @@ mod tests {
     use crate::{
         datasource::{
             file_format::csv::CsvFormat, file_format::json::JsonFormat,
-            provider_as_source, DefaultTableSource, MemTable,
+            DefaultTableSource, MemTable,
         },
         execution::options::ArrowReadOptions,
         test::{
@@ -2222,9 +2222,9 @@ mod tests {
         )?);
         session_ctx.register_table("source", source_table.clone())?;
         // Convert the source table into a provider so that it can be used in a query
-        let source = provider_as_source(source_table);
+        let source = DefaultTableSource::wrap(source_table);
         let target = session_ctx.table_provider("t").await?;
-        let target = Arc::new(DefaultTableSource::new(target));
+        let target = DefaultTableSource::wrap(target);
         // Create a table scan logical plan to read from the source table
         let scan_plan = LogicalPlanBuilder::scan("source", source, None)?
             .filter(filter_predicate)?

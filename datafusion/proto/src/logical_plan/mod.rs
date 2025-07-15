@@ -45,7 +45,6 @@ use datafusion::datasource::file_format::{
 };
 use datafusion::datasource::DefaultTableSource;
 use datafusion::{
-    datasource::provider_as_source,
     datasource::{
         file_format::{
             csv::CsvFormat, json::JsonFormat as OtherNdJsonFormat, FileFormat,
@@ -118,6 +117,10 @@ pub trait LogicalExtensionCodec: Debug + Send + Sync {
 
     fn try_encode(&self, node: &Extension, buf: &mut Vec<u8>) -> Result<()>;
 
+    /// Attempts to decode a [TableSource].
+    ///
+    /// To wrap a custom [TableProvider](datafusion::catalog::TableProvider),
+    /// you can use [DefaultTableSource::wrap].
     fn try_decode_table_source(
         &self,
         buf: &[u8],
@@ -126,6 +129,12 @@ pub trait LogicalExtensionCodec: Debug + Send + Sync {
         ctx: &SessionContext,
     ) -> Result<Arc<dyn TableSource>>;
 
+    /// Attempts to encode a [`TableSource`].
+    ///
+    /// Note that most instances of
+    /// [TableProvider](datafusion::catalog::TableProvider) will be wrapped in
+    /// a [DefaultTableSource]. You can use [DefaultTableSource::unwrap] to
+    /// downcast.
     fn try_encode_table_source(
         &self,
         table_ref: &TableReference,
@@ -498,7 +507,7 @@ impl AsLogicalPlan for LogicalPlanNode {
 
                 LogicalPlanBuilder::scan_with_filters(
                     table_name,
-                    provider_as_source(Arc::new(provider)),
+                    DefaultTableSource::wrap(Arc::new(provider)),
                     projection,
                     filters,
                 )?
@@ -873,7 +882,7 @@ impl AsLogicalPlan for LogicalPlanNode {
 
                 LogicalPlanBuilder::scan(
                     table_name,
-                    provider_as_source(Arc::new(provider)),
+                    DefaultTableSource::wrap(Arc::new(provider)),
                     projection,
                 )?
                 .build()
@@ -954,7 +963,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let cte_work_table = CteWorkTable::new(name.as_str(), Arc::new(schema));
                 LogicalPlanBuilder::scan(
                     name.as_str(),
-                    provider_as_source(Arc::new(cte_work_table)),
+                    DefaultTableSource::wrap(Arc::new(cte_work_table)),
                     None,
                 )?
                 .build()
@@ -1021,7 +1030,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     serialize_exprs(filters, extension_codec)?;
 
                 if let Ok(listing_table) =
-                    DefaultTableSource::unwrap_provider::<ListingTable>(source)
+                    DefaultTableSource::unwrap::<ListingTable>(source)
                 {
                     let any = listing_table.options().format.as_any();
                     let file_format_type = {
@@ -1137,7 +1146,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                         )),
                     })
                 } else if let Ok(view_table) =
-                    DefaultTableSource::unwrap_provider::<ViewTable>(source)
+                    DefaultTableSource::unwrap::<ViewTable>(source)
                 {
                     let schema: protobuf::Schema = schema.as_ref().try_into()?;
                     Ok(LogicalPlanNode {
@@ -1160,7 +1169,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                         ))),
                     })
                 } else if let Ok(cte_work_table) =
-                    DefaultTableSource::unwrap_provider::<CteWorkTable>(source)
+                    DefaultTableSource::unwrap::<CteWorkTable>(source)
                 {
                     let name = cte_work_table.name().to_string();
                     let schema = cte_work_table.schema();
