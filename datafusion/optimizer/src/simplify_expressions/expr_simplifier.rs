@@ -2432,7 +2432,7 @@ mod tests {
 
     #[test]
     fn test_simplify_multiply_by_null() {
-        let null = Expr::Literal(ScalarValue::Null, None);
+        let null = lit(ScalarValue::Null);
         // A * null --> null
         {
             let expr = col("c2") * null.clone();
@@ -4322,7 +4322,7 @@ mod tests {
                 vec![],
                 false,
                 None,
-                None,
+                vec![],
                 None,
             ));
 
@@ -4336,7 +4336,7 @@ mod tests {
                 vec![],
                 false,
                 None,
-                None,
+                vec![],
                 None,
             ));
 
