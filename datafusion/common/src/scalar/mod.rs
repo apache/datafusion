@@ -30,7 +30,7 @@ use std::hash::Hasher;
 use std::iter::repeat_n;
 use std::mem::{size_of, size_of_val};
 use std::str::FromStr;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock, Mutex};
 
 use crate::cast::{
     as_binary_array, as_binary_view_array, as_boolean_array, as_date32_array,
@@ -854,6 +854,140 @@ pub fn get_dict_value<K: ArrowDictionaryKeyType>(
     Ok((dict_array.values(), dict_array.key(index)))
 }
 
+/// Cache for dictionary key arrays to avoid repeated allocations
+/// when the same size is used frequently.
+///
+/// Similar to PartitionColumnProjector's ZeroBufferGenerators, this cache
+/// stores key arrays for different dictionary key types. The cache is
+/// limited to 1 entry per type (the last size used).
+#[derive(Debug)]
+struct KeyArrayCache<K: ArrowDictionaryKeyType> {
+    cache: Option<(usize, bool, PrimitiveArray<K>)>, // (size, is_null, key_array)
+}
+
+impl<K: ArrowDictionaryKeyType> Default for KeyArrayCache<K> {
+    fn default() -> Self {
+        Self { cache: None }
+    }
+}
+
+impl<K: ArrowDictionaryKeyType> KeyArrayCache<K> {
+    fn get_or_create(&mut self, size: usize, is_null: bool) -> PrimitiveArray<K> {
+        match &self.cache {
+            Some((cached_size, cached_is_null, cached_array))
+                if *cached_size == size && *cached_is_null == is_null =>
+            {
+                // Cache hit: reuse existing array if same size and null status
+                cached_array.clone()
+            }
+            _ => {
+                // Cache miss: create new array and cache it
+                let key_array: PrimitiveArray<K> = repeat_n(
+                    if is_null {
+                        None
+                    } else {
+                        Some(K::default_value())
+                    },
+                    size,
+                )
+                .collect();
+
+                self.cache = Some((size, is_null, key_array.clone()));
+                key_array
+            }
+        }
+    }
+}
+
+/// Cache for null arrays to avoid repeated allocations
+/// when the same size is used frequently.
+#[derive(Debug, Default)]
+struct NullArrayCache {
+    cache: Option<(usize, ArrayRef)>, // (size, null_array)
+}
+
+impl NullArrayCache {
+    fn get_or_create(&mut self, size: usize) -> ArrayRef {
+        match &self.cache {
+            Some((cached_size, cached_array)) if *cached_size == size => {
+                // Cache hit: reuse existing array if same size
+                Arc::clone(cached_array)
+            }
+            _ => {
+                // Cache miss: create new array and cache it
+                let null_array = new_null_array(&DataType::Null, size);
+                self.cache = Some((size, Arc::clone(&null_array)));
+                null_array
+            }
+        }
+    }
+}
+
+/// Global cache for dictionary key arrays and null arrays
+#[derive(Debug, Default)]
+struct ArrayCaches {
+    cache_i8: KeyArrayCache<Int8Type>,
+    cache_i16: KeyArrayCache<Int16Type>,
+    cache_i32: KeyArrayCache<Int32Type>,
+    cache_i64: KeyArrayCache<Int64Type>,
+    cache_u8: KeyArrayCache<UInt8Type>,
+    cache_u16: KeyArrayCache<UInt16Type>,
+    cache_u32: KeyArrayCache<UInt32Type>,
+    cache_u64: KeyArrayCache<UInt64Type>,
+    null_cache: NullArrayCache,
+}
+
+static ARRAY_CACHES: LazyLock<Mutex<ArrayCaches>> =
+    LazyLock::new(|| Mutex::new(ArrayCaches::default()));
+
+/// Get the global cache for arrays
+fn get_array_caches() -> &'static Mutex<ArrayCaches> {
+    &ARRAY_CACHES
+}
+
+/// Get cached null array for the given size
+fn get_cached_null_array(size: usize) -> ArrayRef {
+    let cache = get_array_caches();
+    let mut caches = cache.lock().unwrap();
+    caches.null_cache.get_or_create(size)
+}
+
+/// Get cached key array for a specific key type
+fn get_cached_key_array<K: ArrowDictionaryKeyType>(
+    size: usize,
+    is_null: bool,
+) -> PrimitiveArray<K> {
+    let cache = get_array_caches();
+    let mut caches = cache.lock().unwrap();
+
+    // Match on the key type and use the appropriate cache
+    let array_data = match K::DATA_TYPE {
+        DataType::Int8 => caches.cache_i8.get_or_create(size, is_null).to_data(),
+        DataType::Int16 => caches.cache_i16.get_or_create(size, is_null).to_data(),
+        DataType::Int32 => caches.cache_i32.get_or_create(size, is_null).to_data(),
+        DataType::Int64 => caches.cache_i64.get_or_create(size, is_null).to_data(),
+        DataType::UInt8 => caches.cache_u8.get_or_create(size, is_null).to_data(),
+        DataType::UInt16 => caches.cache_u16.get_or_create(size, is_null).to_data(),
+        DataType::UInt32 => caches.cache_u32.get_or_create(size, is_null).to_data(),
+        DataType::UInt64 => caches.cache_u64.get_or_create(size, is_null).to_data(),
+        _ => {
+            // Fallback for unsupported types - create without caching
+            return repeat_n(
+                if is_null {
+                    None
+                } else {
+                    Some(K::default_value())
+                },
+                size,
+            )
+            .collect();
+        }
+    };
+
+    // Convert to the target type - this is safe since we matched on the data type
+    PrimitiveArray::<K>::from(array_data)
+}
+
 /// Create a dictionary array representing `value` repeated `size`
 /// times
 fn dict_from_scalar<K: ArrowDictionaryKeyType>(
@@ -864,15 +998,8 @@ fn dict_from_scalar<K: ArrowDictionaryKeyType>(
     let values_array = value.to_array_of_size(1)?;
 
     // Create a key array with `size` elements, each of 0
-    let key_array: PrimitiveArray<K> = repeat_n(
-        if value.is_null() {
-            None
-        } else {
-            Some(K::default_value())
-        },
-        size,
-    )
-    .collect();
+    // Use cache to avoid repeated allocations for the same size
+    let key_array: PrimitiveArray<K> = get_cached_key_array::<K>(size, value.is_null());
 
     // create a new DictionaryArray
     //
@@ -2677,7 +2804,7 @@ impl ScalarValue {
                     _ => unreachable!("Invalid dictionary keys type: {:?}", key_type),
                 }
             }
-            ScalarValue::Null => new_null_array(&DataType::Null, size),
+            ScalarValue::Null => get_cached_null_array(size),
         })
     }
 
