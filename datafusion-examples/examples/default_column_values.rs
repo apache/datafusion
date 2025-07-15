@@ -39,7 +39,7 @@ use datafusion::parquet::arrow::ArrowWriter;
 use datafusion::parquet::file::properties::WriterProperties;
 use datafusion::physical_expr::expressions::{CastExpr, Column, Literal};
 use datafusion::physical_expr::schema_rewriter::{
-    DefaultPhysicalExprAdapter, PhysicalExprAdapter,
+    DefaultPhysicalExprAdapterFactory, PhysicalExprAdapter, PhysicalExprAdapterFactory,
 };
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_plan::ExecutionPlan;
@@ -263,9 +263,7 @@ impl TableProvider for DefaultValueTableProvider {
         .with_projection(projection.cloned())
         .with_limit(limit)
         .with_file_group(file_group)
-        .with_expr_adapter(Arc::new(DefaultValuePhysicalExprAdapter {
-            default_adapter: DefaultPhysicalExprAdapter,
-        }) as _);
+        .with_expr_adapter(Arc::new(DefaultValuePhysicalExprAdapterFactory) as _);
 
         Ok(Arc::new(DataSourceExec::new(Arc::new(
             file_scan_config.build(),
@@ -273,40 +271,72 @@ impl TableProvider for DefaultValueTableProvider {
     }
 }
 
+/// Factory for creating DefaultValuePhysicalExprAdapter instances
+#[derive(Debug)]
+struct DefaultValuePhysicalExprAdapterFactory;
+
+impl PhysicalExprAdapterFactory for DefaultValuePhysicalExprAdapterFactory {
+    fn create(
+        &self,
+        logical_file_schema: SchemaRef,
+        physical_file_schema: SchemaRef,
+    ) -> Arc<dyn PhysicalExprAdapter> {
+        let default_factory = DefaultPhysicalExprAdapterFactory;
+        let default_adapter = default_factory.create(logical_file_schema.clone(), physical_file_schema.clone());
+        
+        Arc::new(DefaultValuePhysicalExprAdapter {
+            logical_file_schema,
+            physical_file_schema,
+            default_adapter,
+            partition_values: Vec::new(),
+        })
+    }
+}
+
 /// Custom PhysicalExprAdapter that handles missing columns with default values from metadata
 /// and wraps DefaultPhysicalExprAdapter for standard schema adaptation
 #[derive(Debug)]
 struct DefaultValuePhysicalExprAdapter {
-    default_adapter: DefaultPhysicalExprAdapter,
+    logical_file_schema: SchemaRef,
+    physical_file_schema: SchemaRef,
+    default_adapter: Arc<dyn PhysicalExprAdapter>,
+    partition_values: Vec<(FieldRef, ScalarValue)>,
 }
 
 impl PhysicalExprAdapter for DefaultValuePhysicalExprAdapter {
-    fn rewrite_to_file_schema(
-        &self,
-        expr: Arc<dyn PhysicalExpr>,
-        logical_file_schema: &Schema,
-        physical_file_schema: &Schema,
-        partition_values: &[(FieldRef, ScalarValue)],
-    ) -> Result<Arc<dyn PhysicalExpr>> {
+    fn rewrite(&self, expr: Arc<dyn PhysicalExpr>) -> Result<Arc<dyn PhysicalExpr>> {
         // First try our custom default value injection for missing columns
         let rewritten = expr
             .transform(|expr| {
                 self.inject_default_values(
                     expr,
-                    logical_file_schema,
-                    physical_file_schema,
+                    &self.logical_file_schema,
+                    &self.physical_file_schema,
                 )
             })
             .data()?;
 
         // Then apply the default adapter as a fallback to handle standard schema differences
         // like type casting, partition column handling, etc.
-        self.default_adapter.rewrite_to_file_schema(
-            rewritten,
-            logical_file_schema,
-            physical_file_schema,
+        let default_adapter = if !self.partition_values.is_empty() {
+            self.default_adapter.with_partition_values(self.partition_values.clone())
+        } else {
+            self.default_adapter.clone()
+        };
+        
+        default_adapter.rewrite(rewritten)
+    }
+    
+    fn with_partition_values(
+        &self,
+        partition_values: Vec<(FieldRef, ScalarValue)>,
+    ) -> Arc<dyn PhysicalExprAdapter> {
+        Arc::new(DefaultValuePhysicalExprAdapter {
+            logical_file_schema: self.logical_file_schema.clone(),
+            physical_file_schema: self.physical_file_schema.clone(),
+            default_adapter: self.default_adapter.clone(),
             partition_values,
-        )
+        })
     }
 }
 
