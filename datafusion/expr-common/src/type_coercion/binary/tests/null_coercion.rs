@@ -1,0 +1,55 @@
+use super::*;
+
+#[test]
+fn test_type_coercion_logical_op() -> Result<()> {
+    test_coercion_binary_rule!(
+        DataType::Boolean,
+        DataType::Boolean,
+        Operator::And,
+        DataType::Boolean
+    );
+
+    test_coercion_binary_rule!(
+        DataType::Boolean,
+        DataType::Boolean,
+        Operator::Or,
+        DataType::Boolean
+    );
+    test_coercion_binary_rule!(
+        DataType::Boolean,
+        DataType::Null,
+        Operator::And,
+        DataType::Boolean
+    );
+    test_coercion_binary_rule!(
+        DataType::Boolean,
+        DataType::Null,
+        Operator::Or,
+        DataType::Boolean
+    );
+    test_coercion_binary_rule!(
+        DataType::Null,
+        DataType::Null,
+        Operator::Or,
+        DataType::Boolean
+    );
+    test_coercion_binary_rule!(
+        DataType::Null,
+        DataType::Null,
+        Operator::And,
+        DataType::Boolean
+    );
+    test_coercion_binary_rule!(
+        DataType::Null,
+        DataType::Boolean,
+        Operator::And,
+        DataType::Boolean
+    );
+    test_coercion_binary_rule!(
+        DataType::Null,
+        DataType::Boolean,
+        Operator::Or,
+        DataType::Boolean
+    );
+    Ok(())
+}
