@@ -541,7 +541,8 @@ impl ParquetFormat {
         _state: &dyn Session,
     ) -> Result<ParquetSource> {
         if let Some(encryption_factory_id) = &self.options.crypto.factory_id {
-            Err(DataFusionError::Configuration(format!("Parquet encryption factory id is set to '{encryption_factory_id}' but the parquet_encryption feature is disabled")))
+            Err(DataFusionError::Configuration(
+                format!("Parquet encryption factory id is set to '{encryption_factory_id}' but the parquet_encryption feature is disabled")))
         } else {
             Ok(source)
         }

@@ -74,7 +74,6 @@ pub fn write_batches(
     Ok(num_rows)
 }
 
-#[cfg(feature = "parquet_encryption")]
 #[tokio::test]
 async fn round_trip_encryption() {
     let ctx: SessionContext = SessionContext::new();

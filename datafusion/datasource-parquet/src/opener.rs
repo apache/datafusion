@@ -107,7 +107,7 @@ impl FileOpener for ParquetOpener {
     fn open(&self, file_meta: FileMeta, file: PartitionedFile) -> Result<FileOpenFuture> {
         let file_range = file_meta.range.clone();
         let extensions = file_meta.extensions.clone();
-        let file_location = file_meta.location().clone();
+        let file_location = file_meta.location();
         let file_name = file_location.to_string();
         let file_metrics =
             ParquetFileMetrics::new(self.partition_index, &file_name, &self.metrics);
@@ -144,7 +144,7 @@ impl FileOpener for ParquetOpener {
 
         let mut enable_page_index = self.enable_page_index;
         let file_decryption_properties =
-            self.get_file_decryption_properties(&file_location)?;
+            self.get_file_decryption_properties(file_location)?;
 
         // For now, page index does not work with encrypted files. See:
         // https://github.com/apache/arrow-rs/issues/7629
@@ -418,8 +418,6 @@ impl ParquetOpener {
         &self,
         file_location: &object_store::path::Path,
     ) -> Result<Option<Arc<FileDecryptionProperties>>> {
-        // Creating props is delayed until here so that the file url/path is available,
-        // and we can handle errors from the encryption factory.
         match &self.file_decryption_properties {
             Some(file_decryption_properties) => {
                 Ok(Some(Arc::clone(file_decryption_properties)))
