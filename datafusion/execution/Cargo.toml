@@ -50,8 +50,8 @@ datafusion-expr = { workspace = true }
 futures = { workspace = true }
 log = { workspace = true }
 object_store = { workspace = true, features = ["fs"] }
-parquet = { workspace = true, optional = true }
 parking_lot = { workspace = true }
+parquet = { workspace = true, optional = true }
 rand = { workspace = true }
 tempfile = { workspace = true }
 url = { workspace = true }
