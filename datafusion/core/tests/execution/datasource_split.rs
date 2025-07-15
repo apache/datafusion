@@ -82,12 +82,12 @@ async fn datasource_exact_batch_size_no_split() -> datafusion_common::Result<()>
 
 #[tokio::test]
 async fn datasource_small_batch_no_split() -> datafusion_common::Result<()> {
-    // Test with batch smaller than the split threshold (8192)
+    // Test with batch smaller than the batch size (8192)
     let small_batch_size = 512; // Less than 8192
 
     let batches = create_and_collect_batches(small_batch_size).await?;
 
-    // Should not split small batches below the threshold
+    // Should not split small batches below the batch size
     assert_eq!(batches.len(), 1);
     assert_eq!(batches[0].num_rows(), small_batch_size);
     Ok(())

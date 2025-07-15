@@ -271,21 +271,16 @@ impl ExecutionPlan for DataSourceExec {
     ) -> Result<SendableRecordBatchStream> {
         let stream = self.data_source.open(partition, Arc::clone(&context))?;
         let batch_size = context.session_config().batch_size();
-        let threshold = context.session_config().batch_split_threshold();
-        if threshold > 0 && batch_size >= threshold {
-            log::debug!(
-                "Batch splitting enabled for partition {partition}: batch_size={batch_size}, threshold={threshold}"
-            );
-            let metrics = self.data_source.metrics();
-            let split_metrics = SplitMetrics::new(&metrics, partition);
-            Ok(Box::pin(BatchSplitStream::new(
-                stream,
-                batch_size,
-                split_metrics,
-            )))
-        } else {
-            Ok(stream)
-        }
+        log::debug!(
+            "Batch splitting enabled for partition {partition}: batch_size={batch_size}"
+        );
+        let metrics = self.data_source.metrics();
+        let split_metrics = SplitMetrics::new(&metrics, partition);
+        Ok(Box::pin(BatchSplitStream::new(
+            stream,
+            batch_size,
+            split_metrics,
+        )))
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
