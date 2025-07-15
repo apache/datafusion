@@ -26,7 +26,7 @@ use datafusion::prelude::{ParquetReadOptions, SessionContext};
 use datafusion_common::config::{EncryptionFactoryOptions, TableParquetOptions};
 use datafusion_common::{assert_batches_sorted_eq, DataFusionError};
 use datafusion_datasource_parquet::ParquetFormat;
-use datafusion_execution::parquet_encryption::DynEncryptionFactory;
+use datafusion_execution::parquet_encryption::EncryptionFactory;
 use parquet::arrow::ArrowWriter;
 use parquet::encryption::decrypt::FileDecryptionProperties;
 use parquet::encryption::encrypt::FileEncryptionProperties;
@@ -135,7 +135,7 @@ async fn round_trip_parquet_with_encryption_factory() {
     let encryption_factory = Arc::new(MockEncryptionFactory::default());
     ctx.register_parquet_encryption_factory(
         "test_encryption_factory",
-        Arc::clone(&encryption_factory) as Arc<dyn DynEncryptionFactory>,
+        Arc::clone(&encryption_factory) as Arc<dyn EncryptionFactory>,
     );
 
     let tmpdir = TempDir::new().unwrap();
@@ -260,7 +260,7 @@ struct MockEncryptionFactory {
     pub counter: AtomicU8,
 }
 
-impl DynEncryptionFactory for MockEncryptionFactory {
+impl EncryptionFactory for MockEncryptionFactory {
     fn get_file_encryption_properties(
         &self,
         config: &EncryptionFactoryOptions,

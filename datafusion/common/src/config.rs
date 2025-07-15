@@ -2419,6 +2419,17 @@ impl ConfigField for EncryptionFactoryOptions {
     }
 }
 
+impl EncryptionFactoryOptions {
+    /// Convert these encryption factory options to an [`ExtensionOptions`] instance.
+    pub fn to_extension_options<T: ExtensionOptions + Default>(&self) -> Result<T> {
+        let mut options = T::default();
+        for (key, value) in &self.options {
+            options.set(key, value)?;
+        }
+        Ok(options)
+    }
+}
+
 config_namespace! {
     /// Options controlling CSV format
     pub struct CsvOptions {

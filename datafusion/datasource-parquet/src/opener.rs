@@ -46,7 +46,7 @@ use datafusion_pruning::{build_pruning_predicate, FilePruner, PruningPredicate};
 #[cfg(feature = "parquet_encryption")]
 use datafusion_common::config::EncryptionFactoryOptions;
 #[cfg(feature = "parquet_encryption")]
-use datafusion_execution::parquet_encryption::DynEncryptionFactory;
+use datafusion_execution::parquet_encryption::EncryptionFactory;
 use futures::{StreamExt, TryStreamExt};
 use log::debug;
 use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
@@ -100,7 +100,7 @@ pub(super) struct ParquetOpener {
     /// Optional factory to create file decryption properties dynamically
     #[cfg(feature = "parquet_encryption")]
     pub encryption_factory:
-        Option<(Arc<dyn DynEncryptionFactory>, EncryptionFactoryOptions)>,
+        Option<(Arc<dyn EncryptionFactory>, EncryptionFactoryOptions)>,
 }
 
 impl FileOpener for ParquetOpener {

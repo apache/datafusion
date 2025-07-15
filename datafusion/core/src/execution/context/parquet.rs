@@ -23,7 +23,7 @@ use datafusion_datasource_parquet::plan_to_parquet;
 
 use datafusion_common::TableReference;
 #[cfg(feature = "parquet_encryption")]
-use datafusion_execution::parquet_encryption::DynEncryptionFactory;
+use datafusion_execution::parquet_encryption::EncryptionFactory;
 use parquet::file::properties::WriterProperties;
 
 impl SessionContext {
@@ -97,14 +97,14 @@ impl SessionContext {
         plan_to_parquet(self.task_ctx(), plan, path, writer_properties).await
     }
 
-    /// Registers a Parquet [`DynEncryptionFactory`] with an associated unique identifier.
+    /// Registers a Parquet [`EncryptionFactory`] with an associated unique identifier.
     /// If an encryption factory with the same identifier was already registered, it is replaced and returned.
     #[cfg(feature = "parquet_encryption")]
     pub fn register_parquet_encryption_factory(
         &self,
         id: &str,
-        encryption_factory: Arc<dyn DynEncryptionFactory>,
-    ) -> Option<Arc<dyn DynEncryptionFactory>> {
+        encryption_factory: Arc<dyn EncryptionFactory>,
+    ) -> Option<Arc<dyn EncryptionFactory>> {
         self.runtime_env()
             .register_parquet_encryption_factory(id, encryption_factory)
     }

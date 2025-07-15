@@ -30,7 +30,7 @@ use crate::{
 
 use crate::cache::cache_manager::{CacheManager, CacheManagerConfig};
 #[cfg(feature = "parquet_encryption")]
-use crate::parquet_encryption::{DynEncryptionFactory, EncryptionFactoryRegistry};
+use crate::parquet_encryption::{EncryptionFactory, EncryptionFactoryRegistry};
 use datafusion_common::{config::ConfigEntry, Result};
 use object_store::ObjectStore;
 use std::path::PathBuf;
@@ -160,25 +160,25 @@ impl RuntimeEnv {
         self.object_store_registry.get_store(url.as_ref())
     }
 
-    /// Register a [`DynEncryptionFactory`] with an associated identifier that can be later
+    /// Register an [`EncryptionFactory`] with an associated identifier that can be later
     /// used to configure encryption when reading or writing Parquet.
     /// If an encryption factory with the same identifier was already registered, it is replaced and returned.
     #[cfg(feature = "parquet_encryption")]
     pub fn register_parquet_encryption_factory(
         &self,
         id: &str,
-        encryption_factory: Arc<dyn DynEncryptionFactory>,
-    ) -> Option<Arc<dyn DynEncryptionFactory>> {
+        encryption_factory: Arc<dyn EncryptionFactory>,
+    ) -> Option<Arc<dyn EncryptionFactory>> {
         self.parquet_encryption_factory_registry
             .register_factory(id, encryption_factory)
     }
 
-    /// Retrieve a [`DynEncryptionFactory`] by its identifier
+    /// Retrieve an [`EncryptionFactory`] by its identifier
     #[cfg(feature = "parquet_encryption")]
     pub fn parquet_encryption_factory(
         &self,
         id: &str,
-    ) -> Result<Arc<dyn DynEncryptionFactory>> {
+    ) -> Result<Arc<dyn EncryptionFactory>> {
         self.parquet_encryption_factory_registry.get_factory(id)
     }
 }

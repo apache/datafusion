@@ -53,7 +53,7 @@ use datafusion_physical_plan::DisplayFormatType;
 
 use datafusion_common::encryption::map_config_decryption_to_decryption;
 #[cfg(feature = "parquet_encryption")]
-use datafusion_execution::parquet_encryption::DynEncryptionFactory;
+use datafusion_execution::parquet_encryption::EncryptionFactory;
 use itertools::Itertools;
 use object_store::ObjectStore;
 
@@ -286,7 +286,7 @@ pub struct ParquetSource {
     pub(crate) metadata_size_hint: Option<usize>,
     pub(crate) projected_statistics: Option<Statistics>,
     #[cfg(feature = "parquet_encryption")]
-    pub(crate) encryption_factory: Option<Arc<dyn DynEncryptionFactory>>,
+    pub(crate) encryption_factory: Option<Arc<dyn EncryptionFactory>>,
 }
 
 impl ParquetSource {
@@ -329,7 +329,7 @@ impl ParquetSource {
     #[cfg(feature = "parquet_encryption")]
     pub fn with_encryption_factory(
         mut self,
-        encryption_factory: Arc<dyn DynEncryptionFactory>,
+        encryption_factory: Arc<dyn EncryptionFactory>,
     ) -> Self {
         self.encryption_factory = Some(encryption_factory);
         self
@@ -450,7 +450,7 @@ impl ParquetSource {
     #[cfg(feature = "parquet_encryption")]
     fn get_encryption_factory_with_config(
         &self,
-    ) -> Option<(Arc<dyn DynEncryptionFactory>, EncryptionFactoryOptions)> {
+    ) -> Option<(Arc<dyn EncryptionFactory>, EncryptionFactoryOptions)> {
         match &self.encryption_factory {
             None => None,
             Some(factory) => Some((

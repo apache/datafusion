@@ -18,7 +18,7 @@
 use arrow::array::{ArrayRef, Int32Array, RecordBatch, StringArray};
 use arrow_schema::SchemaRef;
 use datafusion::common::{extensions_options, DataFusionError};
-use datafusion::config::TableParquetOptions;
+use datafusion::config::{EncryptionFactoryOptions, TableParquetOptions};
 use datafusion::dataframe::DataFrameWriteOptions;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::ListingOptions;
@@ -224,8 +224,6 @@ impl std::fmt::Debug for KmsEncryptionFactory {
 /// `EncryptionFactory` is a trait defined by DataFusion that allows generating
 /// file encryption and decryption properties.
 impl EncryptionFactory for KmsEncryptionFactory {
-    type Options = KmsEncryptionConfig;
-
     /// Generate file encryption properties to use when writing a Parquet file.
     /// The `FileSinkConfig` is provided so that the schema may be used to dynamically configure
     /// per-column encryption keys.
@@ -234,10 +232,11 @@ impl EncryptionFactory for KmsEncryptionFactory {
     /// stored in a JSON file alongside Parquet files).
     fn get_file_encryption_properties(
         &self,
-        config: &KmsEncryptionConfig,
+        options: &EncryptionFactoryOptions,
         schema: &SchemaRef,
         _file_path: &Path,
     ) -> Result<Option<FileEncryptionProperties>> {
+        let config: KmsEncryptionConfig = options.to_extension_options()?;
         if config.key_id.is_empty() {
             return Err(DataFusionError::Configuration(
                 "Key id for encryption is not set".to_owned(),
@@ -276,7 +275,7 @@ impl EncryptionFactory for KmsEncryptionFactory {
     /// The `file_path` needs to be known to support encryption factories that use external key material.
     fn get_file_decryption_properties(
         &self,
-        _config: &KmsEncryptionConfig,
+        _options: &EncryptionFactoryOptions,
         _file_path: &Path,
     ) -> Result<Option<FileDecryptionProperties>> {
         let decryption_config = DecryptionConfiguration::builder().build();
