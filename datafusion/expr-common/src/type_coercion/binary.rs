@@ -126,6 +126,12 @@ impl<'a> BinaryTypeCoercer<'a> {
     fn signature(&'a self) -> Result<Signature> {
         if let Some(coerced) = null_coercion(self.lhs, self.rhs) {
             use Operator::*;
+            // Special handling for arithmetic + null coercion:
+            // For arithmetic operators on non-temporal types, we must handle the result type here using Arrow's numeric kernel.
+            // This is because Arrow expects concrete numeric types, and this ensures the correct result type (e.g., for NULL + Int32, result is Int32).
+            // For all other cases (including temporal arithmetic and non-arithmetic operators),
+            // we can delegate to signature_inner(&coerced, &coerced), which handles the necessary logic for those operators.
+            // In those cases, signature_inner is designed to work with the coerced type, even if it originated from a NULL.
             if matches!(self.op, Plus | Minus | Multiply | Divide | Modulo)
                 && !coerced.is_temporal()
             {
