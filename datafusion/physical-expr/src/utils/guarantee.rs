@@ -129,35 +129,15 @@ impl LiteralGuarantee {
                     .as_any()
                     .downcast_ref::<crate::expressions::InListExpr>()
                 {
-                    // Only support single-column inlist currently, multi-column inlist is not supported
-                    let col = inlist
-                        .expr()
-                        .as_any()
-                        .downcast_ref::<crate::expressions::Column>();
-                    let Some(col) = col else {
-                        return builder;
-                    };
-
-                    let literals = inlist
-                        .list()
-                        .iter()
-                        .map(|e| e.as_any().downcast_ref::<crate::expressions::Literal>())
-                        .collect::<Option<Vec<_>>>();
-                    let Some(literals) = literals else {
-                        return builder;
-                    };
-
-                    let guarantee = if inlist.negated() {
-                        Guarantee::NotIn
+                    if let Some(inlist) = ColInList::try_new(inlist) {
+                        builder.aggregate_multi_conjunct(
+                            inlist.col,
+                            inlist.guarantee,
+                            inlist.list.iter().map(|lit| lit.value()),
+                        )
                     } else {
-                        Guarantee::In
-                    };
-
-                    builder.aggregate_multi_conjunct(
-                        col,
-                        guarantee,
-                        literals.iter().map(|e| e.value()),
-                    )
+                        builder
+                    }
                 } else {
                     // split disjunction: <expr> OR <expr> OR ...
                     let disjunctions = split_disjunction(expr);
@@ -213,13 +193,13 @@ impl LiteralGuarantee {
                         // we can infer a guarantee for the column
                         // e.g. (a = 1 AND b = 2) OR (a = 2 AND b = 3) is `a IN (1, 2) AND b IN (2, 3)`
                         // otherwise, we can't infer a guarantee
-                        let termsets: Vec<Vec<ColOpLit>> = disjunctions
+                        let termsets: Vec<Vec<ColOpLitOrInList>> = disjunctions
                             .iter()
                             .map(|expr| {
                                 split_conjunction(expr)
                                     .into_iter()
-                                    .filter_map(ColOpLit::try_new)
-                                    .filter(|term| term.guarantee == Guarantee::In)
+                                    .filter_map(ColOpLitOrInList::try_new)
+                                    .filter(|term| term.guarantee() == Guarantee::In)
                                     .collect()
                             })
                             .collect();
@@ -241,11 +221,13 @@ impl LiteralGuarantee {
                             let literals: Vec<_> = termsets
                                 .iter()
                                 .filter_map(|terms| {
-                                    terms
-                                        .iter()
-                                        .find(|term| term.col == col)
-                                        .map(|term| term.lit.value())
+                                    terms.iter().find(|term| term.col() == col).map(
+                                        |term| {
+                                            term.lits().into_iter().map(|lit| lit.value())
+                                        },
+                                    )
                                 })
+                                .flatten()
                                 .collect();
 
                             builder = builder.aggregate_multi_conjunct(
@@ -402,7 +384,7 @@ struct ColOpLit<'a> {
 }
 
 impl<'a> ColOpLit<'a> {
-    /// Returns Some(ColEqLit) if the expression is either:
+    /// Returns Some(ColOpLit) if the expression is either:
     /// 1. `col <op> literal`
     /// 2. `literal <op> col`
     /// 3. operator is `=` or `!=`
@@ -450,16 +432,101 @@ impl<'a> ColOpLit<'a> {
     }
 }
 
+/// Represents a single `col [not]in literal` expression
+struct ColInList<'a> {
+    col: &'a crate::expressions::Column,
+    guarantee: Guarantee,
+    list: Vec<&'a crate::expressions::Literal>,
+}
+
+impl<'a> ColInList<'a> {
+    /// Returns Some(ColInList) if the expression is either:
+    /// 1. `col <op> (literal1, literal2, ...)`
+    /// 3. operator is `in` or `not in`
+    ///
+    /// Returns None otherwise
+    fn try_new(inlist: &'a crate::expressions::InListExpr) -> Option<Self> {
+        // Only support single-column inlist currently, multi-column inlist is not supported
+        let col = inlist
+            .expr()
+            .as_any()
+            .downcast_ref::<crate::expressions::Column>();
+        let Some(col) = col else {
+            return None;
+        };
+
+        let literals = inlist
+            .list()
+            .iter()
+            .map(|e| e.as_any().downcast_ref::<crate::expressions::Literal>())
+            .collect::<Option<Vec<_>>>();
+        let Some(literals) = literals else {
+            return None;
+        };
+
+        let guarantee = if inlist.negated() {
+            Guarantee::NotIn
+        } else {
+            Guarantee::In
+        };
+
+        Some(Self {
+            col,
+            guarantee,
+            list: literals,
+        })
+    }
+}
+
+/// Represents a single `col [not]in literal` expression or a single `col <op> literal` expression
+enum ColOpLitOrInList<'a> {
+    ColOpLit(ColOpLit<'a>),
+    ColInList(ColInList<'a>),
+}
+
+impl<'a> ColOpLitOrInList<'a> {
+    fn try_new(expr: &'a Arc<dyn PhysicalExpr>) -> Option<Self> {
+        match expr
+            .as_any()
+            .downcast_ref::<crate::expressions::InListExpr>()
+        {
+            Some(inlist) => Some(Self::ColInList(ColInList::try_new(inlist)?)),
+            None => ColOpLit::try_new(expr).map(Self::ColOpLit),
+        }
+    }
+
+    fn guarantee(&self) -> Guarantee {
+        match self {
+            Self::ColOpLit(col_op_lit) => col_op_lit.guarantee,
+            Self::ColInList(col_in_list) => col_in_list.guarantee,
+        }
+    }
+
+    fn col(&self) -> &'a crate::expressions::Column {
+        match self {
+            Self::ColOpLit(col_op_lit) => col_op_lit.col,
+            Self::ColInList(col_in_list) => col_in_list.col,
+        }
+    }
+
+    fn lits(&self) -> Vec<&'a crate::expressions::Literal> {
+        match self {
+            Self::ColOpLit(col_op_lit) => vec![col_op_lit.lit],
+            Self::ColInList(col_in_list) => col_in_list.list.clone(),
+        }
+    }
+}
+
 /// Find columns that appear in all termsets
 fn find_common_columns<'a>(
-    termsets: &[Vec<ColOpLit<'a>>],
+    termsets: &[Vec<ColOpLitOrInList<'a>>],
 ) -> Vec<&'a crate::expressions::Column> {
     if termsets.is_empty() {
         return Vec::new();
     }
 
     // Start with columns from the first termset
-    let mut common_cols: HashSet<_> = termsets[0].iter().map(|term| term.col).collect();
+    let mut common_cols: HashSet<_> = termsets[0].iter().map(|term| term.col()).collect();
 
     // check if any common_col in one termset occur many times
     // e.g. (a = 1 AND a = 2) OR (a = 2 AND b = 3), should not infer a guarantee
@@ -470,7 +537,7 @@ fn find_common_columns<'a>(
 
     // Intersect with columns from remaining termsets
     for termset in termsets.iter().skip(1) {
-        let termset_cols: HashSet<_> = termset.iter().map(|term| term.col).collect();
+        let termset_cols: HashSet<_> = termset.iter().map(|term| term.col()).collect();
         if termset_cols.len() != termset.len() {
             return Vec::new();
         }
@@ -878,12 +945,11 @@ mod test {
             vec![not_in_guarantee("b", [1, 2, 3]), in_guarantee("b", [3, 4])],
         );
         // b IN (1, 2, 3) OR b = 2
-        // TODO this should be in_guarantee("b", [1, 2, 3]) but currently we don't support to analyze this kind of disjunction. Only `ColOpLit OR ColOpLit` is supported.
         test_analyze(
             col("b")
                 .in_list(vec![lit(1), lit(2), lit(3)], false)
                 .or(col("b").eq(lit(2))),
-            vec![],
+            vec![in_guarantee("b", [1, 2, 3])],
         );
         // b IN (1, 2, 3) OR b != 3
         test_analyze(
@@ -915,12 +981,6 @@ mod test {
                 .or(col("a").eq(lit("bar")).and(col("b").eq(lit(2))))
                 .or(col("c").eq(lit(3))),
             vec![],
-        );
-        // (a = "foo" AND b = 1) OR (a != "bar" AND b = 2)
-        test_analyze(
-            (col("a").eq(lit("foo")).and(col("b").eq(lit(1))))
-                .or(col("a").not_eq(lit("bar")).and(col("b").eq(lit(2)))),
-            vec![in_guarantee("b", [1, 2])],
         );
         // (a = "foo" AND b > 1) OR (a = "bar" AND b = 2)
         test_analyze(
@@ -962,6 +1022,48 @@ mod test {
                 .or(col("a").eq(lit("foo")).and(col("b").eq(lit(4)))),
             // if b isn't 1 or 4, it can not be true (though the expression actually can never be true)
             vec![in_guarantee("b", [1, 4])],
+        );
+        // (a = "foo" AND b = 1) OR (a != "bar" AND b = 2)
+        test_analyze(
+            (col("a").eq(lit("foo")).and(col("b").eq(lit(1))))
+                .or(col("a").not_eq(lit("bar")).and(col("b").eq(lit(2)))),
+            vec![in_guarantee("b", [1, 2])],
+        );
+        // (a = "foo" AND b = 1) OR (a LIKE "%bar" AND b = 2)
+        test_analyze(
+            (col("a").eq(lit("foo")).and(col("b").eq(lit(1))))
+                .or(col("a").like(lit("%bar")).and(col("b").eq(lit(2)))),
+            vec![in_guarantee("b", [1, 2])],
+        );
+        // (a IN ("foo", "bar") AND b = 5) OR (a IN ("foo", "bar") AND b = 6)
+        test_analyze(
+            (col("a")
+                .in_list(vec![lit("foo"), lit("bar")], false)
+                .and(col("b").eq(lit(5))))
+            .or(col("a")
+                .in_list(vec![lit("foo"), lit("bar")], false)
+                .and(col("b").eq(lit(6)))),
+            vec![in_guarantee("a", ["foo", "bar"]), in_guarantee("b", [5, 6])],
+        );
+        // (a IN ("foo", "bar") AND b = 5) OR (a IN ("foo") AND b = 6)
+        test_analyze(
+            (col("a")
+                .in_list(vec![lit("foo"), lit("bar")], false)
+                .and(col("b").eq(lit(5))))
+            .or(col("a")
+                .in_list(vec![lit("foo")], false)
+                .and(col("b").eq(lit(6)))),
+            vec![in_guarantee("a", ["foo", "bar"]), in_guarantee("b", [5, 6])],
+        );
+        // (a NOT IN ("foo", "bar") AND b = 5) OR (a NOT IN ("foo") AND b = 6)
+        test_analyze(
+            (col("a")
+                .in_list(vec![lit("foo"), lit("bar")], true)
+                .and(col("b").eq(lit(5))))
+            .or(col("a")
+                .in_list(vec![lit("foo")], true)
+                .and(col("b").eq(lit(6)))),
+            vec![in_guarantee("b", [5, 6])],
         );
     }
 
