@@ -24,11 +24,12 @@ use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::ListingOptions;
 use datafusion::error::Result;
 use datafusion::execution::parquet_encryption::EncryptionFactory;
+use datafusion::parquet::encryption::{
+    decrypt::FileDecryptionProperties, encrypt::FileEncryptionProperties,
+};
 use datafusion::prelude::SessionContext;
 use futures::StreamExt;
 use object_store::path::Path;
-use parquet::encryption::decrypt::FileDecryptionProperties;
-use parquet::encryption::encrypt::FileEncryptionProperties;
 use parquet_key_management::crypto_factory::{
     CryptoFactory, DecryptionConfiguration, EncryptionConfiguration,
 };
