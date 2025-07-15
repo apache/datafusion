@@ -24,7 +24,7 @@ statement ok
 set datafusion.execution.target_partitions = 2;
 
 statement ok
-set datafusion.execution.batch_size = 2;
+set datafusion.execution.batch_size = 8192;
 
 statement ok
 set datafusion.explain.logical_plan_only = true;
@@ -3871,8 +3871,8 @@ physical_plan
 02)--CoalesceBatchesExec: target_batch_size=3
 03)----HashJoinExec: mode=CollectLeft, join_type=Left, on=[(b@1, b@1)]
 04)------SortExec: TopK(fetch=10), expr=[b@1 ASC NULLS LAST], preserve_partitioning=[false]
-05)--------DataSourceExec: partitions=1, partition_sizes=[1]
-06)------DataSourceExec: partitions=1, partition_sizes=[1]
+05)--------DataSourceExec: partitions=1, partition_sizes=[2]
+06)------DataSourceExec: partitions=1, partition_sizes=[2]
 
 
 
@@ -3928,8 +3928,8 @@ physical_plan
 01)ProjectionExec: expr=[a@2 as a, b@3 as b, a@0 as a, b@1 as b]
 02)--CoalesceBatchesExec: target_batch_size=3
 03)----HashJoinExec: mode=CollectLeft, join_type=Left, on=[(b@1, b@1)]
-04)------DataSourceExec: partitions=1, partition_sizes=[1]
-05)------DataSourceExec: partitions=1, partition_sizes=[1]
+04)------DataSourceExec: partitions=1, partition_sizes=[2]
+05)------DataSourceExec: partitions=1, partition_sizes=[2]
 
 
 # Null build indices:
@@ -3989,8 +3989,8 @@ physical_plan
 02)--CoalesceBatchesExec: target_batch_size=3
 03)----HashJoinExec: mode=CollectLeft, join_type=Left, on=[(b@1, b@1)]
 04)------SortExec: TopK(fetch=10), expr=[b@1 ASC NULLS LAST], preserve_partitioning=[false]
-05)--------DataSourceExec: partitions=1, partition_sizes=[1]
-06)------DataSourceExec: partitions=1, partition_sizes=[1]
+05)--------DataSourceExec: partitions=1, partition_sizes=[2]
+06)------DataSourceExec: partitions=1, partition_sizes=[2]
 
 
 # Test CROSS JOIN LATERAL syntax (planning)
@@ -4190,8 +4190,8 @@ logical_plan
 physical_plan
 01)CoalesceBatchesExec: target_batch_size=3, fetch=2
 02)--HashJoinExec: mode=CollectLeft, join_type=Full, on=[(c1@0, c1@0)]
-03)----DataSourceExec: partitions=1, partition_sizes=[1]
-04)----DataSourceExec: partitions=1, partition_sizes=[1]
+03)----DataSourceExec: partitions=1, partition_sizes=[2]
+04)----DataSourceExec: partitions=1, partition_sizes=[2]
 
 ## Test join.on.is_empty() && join.filter.is_some()
 query TT
@@ -4205,8 +4205,8 @@ logical_plan
 physical_plan
 01)GlobalLimitExec: skip=0, fetch=2
 02)--NestedLoopJoinExec: join_type=Full, filter=c2@0 >= c2@1
-03)----DataSourceExec: partitions=1, partition_sizes=[1]
-04)----DataSourceExec: partitions=1, partition_sizes=[1]
+03)----DataSourceExec: partitions=1, partition_sizes=[2]
+04)----DataSourceExec: partitions=1, partition_sizes=[2]
 
 ## Test !join.on.is_empty() && join.filter.is_some()
 query TT
@@ -4220,8 +4220,8 @@ logical_plan
 physical_plan
 01)CoalesceBatchesExec: target_batch_size=3, fetch=2
 02)--HashJoinExec: mode=CollectLeft, join_type=Full, on=[(c1@0, c1@0)], filter=c2@0 >= c2@1
-03)----DataSourceExec: partitions=1, partition_sizes=[1]
-04)----DataSourceExec: partitions=1, partition_sizes=[1]
+03)----DataSourceExec: partitions=1, partition_sizes=[2]
+04)----DataSourceExec: partitions=1, partition_sizes=[2]
 
 ## Add more test cases for join limit pushdown
 statement ok
