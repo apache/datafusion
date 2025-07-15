@@ -85,11 +85,17 @@ enum JoinType {
   RIGHTSEMI = 6;
   RIGHTANTI = 7;
   LEFTMARK = 8;
+  RIGHTMARK = 9;
 }
 
 enum JoinConstraint {
   ON = 0;
   USING = 1;
+}
+
+enum NullEquality {
+  NULL_EQUALS_NOTHING = 0;
+  NULL_EQUALS_NULL = 1;
 }
 
 message AvroOptions {}

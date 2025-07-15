@@ -39,6 +39,9 @@ use datafusion_datasource::write::demux::DemuxedStreamReceiver;
 use arrow::compute::sum;
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::config::{ConfigField, ConfigFileType, TableParquetOptions};
+use datafusion_common::encryption::{
+    map_config_decryption_to_decryption, FileDecryptionProperties,
+};
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
@@ -78,6 +81,7 @@ use parquet::arrow::arrow_writer::{
 use parquet::arrow::async_reader::MetadataFetch;
 use parquet::arrow::{parquet_to_arrow_schema, ArrowSchemaConverter, AsyncArrowWriter};
 use parquet::basic::Type;
+
 use parquet::errors::ParquetError;
 use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader, RowGroupMetaData};
 use parquet::file::properties::{WriterProperties, WriterPropertiesBuilder};
@@ -303,10 +307,18 @@ async fn fetch_schema_with_location(
     store: &dyn ObjectStore,
     file: &ObjectMeta,
     metadata_size_hint: Option<usize>,
+    file_decryption_properties: Option<&FileDecryptionProperties>,
     coerce_int96: Option<TimeUnit>,
 ) -> Result<(Path, Schema)> {
     let loc_path = file.location.clone();
-    let schema = fetch_schema(store, file, metadata_size_hint, coerce_int96).await?;
+    let schema = fetch_schema(
+        store,
+        file,
+        metadata_size_hint,
+        file_decryption_properties,
+        coerce_int96,
+    )
+    .await?;
     Ok((loc_path, schema))
 }
 
@@ -331,6 +343,10 @@ impl FileFormat for ParquetFormat {
         }
     }
 
+    fn compression_type(&self) -> Option<FileCompressionType> {
+        None
+    }
+
     async fn infer_schema(
         &self,
         state: &dyn Session,
@@ -341,12 +357,18 @@ impl FileFormat for ParquetFormat {
             Some(time_unit) => Some(parse_coerce_int96_string(time_unit.as_str())?),
             None => None,
         };
+        let file_decryption_properties: Option<FileDecryptionProperties> =
+            map_config_decryption_to_decryption(
+                self.options.crypto.file_decryption.as_ref(),
+            );
+
         let mut schemas: Vec<_> = futures::stream::iter(objects)
             .map(|object| {
                 fetch_schema_with_location(
                     store.as_ref(),
                     object,
                     self.metadata_size_hint(),
+                    file_decryption_properties.as_ref(),
                     coerce_int96,
                 )
             })
@@ -396,11 +418,16 @@ impl FileFormat for ParquetFormat {
         table_schema: SchemaRef,
         object: &ObjectMeta,
     ) -> Result<Statistics> {
+        let file_decryption_properties: Option<FileDecryptionProperties> =
+            map_config_decryption_to_decryption(
+                self.options.crypto.file_decryption.as_ref(),
+            );
         let stats = fetch_statistics(
             store.as_ref(),
             table_schema,
             object,
             self.metadata_size_hint(),
+            file_decryption_properties.as_ref(),
         )
         .await?;
         Ok(stats)
@@ -930,12 +957,17 @@ pub async fn fetch_parquet_metadata(
     store: &dyn ObjectStore,
     meta: &ObjectMeta,
     size_hint: Option<usize>,
+    #[allow(unused)] decryption_properties: Option<&FileDecryptionProperties>,
 ) -> Result<ParquetMetaData> {
     let file_size = meta.size;
     let fetch = ObjectStoreFetch::new(store, meta);
 
-    ParquetMetaDataReader::new()
-        .with_prefetch_hint(size_hint)
+    let reader = ParquetMetaDataReader::new().with_prefetch_hint(size_hint);
+
+    #[cfg(feature = "parquet_encryption")]
+    let reader = reader.with_decryption_properties(decryption_properties);
+
+    reader
         .load_and_finish(fetch, file_size)
         .await
         .map_err(DataFusionError::from)
@@ -946,9 +978,16 @@ async fn fetch_schema(
     store: &dyn ObjectStore,
     file: &ObjectMeta,
     metadata_size_hint: Option<usize>,
+    file_decryption_properties: Option<&FileDecryptionProperties>,
     coerce_int96: Option<TimeUnit>,
 ) -> Result<Schema> {
-    let metadata = fetch_parquet_metadata(store, file, metadata_size_hint).await?;
+    let metadata = fetch_parquet_metadata(
+        store,
+        file,
+        metadata_size_hint,
+        file_decryption_properties,
+    )
+    .await?;
     let file_metadata = metadata.file_metadata();
     let schema = parquet_to_arrow_schema(
         file_metadata.schema_descr(),
@@ -970,8 +1009,11 @@ pub async fn fetch_statistics(
     table_schema: SchemaRef,
     file: &ObjectMeta,
     metadata_size_hint: Option<usize>,
+    decryption_properties: Option<&FileDecryptionProperties>,
 ) -> Result<Statistics> {
-    let metadata = fetch_parquet_metadata(store, file, metadata_size_hint).await?;
+    let metadata =
+        fetch_parquet_metadata(store, file, metadata_size_hint, decryption_properties)
+            .await?;
     statistics_from_parquet_meta_calc(&metadata, table_schema)
 }
 
@@ -1261,8 +1303,14 @@ impl FileSink for ParquetSink {
         object_store: Arc<dyn ObjectStore>,
     ) -> Result<u64> {
         let parquet_opts = &self.parquet_options;
-        let allow_single_file_parallelism =
+        let mut allow_single_file_parallelism =
             parquet_opts.global.allow_single_file_parallelism;
+
+        if parquet_opts.crypto.file_encryption.is_some() {
+            // For now, arrow-rs does not support parallel writes with encryption
+            // See https://github.com/apache/arrow-rs/issues/7359
+            allow_single_file_parallelism = false;
+        }
 
         let mut file_write_tasks: JoinSet<
             std::result::Result<(Path, FileMetaData), DataFusionError>,
@@ -1298,7 +1346,7 @@ impl FileSink for ParquetSink {
                     let file_metadata = writer
                         .close()
                         .await
-                        .map_err(DataFusionError::ParquetError)?;
+                        .map_err(|e| DataFusionError::ParquetError(Box::new(e)))?;
                     Ok((path, file_metadata))
                 });
             } else {
@@ -1361,7 +1409,7 @@ impl FileSink for ParquetSink {
         demux_task
             .join_unwind()
             .await
-            .map_err(DataFusionError::ExecutionJoin)??;
+            .map_err(|e| DataFusionError::ExecutionJoin(Box::new(e)))??;
 
         Ok(row_count as u64)
     }
@@ -1489,7 +1537,7 @@ fn spawn_rg_join_and_finalize_task(
             let (writer, _col_reservation) = task
                 .join_unwind()
                 .await
-                .map_err(DataFusionError::ExecutionJoin)??;
+                .map_err(|e| DataFusionError::ExecutionJoin(Box::new(e)))??;
             let encoded_size = writer.get_estimated_total_bytes();
             rg_reservation.grow(encoded_size);
             finalized_rg.push(writer.close()?);
@@ -1626,7 +1674,7 @@ async fn concatenate_parallel_row_groups(
         let result = task.join_unwind().await;
         let mut rg_out = parquet_writer.next_row_group()?;
         let (serialized_columns, mut rg_reservation, _cnt) =
-            result.map_err(DataFusionError::ExecutionJoin)??;
+            result.map_err(|e| DataFusionError::ExecutionJoin(Box::new(e)))??;
         for chunk in serialized_columns {
             chunk.append_to_row_group(&mut rg_out)?;
             rg_reservation.free();
@@ -1693,7 +1741,7 @@ async fn output_single_parquet_file_parallelized(
     launch_serialization_task
         .join_unwind()
         .await
-        .map_err(DataFusionError::ExecutionJoin)??;
+        .map_err(|e| DataFusionError::ExecutionJoin(Box::new(e)))??;
     Ok(file_metadata)
 }
 

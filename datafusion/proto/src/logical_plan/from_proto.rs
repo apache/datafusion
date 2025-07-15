@@ -19,8 +19,8 @@ use std::sync::Arc;
 
 use datafusion::execution::registry::FunctionRegistry;
 use datafusion_common::{
-    exec_datafusion_err, internal_err, plan_datafusion_err, RecursionUnnestOption,
-    Result, ScalarValue, TableReference, UnnestOptions,
+    exec_datafusion_err, internal_err, plan_datafusion_err, NullEquality,
+    RecursionUnnestOption, Result, ScalarValue, TableReference, UnnestOptions,
 };
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::expr::{Alias, Placeholder, Sort};
@@ -205,6 +205,7 @@ impl From<protobuf::JoinType> for JoinType {
             protobuf::JoinType::Leftanti => JoinType::LeftAnti,
             protobuf::JoinType::Rightanti => JoinType::RightAnti,
             protobuf::JoinType::Leftmark => JoinType::LeftMark,
+            protobuf::JoinType::Rightmark => JoinType::RightMark,
         }
     }
 }
@@ -214,6 +215,15 @@ impl From<protobuf::JoinConstraint> for JoinConstraint {
         match t {
             protobuf::JoinConstraint::On => JoinConstraint::On,
             protobuf::JoinConstraint::Using => JoinConstraint::Using,
+        }
+    }
+}
+
+impl From<protobuf::NullEquality> for NullEquality {
+    fn from(t: protobuf::NullEquality) -> Self {
+        match t {
+            protobuf::NullEquality::NullEqualsNothing => NullEquality::NullEqualsNothing,
+            protobuf::NullEquality::NullEqualsNull => NullEquality::NullEqualsNull,
         }
     }
 }
@@ -566,10 +576,7 @@ pub fn parse_expr(
                 parse_exprs(&pb.args, registry, codec)?,
                 pb.distinct,
                 parse_optional_expr(pb.filter.as_deref(), registry, codec)?.map(Box::new),
-                match pb.order_by.len() {
-                    0 => None,
-                    _ => Some(parse_sorts(&pb.order_by, registry, codec)?),
-                },
+                parse_sorts(&pb.order_by, registry, codec)?,
                 None,
             )))
         }

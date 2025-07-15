@@ -194,7 +194,7 @@ async fn run_tests() -> Result<()> {
             .join()
         })
         // run up to num_cpus streams in parallel
-        .buffer_unordered(get_available_parallelism())
+        .buffer_unordered(options.test_threads)
         .flat_map(|result| {
             // Filter out any Ok() leaving only the DataFusionErrors
             futures::stream::iter(match result {
@@ -689,6 +689,13 @@ struct Options {
         help = "IGNORED (for compatibility with built-in rust test runner)"
     )]
     nocapture: bool,
+
+    #[clap(
+        long,
+        help = "Number of threads used for running tests in parallel",
+        default_value_t = get_available_parallelism()
+    )]
+    test_threads: usize,
 }
 
 impl Options {

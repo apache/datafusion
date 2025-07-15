@@ -200,6 +200,7 @@ impl SchemaProvider for DynamicObjectStoreSchemaProvider {
                     table_url.scheme(),
                     url,
                     &state.default_table_options(),
+                    false,
                 )
                 .await?;
                 state.runtime_env().register_object_store(url, store);
@@ -229,7 +230,6 @@ pub fn substitute_tilde(cur: String) -> String {
 }
 #[cfg(test)]
 mod tests {
-
     use super::*;
 
     use datafusion::catalog::SchemaProvider;

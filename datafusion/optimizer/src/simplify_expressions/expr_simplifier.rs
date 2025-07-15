@@ -46,6 +46,7 @@ use datafusion_physical_expr::{create_physical_expr, execution_props::ExecutionP
 
 use super::inlist_simplifier::ShortenInListSimplifier;
 use super::utils::*;
+use crate::analyzer::type_coercion::TypeCoercionRewriter;
 use crate::simplify_expressions::guarantees::GuaranteeRewriter;
 use crate::simplify_expressions::regex::simplify_regex_expr;
 use crate::simplify_expressions::unwrap_cast::{
@@ -54,11 +55,8 @@ use crate::simplify_expressions::unwrap_cast::{
     unwrap_cast_in_comparison_for_binary,
 };
 use crate::simplify_expressions::SimplifyInfo;
-use crate::{
-    analyzer::type_coercion::TypeCoercionRewriter,
-    simplify_expressions::unwrap_cast::try_cast_literal_to_type,
-};
 use datafusion_expr::expr::FieldMetadata;
+use datafusion_expr_common::casts::try_cast_literal_to_type;
 use indexmap::IndexSet;
 use regex::Regex;
 
@@ -2434,7 +2432,7 @@ mod tests {
 
     #[test]
     fn test_simplify_multiply_by_null() {
-        let null = Expr::Literal(ScalarValue::Null, None);
+        let null = lit(ScalarValue::Null);
         // A * null --> null
         {
             let expr = col("c2") * null.clone();
@@ -4324,7 +4322,7 @@ mod tests {
                 vec![],
                 false,
                 None,
-                None,
+                vec![],
                 None,
             ));
 
@@ -4338,7 +4336,7 @@ mod tests {
                 vec![],
                 false,
                 None,
-                None,
+                vec![],
                 None,
             ));
 

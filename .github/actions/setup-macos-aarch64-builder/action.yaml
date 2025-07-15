@@ -45,5 +45,7 @@ runs:
         rustup component add rustfmt
     - name: Setup rust cache
       uses: Swatinem/rust-cache@v2
+      with:
+           save-if: ${{ github.ref_name == 'main' }}
     - name: Configure rust runtime env
       uses: ./.github/actions/setup-rust-runtime        

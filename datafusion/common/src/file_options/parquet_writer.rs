@@ -27,6 +27,7 @@ use crate::{
 
 use arrow::datatypes::Schema;
 // TODO: handle once deprecated
+use crate::encryption::add_crypto_to_writer_properties;
 #[allow(deprecated)]
 use parquet::{
     arrow::ARROW_SCHEMA_META_KEY,
@@ -95,9 +96,12 @@ impl TryFrom<&TableParquetOptions> for WriterPropertiesBuilder {
             global,
             column_specific_options,
             key_value_metadata,
+            crypto,
         } = table_parquet_options;
 
         let mut builder = global.into_writer_properties_builder()?;
+
+        builder = add_crypto_to_writer_properties(crypto, builder);
 
         // check that the arrow schema is present in the kv_metadata, if configured to do so
         if !global.skip_arrow_metadata
@@ -449,9 +453,10 @@ mod tests {
     };
     use std::collections::HashMap;
 
-    use crate::config::{ParquetColumnOptions, ParquetOptions};
-
     use super::*;
+    use crate::config::{ParquetColumnOptions, ParquetEncryptionOptions, ParquetOptions};
+    #[cfg(feature = "parquet_encryption")]
+    use crate::encryption::map_encryption_to_config_encryption;
 
     const COL_NAME: &str = "configured";
 
@@ -580,6 +585,11 @@ mod tests {
             HashMap::from([(COL_NAME.into(), configured_col_props)])
         };
 
+        #[cfg(feature = "parquet_encryption")]
+        let fep = map_encryption_to_config_encryption(props.file_encryption_properties());
+        #[cfg(not(feature = "parquet_encryption"))]
+        let fep = None;
+
         #[allow(deprecated)] // max_statistics_size
         TableParquetOptions {
             global: ParquetOptions {
@@ -627,6 +637,10 @@ mod tests {
             },
             column_specific_options,
             key_value_metadata,
+            crypto: ParquetEncryptionOptions {
+                file_encryption: fep,
+                file_decryption: None,
+            },
         }
     }
 
@@ -681,6 +695,7 @@ mod tests {
             )]
             .into(),
             key_value_metadata: [(key, value)].into(),
+            crypto: Default::default(),
         };
 
         let writer_props = WriterPropertiesBuilder::try_from(&table_parquet_opts)
