@@ -40,6 +40,8 @@ use std::fmt::Formatter;
 use std::sync::Arc;
 use tempfile::TempDir;
 
+const ENCRYPTION_FACTORY_ID: &str = "example.memory_kms_encryption";
+
 /// This example demonstrates reading and writing Parquet files that
 /// are encrypted using Parquet Modular Encryption, and uses the
 /// parquet-key-management crate to integrate with a Key Management Server (KMS).
@@ -49,9 +51,6 @@ use tempfile::TempDir;
 /// encryption keys can be dynamically generated per file,
 /// and the encryption key metadata stored in files can be used to determine
 /// the decryption keys when reading.
-
-const ENCRYPTION_FACTORY_ID: &'static str = "example.memory_kms_encryption";
-
 #[tokio::main]
 async fn main() -> Result<()> {
     let ctx = SessionContext::new();
@@ -105,9 +104,10 @@ async fn write_encrypted(ctx: &SessionContext, table_path: &str) -> Result<()> {
     // encryption factory to use and providing the factory specific configuration.
     // Our encryption factory requires specifying the master key identifier to
     // use for encryption, and we can optionally configure which columns are encrypted.
-    let mut encryption_config = KmsEncryptionConfig::default();
-    encryption_config.key_id = "kf".to_owned();
-    encryption_config.encrypted_columns = "b,c".to_owned();
+    let encryption_config = KmsEncryptionConfig {
+        key_id: "kf".to_owned(),
+        encrypted_columns: "b,c".to_owned(),
+    };
     parquet_options
         .crypto
         .configure_factory(ENCRYPTION_FACTORY_ID, &encryption_config);

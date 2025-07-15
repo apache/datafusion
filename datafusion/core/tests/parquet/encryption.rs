@@ -236,7 +236,7 @@ async fn round_trip_parquet_with_encryption_factory() {
         .await
         .unwrap();
 
-    let expected = vec![
+    let expected = [
         "+-----+----+--------+",
         "| x1  | x2 | string |",
         "+-----+----+--------+",
@@ -289,7 +289,7 @@ impl EncryptionFactory for MockEncryptionFactory {
         );
         let keys = self.encryption_keys.lock().unwrap();
         let key = keys.get(file_path).ok_or_else(|| {
-            DataFusionError::Execution(format!("No key for file {:?}", file_path))
+            DataFusionError::Execution(format!("No key for file {file_path:?}"))
         })?;
         let decryption_properties =
             FileDecryptionProperties::builder(key.clone()).build()?;
