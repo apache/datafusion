@@ -96,7 +96,13 @@ pub(crate) fn to_substrait_type(
                 nullability,
             })),
         }),
-        // Float16 is not supported in Substrait
+        // Float16 is not supported in Substrait, cast to Float32
+        DataType::Float16 => Ok(substrait::proto::Type {
+            kind: Some(r#type::Kind::Fp32(r#type::Fp32 {
+                type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
+                nullability,
+            })),
+        }),
         DataType::Float32 => Ok(substrait::proto::Type {
             kind: Some(r#type::Kind::Fp32(r#type::Fp32 {
                 type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
