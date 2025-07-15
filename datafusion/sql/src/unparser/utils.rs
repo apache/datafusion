@@ -258,7 +258,7 @@ pub(crate) fn unproject_agg_exprs(
                     return internal_err!("The second argument of grouping function must be a list");
                 };
                 Ok(Transformed::yes(Expr::AggregateFunction(AggregateFunction::new_udf(
-                    Arc::new(AggregateUDF::from(DummyGroupingUDAF::new())), args, false, None, None, None))))
+                    Arc::new(AggregateUDF::from(DummyGroupingUDAF::new())), args, false, None, vec![], None))))
             }
             _ => Ok(Transformed::no(sub_expr))
         }

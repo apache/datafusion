@@ -2658,7 +2658,9 @@ fn test_grouping() -> Result<()> {
         @r#"SELECT grouping("test"."c1") AS "grouping(test.c1)", grouping("test"."c2") AS "grouping(test.c2)", grouping("test"."c1", "test"."c2") AS "grouping(test.c1,test.c2)" FROM "test" GROUP BY GROUPING SETS (("test"."c1", "test"."c2"), ("test"."c1"), ("test"."c2"), ())"#
     );
     Ok(())
+}
 
+#[test]
 fn test_struct_expr() {
     let statement = generate_round_trip_statement(
         GenericDialect {},
