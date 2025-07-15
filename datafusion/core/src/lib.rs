@@ -39,7 +39,8 @@
 //! [DataFusion] is an extensible query engine written in Rust that
 //! uses [Apache Arrow] as its in-memory format. DataFusion's target users are
 //! developers building fast and feature rich database and analytic systems,
-//! customized to particular workloads. See [use cases] for examples.
+//! customized to particular workloads. Please see the [DataFusion website] for
+//! additional documentation, [use cases] and examples.
 //!
 //! "Out of the box," DataFusion offers [SQL] and [`Dataframe`] APIs,
 //! excellent [performance], built-in support for CSV, Parquet, JSON, and Avro,
@@ -53,6 +54,7 @@
 //! See the [Architecture] section below for more details.
 //!
 //! [DataFusion]: https://datafusion.apache.org/
+//! [DataFusion website]: https://datafusion.apache.org
 //! [Apache Arrow]: https://arrow.apache.org
 //! [use cases]: https://datafusion.apache.org/user-guide/introduction.html#use-cases
 //! [SQL]: https://datafusion.apache.org/user-guide/sql/index.html

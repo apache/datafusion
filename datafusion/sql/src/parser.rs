@@ -521,13 +521,13 @@ impl<'a> DFParser<'a> {
             .map(|stmt| Statement::Statement(Box::from(stmt)))
             .map_err(|e| match e {
                 ParserError::RecursionLimitExceeded => DataFusionError::SQL(
-                    ParserError::RecursionLimitExceeded,
+                    Box::new(ParserError::RecursionLimitExceeded),
                     Some(format!(
                         " (current limit: {})",
                         self.options.recursion_limit
                     )),
                 ),
-                other => DataFusionError::SQL(other, None),
+                other => DataFusionError::SQL(Box::new(other), None),
             })
     }
 

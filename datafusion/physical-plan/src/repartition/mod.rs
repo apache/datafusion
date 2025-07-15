@@ -812,8 +812,7 @@ impl ExecutionPlan for RepartitionExec {
         parent_filters: Vec<Arc<dyn PhysicalExpr>>,
         _config: &ConfigOptions,
     ) -> Result<FilterDescription> {
-        Ok(FilterDescription::new_with_child_count(1)
-            .all_parent_filters_supported(parent_filters))
+        FilterDescription::from_children(parent_filters, &self.children())
     }
 
     fn handle_child_pushdown_result(
@@ -822,9 +821,7 @@ impl ExecutionPlan for RepartitionExec {
         child_pushdown_result: ChildPushdownResult,
         _config: &ConfigOptions,
     ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
-        Ok(FilterPushdownPropagation::transparent(
-            child_pushdown_result,
-        ))
+        Ok(FilterPushdownPropagation::if_all(child_pushdown_result))
     }
 }
 

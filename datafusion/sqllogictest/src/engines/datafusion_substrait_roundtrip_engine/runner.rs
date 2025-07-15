@@ -141,10 +141,11 @@ async fn run_query_substrait_round_trip(
     };
 
     let physical_plan = state.create_physical_plan(&round_tripped_plan).await?;
+    let schema = physical_plan.schema();
     let stream = execute_stream(physical_plan, task_ctx)?;
     let types = convert_schema_to_types(stream.schema().fields());
     let results: Vec<RecordBatch> = collect(stream).await?;
-    let rows = convert_batches(results, false)?;
+    let rows = convert_batches(&schema, results, false)?;
 
     if rows.is_empty() && types.is_empty() {
         Ok(DBOutput::StatementComplete(0))

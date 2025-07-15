@@ -15,19 +15,21 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use super::utils::{next_struct_field_name, DEFAULT_TIMEZONE};
+use super::utils::{from_substrait_precision, next_struct_field_name, DEFAULT_TIMEZONE};
 use super::SubstraitConsumer;
 #[allow(deprecated)]
 use crate::variation_const::{
     DATE_32_TYPE_VARIATION_REF, DATE_64_TYPE_VARIATION_REF,
     DECIMAL_128_TYPE_VARIATION_REF, DECIMAL_256_TYPE_VARIATION_REF,
     DEFAULT_CONTAINER_TYPE_VARIATION_REF, DEFAULT_INTERVAL_DAY_TYPE_VARIATION_REF,
-    DEFAULT_TYPE_VARIATION_REF, DURATION_INTERVAL_DAY_TYPE_VARIATION_REF,
+    DEFAULT_MAP_TYPE_VARIATION_REF, DEFAULT_TYPE_VARIATION_REF,
+    DICTIONARY_MAP_TYPE_VARIATION_REF, DURATION_INTERVAL_DAY_TYPE_VARIATION_REF,
     INTERVAL_DAY_TIME_TYPE_REF, INTERVAL_MONTH_DAY_NANO_TYPE_NAME,
     INTERVAL_MONTH_DAY_NANO_TYPE_REF, INTERVAL_YEAR_MONTH_TYPE_REF,
     LARGE_CONTAINER_TYPE_VARIATION_REF, TIMESTAMP_MICRO_TYPE_VARIATION_REF,
     TIMESTAMP_MILLI_TYPE_VARIATION_REF, TIMESTAMP_NANO_TYPE_VARIATION_REF,
-    TIMESTAMP_SECOND_TYPE_VARIATION_REF, UNSIGNED_INTEGER_TYPE_VARIATION_REF,
+    TIMESTAMP_SECOND_TYPE_VARIATION_REF, TIME_32_TYPE_VARIATION_REF,
+    TIME_64_TYPE_VARIATION_REF, UNSIGNED_INTEGER_TYPE_VARIATION_REF,
     VIEW_CONTAINER_TYPE_VARIATION_REF,
 };
 use datafusion::arrow::datatypes::{
@@ -107,28 +109,23 @@ pub fn from_substrait_type(
                 }
             }
             r#type::Kind::PrecisionTimestamp(pts) => {
-                let unit = match pts.precision {
-                    0 => Ok(TimeUnit::Second),
-                    3 => Ok(TimeUnit::Millisecond),
-                    6 => Ok(TimeUnit::Microsecond),
-                    9 => Ok(TimeUnit::Nanosecond),
-                    p => not_impl_err!(
-                        "Unsupported Substrait precision {p} for PrecisionTimestamp"
-                    ),
-                }?;
+                let unit = from_substrait_precision(pts.precision, "PrecisionTimestamp")?;
                 Ok(DataType::Timestamp(unit, None))
             }
             r#type::Kind::PrecisionTimestampTz(pts) => {
-                let unit = match pts.precision {
-                    0 => Ok(TimeUnit::Second),
-                    3 => Ok(TimeUnit::Millisecond),
-                    6 => Ok(TimeUnit::Microsecond),
-                    9 => Ok(TimeUnit::Nanosecond),
-                    p => not_impl_err!(
-                        "Unsupported Substrait precision {p} for PrecisionTimestampTz"
-                    ),
-                }?;
+                let unit =
+                    from_substrait_precision(pts.precision, "PrecisionTimestampTz")?;
                 Ok(DataType::Timestamp(unit, Some(DEFAULT_TIMEZONE.into())))
+            }
+            r#type::Kind::PrecisionTime(pt) => {
+                let time_unit = from_substrait_precision(pt.precision, "PrecisionTime")?;
+                match pt.type_variation_reference {
+                    TIME_32_TYPE_VARIATION_REF => Ok(DataType::Time32(time_unit)),
+                    TIME_64_TYPE_VARIATION_REF => Ok(DataType::Time64(time_unit)),
+                    v => not_impl_err!(
+                        "Unsupported Substrait type variation {v} of type {s_kind:?}"
+                    ),
+                }
             }
             r#type::Kind::Date(date) => match date.type_variation_reference {
                 DATE_32_TYPE_VARIATION_REF => Ok(DataType::Date32),
@@ -181,24 +178,32 @@ pub fn from_substrait_type(
                 let value_type = map.value.as_ref().ok_or_else(|| {
                     substrait_datafusion_err!("Map type must have value type")
                 })?;
-                let key_field = Arc::new(Field::new(
-                    "key",
-                    from_substrait_type(consumer, key_type, dfs_names, name_idx)?,
-                    false,
-                ));
-                let value_field = Arc::new(Field::new(
-                    "value",
-                    from_substrait_type(consumer, value_type, dfs_names, name_idx)?,
-                    true,
-                ));
-                Ok(DataType::Map(
-                    Arc::new(Field::new_struct(
-                        "entries",
-                        [key_field, value_field],
-                        false, // The inner map field is always non-nullable (Arrow #1697),
+                let key_type =
+                    from_substrait_type(consumer, key_type, dfs_names, name_idx)?;
+                let value_type =
+                    from_substrait_type(consumer, value_type, dfs_names, name_idx)?;
+
+                match map.type_variation_reference {
+                    DEFAULT_MAP_TYPE_VARIATION_REF => {
+                        let key_field = Arc::new(Field::new("key", key_type, false));
+                        let value_field = Arc::new(Field::new("value", value_type, true));
+                        Ok(DataType::Map(
+                            Arc::new(Field::new_struct(
+                                "entries",
+                                [key_field, value_field],
+                                false, // The inner map field is always non-nullable (Arrow #1697),
+                            )),
+                            false, // whether keys are sorted
+                        ))
+                    }
+                    DICTIONARY_MAP_TYPE_VARIATION_REF => Ok(DataType::Dictionary(
+                        Box::new(key_type),
+                        Box::new(value_type),
                     )),
-                    false, // whether keys are sorted
-                ))
+                    v => not_impl_err!(
+                        "Unsupported Substrait type variation {v} of type {s_kind:?}"
+                    ),
+                }
             }
             r#type::Kind::Decimal(d) => match d.type_variation_reference {
                 DECIMAL_128_TYPE_VARIATION_REF => {
@@ -220,14 +225,9 @@ pub fn from_substrait_type(
                 }
                 DURATION_INTERVAL_DAY_TYPE_VARIATION_REF => {
                     let duration_unit = match i.precision {
-                        Some(0) => Ok(TimeUnit::Second),
-                        Some(3) => Ok(TimeUnit::Millisecond),
-                        Some(6) => Ok(TimeUnit::Microsecond),
-                        Some(9) => Ok(TimeUnit::Nanosecond),
-                        p => {
-                            not_impl_err!(
-                                "Unsupported Substrait precision {p:?} for Duration"
-                            )
+                        Some(p) => from_substrait_precision(p, "Duration"),
+                        None => {
+                            not_impl_err!("Missing Substrait precision for Duration")
                         }
                     }?;
                     Ok(DataType::Duration(duration_unit))

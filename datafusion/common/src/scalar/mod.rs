@@ -32,31 +32,53 @@ use std::mem::{size_of, size_of_val};
 use std::str::FromStr;
 use std::sync::Arc;
 
-use crate::arrow_datafusion_err;
 use crate::cast::{
-    as_decimal128_array, as_decimal256_array, as_dictionary_array,
-    as_fixed_size_binary_array, as_fixed_size_list_array,
+    as_binary_array, as_binary_view_array, as_boolean_array, as_date32_array,
+    as_date64_array, as_decimal128_array, as_decimal256_array, as_dictionary_array,
+    as_duration_microsecond_array, as_duration_millisecond_array,
+    as_duration_nanosecond_array, as_duration_second_array, as_fixed_size_binary_array,
+    as_fixed_size_list_array, as_float16_array, as_float32_array, as_float64_array,
+    as_int16_array, as_int32_array, as_int64_array, as_int8_array, as_interval_dt_array,
+    as_interval_mdn_array, as_interval_ym_array, as_large_binary_array,
+    as_large_list_array, as_large_string_array, as_string_array, as_string_view_array,
+    as_time32_millisecond_array, as_time32_second_array, as_time64_microsecond_array,
+    as_time64_nanosecond_array, as_timestamp_microsecond_array,
+    as_timestamp_millisecond_array, as_timestamp_nanosecond_array,
+    as_timestamp_second_array, as_uint16_array, as_uint32_array, as_uint64_array,
+    as_uint8_array, as_union_array,
 };
 use crate::error::{DataFusionError, Result, _exec_err, _internal_err, _not_impl_err};
 use crate::format::DEFAULT_CAST_OPTIONS;
 use crate::hash_utils::create_hashes;
 use crate::utils::SingleRowListArrayBuilder;
+use crate::{_internal_datafusion_err, arrow_datafusion_err};
 use arrow::array::{
-    types::{IntervalDayTime, IntervalMonthDayNano},
-    *,
+    new_empty_array, new_null_array, Array, ArrayData, ArrayRef, ArrowNativeTypeOp,
+    ArrowPrimitiveType, AsArray, BinaryArray, BinaryViewArray, BooleanArray, Date32Array,
+    Date64Array, Decimal128Array, Decimal256Array, DictionaryArray,
+    DurationMicrosecondArray, DurationMillisecondArray, DurationNanosecondArray,
+    DurationSecondArray, FixedSizeBinaryArray, FixedSizeListArray, Float16Array,
+    Float32Array, Float64Array, GenericListArray, Int16Array, Int32Array, Int64Array,
+    Int8Array, IntervalDayTimeArray, IntervalMonthDayNanoArray, IntervalYearMonthArray,
+    LargeBinaryArray, LargeListArray, LargeStringArray, ListArray, MapArray,
+    MutableArrayData, PrimitiveArray, Scalar, StringArray, StringViewArray, StructArray,
+    Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
+    Time64NanosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
+    TimestampNanosecondArray, TimestampSecondArray, UInt16Array, UInt32Array,
+    UInt64Array, UInt8Array, UnionArray,
 };
 use arrow::buffer::ScalarBuffer;
-use arrow::compute::kernels::{
-    cast::{cast_with_options, CastOptions},
-    numeric::*,
+use arrow::compute::kernels::cast::{cast_with_options, CastOptions};
+use arrow::compute::kernels::numeric::{
+    add, add_wrapping, div, mul, mul_wrapping, rem, sub, sub_wrapping,
 };
 use arrow::datatypes::{
     i256, ArrowDictionaryKeyType, ArrowNativeType, ArrowTimestampType, DataType,
     Date32Type, Field, Float32Type, Int16Type, Int32Type, Int64Type, Int8Type,
-    IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit, IntervalYearMonthType,
-    TimeUnit, TimestampMicrosecondType, TimestampMillisecondType,
-    TimestampNanosecondType, TimestampSecondType, UInt16Type, UInt32Type, UInt64Type,
-    UInt8Type, UnionFields, UnionMode, DECIMAL128_MAX_PRECISION,
+    IntervalDayTime, IntervalDayTimeType, IntervalMonthDayNano, IntervalMonthDayNanoType,
+    IntervalUnit, IntervalYearMonthType, TimeUnit, TimestampMicrosecondType,
+    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType, UInt16Type,
+    UInt32Type, UInt64Type, UInt8Type, UnionFields, UnionMode, DECIMAL128_MAX_PRECISION,
 };
 use arrow::util::display::{array_value_to_string, ArrayFormatter, FormatOptions};
 use chrono::{Duration, NaiveDate};
@@ -192,6 +214,8 @@ pub use struct_builder::ScalarStructBuilder;
 /// See [datatypes](https://arrow.apache.org/docs/python/api/datatypes.html) for
 /// details on datatypes and the [format](https://github.com/apache/arrow/blob/master/format/Schema.fbs#L354-L375)
 /// for the definitive reference.
+///
+/// [`NullArray`]: arrow::array::NullArray
 #[derive(Clone)]
 pub enum ScalarValue {
     /// represents `DataType::Null` (castable to/from any other type)
@@ -895,17 +919,8 @@ fn dict_from_values<K: ArrowDictionaryKeyType>(
 }
 
 macro_rules! typed_cast_tz {
-    ($array:expr, $index:expr, $ARRAYTYPE:ident, $SCALAR:ident, $TZ:expr) => {{
-        use std::any::type_name;
-        let array = $array
-            .as_any()
-            .downcast_ref::<$ARRAYTYPE>()
-            .ok_or_else(|| {
-                DataFusionError::Internal(format!(
-                    "could not cast value to {}",
-                    type_name::<$ARRAYTYPE>()
-                ))
-            })?;
+    ($array:expr, $index:expr, $array_cast:ident, $SCALAR:ident, $TZ:expr) => {{
+        let array = $array_cast($array)?;
         Ok::<ScalarValue, DataFusionError>(ScalarValue::$SCALAR(
             match array.is_null($index) {
                 true => None,
@@ -917,17 +932,8 @@ macro_rules! typed_cast_tz {
 }
 
 macro_rules! typed_cast {
-    ($array:expr, $index:expr, $ARRAYTYPE:ident, $SCALAR:ident) => {{
-        use std::any::type_name;
-        let array = $array
-            .as_any()
-            .downcast_ref::<$ARRAYTYPE>()
-            .ok_or_else(|| {
-                DataFusionError::Internal(format!(
-                    "could not cast value to {}",
-                    type_name::<$ARRAYTYPE>()
-                ))
-            })?;
+    ($array:expr, $index:expr, $array_cast:ident, $SCALAR:ident) => {{
+        let array = $array_cast($array)?;
         Ok::<ScalarValue, DataFusionError>(ScalarValue::$SCALAR(
             match array.is_null($index) {
                 true => None,
@@ -964,17 +970,8 @@ macro_rules! build_timestamp_array_from_option {
 }
 
 macro_rules! eq_array_primitive {
-    ($array:expr, $index:expr, $ARRAYTYPE:ident, $VALUE:expr) => {{
-        use std::any::type_name;
-        let array = $array
-            .as_any()
-            .downcast_ref::<$ARRAYTYPE>()
-            .ok_or_else(|| {
-                DataFusionError::Internal(format!(
-                    "could not cast value to {}",
-                    type_name::<$ARRAYTYPE>()
-                ))
-            })?;
+    ($array:expr, $index:expr, $array_cast:ident, $VALUE:expr) => {{
+        let array = $array_cast($array)?;
         let is_valid = array.is_valid($index);
         Ok::<bool, DataFusionError>(match $VALUE {
             Some(val) => is_valid && &array.value($index) == val,
@@ -1849,10 +1846,6 @@ impl ScalarValue {
     /// Returns an error if the iterator is empty or if the
     /// [`ScalarValue`]s are not all the same type
     ///
-    /// # Panics
-    ///
-    /// Panics if `self` is a dictionary with invalid key type
-    ///
     /// # Example
     /// ```
     /// use datafusion_common::ScalarValue;
@@ -2510,18 +2503,33 @@ impl ScalarValue {
                 }
             },
             ScalarValue::List(arr) => {
+                if size == 1 {
+                    return Ok(Arc::clone(arr) as Arc<dyn Array>);
+                }
                 Self::list_to_array_of_size(arr.as_ref() as &dyn Array, size)?
             }
             ScalarValue::LargeList(arr) => {
+                if size == 1 {
+                    return Ok(Arc::clone(arr) as Arc<dyn Array>);
+                }
                 Self::list_to_array_of_size(arr.as_ref() as &dyn Array, size)?
             }
             ScalarValue::FixedSizeList(arr) => {
+                if size == 1 {
+                    return Ok(Arc::clone(arr) as Arc<dyn Array>);
+                }
                 Self::list_to_array_of_size(arr.as_ref() as &dyn Array, size)?
             }
             ScalarValue::Struct(arr) => {
+                if size == 1 {
+                    return Ok(Arc::clone(arr) as Arc<dyn Array>);
+                }
                 Self::list_to_array_of_size(arr.as_ref() as &dyn Array, size)?
             }
             ScalarValue::Map(arr) => {
+                if size == 1 {
+                    return Ok(Arc::clone(arr) as Arc<dyn Array>);
+                }
                 Self::list_to_array_of_size(arr.as_ref() as &dyn Array, size)?
             }
             ScalarValue::Date32(e) => {
@@ -2647,7 +2655,7 @@ impl ScalarValue {
                         value_offsets,
                         child_arrays,
                     )
-                    .map_err(|e| DataFusionError::ArrowError(e, None))?;
+                    .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))?;
                     Arc::new(ar)
                 }
                 None => {
@@ -2822,30 +2830,32 @@ impl ScalarValue {
                     array, index, *precision, *scale,
                 )?
             }
-            DataType::Boolean => typed_cast!(array, index, BooleanArray, Boolean)?,
-            DataType::Float64 => typed_cast!(array, index, Float64Array, Float64)?,
-            DataType::Float32 => typed_cast!(array, index, Float32Array, Float32)?,
-            DataType::Float16 => typed_cast!(array, index, Float16Array, Float16)?,
-            DataType::UInt64 => typed_cast!(array, index, UInt64Array, UInt64)?,
-            DataType::UInt32 => typed_cast!(array, index, UInt32Array, UInt32)?,
-            DataType::UInt16 => typed_cast!(array, index, UInt16Array, UInt16)?,
-            DataType::UInt8 => typed_cast!(array, index, UInt8Array, UInt8)?,
-            DataType::Int64 => typed_cast!(array, index, Int64Array, Int64)?,
-            DataType::Int32 => typed_cast!(array, index, Int32Array, Int32)?,
-            DataType::Int16 => typed_cast!(array, index, Int16Array, Int16)?,
-            DataType::Int8 => typed_cast!(array, index, Int8Array, Int8)?,
-            DataType::Binary => typed_cast!(array, index, BinaryArray, Binary)?,
+            DataType::Boolean => typed_cast!(array, index, as_boolean_array, Boolean)?,
+            DataType::Float64 => typed_cast!(array, index, as_float64_array, Float64)?,
+            DataType::Float32 => typed_cast!(array, index, as_float32_array, Float32)?,
+            DataType::Float16 => typed_cast!(array, index, as_float16_array, Float16)?,
+            DataType::UInt64 => typed_cast!(array, index, as_uint64_array, UInt64)?,
+            DataType::UInt32 => typed_cast!(array, index, as_uint32_array, UInt32)?,
+            DataType::UInt16 => typed_cast!(array, index, as_uint16_array, UInt16)?,
+            DataType::UInt8 => typed_cast!(array, index, as_uint8_array, UInt8)?,
+            DataType::Int64 => typed_cast!(array, index, as_int64_array, Int64)?,
+            DataType::Int32 => typed_cast!(array, index, as_int32_array, Int32)?,
+            DataType::Int16 => typed_cast!(array, index, as_int16_array, Int16)?,
+            DataType::Int8 => typed_cast!(array, index, as_int8_array, Int8)?,
+            DataType::Binary => typed_cast!(array, index, as_binary_array, Binary)?,
             DataType::LargeBinary => {
-                typed_cast!(array, index, LargeBinaryArray, LargeBinary)?
+                typed_cast!(array, index, as_large_binary_array, LargeBinary)?
             }
             DataType::BinaryView => {
-                typed_cast!(array, index, BinaryViewArray, BinaryView)?
+                typed_cast!(array, index, as_binary_view_array, BinaryView)?
             }
-            DataType::Utf8 => typed_cast!(array, index, StringArray, Utf8)?,
+            DataType::Utf8 => typed_cast!(array, index, as_string_array, Utf8)?,
             DataType::LargeUtf8 => {
-                typed_cast!(array, index, LargeStringArray, LargeUtf8)?
+                typed_cast!(array, index, as_large_string_array, LargeUtf8)?
             }
-            DataType::Utf8View => typed_cast!(array, index, StringViewArray, Utf8View)?,
+            DataType::Utf8View => {
+                typed_cast!(array, index, as_string_view_array, Utf8View)?
+            }
             DataType::List(field) => {
                 let list_array = array.as_list::<i32>();
                 let nested_array = list_array.value(index);
@@ -2855,7 +2865,7 @@ impl ScalarValue {
                     .build_list_scalar()
             }
             DataType::LargeList(field) => {
-                let list_array = as_large_list_array(array);
+                let list_array = as_large_list_array(array)?;
                 let nested_array = list_array.value(index);
                 // Produces a single element `LargeListArray` with the value at `index`.
                 SingleRowListArrayBuilder::new(nested_array)
@@ -2872,45 +2882,45 @@ impl ScalarValue {
                     .with_field(field)
                     .build_fixed_size_list_scalar(list_size)
             }
-            DataType::Date32 => typed_cast!(array, index, Date32Array, Date32)?,
-            DataType::Date64 => typed_cast!(array, index, Date64Array, Date64)?,
+            DataType::Date32 => typed_cast!(array, index, as_date32_array, Date32)?,
+            DataType::Date64 => typed_cast!(array, index, as_date64_array, Date64)?,
             DataType::Time32(TimeUnit::Second) => {
-                typed_cast!(array, index, Time32SecondArray, Time32Second)?
+                typed_cast!(array, index, as_time32_second_array, Time32Second)?
             }
             DataType::Time32(TimeUnit::Millisecond) => {
-                typed_cast!(array, index, Time32MillisecondArray, Time32Millisecond)?
+                typed_cast!(array, index, as_time32_millisecond_array, Time32Millisecond)?
             }
             DataType::Time64(TimeUnit::Microsecond) => {
-                typed_cast!(array, index, Time64MicrosecondArray, Time64Microsecond)?
+                typed_cast!(array, index, as_time64_microsecond_array, Time64Microsecond)?
             }
             DataType::Time64(TimeUnit::Nanosecond) => {
-                typed_cast!(array, index, Time64NanosecondArray, Time64Nanosecond)?
+                typed_cast!(array, index, as_time64_nanosecond_array, Time64Nanosecond)?
             }
             DataType::Timestamp(TimeUnit::Second, tz_opt) => typed_cast_tz!(
                 array,
                 index,
-                TimestampSecondArray,
+                as_timestamp_second_array,
                 TimestampSecond,
                 tz_opt
             )?,
             DataType::Timestamp(TimeUnit::Millisecond, tz_opt) => typed_cast_tz!(
                 array,
                 index,
-                TimestampMillisecondArray,
+                as_timestamp_millisecond_array,
                 TimestampMillisecond,
                 tz_opt
             )?,
             DataType::Timestamp(TimeUnit::Microsecond, tz_opt) => typed_cast_tz!(
                 array,
                 index,
-                TimestampMicrosecondArray,
+                as_timestamp_microsecond_array,
                 TimestampMicrosecond,
                 tz_opt
             )?,
             DataType::Timestamp(TimeUnit::Nanosecond, tz_opt) => typed_cast_tz!(
                 array,
                 index,
-                TimestampNanosecondArray,
+                as_timestamp_nanosecond_array,
                 TimestampNanosecond,
                 tz_opt
             )?,
@@ -2956,36 +2966,42 @@ impl ScalarValue {
                 )
             }
             DataType::Interval(IntervalUnit::DayTime) => {
-                typed_cast!(array, index, IntervalDayTimeArray, IntervalDayTime)?
+                typed_cast!(array, index, as_interval_dt_array, IntervalDayTime)?
             }
             DataType::Interval(IntervalUnit::YearMonth) => {
-                typed_cast!(array, index, IntervalYearMonthArray, IntervalYearMonth)?
+                typed_cast!(array, index, as_interval_ym_array, IntervalYearMonth)?
             }
-            DataType::Interval(IntervalUnit::MonthDayNano) => typed_cast!(
-                array,
-                index,
-                IntervalMonthDayNanoArray,
-                IntervalMonthDayNano
-            )?,
+            DataType::Interval(IntervalUnit::MonthDayNano) => {
+                typed_cast!(array, index, as_interval_mdn_array, IntervalMonthDayNano)?
+            }
 
             DataType::Duration(TimeUnit::Second) => {
-                typed_cast!(array, index, DurationSecondArray, DurationSecond)?
+                typed_cast!(array, index, as_duration_second_array, DurationSecond)?
             }
-            DataType::Duration(TimeUnit::Millisecond) => {
-                typed_cast!(array, index, DurationMillisecondArray, DurationMillisecond)?
-            }
-            DataType::Duration(TimeUnit::Microsecond) => {
-                typed_cast!(array, index, DurationMicrosecondArray, DurationMicrosecond)?
-            }
-            DataType::Duration(TimeUnit::Nanosecond) => {
-                typed_cast!(array, index, DurationNanosecondArray, DurationNanosecond)?
-            }
+            DataType::Duration(TimeUnit::Millisecond) => typed_cast!(
+                array,
+                index,
+                as_duration_millisecond_array,
+                DurationMillisecond
+            )?,
+            DataType::Duration(TimeUnit::Microsecond) => typed_cast!(
+                array,
+                index,
+                as_duration_microsecond_array,
+                DurationMicrosecond
+            )?,
+            DataType::Duration(TimeUnit::Nanosecond) => typed_cast!(
+                array,
+                index,
+                as_duration_nanosecond_array,
+                DurationNanosecond
+            )?,
             DataType::Map(_, _) => {
                 let a = array.slice(index, 1);
                 Self::Map(Arc::new(a.as_map().to_owned()))
             }
             DataType::Union(fields, mode) => {
-                let array = as_union_array(array);
+                let array = as_union_array(array)?;
                 let ti = array.type_id(index);
                 let index = array.value_offset(index);
                 let value = ScalarValue::try_from_array(array.child(ti), index)?;
@@ -3186,59 +3202,61 @@ impl ScalarValue {
                 )?
             }
             ScalarValue::Boolean(val) => {
-                eq_array_primitive!(array, index, BooleanArray, val)?
+                eq_array_primitive!(array, index, as_boolean_array, val)?
             }
             ScalarValue::Float16(val) => {
-                eq_array_primitive!(array, index, Float16Array, val)?
+                eq_array_primitive!(array, index, as_float16_array, val)?
             }
             ScalarValue::Float32(val) => {
-                eq_array_primitive!(array, index, Float32Array, val)?
+                eq_array_primitive!(array, index, as_float32_array, val)?
             }
             ScalarValue::Float64(val) => {
-                eq_array_primitive!(array, index, Float64Array, val)?
+                eq_array_primitive!(array, index, as_float64_array, val)?
             }
-            ScalarValue::Int8(val) => eq_array_primitive!(array, index, Int8Array, val)?,
+            ScalarValue::Int8(val) => {
+                eq_array_primitive!(array, index, as_int8_array, val)?
+            }
             ScalarValue::Int16(val) => {
-                eq_array_primitive!(array, index, Int16Array, val)?
+                eq_array_primitive!(array, index, as_int16_array, val)?
             }
             ScalarValue::Int32(val) => {
-                eq_array_primitive!(array, index, Int32Array, val)?
+                eq_array_primitive!(array, index, as_int32_array, val)?
             }
             ScalarValue::Int64(val) => {
-                eq_array_primitive!(array, index, Int64Array, val)?
+                eq_array_primitive!(array, index, as_int64_array, val)?
             }
             ScalarValue::UInt8(val) => {
-                eq_array_primitive!(array, index, UInt8Array, val)?
+                eq_array_primitive!(array, index, as_uint8_array, val)?
             }
             ScalarValue::UInt16(val) => {
-                eq_array_primitive!(array, index, UInt16Array, val)?
+                eq_array_primitive!(array, index, as_uint16_array, val)?
             }
             ScalarValue::UInt32(val) => {
-                eq_array_primitive!(array, index, UInt32Array, val)?
+                eq_array_primitive!(array, index, as_uint32_array, val)?
             }
             ScalarValue::UInt64(val) => {
-                eq_array_primitive!(array, index, UInt64Array, val)?
+                eq_array_primitive!(array, index, as_uint64_array, val)?
             }
             ScalarValue::Utf8(val) => {
-                eq_array_primitive!(array, index, StringArray, val)?
+                eq_array_primitive!(array, index, as_string_array, val)?
             }
             ScalarValue::Utf8View(val) => {
-                eq_array_primitive!(array, index, StringViewArray, val)?
+                eq_array_primitive!(array, index, as_string_view_array, val)?
             }
             ScalarValue::LargeUtf8(val) => {
-                eq_array_primitive!(array, index, LargeStringArray, val)?
+                eq_array_primitive!(array, index, as_large_string_array, val)?
             }
             ScalarValue::Binary(val) => {
-                eq_array_primitive!(array, index, BinaryArray, val)?
+                eq_array_primitive!(array, index, as_binary_array, val)?
             }
             ScalarValue::BinaryView(val) => {
-                eq_array_primitive!(array, index, BinaryViewArray, val)?
+                eq_array_primitive!(array, index, as_binary_view_array, val)?
             }
             ScalarValue::FixedSizeBinary(_, val) => {
-                eq_array_primitive!(array, index, FixedSizeBinaryArray, val)?
+                eq_array_primitive!(array, index, as_fixed_size_binary_array, val)?
             }
             ScalarValue::LargeBinary(val) => {
-                eq_array_primitive!(array, index, LargeBinaryArray, val)?
+                eq_array_primitive!(array, index, as_large_binary_array, val)?
             }
             ScalarValue::List(arr) => {
                 Self::eq_array_list(&(arr.to_owned() as ArrayRef), array, index)
@@ -3256,58 +3274,58 @@ impl ScalarValue {
                 Self::eq_array_list(&(arr.to_owned() as ArrayRef), array, index)
             }
             ScalarValue::Date32(val) => {
-                eq_array_primitive!(array, index, Date32Array, val)?
+                eq_array_primitive!(array, index, as_date32_array, val)?
             }
             ScalarValue::Date64(val) => {
-                eq_array_primitive!(array, index, Date64Array, val)?
+                eq_array_primitive!(array, index, as_date64_array, val)?
             }
             ScalarValue::Time32Second(val) => {
-                eq_array_primitive!(array, index, Time32SecondArray, val)?
+                eq_array_primitive!(array, index, as_time32_second_array, val)?
             }
             ScalarValue::Time32Millisecond(val) => {
-                eq_array_primitive!(array, index, Time32MillisecondArray, val)?
+                eq_array_primitive!(array, index, as_time32_millisecond_array, val)?
             }
             ScalarValue::Time64Microsecond(val) => {
-                eq_array_primitive!(array, index, Time64MicrosecondArray, val)?
+                eq_array_primitive!(array, index, as_time64_microsecond_array, val)?
             }
             ScalarValue::Time64Nanosecond(val) => {
-                eq_array_primitive!(array, index, Time64NanosecondArray, val)?
+                eq_array_primitive!(array, index, as_time64_nanosecond_array, val)?
             }
             ScalarValue::TimestampSecond(val, _) => {
-                eq_array_primitive!(array, index, TimestampSecondArray, val)?
+                eq_array_primitive!(array, index, as_timestamp_second_array, val)?
             }
             ScalarValue::TimestampMillisecond(val, _) => {
-                eq_array_primitive!(array, index, TimestampMillisecondArray, val)?
+                eq_array_primitive!(array, index, as_timestamp_millisecond_array, val)?
             }
             ScalarValue::TimestampMicrosecond(val, _) => {
-                eq_array_primitive!(array, index, TimestampMicrosecondArray, val)?
+                eq_array_primitive!(array, index, as_timestamp_microsecond_array, val)?
             }
             ScalarValue::TimestampNanosecond(val, _) => {
-                eq_array_primitive!(array, index, TimestampNanosecondArray, val)?
+                eq_array_primitive!(array, index, as_timestamp_nanosecond_array, val)?
             }
             ScalarValue::IntervalYearMonth(val) => {
-                eq_array_primitive!(array, index, IntervalYearMonthArray, val)?
+                eq_array_primitive!(array, index, as_interval_ym_array, val)?
             }
             ScalarValue::IntervalDayTime(val) => {
-                eq_array_primitive!(array, index, IntervalDayTimeArray, val)?
+                eq_array_primitive!(array, index, as_interval_dt_array, val)?
             }
             ScalarValue::IntervalMonthDayNano(val) => {
-                eq_array_primitive!(array, index, IntervalMonthDayNanoArray, val)?
+                eq_array_primitive!(array, index, as_interval_mdn_array, val)?
             }
             ScalarValue::DurationSecond(val) => {
-                eq_array_primitive!(array, index, DurationSecondArray, val)?
+                eq_array_primitive!(array, index, as_duration_second_array, val)?
             }
             ScalarValue::DurationMillisecond(val) => {
-                eq_array_primitive!(array, index, DurationMillisecondArray, val)?
+                eq_array_primitive!(array, index, as_duration_millisecond_array, val)?
             }
             ScalarValue::DurationMicrosecond(val) => {
-                eq_array_primitive!(array, index, DurationMicrosecondArray, val)?
+                eq_array_primitive!(array, index, as_duration_microsecond_array, val)?
             }
             ScalarValue::DurationNanosecond(val) => {
-                eq_array_primitive!(array, index, DurationNanosecondArray, val)?
+                eq_array_primitive!(array, index, as_duration_nanosecond_array, val)?
             }
             ScalarValue::Union(value, _, _) => {
-                let array = as_union_array(array);
+                let array = as_union_array(array)?;
                 let ti = array.type_id(index);
                 let index = array.value_offset(index);
                 if let Some((ti_v, value)) = value {
@@ -3341,6 +3359,16 @@ impl ScalarValue {
     fn eq_array_list(arr1: &ArrayRef, arr2: &ArrayRef, index: usize) -> bool {
         let right = arr2.slice(index, 1);
         arr1 == &right
+    }
+
+    /// Compare `self` with `other` and return an `Ordering`.
+    ///
+    /// This is the same as [`PartialOrd`] except that it returns
+    /// `Err` if the values cannot be compared, e.g., they have incompatible data types.
+    pub fn try_cmp(&self, other: &Self) -> Result<Ordering> {
+        self.partial_cmp(other).ok_or_else(|| {
+            _internal_datafusion_err!("Uncomparable values: {self:?}, {other:?}")
+        })
     }
 
     /// Estimate size if bytes including `Self`. For values with internal containers such as `String`
@@ -4158,17 +4186,17 @@ impl ScalarType<i32> for Date32Type {
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
-    use crate::cast::{
-        as_map_array, as_string_array, as_struct_array, as_uint32_array, as_uint64_array,
-    };
-
+    use crate::cast::{as_list_array, as_map_array, as_struct_array};
     use crate::test_util::batches_to_string;
-    use arrow::array::{types::Float64Type, NullBufferBuilder};
+    use arrow::array::{
+        FixedSizeListBuilder, Int32Builder, LargeListBuilder, ListBuilder, MapBuilder,
+        NullArray, NullBufferBuilder, OffsetSizeTrait, PrimitiveBuilder, RecordBatch,
+        StringBuilder, StringDictionaryBuilder, StructBuilder, UnionBuilder,
+    };
     use arrow::buffer::{Buffer, OffsetBuffer};
     use arrow::compute::{is_null, kernels};
-    use arrow::datatypes::Fields;
+    use arrow::datatypes::{ArrowNumericType, Fields, Float64Type};
     use arrow::error::ArrowError;
     use arrow::util::pretty::pretty_format_columns;
     use chrono::NaiveDate;
@@ -4525,7 +4553,7 @@ mod tests {
         ]);
 
         let array = ScalarValue::iter_to_array(scalars).unwrap();
-        let list_array = as_list_array(&array);
+        let list_array = as_list_array(&array).unwrap();
         // List[[1,2,3], null, [4,5]]
         let expected = ListArray::from_iter_primitive::<Int64Type, _, _>(vec![
             Some(vec![Some(1), Some(2), Some(3)]),
@@ -4541,7 +4569,7 @@ mod tests {
         ]);
 
         let array = ScalarValue::iter_to_array(scalars).unwrap();
-        let list_array = as_large_list_array(&array);
+        let list_array = as_large_list_array(&array).unwrap();
         let expected = LargeListArray::from_iter_primitive::<Int64Type, _, _>(vec![
             Some(vec![Some(1), Some(2), Some(3)]),
             None,
@@ -4603,6 +4631,17 @@ mod tests {
                 assert!(scalar.eq_array(&arr, i).unwrap());
             }
         }
+    }
+
+    #[test]
+    fn test_eq_array_err_message() {
+        assert_starts_with(
+            ScalarValue::Utf8(Some("123".to_string()))
+                .eq_array(&(Arc::new(Int32Array::from(vec![123])) as ArrayRef), 0)
+                .unwrap_err()
+                .message(),
+            "could not cast array of type Int32 to arrow_array::array::byte_array::GenericByteArray<arrow_array::types::GenericStringType<i32>>",
+        );
     }
 
     #[test]
@@ -4759,6 +4798,32 @@ mod tests {
         let expect = timestamp.add(&interval)?;
         assert_eq!(result, expect);
         Ok(())
+    }
+
+    #[test]
+    fn test_try_cmp() {
+        assert_eq!(
+            ScalarValue::try_cmp(
+                &ScalarValue::Int32(Some(1)),
+                &ScalarValue::Int32(Some(2))
+            )
+            .unwrap(),
+            Ordering::Less
+        );
+        assert_eq!(
+            ScalarValue::try_cmp(&ScalarValue::Int32(None), &ScalarValue::Int32(Some(2)))
+                .unwrap(),
+            Ordering::Less
+        );
+        assert_starts_with(
+            ScalarValue::try_cmp(
+                &ScalarValue::Int32(Some(1)),
+                &ScalarValue::Int64(Some(2)),
+            )
+            .unwrap_err()
+            .message(),
+            "Uncomparable values: Int32(1), Int64(2)",
+        );
     }
 
     #[test]
@@ -6629,10 +6694,7 @@ mod tests {
                     let err = value.arithmetic_negate().expect_err("Should receive overflow error on negating {value:?}");
                     let root_err = err.find_root();
                     match  root_err{
-                        DataFusionError::ArrowError(
-                            ArrowError::ArithmeticOverflow(_),
-                            _,
-                        ) => {}
+                        DataFusionError::ArrowError(err, _) if matches!(err.as_ref(), ArrowError::ArithmeticOverflow(_)) => {}
                         _ => return Err(err),
                     };
                 }
@@ -7668,5 +7730,16 @@ mod tests {
             .unwrap(),
         ];
         assert!(scalars.iter().all(|s| s.is_null()));
+    }
+
+    // `err.to_string()` depends on backtrace being present (may have backtrace appended)
+    // `err.strip_backtrace()` also depends on backtrace being present (may have "This was likely caused by ..." stripped)
+    fn assert_starts_with(actual: impl AsRef<str>, expected_prefix: impl AsRef<str>) {
+        let actual = actual.as_ref();
+        let expected_prefix = expected_prefix.as_ref();
+        assert!(
+            actual.starts_with(expected_prefix),
+            "Expected '{actual}' to start with '{expected_prefix}'"
+        );
     }
 }
