@@ -483,25 +483,34 @@ impl FileSource for ParquetSource {
                 // Use both the schema adapter factory and the expr adapter factory.
                 // This results in the the SchemaAdapter being used for projections (e.g. a column was selected that is a UInt32 in the file and a UInt64 in the table schema)
                 // but the PhysicalExprAdapterFactory being used for predicate pushdown and stats pruning.
-                (Some(Arc::clone(expr_adapter_factory)), Some(Arc::clone(schema_adapter_factory)))
+                (
+                    Some(Arc::clone(expr_adapter_factory)),
+                    Arc::clone(schema_adapter_factory),
+                )
             }
             (Some(expr_adapter_factory), None) => {
                 // If no custom schema adapter factory is provided but an expr adapter factory is provided use the expr adapter factory alongside the default schema adapter factory.
                 // This means that the PhysicalExprAdapterFactory will be used for predicate pushdown and stats pruning, while the default schema adapter factory will be used for projections.
-                (Some(Arc::clone(expr_adapter_factory)), Arc::new(DefaultSchemaAdapterFactory) as _)
-            },
+                (
+                    Some(Arc::clone(expr_adapter_factory)),
+                    Arc::new(DefaultSchemaAdapterFactory) as _,
+                )
+            }
             (None, Some(schema_adapter_factory)) => {
                 // If a custom schema adapter factory is provided but no expr adapter factory is provided use the custom SchemaAdapter for both projections and predicate pushdown.
                 // This maximizes compatiblity with existing code that uses the SchemaAdapter API and did not explicitly opt into the PhysicalExprAdapterFactory API.
-                (None, Some(Arc::clone(schema_adapter_factory)))
+                (None, Arc::clone(schema_adapter_factory) as _)
             }
             (None, None) => {
                 // If no custom schema adapter factory or expr adapter factory is provided, use the default schema adapter factory and the default physical expr adapter factory.
                 // This means that the default SchemaAdapter will be used for projections (e.g. a column was selected that is a UInt32 in the file and a UInt64 in the table schema)
                 // and the default PhysicalExprAdapterFactory will be used for predicate pushdown and stats pruning.
                 // This is the default behavior with not customization and means that most users of DataFusion will be cut over to the new PhysicalExprAdapterFactory API.
-                (Some(Arc::new(DefaultPhysicalExprAdapterFactory::default())), Arc::new(DefaultSchemaAdapterFactory) as _)
-            },
+                (
+                    Some(Arc::new(DefaultPhysicalExprAdapterFactory) as _),
+                    Arc::new(DefaultSchemaAdapterFactory) as _,
+                )
+            }
         };
 
         let parquet_file_reader_factory =
