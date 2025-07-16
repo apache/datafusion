@@ -424,14 +424,14 @@ impl ListingTableConfig {
     }
 
     /// Set the [`PhysicalExprAdapterFactory`] for the [`ListingTable`]
-    /// 
+    ///
     /// The expression adapter factory is used to create physical expression adapters that can
     /// handle schema evolution and type conversions when evaluating expressions
     /// with different schemas than the table schema.
-    /// 
+    ///
     /// If not provided, a default physical expression adapter factory will be used unless a custom
     /// `SchemaAdapterFactory` is set, in which case only the `SchemaAdapterFactory` will be used.
-    /// 
+    ///
     /// See https://github.com/apache/datafusion/issues/16800 for details on this transition.
     pub fn with_physical_expr_adapter_factory(
         self,
