@@ -351,7 +351,7 @@ fn optimize_projections(
             return Ok(Transformed::no(plan));
         }
         LogicalPlan::RecursiveQuery(_) => {
-            if is_problematic_recursive_query(&plan) {
+            if plan_contains_subquery_alias(&plan) {
                 return Ok(Transformed::no(plan));
             }
 
@@ -840,14 +840,14 @@ pub fn is_projection_unnecessary(
     ))
 }
 
-fn is_problematic_recursive_query(plan: &LogicalPlan) -> bool {
+fn plan_contains_subquery_alias(plan: &LogicalPlan) -> bool {
     if matches!(*plan, LogicalPlan::SubqueryAlias(_)) {
         return true;
     }
 
     plan.inputs()
         .iter()
-        .any(|input| is_problematic_recursive_query(input))
+        .any(|input| plan_contains_subquery_alias(input))
 }
 
 #[cfg(test)]
