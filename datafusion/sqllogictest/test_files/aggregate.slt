@@ -4351,6 +4351,50 @@ DROP VIEW binary_views
 statement ok
 DROP TABLE strings;
 
+############ FixedSizeBinary ############
+
+statement ok
+CREATE TABLE binaries
+AS VALUES
+ (X'000103', 1),
+ (X'000104', 1),
+ (X'000101', 3),
+ (X'000103', 1),
+ (X'000102', 1),
+ (NULL, 1),
+ (NULL, 4),
+ (X'000104', 1),
+ (X'000109', 2),
+ (X'000103', 1),
+ (X'000101', 2);
+
+statement ok
+CREATE VIEW fixed_size_binary_views
+AS SELECT arrow_cast(column1, 'FixedSizeBinary(3)') as value, column2 as id FROM binaries;
+
+query I?
+SELECT id, MIN(value) FROM fixed_size_binary_views GROUP BY id ORDER BY id;
+----
+1 000102
+2 000101
+3 000101
+4 NULL
+
+query I?
+SELECT id, MAX(value) FROM fixed_size_binary_views GROUP BY id ORDER BY id;
+----
+1 000104
+2 000109
+3 000101
+4 NULL
+
+statement ok
+DROP VIEW fixed_size_binary_views;
+
+statement ok
+DROP TABLE binaries;
+
+
 #################
 # End min_max on strings/binary with null values and groups
 #################

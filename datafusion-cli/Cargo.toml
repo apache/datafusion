@@ -72,3 +72,5 @@ insta = { workspace = true }
 insta-cmd = "0.6.0"
 predicates = "3.0"
 rstest = { workspace = true }
+testcontainers = { workspace = true }
+testcontainers-modules = { workspace = true, features = ["minio"] }
