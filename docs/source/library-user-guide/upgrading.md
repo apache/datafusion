@@ -120,7 +120,7 @@ SET datafusion.execution.spill_compression = 'zstd';
 
 For more details about this configuration option, including performance trade-offs between different compression codecs, see the [Configuration Settings](../user-guide/configs.md) documentation.
 
-### Custom `SchemaAdapterFactory` will no longer be used for predicate pushdown
+### Deprecating `SchemaAdapterFactory` and `SchemaAdapter`
 
 We are moving away from converting data (using `SchemaAdapter`) to converting the expressions themselves (which is more efficient and flexible).
 The first place this change has taken place is in predicate pushdown for Parquet.
