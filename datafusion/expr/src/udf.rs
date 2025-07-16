@@ -768,7 +768,6 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     /// - This method must be consistent with [`Self::hash_value`]. If `equals` returns true for two UDFs,
     ///   their hash values must also be the same.
     /// - Ensure that the implementation does not panic or cause undefined behavior for any input.
-
     fn equals(&self, other: &dyn ScalarUDFImpl) -> bool {
         // 1. If the pointers are identical, it’s definitely the same UDF.
         if ptr::eq(self.as_any(), other.as_any()) {
