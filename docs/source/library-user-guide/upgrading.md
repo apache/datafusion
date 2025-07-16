@@ -131,6 +131,10 @@ To resolve this you need to implement a custom `PhysicalExprAdapterFactory` and 
 See the [default values](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/default_column_values.rs) for an example of how to do this.
 Opting into the new APIs will set you up for future changes since we plan to expand use of `PhysicalExprAdapterFactory` to other areas of DataFusion.
 
+See [#16800] for details.
+
+[#16800]: https://github.com/apache/datafusion/issues/16800
+
 ## DataFusion `48.0.1`
 
 ### `datafusion.execution.collect_statistics` now defaults to `true`
