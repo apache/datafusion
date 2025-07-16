@@ -1780,23 +1780,6 @@ impl ScalarUDFImpl for ExtensionBasedUdf {
             }
         }
     }
-
-    fn equals(&self, other: &dyn ScalarUDFImpl) -> bool {
-        let Some(other) = other.as_any().downcast_ref::<Self>() else {
-            return false;
-        };
-        let Self { name, signature } = self;
-        name == &other.name && signature == &other.signature
-    }
-
-    fn hash_value(&self) -> u64 {
-        let Self { name, signature } = self;
-        let mut hasher = DefaultHasher::new();
-        std::any::type_name::<Self>().hash(&mut hasher);
-        name.hash(&mut hasher);
-        signature.hash(&mut hasher);
-        hasher.finish()
-    }
 }
 
 struct MyUserExtentionType {}
