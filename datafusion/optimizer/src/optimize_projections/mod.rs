@@ -345,11 +345,25 @@ fn optimize_projections(
                 .collect::<Result<Vec<_>>>()?
         }
         LogicalPlan::EmptyRelation(_)
-        | LogicalPlan::RecursiveQuery(_)
         | LogicalPlan::Values(_)
         | LogicalPlan::DescribeTable(_) => {
             // These operators have no inputs, so stop the optimization process.
             return Ok(Transformed::no(plan));
+        }
+        LogicalPlan::RecursiveQuery(_) => {
+            if is_problematic_recursive_query(&plan) {
+                return Ok(Transformed::no(plan));
+            }
+
+            plan.inputs()
+                .into_iter()
+                .map(|input| {
+                    indices
+                        .clone()
+                        .with_projection_beneficial()
+                        .with_plan_exprs(&plan, input.schema())
+                })
+                .collect::<Result<Vec<_>>>()?
         }
         LogicalPlan::Join(join) => {
             let left_len = join.left.schema().fields().len();
@@ -824,6 +838,16 @@ pub fn is_projection_unnecessary(
             }
         },
     ))
+}
+
+fn is_problematic_recursive_query(plan: &LogicalPlan) -> bool {
+    if matches!(*plan, LogicalPlan::SubqueryAlias(_)) {
+        return true;
+    }
+
+    plan.inputs()
+        .iter()
+        .any(|input| is_problematic_recursive_query(input))
 }
 
 #[cfg(test)]
