@@ -202,9 +202,9 @@ impl PhysicalExprAdapter for CustomPhysicalExprAdapter {
                                 field.data_type()
                             ),
                         };
-                        return Ok(Transformed::yes(Arc::new(expressions::Literal::new(
-                            default_value,
-                        ))));
+                        return Ok(Transformed::yes(Arc::new(
+                            expressions::Literal::new(default_value),
+                        )));
                     }
                 }
 
