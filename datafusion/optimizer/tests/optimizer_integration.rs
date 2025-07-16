@@ -22,7 +22,6 @@ use std::sync::Arc;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
 
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::test_util::datafusion_test_data;
 use datafusion_common::{plan_err, Result, TableReference};
 use datafusion_expr::planner::ExprPlanner;
 use datafusion_expr::test::function_stub::sum_udaf;
@@ -39,8 +38,6 @@ use datafusion_sql::sqlparser::ast::Statement;
 use datafusion_sql::sqlparser::dialect::GenericDialect;
 use datafusion_sql::sqlparser::parser::Parser;
 use insta::assert_snapshot;
-
-use datafusion::prelude::{CsvReadOptions, SessionContext};
 
 #[cfg(test)]
 #[ctor::ctor]
@@ -243,11 +240,14 @@ fn where_exists_distinct() -> Result<()> {
     assert_snapshot!(
     format!("{plan}"),
     @r#"
-LeftSemi Join: test.col_int32 = t2.col_int32
+LeftSemi Join: test.col_int32 = __correlated_sq_1.col_int32
   Filter: test.col_int32 IS NOT NULL
     TableScan: test projection=[col_int32]
-  SubqueryAlias: t2
-    TableScan: test projection=[col_int32]
+  SubqueryAlias: __correlated_sq_1
+    Aggregate: groupBy=[[t2.col_int32]], aggr=[[]]
+      SubqueryAlias: t2
+        Filter: test.col_int32 IS NOT NULL
+          TableScan: test projection=[col_int32]
 "#
 
     );
@@ -518,11 +518,9 @@ fn select_correlated_predicate_subquery_with_uppercase_ident() {
 
 #[test]
 fn recursive_cte_projection_pushdown() -> Result<()> {
-    // Test projection pushdown behavior with recursive CTEs in various scenarios
-
-    // Scenario 1: CTE defines extra columns but recursive part references them
-    // In this case, projection pushdown cannot eliminate the unused columns because
-    // the recursive part still references them, even if the final SELECT doesn't use them
+    // Test that projection pushdown works with recursive CTEs by ensuring
+    // only the required columns are projected from the base table, even when
+    // the CTE definition includes unused columns
     let sql = "WITH RECURSIVE nodes AS (\
         SELECT col_int32 AS id, col_utf8 AS name, col_uint32 AS extra FROM test \
         UNION ALL \
@@ -530,22 +528,26 @@ fn recursive_cte_projection_pushdown() -> Result<()> {
     ) SELECT id FROM nodes";
     let plan = test_sql(sql)?;
 
+    // The optimizer successfully performs projection pushdown by only selecting the needed
+    // columns from the base table and recursive table, eliminating unused columns
     assert_snapshot!(
         format!("{plan}"),
         @r#"SubqueryAlias: nodes
-  Projection: id
-    RecursiveQuery: is_distinct=false
-      Projection: test.col_int32 AS id, test.col_utf8 AS name, test.col_uint32 AS extra
-        TableScan: test
-      Projection: CAST(CAST(nodes.id AS Int64) + Int64(1) AS Int32), nodes.name, nodes.extra
-        Filter: nodes.id < Int32(3)
-          TableScan: nodes
+  RecursiveQuery: is_distinct=false
+    Projection: test.col_int32 AS id
+      TableScan: test projection=[col_int32]
+    Projection: CAST(CAST(nodes.id AS Int64) + Int64(1) AS Int32)
+      Filter: nodes.id < Int32(3)
+        TableScan: nodes projection=[id]
 "#
     );
+    Ok(())
+}
 
-    // Scenario 2: Unused columns in both base and recursive parts
-    // Even when columns are never used in final result, they're still projected
-    // because the recursive part references them
+#[test]
+fn recursive_cte_with_unused_columns() -> Result<()> {
+    // Test projection pushdown with a recursive CTE where the base case
+    // includes columns that are never used in the recursive part or final result
     let sql = "WITH RECURSIVE series AS (\
         SELECT 1 AS n, col_utf8, col_uint32, col_date32 FROM test WHERE col_int32 = 1 \
         UNION ALL \
@@ -553,23 +555,27 @@ fn recursive_cte_projection_pushdown() -> Result<()> {
     ) SELECT n FROM series";
     let plan = test_sql(sql)?;
 
+    // The optimizer successfully performs projection pushdown by eliminating unused columns
+    // even when they're defined in the CTE but not actually needed
     assert_snapshot!(
         format!("{plan}"),
         @r#"SubqueryAlias: series
-  Projection: n
-    RecursiveQuery: is_distinct=false
-      Projection: Int64(1) AS n, test.col_utf8, test.col_uint32, test.col_date32
-        Filter: test.col_int32 = Int32(1)
-          TableScan: test
-      Projection: series.n + Int64(1), series.col_utf8, series.col_uint32, series.col_date32
-        Filter: series.n < Int64(3)
-          TableScan: series
+  RecursiveQuery: is_distinct=false
+    Projection: Int64(1) AS n
+      Filter: test.col_int32 = Int32(1)
+        TableScan: test projection=[col_int32]
+    Projection: series.n + Int64(1)
+      Filter: series.n < Int64(3)
+        TableScan: series projection=[n]
 "#
     );
+    Ok(())
+}
 
-    // Scenario 3: Optimal case - only needed columns are selected
-    // This demonstrates true projection pushdown working when the recursive part
-    // only uses columns that are actually needed in the final result
+#[test]
+fn recursive_cte_true_projection_pushdown() -> Result<()> {
+    // Test case that truly demonstrates projection pushdown working:
+    // The base case only selects needed columns
     let sql = "WITH RECURSIVE countdown AS (\
         SELECT col_int32 AS n FROM test WHERE col_int32 = 5 \
         UNION ALL \
@@ -577,19 +583,20 @@ fn recursive_cte_projection_pushdown() -> Result<()> {
     ) SELECT n FROM countdown";
     let plan = test_sql(sql)?;
 
+    // This demonstrates optimal projection pushdown where only col_int32 is projected from the base table,
+    // and only the needed column is selected from the recursive table
     assert_snapshot!(
         format!("{plan}"),
         @r#"SubqueryAlias: countdown
   RecursiveQuery: is_distinct=false
     Projection: test.col_int32 AS n
       Filter: test.col_int32 = Int32(5)
-        TableScan: test
+        TableScan: test projection=[col_int32]
     Projection: CAST(CAST(countdown.n AS Int64) - Int64(1) AS Int32)
       Filter: countdown.n > Int32(1)
-        TableScan: countdown
+        TableScan: countdown projection=[n]
 "#
     );
-
     Ok(())
 }
 
