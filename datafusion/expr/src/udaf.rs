@@ -906,9 +906,11 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     /// - symmetric: `a.equals(b)` implies `b.equals(a)`;
     /// - transitive: `a.equals(b)` and `b.equals(c)` implies `a.equals(c)`.
     ///
-    /// By default, compares [`Self::name`] and [`Self::signature`].
+    /// By default, compares [`Self::name`], [`Self::aliases`] and [`Self::signature`].
     fn equals(&self, other: &dyn AggregateUDFImpl) -> bool {
-        self.name() == other.name() && self.signature() == other.signature()
+        self.name() == other.name()
+            && self.aliases() == other.aliases()
+            && self.signature() == other.signature()
     }
 
     /// Returns a hash value for this aggregate UDF.
@@ -919,10 +921,11 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     /// Similarly to [`Hash`] and [`Eq`], if [`Self::equals`] returns true for two UDFs,
     /// their `hash_value`s must be the same.
     ///
-    /// By default, hashes [`Self::name`] and [`Self::signature`].
+    /// By default, it is consistent with default implementation of [`Self::equals`].
     fn hash_value(&self) -> u64 {
         let hasher = &mut DefaultHasher::new();
         self.name().hash(hasher);
+        self.aliases().hash(hasher);
         self.signature().hash(hasher);
         hasher.finish()
     }
