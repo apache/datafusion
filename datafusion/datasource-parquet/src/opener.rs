@@ -259,7 +259,9 @@ impl FileOpener for ParquetOpener {
                             )
                             .with_partition_values(partition_values)
                             .rewrite(p)?;
-                        // Now that we've rewritten the predicate, we can simplify it
+                        // After rewriting to the file schema, further simplifications may be possible.
+                        // For example, if `'a' = col_that_is_missing` becomes `'a' = NULL` that can then be simplified to `FALSE`
+                        // and we can avoid doing any more work on the file (bloom filters, loading the page index, etc.).
                         PhysicalExprSimplifier::new(&physical_file_schema).simplify(expr)
                     })
                     .transpose()?;
