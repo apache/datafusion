@@ -980,16 +980,19 @@ impl Display for DFSchema {
 /// widely used in the DataFusion codebase.
 pub trait ExprSchema: std::fmt::Debug {
     /// Is this column reference nullable?
+    #[deprecated(since = "48.0.0", note = "Use ExprSchemable::nullable")]
     fn nullable(&self, col: &Column) -> Result<bool> {
         Ok(self.field_from_column(col)?.is_nullable())
     }
 
     /// What is the datatype of this column?
+    #[deprecated(since = "48.0.0", note = "Use ExprSchemable::data_type")]
     fn data_type(&self, col: &Column) -> Result<&DataType> {
         Ok(self.field_from_column(col)?.data_type())
     }
 
     /// Returns the column's optional metadata.
+    #[deprecated(since = "48.0.0", note = "Use ExprSchemable::metadata")]
     fn metadata(&self, col: &Column) -> Result<&HashMap<String, String>> {
         Ok(self.field_from_column(col)?.metadata())
     }
