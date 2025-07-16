@@ -189,7 +189,9 @@ impl TryFrom<&DataType> for protobuf::arrow_type::ArrowTypeEnum {
                     value: Some(Box::new(value_type.as_ref().try_into()?)),
                 }))
             }
-            DataType::Decimal128(precision, scale) => Self::Decimal(protobuf::Decimal {
+            DataType::Decimal128(precision, scale)
+            |DataType::Decimal32(precision, scale)
+            |DataType::Decimal64(precision, scale) => Self::Decimal(protobuf::Decimal {
                 precision: *precision as u32,
                 scale: *scale as i32,
             }),
