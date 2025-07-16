@@ -184,23 +184,6 @@ impl ScalarUDFImpl for Range {
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }
-
-    fn equals(&self, other: &dyn ScalarUDFImpl) -> bool {
-        let Some(other) = other.as_any().downcast_ref::<Self>() else {
-            return false;
-        };
-        let Self { signature, aliases } = self;
-        signature == &other.signature && aliases == &other.aliases
-    }
-
-    fn hash_value(&self) -> u64 {
-        let Self { signature, aliases } = self;
-        let mut hasher = DefaultHasher::new();
-        std::any::type_name::<Self>().hash(&mut hasher);
-        signature.hash(&mut hasher);
-        aliases.hash(&mut hasher);
-        hasher.finish()
-    }
 }
 
 make_udf_expr_and_func!(
@@ -327,23 +310,6 @@ impl ScalarUDFImpl for GenSeries {
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
-    }
-
-    fn equals(&self, other: &dyn ScalarUDFImpl) -> bool {
-        let Some(other) = other.as_any().downcast_ref::<Self>() else {
-            return false;
-        };
-        let Self { signature, aliases } = self;
-        signature == &other.signature && aliases == &other.aliases
-    }
-
-    fn hash_value(&self) -> u64 {
-        let Self { signature, aliases } = self;
-        let mut hasher = DefaultHasher::new();
-        std::any::type_name::<Self>().hash(&mut hasher);
-        signature.hash(&mut hasher);
-        aliases.hash(&mut hasher);
-        hasher.finish()
     }
 }
 

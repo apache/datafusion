@@ -272,23 +272,6 @@ impl AggregateUDFImpl for Count {
     fn reverse_expr(&self) -> ReversedUDAF {
         ReversedUDAF::Identical
     }
-
-    fn equals(&self, other: &dyn AggregateUDFImpl) -> bool {
-        let Some(other) = other.as_any().downcast_ref::<Self>() else {
-            return false;
-        };
-        let Self { signature, aliases } = self;
-        signature == &other.signature && aliases == &other.aliases
-    }
-
-    fn hash_value(&self) -> u64 {
-        let Self { signature, aliases } = self;
-        let mut hasher = DefaultHasher::new();
-        std::any::type_name::<Self>().hash(&mut hasher);
-        signature.hash(&mut hasher);
-        aliases.hash(&mut hasher);
-        hasher.finish()
-    }
 }
 
 create_func!(Min, min_udaf);
@@ -506,22 +489,5 @@ impl AggregateUDFImpl for Avg {
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         coerce_avg_type(self.name(), arg_types)
-    }
-
-    fn equals(&self, other: &dyn AggregateUDFImpl) -> bool {
-        let Some(other) = other.as_any().downcast_ref::<Self>() else {
-            return false;
-        };
-        let Self { signature, aliases } = self;
-        signature == &other.signature && aliases == &other.aliases
-    }
-
-    fn hash_value(&self) -> u64 {
-        let Self { signature, aliases } = self;
-        let mut hasher = DefaultHasher::new();
-        std::any::type_name::<Self>().hash(&mut hasher);
-        signature.hash(&mut hasher);
-        aliases.hash(&mut hasher);
-        hasher.finish()
     }
 }

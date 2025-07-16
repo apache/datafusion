@@ -184,23 +184,6 @@ impl ScalarUDFImpl for ArrayElement {
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }
-
-    fn equals(&self, other: &dyn ScalarUDFImpl) -> bool {
-        let Some(other) = other.as_any().downcast_ref::<Self>() else {
-            return false;
-        };
-        let Self { signature, aliases } = self;
-        signature == &other.signature && aliases == &other.aliases
-    }
-
-    fn hash_value(&self) -> u64 {
-        let Self { signature, aliases } = self;
-        let mut hasher = DefaultHasher::new();
-        std::any::type_name::<Self>().hash(&mut hasher);
-        signature.hash(&mut hasher);
-        aliases.hash(&mut hasher);
-        hasher.finish()
-    }
 }
 
 /// array_element SQL function
@@ -425,23 +408,6 @@ impl ScalarUDFImpl for ArraySlice {
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
-    }
-
-    fn equals(&self, other: &dyn ScalarUDFImpl) -> bool {
-        let Some(other) = other.as_any().downcast_ref::<Self>() else {
-            return false;
-        };
-        let Self { signature, aliases } = self;
-        signature == &other.signature && aliases == &other.aliases
-    }
-
-    fn hash_value(&self) -> u64 {
-        let Self { signature, aliases } = self;
-        let mut hasher = DefaultHasher::new();
-        std::any::type_name::<Self>().hash(&mut hasher);
-        signature.hash(&mut hasher);
-        aliases.hash(&mut hasher);
-        hasher.finish()
     }
 }
 
@@ -751,23 +717,6 @@ impl ScalarUDFImpl for ArrayPopFront {
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }
-
-    fn equals(&self, other: &dyn ScalarUDFImpl) -> bool {
-        let Some(other) = other.as_any().downcast_ref::<Self>() else {
-            return false;
-        };
-        let Self { signature, aliases } = self;
-        signature == &other.signature && aliases == &other.aliases
-    }
-
-    fn hash_value(&self) -> u64 {
-        let Self { signature, aliases } = self;
-        let mut hasher = DefaultHasher::new();
-        std::any::type_name::<Self>().hash(&mut hasher);
-        signature.hash(&mut hasher);
-        aliases.hash(&mut hasher);
-        hasher.finish()
-    }
 }
 
 /// array_pop_front SQL function
@@ -875,23 +824,6 @@ impl ScalarUDFImpl for ArrayPopBack {
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }
-
-    fn equals(&self, other: &dyn ScalarUDFImpl) -> bool {
-        let Some(other) = other.as_any().downcast_ref::<Self>() else {
-            return false;
-        };
-        let Self { signature, aliases } = self;
-        signature == &other.signature && aliases == &other.aliases
-    }
-
-    fn hash_value(&self) -> u64 {
-        let Self { signature, aliases } = self;
-        let mut hasher = DefaultHasher::new();
-        std::any::type_name::<Self>().hash(&mut hasher);
-        signature.hash(&mut hasher);
-        aliases.hash(&mut hasher);
-        hasher.finish()
-    }
 }
 
 /// array_pop_back SQL function
@@ -996,23 +928,6 @@ impl ScalarUDFImpl for ArrayAnyValue {
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
-    }
-
-    fn equals(&self, other: &dyn ScalarUDFImpl) -> bool {
-        let Some(other) = other.as_any().downcast_ref::<Self>() else {
-            return false;
-        };
-        let Self { signature, aliases } = self;
-        signature == &other.signature && aliases == &other.aliases
-    }
-
-    fn hash_value(&self) -> u64 {
-        let Self { signature, aliases } = self;
-        let mut hasher = DefaultHasher::new();
-        std::any::type_name::<Self>().hash(&mut hasher);
-        signature.hash(&mut hasher);
-        aliases.hash(&mut hasher);
-        hasher.finish()
     }
 }
 
