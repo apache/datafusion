@@ -38,7 +38,6 @@
 /// The "system-preferred" variation (i.e., no variation).
 pub const DEFAULT_TYPE_VARIATION_REF: u32 = 0;
 pub const UNSIGNED_INTEGER_TYPE_VARIATION_REF: u32 = 1;
-pub const FLOAT16_TYPE_VARIATION_REF: u32 = 2;
 
 #[deprecated(since = "42.0.0", note = "Use `PrecisionTimestamp(Tz)` type instead")]
 pub const TIMESTAMP_SECOND_TYPE_VARIATION_REF: u32 = 0;
@@ -123,3 +122,8 @@ pub const INTERVAL_MONTH_DAY_NANO_TYPE_REF: u32 = 3;
     note = "Use Substrait `IntervalCompund` type instead"
 )]
 pub const INTERVAL_MONTH_DAY_NANO_TYPE_NAME: &str = "interval-month-day-nano";
+
+/// For [`DataType::Float16`].
+///
+/// [`DataType::Float16`]: datafusion::arrow::datatypes::DataType::Float16
+pub const FLOAT16_TYPE_REF: u32 = 4;

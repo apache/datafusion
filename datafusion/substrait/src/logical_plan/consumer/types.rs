@@ -24,13 +24,13 @@ use crate::variation_const::{
     DEFAULT_CONTAINER_TYPE_VARIATION_REF, DEFAULT_INTERVAL_DAY_TYPE_VARIATION_REF,
     DEFAULT_MAP_TYPE_VARIATION_REF, DEFAULT_TYPE_VARIATION_REF,
     DICTIONARY_MAP_TYPE_VARIATION_REF, DURATION_INTERVAL_DAY_TYPE_VARIATION_REF,
-    FLOAT16_TYPE_VARIATION_REF, INTERVAL_DAY_TIME_TYPE_REF,
-    INTERVAL_MONTH_DAY_NANO_TYPE_NAME, INTERVAL_MONTH_DAY_NANO_TYPE_REF,
-    INTERVAL_YEAR_MONTH_TYPE_REF, LARGE_CONTAINER_TYPE_VARIATION_REF,
-    TIMESTAMP_MICRO_TYPE_VARIATION_REF, TIMESTAMP_MILLI_TYPE_VARIATION_REF,
-    TIMESTAMP_NANO_TYPE_VARIATION_REF, TIMESTAMP_SECOND_TYPE_VARIATION_REF,
-    TIME_32_TYPE_VARIATION_REF, TIME_64_TYPE_VARIATION_REF,
-    UNSIGNED_INTEGER_TYPE_VARIATION_REF, VIEW_CONTAINER_TYPE_VARIATION_REF,
+    FLOAT16_TYPE_REF, INTERVAL_DAY_TIME_TYPE_REF, INTERVAL_MONTH_DAY_NANO_TYPE_NAME,
+    INTERVAL_MONTH_DAY_NANO_TYPE_REF, INTERVAL_YEAR_MONTH_TYPE_REF,
+    LARGE_CONTAINER_TYPE_VARIATION_REF, TIMESTAMP_MICRO_TYPE_VARIATION_REF,
+    TIMESTAMP_MILLI_TYPE_VARIATION_REF, TIMESTAMP_NANO_TYPE_VARIATION_REF,
+    TIMESTAMP_SECOND_TYPE_VARIATION_REF, TIME_32_TYPE_VARIATION_REF,
+    TIME_64_TYPE_VARIATION_REF, UNSIGNED_INTEGER_TYPE_VARIATION_REF,
+    VIEW_CONTAINER_TYPE_VARIATION_REF,
 };
 use datafusion::arrow::datatypes::{
     DataType, Field, Fields, IntervalUnit, Schema, TimeUnit,
@@ -85,13 +85,7 @@ pub fn from_substrait_type(
                     "Unsupported Substrait type variation {v} of type {s_kind:?}"
                 ),
             },
-            r#type::Kind::Fp32(fp32) => match fp32.type_variation_reference {
-                DEFAULT_TYPE_VARIATION_REF => Ok(DataType::Float32),
-                FLOAT16_TYPE_VARIATION_REF => Ok(DataType::Float16),
-                v => not_impl_err!(
-                    "Unsupported Substrait type variation {v} of type {s_kind:?}"
-                ),
-            },
+            r#type::Kind::Fp32(_) => Ok(DataType::Float32),
             r#type::Kind::Fp64(_) => Ok(DataType::Float64),
             r#type::Kind::Timestamp(ts) => {
                 // Kept for backwards compatibility, new plans should use PrecisionTimestamp(Tz) instead
@@ -266,6 +260,8 @@ pub fn from_substrait_type(
                 } else {
                     #[allow(deprecated)]
                     match u.type_reference {
+                        // Float16 support via UserDefined type
+                        FLOAT16_TYPE_REF => Ok(DataType::Float16),
                         // Kept for backwards compatibility, producers should use IntervalYear instead
                         INTERVAL_YEAR_MONTH_TYPE_REF => {
                             Ok(DataType::Interval(IntervalUnit::YearMonth))
