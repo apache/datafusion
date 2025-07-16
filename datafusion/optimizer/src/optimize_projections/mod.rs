@@ -637,8 +637,8 @@ fn outer_columns<'a>(expr: &'a Expr, columns: &mut HashSet<&'a Column>) {
     // inspect_expr_pre doesn't handle subquery references, so find them explicitly
     expr.apply(|expr| {
         match expr {
-            Expr::OuterReferenceColumn(_, col) => {
-                columns.insert(col);
+            Expr::OuterReferenceColumn(boxed_orc) => {
+                columns.insert(&boxed_orc.as_ref().column);
             }
             Expr::ScalarSubquery(subquery) => {
                 outer_columns_helper_multi(&subquery.outer_ref_columns, columns);

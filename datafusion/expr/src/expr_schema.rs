@@ -112,7 +112,9 @@ impl ExprSchemable for Expr {
             },
             Expr::Negative(expr) => expr.get_type(schema),
             Expr::Column(c) => Ok(schema.data_type(c)?.clone()),
-            Expr::OuterReferenceColumn(ty, _) => Ok(ty.clone()),
+            Expr::OuterReferenceColumn(boxed_orc) => {
+                Ok(boxed_orc.as_ref().data_type.clone())
+            }
             Expr::ScalarVariable(ty, _) => Ok(ty.clone()),
             Expr::Literal(l, _) => Ok(l.data_type()),
             Expr::Case(case) => {
@@ -276,7 +278,7 @@ impl ExprSchemable for Expr {
                 || high.nullable(input_schema)?),
 
             Expr::Column(c) => input_schema.nullable(c),
-            Expr::OuterReferenceColumn(_, _) => Ok(true),
+            Expr::OuterReferenceColumn(_) => Ok(true),
             Expr::Literal(value, _) => Ok(value.is_null()),
             Expr::Case(case) => {
                 // This expression is nullable if any of the input expressions are nullable
@@ -411,9 +413,11 @@ impl ExprSchemable for Expr {
             }
             Expr::Negative(expr) => expr.to_field(schema).map(|(_, f)| f),
             Expr::Column(c) => schema.field_from_column(c).map(|f| Arc::new(f.clone())),
-            Expr::OuterReferenceColumn(ty, _) => {
-                Ok(Arc::new(Field::new(&schema_name, ty.clone(), true)))
-            }
+            Expr::OuterReferenceColumn(boxed_alias) => Ok(Arc::new(Field::new(
+                &schema_name,
+                boxed_alias.as_ref().data_type.clone(),
+                true,
+            ))),
             Expr::ScalarVariable(ty, _) => {
                 Ok(Arc::new(Field::new(&schema_name, ty.clone(), true)))
             }

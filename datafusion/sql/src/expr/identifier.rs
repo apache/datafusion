@@ -15,17 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use arrow::datatypes::Field;
 use datafusion_common::{
     internal_err, not_impl_err, plan_datafusion_err, plan_err, Column, DFSchema,
     DataFusionError, Result, Span, TableReference,
 };
+use datafusion_expr::expr::OuterReference;
 use datafusion_expr::planner::PlannerResult;
+use datafusion_expr::UNNAMED_TABLE;
 use datafusion_expr::{Case, Expr};
 use sqlparser::ast::{CaseWhen, Expr as SQLExpr, Ident};
-
-use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
-use datafusion_expr::UNNAMED_TABLE;
 
 impl<S: ContextProvider> SqlToRel<'_, S> {
     pub(super) fn sql_identifier_to_expr(
@@ -75,8 +75,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 {
                     // Found an exact match on a qualified name in the outer plan schema, so this is an outer reference column
                     return Ok(Expr::OuterReferenceColumn(
-                        field.data_type().clone(),
-                        Column::from((qualifier, field)),
+                        OuterReference {
+                            data_type: field.data_type().clone(),
+                            column: Column::from((qualifier, field)),
+                        }
+                        .into(),
                     ));
                 }
             }
@@ -182,8 +185,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                                 Some((field, qualifier, _nested_names)) => {
                                     // Found an exact match on a qualified name in the outer plan schema, so this is an outer reference column
                                     Ok(Expr::OuterReferenceColumn(
-                                        field.data_type().clone(),
-                                        Column::from((qualifier, field)),
+                                        OuterReference {
+                                            data_type: field.data_type().clone(),
+                                            column: Column::from((qualifier, field)),
+                                        }
+                                        .into(),
                                     ))
                                 }
                                 // Found no matching field, will return a default
