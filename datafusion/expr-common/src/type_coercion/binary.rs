@@ -777,6 +777,7 @@ pub fn comparison_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<D
         .or_else(|| binary_coercion(lhs_type, rhs_type))
         .or_else(|| struct_coercion(lhs_type, rhs_type))
         .or_else(|| map_coercion(lhs_type, rhs_type))
+        .or_else(|| boolean_coercion(lhs_type, rhs_type))
 }
 
 /// Similar to [`comparison_coercion`] but prefers numeric if compares with
@@ -1047,6 +1048,20 @@ fn map_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
                     )
                 },
             )
+        }
+        _ => None,
+    }
+}
+
+/// Coercion rules for boolean types: If at least one argument is
+/// a boolean type and both arguments can be coerced into a boolean type, coerce
+/// to boolean type.
+fn boolean_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
+    use arrow::datatypes::DataType::*;
+    match (lhs_type, rhs_type) {
+        (Boolean, Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64)
+        | (Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64, Boolean) => {
+            Some(Boolean)
         }
         _ => None,
     }
@@ -2509,6 +2524,32 @@ mod tests {
             Operator::Eq,
             DataType::List(Arc::clone(&inner_field))
         );
+
+        // boolean
+        let int_types = vec![
+            DataType::Int8,
+            DataType::Int16,
+            DataType::Int32,
+            DataType::Int64,
+            DataType::UInt8,
+            DataType::UInt16,
+            DataType::UInt32,
+            DataType::UInt64,
+        ];
+        for int_type in int_types {
+            test_coercion_binary_rule!(
+                DataType::Boolean,
+                DataType::Int8,
+                Operator::Eq,
+                DataType::Boolean
+            );
+            test_coercion_binary_rule!(
+                int_type,
+                DataType::Boolean,
+                Operator::Eq,
+                DataType::Boolean
+            );
+        }
 
         // Negative test: inner_timestamp_field and inner_field are not compatible because their inner types are not compatible
         let inner_timestamp_field = Arc::new(Field::new_list_field(
