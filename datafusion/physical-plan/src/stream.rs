@@ -33,6 +33,7 @@ use datafusion_common::{exec_err, Result};
 use datafusion_common_runtime::JoinSet;
 use datafusion_execution::TaskContext;
 
+use futures::ready;
 use futures::stream::BoxStream;
 use futures::{Future, Stream, StreamExt};
 use log::debug;
@@ -612,13 +613,7 @@ impl BatchSplitStream {
         &mut self,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Result<RecordBatch>>> {
-        use futures::ready;
-        let poll = self.input.as_mut().poll_next(cx);
-        let item = match poll {
-            Poll::Ready(item) => item,
-            Poll::Pending => return Poll::Pending,
-        };
-        match item {
+        match ready!(self.input.as_mut().poll_next(cx)) {
             Some(Ok(batch)) => {
                 if batch.num_rows() <= self.batch_size {
                     // Small batch, pass through directly
@@ -629,7 +624,7 @@ impl BatchSplitStream {
                     // Immediately produce the first slice
                     match self.next_sliced_batch() {
                         Some(result) => Poll::Ready(Some(result)),
-                        None => Poll::Ready(None), // This should not happen
+                        None => Poll::Ready(None), // Should not happen
                     }
                 }
             }
