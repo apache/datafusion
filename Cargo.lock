@@ -2189,6 +2189,7 @@ dependencies = [
  "object_store",
  "parquet-key-management",
  "prost",
+ "serde_json",
  "tempfile",
  "test-utils",
  "tokio",
