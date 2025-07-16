@@ -123,6 +123,8 @@ For more details about this configuration option, including performance trade-of
 ### Deprecating `SchemaAdapterFactory` and `SchemaAdapter`
 
 We are moving away from converting data (using `SchemaAdapter`) to converting the expressions themselves (which is more efficient and flexible).
+
+See [issue #16800](https://github.com/apache/datafusion/issues/16800) for more information
 The first place this change has taken place is in predicate pushdown for Parquet.
 By default if you do not use a custom `SchemaAdapterFactory` we will use expression conversion instead.
 If you do set a custom `SchemaAdapterFactory` we will continue to use it but emit a warning about that code path being deprecated.
