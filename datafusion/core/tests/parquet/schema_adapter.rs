@@ -188,8 +188,7 @@ impl PhysicalExprAdapter for CustomPhysicalExprAdapter {
                             .field_with_name(field_name)
                             .map_err(|_| {
                                 datafusion_common::DataFusionError::Plan(format!(
-                                    "Field '{}' not found in logical file schema",
-                                    field_name
+                                    "Field '{field_name}' not found in logical file schema",
                                 ))
                             })?;
                         // If the field does not exist, create a default value expression
