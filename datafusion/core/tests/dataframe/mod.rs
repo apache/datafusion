@@ -6238,7 +6238,7 @@ async fn test_copy_to_preserves_order() -> Result<()> {
     let physical_plan_format =
         displayable(physical_plan.as_ref()).indent(true).to_string();
 
-    // Expect that input to the DataSinkExec is sorted correctly 
+    // Expect that input to the DataSinkExec is sorted correctly
     assert_snapshot!(
         physical_plan_format,
         @r###"
