@@ -1536,8 +1536,10 @@ SELECT not(true), not(false)
 ----
 false true
 
-query error type_coercion\ncaused by\nError during planning: Cannot infer common argument type for comparison operation Int64 IS DISTINCT FROM Boolean
+query BB
 SELECT not(1), not(0)
+----
+false true
 
 query ?B
 SELECT null, not(null)
