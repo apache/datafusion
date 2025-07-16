@@ -612,8 +612,14 @@ impl BatchSplitStream {
         &mut self,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Result<RecordBatch>>> {
-        match self.input.as_mut().poll_next(cx) {
-            Poll::Ready(Some(Ok(batch))) => {
+        use futures::ready;
+        let poll = self.input.as_mut().poll_next(cx);
+        let item = match poll {
+            Poll::Ready(item) => item,
+            Poll::Pending => return Poll::Pending,
+        };
+        match item {
+            Some(Ok(batch)) => {
                 if batch.num_rows() <= self.batch_size {
                     // Small batch, pass through directly
                     Poll::Ready(Some(Ok(batch)))
@@ -627,9 +633,8 @@ impl BatchSplitStream {
                     }
                 }
             }
-            Poll::Ready(Some(Err(e))) => Poll::Ready(Some(Err(e))),
-            Poll::Ready(None) => Poll::Ready(None),
-            Poll::Pending => Poll::Pending,
+            Some(Err(e)) => Poll::Ready(Some(Err(e))),
+            None => Poll::Ready(None),
         }
     }
 }
