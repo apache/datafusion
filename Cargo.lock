@@ -2188,6 +2188,7 @@ dependencies = [
  "nix",
  "object_store",
  "prost",
+ "serde_json",
  "tempfile",
  "test-utils",
  "tokio",
