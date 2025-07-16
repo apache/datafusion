@@ -475,17 +475,15 @@ impl FileSource for ParquetSource {
 
         let expr_adapter_factory = match (
             self.schema_adapter_factory.as_ref(),
-            base_config.expr_adapter.as_ref(),
+            base_config.expr_adapter_factory.as_ref(),
         ) {
-            (Some(_), Some(_)) => {
-                log::warn!(
-                    "ParquetSource: both schema_adapter_factory and expr_adapter are set. \
-                     Using schema_adapter_factory only. \
-                     See https://datafusion.apache.org/library-user-guide/upgrading.html#datafusion-49-0-0 for more details.",
-                );
-                None
+            (Some(_), Some(expr_adapter_factory)) => {
+                log::warn!("The SchemaAdapter API will be removed from ParquetSource in a future release. \
+                Use PhysicalExprAdapterFactory API instead. \
+                See https://datafusion.apache.org/library-user-guide/upgrading.html#datafusion-49-0-0 for more details.");
+                Some(Arc::clone(expr_adapter_factory))
             }
-            (None, Some(expr_adapter)) => Some(Arc::clone(expr_adapter)),
+            (None, Some(expr_adapter_factory)) => Some(Arc::clone(expr_adapter_factory)),
             (Some(_), None) => {
                 log::warn!("The SchemaAdapter API will be removed from ParquetSource in a future release. \
                 Use PhysicalExprAdapterFactory API instead. \

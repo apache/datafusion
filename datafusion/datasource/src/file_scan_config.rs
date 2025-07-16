@@ -191,7 +191,7 @@ pub struct FileScanConfig {
     pub batch_size: Option<usize>,
     /// Expression adapter used to adapt filters and projections that are pushed down into the scan
     /// from the logical schema to the physical schema of the file.
-    pub expr_adapter: Option<Arc<dyn PhysicalExprAdapterFactory>>,
+    pub expr_adapter_factory: Option<Arc<dyn PhysicalExprAdapterFactory>>,
 }
 
 /// A builder for [`FileScanConfig`]'s.
@@ -467,7 +467,7 @@ impl FileScanConfigBuilder {
             file_compression_type,
             new_lines_in_values,
             batch_size,
-            expr_adapter,
+            expr_adapter_factory: expr_adapter,
         }
     }
 }
@@ -488,7 +488,7 @@ impl From<FileScanConfig> for FileScanConfigBuilder {
             table_partition_cols: config.table_partition_cols,
             constraints: Some(config.constraints),
             batch_size: config.batch_size,
-            expr_adapter: config.expr_adapter,
+            expr_adapter: config.expr_adapter_factory,
         }
     }
 }
@@ -702,7 +702,7 @@ impl FileScanConfig {
             new_lines_in_values: false,
             file_source: Arc::clone(&file_source),
             batch_size: None,
-            expr_adapter: None,
+            expr_adapter_factory: None,
         }
     }
 
