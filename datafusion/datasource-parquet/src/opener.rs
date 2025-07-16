@@ -1273,7 +1273,9 @@ mod test {
             .await
             .unwrap();
         let batches = collect_batches(stream).await;
-        let expected = vec![
+
+        #[rustfmt::skip]
+        let expected = [
             "+---+-----+",
             "| a | b   |",
             "+---+-----+",
