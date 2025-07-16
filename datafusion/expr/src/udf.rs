@@ -704,9 +704,10 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     /// - symmetric: `a.equals(b)` implies `b.equals(a)`;
     /// - transitive: `a.equals(b)` and `b.equals(c)` implies `a.equals(c)`.
     ///
-    /// By default, compares [`Self::name`], [`Self::aliases`] and [`Self::signature`].
+    /// By default, compares type, [`Self::name`], [`Self::aliases`] and [`Self::signature`].
     fn equals(&self, other: &dyn ScalarUDFImpl) -> bool {
-        self.name() == other.name()
+        self.as_any().type_id() == other.as_any().type_id()
+            && self.name() == other.name()
             && self.aliases() == other.aliases()
             && self.signature() == other.signature()
     }
@@ -722,6 +723,7 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     /// By default, it is consistent with default implementation of [`Self::equals`].
     fn hash_value(&self) -> u64 {
         let hasher = &mut DefaultHasher::new();
+        self.as_any().type_id().hash(hasher);
         self.name().hash(hasher);
         self.aliases().hash(hasher);
         self.signature().hash(hasher);
