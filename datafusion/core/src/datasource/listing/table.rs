@@ -938,6 +938,8 @@ pub struct ListingTable {
     column_defaults: HashMap<String, Expr>,
     /// Optional [`SchemaAdapterFactory`] for creating schema adapters
     schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
+    /// Optional [`PhysicalExprAdapterFactory`] for creating physical expression adapters
+    expr_adapter_factory: Option<Arc<dyn PhysicalExprAdapterFactory>>,
 }
 
 impl ListingTable {
@@ -979,6 +981,7 @@ impl ListingTable {
             constraints: Constraints::default(),
             column_defaults: HashMap::new(),
             schema_adapter_factory: config.schema_adapter_factory,
+            expr_adapter_factory: config.physical_expr_adapter_factory,
         };
 
         Ok(table)
@@ -1223,6 +1226,7 @@ impl TableProvider for ListingTable {
                 .with_limit(limit)
                 .with_output_ordering(output_ordering)
                 .with_table_partition_cols(table_partition_cols)
+                .with_expr_adapter(self.expr_adapter_factory.clone())
                 .build(),
             )
             .await

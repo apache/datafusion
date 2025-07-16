@@ -269,7 +269,7 @@ pub struct FileScanConfigBuilder {
     file_compression_type: Option<FileCompressionType>,
     new_lines_in_values: Option<bool>,
     batch_size: Option<usize>,
-    expr_adapter: Option<Arc<dyn PhysicalExprAdapterFactory>>,
+    expr_adapter_factory: Option<Arc<dyn PhysicalExprAdapterFactory>>,
 }
 
 impl FileScanConfigBuilder {
@@ -298,7 +298,7 @@ impl FileScanConfigBuilder {
             table_partition_cols: vec![],
             constraints: None,
             batch_size: None,
-            expr_adapter: None,
+            expr_adapter_factory: None,
         }
     }
 
@@ -415,9 +415,9 @@ impl FileScanConfigBuilder {
     /// - Rewriting expression to use pre-computed values or file format specific optimizations
     pub fn with_expr_adapter(
         mut self,
-        expr_adapter: Arc<dyn PhysicalExprAdapterFactory>,
+        expr_adapter: Option<Arc<dyn PhysicalExprAdapterFactory>>,
     ) -> Self {
-        self.expr_adapter = Some(expr_adapter);
+        self.expr_adapter_factory = expr_adapter;
         self
     }
 
@@ -440,7 +440,7 @@ impl FileScanConfigBuilder {
             file_compression_type,
             new_lines_in_values,
             batch_size,
-            expr_adapter,
+            expr_adapter_factory: expr_adapter,
         } = self;
 
         let constraints = constraints.unwrap_or_default();
@@ -488,7 +488,7 @@ impl From<FileScanConfig> for FileScanConfigBuilder {
             table_partition_cols: config.table_partition_cols,
             constraints: Some(config.constraints),
             batch_size: config.batch_size,
-            expr_adapter: config.expr_adapter_factory,
+            expr_adapter_factory: config.expr_adapter_factory,
         }
     }
 }
