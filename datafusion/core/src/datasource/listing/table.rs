@@ -432,7 +432,7 @@ impl ListingTableConfig {
     /// If not provided, a default physical expression adapter factory will be used unless a custom
     /// `SchemaAdapterFactory` is set, in which case only the `SchemaAdapterFactory` will be used.
     ///
-    /// See https://github.com/apache/datafusion/issues/16800 for details on this transition.
+    /// See <https://github.com/apache/datafusion/issues/16800> for details on this transition.
     pub fn with_physical_expr_adapter_factory(
         self,
         physical_expr_adapter_factory: Arc<dyn PhysicalExprAdapterFactory>,
