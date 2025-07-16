@@ -841,6 +841,7 @@ pub fn is_projection_unnecessary(
 }
 
 fn plan_contains_subquery_alias(plan: &LogicalPlan) -> bool {
+    // tbis enables the recursive_cte_alias_instability test to pass
     if matches!(*plan, LogicalPlan::SubqueryAlias(_)) {
         return true;
     }
