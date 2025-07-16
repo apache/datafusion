@@ -5184,6 +5184,10 @@ order by c1;
 3 1 1
 3 10 2
 
+
+statement ok
+set datafusion.execution.batch_size = 1;
+
 # push filter since it uses a partition column
 query TT
 explain select c1, c2, rank
