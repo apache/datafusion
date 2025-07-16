@@ -2548,7 +2548,117 @@ select covar_samp(c1, c2), arrow_typeof(covar_samp(c1, c2)) from t;
 statement ok
 drop table t;
 
+# correlation_f64_1
+statement ok
+create table t (c1 double, c2 double) as values (1, 4), (2, 5), (3, 6);
+
+query RT rowsort
+select corr(c1, c2), arrow_typeof(corr(c1, c2)) from t;
+----
+1 Float64
+
+# correlation with different numeric types (create test data)
+statement ok
+CREATE OR REPLACE TABLE corr_test(
+  int8_col TINYINT,
+  int16_col SMALLINT,
+  int32_col INT,
+  int64_col BIGINT,
+  uint32_col INT UNSIGNED,
+  float32_col FLOAT,
+  float64_col DOUBLE
+) as VALUES
+(1, 10, 100, 1000, 10000, 1.1, 10.1),
+(2, 20, 200, 2000, 20000, 2.2, 20.2),
+(3, 30, 300, 3000, 30000, 3.3, 30.3),
+(4, 40, 400, 4000, 40000, 4.4, 40.4),
+(5, 50, 500, 5000, 50000, 5.5, 50.5);
+
+# correlation using int32 and float64
+query R
+SELECT corr(int32_col, float64_col) FROM corr_test;
+----
+1
+
+# correlation using int64 and int32
+query R
+SELECT corr(int64_col, int32_col) FROM corr_test;
+----
+1
+
+# correlation using float32 and int8
+query R
+SELECT corr(float32_col, int8_col) FROM corr_test;
+----
+1
+
+# correlation using uint32 and int16
+query R
+SELECT corr(uint32_col, int16_col) FROM corr_test;
+----
+1
+
+# correlation with nulls
+statement ok
+CREATE OR REPLACE TABLE corr_nulls(
+  x INT,
+  y DOUBLE
+) as VALUES
+(1, 10.0),
+(2, 20.0),
+(NULL, 30.0),
+(4, NULL),
+(5, 50.0);
+
+# correlation with some nulls (should skip null pairs)
+query R
+SELECT corr(x, y) FROM corr_nulls;
+----
+1
+
+# correlation with single row (should return NULL)
+statement ok
+CREATE OR REPLACE TABLE corr_single_row(
+  x INT,
+  y DOUBLE
+) as VALUES
+(1, 10.0);
+
+query R
+SELECT corr(x, y) FROM corr_single_row;
+----
+0
+
+# correlation with all nulls
+statement ok
+CREATE OR REPLACE TABLE corr_all_nulls(
+  x INT,
+  y DOUBLE
+) as VALUES
+(NULL, NULL),
+(NULL, NULL);
+
+query R
+SELECT corr(x, y) FROM corr_all_nulls;
+----
+NULL
+
+statement ok
+drop table corr_test;
+
+statement ok
+drop table corr_nulls;
+
+statement ok
+drop table corr_single_row;
+
+statement ok
+drop table corr_all_nulls;
+
 # covariance_f64_4
+statement ok
+drop table if exists t;
+
 statement ok
 create table t (c1 double, c2 double) as values (1.1, 4.1), (2.0, 5.0), (3.0, 6.0);
 
@@ -4240,6 +4350,50 @@ DROP VIEW binary_views
 
 statement ok
 DROP TABLE strings;
+
+############ FixedSizeBinary ############
+
+statement ok
+CREATE TABLE binaries
+AS VALUES
+ (X'000103', 1),
+ (X'000104', 1),
+ (X'000101', 3),
+ (X'000103', 1),
+ (X'000102', 1),
+ (NULL, 1),
+ (NULL, 4),
+ (X'000104', 1),
+ (X'000109', 2),
+ (X'000103', 1),
+ (X'000101', 2);
+
+statement ok
+CREATE VIEW fixed_size_binary_views
+AS SELECT arrow_cast(column1, 'FixedSizeBinary(3)') as value, column2 as id FROM binaries;
+
+query I?
+SELECT id, MIN(value) FROM fixed_size_binary_views GROUP BY id ORDER BY id;
+----
+1 000102
+2 000101
+3 000101
+4 NULL
+
+query I?
+SELECT id, MAX(value) FROM fixed_size_binary_views GROUP BY id ORDER BY id;
+----
+1 000104
+2 000109
+3 000101
+4 NULL
+
+statement ok
+DROP VIEW fixed_size_binary_views;
+
+statement ok
+DROP TABLE binaries;
+
 
 #################
 # End min_max on strings/binary with null values and groups

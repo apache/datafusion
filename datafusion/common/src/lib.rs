@@ -41,6 +41,7 @@ pub mod config;
 pub mod cse;
 pub mod diagnostic;
 pub mod display;
+pub mod encryption;
 pub mod error;
 pub mod file_options;
 pub mod format;

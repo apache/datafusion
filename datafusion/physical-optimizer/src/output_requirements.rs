@@ -138,10 +138,35 @@ impl DisplayAs for OutputRequirementExec {
     ) -> std::fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(f, "OutputRequirementExec")
+                let order_cols = self
+                    .order_requirement
+                    .as_ref()
+                    .map(|reqs| reqs.first())
+                    .map(|lex| {
+                        let pairs: Vec<String> = lex
+                            .iter()
+                            .map(|req| {
+                                let direction = req
+                                    .options
+                                    .as_ref()
+                                    .map(
+                                        |opt| if opt.descending { "desc" } else { "asc" },
+                                    )
+                                    .unwrap_or("unspecified");
+                                format!("({}, {direction})", req.expr)
+                            })
+                            .collect();
+                        format!("[{}]", pairs.join(", "))
+                    })
+                    .unwrap_or_else(|| "[]".to_string());
+
+                write!(
+                    f,
+                    "OutputRequirementExec: order_by={}, dist_by={}",
+                    order_cols, self.dist_requirement
+                )
             }
             DisplayFormatType::TreeRender => {
-                // TODO: collect info
                 write!(f, "")
             }
         }
