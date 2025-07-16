@@ -899,6 +899,7 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     /// Return true if this aggregate UDF is equal to the other.
     ///
     /// Allows customizing the equality of aggregate UDFs.
+    /// *Must* be implemented explicitly if the UDF type has internal state.
     /// Must be consistent with [`Self::hash_value`] and follow the same rules as [`Eq`]:
     ///
     /// - reflexive: `a.equals(a)`;
@@ -912,8 +913,11 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
 
     /// Returns a hash value for this aggregate UDF.
     ///
-    /// Allows customizing the hash code of aggregate UDFs. Similarly to [`Hash`] and [`Eq`],
-    /// if [`Self::equals`] returns true for two UDFs, their `hash_value`s must be the same.
+    /// Allows customizing the hash code of aggregate UDFs.
+    /// *Must* be implemented explicitly whenever [`Self::equals`] is implemented.
+    ///
+    /// Similarly to [`Hash`] and [`Eq`], if [`Self::equals`] returns true for two UDFs,
+    /// their `hash_value`s must be the same.
     ///
     /// By default, hashes [`Self::name`] and [`Self::signature`].
     fn hash_value(&self) -> u64 {
