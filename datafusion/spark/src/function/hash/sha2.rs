@@ -28,7 +28,6 @@ use datafusion_expr::Signature;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Volatility};
 pub use datafusion_functions::crypto::basic::{sha224, sha256, sha384, sha512};
 use std::any::Any;
-use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 
 /// <https://spark.apache.org/docs/latest/api/sql/index.html#sha2>

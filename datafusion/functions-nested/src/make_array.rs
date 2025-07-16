@@ -18,7 +18,6 @@
 //! [`ScalarUDFImpl`] definitions for `make_array` function.
 
 use std::any::Any;
-use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 use std::vec;
 

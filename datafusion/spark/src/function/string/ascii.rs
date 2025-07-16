@@ -23,7 +23,6 @@ use datafusion_expr::ColumnarValue;
 use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use datafusion_functions::utils::make_scalar_function;
 use std::any::Any;
-use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 
 /// <https://spark.apache.org/docs/latest/api/sql/index.html#ascii>

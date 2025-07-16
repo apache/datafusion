@@ -32,7 +32,6 @@ use datafusion_functions_aggregate_common::min_max::{max_batch, min_batch};
 use datafusion_macros::user_doc;
 use itertools::Itertools;
 use std::any::Any;
-use std::hash::{DefaultHasher, Hash, Hasher};
 
 make_udf_expr_and_func!(
     ArrayMax,

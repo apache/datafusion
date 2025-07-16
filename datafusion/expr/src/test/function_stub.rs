@@ -19,11 +19,11 @@
 //!
 //! These are used to avoid a dependence on `datafusion-functions-aggregate` which live in a different crate
 
+use std::any::Any;
+
 use arrow::datatypes::{
     DataType, FieldRef, DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION,
 };
-use std::any::Any;
-use std::hash::{DefaultHasher, Hash, Hasher};
 
 use datafusion_common::{exec_err, not_impl_err, utils::take_function_args, Result};
 

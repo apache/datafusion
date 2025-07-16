@@ -17,7 +17,6 @@
 
 //! Math function: `power()`.
 use std::any::Any;
-use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 
 use super::log::LogFunc;

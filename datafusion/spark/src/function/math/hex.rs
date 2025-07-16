@@ -34,7 +34,6 @@ use datafusion_common::{
 use datafusion_expr::Signature;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Volatility};
 use std::fmt::Write;
-use std::hash::{DefaultHasher, Hash, Hasher};
 
 /// <https://spark.apache.org/docs/latest/api/sql/index.html#hex>
 #[derive(Debug)]

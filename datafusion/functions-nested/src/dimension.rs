@@ -23,12 +23,12 @@ use arrow::datatypes::{
     DataType::{FixedSizeList, LargeList, List, Null, UInt64},
     UInt64Type,
 };
+use std::any::Any;
+
 use datafusion_common::cast::{
     as_fixed_size_list_array, as_large_list_array, as_list_array,
 };
 use datafusion_common::{exec_err, utils::take_function_args, Result};
-use std::any::Any;
-use std::hash::{DefaultHasher, Hash, Hasher};
 
 use crate::utils::{compute_array_dims, make_scalar_function};
 use datafusion_common::utils::list_ndims;

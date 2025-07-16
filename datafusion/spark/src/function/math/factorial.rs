@@ -16,7 +16,6 @@
 // under the License.
 
 use std::any::Any;
-use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 
 use arrow::array::{Array, Int64Array};

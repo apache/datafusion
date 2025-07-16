@@ -37,7 +37,6 @@ use crate::utils::compare_element_to_list;
 use crate::utils::make_scalar_function;
 
 use std::any::Any;
-use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 
 // Create static instances of ScalarUDFs for each function

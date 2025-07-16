@@ -18,6 +18,8 @@
 use arrow::datatypes::DataType::Timestamp;
 use arrow::datatypes::TimeUnit::Nanosecond;
 use arrow::datatypes::{DataType, Field, FieldRef};
+use std::any::Any;
+
 use datafusion_common::{internal_err, Result, ScalarValue};
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::{
@@ -25,8 +27,6 @@ use datafusion_expr::{
     Volatility,
 };
 use datafusion_macros::user_doc;
-use std::any::Any;
-use std::hash::{DefaultHasher, Hash, Hasher};
 
 #[user_doc(
     doc_section(label = "Time and Date Functions"),

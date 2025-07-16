@@ -16,7 +16,6 @@
 // under the License.
 
 use std::any::Any;
-use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 
 use crate::utils::{make_scalar_function, utf8_to_int_type};

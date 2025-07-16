@@ -38,7 +38,6 @@ use crate::make_array::make_array_udf;
 use crate::utils::make_scalar_function;
 
 use std::any::Any;
-use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 
 // Create static instances of ScalarUDFs for each function

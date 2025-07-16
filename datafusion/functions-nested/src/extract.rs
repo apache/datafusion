@@ -43,7 +43,6 @@ use datafusion_expr::{
 };
 use datafusion_macros::user_doc;
 use std::any::Any;
-use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 
 use crate::utils::make_scalar_function;

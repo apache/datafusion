@@ -16,7 +16,6 @@
 // under the License.
 
 use std::any::Any;
-use std::hash::{DefaultHasher, Hash, Hasher};
 use std::ops::{Add, Sub};
 use std::str::FromStr;
 use std::sync::Arc;

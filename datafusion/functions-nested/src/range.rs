@@ -44,7 +44,6 @@ use datafusion_macros::user_doc;
 use itertools::Itertools;
 use std::any::Any;
 use std::cmp::Ordering;
-use std::hash::{DefaultHasher, Hash, Hasher};
 use std::iter::from_fn;
 use std::str::FromStr;
 use std::sync::Arc;

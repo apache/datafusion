@@ -36,7 +36,6 @@ use datafusion_functions_aggregate_common::{
     aggregate::groups_accumulator::accumulate::accumulate, stats::StatsType,
 };
 use datafusion_macros::user_doc;
-use std::hash::{DefaultHasher, Hash, Hasher};
 use std::mem::{size_of, size_of_val};
 use std::{fmt::Debug, sync::Arc};
 

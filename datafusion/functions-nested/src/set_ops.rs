@@ -40,7 +40,6 @@ use itertools::Itertools;
 use std::any::Any;
 use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
-use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 
 // Create static instances of ScalarUDFs for each function

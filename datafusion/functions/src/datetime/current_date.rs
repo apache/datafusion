@@ -15,11 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::any::Any;
+
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::Date32;
 use chrono::{Datelike, NaiveDate};
-use std::any::Any;
-use std::hash::{DefaultHasher, Hash, Hasher};
 
 use datafusion_common::{internal_err, Result, ScalarValue};
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};

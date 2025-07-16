@@ -31,7 +31,6 @@ use datafusion_expr::{
 };
 use datafusion_macros::user_doc;
 use std::any::Any;
-use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 
 make_udf_expr_and_func!(

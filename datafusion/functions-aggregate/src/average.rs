@@ -50,7 +50,6 @@ use datafusion_macros::user_doc;
 use log::debug;
 use std::any::Any;
 use std::fmt::Debug;
-use std::hash::{DefaultHasher, Hash, Hasher};
 use std::mem::{size_of, size_of_val};
 use std::sync::Arc;
 
