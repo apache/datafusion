@@ -2539,7 +2539,7 @@ mod tests {
         for int_type in int_types {
             test_coercion_binary_rule!(
                 DataType::Boolean,
-                DataType::Int8,
+                int_type,
                 Operator::Eq,
                 DataType::Boolean
             );
