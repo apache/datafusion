@@ -244,7 +244,7 @@ async fn test_parquet_integration_with_schema_adapter() -> Result<()> {
     // Verify the schema has uppercase column names
     let result_schema = batches[0].schema();
     assert_eq!(result_schema.field(0).name(), "ID");
-    assert_eq!(result_schema.field(1).name(), "NAME0");
+    assert_eq!(result_schema.field(1).name(), "NAME");
 
     Ok(())
 }
