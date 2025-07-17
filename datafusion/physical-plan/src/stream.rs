@@ -22,7 +22,9 @@ use std::sync::Arc;
 use std::task::Context;
 use std::task::Poll;
 
-use super::metrics::BaselineMetrics;
+#[cfg(test)]
+use super::metrics::ExecutionPlanMetricsSet;
+use super::metrics::{BaselineMetrics, SplitMetrics};
 use super::{ExecutionPlan, RecordBatchStream, SendableRecordBatchStream};
 use crate::displayable;
 
@@ -31,6 +33,7 @@ use datafusion_common::{exec_err, Result};
 use datafusion_common_runtime::JoinSet;
 use datafusion_execution::TaskContext;
 
+use futures::ready;
 use futures::stream::BoxStream;
 use futures::{Future, Stream, StreamExt};
 use log::debug;
@@ -522,6 +525,138 @@ impl Stream for ObservedStream {
     }
 }
 
+pin_project! {
+    /// Stream wrapper that splits large [`RecordBatch`]es into smaller batches.
+    ///
+    /// This ensures upstream operators receive batches no larger than
+    /// `batch_size`, which can improve parallelism when data sources
+    /// generate very large batches.
+    ///
+    /// # Fields
+    ///
+    /// - `current_batch`: The batch currently being split, if any
+    /// - `offset`: Index of the next row to split from `current_batch`.
+    ///   This tracks our position within the current batch being split.
+    ///
+    /// # Invariants
+    ///
+    /// - `offset` is always ≤ `current_batch.num_rows()` when `current_batch` is `Some`
+    /// - When `current_batch` is `None`, `offset` is always 0
+    /// - `batch_size` is always > 0
+pub struct BatchSplitStream {
+        #[pin]
+        input: SendableRecordBatchStream,
+        schema: SchemaRef,
+        batch_size: usize,
+        metrics: SplitMetrics,
+        current_batch: Option<RecordBatch>,
+        offset: usize,
+    }
+}
+
+impl BatchSplitStream {
+    /// Create a new [`BatchSplitStream`]
+    pub fn new(
+        input: SendableRecordBatchStream,
+        batch_size: usize,
+        metrics: SplitMetrics,
+    ) -> Self {
+        let schema = input.schema();
+        Self {
+            input,
+            schema,
+            batch_size,
+            metrics,
+            current_batch: None,
+            offset: 0,
+        }
+    }
+
+    /// Attempt to produce the next sliced batch from the current batch.
+    ///
+    /// Returns `Some(batch)` if a slice was produced, `None` if the current batch
+    /// is exhausted and we need to poll upstream for more data.
+    fn next_sliced_batch(&mut self) -> Option<Result<RecordBatch>> {
+        let batch = self.current_batch.take()?;
+
+        // Assert slice boundary safety - offset should never exceed batch size
+        debug_assert!(
+            self.offset <= batch.num_rows(),
+            "Offset {} exceeds batch size {}",
+            self.offset,
+            batch.num_rows()
+        );
+
+        let remaining = batch.num_rows() - self.offset;
+        let to_take = remaining.min(self.batch_size);
+        let out = batch.slice(self.offset, to_take);
+
+        self.metrics.batches_splitted.add(1);
+        self.offset += to_take;
+        if self.offset < batch.num_rows() {
+            // More data remains in this batch, store it back
+            self.current_batch = Some(batch);
+        } else {
+            // Batch is exhausted, reset offset
+            // Note: current_batch is already None since we took it at the start
+            self.offset = 0;
+        }
+        Some(Ok(out))
+    }
+
+    /// Poll the upstream input for the next batch.
+    ///
+    /// Returns the appropriate `Poll` result based on upstream state.
+    /// Small batches are passed through directly, large batches are stored
+    /// for slicing and return the first slice immediately.
+    fn poll_upstream(
+        &mut self,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<RecordBatch>>> {
+        match ready!(self.input.as_mut().poll_next(cx)) {
+            Some(Ok(batch)) => {
+                if batch.num_rows() <= self.batch_size {
+                    // Small batch, pass through directly
+                    Poll::Ready(Some(Ok(batch)))
+                } else {
+                    // Large batch, store for slicing and return first slice
+                    self.current_batch = Some(batch);
+                    // Immediately produce the first slice
+                    match self.next_sliced_batch() {
+                        Some(result) => Poll::Ready(Some(result)),
+                        None => Poll::Ready(None), // Should not happen
+                    }
+                }
+            }
+            Some(Err(e)) => Poll::Ready(Some(Err(e))),
+            None => Poll::Ready(None),
+        }
+    }
+}
+
+impl Stream for BatchSplitStream {
+    type Item = Result<RecordBatch>;
+
+    fn poll_next(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Self::Item>> {
+        // First, try to produce a slice from the current batch
+        if let Some(result) = self.next_sliced_batch() {
+            return Poll::Ready(Some(result));
+        }
+
+        // No current batch or current batch exhausted, poll upstream
+        self.poll_upstream(cx)
+    }
+}
+
+impl RecordBatchStream for BatchSplitStream {
+    fn schema(&self) -> SchemaRef {
+        Arc::clone(&self.schema)
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -614,6 +749,44 @@ mod test {
 
         // There should be no more batches produced (should not get the second error)
         assert!(stream.next().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn batch_split_stream_basic_functionality() {
+        use arrow::array::{Int32Array, RecordBatch};
+        use futures::stream::{self, StreamExt};
+
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+
+        // Create a large batch that should be split
+        let large_batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from((0..2000).collect::<Vec<_>>()))],
+        )
+        .unwrap();
+
+        // Create a stream with the large batch
+        let input_stream = stream::iter(vec![Ok(large_batch)]);
+        let adapter = RecordBatchStreamAdapter::new(Arc::clone(&schema), input_stream);
+        let batch_stream = Box::pin(adapter) as SendableRecordBatchStream;
+
+        // Create a BatchSplitStream with batch_size = 500
+        let metrics = ExecutionPlanMetricsSet::new();
+        let split_metrics = SplitMetrics::new(&metrics, 0);
+        let mut split_stream = BatchSplitStream::new(batch_stream, 500, split_metrics);
+
+        let mut total_rows = 0;
+        let mut batch_count = 0;
+
+        while let Some(result) = split_stream.next().await {
+            let batch = result.unwrap();
+            assert!(batch.num_rows() <= 500, "Batch size should not exceed 500");
+            total_rows += batch.num_rows();
+            batch_count += 1;
+        }
+
+        assert_eq!(total_rows, 2000, "All rows should be preserved");
+        assert_eq!(batch_count, 4, "Should have 4 batches of 500 rows each");
     }
 
     /// Consumes all the input's partitions into a

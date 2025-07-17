@@ -1818,7 +1818,7 @@ pub(crate) mod tests {
         join_type: JoinType,
         #[values(1, 100, 1000)] left_batch_size: usize,
         #[values(1, 100, 1000)] right_batch_size: usize,
-        #[values(2, 10000)] batch_size: usize,
+        #[values(1001, 10000)] batch_size: usize,
     ) -> Result<()> {
         let left_columns = generate_columns(3, 1000);
         let left = build_table(

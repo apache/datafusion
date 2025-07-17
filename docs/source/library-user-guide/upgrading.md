@@ -120,6 +120,73 @@ SET datafusion.execution.spill_compression = 'zstd';
 
 For more details about this configuration option, including performance trade-offs between different compression codecs, see the [Configuration Settings](../user-guide/configs.md) documentation.
 
+### Deprecated `map_varchar_to_utf8view` configuration option
+
+See [issue #16290](https://github.com/apache/datafusion/pull/16290) for more information
+The old configuration
+
+```text
+datafusion.sql_parser.map_varchar_to_utf8view
+```
+
+is now **deprecated** in favor of the unified option below.\
+If you previously used this to control only `VARCHAR`→`Utf8View` mapping, please migrate to `map_string_types_to_utf8view`.
+
+---
+
+### New `map_string_types_to_utf8view` configuration option
+
+To unify **all** SQL string types (`CHAR`, `VARCHAR`, `TEXT`, `STRING`) to Arrow’s zero‑copy `Utf8View`, DataFusion 49.0.0 introduces:
+
+- **Key**: `datafusion.sql_parser.map_string_types_to_utf8view`
+- **Default**: `true`
+
+**Description:**
+
+- When **true** (default), **all** SQL string types are mapped to `Utf8View`, avoiding full‑copy UTF‑8 allocations and improving performance.
+- When **false**, DataFusion falls back to the legacy `Utf8` mapping for **all** string types.
+
+#### Examples
+
+```rust
+# /* comment to avoid running
+// Disable Utf8View mapping for all SQL string types
+let opts = datafusion::sql::planner::ParserOptions::new()
+    .with_map_string_types_to_utf8view(false);
+
+// Verify the setting is applied
+assert!(!opts.map_string_types_to_utf8view);
+# */
+```
+
+---
+
+```sql
+-- Disable Utf8View mapping globally
+SET datafusion.sql_parser.map_string_types_to_utf8view = false;
+
+-- Now VARCHAR, CHAR, TEXT, STRING all use Utf8 rather than Utf8View
+CREATE TABLE my_table (a VARCHAR, b TEXT, c STRING);
+DESCRIBE my_table;
+```
+
+### Deprecating `SchemaAdapterFactory` and `SchemaAdapter`
+
+We are moving away from converting data (using `SchemaAdapter`) to converting the expressions themselves (which is more efficient and flexible).
+
+See [issue #16800](https://github.com/apache/datafusion/issues/16800) for more information
+The first place this change has taken place is in predicate pushdown for Parquet.
+By default if you do not use a custom `SchemaAdapterFactory` we will use expression conversion instead.
+If you do set a custom `SchemaAdapterFactory` we will continue to use it but emit a warning about that code path being deprecated.
+
+To resolve this you need to implement a custom `PhysicalExprAdapterFactory` and use that instead of a `SchemaAdapterFactory`.
+See the [default values](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/default_column_values.rs) for an example of how to do this.
+Opting into the new APIs will set you up for future changes since we plan to expand use of `PhysicalExprAdapterFactory` to other areas of DataFusion.
+
+See [#16800] for details.
+
+[#16800]: https://github.com/apache/datafusion/issues/16800
+
 ## DataFusion `48.0.1`
 
 ### `datafusion.execution.collect_statistics` now defaults to `true`
