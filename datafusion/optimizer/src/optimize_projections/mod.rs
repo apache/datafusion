@@ -841,14 +841,19 @@ pub fn is_projection_unnecessary(
 }
 
 fn plan_contains_subquery_alias(plan: &LogicalPlan) -> bool {
-    // tbis enables the recursive_cte_alias_instability test to pass
+    let mut count = 0;
+    count_subquery_aliases(plan, &mut count);
+    count >= 2
+}
+
+fn count_subquery_aliases(plan: &LogicalPlan, count: &mut usize) {
     if matches!(*plan, LogicalPlan::SubqueryAlias(_)) {
-        return true;
+        *count += 1;
     }
 
-    plan.inputs()
-        .iter()
-        .any(|input| plan_contains_subquery_alias(input))
+    for input in plan.inputs() {
+        count_subquery_aliases(input, count);
+    }
 }
 
 #[cfg(test)]
