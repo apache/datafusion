@@ -592,6 +592,35 @@
     </a>
    </li>
    <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#deprecated-map-varchar-to-utf8view-configuration-option">
+     Deprecated
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       map_varchar_to_utf8view
+      </span>
+     </code>
+     configuration option
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#new-map-string-types-to-utf8view-configuration-option">
+     New
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       map_string_types_to_utf8view
+      </span>
+     </code>
+     configuration option
+    </a>
+    <ul class="nav section-nav flex-column">
+     <li class="toc-h4 nav-item toc-entry">
+      <a class="reference internal nav-link" href="#examples">
+       Examples
+      </a>
+     </li>
+    </ul>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
     <a class="reference internal nav-link" href="#deprecating-schemaadapterfactory-and-schemaadapter">
      Deprecating
      <code class="docutils literal notranslate">
@@ -1083,6 +1112,50 @@ is more efficient.</p>
 </pre></div>
 </div>
 <p>For more details about this configuration option, including performance trade-offs between different compression codecs, see the <a class="reference internal" href="../user-guide/configs.html"><span class="std std-doc">Configuration Settings</span></a> documentation.</p>
+</section>
+<section id="deprecated-map-varchar-to-utf8view-configuration-option">
+<h3>Deprecated <code class="docutils literal notranslate"><span class="pre">map_varchar_to_utf8view</span></code> configuration option<a class="headerlink" href="#deprecated-map-varchar-to-utf8view-configuration-option" title="Link to this heading">¶</a></h3>
+<p>See <a class="reference external" href="https://github.com/apache/datafusion/pull/16290">issue #16290</a> for more information
+The old configuration</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>datafusion.sql_parser.map_varchar_to_utf8view
+</pre></div>
+</div>
+<p>is now <strong>deprecated</strong> in favor of the unified option below.<br />
+If you previously used this to control only <code class="docutils literal notranslate"><span class="pre">VARCHAR</span></code>→<code class="docutils literal notranslate"><span class="pre">Utf8View</span></code> mapping, please migrate to <code class="docutils literal notranslate"><span class="pre">map_string_types_to_utf8view</span></code>.</p>
+</section>
+<hr class="docutils" />
+<section id="new-map-string-types-to-utf8view-configuration-option">
+<h3>New <code class="docutils literal notranslate"><span class="pre">map_string_types_to_utf8view</span></code> configuration option<a class="headerlink" href="#new-map-string-types-to-utf8view-configuration-option" title="Link to this heading">¶</a></h3>
+<p>To unify <strong>all</strong> SQL string types (<code class="docutils literal notranslate"><span class="pre">CHAR</span></code>, <code class="docutils literal notranslate"><span class="pre">VARCHAR</span></code>, <code class="docutils literal notranslate"><span class="pre">TEXT</span></code>, <code class="docutils literal notranslate"><span class="pre">STRING</span></code>) to Arrow’s zero‑copy <code class="docutils literal notranslate"><span class="pre">Utf8View</span></code>, DataFusion 49.0.0 introduces:</p>
+<ul class="simple">
+<li><p><strong>Key</strong>: <code class="docutils literal notranslate"><span class="pre">datafusion.sql_parser.map_string_types_to_utf8view</span></code></p></li>
+<li><p><strong>Default</strong>: <code class="docutils literal notranslate"><span class="pre">true</span></code></p></li>
+</ul>
+<p><strong>Description:</strong></p>
+<ul class="simple">
+<li><p>When <strong>true</strong> (default), <strong>all</strong> SQL string types are mapped to <code class="docutils literal notranslate"><span class="pre">Utf8View</span></code>, avoiding full‑copy UTF‑8 allocations and improving performance.</p></li>
+<li><p>When <strong>false</strong>, DataFusion falls back to the legacy <code class="docutils literal notranslate"><span class="pre">Utf8</span></code> mapping for <strong>all</strong> string types.</p></li>
+</ul>
+<section id="examples">
+<h4>Examples<a class="headerlink" href="#examples" title="Link to this heading">¶</a></h4>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="c1">// Disable Utf8View mapping for all SQL string types</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">opts</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">sql</span><span class="p">::</span><span class="n">planner</span><span class="p">::</span><span class="n">ParserOptions</span><span class="p">::</span><span class="n">new</span><span class="p">()</span>
+<span class="w">    </span><span class="p">.</span><span class="n">with_map_string_types_to_utf8view</span><span class="p">(</span><span class="kc">false</span><span class="p">);</span>
+
+<span class="c1">// Verify the setting is applied</span>
+<span class="fm">assert!</span><span class="p">(</span><span class="o">!</span><span class="n">opts</span><span class="p">.</span><span class="n">map_string_types_to_utf8view</span><span class="p">);</span>
+</pre></div>
+</div>
+<hr class="docutils" />
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="c1">-- Disable Utf8View mapping globally</span>
+<span class="k">SET</span><span class="w"> </span><span class="n">datafusion</span><span class="p">.</span><span class="n">sql_parser</span><span class="p">.</span><span class="n">map_string_types_to_utf8view</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">false</span><span class="p">;</span>
+
+<span class="c1">-- Now VARCHAR, CHAR, TEXT, STRING all use Utf8 rather than Utf8View</span>
+<span class="k">CREATE</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">my_table</span><span class="w"> </span><span class="p">(</span><span class="n">a</span><span class="w"> </span><span class="nb">VARCHAR</span><span class="p">,</span><span class="w"> </span><span class="n">b</span><span class="w"> </span><span class="nb">TEXT</span><span class="p">,</span><span class="w"> </span><span class="k">c</span><span class="w"> </span><span class="n">STRING</span><span class="p">);</span>
+<span class="k">DESCRIBE</span><span class="w"> </span><span class="n">my_table</span><span class="p">;</span>
+</pre></div>
+</div>
+</section>
 </section>
 <section id="deprecating-schemaadapterfactory-and-schemaadapter">
 <h3>Deprecating <code class="docutils literal notranslate"><span class="pre">SchemaAdapterFactory</span></code> and <code class="docutils literal notranslate"><span class="pre">SchemaAdapter</span></code><a class="headerlink" href="#deprecating-schemaadapterfactory-and-schemaadapter" title="Link to this heading">¶</a></h3>
