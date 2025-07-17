@@ -158,6 +158,7 @@ let opts = datafusion::sql::planner::ParserOptions::new()
 assert!(!opts.map_string_types_to_utf8view);
 # */
 ```
+
 ---
 
 ```sql
