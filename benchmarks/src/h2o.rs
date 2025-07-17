@@ -158,35 +158,42 @@ impl RunOpt {
 
         let table_path_str = table_path.as_ref();
 
-        if self.path.extension().map(|s| s == "csv").unwrap_or(false) {
-            ctx.register_csv(table_ref, table_path_str, csv_options)
-                .await
-                .map_err(|e| {
-                    DataFusionError::Context(
-                        format!("Registering 'table' as {}", table_path_str),
-                        Box::new(e),
-                    )
-                })
-                .expect("error registering csv");
-            return Ok(());
+        let extension = Path::new(table_path_str)
+            .extension()
+            .and_then(|s| s.to_str())
+            .unwrap_or("");
+
+        match extension {
+            "csv" => {
+                ctx.register_csv(table_ref, table_path_str, csv_options)
+                    .await
+                    .map_err(|e| {
+                        DataFusionError::Context(
+                            format!("Registering 'table' as {}", table_path_str).into(),
+                            Box::new(e),
+                        )
+                    })
+                    .expect("error registering csv");
+            }
+            "parquet" => {
+                ctx.register_parquet(table_ref, table_path_str, parquet_options)
+                    .await
+                    .map_err(|e| {
+                        DataFusionError::Context(
+                            format!("Registering 'table' as {}", table_path_str).into(),
+                            Box::new(e),
+                        )
+                    })
+                    .expect("error registering parquet");
+            }
+            _ => {
+                return Err(DataFusionError::Plan(format!(
+                    "Unsupported file extension: {}",
+                    extension
+                )));
+            }
         }
 
-        if self
-            .path
-            .extension()
-            .map(|s| s == "parquet")
-            .unwrap_or(false)
-        {
-            ctx.register_parquet(table_ref, table_path_str, parquet_options)
-                .await
-                .map_err(|e| {
-                    DataFusionError::Context(
-                        format!("Registering 'table' as {}", table_path_str),
-                        Box::new(e),
-                    )
-                })
-                .expect("error registering parquet");
-        }
         Ok(())
     }
 }
