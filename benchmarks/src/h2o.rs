@@ -169,7 +169,7 @@ impl RunOpt {
                     .await
                     .map_err(|e| {
                         DataFusionError::Context(
-                            format!("Registering 'table' as {}", table_path_str).into(),
+                            format!("Registering 'table' as {table_path_str}"),
                             Box::new(e),
                         )
                     })
@@ -180,7 +180,7 @@ impl RunOpt {
                     .await
                     .map_err(|e| {
                         DataFusionError::Context(
-                            format!("Registering 'table' as {}", table_path_str).into(),
+                            format!("Registering 'table' as {table_path_str}"),
                             Box::new(e),
                         )
                     })
@@ -188,8 +188,7 @@ impl RunOpt {
             }
             _ => {
                 return Err(DataFusionError::Plan(format!(
-                    "Unsupported file extension: {}",
-                    extension
+                    "Unsupported file extension: {extension}",
                 )));
             }
         }
