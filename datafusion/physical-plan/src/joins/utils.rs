@@ -17,6 +17,7 @@
 
 //! Join related functionality used both on logical and physical plans
 
+use std::cmp::min;
 use std::collections::HashSet;
 use std::fmt::{self, Debug};
 use std::future::Future;
@@ -36,12 +37,13 @@ pub use super::join_filter::JoinFilter;
 pub use super::join_hash_map::JoinHashMapType;
 pub use crate::joins::{JoinOn, JoinOnRef};
 
+use arrow::array::BooleanArray;
 use arrow::array::{
     builder::UInt64Builder, downcast_array, new_null_array, Array, ArrowPrimitiveType,
     BooleanBufferBuilder, NativeAdapter, PrimitiveArray, RecordBatch, RecordBatchOptions,
     UInt32Array, UInt32Builder, UInt64Array,
 };
-use arrow::buffer::NullBuffer;
+use arrow::buffer::{BooleanBuffer, NullBuffer};
 use arrow::compute;
 use arrow::datatypes::{
     ArrowNativeType, Field, Schema, SchemaBuilder, UInt32Type, UInt64Type,
@@ -843,24 +845,56 @@ pub(crate) fn apply_join_filter_to_indices(
     probe_indices: UInt32Array,
     filter: &JoinFilter,
     build_side: JoinSide,
+    max_intermediate_size: Option<usize>,
 ) -> Result<(UInt64Array, UInt32Array)> {
     if build_indices.is_empty() && probe_indices.is_empty() {
         return Ok((build_indices, probe_indices));
     };
 
-    let intermediate_batch = build_batch_from_indices(
-        filter.schema(),
-        build_input_buffer,
-        probe_batch,
-        &build_indices,
-        &probe_indices,
-        filter.column_indices(),
-        build_side,
-    )?;
-    let filter_result = filter
-        .expression()
-        .evaluate(&intermediate_batch)?
-        .into_array(intermediate_batch.num_rows())?;
+    let filter_result = if let Some(max_size) = max_intermediate_size {
+        let mut filter_results =
+            Vec::with_capacity(build_indices.len().div_ceil(max_size));
+
+        for i in (0..build_indices.len()).step_by(max_size) {
+            let end = min(build_indices.len(), i + max_size);
+            let len = end - i;
+            let intermediate_batch = build_batch_from_indices(
+                filter.schema(),
+                build_input_buffer,
+                probe_batch,
+                &build_indices.slice(i, len),
+                &probe_indices.slice(i, len),
+                filter.column_indices(),
+                build_side,
+            )?;
+            let filter_result = filter
+                .expression()
+                .evaluate(&intermediate_batch)?
+                .into_array(intermediate_batch.num_rows())?;
+            filter_results.push(filter_result);
+        }
+
+        let filter_refs: Vec<&dyn Array> =
+            filter_results.iter().map(|a| a.as_ref()).collect();
+
+        compute::concat(&filter_refs)?
+    } else {
+        let intermediate_batch = build_batch_from_indices(
+            filter.schema(),
+            build_input_buffer,
+            probe_batch,
+            &build_indices,
+            &probe_indices,
+            filter.column_indices(),
+            build_side,
+        )?;
+
+        filter
+            .expression()
+            .evaluate(&intermediate_batch)?
+            .into_array(intermediate_batch.num_rows())?
+    };
+
     let mask = as_boolean_array(&filter_result)?;
 
     let left_filtered = compute::filter(&build_indices, mask)?;
@@ -923,9 +957,59 @@ pub(crate) fn build_batch_from_indices(
                 compute::take(array.as_ref(), probe_indices, None)?
             }
         };
+
         columns.push(array);
     }
     Ok(RecordBatch::try_new(Arc::new(schema.clone()), columns)?)
+}
+
+/// Returns a new [RecordBatch] resulting of a join where the build/left side is empty.
+/// The resulting batch has [Schema] `schema`.
+pub(crate) fn build_batch_empty_build_side(
+    schema: &Schema,
+    build_batch: &RecordBatch,
+    probe_batch: &RecordBatch,
+    column_indices: &[ColumnIndex],
+    join_type: JoinType,
+) -> Result<RecordBatch> {
+    match join_type {
+        // these join types only return data if the left side is not empty, so we return an
+        // empty RecordBatch
+        JoinType::Inner
+        | JoinType::Left
+        | JoinType::LeftSemi
+        | JoinType::RightSemi
+        | JoinType::LeftAnti
+        | JoinType::LeftMark => Ok(RecordBatch::new_empty(Arc::new(schema.clone()))),
+
+        // the remaining joins will return data for the right columns and null for the left ones
+        JoinType::Right | JoinType::Full | JoinType::RightAnti | JoinType::RightMark => {
+            let num_rows = probe_batch.num_rows();
+            let mut columns: Vec<Arc<dyn Array>> =
+                Vec::with_capacity(schema.fields().len());
+
+            for column_index in column_indices {
+                let array = match column_index.side {
+                    // left -> null array
+                    JoinSide::Left => new_null_array(
+                        build_batch.column(column_index.index).data_type(),
+                        num_rows,
+                    ),
+                    // right -> respective right array
+                    JoinSide::Right => Arc::clone(probe_batch.column(column_index.index)),
+                    // right mark -> unset boolean array as there are no matches on the left side
+                    JoinSide::None => Arc::new(BooleanArray::new(
+                        BooleanBuffer::new_unset(num_rows),
+                        None,
+                    )),
+                };
+
+                columns.push(array);
+            }
+
+            Ok(RecordBatch::try_new(Arc::new(schema.clone()), columns)?)
+        }
+    }
 }
 
 /// The input is the matched indices for left and right and
