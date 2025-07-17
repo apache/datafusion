@@ -226,7 +226,7 @@ impl PhysicalExprAdapter for CustomPhysicalExprAdapter {
 }
 
 #[tokio::test]
-async fn single_file() {
+async fn test_custom_schema_adapter_and_custom_expression_adapter() {
     let batch =
         record_batch!(("extra", Int64, [1, 2, 3]), ("c1", Int32, [1, 2, 3])).unwrap();
 
