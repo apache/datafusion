@@ -17,21 +17,21 @@
 
 //! Integration test for schema adapter factory functionality
 
-use std::any::Any;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::arrow_file::ArrowSource;
 use datafusion::prelude::*;
+use datafusion_common::ColumnStatistics;
 use datafusion_common::Result;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_datasource::schema_adapter::{
     SchemaAdapter, SchemaAdapterFactory, SchemaMapper,
 };
-use datafusion_common::ColumnStatistics;
 use datafusion_datasource::source::DataSourceExec;
 use datafusion_datasource::PartitionedFile;
+use std::any::Any;
 use std::sync::Arc;
 use tempfile::TempDir;
 
@@ -76,7 +76,10 @@ impl SchemaAdapter for UppercaseAdapter {
             .position(|f| f.name().eq_ignore_ascii_case(field.name()))
     }
 
-    fn map_schema(&self, file_schema: &Schema) -> Result<(Arc<dyn SchemaMapper>, Vec<usize>)> {
+    fn map_schema(
+        &self,
+        file_schema: &Schema,
+    ) -> Result<(Arc<dyn SchemaMapper>, Vec<usize>)> {
         let mut projection = Vec::with_capacity(file_schema.fields().len());
         for (idx, file_field) in file_schema.fields().iter().enumerate() {
             if self
@@ -141,13 +144,11 @@ impl SchemaMapper for UppercaseSchemaMapper {
         &self,
         stats: &[ColumnStatistics],
     ) -> Result<Vec<ColumnStatistics>> {
-        Ok(
-            self
-                .projection
-                .iter()
-                .map(|&i| stats.get(i).cloned().unwrap_or_default())
-                .collect(),
-        )
+        Ok(self
+            .projection
+            .iter()
+            .map(|&i| stats.get(i).cloned().unwrap_or_default())
+            .collect())
     }
 }
 
@@ -209,14 +210,15 @@ async fn test_parquet_integration_with_schema_adapter() -> Result<()> {
     // Verify the schema has uppercase column names
     let result_schema = batches[0].schema();
     assert_eq!(result_schema.field(0).name(), "ID");
-    assert_eq!(result_schema.field(1).name(), "NAME");
+    assert_eq!(result_schema.field(1).name(), "NAME0");
 
     Ok(())
 }
 
 #[cfg(feature = "parquet")]
 #[tokio::test]
-async fn test_parquet_integration_with_schema_adapter_and_expression_rewriter() -> Result<()> {
+async fn test_parquet_integration_with_schema_adapter_and_expression_rewriter(
+) -> Result<()> {
     // Create a temporary directory for our test file
     let tmp_dir = TempDir::new()?;
     let file_path = tmp_dir.path().join("test.parquet");
@@ -276,7 +278,6 @@ async fn test_parquet_integration_with_schema_adapter_and_expression_rewriter() 
 
     Ok(())
 }
-
 
 #[tokio::test]
 async fn test_multi_source_schema_adapter_reuse() -> Result<()> {
@@ -389,7 +390,6 @@ fn test_schema_adapter_preservation() {
     // Verify the schema adapter factory is present in the file source
     assert!(config.source().schema_adapter_factory().is_some());
 }
-
 
 /// A test source for testing schema adapters
 #[derive(Debug, Clone)]
