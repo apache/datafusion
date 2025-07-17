@@ -264,9 +264,7 @@ async fn test_custom_schema_adapter_and_custom_expression_adapter() {
             .unwrap()
             .with_schema(table_schema.clone())
             .with_schema_adapter_factory(Arc::new(DefaultSchemaAdapterFactory))
-            .with_physical_expr_adapter_factory(Arc::new(
-                DefaultPhysicalExprAdapterFactory,
-            ));
+            .with_expr_adapter_factory(Arc::new(DefaultPhysicalExprAdapterFactory));
 
     let table = ListingTable::try_new(listing_table_config).unwrap();
     ctx.register_table("t", Arc::new(table)).unwrap();
@@ -324,9 +322,7 @@ async fn test_custom_schema_adapter_and_custom_expression_adapter() {
             .await
             .unwrap()
             .with_schema(table_schema.clone())
-            .with_physical_expr_adapter_factory(Arc::new(
-                CustomPhysicalExprAdapterFactory,
-            ));
+            .with_expr_adapter_factory(Arc::new(CustomPhysicalExprAdapterFactory));
     let table = ListingTable::try_new(listing_table_config).unwrap();
     ctx.deregister_table("t").unwrap();
     ctx.register_table("t", Arc::new(table)).unwrap();
@@ -354,9 +350,7 @@ async fn test_custom_schema_adapter_and_custom_expression_adapter() {
             .unwrap()
             .with_schema(table_schema.clone())
             .with_schema_adapter_factory(Arc::new(CustomSchemaAdapterFactory))
-            .with_physical_expr_adapter_factory(Arc::new(
-                CustomPhysicalExprAdapterFactory,
-            ));
+            .with_expr_adapter_factory(Arc::new(CustomPhysicalExprAdapterFactory));
     let table = ListingTable::try_new(listing_table_config).unwrap();
     ctx.deregister_table("t").unwrap();
     ctx.register_table("t", Arc::new(table)).unwrap();
