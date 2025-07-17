@@ -50,6 +50,7 @@ mod filter_pushdown;
 mod page_pruning;
 mod row_group_pruning;
 mod schema;
+mod schema_adapter;
 mod schema_coercion;
 mod utils;
 

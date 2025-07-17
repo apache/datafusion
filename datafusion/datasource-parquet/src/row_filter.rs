@@ -67,7 +67,6 @@ use arrow::array::BooleanArray;
 use arrow::datatypes::{DataType, Schema, SchemaRef};
 use arrow::error::{ArrowError, Result as ArrowResult};
 use arrow::record_batch::RecordBatch;
-use itertools::Itertools;
 use parquet::arrow::arrow_reader::{ArrowPredicate, RowFilter};
 use parquet::arrow::ProjectionMask;
 use parquet::file::metadata::ParquetMetaData;
@@ -75,8 +74,9 @@ use parquet::file::metadata::ParquetMetaData;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
 use datafusion_common::Result;
+use datafusion_datasource::schema_adapter::{SchemaAdapterFactory, SchemaMapper};
 use datafusion_physical_expr::expressions::Column;
-use datafusion_physical_expr::utils::{collect_columns, reassign_predicate_columns};
+use datafusion_physical_expr::utils::reassign_predicate_columns;
 use datafusion_physical_expr::{split_conjunction, PhysicalExpr};
 
 use datafusion_physical_plan::metrics;
@@ -106,6 +106,8 @@ pub(crate) struct DatafusionArrowPredicate {
     rows_matched: metrics::Count,
     /// how long was spent evaluating this predicate
     time: metrics::Time,
+    /// used to perform type coercion while filtering rows
+    schema_mapper: Arc<dyn SchemaMapper>,
 }
 
 impl DatafusionArrowPredicate {
@@ -130,6 +132,7 @@ impl DatafusionArrowPredicate {
             rows_pruned,
             rows_matched,
             time,
+            schema_mapper: candidate.schema_mapper,
         })
     }
 }
@@ -140,6 +143,8 @@ impl ArrowPredicate for DatafusionArrowPredicate {
     }
 
     fn evaluate(&mut self, batch: RecordBatch) -> ArrowResult<BooleanArray> {
+        let batch = self.schema_mapper.map_batch(batch)?;
+
         // scoped timer updates on drop
         let mut timer = self.time.timer();
 
@@ -182,6 +187,9 @@ pub(crate) struct FilterCandidate {
     /// required to pass thorugh a `SchemaMapper` to the table schema
     /// upon which we then evaluate the filter expression.
     projection: Vec<usize>,
+    ///  A `SchemaMapper` used to map batches read from the file schema to
+    /// the filter's projection of the table schema.
+    schema_mapper: Arc<dyn SchemaMapper>,
     /// The projected table schema that this filter references
     filter_schema: SchemaRef,
 }
@@ -222,11 +230,26 @@ struct FilterCandidateBuilder {
     /// columns in the file schema that are not in the table schema or columns that
     /// are in the table schema that are not in the file schema.
     file_schema: SchemaRef,
+    /// The schema of the table (merged schema) -- columns may be in different
+    /// order than in the file and have columns that are not in the file schema
+    table_schema: SchemaRef,
+    /// A `SchemaAdapterFactory` used to map the file schema to the table schema.
+    schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
 }
 
 impl FilterCandidateBuilder {
-    pub fn new(expr: Arc<dyn PhysicalExpr>, file_schema: Arc<Schema>) -> Self {
-        Self { expr, file_schema }
+    pub fn new(
+        expr: Arc<dyn PhysicalExpr>,
+        file_schema: Arc<Schema>,
+        table_schema: Arc<Schema>,
+        schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
+    ) -> Self {
+        Self {
+            expr,
+            file_schema,
+            table_schema,
+            schema_adapter_factory,
+        }
     }
 
     /// Attempt to build a `FilterCandidate` from the expression
@@ -238,21 +261,20 @@ impl FilterCandidateBuilder {
     /// * `Err(e)` if an error occurs while building the candidate
     pub fn build(self, metadata: &ParquetMetaData) -> Result<Option<FilterCandidate>> {
         let Some(required_indices_into_table_schema) =
-            pushdown_columns(&self.expr, &self.file_schema)?
+            pushdown_columns(&self.expr, &self.table_schema)?
         else {
             return Ok(None);
         };
 
         let projected_table_schema = Arc::new(
-            self.file_schema
+            self.table_schema
                 .project(&required_indices_into_table_schema)?,
         );
 
-        let projection_into_file_schema = collect_columns(&self.expr)
-            .iter()
-            .map(|c| c.index())
-            .sorted_unstable()
-            .collect_vec();
+        let (schema_mapper, projection_into_file_schema) = self
+            .schema_adapter_factory
+            .create(Arc::clone(&projected_table_schema), self.table_schema)
+            .map_schema(&self.file_schema)?;
 
         let required_bytes = size_of_columns(&projection_into_file_schema, metadata)?;
         let can_use_index = columns_sorted(&projection_into_file_schema, metadata)?;
@@ -262,6 +284,7 @@ impl FilterCandidateBuilder {
             required_bytes,
             can_use_index,
             projection: projection_into_file_schema,
+            schema_mapper: Arc::clone(&schema_mapper),
             filter_schema: Arc::clone(&projected_table_schema),
         }))
     }
@@ -403,9 +426,11 @@ fn columns_sorted(_columns: &[usize], _metadata: &ParquetMetaData) -> Result<boo
 pub fn build_row_filter(
     expr: &Arc<dyn PhysicalExpr>,
     physical_file_schema: &SchemaRef,
+    predicate_file_schema: &SchemaRef,
     metadata: &ParquetMetaData,
     reorder_predicates: bool,
     file_metrics: &ParquetFileMetrics,
+    schema_adapter_factory: &Arc<dyn SchemaAdapterFactory>,
 ) -> Result<Option<RowFilter>> {
     let rows_pruned = &file_metrics.pushdown_rows_pruned;
     let rows_matched = &file_metrics.pushdown_rows_matched;
@@ -422,6 +447,8 @@ pub fn build_row_filter(
             FilterCandidateBuilder::new(
                 Arc::clone(expr),
                 Arc::clone(physical_file_schema),
+                Arc::clone(predicate_file_schema),
+                Arc::clone(schema_adapter_factory),
             )
             .build(metadata)
         })
@@ -465,9 +492,13 @@ mod test {
     use super::*;
     use datafusion_common::ScalarValue;
 
+    use arrow::datatypes::{Field, TimeUnit::Nanosecond};
+    use datafusion_datasource::schema_adapter::DefaultSchemaAdapterFactory;
     use datafusion_expr::{col, Expr};
     use datafusion_physical_expr::planner::logical2physical;
+    use datafusion_physical_plan::metrics::{Count, Time};
 
+    use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
     use parquet::arrow::parquet_to_arrow_schema;
     use parquet::file::reader::{FileReader, SerializedFileReader};
 
@@ -489,13 +520,109 @@ mod test {
         let expr = col("int64_list").is_not_null();
         let expr = logical2physical(&expr, &table_schema);
 
+        let schema_adapter_factory = Arc::new(DefaultSchemaAdapterFactory);
         let table_schema = Arc::new(table_schema.clone());
 
-        let candidate = FilterCandidateBuilder::new(expr, table_schema.clone())
-            .build(metadata)
-            .expect("building candidate");
+        let candidate = FilterCandidateBuilder::new(
+            expr,
+            table_schema.clone(),
+            table_schema,
+            schema_adapter_factory,
+        )
+        .build(metadata)
+        .expect("building candidate");
 
         assert!(candidate.is_none());
+    }
+
+    #[test]
+    fn test_filter_type_coercion() {
+        let testdata = datafusion_common::test_util::parquet_test_data();
+        let file = std::fs::File::open(format!("{testdata}/alltypes_plain.parquet"))
+            .expect("opening file");
+
+        let parquet_reader_builder =
+            ParquetRecordBatchReaderBuilder::try_new(file).expect("creating reader");
+        let metadata = parquet_reader_builder.metadata().clone();
+        let file_schema = parquet_reader_builder.schema().clone();
+
+        // This is the schema we would like to coerce to,
+        // which is different from the physical schema of the file.
+        let table_schema = Schema::new(vec![Field::new(
+            "timestamp_col",
+            DataType::Timestamp(Nanosecond, Some(Arc::from("UTC"))),
+            false,
+        )]);
+
+        // Test all should fail
+        let expr = col("timestamp_col").lt(Expr::Literal(
+            ScalarValue::TimestampNanosecond(Some(1), Some(Arc::from("UTC"))),
+            None,
+        ));
+        let expr = logical2physical(&expr, &table_schema);
+        let schema_adapter_factory = Arc::new(DefaultSchemaAdapterFactory);
+        let table_schema = Arc::new(table_schema.clone());
+        let candidate = FilterCandidateBuilder::new(
+            expr,
+            file_schema.clone(),
+            table_schema.clone(),
+            schema_adapter_factory,
+        )
+        .build(&metadata)
+        .expect("building candidate")
+        .expect("candidate expected");
+
+        let mut row_filter = DatafusionArrowPredicate::try_new(
+            candidate,
+            &metadata,
+            Count::new(),
+            Count::new(),
+            Time::new(),
+        )
+        .expect("creating filter predicate");
+
+        let mut parquet_reader = parquet_reader_builder
+            .with_projection(row_filter.projection().clone())
+            .build()
+            .expect("building reader");
+
+        // Parquet file is small, we only need 1 record batch
+        let first_rb = parquet_reader
+            .next()
+            .expect("expected record batch")
+            .expect("expected error free record batch");
+
+        let filtered = row_filter.evaluate(first_rb.clone());
+        assert!(matches!(filtered, Ok(a) if a == BooleanArray::from(vec![false; 8])));
+
+        // Test all should pass
+        let expr = col("timestamp_col").gt(Expr::Literal(
+            ScalarValue::TimestampNanosecond(Some(0), Some(Arc::from("UTC"))),
+            None,
+        ));
+        let expr = logical2physical(&expr, &table_schema);
+        let schema_adapter_factory = Arc::new(DefaultSchemaAdapterFactory);
+        let candidate = FilterCandidateBuilder::new(
+            expr,
+            file_schema,
+            table_schema,
+            schema_adapter_factory,
+        )
+        .build(&metadata)
+        .expect("building candidate")
+        .expect("candidate expected");
+
+        let mut row_filter = DatafusionArrowPredicate::try_new(
+            candidate,
+            &metadata,
+            Count::new(),
+            Count::new(),
+            Time::new(),
+        )
+        .expect("creating filter predicate");
+
+        let filtered = row_filter.evaluate(first_rb);
+        assert!(matches!(filtered, Ok(a) if a == BooleanArray::from(vec![true; 8])));
     }
 
     #[test]
