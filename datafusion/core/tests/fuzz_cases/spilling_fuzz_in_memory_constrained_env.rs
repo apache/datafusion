@@ -37,7 +37,7 @@ use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use futures::StreamExt;
 
 use crate::fuzz_cases::aggregate_fuzz::assert_spill_count_metric;
-use crate::fuzz_cases::stream_exec::StreamExec;
+use crate::fuzz_cases::once_exec::OnceExec;
 use datafusion_execution::memory_pool::units::{KB, MB};
 use datafusion_execution::TaskContext;
 use datafusion_functions_aggregate::array_agg::array_agg_udaf;
@@ -270,7 +270,7 @@ async fn run_sort_test_with_limited_memory(
 
     let schema = Arc::clone(&scan_schema);
     let plan: Arc<dyn ExecutionPlan> =
-        Arc::new(StreamExec::new(Box::pin(RecordBatchStreamAdapter::new(
+        Arc::new(OnceExec::new(Box::pin(RecordBatchStreamAdapter::new(
             Arc::clone(&schema),
             futures::stream::iter((0..number_of_record_batches as u64).map(
                 move |index| {
@@ -581,7 +581,7 @@ async fn run_test_aggregate_with_high_cardinality(
 
     let schema = Arc::clone(&scan_schema);
     let plan: Arc<dyn ExecutionPlan> =
-        Arc::new(StreamExec::new(Box::pin(RecordBatchStreamAdapter::new(
+        Arc::new(OnceExec::new(Box::pin(RecordBatchStreamAdapter::new(
             Arc::clone(&schema),
             futures::stream::iter((0..number_of_record_batches as u64).map(
                 move |index| {

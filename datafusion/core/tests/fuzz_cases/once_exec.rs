@@ -29,19 +29,19 @@ use std::sync::{Arc, Mutex};
 
 /// Execution plan that return the stream on the call to `execute`. further calls to `execute` will
 /// return an error
-pub struct StreamExec {
+pub struct OnceExec {
     /// the results to send back
     stream: Mutex<Option<SendableRecordBatchStream>>,
     cache: PlanProperties,
 }
 
-impl Debug for StreamExec {
+impl Debug for OnceExec {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "StreamExec")
+        write!(f, "OnceExec")
     }
 }
 
-impl StreamExec {
+impl OnceExec {
     pub fn new(stream: SendableRecordBatchStream) -> Self {
         let cache = Self::compute_properties(stream.schema());
         Self {
@@ -61,11 +61,11 @@ impl StreamExec {
     }
 }
 
-impl DisplayAs for StreamExec {
+impl DisplayAs for OnceExec {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(f, "StreamExec:")
+                write!(f, "OnceExec:")
             }
             DisplayFormatType::TreeRender => {
                 write!(f, "")
@@ -74,7 +74,7 @@ impl DisplayAs for StreamExec {
     }
 }
 
-impl ExecutionPlan for StreamExec {
+impl ExecutionPlan for OnceExec {
     fn name(&self) -> &'static str {
         Self::static_name()
     }
