@@ -23,7 +23,7 @@
 use insta::assert_snapshot;
 use std::sync::Arc;
 
-use crate::physical_optimizer::test_utils::parquet_exec;
+use crate::physical_optimizer_test::test_utils::parquet_exec;
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::config::ConfigOptions;

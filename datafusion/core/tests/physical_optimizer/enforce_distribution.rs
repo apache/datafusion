@@ -19,7 +19,7 @@ use std::fmt::Debug;
 use std::ops::Deref;
 use std::sync::Arc;
 
-use crate::physical_optimizer::test_utils::{
+use crate::physical_optimizer_test::test_utils::{
     check_integrity, coalesce_partitions_exec, parquet_exec_with_sort,
     parquet_exec_with_stats, repartition_exec, schema, sort_exec,
     sort_exec_with_preserve_partitioning, sort_merge_join_exec,
@@ -300,7 +300,7 @@ fn hash_join_exec(
     join_on: &JoinOn,
     join_type: &JoinType,
 ) -> Arc<dyn ExecutionPlan> {
-    crate::physical_optimizer::test_utils::hash_join_exec(
+    crate::physical_optimizer_test::test_utils::hash_join_exec(
         left,
         right,
         join_on.clone(),

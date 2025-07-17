@@ -17,7 +17,7 @@
 
 use std::sync::Arc;
 
-use crate::physical_optimizer::test_utils::{
+use crate::physical_optimizer_test::test_utils::{
     coalesce_batches_exec, coalesce_partitions_exec, global_limit_exec, local_limit_exec,
     sort_exec, sort_preserving_merge_exec, stream_exec,
 };
