@@ -840,7 +840,6 @@ data_h2o() {
 
     # Set virtual environment directory
     VIRTUAL_ENV="${PWD}/venv"
-    rm -rf "$VIRTUAL_ENV"
 
     # Create a virtual environment using the detected Python command
     $PYTHON_CMD -m venv "$VIRTUAL_ENV"
