@@ -23,5 +23,17 @@
 
 ## Original Query: SELECT next_day('2015-01-14', 'TU');
 ## PySpark 3.5.5 Result: {'next_day(2015-01-14, TU)': datetime.date(2015, 1, 20), 'typeof(next_day(2015-01-14, TU))': 'date', 'typeof(2015-01-14)': 'string', 'typeof(TU)': 'string'}
-#query
-#SELECT next_day('2015-01-14'::string, 'TU'::string);
+query D
+SELECT next_day('2015-01-14'::string, 'TU'::string);
+----
+2015-01-20
+
+query D
+SELECT next_day('2015-07-27'::string, 'Sun'::string);
+----
+2015-08-02
+
+query D
+SELECT next_day('2015-07-27'::string, 'Sat'::string);
+----
+2015-08-01
