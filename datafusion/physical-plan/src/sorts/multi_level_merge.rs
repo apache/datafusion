@@ -32,6 +32,7 @@ use datafusion_execution::memory_pool::{
     MemoryConsumer, MemoryPool, MemoryReservation, UnboundedMemoryPool,
 };
 
+use crate::sorts::sort::get_reserved_byte_for_record_batch_size;
 use crate::sorts::streaming_merge::{SortedSpillFile, StreamingMergeBuilder};
 use crate::stream::RecordBatchStreamAdapter;
 use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
@@ -249,7 +250,9 @@ impl MultiLevelMergeBuilder {
         for spill in &self.sorted_spill_files {
             // For memory pools that are not shared this is good, for other this is not
             // and there should be some upper limit to memory reservation so we won't starve the system
-            match reservation.try_grow(spill.max_record_batch_memory * buffer_len) {
+            match reservation.try_grow(get_reserved_byte_for_record_batch_size(
+                spill.max_record_batch_memory * buffer_len,
+            )) {
                 Ok(_) => {
                     number_of_spills_to_read_for_current_phase += 1;
                 }

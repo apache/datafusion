@@ -784,11 +784,16 @@ impl ExternalSorter {
 /// in sorting and merging. The sorted copies are in either row format or array format.
 /// Please refer to cursor.rs and stream.rs for more details. No matter what format the
 /// sorted copies are, they will use more memory than the original record batch.
-fn get_reserved_byte_for_record_batch(batch: &RecordBatch) -> usize {
+pub(crate) fn get_reserved_byte_for_record_batch_size(record_batch_size: usize) -> usize {
     // 2x may not be enough for some cases, but it's a good start.
     // If 2x is not enough, user can set a larger value for `sort_spill_reservation_bytes`
     // to compensate for the extra memory needed.
-    get_record_batch_memory_size(batch) * 2
+    record_batch_size * 2
+}
+
+/// Estimate how much memory is needed to sort a `RecordBatch`.
+fn get_reserved_byte_for_record_batch(batch: &RecordBatch) -> usize {
+    get_reserved_byte_for_record_batch_size(get_record_batch_memory_size(batch))
 }
 
 impl Debug for ExternalSorter {
