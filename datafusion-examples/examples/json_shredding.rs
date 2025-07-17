@@ -273,7 +273,7 @@ impl TableProvider for ExampleTableProvider {
         .with_limit(limit)
         .with_file_group(file_group)
         // if the rewriter needs a reference to the table schema you can bind self.schema() here
-        .with_expr_adapter(Arc::new(ShreddedJsonRewriterFactory) as _);
+        .with_expr_adapter(Some(Arc::new(ShreddedJsonRewriterFactory) as _));
 
         Ok(Arc::new(DataSourceExec::new(Arc::new(
             file_scan_config.build(),

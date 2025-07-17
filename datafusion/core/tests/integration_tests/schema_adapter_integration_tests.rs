@@ -148,6 +148,70 @@ async fn test_parquet_integration_with_schema_adapter() -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "parquet")]
+#[tokio::test]
+async fn test_parquet_integration_with_schema_adapter_and_expression_rewriter() -> Result<()> {
+    // Create a temporary directory for our test file
+    let tmp_dir = TempDir::new()?;
+    let file_path = tmp_dir.path().join("test.parquet");
+    let file_path_str = file_path.to_str().unwrap();
+
+    // Create test data
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int32, false),
+        Field::new("name", DataType::Utf8, true),
+    ]));
+
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(arrow::array::Int32Array::from(vec![1, 2, 3])),
+            Arc::new(arrow::array::StringArray::from(vec!["a", "b", "c"])),
+        ],
+    )?;
+
+    // Write test parquet file
+    let file = std::fs::File::create(file_path_str)?;
+    let props = WriterProperties::builder().build();
+    let mut writer = ArrowWriter::try_new(file, schema.clone(), Some(props))?;
+    writer.write(&batch)?;
+    writer.close()?;
+
+    // Create a session context
+    let ctx = SessionContext::new();
+
+    // Create a ParquetSource with the adapter factory
+    let source = ParquetSource::default()
+        .with_schema_adapter_factory(Arc::new(UppercaseAdapterFactory {}));
+
+    // Create a scan config
+    let config = FileScanConfigBuilder::new(
+        ObjectStoreUrl::parse(&format!("file://{}", file_path_str))?,
+        schema.clone(),
+    )
+    .with_source(source)
+    .build();
+
+    // Create a data source executor
+    let exec = DataSourceExec::from_data_source(config);
+
+    // Collect results
+    let task_ctx = ctx.task_ctx();
+    let stream = exec.execute(0, task_ctx)?;
+    let batches = datafusion::physical_plan::common::collect(stream).await?;
+
+    // There should be one batch
+    assert_eq!(batches.len(), 1);
+
+    // Verify the schema has uppercase column names
+    let result_schema = batches[0].schema();
+    assert_eq!(result_schema.field(0).name(), "ID");
+    assert_eq!(result_schema.field(1).name(), "NAME");
+
+    Ok(())
+}
+
+
 #[tokio::test]
 async fn test_multi_source_schema_adapter_reuse() -> Result<()> {
     // This test verifies that the same schema adapter factory can be reused

@@ -263,7 +263,7 @@ impl TableProvider for DefaultValueTableProvider {
         .with_projection(projection.cloned())
         .with_limit(limit)
         .with_file_group(file_group)
-        .with_expr_adapter(Arc::new(DefaultValuePhysicalExprAdapterFactory) as _);
+        .with_expr_adapter(Some(Arc::new(DefaultValuePhysicalExprAdapterFactory) as _));
 
         Ok(Arc::new(DataSourceExec::new(Arc::new(
             file_scan_config.build(),
