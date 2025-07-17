@@ -120,7 +120,8 @@ SET datafusion.execution.spill_compression = 'zstd';
 
 For more details about this configuration option, including performance trade-offs between different compression codecs, see the [Configuration Settings](../user-guide/configs.md) documentation.
 
-### Deprecated `map_varchar_to_utf8view`
+### Deprecated `map_varchar_to_utf8view` 
+See [issue #16290](https://github.com/apache/datafusion/pull/16290) for more information
 The old configuration
 
 ```text
@@ -166,6 +167,23 @@ SET datafusion.sql_parser.map_string_types_to_utf8view = false;
 CREATE TABLE my_table (a VARCHAR, b TEXT, c STRING);
 DESCRIBE my_table;
 ```
+
+### Deprecating `SchemaAdapterFactory` and `SchemaAdapter`
+
+We are moving away from converting data (using `SchemaAdapter`) to converting the expressions themselves (which is more efficient and flexible).
+
+See [issue #16800](https://github.com/apache/datafusion/issues/16800) for more information
+The first place this change has taken place is in predicate pushdown for Parquet.
+By default if you do not use a custom `SchemaAdapterFactory` we will use expression conversion instead.
+If you do set a custom `SchemaAdapterFactory` we will continue to use it but emit a warning about that code path being deprecated.
+
+To resolve this you need to implement a custom `PhysicalExprAdapterFactory` and use that instead of a `SchemaAdapterFactory`.
+See the [default values](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/default_column_values.rs) for an example of how to do this.
+Opting into the new APIs will set you up for future changes since we plan to expand use of `PhysicalExprAdapterFactory` to other areas of DataFusion.
+
+See [#16800] for details.
+
+[#16800]: https://github.com/apache/datafusion/issues/16800
 
 ## DataFusion `48.0.1`
 
