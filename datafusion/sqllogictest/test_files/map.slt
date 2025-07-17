@@ -835,7 +835,7 @@ select column3[true] from tt;
 
 # https://github.com/apache/datafusion/issues/16187
 # should be NULL in case of out of bounds for Null Type
-query T
+query ?
 select map_values(map([named_struct('a', 1, 'b', null)], [named_struct('a', 1, 'b', null)]))[0] as a;
 ----
 NULL
