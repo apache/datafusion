@@ -239,17 +239,17 @@ impl MultiLevelMergeBuilder {
     /// otherwise it will return an error
     fn get_sorted_spill_files_to_merge(
         &mut self,
-        buffer_size: usize,
+        buffer_len: usize,
         minimum_number_of_required_streams: usize,
         reservation: &mut MemoryReservation,
     ) -> Result<(Vec<SortedSpillFile>, usize)> {
-        assert_ne!(buffer_size, 0, "Buffer size must be greater than 0");
+        assert_ne!(buffer_len, 0, "Buffer length must be greater than 0");
         let mut number_of_spills_to_read_for_current_phase = 0;
 
         for spill in &self.sorted_spill_files {
             // For memory pools that are not shared this is good, for other this is not
             // and there should be some upper limit to memory reservation so we won't starve the system
-            match reservation.try_grow(spill.max_record_batch_memory * buffer_size) {
+            match reservation.try_grow(spill.max_record_batch_memory * buffer_len) {
                 Ok(_) => {
                     number_of_spills_to_read_for_current_phase += 1;
                 }
@@ -262,10 +262,10 @@ impl MultiLevelMergeBuilder {
                     {
                         // Free the memory we reserved for this merge as we either try again or fail
                         reservation.free();
-                        if buffer_size > 1 {
+                        if buffer_len > 1 {
                             // Try again with smaller buffer size, it will be slower but at least we can merge
                             return self.get_sorted_spill_files_to_merge(
-                                buffer_size - 1,
+                                buffer_len - 1,
                                 minimum_number_of_required_streams,
                                 reservation,
                             );
@@ -286,7 +286,7 @@ impl MultiLevelMergeBuilder {
             .drain(..number_of_spills_to_read_for_current_phase)
             .collect::<Vec<_>>();
 
-        Ok((spills, buffer_size))
+        Ok((spills, buffer_len))
     }
 }
 
