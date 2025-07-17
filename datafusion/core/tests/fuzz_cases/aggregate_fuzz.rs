@@ -22,11 +22,10 @@ use crate::fuzz_cases::aggregation_fuzzer::query_builder::QueryBuilder;
 use crate::fuzz_cases::aggregation_fuzzer::{
     AggregationFuzzerBuilder, DatasetGeneratorConfig,
 };
-use std::pin::Pin;
 
 use arrow::array::{
     types::Int64Type, Array, ArrayRef, AsArray, Int32Array, Int64Array, RecordBatch,
-    StringArray, UInt64Array,
+    StringArray,
 };
 use arrow::compute::concat_batches;
 use arrow::datatypes::DataType;
@@ -43,27 +42,19 @@ use datafusion_functions_aggregate::sum::sum_udaf;
 use datafusion_physical_expr::expressions::{col, lit, Column};
 use datafusion_physical_expr::PhysicalSortExpr;
 use datafusion_physical_plan::InputOrderMode;
-use futures::StreamExt;
 use test_utils::{add_empty_batches, StringBatchGenerator};
 
-use crate::fuzz_cases::stream_exec::StreamExec;
-use datafusion_execution::memory_pool::units::{KB, MB};
-use datafusion_execution::memory_pool::{
-    FairSpillPool, MemoryConsumer, MemoryReservation,
-};
+use datafusion_execution::memory_pool::FairSpillPool;
 use datafusion_execution::runtime_env::RuntimeEnvBuilder;
 use datafusion_execution::TaskContext;
-use datafusion_functions_aggregate::array_agg::array_agg_udaf;
-use datafusion_physical_plan::metrics::MetricValue;
-use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
-use rand::rngs::StdRng;
-use rand::{random, rng, Rng, SeedableRng};
-
 use datafusion_physical_expr::aggregate::AggregateExprBuilder;
 use datafusion_physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
 };
+use datafusion_physical_plan::metrics::MetricValue;
 use datafusion_physical_plan::{collect, displayable, ExecutionPlan};
+use rand::rngs::StdRng;
+use rand::{random, rng, Rng, SeedableRng};
 
 // ========================================================================
 //  The new aggregation fuzz tests based on [`AggregationFuzzer`]
@@ -641,7 +632,7 @@ fn extract_result_counts(results: Vec<RecordBatch>) -> HashMap<Option<String>, i
     output
 }
 
-fn assert_spill_count_metric(
+pub(crate) fn assert_spill_count_metric(
     expect_spill: bool,
     single_aggregate: Arc<AggregateExec>,
 ) -> usize {
@@ -670,7 +661,7 @@ fn assert_spill_count_metric(
 
 // Fix for https://github.com/apache/datafusion/issues/15530
 #[tokio::test]
-async fn test_single_mode_aggregate_with_spill() -> Result<()> {
+async fn test_single_mode_aggregate_single_mode_aggregate_with_spill() -> Result<()> {
     let scan_schema = Arc::new(Schema::new(vec![
         Field::new("col_0", DataType::Int64, true),
         Field::new("col_1", DataType::Utf8, true),
@@ -775,333 +766,4 @@ async fn test_single_mode_aggregate_with_spill() -> Result<()> {
     assert_spill_count_metric(true, single_aggregate);
 
     Ok(())
-}
-
-#[tokio::test]
-async fn test_high_cardinality_with_limited_memory() -> Result<()> {
-    let record_batch_size = 8192;
-    let pool_size = 2 * MB as usize;
-    let task_ctx = {
-        let memory_pool = Arc::new(FairSpillPool::new(pool_size));
-        TaskContext::default()
-            .with_session_config(SessionConfig::new().with_batch_size(record_batch_size))
-            .with_runtime(Arc::new(
-                RuntimeEnvBuilder::new()
-                    .with_memory_pool(memory_pool)
-                    .build()?,
-            ))
-    };
-
-    let record_batch_size = pool_size / 16;
-
-    // Basic test with a lot of groups that cannot all fit in memory and 1 record batch
-    // from each spill file is too much memory
-    let spill_count = run_test_high_cardinality(RunTestHighCardinalityArgs {
-        pool_size,
-        task_ctx,
-        number_of_record_batches: 100,
-        get_size_of_record_batch_to_generate: Box::pin(move |_| record_batch_size),
-        memory_behavior: Default::default(),
-    })
-    .await?;
-
-    let total_spill_files_size = spill_count * record_batch_size;
-    assert!(
-        total_spill_files_size > pool_size,
-        "Total spill files size {total_spill_files_size} should be greater than pool size {pool_size}",
-    );
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn test_high_cardinality_with_limited_memory_and_different_sizes_of_record_batch(
-) -> Result<()> {
-    let record_batch_size = 8192;
-    let pool_size = 2 * MB as usize;
-    let task_ctx = {
-        let memory_pool = Arc::new(FairSpillPool::new(pool_size));
-        TaskContext::default()
-            .with_session_config(SessionConfig::new().with_batch_size(record_batch_size))
-            .with_runtime(Arc::new(
-                RuntimeEnvBuilder::new()
-                    .with_memory_pool(memory_pool)
-                    .build()?,
-            ))
-    };
-
-    run_test_high_cardinality(RunTestHighCardinalityArgs {
-        pool_size,
-        task_ctx,
-        number_of_record_batches: 100,
-        get_size_of_record_batch_to_generate: Box::pin(move |i| {
-            if i % 25 == 1 {
-                pool_size / 4
-            } else {
-                (16 * KB) as usize
-            }
-        }),
-        memory_behavior: Default::default(),
-    })
-    .await?;
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn test_high_cardinality_with_limited_memory_and_different_sizes_of_record_batch_and_changing_memory_reservation(
-) -> Result<()> {
-    let record_batch_size = 8192;
-    let pool_size = 2 * MB as usize;
-    let task_ctx = {
-        let memory_pool = Arc::new(FairSpillPool::new(pool_size));
-        TaskContext::default()
-            .with_session_config(SessionConfig::new().with_batch_size(record_batch_size))
-            .with_runtime(Arc::new(
-                RuntimeEnvBuilder::new()
-                    .with_memory_pool(memory_pool)
-                    .build()?,
-            ))
-    };
-
-    run_test_high_cardinality(RunTestHighCardinalityArgs {
-        pool_size,
-        task_ctx,
-        number_of_record_batches: 100,
-        get_size_of_record_batch_to_generate: Box::pin(move |i| {
-            if i % 25 == 1 {
-                pool_size / 4
-            } else {
-                (16 * KB) as usize
-            }
-        }),
-        memory_behavior: MemoryBehavior::TakeAllMemoryAndReleaseEveryNthBatch(10),
-    })
-    .await?;
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn test_high_cardinality_with_limited_memory_and_different_sizes_of_record_batch_and_take_all_memory(
-) -> Result<()> {
-    let record_batch_size = 8192;
-    let pool_size = 2 * MB as usize;
-    let task_ctx = {
-        let memory_pool = Arc::new(FairSpillPool::new(pool_size));
-        TaskContext::default()
-            .with_session_config(SessionConfig::new().with_batch_size(record_batch_size))
-            .with_runtime(Arc::new(
-                RuntimeEnvBuilder::new()
-                    .with_memory_pool(memory_pool)
-                    .build()?,
-            ))
-    };
-
-    run_test_high_cardinality(RunTestHighCardinalityArgs {
-        pool_size,
-        task_ctx,
-        number_of_record_batches: 100,
-        get_size_of_record_batch_to_generate: Box::pin(move |i| {
-            if i % 25 == 1 {
-                pool_size / 4
-            } else {
-                (16 * KB) as usize
-            }
-        }),
-        memory_behavior: MemoryBehavior::TakeAllMemoryAtTheBeginning,
-    })
-    .await?;
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn test_high_cardinality_with_limited_memory_and_large_record_batch() -> Result<()>
-{
-    let record_batch_size = 8192;
-    let pool_size = 2 * MB as usize;
-    let task_ctx = {
-        let memory_pool = Arc::new(FairSpillPool::new(pool_size));
-        TaskContext::default()
-            .with_session_config(SessionConfig::new().with_batch_size(record_batch_size))
-            .with_runtime(Arc::new(
-                RuntimeEnvBuilder::new()
-                    .with_memory_pool(memory_pool)
-                    .build()?,
-            ))
-    };
-
-    // Test that the merge degree of multi level merge sort cannot be fixed size when there is not enough memory
-    run_test_high_cardinality(RunTestHighCardinalityArgs {
-        pool_size,
-        task_ctx,
-        number_of_record_batches: 100,
-        get_size_of_record_batch_to_generate: Box::pin(move |_| pool_size / 4),
-        memory_behavior: Default::default(),
-    })
-    .await?;
-
-    Ok(())
-}
-
-struct RunTestHighCardinalityArgs {
-    pool_size: usize,
-    task_ctx: TaskContext,
-    number_of_record_batches: usize,
-    get_size_of_record_batch_to_generate:
-        Pin<Box<dyn Fn(usize) -> usize + Send + 'static>>,
-    memory_behavior: MemoryBehavior,
-}
-
-#[derive(Default)]
-enum MemoryBehavior {
-    #[default]
-    AsIs,
-    TakeAllMemoryAtTheBeginning,
-    TakeAllMemoryAndReleaseEveryNthBatch(usize),
-}
-
-async fn run_test_high_cardinality(args: RunTestHighCardinalityArgs) -> Result<usize> {
-    let RunTestHighCardinalityArgs {
-        pool_size,
-        task_ctx,
-        number_of_record_batches,
-        get_size_of_record_batch_to_generate,
-        memory_behavior,
-    } = args;
-    let scan_schema = Arc::new(Schema::new(vec![
-        Field::new("col_0", DataType::UInt64, true),
-        Field::new("col_1", DataType::Utf8, true),
-    ]));
-
-    let group_by = PhysicalGroupBy::new_single(vec![(
-        Arc::new(Column::new("col_0", 0)),
-        "col_0".to_string(),
-    )]);
-
-    let aggregate_expressions = vec![Arc::new(
-        AggregateExprBuilder::new(
-            array_agg_udaf(),
-            vec![col("col_1", &scan_schema).unwrap()],
-        )
-        .schema(Arc::clone(&scan_schema))
-        .alias("array_agg(col_1)")
-        .build()?,
-    )];
-
-    let record_batch_size = task_ctx.session_config().batch_size() as u64;
-
-    let schema = Arc::clone(&scan_schema);
-    let plan: Arc<dyn ExecutionPlan> =
-        Arc::new(StreamExec::new(Box::pin(RecordBatchStreamAdapter::new(
-            Arc::clone(&schema),
-            futures::stream::iter((0..number_of_record_batches as u64).map(
-                move |index| {
-                    let mut record_batch_memory_size =
-                        get_size_of_record_batch_to_generate(index as usize);
-                    record_batch_memory_size = record_batch_memory_size
-                        .saturating_sub(size_of::<u64>() * record_batch_size as usize);
-
-                    let string_item_size =
-                        record_batch_memory_size / record_batch_size as usize;
-                    let string_array = Arc::new(StringArray::from_iter_values(
-                        (0..record_batch_size).map(|_| "a".repeat(string_item_size)),
-                    ));
-
-                    RecordBatch::try_new(
-                        Arc::clone(&schema),
-                        vec![
-                            // Grouping key
-                            Arc::new(UInt64Array::from_iter_values(
-                                (index * record_batch_size)
-                                    ..(index * record_batch_size) + record_batch_size,
-                            )),
-                            // Grouping value
-                            string_array,
-                        ],
-                    )
-                    .map_err(|err| err.into())
-                },
-            )),
-        ))));
-
-    let aggregate_exec = Arc::new(AggregateExec::try_new(
-        AggregateMode::Partial,
-        group_by.clone(),
-        aggregate_expressions.clone(),
-        vec![None; aggregate_expressions.len()],
-        plan,
-        Arc::clone(&scan_schema),
-    )?);
-    let aggregate_final = Arc::new(AggregateExec::try_new(
-        AggregateMode::Final,
-        group_by,
-        aggregate_expressions.clone(),
-        vec![None; aggregate_expressions.len()],
-        aggregate_exec,
-        Arc::clone(&scan_schema),
-    )?);
-
-    let task_ctx = Arc::new(task_ctx);
-
-    let mut result = aggregate_final.execute(0, Arc::clone(&task_ctx))?;
-
-    let mut number_of_groups = 0;
-
-    let memory_pool = task_ctx.memory_pool();
-    let memory_consumer = MemoryConsumer::new("mock_memory_consumer");
-    let mut memory_reservation = memory_consumer.register(memory_pool);
-
-    let mut index = 0;
-    let mut memory_took = false;
-
-    while let Some(batch) = result.next().await {
-        match memory_behavior {
-            MemoryBehavior::AsIs => {
-                // Do nothing
-            }
-            MemoryBehavior::TakeAllMemoryAtTheBeginning => {
-                if !memory_took {
-                    memory_took = true;
-                    grow_memory_as_much_as_possible(10, &mut memory_reservation)?;
-                }
-            }
-            MemoryBehavior::TakeAllMemoryAndReleaseEveryNthBatch(n) => {
-                if !memory_took {
-                    memory_took = true;
-                    grow_memory_as_much_as_possible(pool_size, &mut memory_reservation)?;
-                } else if index % n == 0 {
-                    // release memory
-                    memory_reservation.free();
-                }
-            }
-        }
-
-        let batch = batch?;
-        number_of_groups += batch.num_rows();
-
-        index += 1;
-    }
-
-    assert_eq!(
-        number_of_groups,
-        number_of_record_batches * record_batch_size as usize
-    );
-
-    let spill_count = assert_spill_count_metric(true, aggregate_final);
-
-    Ok(spill_count)
-}
-
-fn grow_memory_as_much_as_possible(
-    memory_step: usize,
-    memory_reservation: &mut MemoryReservation,
-) -> Result<bool> {
-    let mut was_able_to_grow = false;
-    while memory_reservation.try_grow(memory_step).is_ok() {
-        was_able_to_grow = true;
-    }
-
-    Ok(was_able_to_grow)
 }

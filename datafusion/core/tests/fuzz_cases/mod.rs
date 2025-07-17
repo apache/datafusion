@@ -34,4 +34,5 @@ mod window_fuzz;
 
 // Utility modules
 mod record_batch_generator;
+mod spilling_fuzz_in_memory_constrained_env;
 mod stream_exec;
