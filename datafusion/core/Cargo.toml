@@ -255,3 +255,8 @@ name = "dataframe"
 [[bench]]
 harness = false
 name = "spm"
+
+
+[[test]]
+name = "schema_adapter_integration_tests"
+path = "tests/integration_tests/schema_adapter_integration_tests.rs"
