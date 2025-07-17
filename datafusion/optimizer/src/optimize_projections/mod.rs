@@ -841,18 +841,27 @@ pub fn is_projection_unnecessary(
 }
 
 fn plan_contains_subquery_alias(plan: &LogicalPlan) -> bool {
+    // ambiguity of aliases can arise if there are
+    // 2 or more subquery aliases in the plan
     let mut count = 0;
-    count_subquery_aliases(plan, &mut count);
-    count >= 2
+    const THRESHOLD: usize = 2;
+    count_subquery_aliases(plan, &mut count, THRESHOLD);
+    count >= THRESHOLD
 }
 
-fn count_subquery_aliases(plan: &LogicalPlan, count: &mut usize) {
+fn count_subquery_aliases(plan: &LogicalPlan, count: &mut usize, threshold: usize) {
     if matches!(*plan, LogicalPlan::SubqueryAlias(_)) {
         *count += 1;
+        if *count >= threshold {
+            return;
+        }
     }
 
     for input in plan.inputs() {
-        count_subquery_aliases(input, count);
+        count_subquery_aliases(input, count, threshold);
+        if *count >= 2 {
+            return;
+        }
     }
 }
 
