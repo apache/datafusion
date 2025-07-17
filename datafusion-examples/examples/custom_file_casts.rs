@@ -114,8 +114,13 @@ async fn main() -> Result<()> {
     println!("\n=== File with wider schema errors ===");
     let query = "SELECT id FROM bad_table WHERE id > 1";
     println!("Query: {query}");
-    ctx.sql(query).await?.collect().await?; // Should error here!
-    unreachable!();
+    match ctx.sql(query).await?.collect().await {
+        Ok(_) => panic!("Expected error for narrowing cast, but query succeeded"),
+        Err(e) => {
+            println!("Caught expected error: {e}");
+        }
+    }
+    Ok(())
 }
 
 async fn write_data(
