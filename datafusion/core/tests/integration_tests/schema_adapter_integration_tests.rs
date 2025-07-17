@@ -26,7 +26,10 @@ use datafusion::prelude::*;
 use datafusion_common::Result;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
-use datafusion_datasource::schema_adapter::{SchemaAdapter, SchemaAdapterFactory};
+use datafusion_datasource::schema_adapter::{
+    SchemaAdapter, SchemaAdapterFactory, SchemaMapper,
+};
+use datafusion_common::ColumnStatistics;
 use datafusion_datasource::source::DataSourceExec;
 use datafusion_datasource::PartitionedFile;
 use std::sync::Arc;
@@ -47,29 +50,62 @@ use datafusion_datasource_csv::CsvSource;
 struct UppercaseAdapterFactory {}
 
 impl SchemaAdapterFactory for UppercaseAdapterFactory {
-    fn create(&self, schema: &Schema) -> Result<Box<dyn SchemaAdapter>> {
-        Ok(Box::new(UppercaseAdapter {
-            input_schema: Arc::new(schema.clone()),
-        }))
+    fn create(
+        &self,
+        projected_table_schema: SchemaRef,
+        _table_schema: SchemaRef,
+    ) -> Box<dyn SchemaAdapter> {
+        Box::new(UppercaseAdapter {
+            table_schema: projected_table_schema,
+        })
     }
 }
 
 /// Schema adapter that transforms column names to uppercase
 #[derive(Debug)]
 struct UppercaseAdapter {
-    input_schema: SchemaRef,
+    table_schema: SchemaRef,
 }
 
 impl SchemaAdapter for UppercaseAdapter {
+    fn map_column_index(&self, index: usize, file_schema: &Schema) -> Option<usize> {
+        let field = self.table_schema.field(index);
+        file_schema
+            .fields()
+            .iter()
+            .position(|f| f.name().eq_ignore_ascii_case(field.name()))
+    }
+
+    fn map_schema(&self, file_schema: &Schema) -> Result<(Arc<dyn SchemaMapper>, Vec<usize>)> {
+        let mut projection = Vec::with_capacity(file_schema.fields().len());
+        for (idx, file_field) in file_schema.fields().iter().enumerate() {
+            if self
+                .table_schema
+                .fields()
+                .iter()
+                .any(|f| f.name().eq_ignore_ascii_case(file_field.name()))
+            {
+                projection.push(idx);
+            }
+        }
+
+        let mapper = UppercaseSchemaMapper {
+            output_schema: self.output_schema(),
+            projection: projection.clone(),
+        };
+
+        Ok((Arc::new(mapper), projection))
+    }
+}
+
+impl UppercaseAdapter {
     fn adapt(&self, record_batch: RecordBatch) -> Result<RecordBatch> {
-        // In a real adapter, we might transform the data too
-        // For this test, we're just passing through the batch
         Ok(record_batch)
     }
 
     fn output_schema(&self) -> SchemaRef {
         let fields = self
-            .input_schema
+            .table_schema
             .fields()
             .iter()
             .map(|f| {
@@ -82,6 +118,36 @@ impl SchemaAdapter for UppercaseAdapter {
             .collect();
 
         Arc::new(Schema::new(fields))
+    }
+}
+
+#[derive(Debug)]
+struct UppercaseSchemaMapper {
+    output_schema: SchemaRef,
+    projection: Vec<usize>,
+}
+
+impl SchemaMapper for UppercaseSchemaMapper {
+    fn map_batch(&self, batch: RecordBatch) -> Result<RecordBatch> {
+        let columns = self
+            .projection
+            .iter()
+            .map(|&i| batch.column(i).clone())
+            .collect::<Vec<_>>();
+        RecordBatch::try_new(self.output_schema.clone(), columns)
+    }
+
+    fn map_column_statistics(
+        &self,
+        stats: &[ColumnStatistics],
+    ) -> Result<Vec<ColumnStatistics>> {
+        Ok(
+            self
+                .projection
+                .iter()
+                .map(|&i| stats.get(i).cloned().unwrap_or_default())
+                .collect(),
+        )
     }
 }
 
