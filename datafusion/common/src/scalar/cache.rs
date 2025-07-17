@@ -17,7 +17,6 @@
 
 //! Array caching utilities for scalar values
 
-use std::collections::HashMap;
 use std::iter::repeat_n;
 use std::sync::{Arc, LazyLock, Mutex};
 
@@ -27,7 +26,7 @@ use arrow::datatypes::{
     UInt32Type, UInt64Type, UInt8Type,
 };
 
-/// Maximum number of cached items to prevent memory leaks
+/// Maximum number of rows to cache to prevent memory leaks
 const MAX_CACHE_SIZE: usize = 1024 * 1024;
 
 /// Cache for dictionary key arrays to avoid repeated allocations
@@ -35,17 +34,16 @@ const MAX_CACHE_SIZE: usize = 1024 * 1024;
 ///
 /// Similar to PartitionColumnProjector's ZeroBufferGenerators, this cache
 /// stores key arrays for different dictionary key types. The cache is
-/// limited to prevent memory leaks for extremely large array requests.
+/// limited to 1 entry per type (the last size used) to prevent memory leaks
+/// for extremely large array requests.
 #[derive(Debug)]
 struct KeyArrayCache<K: ArrowDictionaryKeyType> {
-    cache: HashMap<(usize, bool), PrimitiveArray<K>>, // (num_rows, is_null) -> key_array
+    cache: Option<(usize, bool, PrimitiveArray<K>)>, // (num_rows, is_null, key_array)
 }
 
 impl<K: ArrowDictionaryKeyType> Default for KeyArrayCache<K> {
     fn default() -> Self {
-        Self {
-            cache: HashMap::new(),
-        }
+        Self { cache: None }
     }
 }
 
@@ -58,20 +56,19 @@ impl<K: ArrowDictionaryKeyType> KeyArrayCache<K> {
             return self.create_key_array(num_rows, is_null);
         }
 
-        let key = (num_rows, is_null);
-        if let Some(cached_array) = self.cache.get(&key) {
-            // Cache hit: clone the cached array
-            cached_array.clone()
-        } else {
-            // Cache miss: create new array and cache it
-            let key_array = self.create_key_array(num_rows, is_null);
-            
-            // Only cache if we haven't exceeded the maximum cache size
-            if self.cache.len() < MAX_CACHE_SIZE {
-                self.cache.insert(key, key_array.clone());
+        match &self.cache {
+            Some((cached_num_rows, cached_is_null, cached_array))
+                if *cached_num_rows == num_rows && *cached_is_null == is_null =>
+            {
+                // Cache hit: reuse existing array if same size and null status
+                cached_array.clone()
             }
-            
-            key_array
+            _ => {
+                // Cache miss: create new array and cache it
+                let key_array = self.create_key_array(num_rows, is_null);
+                self.cache = Some((num_rows, is_null, key_array.clone()));
+                key_array
+            }
         }
     }
 
@@ -94,7 +91,7 @@ impl<K: ArrowDictionaryKeyType> KeyArrayCache<K> {
 /// when the same size is used frequently.
 #[derive(Debug, Default)]
 struct NullArrayCache {
-    cache: HashMap<usize, ArrayRef>, // num_rows -> null_array
+    cache: Option<(usize, ArrayRef)>, // (num_rows, null_array)
 }
 
 impl NullArrayCache {
@@ -106,19 +103,17 @@ impl NullArrayCache {
             return new_null_array(&DataType::Null, num_rows);
         }
 
-        if let Some(cached_array) = self.cache.get(&num_rows) {
-            // Cache hit: clone the cached array
-            Arc::clone(cached_array)
-        } else {
-            // Cache miss: create new array and cache it
-            let null_array = new_null_array(&DataType::Null, num_rows);
-            
-            // Only cache if we haven't exceeded the maximum cache size
-            if self.cache.len() < MAX_CACHE_SIZE {
-                self.cache.insert(num_rows, Arc::clone(&null_array));
+        match &self.cache {
+            Some((cached_num_rows, cached_array)) if *cached_num_rows == num_rows => {
+                // Cache hit: reuse existing array if same size
+                Arc::clone(cached_array)
             }
-            
-            null_array
+            _ => {
+                // Cache miss: create new array and cache it
+                let null_array = new_null_array(&DataType::Null, num_rows);
+                self.cache = Some((num_rows, Arc::clone(&null_array)));
+                null_array
+            }
         }
     }
 }
