@@ -22,8 +22,8 @@ use std::sync::{Arc, LazyLock, Mutex};
 
 use arrow::array::{new_null_array, Array, ArrayRef, PrimitiveArray};
 use arrow::datatypes::{
-    ArrowDictionaryKeyType, DataType, Int16Type, Int32Type, Int64Type, Int8Type, UInt16Type,
-    UInt32Type, UInt64Type, UInt8Type,
+    ArrowDictionaryKeyType, DataType, Int16Type, Int32Type, Int64Type, Int8Type,
+    UInt16Type, UInt32Type, UInt64Type, UInt8Type,
 };
 
 /// Maximum number of rows to cache to prevent memory leaks

@@ -82,10 +82,10 @@ use arrow::datatypes::{
     UInt32Type, UInt64Type, UInt8Type, UnionFields, UnionMode, DECIMAL128_MAX_PRECISION,
 };
 use arrow::util::display::{array_value_to_string, ArrayFormatter, FormatOptions};
+use cache::{get_or_create_cached_key_array, get_or_create_cached_null_array};
 use chrono::{Duration, NaiveDate};
 use half::f16;
 pub use struct_builder::ScalarStructBuilder;
-use cache::{get_or_create_cached_key_array, get_or_create_cached_null_array};
 
 /// A dynamically typed, nullable single value.
 ///
@@ -856,7 +856,6 @@ pub fn get_dict_value<K: ArrowDictionaryKeyType>(
     Ok((dict_array.values(), dict_array.key(index)))
 }
 
-
 /// Create a dictionary array representing `value` repeated `size`
 /// times
 fn dict_from_scalar<K: ArrowDictionaryKeyType>(
@@ -868,7 +867,8 @@ fn dict_from_scalar<K: ArrowDictionaryKeyType>(
 
     // Create a key array with `size` elements, each of 0
     // Use cache to avoid repeated allocations for the same size
-    let key_array: PrimitiveArray<K> = get_or_create_cached_key_array::<K>(size, value.is_null());
+    let key_array: PrimitiveArray<K> =
+        get_or_create_cached_key_array::<K>(size, value.is_null());
 
     // create a new DictionaryArray
     //
