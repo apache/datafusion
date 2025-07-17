@@ -43,7 +43,7 @@ mod custom_sources_cases;
 mod optimizer;
 
 /// Run all tests that are found in the `physical_optimizer` directory
-mod physical_optimizer_test;
+mod physical_optimizer;
 
 /// Run all tests that are found in the `serde` directory
 mod serde;

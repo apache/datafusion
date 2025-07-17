@@ -20,7 +20,7 @@
 use insta::assert_snapshot;
 use std::sync::Arc;
 
-use crate::physical_optimizer_test::test_utils::{
+use crate::physical_optimizer::test_utils::{
     build_group_by, get_optimized_plan, mock_data, parquet_exec_with_sort, schema,
     TestAggregate,
 };

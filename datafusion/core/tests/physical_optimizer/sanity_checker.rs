@@ -18,7 +18,7 @@
 use insta::assert_snapshot;
 use std::sync::Arc;
 
-use crate::physical_optimizer_test::test_utils::{
+use crate::physical_optimizer::test_utils::{
     bounded_window_exec, global_limit_exec, local_limit_exec, memory_exec,
     repartition_exec, sort_exec, sort_expr_options, sort_merge_join_exec,
 };

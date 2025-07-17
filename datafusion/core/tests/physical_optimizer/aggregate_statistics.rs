@@ -17,7 +17,7 @@
 
 use std::sync::Arc;
 
-use crate::physical_optimizer_test::test_utils::TestAggregate;
+use crate::physical_optimizer::test_utils::TestAggregate;
 
 use arrow::array::Int32Array;
 use arrow::datatypes::{DataType, Field, Schema};
