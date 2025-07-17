@@ -591,6 +591,22 @@
      configuration option
     </a>
    </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#deprecating-schemaadapterfactory-and-schemaadapter">
+     Deprecating
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       SchemaAdapterFactory
+      </span>
+     </code>
+     and
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       SchemaAdapter
+      </span>
+     </code>
+    </a>
+   </li>
   </ul>
  </li>
  <li class="toc-h2 nav-item toc-entry">
@@ -1067,6 +1083,18 @@ is more efficient.</p>
 </pre></div>
 </div>
 <p>For more details about this configuration option, including performance trade-offs between different compression codecs, see the <a class="reference internal" href="../user-guide/configs.html"><span class="std std-doc">Configuration Settings</span></a> documentation.</p>
+</section>
+<section id="deprecating-schemaadapterfactory-and-schemaadapter">
+<h3>Deprecating <code class="docutils literal notranslate"><span class="pre">SchemaAdapterFactory</span></code> and <code class="docutils literal notranslate"><span class="pre">SchemaAdapter</span></code><a class="headerlink" href="#deprecating-schemaadapterfactory-and-schemaadapter" title="Link to this heading">¶</a></h3>
+<p>We are moving away from converting data (using <code class="docutils literal notranslate"><span class="pre">SchemaAdapter</span></code>) to converting the expressions themselves (which is more efficient and flexible).</p>
+<p>See <a class="reference external" href="https://github.com/apache/datafusion/issues/16800">issue #16800</a> for more information
+The first place this change has taken place is in predicate pushdown for Parquet.
+By default if you do not use a custom <code class="docutils literal notranslate"><span class="pre">SchemaAdapterFactory</span></code> we will use expression conversion instead.
+If you do set a custom <code class="docutils literal notranslate"><span class="pre">SchemaAdapterFactory</span></code> we will continue to use it but emit a warning about that code path being deprecated.</p>
+<p>To resolve this you need to implement a custom <code class="docutils literal notranslate"><span class="pre">PhysicalExprAdapterFactory</span></code> and use that instead of a <code class="docutils literal notranslate"><span class="pre">SchemaAdapterFactory</span></code>.
+See the <a class="reference external" href="https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/default_column_values.rs">default values</a> for an example of how to do this.
+Opting into the new APIs will set you up for future changes since we plan to expand use of <code class="docutils literal notranslate"><span class="pre">PhysicalExprAdapterFactory</span></code> to other areas of DataFusion.</p>
+<p>See <a class="reference external" href="https://github.com/apache/datafusion/issues/16800">#16800</a> for details.</p>
 </section>
 </section>
 <section id="datafusion-48-0-1">
