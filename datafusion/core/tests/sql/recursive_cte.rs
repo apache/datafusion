@@ -24,6 +24,7 @@ async fn recursive_cte_alias_instability() -> Result<()> {
     // plan_contains_subquery_alias in datafusion/optimizer/src/optimize_projections/mod.rs
     // enables this to pass by skipping optimize_projection for the recursive CTE
     // that has subquery_alias in the projection like in the sql below
+    // the sql is similar to the one in datafusion/sqllogictest/test_files/cte.slt
     let ctx = SessionContext::new();
     let testdata = datafusion_test_data();
     let csv_path = format!("{testdata}/recursive_cte/prices.csv");
