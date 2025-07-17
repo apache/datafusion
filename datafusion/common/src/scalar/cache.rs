@@ -26,7 +26,7 @@ use arrow::datatypes::{
     UInt16Type, UInt32Type, UInt64Type, UInt8Type,
 };
 
-/// Maximum number of rows to cache to prevent memory leaks
+/// Maximum number of rows to cache to be conservative on memory usage
 const MAX_CACHE_SIZE: usize = 1024 * 1024;
 
 /// Cache for dictionary key arrays to avoid repeated allocations
@@ -141,14 +141,14 @@ fn get_array_caches() -> &'static Mutex<ArrayCaches> {
 }
 
 /// Get or create a cached null array for the given number of rows
-pub fn get_or_create_cached_null_array(num_rows: usize) -> ArrayRef {
+pub(crate) fn get_or_create_cached_null_array(num_rows: usize) -> ArrayRef {
     let cache = get_array_caches();
     let mut caches = cache.lock().unwrap();
     caches.null_cache.get_or_create(num_rows)
 }
 
 /// Get or create a cached key array for a specific key type
-pub fn get_or_create_cached_key_array<K: ArrowDictionaryKeyType>(
+pub(crate) fn get_or_create_cached_key_array<K: ArrowDictionaryKeyType>(
     num_rows: usize,
     is_null: bool,
 ) -> PrimitiveArray<K> {
