@@ -112,7 +112,7 @@ async fn main() -> Result<()> {
     assert_batches_eq!(expected, &batches);
 
     println!("\n=== File with wider schema errors ===");
-    let query = "explain analyze SELECT id FROM bad_table WHERE id > 1";
+    let query = "SELECT id FROM bad_table WHERE id > 1";
     println!("Query: {query}");
     ctx.sql(query).await?.collect().await?; // Should error here!
     unreachable!();
