@@ -173,29 +173,19 @@ pub struct DefaultPhysicalExprAdapter {
     partition_values: Vec<(FieldRef, ScalarValue)>,
 }
 
-// impl PhysicalExprAdapter for DefaultPhysicalExprAdapter {
-//     /// Rewrite the given physical expression to match the target schema
-//     ///
-//     /// This method applies the following transformations:
-//     /// 1. Replaces partition column references with literal values
-//     /// 2. Handles missing columns by inserting null literals
-//     /// 3. Casts columns when logical and physical schemas have different types
-//     fn rewrite_to_file_schema(
-//         &self,
-//         expr: Arc<dyn PhysicalExpr>,
-//         logical_file_schema: &Schema,
-//         physical_file_schema: &Schema,
-//         partition_values: &[(FieldRef, ScalarValue)],
-//     ) -> Result<Arc<dyn PhysicalExpr>> {
-//         let rewriter = DefaultPhysicalExprAdapterRewriter {
-//             logical_file_schema,
-//             physical_file_schema,
-//             partition_fields: partition_values,
-//         };
-//         expr.transform(|expr| rewriter.rewrite_expr(Arc::clone(&expr)))
-//             .data()
-//     }
-// }
+impl DefaultPhysicalExprAdapter {
+    /// Create a new instance of the default physical expression adapter.
+    ///
+    /// This adapter rewrites expressions to match the physical schema of the file being scanned,
+    /// handling type mismatches and missing columns by filling them with default values.
+    pub fn new(logical_file_schema: SchemaRef, physical_file_schema: SchemaRef) -> Self {
+        Self {
+            logical_file_schema,
+            physical_file_schema,
+            partition_values: Vec::new(),
+        }
+    }
+}
 
 impl PhysicalExprAdapter for DefaultPhysicalExprAdapter {
     fn rewrite(&self, expr: Arc<dyn PhysicalExpr>) -> Result<Arc<dyn PhysicalExpr>> {
