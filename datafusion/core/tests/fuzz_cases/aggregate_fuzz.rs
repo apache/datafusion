@@ -634,9 +634,9 @@ fn extract_result_counts(results: Vec<RecordBatch>) -> HashMap<Option<String>, i
 
 pub(crate) fn assert_spill_count_metric(
     expect_spill: bool,
-    single_aggregate: Arc<AggregateExec>,
+    plan_that_spills: Arc<dyn ExecutionPlan>,
 ) -> usize {
-    if let Some(metrics_set) = single_aggregate.metrics() {
+    if let Some(metrics_set) = plan_that_spills.metrics() {
         let mut spill_count = 0;
 
         // Inspect metrics for SpillCount

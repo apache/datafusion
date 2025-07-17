@@ -20,6 +20,8 @@
 use std::pin::Pin;
 use std::sync::Arc;
 
+use crate::fuzz_cases::aggregate_fuzz::assert_spill_count_metric;
+use crate::fuzz_cases::once_exec::OnceExec;
 use arrow::array::UInt64Array;
 use arrow::{array::StringArray, compute::SortOptions, record_batch::RecordBatch};
 use arrow_schema::{DataType, Field, Schema};
@@ -29,23 +31,20 @@ use datafusion::physical_plan::expressions::PhysicalSortExpr;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionConfig;
+use datafusion_execution::memory_pool::units::{KB, MB};
 use datafusion_execution::memory_pool::{
     FairSpillPool, MemoryConsumer, MemoryReservation,
 };
-use datafusion_physical_expr::expressions::{col, Column};
-use datafusion_physical_expr_common::sort_expr::LexOrdering;
-use futures::StreamExt;
-
-use crate::fuzz_cases::aggregate_fuzz::assert_spill_count_metric;
-use crate::fuzz_cases::once_exec::OnceExec;
-use datafusion_execution::memory_pool::units::{KB, MB};
-use datafusion_execution::TaskContext;
+use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_functions_aggregate::array_agg::array_agg_udaf;
 use datafusion_physical_expr::aggregate::AggregateExprBuilder;
+use datafusion_physical_expr::expressions::{col, Column};
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
 };
 use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
+use futures::StreamExt;
 
 #[tokio::test]
 async fn test_sort_with_limited_memory() -> Result<()> {
@@ -72,7 +71,7 @@ async fn test_sort_with_limited_memory() -> Result<()> {
     // from each spill file is too much memory
     let spill_count = run_sort_test_with_limited_memory(RunTestWithLimitedMemoryArgs {
         pool_size,
-        task_ctx,
+        task_ctx: Arc::new(task_ctx),
         number_of_record_batches: 100,
         get_size_of_record_batch_to_generate: Box::pin(move |_| record_batch_size),
         memory_behavior: Default::default(),
@@ -110,7 +109,7 @@ async fn test_sort_with_limited_memory_and_different_sizes_of_record_batch() -> 
 
     run_sort_test_with_limited_memory(RunTestWithLimitedMemoryArgs {
         pool_size,
-        task_ctx,
+        task_ctx: Arc::new(task_ctx),
         number_of_record_batches: 100,
         get_size_of_record_batch_to_generate: Box::pin(move |i| {
             if i % 25 == 1 {
@@ -148,7 +147,7 @@ async fn test_sort_with_limited_memory_and_different_sizes_of_record_batch_and_c
 
     run_sort_test_with_limited_memory(RunTestWithLimitedMemoryArgs {
         pool_size,
-        task_ctx,
+        task_ctx: Arc::new(task_ctx),
         number_of_record_batches: 100,
         get_size_of_record_batch_to_generate: Box::pin(move |i| {
             if i % 25 == 1 {
@@ -186,7 +185,7 @@ async fn test_sort_with_limited_memory_and_different_sizes_of_record_batch_and_t
 
     run_sort_test_with_limited_memory(RunTestWithLimitedMemoryArgs {
         pool_size,
-        task_ctx,
+        task_ctx: Arc::new(task_ctx),
         number_of_record_batches: 100,
         get_size_of_record_batch_to_generate: Box::pin(move |i| {
             if i % 25 == 1 {
@@ -224,7 +223,7 @@ async fn test_sort_with_limited_memory_and_large_record_batch() -> Result<()> {
     // Test that the merge degree of multi level merge sort cannot be fixed size when there is not enough memory
     run_sort_test_with_limited_memory(RunTestWithLimitedMemoryArgs {
         pool_size,
-        task_ctx,
+        task_ctx: Arc::new(task_ctx),
         number_of_record_batches: 100,
         get_size_of_record_batch_to_generate: Box::pin(move |_| pool_size / 4),
         memory_behavior: Default::default(),
@@ -236,7 +235,7 @@ async fn test_sort_with_limited_memory_and_large_record_batch() -> Result<()> {
 
 struct RunTestWithLimitedMemoryArgs {
     pool_size: usize,
-    task_ctx: TaskContext,
+    task_ctx: Arc<TaskContext>,
     number_of_record_batches: usize,
     get_size_of_record_batch_to_generate:
         Pin<Box<dyn Fn(usize) -> usize + Send + 'static>>,
@@ -252,27 +251,25 @@ enum MemoryBehavior {
 }
 
 async fn run_sort_test_with_limited_memory(
-    args: RunTestWithLimitedMemoryArgs,
+    mut args: RunTestWithLimitedMemoryArgs,
 ) -> Result<usize> {
-    let RunTestWithLimitedMemoryArgs {
-        pool_size,
-        task_ctx,
-        number_of_record_batches,
-        get_size_of_record_batch_to_generate,
-        memory_behavior,
-    } = args;
+    let get_size_of_record_batch_to_generate = std::mem::replace(
+        &mut args.get_size_of_record_batch_to_generate,
+        Box::pin(move |_| unreachable!("should not be called after take")),
+    );
+
     let scan_schema = Arc::new(Schema::new(vec![
         Field::new("col_0", DataType::UInt64, true),
         Field::new("col_1", DataType::Utf8, true),
     ]));
 
-    let record_batch_size = task_ctx.session_config().batch_size() as u64;
+    let record_batch_size = args.task_ctx.session_config().batch_size() as u64;
 
     let schema = Arc::clone(&scan_schema);
     let plan: Arc<dyn ExecutionPlan> =
         Arc::new(OnceExec::new(Box::pin(RecordBatchStreamAdapter::new(
             Arc::clone(&schema),
-            futures::stream::iter((0..number_of_record_batches as u64).map(
+            futures::stream::iter((0..args.number_of_record_batches as u64).map(
                 move |index| {
                     let mut record_batch_memory_size =
                         get_size_of_record_batch_to_generate(index as usize);
@@ -311,59 +308,9 @@ async fn run_sort_test_with_limited_memory(
         plan,
     ));
 
-    let task_ctx = Arc::new(task_ctx);
+    let result = sort_exec.execute(0, Arc::clone(&args.task_ctx))?;
 
-    let mut result = sort_exec.execute(0, Arc::clone(&task_ctx))?;
-
-    let mut number_of_rows = 0;
-
-    let memory_pool = task_ctx.memory_pool();
-    let memory_consumer = MemoryConsumer::new("mock_memory_consumer");
-    let mut memory_reservation = memory_consumer.register(memory_pool);
-
-    let mut index = 0;
-    let mut memory_took = false;
-
-    while let Some(batch) = result.next().await {
-        match memory_behavior {
-            MemoryBehavior::AsIs => {
-                // Do nothing
-            }
-            MemoryBehavior::TakeAllMemoryAtTheBeginning => {
-                if !memory_took {
-                    memory_took = true;
-                    grow_memory_as_much_as_possible(10, &mut memory_reservation)?;
-                }
-            }
-            MemoryBehavior::TakeAllMemoryAndReleaseEveryNthBatch(n) => {
-                if !memory_took {
-                    memory_took = true;
-                    grow_memory_as_much_as_possible(pool_size, &mut memory_reservation)?;
-                } else if index % n == 0 {
-                    // release memory
-                    memory_reservation.free();
-                }
-            }
-        }
-
-        let batch = batch?;
-        number_of_rows += batch.num_rows();
-
-        index += 1;
-    }
-
-    assert_eq!(
-        number_of_rows,
-        number_of_record_batches * record_batch_size as usize
-    );
-
-    let spill_count = sort_exec.metrics().unwrap().spill_count().unwrap();
-    assert!(
-        spill_count > 0,
-        "Expected spill, but did not: {number_of_record_batches:?}"
-    );
-
-    Ok(spill_count)
+    run_test(args, sort_exec, result).await
 }
 
 fn grow_memory_as_much_as_possible(
@@ -400,7 +347,7 @@ async fn test_aggregate_with_high_cardinality_with_limited_memory() -> Result<()
     let spill_count =
         run_test_aggregate_with_high_cardinality(RunTestWithLimitedMemoryArgs {
             pool_size,
-            task_ctx,
+            task_ctx: Arc::new(task_ctx),
             number_of_record_batches: 100,
             get_size_of_record_batch_to_generate: Box::pin(move |_| record_batch_size),
             memory_behavior: Default::default(),
@@ -434,7 +381,7 @@ async fn test_aggregate_with_high_cardinality_with_limited_memory_and_different_
 
     run_test_aggregate_with_high_cardinality(RunTestWithLimitedMemoryArgs {
         pool_size,
-        task_ctx,
+        task_ctx: Arc::new(task_ctx),
         number_of_record_batches: 100,
         get_size_of_record_batch_to_generate: Box::pin(move |i| {
             if i % 25 == 1 {
@@ -468,7 +415,7 @@ async fn test_aggregate_with_high_cardinality_with_limited_memory_and_different_
 
     run_test_aggregate_with_high_cardinality(RunTestWithLimitedMemoryArgs {
         pool_size,
-        task_ctx,
+        task_ctx: Arc::new(task_ctx),
         number_of_record_batches: 100,
         get_size_of_record_batch_to_generate: Box::pin(move |i| {
             if i % 25 == 1 {
@@ -502,7 +449,7 @@ async fn test_aggregate_with_high_cardinality_with_limited_memory_and_different_
 
     run_test_aggregate_with_high_cardinality(RunTestWithLimitedMemoryArgs {
         pool_size,
-        task_ctx,
+        task_ctx: Arc::new(task_ctx),
         number_of_record_batches: 100,
         get_size_of_record_batch_to_generate: Box::pin(move |i| {
             if i % 25 == 1 {
@@ -537,7 +484,7 @@ async fn test_aggregate_with_high_cardinality_with_limited_memory_and_large_reco
     // Test that the merge degree of multi level merge sort cannot be fixed size when there is not enough memory
     run_test_aggregate_with_high_cardinality(RunTestWithLimitedMemoryArgs {
         pool_size,
-        task_ctx,
+        task_ctx: Arc::new(task_ctx),
         number_of_record_batches: 100,
         get_size_of_record_batch_to_generate: Box::pin(move |_| pool_size / 4),
         memory_behavior: Default::default(),
@@ -548,15 +495,12 @@ async fn test_aggregate_with_high_cardinality_with_limited_memory_and_large_reco
 }
 
 async fn run_test_aggregate_with_high_cardinality(
-    args: RunTestWithLimitedMemoryArgs,
+    mut args: RunTestWithLimitedMemoryArgs,
 ) -> Result<usize> {
-    let RunTestWithLimitedMemoryArgs {
-        pool_size,
-        task_ctx,
-        number_of_record_batches,
-        get_size_of_record_batch_to_generate,
-        memory_behavior,
-    } = args;
+    let get_size_of_record_batch_to_generate = std::mem::replace(
+        &mut args.get_size_of_record_batch_to_generate,
+        Box::pin(move |_| unreachable!("should not be called after take")),
+    );
     let scan_schema = Arc::new(Schema::new(vec![
         Field::new("col_0", DataType::UInt64, true),
         Field::new("col_1", DataType::Utf8, true),
@@ -577,13 +521,13 @@ async fn run_test_aggregate_with_high_cardinality(
         .build()?,
     )];
 
-    let record_batch_size = task_ctx.session_config().batch_size() as u64;
+    let record_batch_size = args.task_ctx.session_config().batch_size() as u64;
 
     let schema = Arc::clone(&scan_schema);
     let plan: Arc<dyn ExecutionPlan> =
         Arc::new(OnceExec::new(Box::pin(RecordBatchStreamAdapter::new(
             Arc::clone(&schema),
-            futures::stream::iter((0..number_of_record_batches as u64).map(
+            futures::stream::iter((0..args.number_of_record_batches as u64).map(
                 move |index| {
                     let mut record_batch_memory_size =
                         get_size_of_record_batch_to_generate(index as usize);
@@ -630,21 +574,48 @@ async fn run_test_aggregate_with_high_cardinality(
         Arc::clone(&scan_schema),
     )?);
 
-    let task_ctx = Arc::new(task_ctx);
+    let result = aggregate_final.execute(0, Arc::clone(&args.task_ctx))?;
 
-    let mut result = aggregate_final.execute(0, Arc::clone(&task_ctx))?;
+    run_test(args, aggregate_final, result).await
+}
 
-    let mut number_of_groups = 0;
+async fn run_test(
+    args: RunTestWithLimitedMemoryArgs,
+    plan: Arc<dyn ExecutionPlan>,
+    result_stream: SendableRecordBatchStream,
+) -> Result<usize> {
+    let number_of_record_batches = args.number_of_record_batches;
 
-    let memory_pool = task_ctx.memory_pool();
+    consume_stream_and_simulate_other_running_memory_consumers(args, result_stream)
+        .await?;
+
+    let spill_count = assert_spill_count_metric(true, plan);
+
+    assert!(
+        spill_count > 0,
+        "Expected spill, but did not, number of record batches: {number_of_record_batches}",
+    );
+
+    Ok(spill_count)
+}
+
+/// Consume the stream and change the amount of memory used while consuming it based on the [`MemoryBehavior`] provided
+async fn consume_stream_and_simulate_other_running_memory_consumers(
+    args: RunTestWithLimitedMemoryArgs,
+    mut result_stream: SendableRecordBatchStream,
+) -> Result<()> {
+    let mut number_of_rows = 0;
+    let record_batch_size = args.task_ctx.session_config().batch_size() as u64;
+
+    let memory_pool = args.task_ctx.memory_pool();
     let memory_consumer = MemoryConsumer::new("mock_memory_consumer");
     let mut memory_reservation = memory_consumer.register(memory_pool);
 
     let mut index = 0;
     let mut memory_took = false;
 
-    while let Some(batch) = result.next().await {
-        match memory_behavior {
+    while let Some(batch) = result_stream.next().await {
+        match args.memory_behavior {
             MemoryBehavior::AsIs => {
                 // Do nothing
             }
@@ -657,7 +628,10 @@ async fn run_test_aggregate_with_high_cardinality(
             MemoryBehavior::TakeAllMemoryAndReleaseEveryNthBatch(n) => {
                 if !memory_took {
                     memory_took = true;
-                    grow_memory_as_much_as_possible(pool_size, &mut memory_reservation)?;
+                    grow_memory_as_much_as_possible(
+                        args.pool_size,
+                        &mut memory_reservation,
+                    )?;
                 } else if index % n == 0 {
                     // release memory
                     memory_reservation.free();
@@ -666,17 +640,15 @@ async fn run_test_aggregate_with_high_cardinality(
         }
 
         let batch = batch?;
-        number_of_groups += batch.num_rows();
+        number_of_rows += batch.num_rows();
 
         index += 1;
     }
 
     assert_eq!(
-        number_of_groups,
-        number_of_record_batches * record_batch_size as usize
+        number_of_rows,
+        args.number_of_record_batches * record_batch_size as usize
     );
 
-    let spill_count = assert_spill_count_metric(true, aggregate_final);
-
-    Ok(spill_count)
+    Ok(())
 }
