@@ -25,12 +25,14 @@ use crate::{ColumnarValue, Documentation, Expr, Signature};
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::{not_impl_err, ExprSchema, Result, ScalarValue};
 use datafusion_expr_common::interval_arithmetic::Interval;
-use std::any::Any;
-use std::cmp::Ordering;
-use std::fmt::Debug;
-use std::hash::{DefaultHasher, Hash, Hasher};
-use std::sync::Arc;
-
+use std::{
+    any::Any,
+    cmp::Ordering,
+    fmt::Debug,
+    hash::{DefaultHasher, Hash, Hasher},
+    ptr,
+    sync::Arc,
+};
 /// Logical representation of a Scalar User Defined Function.
 ///
 /// A scalar function produces a single row output for each row of input. This
@@ -60,7 +62,11 @@ pub struct ScalarUDF {
 
 impl PartialEq for ScalarUDF {
     fn eq(&self, other: &Self) -> bool {
-        self.inner.equals(other.inner.as_ref())
+        if Arc::ptr_eq(&self.inner, &other.inner) {
+            true
+        } else {
+            self.inner.equals(other.inner.as_ref())
+        }
     }
 }
 
@@ -696,16 +702,98 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
 
     /// Return true if this scalar UDF is equal to the other.
     ///
-    /// Allows customizing the equality of scalar UDFs.
-    /// Must be consistent with [`Self::hash_value`] and follow the same rules as [`Eq`]:
+    /// This method allows customizing the equality of scalar UDFs. It must adhere to the rules of equivalence:
     ///
-    /// - reflexive: `a.equals(a)`;
-    /// - symmetric: `a.equals(b)` implies `b.equals(a)`;
-    /// - transitive: `a.equals(b)` and `b.equals(c)` implies `a.equals(c)`.
+    /// - Reflexive: `a.equals(a)` must return true.
+    /// - Symmetric: `a.equals(b)` implies `b.equals(a)`.
+    /// - Transitive: `a.equals(b)` and `b.equals(c)` implies `a.equals(c)`.
     ///
-    /// By default, compares [`Self::name`] and [`Self::signature`].
+    /// # Default Behavior
+    /// By default, this method compares the type IDs, names, and signatures of the two UDFs. If these match,
+    /// the method assumes the UDFs are not equal unless their pointers are the same. This conservative approach
+    /// ensures that different instances of the same function type are not mistakenly considered equal.
+    ///
+    /// # Custom Implementation
+    /// If a UDF has internal state or additional properties that should be considered for equality, this method
+    /// should be overridden. For example, a UDF with parameters might compare those parameters in addition to
+    /// the default checks.
+    ///
+    /// # Example
+    /// ```rust
+    /// use std::any::Any;
+    /// use std::hash::{DefaultHasher, Hash, Hasher};
+    /// use arrow::datatypes::DataType;
+    /// use datafusion_common::{not_impl_err, Result};
+    /// use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature};
+    ///
+    /// #[derive(Debug, PartialEq)]
+    /// struct MyUdf {
+    ///  param: i32,
+    ///  signature: Signature,
+    /// }
+    ///
+    /// impl ScalarUDFImpl for MyUdf {
+    ///    fn as_any(&self) -> &dyn Any {
+    ///        self
+    ///    }
+    ///    fn name(&self) -> &str {
+    ///        "my_udf"
+    ///    }
+    ///    fn signature(&self) -> &Signature {
+    ///        &self.signature
+    ///    }
+    ///    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+    ///        Ok(DataType::Int32)
+    ///    }
+    ///    fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+    ///        not_impl_err!("not used")
+    ///    }
+    ///     fn equals(&self, other: &dyn ScalarUDFImpl) -> bool {
+    ///         if let Some(other) = other.as_any().downcast_ref::<Self>() {
+    ///             self == other
+    ///         } else {
+    ///             false
+    ///         }
+    ///     }
+    ///     fn hash_value(&self) -> u64 {
+    ///         let mut hasher = DefaultHasher::new();
+    ///         self.param.hash(&mut hasher);
+    ///         self.name().hash(&mut hasher);
+    ///         hasher.finish()
+    ///     }
+    /// }
+    /// ```
+    ///
+    /// # Notes
+    /// - This method must be consistent with [`Self::hash_value`]. If `equals` returns true for two UDFs,
+    ///   their hash values must also be the same.
+    /// - Ensure that the implementation does not panic or cause undefined behavior for any input.
     fn equals(&self, other: &dyn ScalarUDFImpl) -> bool {
-        self.name() == other.name() && self.signature() == other.signature()
+        // 1. If the pointers are identical, it’s definitely the same UDF.
+        if ptr::eq(self.as_any(), other.as_any()) {
+            return true;
+        }
+
+        // 2. Otherwise, check that they’re the same concrete Rust type.
+        let self_any = self.as_any();
+        let other_any = other.as_any();
+        if self_any.type_id() != other_any.type_id() {
+            // Different types can never be equal.
+            return false;
+        }
+
+        // 3. Now we know they're the same struct type. In theory, since Rust moves
+        //    values by `memcpy`-ing their bytes, we could `memcmp` them byte-for-byte:
+        //
+        //    However, Rust doesn't guarantee that padding bytes are set the same way,
+        //    so two equal structs might have different padding and compare as not equal.
+        //
+        //    If your UDF type has no padding, or you make sure all padding is zeroed
+        //    (for example, with #[repr(C)] and a safe initializer), you can use memcmp
+        //    Otherwise, it's safer to just return false.
+
+        // 4. Fallback: we can’t prove they’re identical, so we say “not equal.”
+        false
     }
 
     /// Returns a hash value for this scalar UDF.
