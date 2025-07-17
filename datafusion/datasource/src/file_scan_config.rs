@@ -1919,13 +1919,28 @@ mod tests {
         struct File {
             name: &'static str,
             date: &'static str,
-            statistics: Vec<Option<(f64, f64)>>,
+            statistics: Vec<Option<(Option<f64>, Option<f64>)>>,
         }
         impl File {
             fn new(
                 name: &'static str,
                 date: &'static str,
                 statistics: Vec<Option<(f64, f64)>>,
+            ) -> Self {
+                Self::new_nullable(
+                    name,
+                    date,
+                    statistics
+                        .into_iter()
+                        .map(|opt| opt.map(|(min, max)| (Some(min), Some(max))))
+                        .collect(),
+                )
+            }
+
+            fn new_nullable(
+                name: &'static str,
+                date: &'static str,
+                statistics: Vec<Option<(Option<f64>, Option<f64>)>>,
             ) -> Self {
                 Self {
                     name,
@@ -1992,21 +2007,35 @@ mod tests {
                 sort: vec![col("value").sort(false, true)],
                 expected_result: Ok(vec![vec!["1", "0"], vec!["2"]]),
             },
-            // reject nullable sort columns
             TestCase {
-                name: "no nullable sort columns",
+                name: "nullable sort columns, nulls last",
                 file_schema: Schema::new(vec![Field::new(
                     "value".to_string(),
                     DataType::Float64,
-                    true, // should fail because nullable
+                    true,
                 )]),
                 files: vec![
-                    File::new("0", "2023-01-01", vec![Some((0.00, 0.49))]),
-                    File::new("1", "2023-01-01", vec![Some((0.50, 1.00))]),
-                    File::new("2", "2023-01-02", vec![Some((0.00, 1.00))]),
+                    File::new_nullable("0", "2023-01-01", vec![Some((Some(0.00), Some(0.49)))]),
+                    File::new_nullable("1", "2023-01-01", vec![Some((Some(0.50), None))]),
+                    File::new_nullable("2", "2023-01-02", vec![Some((Some(0.00), None))]),
                 ],
                 sort: vec![col("value").sort(true, false)],
-                expected_result: Err("construct min/max statistics for split_groups_by_statistics\ncaused by\nbuild min rows\ncaused by\ncreate sorting columns\ncaused by\nError during planning: cannot sort by nullable column")
+                expected_result: Ok(vec![vec!["0", "1"], vec!["2"]])
+            },
+            TestCase {
+                name: "nullable sort columns, nulls first",
+                file_schema: Schema::new(vec![Field::new(
+                    "value".to_string(),
+                    DataType::Float64,
+                    true,
+                )]),
+                files: vec![
+                    File::new_nullable("0", "2023-01-01", vec![Some((None, Some(0.49)))]),
+                    File::new_nullable("1", "2023-01-01", vec![Some((Some(0.50), Some(1.00)))]),
+                    File::new_nullable("2", "2023-01-02", vec![Some((None, Some(1.00)))]),
+                ],
+                sort: vec![col("value").sort(true, true)],
+                expected_result: Ok(vec![vec!["0", "1"], vec!["2"]])
             },
             TestCase {
                 name: "all three non-overlapping",
@@ -2166,12 +2195,12 @@ mod tests {
                             .map(|stats| {
                                 stats
                                     .map(|(min, max)| ColumnStatistics {
-                                        min_value: Precision::Exact(ScalarValue::from(
-                                            min,
-                                        )),
-                                        max_value: Precision::Exact(ScalarValue::from(
-                                            max,
-                                        )),
+                                        min_value: Precision::Exact(
+                                            ScalarValue::Float64(min),
+                                        ),
+                                        max_value: Precision::Exact(
+                                            ScalarValue::Float64(max),
+                                        ),
                                         ..Default::default()
                                     })
                                     .unwrap_or_default()
