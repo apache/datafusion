@@ -17,5 +17,4 @@
 
 //! End to end test for Schema related functionality
 
-/// Run all tests that are found in the `parquet` directory
-mod schema_adaptation;
+// Schema adaptation tests now live in `parquet/schema_adapter.rs`
