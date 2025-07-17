@@ -192,6 +192,7 @@ async fn test_parquet_integration_with_schema_adapter() -> Result<()> {
     let config = FileScanConfigBuilder::new(
         ObjectStoreUrl::parse(&format!("file://{}", file_path_str))?,
         schema.clone(),
+        None,
     )
     .with_source(source)
     .build();
@@ -461,67 +462,7 @@ impl FileSource for TestSource {
     }
 }
 
-/// A test schema adapter factory
-#[derive(Debug)]
-struct TestSchemaAdapterFactory {}
-
-impl SchemaAdapterFactory for TestSchemaAdapterFactory {
-    fn create(
-        &self,
-        projected_table_schema: SchemaRef,
-        _table_schema: SchemaRef,
-    ) -> Box<dyn SchemaAdapter> {
-        Box::new(TestSchemaAdapter {
-            table_schema: projected_table_schema,
-        })
-    }
-}
-
-/// A test schema adapter implementation
-#[derive(Debug)]
-struct TestSchemaAdapter {
-    table_schema: SchemaRef,
-}
-
-impl SchemaAdapter for TestSchemaAdapter {
-    fn map_column_index(&self, index: usize, file_schema: &Schema) -> Option<usize> {
-        let field = self.table_schema.field(index);
-        file_schema.fields.find(field.name()).map(|(i, _)| i)
-    }
-
-    fn map_schema(
-        &self,
-        file_schema: &Schema,
-    ) -> Result<(Arc<dyn SchemaMapper>, Vec<usize>)> {
-        let mut projection = Vec::with_capacity(file_schema.fields().len());
-        for (file_idx, file_field) in file_schema.fields().iter().enumerate() {
-            if self.table_schema.fields().find(file_field.name()).is_some() {
-                projection.push(file_idx);
-            }
-        }
-
-        Ok((Arc::new(TestSchemaMapping {}), projection))
-    }
-}
-
-/// A test schema mapper implementation
-#[derive(Debug)]
-struct TestSchemaMapping {}
-
-impl SchemaMapper for TestSchemaMapping {
-    fn map_batch(&self, batch: RecordBatch) -> Result<RecordBatch> {
-        // For testing, just return the original batch
-        Ok(batch)
-    }
-
-    fn map_column_statistics(
-        &self,
-        stats: &[ColumnStatistics],
-    ) -> Result<Vec<ColumnStatistics>> {
-        // For testing, just return the input statistics
-        Ok(stats.to_vec())
-    }
-}
+// Removed duplicate struct and impl blocks for TestSchemaAdapterFactory, TestSchemaAdapter, and TestSchemaMapping
 
 #[test]
 fn test_schema_adapter() {
