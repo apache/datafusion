@@ -20,30 +20,35 @@
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion::datasource::object_store::ObjectStoreUrl;
-use datafusion::datasource::physical_plan::arrow_file::ArrowSource;
+use datafusion::datasource::physical_plan::ArrowSource;
+use datafusion::datasource::physical_plan::JsonSource;
+#[cfg(feature = "parquet")]
+use datafusion::datasource::physical_plan::ParquetSource;
+use datafusion::datasource::physical_plan::{
+    FileOpener, FileScanConfig, FileScanConfigBuilder, FileSource,
+};
+use datafusion::datasource::source::DataSourceExec;
+use datafusion::physical_plan::metrics::ExecutionPlanMetricsSet;
+use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_plan::Statistics;
 use datafusion::prelude::*;
 use datafusion_common::ColumnStatistics;
+use datafusion_common::DataFusionError;
 use datafusion_common::Result;
-use datafusion_datasource::file::FileSource;
-use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_datasource::schema_adapter::{
     SchemaAdapter, SchemaAdapterFactory, SchemaMapper,
 };
-use datafusion_datasource::source::DataSourceExec;
 use datafusion_datasource::PartitionedFile;
-use std::any::Any;
-use std::sync::Arc;
-use tempfile::TempDir;
-
-#[cfg(feature = "parquet")]
-use datafusion_datasource_parquet::ParquetSource;
+use object_store::ObjectStore;
 #[cfg(feature = "parquet")]
 use parquet::arrow::ArrowWriter;
 #[cfg(feature = "parquet")]
 use parquet::file::properties::WriterProperties;
+use std::any::Any;
+use std::sync::Arc;
+use tempfile::TempDir;
 
-#[cfg(feature = "csv")]
-use datafusion_datasource_csv::CsvSource;
+use datafusion::datasource::physical_plan::CsvSource;
 
 /// A schema adapter factory that transforms column names to uppercase
 #[derive(Debug)]
@@ -101,13 +106,42 @@ impl SchemaAdapter for UppercaseAdapter {
     }
 }
 
+#[derive(Debug)]
+struct TestSchemaMapping {
+    output_schema: SchemaRef,
+    projection: Vec<usize>,
+}
+
+impl SchemaMapper for TestSchemaMapping {
+    fn map_batch(&self, batch: RecordBatch) -> Result<RecordBatch> {
+        let columns = self
+            .projection
+            .iter()
+            .map(|&i| batch.column(i).clone())
+            .collect::<Vec<_>>();
+        Ok(RecordBatch::try_new(self.output_schema.clone(), columns)?)
+    }
+
+    fn map_column_statistics(
+        &self,
+        stats: &[ColumnStatistics],
+    ) -> Result<Vec<ColumnStatistics>> {
+        Ok(self
+            .projection
+            .iter()
+            .map(|&i| stats.get(i).cloned().unwrap_or_default())
+            .collect())
+    }
+}
+
 impl UppercaseAdapter {
+    #[allow(dead_code)]
     fn adapt(&self, record_batch: RecordBatch) -> Result<RecordBatch> {
         Ok(record_batch)
     }
 
     fn output_schema(&self) -> SchemaRef {
-        let fields = self
+        let fields: Vec<Field> = self
             .table_schema
             .fields()
             .iter()
@@ -137,7 +171,7 @@ impl SchemaMapper for UppercaseSchemaMapper {
             .iter()
             .map(|&i| batch.column(i).clone())
             .collect::<Vec<_>>();
-        RecordBatch::try_new(self.output_schema.clone(), columns)
+        Ok(RecordBatch::try_new(self.output_schema.clone(), columns)?)
     }
 
     fn map_column_statistics(
@@ -185,16 +219,15 @@ async fn test_parquet_integration_with_schema_adapter() -> Result<()> {
     let ctx = SessionContext::new();
 
     // Create a ParquetSource with the adapter factory
-    let source = ParquetSource::default()
-        .with_schema_adapter_factory(Arc::new(UppercaseAdapterFactory {}));
+    let file_source = ParquetSource::default()
+        .with_schema_adapter_factory(Arc::new(UppercaseAdapterFactory {}))?;
 
-    // Create a scan config
     let config = FileScanConfigBuilder::new(
-        ObjectStoreUrl::parse(&format!("file://{}", file_path_str))?,
+        ObjectStoreUrl::parse(format!("file://{file_path_str}"))?,
         schema.clone(),
-        None,
+        file_source.clone(),
     )
-    .with_source(source)
+    .with_file(PartitionedFile::new(file_path_str, 100))
     .build();
 
     // Create a data source executor
@@ -250,15 +283,15 @@ async fn test_parquet_integration_with_schema_adapter_and_expression_rewriter(
     let ctx = SessionContext::new();
 
     // Create a ParquetSource with the adapter factory
-    let source = ParquetSource::default()
-        .with_schema_adapter_factory(Arc::new(UppercaseAdapterFactory {}));
+    let file_source = ParquetSource::default()
+        .with_schema_adapter_factory(Arc::new(UppercaseAdapterFactory {}))?;
 
-    // Create a scan config
     let config = FileScanConfigBuilder::new(
-        ObjectStoreUrl::parse(&format!("file://{}", file_path_str))?,
+        ObjectStoreUrl::parse(format!("file://{file_path_str}"))?,
         schema.clone(),
+        file_source,
     )
-    .with_source(source)
+    .with_file(PartitionedFile::new(file_path_str, 100))
     .build();
 
     // Create a data source executor
@@ -292,15 +325,18 @@ async fn test_multi_source_schema_adapter_reuse() -> Result<()> {
     let factory = Arc::new(UppercaseAdapterFactory {});
 
     // Apply the same adapter to different source types
-    let arrow_source =
-        ArrowSource::default().with_schema_adapter_factory(factory.clone());
+    let arrow_source = ArrowSource::default()
+        .with_schema_adapter_factory(factory.clone())
+        .unwrap();
 
     #[cfg(feature = "parquet")]
-    let parquet_source =
-        ParquetSource::default().with_schema_adapter_factory(factory.clone());
+    let parquet_source = ParquetSource::default()
+        .with_schema_adapter_factory(factory.clone())
+        .unwrap();
 
-    #[cfg(feature = "csv")]
-    let csv_source = CsvSource::default().with_schema_adapter_factory(factory.clone());
+    let csv_source = CsvSource::default()
+        .with_schema_adapter_factory(factory.clone())
+        .unwrap();
 
     // Verify adapters were properly set
     assert!(arrow_source.schema_adapter_factory().is_some());
@@ -308,7 +344,6 @@ async fn test_multi_source_schema_adapter_reuse() -> Result<()> {
     #[cfg(feature = "parquet")]
     assert!(parquet_source.schema_adapter_factory().is_some());
 
-    #[cfg(feature = "csv")]
     assert!(csv_source.schema_adapter_factory().is_some());
 
     Ok(())
@@ -329,11 +364,9 @@ fn test_from_implementations() {
     #[cfg(feature = "parquet")]
     test_from_impl::<ParquetSource>("parquet");
 
-    #[cfg(feature = "csv")]
     test_from_impl::<CsvSource>("csv");
 
-    #[cfg(feature = "json")]
-    test_from_impl::<datafusion_datasource_json::JsonSource>("json");
+    test_from_impl::<JsonSource>("json");
 }
 
 /// A simple test schema adapter factory that doesn't modify the schema
@@ -341,10 +374,14 @@ fn test_from_implementations() {
 struct TestSchemaAdapterFactory {}
 
 impl SchemaAdapterFactory for TestSchemaAdapterFactory {
-    fn create(&self, schema: &Schema) -> Result<Box<dyn SchemaAdapter>> {
-        Ok(Box::new(TestSchemaAdapter {
-            input_schema: Arc::new(schema.clone()),
-        }))
+    fn create(
+        &self,
+        projected_table_schema: SchemaRef,
+        _table_schema: SchemaRef,
+    ) -> Box<dyn SchemaAdapter> {
+        Box::new(TestSchemaAdapter {
+            input_schema: projected_table_schema,
+        })
     }
 }
 
@@ -355,13 +392,36 @@ struct TestSchemaAdapter {
 }
 
 impl SchemaAdapter for TestSchemaAdapter {
-    fn adapt(&self, record_batch: RecordBatch) -> Result<RecordBatch> {
-        // Just pass through the batch unmodified
-        Ok(record_batch)
+    fn map_column_index(&self, index: usize, file_schema: &Schema) -> Option<usize> {
+        let field = self.input_schema.field(index);
+        file_schema
+            .fields()
+            .iter()
+            .position(|f| f.name() == field.name())
     }
 
-    fn output_schema(&self) -> SchemaRef {
-        self.input_schema.clone()
+    fn map_schema(
+        &self,
+        file_schema: &Schema,
+    ) -> Result<(Arc<dyn SchemaMapper>, Vec<usize>)> {
+        let mut projection = Vec::with_capacity(file_schema.fields().len());
+        for (idx, file_field) in file_schema.fields().iter().enumerate() {
+            if self
+                .input_schema
+                .fields()
+                .iter()
+                .any(|f| f.name() == file_field.name())
+            {
+                projection.push(idx);
+            }
+        }
+
+        let mapper = TestSchemaMapping {
+            output_schema: Arc::clone(&self.input_schema),
+            projection: projection.clone(),
+        };
+
+        Ok((Arc::new(mapper), projection))
     }
 }
 
@@ -377,31 +437,34 @@ fn test_schema_adapter_preservation() {
     // Create source with schema adapter factory
     let source = ParquetSource::default();
     let factory = Arc::new(TestSchemaAdapterFactory {});
-    let file_source = source.with_schema_adapter_factory(factory);
+    let file_source = source.with_schema_adapter_factory(factory).unwrap();
 
     // Create a FileScanConfig with the source
-    let config_builder =
-        FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), schema.clone())
-            .with_source(file_source.clone())
-            // Add a file to make it valid
-            .with_file(PartitionedFile::new("test.parquet", 100));
+    let config_builder = FileScanConfigBuilder::new(
+        ObjectStoreUrl::local_filesystem(),
+        schema.clone(),
+        file_source.clone(),
+    )
+    .with_file(PartitionedFile::new("test.parquet", 100));
 
     let config = config_builder.build();
 
     // Verify the schema adapter factory is present in the file source
-    assert!(config.source().schema_adapter_factory().is_some());
+    assert!(config.file_source().schema_adapter_factory().is_some());
 }
 
 /// A test source for testing schema adapters
 #[derive(Debug, Clone)]
 struct TestSource {
     schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
+    metrics: ExecutionPlanMetricsSet,
 }
 
 impl TestSource {
     fn new() -> Self {
         Self {
             schema_adapter_factory: None,
+            metrics: ExecutionPlanMetricsSet::new(),
         }
     }
 }
@@ -441,7 +504,7 @@ impl FileSource for TestSource {
     }
 
     fn metrics(&self) -> &ExecutionPlanMetricsSet {
-        unimplemented!("Not needed for this test")
+        &self.metrics
     }
 
     fn statistics(&self) -> Result<Statistics, DataFusionError> {
@@ -454,6 +517,7 @@ impl FileSource for TestSource {
     ) -> Result<Arc<dyn FileSource>> {
         Ok(Arc::new(Self {
             schema_adapter_factory: Some(schema_adapter_factory),
+            metrics: ExecutionPlanMetricsSet::new(),
         }))
     }
 
@@ -461,8 +525,6 @@ impl FileSource for TestSource {
         self.schema_adapter_factory.clone()
     }
 }
-
-// Removed duplicate struct and impl blocks for TestSchemaAdapterFactory, TestSchemaAdapter, and TestSchemaMapping
 
 #[test]
 fn test_schema_adapter() {
