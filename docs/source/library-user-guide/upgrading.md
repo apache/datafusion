@@ -120,7 +120,7 @@ SET datafusion.execution.spill_compression = 'zstd';
 
 For more details about this configuration option, including performance trade-offs between different compression codecs, see the [Configuration Settings](../user-guide/configs.md) documentation.
 
-### Deprecated `map_varchar_to_utf8view` 
+### Deprecated `map_varchar_to_utf8view`
 
 See [issue #16290](https://github.com/apache/datafusion/pull/16290) for more information
 The old configuration
