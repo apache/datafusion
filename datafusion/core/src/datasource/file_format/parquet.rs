@@ -107,10 +107,8 @@ pub(crate) mod test_util {
 mod tests {
 
     use std::fmt::{self, Display, Formatter};
-    use std::pin::Pin;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
-    use std::task::{Context, Poll};
     use std::time::Duration;
 
     use crate::datasource::file_format::parquet::test_util::store_parquet;
@@ -120,7 +118,7 @@ mod tests {
     use crate::prelude::{ParquetReadOptions, SessionConfig, SessionContext};
 
     use arrow::array::RecordBatch;
-    use arrow_schema::{Schema, SchemaRef};
+    use arrow_schema::Schema;
     use datafusion_catalog::Session;
     use datafusion_common::cast::{
         as_binary_array, as_binary_view_array, as_boolean_array, as_float32_array,
@@ -140,7 +138,7 @@ mod tests {
     };
     use datafusion_execution::object_store::ObjectStoreUrl;
     use datafusion_execution::runtime_env::RuntimeEnv;
-    use datafusion_execution::{RecordBatchStream, TaskContext};
+    use datafusion_execution::TaskContext;
     use datafusion_expr::dml::InsertOp;
     use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
     use datafusion_physical_plan::{collect, ExecutionPlan};
@@ -153,14 +151,14 @@ mod tests {
     use async_trait::async_trait;
     use datafusion_datasource::file_groups::FileGroup;
     use futures::stream::BoxStream;
-    use futures::{Stream, StreamExt};
+    use futures::StreamExt;
     use insta::assert_snapshot;
     use log::error;
     use object_store::local::LocalFileSystem;
     use object_store::ObjectMeta;
     use object_store::{
         path::Path, GetOptions, GetResult, ListResult, MultipartUpload, ObjectStore,
-        PutMultipartOpts, PutOptions, PutPayload, PutResult,
+        PutMultipartOptions, PutOptions, PutPayload, PutResult,
     };
     use parquet::arrow::arrow_reader::ArrowReaderOptions;
     use parquet::arrow::ParquetRecordBatchStreamBuilder;
@@ -168,6 +166,8 @@ mod tests {
     use parquet::file::page_index::index::Index;
     use parquet::format::FileMetaData;
     use tokio::fs::File;
+
+    use crate::test_util::bounded_stream;
 
     enum ForceViews {
         Yes,
@@ -196,7 +196,8 @@ mod tests {
         let schema = format.infer_schema(&ctx, &store, &meta).await.unwrap();
 
         let stats =
-            fetch_statistics(store.as_ref(), schema.clone(), &meta[0], None).await?;
+            fetch_statistics(store.as_ref(), schema.clone(), &meta[0], None, None)
+                .await?;
 
         assert_eq!(stats.num_rows, Precision::Exact(3));
         let c1_stats = &stats.column_statistics[0];
@@ -204,7 +205,8 @@ mod tests {
         assert_eq!(c1_stats.null_count, Precision::Exact(1));
         assert_eq!(c2_stats.null_count, Precision::Exact(3));
 
-        let stats = fetch_statistics(store.as_ref(), schema, &meta[1], None).await?;
+        let stats =
+            fetch_statistics(store.as_ref(), schema, &meta[1], None, None).await?;
         assert_eq!(stats.num_rows, Precision::Exact(3));
         let c1_stats = &stats.column_statistics[0];
         let c2_stats = &stats.column_statistics[1];
@@ -309,7 +311,7 @@ mod tests {
         async fn put_multipart_opts(
             &self,
             _location: &Path,
-            _opts: PutMultipartOpts,
+            _opts: PutMultipartOptions,
         ) -> object_store::Result<Box<dyn MultipartUpload>> {
             Err(object_store::Error::NotImplemented)
         }
@@ -376,9 +378,14 @@ mod tests {
 
         // Use a size hint larger than the parquet footer but smaller than the actual metadata, requiring a second fetch
         // for the remaining metadata
-        fetch_parquet_metadata(store.as_ref() as &dyn ObjectStore, &meta[0], Some(9))
-            .await
-            .expect("error reading metadata with hint");
+        fetch_parquet_metadata(
+            store.as_ref() as &dyn ObjectStore,
+            &meta[0],
+            Some(9),
+            None,
+        )
+        .await
+        .expect("error reading metadata with hint");
 
         assert_eq!(store.request_count(), 2);
 
@@ -396,9 +403,14 @@ mod tests {
             .await
             .unwrap();
 
-        let stats =
-            fetch_statistics(store.upcast().as_ref(), schema.clone(), &meta[0], Some(9))
-                .await?;
+        let stats = fetch_statistics(
+            store.upcast().as_ref(),
+            schema.clone(),
+            &meta[0],
+            Some(9),
+            None,
+        )
+        .await?;
 
         assert_eq!(stats.num_rows, Precision::Exact(3));
         let c1_stats = &stats.column_statistics[0];
@@ -413,7 +425,7 @@ mod tests {
         // Use the file size as the hint so we can get the full metadata from the first fetch
         let size_hint = meta[0].size as usize;
 
-        fetch_parquet_metadata(store.upcast().as_ref(), &meta[0], Some(size_hint))
+        fetch_parquet_metadata(store.upcast().as_ref(), &meta[0], Some(size_hint), None)
             .await
             .expect("error reading metadata with hint");
 
@@ -432,6 +444,7 @@ mod tests {
             schema.clone(),
             &meta[0],
             Some(size_hint),
+            None,
         )
         .await?;
 
@@ -448,7 +461,7 @@ mod tests {
         // Use the a size hint larger than the file size to make sure we don't panic
         let size_hint = (meta[0].size + 100) as usize;
 
-        fetch_parquet_metadata(store.upcast().as_ref(), &meta[0], Some(size_hint))
+        fetch_parquet_metadata(store.upcast().as_ref(), &meta[0], Some(size_hint), None)
             .await
             .expect("error reading metadata with hint");
 
@@ -487,7 +500,8 @@ mod tests {
         let schema = format.infer_schema(&state, &store, &files).await.unwrap();
 
         // Fetch statistics for first file
-        let pq_meta = fetch_parquet_metadata(store.as_ref(), &files[0], None).await?;
+        let pq_meta =
+            fetch_parquet_metadata(store.as_ref(), &files[0], None, None).await?;
         let stats = statistics_from_parquet_meta_calc(&pq_meta, schema.clone())?;
         assert_eq!(stats.num_rows, Precision::Exact(4));
 
@@ -545,7 +559,8 @@ mod tests {
         };
 
         // Fetch statistics for first file
-        let pq_meta = fetch_parquet_metadata(store.as_ref(), &files[0], None).await?;
+        let pq_meta =
+            fetch_parquet_metadata(store.as_ref(), &files[0], None, None).await?;
         let stats = statistics_from_parquet_meta_calc(&pq_meta, schema.clone())?;
         assert_eq!(stats.num_rows, Precision::Exact(3));
         // column c1
@@ -571,7 +586,8 @@ mod tests {
         assert_eq!(c2_stats.min_value, Precision::Exact(null_i64.clone()));
 
         // Fetch statistics for second file
-        let pq_meta = fetch_parquet_metadata(store.as_ref(), &files[1], None).await?;
+        let pq_meta =
+            fetch_parquet_metadata(store.as_ref(), &files[1], None, None).await?;
         let stats = statistics_from_parquet_meta_calc(&pq_meta, schema.clone())?;
         assert_eq!(stats.num_rows, Precision::Exact(3));
         // column c1: missing from the file so the table treats all 3 rows as null
@@ -1247,6 +1263,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_write_empty_recordbatch_creates_file() -> Result<()> {
+        let empty_record_batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)])),
+            vec![Arc::new(Int32Array::from(Vec::<i32>::new()))],
+        )
+        .expect("Failed to create empty RecordBatch");
+
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let path = format!("{}/empty2.parquet", tmp_dir.path().to_string_lossy());
+
+        let ctx = SessionContext::new();
+        let df = ctx.read_batch(empty_record_batch.clone())?;
+        df.write_parquet(&path, crate::dataframe::DataFrameWriteOptions::new(), None)
+            .await?;
+        assert!(std::path::Path::new(&path).exists());
+
+        let stream = ctx
+            .read_parquet(&path, ParquetReadOptions::new())
+            .await?
+            .execute_stream()
+            .await?;
+        assert_eq!(stream.schema(), empty_record_batch.schema());
+        let results = stream.collect::<Vec<_>>().await;
+        assert_eq!(results.len(), 0);
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn parquet_sink_write_insert_schema_into_metadata() -> Result<()> {
         // expected kv metadata without schema
         let expected_without = vec![
@@ -1661,44 +1705,5 @@ mod tests {
             .expect("should track for column-parallel writes");
 
         Ok(())
-    }
-
-    /// Creates an bounded stream for testing purposes.
-    fn bounded_stream(
-        batch: RecordBatch,
-        limit: usize,
-    ) -> datafusion_execution::SendableRecordBatchStream {
-        Box::pin(BoundedStream {
-            count: 0,
-            limit,
-            batch,
-        })
-    }
-
-    struct BoundedStream {
-        limit: usize,
-        count: usize,
-        batch: RecordBatch,
-    }
-
-    impl Stream for BoundedStream {
-        type Item = Result<RecordBatch>;
-
-        fn poll_next(
-            mut self: Pin<&mut Self>,
-            _cx: &mut Context<'_>,
-        ) -> Poll<Option<Self::Item>> {
-            if self.count >= self.limit {
-                return Poll::Ready(None);
-            }
-            self.count += 1;
-            Poll::Ready(Some(Ok(self.batch.clone())))
-        }
-    }
-
-    impl RecordBatchStream for BoundedStream {
-        fn schema(&self) -> SchemaRef {
-            self.batch.schema()
-        }
     }
 }

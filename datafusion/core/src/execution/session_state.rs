@@ -494,7 +494,7 @@ impl SessionState {
             enable_options_value_normalization: sql_parser_options
                 .enable_options_value_normalization,
             support_varchar_with_length: sql_parser_options.support_varchar_with_length,
-            map_varchar_to_utf8view: sql_parser_options.map_varchar_to_utf8view,
+            map_string_types_to_utf8view: sql_parser_options.map_string_types_to_utf8view,
             collect_spans: sql_parser_options.collect_spans,
         }
     }
@@ -1675,6 +1675,13 @@ impl ContextProvider for SessionContextProvider<'_> {
             .get(name)
             .cloned()
             .ok_or_else(|| plan_datafusion_err!("table function '{name}' not found"))?;
+        let dummy_schema = DFSchema::empty();
+        let simplifier =
+            ExprSimplifier::new(SessionSimplifyProvider::new(self.state, &dummy_schema));
+        let args = args
+            .into_iter()
+            .map(|arg| simplifier.simplify(arg))
+            .collect::<datafusion_common::Result<Vec<_>>>()?;
         let provider = tbl_func.create_table_provider(&args)?;
 
         Ok(provider_as_source(provider))

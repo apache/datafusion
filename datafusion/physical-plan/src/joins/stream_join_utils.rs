@@ -22,8 +22,12 @@ use std::collections::{HashMap, VecDeque};
 use std::mem::size_of;
 use std::sync::Arc;
 
+use crate::joins::join_hash_map::{
+    get_matched_indices, get_matched_indices_with_limit_offset, update_from_iter,
+    JoinHashMapOffset,
+};
 use crate::joins::utils::{JoinFilter, JoinHashMapType};
-use crate::metrics::{ExecutionPlanMetricsSet, MetricBuilder};
+use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricBuilder};
 use crate::{metrics, ExecutionPlan};
 
 use arrow::array::{
@@ -47,26 +51,49 @@ use hashbrown::HashTable;
 
 /// Implementation of `JoinHashMapType` for `PruningJoinHashMap`.
 impl JoinHashMapType for PruningJoinHashMap {
-    type NextType = VecDeque<u64>;
-
     // Extend with zero
     fn extend_zero(&mut self, len: usize) {
         self.next.resize(self.next.len() + len, 0)
     }
 
-    /// Get mutable references to the hash map and the next.
-    fn get_mut(&mut self) -> (&mut HashTable<(u64, u64)>, &mut Self::NextType) {
-        (&mut self.map, &mut self.next)
+    fn update_from_iter<'a>(
+        &mut self,
+        iter: Box<dyn Iterator<Item = (usize, &'a u64)> + Send + 'a>,
+        deleted_offset: usize,
+    ) {
+        let slice: &mut [u64] = self.next.make_contiguous();
+        update_from_iter::<u64>(&mut self.map, slice, iter, deleted_offset);
     }
 
-    /// Get a reference to the hash map.
-    fn get_map(&self) -> &HashTable<(u64, u64)> {
-        &self.map
+    fn get_matched_indices<'a>(
+        &self,
+        iter: Box<dyn Iterator<Item = (usize, &'a u64)> + 'a>,
+        deleted_offset: Option<usize>,
+    ) -> (Vec<u32>, Vec<u64>) {
+        // Flatten the deque
+        let next: Vec<u64> = self.next.iter().copied().collect();
+        get_matched_indices::<u64>(&self.map, &next, iter, deleted_offset)
     }
 
-    /// Get a reference to the next.
-    fn get_list(&self) -> &Self::NextType {
-        &self.next
+    fn get_matched_indices_with_limit_offset(
+        &self,
+        hash_values: &[u64],
+        limit: usize,
+        offset: JoinHashMapOffset,
+    ) -> (Vec<u32>, Vec<u64>, Option<JoinHashMapOffset>) {
+        // Flatten the deque
+        let next: Vec<u64> = self.next.iter().copied().collect();
+        get_matched_indices_with_limit_offset::<u64>(
+            &self.map,
+            &next,
+            hash_values,
+            limit,
+            offset,
+        )
+    }
+
+    fn is_empty(&self) -> bool {
+        self.map.is_empty()
     }
 }
 
@@ -659,7 +686,7 @@ pub struct StreamJoinMetrics {
     /// Number of batches produced by this operator
     pub(crate) output_batches: metrics::Count,
     /// Number of rows produced by this operator
-    pub(crate) output_rows: metrics::Count,
+    pub(crate) baseline_metrics: BaselineMetrics,
 }
 
 impl StreamJoinMetrics {
@@ -686,14 +713,12 @@ impl StreamJoinMetrics {
         let output_batches =
             MetricBuilder::new(metrics).counter("output_batches", partition);
 
-        let output_rows = MetricBuilder::new(metrics).output_rows(partition);
-
         Self {
             left,
             right,
             output_batches,
             stream_memory_usage,
-            output_rows,
+            baseline_metrics: BaselineMetrics::new(metrics, partition),
         }
     }
 }

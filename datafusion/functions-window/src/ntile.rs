@@ -17,13 +17,10 @@
 
 //! `ntile` window function implementation
 
-use std::any::Any;
-use std::fmt::Debug;
-use std::sync::Arc;
-
 use crate::utils::{
     get_scalar_value_from_args, get_signed_integer, get_unsigned_integer,
 };
+use arrow::datatypes::FieldRef;
 use datafusion_common::arrow::array::{ArrayRef, UInt64Array};
 use datafusion_common::arrow::datatypes::{DataType, Field};
 use datafusion_common::{exec_err, DataFusionError, Result};
@@ -34,6 +31,9 @@ use datafusion_functions_window_common::field;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 use datafusion_macros::user_doc;
 use field::WindowUDFFieldArgs;
+use std::any::Any;
+use std::fmt::Debug;
+use std::sync::Arc;
 
 get_or_init_udwf!(
     Ntile,
@@ -149,10 +149,10 @@ impl WindowUDFImpl for Ntile {
             Ok(Box::new(NtileEvaluator { n: n as u64 }))
         }
     }
-    fn field(&self, field_args: WindowUDFFieldArgs) -> Result<Field> {
+    fn field(&self, field_args: WindowUDFFieldArgs) -> Result<FieldRef> {
         let nullable = false;
 
-        Ok(Field::new(field_args.name(), DataType::UInt64, nullable))
+        Ok(Field::new(field_args.name(), DataType::UInt64, nullable).into())
     }
 
     fn documentation(&self) -> Option<&Documentation> {

@@ -38,9 +38,9 @@ pub use subquery::*;
 pub use window_function::*;
 
 use crate::extensions::Extensions;
-use crate::logical_plan::consumer::utils::rename_field;
 use crate::logical_plan::consumer::{
-    from_substrait_named_struct, DefaultSubstraitConsumer, SubstraitConsumer,
+    from_substrait_named_struct, rename_field, DefaultSubstraitConsumer,
+    SubstraitConsumer,
 };
 use datafusion::arrow::datatypes::Field;
 use datafusion::common::{not_impl_err, plan_err, substrait_err, DFSchema, DFSchemaRef};
@@ -152,7 +152,6 @@ pub async fn from_substrait_extended_expr(
             &substrait_expr.output_names,
             expr_idx,
             &mut names_idx,
-            /*rename_self=*/ true,
         )?;
         exprs.push((expr, output_field));
     }

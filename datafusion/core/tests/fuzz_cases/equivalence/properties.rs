@@ -15,18 +15,20 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::sync::Arc;
+
 use crate::fuzz_cases::equivalence::utils::{
     create_random_schema, generate_table_for_eq_properties, is_table_same_after_sort,
     TestScalarUDF,
 };
+
 use datafusion_common::Result;
 use datafusion_expr::{Operator, ScalarUDF};
 use datafusion_physical_expr::expressions::{col, BinaryExpr};
-use datafusion_physical_expr::{PhysicalExprRef, ScalarFunctionExpr};
-use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
-use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
+use datafusion_physical_expr::{LexOrdering, ScalarFunctionExpr};
+use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
+
 use itertools::Itertools;
-use std::sync::Arc;
 
 #[test]
 fn test_find_longest_permutation_random() -> Result<()> {
@@ -47,13 +49,13 @@ fn test_find_longest_permutation_random() -> Result<()> {
             Arc::clone(&test_fun),
             vec![col_a],
             &test_schema,
-        )?) as PhysicalExprRef;
+        )?) as _;
 
         let a_plus_b = Arc::new(BinaryExpr::new(
             col("a", &test_schema)?,
             Operator::Plus,
             col("b", &test_schema)?,
-        )) as Arc<dyn PhysicalExpr>;
+        )) as _;
         let exprs = [
             col("a", &test_schema)?,
             col("b", &test_schema)?,
@@ -68,16 +70,16 @@ fn test_find_longest_permutation_random() -> Result<()> {
         for n_req in 0..=exprs.len() {
             for exprs in exprs.iter().combinations(n_req) {
                 let exprs = exprs.into_iter().cloned().collect::<Vec<_>>();
-                let (ordering, indices) = eq_properties.find_longest_permutation(&exprs);
+                let (ordering, indices) =
+                    eq_properties.find_longest_permutation(&exprs)?;
                 // Make sure that find_longest_permutation return values are consistent
                 let ordering2 = indices
                     .iter()
                     .zip(ordering.iter())
-                    .map(|(&idx, sort_expr)| PhysicalSortExpr {
-                        expr: Arc::clone(&exprs[idx]),
-                        options: sort_expr.options,
+                    .map(|(&idx, sort_expr)| {
+                        PhysicalSortExpr::new(Arc::clone(&exprs[idx]), sort_expr.options)
                     })
-                    .collect::<LexOrdering>();
+                    .collect::<Vec<_>>();
                 assert_eq!(
                     ordering, ordering2,
                     "indices and lexicographical ordering do not match"
@@ -89,11 +91,11 @@ fn test_find_longest_permutation_random() -> Result<()> {
                 assert_eq!(ordering.len(), indices.len(), "{err_msg}");
                 // Since ordered section satisfies schema, we expect
                 // that result will be same after sort (e.g sort was unnecessary).
+                let Some(ordering) = LexOrdering::new(ordering) else {
+                    continue;
+                };
                 assert!(
-                    is_table_same_after_sort(
-                        ordering.clone(),
-                        table_data_with_properties.clone(),
-                    )?,
+                    is_table_same_after_sort(ordering, &table_data_with_properties)?,
                     "{}",
                     err_msg
                 );

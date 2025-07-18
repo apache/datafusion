@@ -17,12 +17,15 @@
 
 //! [`StringAgg`] accumulator for the `string_agg` function
 
+use std::any::Any;
+use std::mem::size_of_val;
+
 use crate::array_agg::ArrayAgg;
+
 use arrow::array::ArrayRef;
-use arrow::datatypes::{DataType, Field};
-use datafusion_common::cast::as_generic_string_array;
-use datafusion_common::Result;
-use datafusion_common::{internal_err, not_impl_err, ScalarValue};
+use arrow::datatypes::{DataType, Field, FieldRef};
+use datafusion_common::cast::{as_generic_string_array, as_string_view_array};
+use datafusion_common::{internal_err, not_impl_err, Result, ScalarValue};
 use datafusion_expr::function::AccumulatorArgs;
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Documentation, Signature, TypeSignature, Volatility,
@@ -30,8 +33,6 @@ use datafusion_expr::{
 use datafusion_functions_aggregate_common::accumulator::StateFieldsArgs;
 use datafusion_macros::user_doc;
 use datafusion_physical_expr::expressions::Literal;
-use std::any::Any;
-use std::mem::size_of_val;
 
 make_udaf_expr_and_func!(
     StringAgg,
@@ -95,9 +96,15 @@ impl StringAgg {
                     TypeSignature::Exact(vec![DataType::LargeUtf8, DataType::Utf8]),
                     TypeSignature::Exact(vec![DataType::LargeUtf8, DataType::LargeUtf8]),
                     TypeSignature::Exact(vec![DataType::LargeUtf8, DataType::Null]),
+                    TypeSignature::Exact(vec![DataType::LargeUtf8, DataType::Utf8View]),
                     TypeSignature::Exact(vec![DataType::Utf8, DataType::Utf8]),
                     TypeSignature::Exact(vec![DataType::Utf8, DataType::LargeUtf8]),
                     TypeSignature::Exact(vec![DataType::Utf8, DataType::Null]),
+                    TypeSignature::Exact(vec![DataType::Utf8, DataType::Utf8View]),
+                    TypeSignature::Exact(vec![DataType::Utf8View, DataType::Utf8View]),
+                    TypeSignature::Exact(vec![DataType::Utf8View, DataType::LargeUtf8]),
+                    TypeSignature::Exact(vec![DataType::Utf8View, DataType::Null]),
+                    TypeSignature::Exact(vec![DataType::Utf8View, DataType::Utf8]),
                 ],
                 Volatility::Immutable,
             ),
@@ -129,7 +136,7 @@ impl AggregateUDFImpl for StringAgg {
         Ok(DataType::LargeUtf8)
     }
 
-    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
+    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         self.array_agg.state_fields(args)
     }
 
@@ -154,11 +161,12 @@ impl AggregateUDFImpl for StringAgg {
         };
 
         let array_agg_acc = self.array_agg.accumulator(AccumulatorArgs {
-            return_field: &Field::new(
+            return_field: Field::new(
                 "f",
                 DataType::new_list(acc_args.return_field.data_type().clone(), true),
                 true,
-            ),
+            )
+            .into(),
             exprs: &filter_index(acc_args.exprs, 1),
             ..acc_args
         })?;
@@ -207,6 +215,10 @@ impl Accumulator for StringAggAccumulator {
                 .flatten()
                 .collect(),
             DataType::Utf8 => as_generic_string_array::<i32>(list.values())?
+                .iter()
+                .flatten()
+                .collect(),
+            DataType::Utf8View => as_string_view_array(list.values())?
                 .iter()
                 .flatten()
                 .collect(),
@@ -260,7 +272,7 @@ mod tests {
     use arrow::datatypes::{Fields, Schema};
     use datafusion_common::internal_err;
     use datafusion_physical_expr::expressions::Column;
-    use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
+    use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
     use std::sync::Arc;
 
     #[test]
@@ -402,7 +414,7 @@ mod tests {
     struct StringAggAccumulatorBuilder {
         sep: String,
         distinct: bool,
-        ordering: LexOrdering,
+        order_bys: Vec<PhysicalSortExpr>,
         schema: Schema,
     }
 
@@ -411,7 +423,7 @@ mod tests {
             Self {
                 sep: sep.to_string(),
                 distinct: Default::default(),
-                ordering: Default::default(),
+                order_bys: vec![],
                 schema: Schema {
                     fields: Fields::from(vec![Field::new(
                         "col",
@@ -428,7 +440,7 @@ mod tests {
         }
 
         fn order_by_col(mut self, col: &str, sort_options: SortOptions) -> Self {
-            self.ordering.extend([PhysicalSortExpr::new(
+            self.order_bys.extend([PhysicalSortExpr::new(
                 Arc::new(
                     Column::new_with_schema(col, &self.schema)
                         .expect("column not available in schema"),
@@ -440,10 +452,10 @@ mod tests {
 
         fn build(&self) -> Result<Box<dyn Accumulator>> {
             StringAgg::new().accumulator(AccumulatorArgs {
-                return_field: &Field::new("f", DataType::LargeUtf8, true),
+                return_field: Field::new("f", DataType::LargeUtf8, true).into(),
                 schema: &self.schema,
                 ignore_nulls: false,
-                ordering_req: &self.ordering,
+                order_bys: &self.order_bys,
                 is_reversed: false,
                 name: "",
                 is_distinct: self.distinct,

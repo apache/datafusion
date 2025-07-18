@@ -510,6 +510,14 @@ See [`sort_tpch.rs`](src/sort_tpch.rs) for more details.
 ./bench.sh run sort_tpch
 ```
 
+### TopK TPCH
+
+In addition, topk_tpch is available from the bench.sh script:
+
+```bash
+./bench.sh run topk_tpch
+```
+
 ## IMDB
 
 Run Join Order Benchmark (JOB) on IMDB dataset.

@@ -55,8 +55,7 @@ use crate::physical_plan::{
     displayable, windows, ExecutionPlan, ExecutionPlanProperties, InputOrderMode,
     Partitioning, PhysicalExpr, WindowExpr,
 };
-use datafusion_physical_plan::empty::EmptyExec;
-use datafusion_physical_plan::recursive_query::RecursiveQueryExec;
+use crate::schema_equivalence::schema_satisfied_by;
 
 use arrow::array::{builder::StringBuilder, RecordBatch};
 use arrow::compute::SortOptions;
@@ -69,6 +68,7 @@ use datafusion_common::{
     exec_err, internal_datafusion_err, internal_err, not_impl_err, plan_err, DFSchema,
     ScalarValue,
 };
+use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::memory::MemorySourceConfig;
 use datafusion_expr::dml::{CopyTo, InsertOp};
 use datafusion_expr::expr::{
@@ -84,19 +84,23 @@ use datafusion_expr::{
 };
 use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
 use datafusion_physical_expr::expressions::{Column, Literal};
-use datafusion_physical_expr::LexOrdering;
+use datafusion_physical_expr::{
+    create_physical_sort_exprs, LexOrdering, PhysicalSortExpr,
+};
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_plan::empty::EmptyExec;
 use datafusion_physical_plan::execution_plan::InvariantLevel;
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
+use datafusion_physical_plan::recursive_query::RecursiveQueryExec;
 use datafusion_physical_plan::unnest::ListUnnest;
+use datafusion_sql::TableReference;
+use sqlparser::ast::NullTreatment;
 
-use crate::schema_equivalence::schema_satisfied_by;
 use async_trait::async_trait;
-use datafusion_datasource::file_groups::FileGroup;
+use datafusion_physical_plan::async_func::{AsyncFuncExec, AsyncMapper};
 use futures::{StreamExt, TryStreamExt};
 use itertools::{multiunzip, Itertools};
 use log::{debug, trace};
-use sqlparser::ast::NullTreatment;
 use tokio::sync::Mutex;
 
 /// Physical query planner that converts a `LogicalPlan` to an
@@ -501,6 +505,7 @@ impl DefaultPhysicalPlanner {
                 file_type,
                 partition_by,
                 options: source_option_tuples,
+                output_schema: _,
             }) => {
                 let original_url = output_url.clone();
                 let input_exec = children.one()?;
@@ -530,6 +535,14 @@ impl DefaultPhysicalPlanner {
                 let sink_format = file_type_to_format(file_type)?
                     .create(session_state, source_option_tuples)?;
 
+                // Determine extension based on format extension and compression
+                let file_extension = match sink_format.compression_type() {
+                    Some(compression_type) => sink_format
+                        .get_ext_with_compression(&compression_type)
+                        .unwrap_or_else(|_| sink_format.get_ext()),
+                    None => sink_format.get_ext(),
+                };
+
                 // Set file sink related options
                 let config = FileSinkConfig {
                     original_url,
@@ -540,11 +553,18 @@ impl DefaultPhysicalPlanner {
                     table_partition_cols,
                     insert_op: InsertOp::Append,
                     keep_partition_by_columns,
-                    file_extension: sink_format.get_ext(),
+                    file_extension,
                 };
 
+                let ordering = input_exec.properties().output_ordering().cloned();
+
                 sink_format
-                    .create_writer_physical_plan(input_exec, session_state, config, None)
+                    .create_writer_physical_plan(
+                        input_exec,
+                        session_state,
+                        config,
+                        ordering.map(Into::into),
+                    )
                     .await?
             }
             LogicalPlan::Dml(DmlStatement {
@@ -574,27 +594,25 @@ impl DefaultPhysicalPlanner {
                 let input_exec = children.one()?;
 
                 let get_sort_keys = |expr: &Expr| match expr {
-                    Expr::WindowFunction(WindowFunction {
-                        params:
-                            WindowFunctionParams {
-                                ref partition_by,
-                                ref order_by,
-                                ..
-                            },
-                        ..
-                    }) => generate_sort_key(partition_by, order_by),
+                    Expr::WindowFunction(window_fun) => {
+                        let WindowFunctionParams {
+                            ref partition_by,
+                            ref order_by,
+                            ..
+                        } = &window_fun.as_ref().params;
+                        generate_sort_key(partition_by, order_by)
+                    }
                     Expr::Alias(Alias { expr, .. }) => {
                         // Convert &Box<T> to &T
                         match &**expr {
-                            Expr::WindowFunction(WindowFunction {
-                                params:
-                                    WindowFunctionParams {
-                                        ref partition_by,
-                                        ref order_by,
-                                        ..
-                                    },
-                                ..
-                            }) => generate_sort_key(partition_by, order_by),
+                            Expr::WindowFunction(window_fun) => {
+                                let WindowFunctionParams {
+                                    ref partition_by,
+                                    ref order_by,
+                                    ..
+                                } = &window_fun.as_ref().params;
+                                generate_sort_key(partition_by, order_by)
+                            }
                             _ => unreachable!(),
                         }
                     }
@@ -777,12 +795,46 @@ impl DefaultPhysicalPlanner {
 
                 let runtime_expr =
                     self.create_physical_expr(predicate, input_dfschema, session_state)?;
+
+                let input_schema = input.schema();
+                let filter = match self.try_plan_async_exprs(
+                    input_schema.fields().len(),
+                    PlannedExprResult::Expr(vec![runtime_expr]),
+                    input_schema.as_arrow(),
+                )? {
+                    PlanAsyncExpr::Sync(PlannedExprResult::Expr(runtime_expr)) => {
+                        FilterExec::try_new(Arc::clone(&runtime_expr[0]), physical_input)?
+                    }
+                    PlanAsyncExpr::Async(
+                        async_map,
+                        PlannedExprResult::Expr(runtime_expr),
+                    ) => {
+                        let async_exec = AsyncFuncExec::try_new(
+                            async_map.async_exprs,
+                            physical_input,
+                        )?;
+                        FilterExec::try_new(
+                            Arc::clone(&runtime_expr[0]),
+                            Arc::new(async_exec),
+                        )?
+                        // project the output columns excluding the async functions
+                        // The async functions are always appended to the end of the schema.
+                        .with_projection(Some(
+                            (0..input.schema().fields().len()).collect(),
+                        ))?
+                    }
+                    _ => {
+                        return internal_err!(
+                            "Unexpected result from try_plan_async_exprs"
+                        )
+                    }
+                };
+
                 let selectivity = session_state
                     .config()
                     .options()
                     .optimizer
                     .default_filter_selectivity;
-                let filter = FilterExec::try_new(runtime_expr, physical_input)?;
                 Arc::new(filter.with_default_selectivity(selectivity)?)
             }
             LogicalPlan::Repartition(Repartition {
@@ -824,13 +876,17 @@ impl DefaultPhysicalPlanner {
             }) => {
                 let physical_input = children.one()?;
                 let input_dfschema = input.as_ref().schema();
-                let sort_expr = create_physical_sort_exprs(
+                let sort_exprs = create_physical_sort_exprs(
                     expr,
                     input_dfschema,
                     session_state.execution_props(),
                 )?;
-                let new_sort =
-                    SortExec::new(sort_expr, physical_input).with_fetch(*fetch);
+                let Some(ordering) = LexOrdering::new(sort_exprs) else {
+                    return internal_err!(
+                        "SortExec requires at least one sort expression"
+                    );
+                };
+                let new_sort = SortExec::new(ordering, physical_input).with_fetch(*fetch);
                 Arc::new(new_sort)
             }
             LogicalPlan::Subquery(_) => todo!(),
@@ -892,17 +948,15 @@ impl DefaultPhysicalPlanner {
 
             // 2 Children
             LogicalPlan::Join(Join {
-                left,
-                right,
+                left: original_left,
+                right: original_right,
                 on: keys,
                 filter,
                 join_type,
-                null_equals_null,
+                null_equality,
                 schema: join_schema,
                 ..
             }) => {
-                let null_equals_null = *null_equals_null;
-
                 let [physical_left, physical_right] = children.two()?;
 
                 // If join has expression equijoin keys, add physical projection.
@@ -918,23 +972,25 @@ impl DefaultPhysicalPlanner {
                     let (left, left_col_keys, left_projected) =
                         wrap_projection_for_join_if_necessary(
                             &left_keys,
-                            left.as_ref().clone(),
+                            original_left.as_ref().clone(),
                         )?;
                     let (right, right_col_keys, right_projected) =
                         wrap_projection_for_join_if_necessary(
                             &right_keys,
-                            right.as_ref().clone(),
+                            original_right.as_ref().clone(),
                         )?;
                     let column_on = (left_col_keys, right_col_keys);
 
                     let left = Arc::new(left);
                     let right = Arc::new(right);
-                    let new_join = LogicalPlan::Join(Join::try_new_with_project_input(
+                    let (new_join, requalified) = Join::try_new_with_project_input(
                         node,
                         Arc::clone(&left),
                         Arc::clone(&right),
                         column_on,
-                    )?);
+                    )?;
+
+                    let new_join = LogicalPlan::Join(new_join);
 
                     // If inputs were projected then create ExecutionPlan for these new
                     // LogicalPlan nodes.
@@ -967,8 +1023,24 @@ impl DefaultPhysicalPlanner {
 
                     // Remove temporary projected columns
                     if left_projected || right_projected {
-                        let final_join_result =
-                            join_schema.iter().map(Expr::from).collect::<Vec<_>>();
+                        // Re-qualify the join schema only if the inputs were previously requalified in
+                        // `try_new_with_project_input`. This ensures that when building the Projection
+                        // it can correctly resolve field nullability and data types
+                        // by disambiguating fields from the left and right sides of the join.
+                        let qualified_join_schema = if requalified {
+                            Arc::new(qualify_join_schema_sides(
+                                join_schema,
+                                original_left,
+                                original_right,
+                            )?)
+                        } else {
+                            Arc::clone(join_schema)
+                        };
+
+                        let final_join_result = qualified_join_schema
+                            .iter()
+                            .map(Expr::from)
+                            .collect::<Vec<_>>();
                         let projection = LogicalPlan::Projection(Projection::try_new(
                             final_join_result,
                             Arc::new(new_join),
@@ -1123,7 +1195,7 @@ impl DefaultPhysicalPlanner {
                         join_filter,
                         *join_type,
                         vec![SortOptions::default(); join_on_len],
-                        null_equals_null,
+                        *null_equality,
                     )?)
                 } else if session_state.config().target_partitions() > 1
                     && session_state.config().repartition_joins()
@@ -1137,7 +1209,7 @@ impl DefaultPhysicalPlanner {
                         join_type,
                         None,
                         PartitionMode::Auto,
-                        null_equals_null,
+                        *null_equality,
                     )?)
                 } else {
                     Arc::new(HashJoinExec::try_new(
@@ -1148,7 +1220,7 @@ impl DefaultPhysicalPlanner {
                         join_type,
                         None,
                         PartitionMode::CollectLeft,
-                        null_equals_null,
+                        *null_equality,
                     )?)
                 };
 
@@ -1465,6 +1537,64 @@ fn get_null_physical_expr_pair(
     Ok((Arc::new(null_value), physical_name))
 }
 
+/// Qualifies the fields in a join schema with "left" and "right" qualifiers
+/// without mutating the original schema. This function should only be used when
+/// the join inputs have already been requalified earlier in `try_new_with_project_input`.
+///
+/// The purpose is to avoid ambiguity errors later in planning (e.g., in nullability or data type resolution)
+/// when converting expressions to fields.
+fn qualify_join_schema_sides(
+    join_schema: &DFSchema,
+    left: &LogicalPlan,
+    right: &LogicalPlan,
+) -> Result<DFSchema> {
+    let left_fields = left.schema().fields();
+    let right_fields = right.schema().fields();
+    let join_fields = join_schema.fields();
+
+    // Validate lengths
+    if join_fields.len() != left_fields.len() + right_fields.len() {
+        return internal_err!(
+            "Join schema field count must match left and right field count."
+        );
+    }
+
+    // Validate field names match
+    for (i, (field, expected)) in join_fields
+        .iter()
+        .zip(left_fields.iter().chain(right_fields.iter()))
+        .enumerate()
+    {
+        if field.name() != expected.name() {
+            return internal_err!(
+                "Field name mismatch at index {}: expected '{}', found '{}'",
+                i,
+                expected.name(),
+                field.name()
+            );
+        }
+    }
+
+    // qualify sides
+    let qualifiers = join_fields
+        .iter()
+        .enumerate()
+        .map(|(i, _)| {
+            if i < left_fields.len() {
+                Some(TableReference::Bare {
+                    table: Arc::from("left"),
+                })
+            } else {
+                Some(TableReference::Bare {
+                    table: Arc::from("right"),
+                })
+            }
+        })
+        .collect();
+
+    join_schema.with_field_specific_qualified_schema(qualifiers)
+}
+
 fn get_physical_expr_pair(
     expr: &Expr,
     input_dfschema: &DFSchema,
@@ -1506,17 +1636,18 @@ pub fn create_window_expr_with_name(
     let name = name.into();
     let physical_schema: &Schema = &logical_schema.into();
     match e {
-        Expr::WindowFunction(WindowFunction {
-            fun,
-            params:
-                WindowFunctionParams {
-                    args,
-                    partition_by,
-                    order_by,
-                    window_frame,
-                    null_treatment,
-                },
-        }) => {
+        Expr::WindowFunction(window_fun) => {
+            let WindowFunction {
+                fun,
+                params:
+                    WindowFunctionParams {
+                        args,
+                        partition_by,
+                        order_by,
+                        window_frame,
+                        null_treatment,
+                    },
+            } = window_fun.as_ref();
             let physical_args =
                 create_physical_exprs(args, logical_schema, execution_props)?;
             let partition_by =
@@ -1539,7 +1670,7 @@ pub fn create_window_expr_with_name(
                 name,
                 &physical_args,
                 &partition_by,
-                order_by.as_ref(),
+                &order_by,
                 window_frame,
                 physical_schema,
                 ignore_nulls,
@@ -1567,8 +1698,8 @@ type AggregateExprWithOptionalArgs = (
     Arc<AggregateFunctionExpr>,
     // The filter clause, if any
     Option<Arc<dyn PhysicalExpr>>,
-    // Ordering requirements, if any
-    Option<LexOrdering>,
+    // Expressions in the ORDER BY clause
+    Vec<PhysicalSortExpr>,
 );
 
 /// Create an aggregate expression with a name from a logical expression
@@ -1612,22 +1743,16 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
             let ignore_nulls = null_treatment.unwrap_or(NullTreatment::RespectNulls)
                 == NullTreatment::IgnoreNulls;
 
-            let (agg_expr, filter, order_by) = {
-                let physical_sort_exprs = match order_by {
-                    Some(exprs) => Some(create_physical_sort_exprs(
-                        exprs,
-                        logical_input_schema,
-                        execution_props,
-                    )?),
-                    None => None,
-                };
-
-                let ordering_reqs: LexOrdering =
-                    physical_sort_exprs.clone().unwrap_or_default();
+            let (agg_expr, filter, order_bys) = {
+                let order_bys = create_physical_sort_exprs(
+                    order_by,
+                    logical_input_schema,
+                    execution_props,
+                )?;
 
                 let agg_expr =
                     AggregateExprBuilder::new(func.to_owned(), physical_args.to_vec())
-                        .order_by(ordering_reqs)
+                        .order_by(order_bys.clone())
                         .schema(Arc::new(physical_input_schema.to_owned()))
                         .alias(name)
                         .human_display(human_displan)
@@ -1636,10 +1761,10 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                         .build()
                         .map(Arc::new)?;
 
-                (agg_expr, filter, physical_sort_exprs)
+                (agg_expr, filter, order_bys)
             };
 
-            Ok((agg_expr, filter, order_by))
+            Ok((agg_expr, filter, order_bys))
         }
         other => internal_err!("Invalid aggregate expression '{other:?}'"),
     }
@@ -1674,14 +1799,6 @@ pub fn create_aggregate_expr_and_maybe_filter(
         execution_props,
     )
 }
-
-#[deprecated(
-    since = "47.0.0",
-    note = "use datafusion::{create_physical_sort_expr, create_physical_sort_exprs}"
-)]
-pub use datafusion_physical_expr::{
-    create_physical_sort_expr, create_physical_sort_exprs,
-};
 
 impl DefaultPhysicalPlanner {
     /// Handles capturing the various plans for EXPLAIN queries
@@ -2052,11 +2169,89 @@ impl DefaultPhysicalPlanner {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        Ok(Arc::new(ProjectionExec::try_new(
-            physical_exprs,
-            input_exec,
-        )?))
+        let num_input_columns = input_exec.schema().fields().len();
+
+        match self.try_plan_async_exprs(
+            num_input_columns,
+            PlannedExprResult::ExprWithName(physical_exprs),
+            input_physical_schema.as_ref(),
+        )? {
+            PlanAsyncExpr::Sync(PlannedExprResult::ExprWithName(physical_exprs)) => Ok(
+                Arc::new(ProjectionExec::try_new(physical_exprs, input_exec)?),
+            ),
+            PlanAsyncExpr::Async(
+                async_map,
+                PlannedExprResult::ExprWithName(physical_exprs),
+            ) => {
+                let async_exec =
+                    AsyncFuncExec::try_new(async_map.async_exprs, input_exec)?;
+                let new_proj_exec =
+                    ProjectionExec::try_new(physical_exprs, Arc::new(async_exec))?;
+                Ok(Arc::new(new_proj_exec))
+            }
+            _ => internal_err!("Unexpected PlanAsyncExpressions variant"),
+        }
     }
+
+    fn try_plan_async_exprs(
+        &self,
+        num_input_columns: usize,
+        physical_expr: PlannedExprResult,
+        schema: &Schema,
+    ) -> Result<PlanAsyncExpr> {
+        let mut async_map = AsyncMapper::new(num_input_columns);
+        match &physical_expr {
+            PlannedExprResult::ExprWithName(exprs) => {
+                exprs
+                    .iter()
+                    .try_for_each(|(expr, _)| async_map.find_references(expr, schema))?;
+            }
+            PlannedExprResult::Expr(exprs) => {
+                exprs
+                    .iter()
+                    .try_for_each(|expr| async_map.find_references(expr, schema))?;
+            }
+        }
+
+        if async_map.is_empty() {
+            return Ok(PlanAsyncExpr::Sync(physical_expr));
+        }
+
+        let new_exprs = match physical_expr {
+            PlannedExprResult::ExprWithName(exprs) => PlannedExprResult::ExprWithName(
+                exprs
+                    .iter()
+                    .map(|(expr, column_name)| {
+                        let new_expr = Arc::clone(expr)
+                            .transform_up(|e| Ok(async_map.map_expr(e)))?;
+                        Ok((new_expr.data, column_name.to_string()))
+                    })
+                    .collect::<Result<_>>()?,
+            ),
+            PlannedExprResult::Expr(exprs) => PlannedExprResult::Expr(
+                exprs
+                    .iter()
+                    .map(|expr| {
+                        let new_expr = Arc::clone(expr)
+                            .transform_up(|e| Ok(async_map.map_expr(e)))?;
+                        Ok(new_expr.data)
+                    })
+                    .collect::<Result<_>>()?,
+            ),
+        };
+        // rewrite the projection's expressions in terms of the columns with the result of async evaluation
+        Ok(PlanAsyncExpr::Async(async_map, new_exprs))
+    }
+}
+
+enum PlannedExprResult {
+    ExprWithName(Vec<(Arc<dyn PhysicalExpr>, String)>),
+    Expr(Vec<Arc<dyn PhysicalExpr>>),
+}
+
+enum PlanAsyncExpr {
+    Sync(PlannedExprResult),
+    Async(AsyncMapper, PlannedExprResult),
 }
 
 fn tuple_err<T, R>(value: (Result<T>, Result<R>)) -> Result<(T, R)> {
@@ -2258,7 +2453,8 @@ mod tests {
         // verify that the plan correctly casts u8 to i64
         // the cast from u8 to i64 for literal will be simplified, and get lit(int64(5))
         // the cast here is implicit so has CastOptions with safe=true
-        let expected = "BinaryExpr { left: Column { name: \"c7\", index: 2 }, op: Lt, right: Literal { value: Int64(5) }, fail_on_overflow: false }";
+        let expected = r#"BinaryExpr { left: Column { name: "c7", index: 2 }, op: Lt, right: Literal { value: Int64(5), field: Field { name: "lit", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }, fail_on_overflow: false }"#;
+
         assert!(format!("{exec_plan:?}").contains(expected));
         Ok(())
     }
@@ -2283,7 +2479,7 @@ mod tests {
             &session_state,
         );
 
-        let expected = r#"Ok(PhysicalGroupBy { expr: [(Column { name: "c1", index: 0 }, "c1"), (Column { name: "c2", index: 1 }, "c2"), (Column { name: "c3", index: 2 }, "c3")], null_expr: [(Literal { value: Utf8(NULL) }, "c1"), (Literal { value: Int64(NULL) }, "c2"), (Literal { value: Int64(NULL) }, "c3")], groups: [[false, false, false], [true, false, false], [false, true, false], [false, false, true], [true, true, false], [true, false, true], [false, true, true], [true, true, true]] })"#;
+        let expected = r#"Ok(PhysicalGroupBy { expr: [(Column { name: "c1", index: 0 }, "c1"), (Column { name: "c2", index: 1 }, "c2"), (Column { name: "c3", index: 2 }, "c3")], null_expr: [(Literal { value: Utf8(NULL), field: Field { name: "lit", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} } }, "c1"), (Literal { value: Int64(NULL), field: Field { name: "lit", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} } }, "c2"), (Literal { value: Int64(NULL), field: Field { name: "lit", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} } }, "c3")], groups: [[false, false, false], [true, false, false], [false, true, false], [false, false, true], [true, true, false], [true, false, true], [false, true, true], [true, true, true]] })"#;
 
         assert_eq!(format!("{cube:?}"), expected);
 
@@ -2310,7 +2506,7 @@ mod tests {
             &session_state,
         );
 
-        let expected = r#"Ok(PhysicalGroupBy { expr: [(Column { name: "c1", index: 0 }, "c1"), (Column { name: "c2", index: 1 }, "c2"), (Column { name: "c3", index: 2 }, "c3")], null_expr: [(Literal { value: Utf8(NULL) }, "c1"), (Literal { value: Int64(NULL) }, "c2"), (Literal { value: Int64(NULL) }, "c3")], groups: [[true, true, true], [false, true, true], [false, false, true], [false, false, false]] })"#;
+        let expected = r#"Ok(PhysicalGroupBy { expr: [(Column { name: "c1", index: 0 }, "c1"), (Column { name: "c2", index: 1 }, "c2"), (Column { name: "c3", index: 2 }, "c3")], null_expr: [(Literal { value: Utf8(NULL), field: Field { name: "lit", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} } }, "c1"), (Literal { value: Int64(NULL), field: Field { name: "lit", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} } }, "c2"), (Literal { value: Int64(NULL), field: Field { name: "lit", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} } }, "c3")], groups: [[true, true, true], [false, true, true], [false, false, true], [false, false, false]] })"#;
 
         assert_eq!(format!("{rollup:?}"), expected);
 
@@ -2494,7 +2690,7 @@ mod tests {
         let execution_plan = plan(&logical_plan).await?;
         // verify that the plan correctly adds cast from Int64(1) to Utf8, and the const will be evaluated.
 
-        let expected = "expr: [(BinaryExpr { left: BinaryExpr { left: Column { name: \"c1\", index: 0 }, op: Eq, right: Literal { value: Utf8(\"a\") }, fail_on_overflow: false }, op: Or, right: BinaryExpr { left: Column { name: \"c1\", index: 0 }, op: Eq, right: Literal { value: Utf8(\"1\") }, fail_on_overflow: false }, fail_on_overflow: false }";
+        let expected = "expr: [(BinaryExpr { left: BinaryExpr { left: Column { name: \"c1\", index: 0 }, op: Eq, right: Literal { value: Utf8(\"a\"), field: Field { name: \"lit\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }, fail_on_overflow: false }, op: Or, right: BinaryExpr { left: Column { name: \"c1\", index: 0 }, op: Eq, right: Literal { value: Utf8(\"1\"), field: Field { name: \"lit\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }, fail_on_overflow: false }, fail_on_overflow: false }";
 
         let actual = format!("{execution_plan:?}");
         assert!(actual.contains(expected), "{}", actual);

@@ -31,7 +31,7 @@ pub fn from_cast(
 ) -> datafusion::common::Result<Expression> {
     let Cast { expr, data_type } = cast;
     // since substrait Null must be typed, so if we see a cast(null, dt), we make it a typed null
-    if let Expr::Literal(lit) = expr.as_ref() {
+    if let Expr::Literal(lit, _) = expr.as_ref() {
         // only the untyped(a null scalar value) null literal need this special handling
         // since all other kind of nulls are already typed and can be handled by substrait
         // e.g. null::<Int32Type> or null::<Utf8Type>
@@ -92,7 +92,7 @@ mod tests {
         let empty_schema = DFSchemaRef::new(DFSchema::empty());
         let field = Field::new("out", DataType::Int32, false);
 
-        let expr = Expr::Literal(ScalarValue::Null)
+        let expr = Expr::Literal(ScalarValue::Null, None)
             .cast_to(&DataType::Int32, &empty_schema)
             .unwrap();
 
@@ -119,7 +119,7 @@ mod tests {
         }
 
         // a typed null should not be folded
-        let expr = Expr::Literal(ScalarValue::Int64(None))
+        let expr = Expr::Literal(ScalarValue::Int64(None), None)
             .cast_to(&DataType::Int32, &empty_schema)
             .unwrap();
 

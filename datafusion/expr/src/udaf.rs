@@ -24,7 +24,7 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 use std::vec;
 
-use arrow::datatypes::{DataType, Field};
+use arrow::datatypes::{DataType, Field, FieldRef};
 
 use datafusion_common::{exec_err, not_impl_err, Result, ScalarValue, Statistics};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
@@ -158,7 +158,7 @@ impl AggregateUDF {
             args,
             false,
             None,
-            None,
+            vec![],
             None,
         ))
     }
@@ -168,6 +168,11 @@ impl AggregateUDF {
     /// See [`AggregateUDFImpl::name`] for more details.
     pub fn name(&self) -> &str {
         self.inner.name()
+    }
+
+    /// Returns the aliases for this function.
+    pub fn aliases(&self) -> &[String] {
+        self.inner.aliases()
     }
 
     /// See [`AggregateUDFImpl::schema_name`] for more details.
@@ -205,11 +210,6 @@ impl AggregateUDF {
         self.inner.is_nullable()
     }
 
-    /// Returns the aliases for this function.
-    pub fn aliases(&self) -> &[String] {
-        self.inner.aliases()
-    }
-
     /// Returns this function's signature (what input types are accepted)
     ///
     /// See [`AggregateUDFImpl::signature`] for more details.
@@ -227,7 +227,7 @@ impl AggregateUDF {
     /// Return the field of the function given its input fields
     ///
     /// See [`AggregateUDFImpl::return_field`] for more details.
-    pub fn return_field(&self, args: &[Field]) -> Result<Field> {
+    pub fn return_field(&self, args: &[FieldRef]) -> Result<FieldRef> {
         self.inner.return_field(args)
     }
 
@@ -241,7 +241,7 @@ impl AggregateUDF {
     /// for more details.
     ///
     /// This is used to support multi-phase aggregations
-    pub fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
+    pub fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         self.inner.state_fields(args)
     }
 
@@ -363,8 +363,8 @@ where
 /// # Basic Example
 /// ```
 /// # use std::any::Any;
-/// # use std::sync::LazyLock;
-/// # use arrow::datatypes::DataType;
+/// # use std::sync::{Arc, LazyLock};
+/// # use arrow::datatypes::{DataType, FieldRef};
 /// # use datafusion_common::{DataFusionError, plan_err, Result};
 /// # use datafusion_expr::{col, ColumnarValue, Signature, Volatility, Expr, Documentation};
 /// # use datafusion_expr::{AggregateUDFImpl, AggregateUDF, Accumulator, function::{AccumulatorArgs, StateFieldsArgs}};
@@ -394,7 +394,7 @@ where
 /// fn get_doc() -> &'static Documentation {
 ///     &DOCUMENTATION
 /// }
-///    
+///
 /// /// Implement the AggregateUDFImpl trait for GeoMeanUdf
 /// impl AggregateUDFImpl for GeoMeanUdf {
 ///    fn as_any(&self) -> &dyn Any { self }
@@ -408,14 +408,14 @@ where
 ///    }
 ///    // This is the accumulator factory; DataFusion uses it to create new accumulators.
 ///    fn accumulator(&self, _acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> { unimplemented!() }
-///    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
+///    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
 ///        Ok(vec![
-///             args.return_field.clone().with_name("value"),
-///             Field::new("ordering", DataType::UInt32, true)
+///             Arc::new(args.return_field.as_ref().clone().with_name("value")),
+///             Arc::new(Field::new("ordering", DataType::UInt32, true))
 ///        ])
 ///    }
 ///    fn documentation(&self) -> Option<&Documentation> {
-///        Some(get_doc())  
+///        Some(get_doc())
 ///    }
 /// }
 ///
@@ -434,6 +434,14 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
 
     /// Returns this function's name
     fn name(&self) -> &str;
+
+    /// Returns any aliases (alternate names) for this function.
+    ///
+    /// Note: `aliases` should only include names other than [`Self::name`].
+    /// Defaults to `[]` (no aliases)
+    fn aliases(&self) -> &[String] {
+        &[]
+    }
 
     /// Returns the name of the column this expression would create
     ///
@@ -474,7 +482,7 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
             schema_name.write_fmt(format_args!(" FILTER (WHERE {filter})"))?;
         };
 
-        if let Some(order_by) = order_by {
+        if !order_by.is_empty() {
             let clause = match self.is_ordered_set_aggregate() {
                 true => "WITHIN GROUP",
                 false => "ORDER BY",
@@ -519,7 +527,7 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
             schema_name.write_fmt(format_args!(" FILTER (WHERE {filter})"))?;
         };
 
-        if let Some(order_by) = order_by {
+        if !order_by.is_empty() {
             schema_name.write_fmt(format_args!(
                 " ORDER BY [{}]",
                 schema_name_from_sorts(order_by)?
@@ -608,10 +616,11 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
         if let Some(fe) = filter {
             display_name.write_fmt(format_args!(" FILTER (WHERE {fe})"))?;
         }
-        if let Some(ob) = order_by {
+        if !order_by.is_empty() {
             display_name.write_fmt(format_args!(
                 " ORDER BY [{}]",
-                ob.iter()
+                order_by
+                    .iter()
                     .map(|o| format!("{o}"))
                     .collect::<Vec<String>>()
                     .join(", ")
@@ -698,12 +707,16 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     /// 2. return types based on the **values** of the arguments (rather than
     ///    their **types**.
     /// 3. return types based on metadata within the fields of the inputs
-    fn return_field(&self, arg_fields: &[Field]) -> Result<Field> {
+    fn return_field(&self, arg_fields: &[FieldRef]) -> Result<FieldRef> {
         let arg_types: Vec<_> =
             arg_fields.iter().map(|f| f.data_type()).cloned().collect();
         let data_type = self.return_type(&arg_types)?;
 
-        Ok(Field::new(self.name(), data_type, self.is_nullable()))
+        Ok(Arc::new(Field::new(
+            self.name(),
+            data_type,
+            self.is_nullable(),
+        )))
     }
 
     /// Whether the aggregate function is nullable.
@@ -744,14 +757,16 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     /// The name of the fields must be unique within the query and thus should
     /// be derived from `name`. See [`format_state_name`] for a utility function
     /// to generate a unique name.
-    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
+    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         let fields = vec![args
             .return_field
+            .as_ref()
             .clone()
             .with_name(format_state_name(args.name, "value"))];
 
         Ok(fields
             .into_iter()
+            .map(Arc::new)
             .chain(args.ordering_fields.to_vec())
             .collect())
     }
@@ -780,14 +795,6 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
         _args: AccumulatorArgs,
     ) -> Result<Box<dyn GroupsAccumulator>> {
         not_impl_err!("GroupsAccumulator hasn't been implemented for {self:?} yet")
-    }
-
-    /// Returns any aliases (alternate names) for this function.
-    ///
-    /// Note: `aliases` should only include names other than [`Self::name`].
-    /// Defaults to `[]` (no aliases)
-    fn aliases(&self) -> &[String] {
-        &[]
     }
 
     /// Sliding accumulator is an alternative accumulator that can be used for
@@ -1045,7 +1052,7 @@ impl AggregateUDFImpl for AliasedAggregateUDFImpl {
         &self.aliases
     }
 
-    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
+    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         self.inner.state_fields(args)
     }
 
@@ -1178,7 +1185,7 @@ pub enum SetMonotonicity {
 #[cfg(test)]
 mod test {
     use crate::{AggregateUDF, AggregateUDFImpl};
-    use arrow::datatypes::{DataType, Field};
+    use arrow::datatypes::{DataType, FieldRef};
     use datafusion_common::Result;
     use datafusion_expr_common::accumulator::Accumulator;
     use datafusion_expr_common::signature::{Signature, Volatility};
@@ -1224,7 +1231,7 @@ mod test {
         ) -> Result<Box<dyn Accumulator>> {
             unimplemented!()
         }
-        fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<Field>> {
+        fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
             unimplemented!()
         }
     }
@@ -1264,7 +1271,7 @@ mod test {
         ) -> Result<Box<dyn Accumulator>> {
             unimplemented!()
         }
-        fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<Field>> {
+        fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
             unimplemented!()
         }
     }

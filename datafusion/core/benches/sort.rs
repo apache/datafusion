@@ -71,7 +71,6 @@ use std::sync::Arc;
 use arrow::array::StringViewArray;
 use arrow::{
     array::{DictionaryArray, Float64Array, Int64Array, StringArray},
-    compute::SortOptions,
     datatypes::{Int32Type, Schema},
     record_batch::RecordBatch,
 };
@@ -272,14 +271,11 @@ impl BenchCase {
 
 /// Make sort exprs for each column in `schema`
 fn make_sort_exprs(schema: &Schema) -> LexOrdering {
-    schema
+    let sort_exprs = schema
         .fields()
         .iter()
-        .map(|f| PhysicalSortExpr {
-            expr: col(f.name(), schema).unwrap(),
-            options: SortOptions::default(),
-        })
-        .collect()
+        .map(|f| PhysicalSortExpr::new_default(col(f.name(), schema).unwrap()));
+    LexOrdering::new(sort_exprs).unwrap()
 }
 
 /// Create streams of int64 (where approximately 1/3 values is repeated)

@@ -134,6 +134,10 @@ impl FileFormat for ArrowFormat {
         }
     }
 
+    fn compression_type(&self) -> Option<FileCompressionType> {
+        None
+    }
+
     async fn infer_schema(
         &self,
         _state: &dyn Session,
@@ -294,7 +298,7 @@ impl FileSink for ArrowFileSink {
         demux_task
             .join_unwind()
             .await
-            .map_err(DataFusionError::ExecutionJoin)??;
+            .map_err(|e| DataFusionError::ExecutionJoin(Box::new(e)))??;
         Ok(row_count as u64)
     }
 }

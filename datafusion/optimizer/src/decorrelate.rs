@@ -494,9 +494,12 @@ fn agg_exprs_evaluation_result_on_empty_batch(
                 let new_expr = match expr {
                     Expr::AggregateFunction(expr::AggregateFunction { func, .. }) => {
                         if func.name() == "count" {
-                            Transformed::yes(Expr::Literal(ScalarValue::Int64(Some(0))))
+                            Transformed::yes(Expr::Literal(
+                                ScalarValue::Int64(Some(0)),
+                                None,
+                            ))
                         } else {
-                            Transformed::yes(Expr::Literal(ScalarValue::Null))
+                            Transformed::yes(Expr::Literal(ScalarValue::Null, None))
                         }
                     }
                     _ => Transformed::no(expr),
@@ -587,10 +590,10 @@ fn filter_exprs_evaluation_result_on_empty_batch(
         let result_expr = simplifier.simplify(result_expr)?;
         match &result_expr {
             // evaluate to false or null on empty batch, no need to pull up
-            Expr::Literal(ScalarValue::Null)
-            | Expr::Literal(ScalarValue::Boolean(Some(false))) => None,
+            Expr::Literal(ScalarValue::Null, _)
+            | Expr::Literal(ScalarValue::Boolean(Some(false)), _) => None,
             // evaluate to true on empty batch, need to pull up the expr
-            Expr::Literal(ScalarValue::Boolean(Some(true))) => {
+            Expr::Literal(ScalarValue::Boolean(Some(true)), _) => {
                 for (name, exprs) in input_expr_result_map_for_count_bug {
                     expr_result_map_for_count_bug.insert(name.clone(), exprs.clone());
                 }
@@ -605,7 +608,7 @@ fn filter_exprs_evaluation_result_on_empty_batch(
                             Box::new(result_expr.clone()),
                             Box::new(input_expr.clone()),
                         )],
-                        else_expr: Some(Box::new(Expr::Literal(ScalarValue::Null))),
+                        else_expr: Some(Box::new(Expr::Literal(ScalarValue::Null, None))),
                     });
                     let expr_key = new_expr.schema_name().to_string();
                     expr_result_map_for_count_bug.insert(expr_key, new_expr);

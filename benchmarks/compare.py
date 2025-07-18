@@ -18,7 +18,9 @@
 
 from __future__ import annotations
 
+import argparse
 import json
+import math
 from dataclasses import dataclass
 from typing import Dict, List, Any
 from pathlib import Path
@@ -47,6 +49,7 @@ class QueryRun:
     query: int
     iterations: List[QueryResult]
     start_time: int
+    success: bool = True
 
     @classmethod
     def load_from(cls, data: Dict[str, Any]) -> QueryRun:
@@ -54,15 +57,55 @@ class QueryRun:
             query=data["query"],
             iterations=[QueryResult(**iteration) for iteration in data["iterations"]],
             start_time=data["start_time"],
+            success=data.get("success", True),
         )
 
     @property
-    def execution_time(self) -> float:
+    def min_execution_time(self) -> float:
         assert len(self.iterations) >= 1
 
-        # Use minimum execution time to account for variations / other
-        # things the system was doing
         return min(iteration.elapsed for iteration in self.iterations)
+
+
+    @property
+    def max_execution_time(self) -> float:
+        assert len(self.iterations) >= 1
+
+        return max(iteration.elapsed for iteration in self.iterations)
+
+
+    @property
+    def mean_execution_time(self) -> float:
+        assert len(self.iterations) >= 1
+
+        total = sum(iteration.elapsed for iteration in self.iterations)
+        return total / len(self.iterations)
+
+
+    @property
+    def stddev_execution_time(self) -> float:
+        assert len(self.iterations) >= 1
+
+        mean = self.mean_execution_time
+        squared_diffs = [(iteration.elapsed - mean) ** 2 for iteration in self.iterations]
+        variance = sum(squared_diffs) / len(self.iterations)
+        return math.sqrt(variance)
+
+    def execution_time_report(self, detailed = False) -> tuple[float, str]:
+        if detailed:
+            mean_execution_time = self.mean_execution_time
+            return (
+                mean_execution_time,
+                f"{self.min_execution_time:.2f} / {mean_execution_time :.2f} ±{self.stddev_execution_time:.2f} / {self.max_execution_time:.2f} ms"
+            )
+        else:
+            # Use minimum execution time to account for variations / other
+            # things the system was doing
+            min_execution_time = self.min_execution_time
+            return (
+                min_execution_time,
+                f"{min_execution_time :.2f} ms"
+            )
 
 
 @dataclass
@@ -106,6 +149,7 @@ def compare(
     baseline_path: Path,
     comparison_path: Path,
     noise_threshold: float,
+    detailed: bool,
 ) -> None:
     baseline = BenchmarkRun.load_from_file(baseline_path)
     comparison = BenchmarkRun.load_from_file(comparison_path)
@@ -125,16 +169,34 @@ def compare(
     faster_count = 0
     slower_count = 0
     no_change_count = 0
+    failure_count = 0
     total_baseline_time = 0
     total_comparison_time = 0
 
     for baseline_result, comparison_result in zip(baseline.queries, comparison.queries):
         assert baseline_result.query == comparison_result.query
+        
+        base_failed = not baseline_result.success
+        comp_failed = not comparison_result.success 
+        # If a query fails, its execution time is excluded from the performance comparison
+        if base_failed or comp_failed:
+            change_text = "incomparable" 
+            failure_count += 1
+            table.add_row(
+                f"Q{baseline_result.query}",
+                "FAIL" if base_failed else baseline_result.execution_time_report(detailed)[1],
+                "FAIL" if comp_failed else comparison_result.execution_time_report(detailed)[1],
+                change_text,
+            )
+            continue
 
-        total_baseline_time += baseline_result.execution_time
-        total_comparison_time += comparison_result.execution_time
+        baseline_value, baseline_text = baseline_result.execution_time_report(detailed)
+        comparison_value, comparison_text = comparison_result.execution_time_report(detailed)
 
-        change = comparison_result.execution_time / baseline_result.execution_time
+        total_baseline_time += baseline_value
+        total_comparison_time += comparison_value
+
+        change = comparison_value / baseline_value
 
         if (1.0 - noise_threshold) <= change <= (1.0 + noise_threshold):
             change_text = "no change"
@@ -148,16 +210,20 @@ def compare(
 
         table.add_row(
             f"Q{baseline_result.query}",
-            f"{baseline_result.execution_time:.2f}ms",
-            f"{comparison_result.execution_time:.2f}ms",
+            baseline_text,
+            comparison_text,
             change_text,
         )
 
     console.print(table)
 
     # Calculate averages
-    avg_baseline_time = total_baseline_time / len(baseline.queries)
-    avg_comparison_time = total_comparison_time / len(comparison.queries)
+    avg_baseline_time = 0.0
+    avg_comparison_time = 0.0
+    if len(baseline.queries) - failure_count > 0:
+        avg_baseline_time = total_baseline_time / (len(baseline.queries) - failure_count)
+    if len(comparison.queries) - failure_count > 0:
+        avg_comparison_time = total_comparison_time / (len(comparison.queries) - failure_count)
 
     # Summary table
     summary_table = Table(show_header=True, header_style="bold magenta")
@@ -171,6 +237,7 @@ def compare(
     summary_table.add_row("Queries Faster", str(faster_count))
     summary_table.add_row("Queries Slower", str(slower_count))
     summary_table.add_row("Queries with No Change", str(no_change_count))
+    summary_table.add_row("Queries with Failure", str(failure_count))
 
     console.print(summary_table)
 
@@ -193,10 +260,16 @@ def main() -> None:
         default=0.05,
         help="The threshold for statistically insignificant results (+/- %5).",
     )
+    compare_parser.add_argument(
+        "--detailed",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Show detailed result comparison instead of minimum runtime.",
+    )
 
     options = parser.parse_args()
 
-    compare(options.baseline_path, options.comparison_path, options.noise_threshold)
+    compare(options.baseline_path, options.comparison_path, options.noise_threshold, options.detailed)
 
 
 

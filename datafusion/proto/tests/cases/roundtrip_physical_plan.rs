@@ -18,6 +18,7 @@
 use std::any::Any;
 use std::fmt::{Display, Formatter};
 use std::ops::Deref;
+
 use std::sync::Arc;
 use std::vec;
 
@@ -60,7 +61,7 @@ use datafusion::logical_expr::{create_udf, JoinType, Operator, Volatility};
 use datafusion::physical_expr::expressions::Literal;
 use datafusion::physical_expr::window::{SlidingAggregateWindowExpr, StandardWindowExpr};
 use datafusion::physical_expr::{
-    LexOrdering, LexRequirement, PhysicalSortRequirement, ScalarFunctionExpr,
+    LexOrdering, PhysicalSortRequirement, ScalarFunctionExpr,
 };
 use datafusion::physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
@@ -74,6 +75,7 @@ use datafusion::physical_plan::expressions::{
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::joins::{
     HashJoinExec, NestedLoopJoinExec, PartitionMode, StreamJoinPartitionMode,
+    SymmetricHashJoinExec,
 };
 use datafusion::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion::physical_plan::placeholder_row::PlaceholderRowExec;
@@ -97,7 +99,7 @@ use datafusion_common::file_options::json_writer::JsonWriterOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
-    internal_err, not_impl_err, DataFusionError, Result, UnnestOptions,
+    internal_err, not_impl_err, DataFusionError, NullEquality, Result, UnnestOptions,
 };
 use datafusion_expr::{
     Accumulator, AccumulatorFactoryFunction, AggregateUDF, ColumnarValue, ScalarUDF,
@@ -109,8 +111,7 @@ use datafusion_functions_aggregate::string_agg::string_agg_udaf;
 use datafusion_proto::physical_plan::{
     AsExecutionPlan, DefaultPhysicalExtensionCodec, PhysicalExtensionCodec,
 };
-use datafusion_proto::protobuf;
-use datafusion_proto::protobuf::PhysicalPlanNode;
+use datafusion_proto::protobuf::{self, PhysicalPlanNode};
 
 /// Perform a serde roundtrip and assert that the string representation of the before and after plans
 /// are identical. Note that this often isn't sufficient to guarantee that no information is
@@ -268,7 +269,7 @@ fn roundtrip_hash_join() -> Result<()> {
                 join_type,
                 None,
                 *partition_mode,
-                false,
+                NullEquality::NullEqualsNothing,
             )?))?;
         }
     }
@@ -321,9 +322,9 @@ fn roundtrip_udwf() -> Result<()> {
         &[
             col("a", &schema)?
         ],
-        &LexOrdering::new(vec![
-            PhysicalSortExpr::new(col("b", &schema)?, SortOptions::new(true, true)),
-        ]),
+        &[
+            PhysicalSortExpr::new(col("b", &schema)?, SortOptions::new(true, true))
+        ],
         Arc::new(WindowFrame::new(None)),
     ));
 
@@ -360,13 +361,13 @@ fn roundtrip_window() -> Result<()> {
     let udwf_expr = Arc::new(StandardWindowExpr::new(
         nth_value_window,
         &[col("b", &schema)?],
-        &LexOrdering::new(vec![PhysicalSortExpr {
+        &[PhysicalSortExpr {
             expr: col("a", &schema)?,
             options: SortOptions {
                 descending: false,
                 nulls_first: false,
             },
-        }]),
+        }],
         Arc::new(window_frame),
     ));
 
@@ -380,7 +381,7 @@ fn roundtrip_window() -> Result<()> {
         .build()
         .map(Arc::new)?,
         &[],
-        &LexOrdering::default(),
+        &[],
         Arc::new(WindowFrame::new(None)),
     ));
 
@@ -400,7 +401,7 @@ fn roundtrip_window() -> Result<()> {
     let sliding_aggr_window_expr = Arc::new(SlidingAggregateWindowExpr::new(
         sum_expr,
         &[],
-        &LexOrdering::default(),
+        &[],
         Arc::new(window_frame),
     ));
 
@@ -528,13 +529,13 @@ fn rountrip_aggregate_with_sort() -> Result<()> {
 
     let groups: Vec<(Arc<dyn PhysicalExpr>, String)> =
         vec![(col("a", &schema)?, "unused".to_string())];
-    let sort_exprs = LexOrdering::new(vec![PhysicalSortExpr {
+    let sort_exprs = vec![PhysicalSortExpr {
         expr: col("b", &schema)?,
         options: SortOptions {
             descending: false,
             nulls_first: true,
         },
-    }]);
+    }];
 
     let aggregates =
         vec![
@@ -595,7 +596,7 @@ fn roundtrip_aggregate_udaf() -> Result<()> {
         Signature::exact(vec![DataType::Int64], Volatility::Immutable),
         return_type,
         accumulator,
-        vec![Field::new("value", DataType::Int64, true)],
+        vec![Field::new("value", DataType::Int64, true).into()],
     ));
 
     let ctx = SessionContext::new();
@@ -654,7 +655,7 @@ fn roundtrip_sort() -> Result<()> {
     let field_a = Field::new("a", DataType::Boolean, false);
     let field_b = Field::new("b", DataType::Int64, false);
     let schema = Arc::new(Schema::new(vec![field_a, field_b]));
-    let sort_exprs = LexOrdering::new(vec![
+    let sort_exprs = [
         PhysicalSortExpr {
             expr: col("a", &schema)?,
             options: SortOptions {
@@ -669,7 +670,8 @@ fn roundtrip_sort() -> Result<()> {
                 nulls_first: true,
             },
         },
-    ]);
+    ]
+    .into();
     roundtrip_test(Arc::new(SortExec::new(
         sort_exprs,
         Arc::new(EmptyExec::new(schema)),
@@ -681,7 +683,7 @@ fn roundtrip_sort_preserve_partitioning() -> Result<()> {
     let field_a = Field::new("a", DataType::Boolean, false);
     let field_b = Field::new("b", DataType::Int64, false);
     let schema = Arc::new(Schema::new(vec![field_a, field_b]));
-    let sort_exprs = LexOrdering::new(vec![
+    let sort_exprs: LexOrdering = [
         PhysicalSortExpr {
             expr: col("a", &schema)?,
             options: SortOptions {
@@ -696,7 +698,8 @@ fn roundtrip_sort_preserve_partitioning() -> Result<()> {
                 nulls_first: true,
             },
         },
-    ]);
+    ]
+    .into();
 
     roundtrip_test(Arc::new(SortExec::new(
         sort_exprs.clone(),
@@ -981,7 +984,7 @@ fn roundtrip_scalar_udf() -> Result<()> {
         "dummy",
         fun_def,
         vec![col("a", &schema)?],
-        Field::new("f", DataType::Int64, true),
+        Field::new("f", DataType::Int64, true).into(),
     );
 
     let project =
@@ -1109,7 +1112,7 @@ fn roundtrip_scalar_udf_extension_codec() -> Result<()> {
         "regex_udf",
         Arc::new(ScalarUDF::from(MyRegexUdf::new(".*".to_string()))),
         vec![col("text", &schema)?],
-        Field::new("f", DataType::Int64, true),
+        Field::new("f", DataType::Int64, true).into(),
     ));
 
     let filter = Arc::new(FilterExec::try_new(
@@ -1131,7 +1134,7 @@ fn roundtrip_scalar_udf_extension_codec() -> Result<()> {
         vec![Arc::new(PlainAggregateWindowExpr::new(
             aggr_expr.clone(),
             &[col("author", &schema)?],
-            &LexOrdering::default(),
+            &[],
             Arc::new(WindowFrame::new(None)),
         ))],
         filter,
@@ -1176,13 +1179,13 @@ fn roundtrip_udwf_extension_codec() -> Result<()> {
     let udwf_expr = Arc::new(StandardWindowExpr::new(
         udwf,
         &[col("b", &schema)?],
-        &LexOrdering::new(vec![PhysicalSortExpr {
+        &[PhysicalSortExpr {
             expr: col("a", &schema)?,
             options: SortOptions {
                 descending: false,
                 nulls_first: false,
             },
-        }]),
+        }],
         Arc::new(window_frame),
     ));
 
@@ -1211,7 +1214,7 @@ fn roundtrip_aggregate_udf_extension_codec() -> Result<()> {
         "regex_udf",
         Arc::new(ScalarUDF::from(MyRegexUdf::new(".*".to_string()))),
         vec![col("text", &schema)?],
-        Field::new("f", DataType::Int64, true),
+        Field::new("f", DataType::Int64, true).into(),
     ));
 
     let udaf = Arc::new(AggregateUDF::from(MyAggregateUDF::new(
@@ -1239,7 +1242,7 @@ fn roundtrip_aggregate_udf_extension_codec() -> Result<()> {
         vec![Arc::new(PlainAggregateWindowExpr::new(
             aggr_expr,
             &[col("author", &schema)?],
-            &LexOrdering::default(),
+            &[],
             Arc::new(WindowFrame::new(None)),
         ))],
         filter,
@@ -1335,13 +1338,14 @@ fn roundtrip_json_sink() -> Result<()> {
         file_sink_config,
         JsonWriterOptions::new(CompressionTypeVariant::UNCOMPRESSED),
     ));
-    let sort_order = LexRequirement::new(vec![PhysicalSortRequirement::new(
+    let sort_order = [PhysicalSortRequirement::new(
         Arc::new(Column::new("plan_type", 0)),
         Some(SortOptions {
             descending: true,
             nulls_first: false,
         }),
-    )]);
+    )]
+    .into();
 
     roundtrip_test(Arc::new(DataSinkExec::new(
         input,
@@ -1372,13 +1376,14 @@ fn roundtrip_csv_sink() -> Result<()> {
         file_sink_config,
         CsvWriterOptions::new(WriterBuilder::default(), CompressionTypeVariant::ZSTD),
     ));
-    let sort_order = LexRequirement::new(vec![PhysicalSortRequirement::new(
+    let sort_order = [PhysicalSortRequirement::new(
         Arc::new(Column::new("plan_type", 0)),
         Some(SortOptions {
             descending: true,
             nulls_first: false,
         }),
-    )]);
+    )]
+    .into();
 
     let ctx = SessionContext::new();
     let codec = DefaultPhysicalExtensionCodec {};
@@ -1428,13 +1433,14 @@ fn roundtrip_parquet_sink() -> Result<()> {
         file_sink_config,
         TableParquetOptions::default(),
     ));
-    let sort_order = LexRequirement::new(vec![PhysicalSortRequirement::new(
+    let sort_order = [PhysicalSortRequirement::new(
         Arc::new(Column::new("plan_type", 0)),
         Some(SortOptions {
             descending: true,
             nulls_first: false,
         }),
-    )]);
+    )]
+    .into();
 
     roundtrip_test(Arc::new(DataSinkExec::new(
         input,
@@ -1471,31 +1477,29 @@ fn roundtrip_sym_hash_join() -> Result<()> {
         ] {
             for left_order in &[
                 None,
-                Some(LexOrdering::new(vec![PhysicalSortExpr {
+                LexOrdering::new(vec![PhysicalSortExpr {
                     expr: Arc::new(Column::new("col", schema_left.index_of("col")?)),
                     options: Default::default(),
-                }])),
+                }]),
             ] {
-                for right_order in &[
+                for right_order in [
                     None,
-                    Some(LexOrdering::new(vec![PhysicalSortExpr {
+                    LexOrdering::new(vec![PhysicalSortExpr {
                         expr: Arc::new(Column::new("col", schema_right.index_of("col")?)),
                         options: Default::default(),
-                    }])),
+                    }]),
                 ] {
-                    roundtrip_test(Arc::new(
-                        datafusion::physical_plan::joins::SymmetricHashJoinExec::try_new(
-                            Arc::new(EmptyExec::new(schema_left.clone())),
-                            Arc::new(EmptyExec::new(schema_right.clone())),
-                            on.clone(),
-                            None,
-                            join_type,
-                            false,
-                            left_order.clone(),
-                            right_order.clone(),
-                            *partition_mode,
-                        )?,
-                    ))?;
+                    roundtrip_test(Arc::new(SymmetricHashJoinExec::try_new(
+                        Arc::new(EmptyExec::new(schema_left.clone())),
+                        Arc::new(EmptyExec::new(schema_right.clone())),
+                        on.clone(),
+                        None,
+                        join_type,
+                        NullEquality::NullEqualsNothing,
+                        left_order.clone(),
+                        right_order,
+                        *partition_mode,
+                    )?))?;
                 }
             }
         }
@@ -1732,4 +1736,106 @@ async fn roundtrip_physical_plan_node() {
         .unwrap();
 
     let _ = plan.execute(0, ctx.task_ctx()).unwrap();
+}
+
+/// Helper function to create a SessionContext with all TPC-H tables registered as external tables
+async fn tpch_context() -> Result<SessionContext> {
+    use datafusion_common::test_util::datafusion_test_data;
+
+    let ctx = SessionContext::new();
+    let test_data = datafusion_test_data();
+
+    // TPC-H table names
+    let tables = [
+        "part", "supplier", "partsupp", "customer", "orders", "lineitem", "nation",
+        "region",
+    ];
+
+    // Create external tables for all TPC-H tables
+    for table in &tables {
+        let table_sql = format!(
+            "CREATE EXTERNAL TABLE {table} STORED AS PARQUET LOCATION '{test_data}/tpch_{table}_small.parquet'"
+        );
+        ctx.sql(&table_sql).await.map_err(|e| {
+            DataFusionError::External(
+                format!("Failed to create {table} table: {e}").into(),
+            )
+        })?;
+    }
+
+    Ok(ctx)
+}
+
+/// Helper function to get TPC-H query SQL
+fn get_tpch_query_sql(query: usize) -> Result<Vec<String>> {
+    use std::fs;
+
+    if !(1..=22).contains(&query) {
+        return Err(DataFusionError::External(
+            format!("Invalid TPC-H query number: {query}").into(),
+        ));
+    }
+
+    let filename = format!("../../benchmarks/queries/q{query}.sql");
+    let contents = fs::read_to_string(&filename).map_err(|e| {
+        DataFusionError::External(
+            format!("Failed to read query file {filename}: {e}").into(),
+        )
+    })?;
+
+    Ok(contents
+        .split(';')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .collect())
+}
+
+#[tokio::test]
+async fn test_serialize_deserialize_tpch_queries() -> Result<()> {
+    // Create context with TPC-H tables
+    let ctx = tpch_context().await?;
+
+    // repeat to run all 22 queries
+    for query in 1..=22 {
+        // run all statements in the query
+        let sql = get_tpch_query_sql(query)?;
+        for stmt in sql {
+            let logical_plan = ctx.sql(&stmt).await?.into_unoptimized_plan();
+            let optimized_plan = ctx.state().optimize(&logical_plan)?;
+            let physical_plan = ctx.state().create_physical_plan(&optimized_plan).await?;
+
+            // serialize the physical plan
+            let codec = DefaultPhysicalExtensionCodec {};
+            let proto =
+                PhysicalPlanNode::try_from_physical_plan(physical_plan.clone(), &codec)?;
+
+            // deserialize the physical plan
+            let _deserialized_plan =
+                proto.try_into_physical_plan(&ctx, ctx.runtime_env().as_ref(), &codec)?;
+        }
+    }
+
+    Ok(())
+}
+
+// bug: https://github.com/apache/datafusion/issues/16772
+// Only 4 queries pass: q3, q5, q10, q12
+// Ignore the test until the bug is fixed
+#[ignore]
+#[tokio::test]
+async fn test_round_trip_tpch_queries() -> Result<()> {
+    // Create context with TPC-H tables
+    let ctx = tpch_context().await?;
+
+    // repeat to run all 22 queries
+    for query in 1..=22 {
+        // run all statements in the query
+        let sql = get_tpch_query_sql(query)?;
+        for stmt in sql {
+            roundtrip_test_sql_with_context(&stmt, &ctx).await?;
+        }
+    }
+
+    Ok(())
 }

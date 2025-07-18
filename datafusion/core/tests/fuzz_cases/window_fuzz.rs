@@ -252,7 +252,6 @@ async fn bounded_window_causal_non_causal() -> Result<()> {
     ];
 
     let partitionby_exprs = vec![];
-    let orderby_exprs = LexOrdering::default();
     // Window frame starts with "UNBOUNDED PRECEDING":
     let start_bound = WindowFrameBound::Preceding(ScalarValue::UInt64(None));
 
@@ -285,7 +284,7 @@ async fn bounded_window_causal_non_causal() -> Result<()> {
                     fn_name.to_string(),
                     &args,
                     &partitionby_exprs,
-                    orderby_exprs.as_ref(),
+                    &[],
                     Arc::new(window_frame),
                     &extended_schema,
                     false,
@@ -594,7 +593,7 @@ async fn run_window_test(
     let ctx = SessionContext::new_with_config(session_config);
     let (window_fn, args, fn_name) = get_random_function(&schema, &mut rng, is_linear);
     let window_frame = get_random_window_frame(&mut rng, is_linear);
-    let mut orderby_exprs = LexOrdering::default();
+    let mut orderby_exprs = vec![];
     for column in &orderby_columns {
         orderby_exprs.push(PhysicalSortExpr {
             expr: col(column, &schema)?,
@@ -602,13 +601,13 @@ async fn run_window_test(
         })
     }
     if orderby_exprs.len() > 1 && !window_frame.can_accept_multi_orderby() {
-        orderby_exprs = LexOrdering::new(orderby_exprs[0..1].to_vec());
+        orderby_exprs.truncate(1);
     }
     let mut partitionby_exprs = vec![];
     for column in &partition_by_columns {
         partitionby_exprs.push(col(column, &schema)?);
     }
-    let mut sort_keys = LexOrdering::default();
+    let mut sort_keys = vec![];
     for partition_by_expr in &partitionby_exprs {
         sort_keys.push(PhysicalSortExpr {
             expr: partition_by_expr.clone(),
@@ -622,7 +621,7 @@ async fn run_window_test(
     }
 
     let concat_input_record = concat_batches(&schema, &input1)?;
-    let source_sort_keys = LexOrdering::new(vec![
+    let source_sort_keys: LexOrdering = [
         PhysicalSortExpr {
             expr: col("a", &schema)?,
             options: Default::default(),
@@ -635,7 +634,8 @@ async fn run_window_test(
             expr: col("c", &schema)?,
             options: Default::default(),
         },
-    ]);
+    ]
+    .into();
     let mut exec1 = DataSourceExec::from_data_source(
         MemorySourceConfig::try_new(&[vec![concat_input_record]], schema.clone(), None)?
             .try_with_sort_information(vec![source_sort_keys.clone()])?,
@@ -643,7 +643,9 @@ async fn run_window_test(
     // Table is ordered according to ORDER BY a, b, c In linear test we use PARTITION BY b, ORDER BY a
     // For WindowAggExec  to produce correct result it need table to be ordered by b,a. Hence add a sort.
     if is_linear {
-        exec1 = Arc::new(SortExec::new(sort_keys, exec1)) as _;
+        if let Some(ordering) = LexOrdering::new(sort_keys) {
+            exec1 = Arc::new(SortExec::new(ordering, exec1)) as _;
+        }
     }
 
     let extended_schema = schema_add_window_field(&args, &schema, &window_fn, &fn_name)?;
@@ -654,7 +656,7 @@ async fn run_window_test(
             fn_name.clone(),
             &args,
             &partitionby_exprs,
-            orderby_exprs.as_ref(),
+            &orderby_exprs.clone(),
             Arc::new(window_frame.clone()),
             &extended_schema,
             false,
@@ -663,8 +665,8 @@ async fn run_window_test(
         false,
     )?) as _;
     let exec2 = DataSourceExec::from_data_source(
-        MemorySourceConfig::try_new(&[input1.clone()], schema.clone(), None)?
-            .try_with_sort_information(vec![source_sort_keys.clone()])?,
+        MemorySourceConfig::try_new(&[input1], schema, None)?
+            .try_with_sort_information(vec![source_sort_keys])?,
     );
     let running_window_exec = Arc::new(BoundedWindowAggExec::try_new(
         vec![create_window_expr(
@@ -672,7 +674,7 @@ async fn run_window_test(
             fn_name,
             &args,
             &partitionby_exprs,
-            orderby_exprs.as_ref(),
+            &orderby_exprs,
             Arc::new(window_frame.clone()),
             &extended_schema,
             false,

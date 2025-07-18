@@ -855,6 +855,22 @@ async fn aggregate_wo_projection_sorted_consume() -> Result<()> {
 }
 
 #[tokio::test]
+async fn aggregate_identical_grouping_expressions() -> Result<()> {
+    let proto_plan =
+        read_json("tests/testdata/test_plans/aggregate_identical_grouping_expressions.substrait.json");
+
+    let plan = generate_plan_from_substrait(proto_plan).await?;
+    assert_snapshot!(
+    plan,
+    @r#"
+    Aggregate: groupBy=[[Int32(1) AS grouping_col_1, Int32(1) AS grouping_col_2]], aggr=[[]]
+      TableScan: data projection=[]
+    "#
+            );
+    Ok(())
+}
+
+#[tokio::test]
 async fn simple_intersect_consume() -> Result<()> {
     let proto_plan = read_json("tests/testdata/test_plans/intersect.substrait.json");
 

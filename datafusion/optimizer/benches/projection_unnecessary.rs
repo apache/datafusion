@@ -30,7 +30,7 @@ fn is_projection_unnecessary_old(
     // First check if all expressions are trivial (cheaper operation than `projection_schema`)
     if !proj_exprs
         .iter()
-        .all(|expr| matches!(expr, Expr::Column(_) | Expr::Literal(_)))
+        .all(|expr| matches!(expr, Expr::Column(_) | Expr::Literal(_, _)))
     {
         return Ok(false);
     }

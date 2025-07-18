@@ -40,7 +40,7 @@ use datafusion::execution::SessionStateBuilder;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::{collect, displayable};
 use datafusion::prelude::*;
-use datafusion_benchmarks::util::{BenchmarkRun, CommonOpt};
+use datafusion_benchmarks::util::{BenchmarkRun, CommonOpt, QueryResult};
 use datafusion_common::instant::Instant;
 use datafusion_common::utils::get_available_parallelism;
 use datafusion_common::{exec_err, DEFAULT_PARQUET_EXTENSION};
@@ -75,11 +75,6 @@ struct ExternalAggrConfig {
     /// Path to JSON benchmark result to be compare using `compare.py`
     #[structopt(parse(from_os_str), short = "o", long = "output")]
     output_path: Option<PathBuf>,
-}
-
-struct QueryResult {
-    elapsed: std::time::Duration,
-    row_count: usize,
 }
 
 /// Query Memory Limits

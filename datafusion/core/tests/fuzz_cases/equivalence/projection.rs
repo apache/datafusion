@@ -87,10 +87,7 @@ fn project_orderings_random() -> Result<()> {
                     // Since ordered section satisfies schema, we expect
                     // that result will be same after sort (e.g sort was unnecessary).
                     assert!(
-                        is_table_same_after_sort(
-                            ordering.clone(),
-                            projected_batch.clone(),
-                        )?,
+                        is_table_same_after_sort(ordering.clone(), &projected_batch)?,
                         "{}",
                         err_msg
                     );
@@ -147,8 +144,7 @@ fn ordering_satisfy_after_projection_random() -> Result<()> {
             for proj_exprs in proj_exprs.iter().combinations(n_req) {
                 let proj_exprs = proj_exprs
                     .into_iter()
-                    .map(|(expr, name)| (Arc::clone(expr), name.to_string()))
-                    .collect::<Vec<_>>();
+                    .map(|(expr, name)| (Arc::clone(expr), name.to_string()));
                 let (projected_batch, projected_eq) = apply_projection(
                     proj_exprs.clone(),
                     &table_data_with_properties,
@@ -156,33 +152,34 @@ fn ordering_satisfy_after_projection_random() -> Result<()> {
                 )?;
 
                 let projection_mapping =
-                    ProjectionMapping::try_new(&proj_exprs, &test_schema)?;
+                    ProjectionMapping::try_new(proj_exprs, &test_schema)?;
 
                 let projected_exprs = projection_mapping
                     .iter()
-                    .map(|(_source, target)| Arc::clone(target))
+                    .flat_map(|(_, targets)| {
+                        targets.iter().map(|(target, _)| Arc::clone(target))
+                    })
                     .collect::<Vec<_>>();
 
-                for n_req in 0..=projected_exprs.len() {
+                for n_req in 1..=projected_exprs.len() {
                     for exprs in projected_exprs.iter().combinations(n_req) {
-                        let requirement = exprs
-                            .into_iter()
-                            .map(|expr| PhysicalSortExpr {
-                                expr: Arc::clone(expr),
-                                options: SORT_OPTIONS,
-                            })
-                            .collect::<LexOrdering>();
-                        let expected = is_table_same_after_sort(
-                            requirement.clone(),
-                            projected_batch.clone(),
-                        )?;
+                        let sort_exprs = exprs.into_iter().map(|expr| {
+                            PhysicalSortExpr::new(Arc::clone(expr), SORT_OPTIONS)
+                        });
+                        let Some(ordering) = LexOrdering::new(sort_exprs) else {
+                            unreachable!(
+                                "Test should always produce non-degenerate orderings"
+                            );
+                        };
+                        let expected =
+                            is_table_same_after_sort(ordering.clone(), &projected_batch)?;
                         let err_msg = format!(
-                            "Error in test case requirement:{requirement:?}, expected: {expected:?}, eq_properties: {eq_properties}, projected_eq: {projected_eq}, projection_mapping: {projection_mapping:?}"
+                            "Error in test case requirement:{ordering:?}, expected: {expected:?}, eq_properties: {eq_properties}, projected_eq: {projected_eq}, projection_mapping: {projection_mapping:?}"
                         );
                         // Check whether ordering_satisfy API result and
                         // experimental result matches.
                         assert_eq!(
-                            projected_eq.ordering_satisfy(requirement.as_ref()),
+                            projected_eq.ordering_satisfy(ordering)?,
                             expected,
                             "{err_msg}"
                         );

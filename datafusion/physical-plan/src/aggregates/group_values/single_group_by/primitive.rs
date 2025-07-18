@@ -105,7 +105,7 @@ impl<T: ArrowPrimitiveType> GroupValuesPrimitive<T> {
             map: HashTable::with_capacity(128),
             values: Vec::with_capacity(128),
             null_group: None,
-            random_state: Default::default(),
+            random_state: crate::aggregates::AGGREGATION_HASH_SEED,
         }
     }
 }

@@ -25,19 +25,68 @@
 
 //! Spark Expression packages for [DataFusion].
 //!
-//! This crate contains a collection of various Spark expression packages for DataFusion,
+//! This crate contains a collection of various Spark function packages for DataFusion,
 //! implemented using the extension API.
 //!
 //! [DataFusion]: https://crates.io/crates/datafusion
 //!
-//! # Available Packages
+//!
+//! # Available Function Packages
 //! See the list of [modules](#modules) in this crate for available packages.
 //!
-//! # Using A Package
-//! You can register all functions in all packages using the [`register_all`] function.
+//! # Example: using all function packages
 //!
-//! Each package also exports an `expr_fn` submodule to help create [`Expr`]s that invoke
-//! functions using a fluent style. For example:
+//! You can register all the functions in all packages using the [`register_all`]
+//! function as shown below.
+//!
+//! ```
+//! # use datafusion_execution::FunctionRegistry;
+//! # use datafusion_expr::{ScalarUDF, AggregateUDF, WindowUDF};
+//! # use datafusion_expr::planner::ExprPlanner;
+//! # use datafusion_common::Result;
+//! # use std::collections::HashSet;
+//! # use std::sync::Arc;
+//! # // Note: We can't use a real SessionContext here because the
+//! # // `datafusion_spark` crate has no dependence on the DataFusion crate
+//! # // thus use a dummy SessionContext that has enough of the implementation
+//! # struct SessionContext {}
+//! # impl FunctionRegistry for SessionContext {
+//! #    fn register_udf(&mut self, _udf: Arc<ScalarUDF>) -> Result<Option<Arc<ScalarUDF>>> { Ok (None) }
+//! #    fn udfs(&self) -> HashSet<String> { unimplemented!() }
+//! #    fn udf(&self, _name: &str) -> Result<Arc<ScalarUDF>> { unimplemented!() }
+//! #    fn udaf(&self, name: &str) -> Result<Arc<AggregateUDF>> {unimplemented!() }
+//! #    fn udwf(&self, name: &str) -> Result<Arc<WindowUDF>> { unimplemented!() }
+//! #    fn expr_planners(&self) -> Vec<Arc<dyn ExprPlanner>> { unimplemented!() }
+//! # }
+//! # impl SessionContext {
+//! #   fn new() -> Self { SessionContext {} }
+//! #   async fn sql(&mut self, _query: &str) -> Result<()> { Ok(()) }
+//! #  }
+//! #
+//! # async fn stub() -> Result<()> {
+//! // Create a new session context
+//! let mut ctx = SessionContext::new();
+//! // register all spark functions with the context
+//! datafusion_spark::register_all(&mut ctx)?;
+//! // run a query. Note the `sha2` function is now available which
+//! // has Spark semantics
+//! let df = ctx.sql("SELECT sha2('The input String', 256)").await?;
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! # Example: calling a specific function in Rust
+//!
+//! Each package also exports an `expr_fn` submodule that create [`Expr`]s for
+//! invoking functions via rust using a fluent style. For example, to invoke the
+//! `sha2` function, you can use the following code:
+//!
+//! ```rust
+//! # use datafusion_expr::{col, lit};
+//! use datafusion_spark::expr_fn::sha2;
+//! // Create the expression `sha2(my_data, 256)`
+//! let expr = sha2(col("my_data"), lit(256));
+//!```
 //!
 //![`Expr`]: datafusion_expr::Expr
 

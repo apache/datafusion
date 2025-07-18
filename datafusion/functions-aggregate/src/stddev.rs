@@ -23,8 +23,8 @@ use std::mem::align_of_val;
 use std::sync::Arc;
 
 use arrow::array::Float64Array;
+use arrow::datatypes::FieldRef;
 use arrow::{array::ArrayRef, datatypes::DataType, datatypes::Field};
-
 use datafusion_common::{internal_err, not_impl_err, Result};
 use datafusion_common::{plan_err, ScalarValue};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
@@ -109,7 +109,7 @@ impl AggregateUDFImpl for Stddev {
         Ok(DataType::Float64)
     }
 
-    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
+    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         Ok(vec![
             Field::new(
                 format_state_name(args.name, "count"),
@@ -122,7 +122,10 @@ impl AggregateUDFImpl for Stddev {
                 true,
             ),
             Field::new(format_state_name(args.name, "m2"), DataType::Float64, true),
-        ])
+        ]
+        .into_iter()
+        .map(Arc::new)
+        .collect())
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
@@ -217,7 +220,7 @@ impl AggregateUDFImpl for StddevPop {
         &self.signature
     }
 
-    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
+    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         Ok(vec![
             Field::new(
                 format_state_name(args.name, "count"),
@@ -230,7 +233,10 @@ impl AggregateUDFImpl for StddevPop {
                 true,
             ),
             Field::new(format_state_name(args.name, "m2"), DataType::Float64, true),
-        ])
+        ]
+        .into_iter()
+        .map(Arc::new)
+        .collect())
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
@@ -387,7 +393,6 @@ mod tests {
     use datafusion_expr::AggregateUDF;
     use datafusion_functions_aggregate_common::utils::get_accum_scalar_values_as_arrays;
     use datafusion_physical_expr::expressions::col;
-    use datafusion_physical_expr_common::sort_expr::LexOrdering;
     use std::sync::Arc;
 
     #[test]
@@ -436,10 +441,10 @@ mod tests {
         schema: &Schema,
     ) -> Result<ScalarValue> {
         let args1 = AccumulatorArgs {
-            return_field: &Field::new("f", DataType::Float64, true),
+            return_field: Field::new("f", DataType::Float64, true).into(),
             schema,
             ignore_nulls: false,
-            ordering_req: &LexOrdering::default(),
+            order_bys: &[],
             name: "a",
             is_distinct: false,
             is_reversed: false,
@@ -447,10 +452,10 @@ mod tests {
         };
 
         let args2 = AccumulatorArgs {
-            return_field: &Field::new("f", DataType::Float64, true),
+            return_field: Field::new("f", DataType::Float64, true).into(),
             schema,
             ignore_nulls: false,
-            ordering_req: &LexOrdering::default(),
+            order_bys: &[],
             name: "a",
             is_distinct: false,
             is_reversed: false,

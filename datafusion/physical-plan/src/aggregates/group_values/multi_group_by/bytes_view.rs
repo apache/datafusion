@@ -20,6 +20,7 @@ use crate::aggregates::group_values::null_builder::MaybeNullBufferBuilder;
 use arrow::array::{make_view, Array, ArrayRef, AsArray, ByteView, GenericByteViewArray};
 use arrow::buffer::{Buffer, ScalarBuffer};
 use arrow::datatypes::ByteViewType;
+use datafusion_common::Result;
 use itertools::izip;
 use std::marker::PhantomData;
 use std::mem::{replace, size_of};
@@ -148,14 +149,7 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
         match all_null_or_non_null {
             None => {
                 for &row in rows {
-                    // Null row case, set and return
-                    if arr.is_valid(row) {
-                        self.nulls.append(false);
-                        self.do_append_val_inner(arr, row);
-                    } else {
-                        self.nulls.append(true);
-                        self.views.push(0);
-                    }
+                    self.append_val_inner(array, row);
                 }
             }
 
@@ -493,8 +487,9 @@ impl<B: ByteViewType> GroupColumn for ByteViewGroupValueBuilder<B> {
         self.equal_to_inner(lhs_row, array, rhs_row)
     }
 
-    fn append_val(&mut self, array: &ArrayRef, row: usize) {
-        self.append_val_inner(array, row)
+    fn append_val(&mut self, array: &ArrayRef, row: usize) -> Result<()> {
+        self.append_val_inner(array, row);
+        Ok(())
     }
 
     fn vectorized_equal_to(
@@ -507,8 +502,9 @@ impl<B: ByteViewType> GroupColumn for ByteViewGroupValueBuilder<B> {
         self.vectorized_equal_to_inner(group_indices, array, rows, equal_to_results);
     }
 
-    fn vectorized_append(&mut self, array: &ArrayRef, rows: &[usize]) {
+    fn vectorized_append(&mut self, array: &ArrayRef, rows: &[usize]) -> Result<()> {
         self.vectorized_append_inner(array, rows);
+        Ok(())
     }
 
     fn len(&self) -> usize {
@@ -563,7 +559,7 @@ mod tests {
         ]);
         let builder_array: ArrayRef = Arc::new(builder_array);
         for row in 0..builder_array.len() {
-            builder.append_val(&builder_array, row);
+            builder.append_val(&builder_array, row).unwrap();
         }
 
         let output = Box::new(builder).build();
@@ -578,7 +574,7 @@ mod tests {
                       builder_array: &ArrayRef,
                       append_rows: &[usize]| {
             for &index in append_rows {
-                builder.append_val(builder_array, index);
+                builder.append_val(builder_array, index).unwrap();
             }
         };
 
@@ -601,7 +597,9 @@ mod tests {
         let append = |builder: &mut ByteViewGroupValueBuilder<StringViewType>,
                       builder_array: &ArrayRef,
                       append_rows: &[usize]| {
-            builder.vectorized_append(builder_array, append_rows);
+            builder
+                .vectorized_append(builder_array, append_rows)
+                .unwrap();
         };
 
         let equal_to = |builder: &ByteViewGroupValueBuilder<StringViewType>,
@@ -636,7 +634,9 @@ mod tests {
             None,
             None,
         ])) as _;
-        builder.vectorized_append(&all_nulls_input_array, &[0, 1, 2, 3, 4]);
+        builder
+            .vectorized_append(&all_nulls_input_array, &[0, 1, 2, 3, 4])
+            .unwrap();
 
         let mut equal_to_results = vec![true; all_nulls_input_array.len()];
         builder.vectorized_equal_to(
@@ -660,7 +660,9 @@ mod tests {
             Some("stringview4"),
             Some("stringview5"),
         ])) as _;
-        builder.vectorized_append(&all_not_nulls_input_array, &[0, 1, 2, 3, 4]);
+        builder
+            .vectorized_append(&all_not_nulls_input_array, &[0, 1, 2, 3, 4])
+            .unwrap();
 
         let mut equal_to_results = vec![true; all_not_nulls_input_array.len()];
         builder.vectorized_equal_to(
@@ -841,7 +843,7 @@ mod tests {
 
         // ####### Test situation 1~5 #######
         for row in 0..first_ones_to_append {
-            builder.append_val(&input_array, row);
+            builder.append_val(&input_array, row).unwrap();
         }
 
         assert_eq!(builder.completed.len(), 2);
@@ -879,7 +881,7 @@ mod tests {
         assert!(builder.views.is_empty());
 
         for row in first_ones_to_append..first_ones_to_append + second_ones_to_append {
-            builder.append_val(&input_array, row);
+            builder.append_val(&input_array, row).unwrap();
         }
 
         assert!(builder.completed.is_empty());
@@ -894,7 +896,7 @@ mod tests {
             ByteViewGroupValueBuilder::<StringViewType>::new().with_max_block_size(60);
 
         for row in 0..final_ones_to_append {
-            builder.append_val(&input_array, row);
+            builder.append_val(&input_array, row).unwrap();
         }
 
         assert_eq!(builder.completed.len(), 3);

@@ -19,9 +19,9 @@ use arrow::array::{
     ArrayRef, FixedSizeListArray, Int32Builder, MapArray, MapBuilder, StringBuilder,
 };
 use arrow::datatypes::{
-    DataType, Field, Fields, Int32Type, IntervalDayTimeType, IntervalMonthDayNanoType,
-    IntervalUnit, Schema, SchemaRef, TimeUnit, UnionFields, UnionMode,
-    DECIMAL256_MAX_PRECISION,
+    DataType, Field, FieldRef, Fields, Int32Type, IntervalDayTimeType,
+    IntervalMonthDayNanoType, IntervalUnit, Schema, SchemaRef, TimeUnit, UnionFields,
+    UnionMode, DECIMAL256_MAX_PRECISION,
 };
 use arrow::util::pretty::pretty_format_batches;
 use datafusion::datasource::file_format::json::{JsonFormat, JsonFormatFactory};
@@ -429,13 +429,13 @@ async fn roundtrip_logical_plan_copy_to_sql_options() -> Result<()> {
     let input = create_csv_scan(&ctx).await?;
     let file_type = format_as_file_type(Arc::new(CsvFormatFactory::new()));
 
-    let plan = LogicalPlan::Copy(CopyTo {
-        input: Arc::new(input),
-        output_url: "test.csv".to_string(),
-        partition_by: vec!["a".to_string(), "b".to_string(), "c".to_string()],
+    let plan = LogicalPlan::Copy(CopyTo::new(
+        Arc::new(input),
+        "test.csv".to_string(),
+        vec!["a".to_string(), "b".to_string(), "c".to_string()],
         file_type,
-        options: Default::default(),
-    });
+        Default::default(),
+    ));
 
     let codec = CsvLogicalExtensionCodec {};
     let bytes = logical_plan_to_bytes_with_extension_codec(&plan, &codec)?;
@@ -469,13 +469,13 @@ async fn roundtrip_logical_plan_copy_to_writer_options() -> Result<()> {
         ParquetFormatFactory::new_with_options(parquet_format),
     ));
 
-    let plan = LogicalPlan::Copy(CopyTo {
-        input: Arc::new(input),
-        output_url: "test.parquet".to_string(),
+    let plan = LogicalPlan::Copy(CopyTo::new(
+        Arc::new(input),
+        "test.parquet".to_string(),
+        vec!["a".to_string(), "b".to_string(), "c".to_string()],
         file_type,
-        partition_by: vec!["a".to_string(), "b".to_string(), "c".to_string()],
-        options: Default::default(),
-    });
+        Default::default(),
+    ));
 
     let codec = ParquetLogicalExtensionCodec {};
     let bytes = logical_plan_to_bytes_with_extension_codec(&plan, &codec)?;
@@ -501,13 +501,13 @@ async fn roundtrip_logical_plan_copy_to_arrow() -> Result<()> {
 
     let file_type = format_as_file_type(Arc::new(ArrowFormatFactory::new()));
 
-    let plan = LogicalPlan::Copy(CopyTo {
-        input: Arc::new(input),
-        output_url: "test.arrow".to_string(),
-        partition_by: vec!["a".to_string(), "b".to_string(), "c".to_string()],
+    let plan = LogicalPlan::Copy(CopyTo::new(
+        Arc::new(input),
+        "test.arrow".to_string(),
+        vec!["a".to_string(), "b".to_string(), "c".to_string()],
         file_type,
-        options: Default::default(),
-    });
+        Default::default(),
+    ));
 
     let codec = ArrowLogicalExtensionCodec {};
     let bytes = logical_plan_to_bytes_with_extension_codec(&plan, &codec)?;
@@ -548,13 +548,13 @@ async fn roundtrip_logical_plan_copy_to_csv() -> Result<()> {
         csv_format.clone(),
     )));
 
-    let plan = LogicalPlan::Copy(CopyTo {
-        input: Arc::new(input),
-        output_url: "test.csv".to_string(),
-        partition_by: vec!["a".to_string(), "b".to_string(), "c".to_string()],
+    let plan = LogicalPlan::Copy(CopyTo::new(
+        Arc::new(input),
+        "test.csv".to_string(),
+        vec!["a".to_string(), "b".to_string(), "c".to_string()],
         file_type,
-        options: Default::default(),
-    });
+        Default::default(),
+    ));
 
     let codec = CsvLogicalExtensionCodec {};
     let bytes = logical_plan_to_bytes_with_extension_codec(&plan, &codec)?;
@@ -614,13 +614,13 @@ async fn roundtrip_logical_plan_copy_to_json() -> Result<()> {
         json_format.clone(),
     )));
 
-    let plan = LogicalPlan::Copy(CopyTo {
-        input: Arc::new(input),
-        output_url: "test.json".to_string(),
-        partition_by: vec!["a".to_string(), "b".to_string(), "c".to_string()],
+    let plan = LogicalPlan::Copy(CopyTo::new(
+        Arc::new(input),
+        "test.json".to_string(),
+        vec!["a".to_string(), "b".to_string(), "c".to_string()],
         file_type,
-        options: Default::default(),
-    });
+        Default::default(),
+    ));
 
     // Assume JsonLogicalExtensionCodec is implemented similarly to CsvLogicalExtensionCodec
     let codec = JsonLogicalExtensionCodec {};
@@ -686,13 +686,13 @@ async fn roundtrip_logical_plan_copy_to_parquet() -> Result<()> {
         ParquetFormatFactory::new_with_options(parquet_format.clone()),
     ));
 
-    let plan = LogicalPlan::Copy(CopyTo {
-        input: Arc::new(input),
-        output_url: "test.parquet".to_string(),
-        partition_by: vec!["a".to_string(), "b".to_string(), "c".to_string()],
+    let plan = LogicalPlan::Copy(CopyTo::new(
+        Arc::new(input),
+        "test.parquet".to_string(),
+        vec!["a".to_string(), "b".to_string(), "c".to_string()],
         file_type,
-        options: Default::default(),
-    });
+        Default::default(),
+    ));
 
     // Assume ParquetLogicalExtensionCodec is implemented similarly to JsonLogicalExtensionCodec
     let codec = ParquetLogicalExtensionCodec {};
@@ -960,8 +960,8 @@ async fn roundtrip_expr_api() -> Result<()> {
         array_replace_all(make_array(vec![lit(1), lit(2), lit(3)]), lit(2), lit(4)),
         count(lit(1)),
         count_distinct(lit(1)),
-        first_value(lit(1), None),
-        first_value(lit(1), Some(vec![lit(2).sort(true, true)])),
+        first_value(lit(1), vec![]),
+        first_value(lit(1), vec![lit(2).sort(true, true)]),
         functions_window::nth_value::first_value(lit(1)),
         functions_window::nth_value::last_value(lit(1)),
         functions_window::nth_value::nth_value(lit(1), 1),
@@ -1968,7 +1968,7 @@ fn roundtrip_case_with_null() {
     let test_expr = Expr::Case(Case::new(
         Some(Box::new(lit(1.0_f32))),
         vec![(Box::new(lit(2.0_f32)), Box::new(lit(3.0_f32)))],
-        Some(Box::new(Expr::Literal(ScalarValue::Null))),
+        Some(Box::new(Expr::Literal(ScalarValue::Null, None))),
     ));
 
     let ctx = SessionContext::new();
@@ -1977,7 +1977,7 @@ fn roundtrip_case_with_null() {
 
 #[test]
 fn roundtrip_null_literal() {
-    let test_expr = Expr::Literal(ScalarValue::Null);
+    let test_expr = Expr::Literal(ScalarValue::Null, None);
 
     let ctx = SessionContext::new();
     roundtrip_expr_test(test_expr, ctx);
@@ -2181,7 +2181,7 @@ fn roundtrip_aggregate_udf() {
         vec![lit(1.0_f64)],
         false,
         Some(Box::new(lit(true))),
-        None,
+        vec![],
         None,
     ));
 
@@ -2359,7 +2359,7 @@ fn roundtrip_window() {
     let ctx = SessionContext::new();
 
     // 1. without window_frame
-    let test_expr1 = Expr::WindowFunction(expr::WindowFunction::new(
+    let test_expr1 = Expr::from(expr::WindowFunction::new(
         WindowFunctionDefinition::WindowUDF(rank_udwf()),
         vec![],
     ))
@@ -2370,7 +2370,7 @@ fn roundtrip_window() {
     .unwrap();
 
     // 2. with default window_frame
-    let test_expr2 = Expr::WindowFunction(expr::WindowFunction::new(
+    let test_expr2 = Expr::from(expr::WindowFunction::new(
         WindowFunctionDefinition::WindowUDF(rank_udwf()),
         vec![],
     ))
@@ -2387,7 +2387,7 @@ fn roundtrip_window() {
         WindowFrameBound::Following(ScalarValue::UInt64(Some(2))),
     );
 
-    let test_expr3 = Expr::WindowFunction(expr::WindowFunction::new(
+    let test_expr3 = Expr::from(expr::WindowFunction::new(
         WindowFunctionDefinition::WindowUDF(rank_udwf()),
         vec![],
     ))
@@ -2404,7 +2404,7 @@ fn roundtrip_window() {
         WindowFrameBound::Following(ScalarValue::UInt64(Some(2))),
     );
 
-    let test_expr4 = Expr::WindowFunction(expr::WindowFunction::new(
+    let test_expr4 = Expr::from(expr::WindowFunction::new(
         WindowFunctionDefinition::AggregateUDF(max_udaf()),
         vec![col("col1")],
     ))
@@ -2454,7 +2454,7 @@ fn roundtrip_window() {
         Arc::new(vec![DataType::Float64, DataType::UInt32]),
     );
 
-    let test_expr5 = Expr::WindowFunction(expr::WindowFunction::new(
+    let test_expr5 = Expr::from(expr::WindowFunction::new(
         WindowFunctionDefinition::AggregateUDF(Arc::new(dummy_agg.clone())),
         vec![col("col1")],
     ))
@@ -2516,9 +2516,13 @@ fn roundtrip_window() {
             make_partition_evaluator()
         }
 
-        fn field(&self, field_args: WindowUDFFieldArgs) -> Result<Field> {
+        fn field(&self, field_args: WindowUDFFieldArgs) -> Result<FieldRef> {
             if let Some(return_field) = field_args.get_input_field(0) {
-                Ok(return_field.with_name(field_args.name()))
+                Ok(return_field
+                    .as_ref()
+                    .clone()
+                    .with_name(field_args.name())
+                    .into())
             } else {
                 plan_err!(
                     "dummy_udwf expects 1 argument, got {}: {:?}",
@@ -2535,7 +2539,7 @@ fn roundtrip_window() {
 
     let dummy_window_udf = WindowUDF::from(SimpleWindowUDF::new());
 
-    let test_expr6 = Expr::WindowFunction(expr::WindowFunction::new(
+    let test_expr6 = Expr::from(expr::WindowFunction::new(
         WindowFunctionDefinition::WindowUDF(Arc::new(dummy_window_udf.clone())),
         vec![col("col1")],
     ))
@@ -2545,7 +2549,7 @@ fn roundtrip_window() {
     .build()
     .unwrap();
 
-    let text_expr7 = Expr::WindowFunction(expr::WindowFunction::new(
+    let text_expr7 = Expr::from(expr::WindowFunction::new(
         WindowFunctionDefinition::AggregateUDF(avg_udaf()),
         vec![col("col1")],
     ))

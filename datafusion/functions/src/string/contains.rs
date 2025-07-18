@@ -166,15 +166,15 @@ mod test {
         ])));
         let scalar = ColumnarValue::Scalar(ScalarValue::Utf8(Some("x?(".to_string())));
         let arg_fields = vec![
-            Field::new("a", DataType::Utf8, true),
-            Field::new("a", DataType::Utf8, true),
+            Field::new("a", DataType::Utf8, true).into(),
+            Field::new("a", DataType::Utf8, true).into(),
         ];
 
         let args = ScalarFunctionArgs {
             args: vec![array, scalar],
-            arg_fields: arg_fields.iter().collect(),
+            arg_fields,
             number_rows: 2,
-            return_field: &Field::new("f", DataType::Boolean, true),
+            return_field: Field::new("f", DataType::Boolean, true).into(),
         };
 
         let actual = udf.invoke_with_args(args).unwrap();
@@ -191,8 +191,11 @@ mod test {
     #[test]
     fn test_contains_api() {
         let expr = contains(
-            Expr::Literal(ScalarValue::Utf8(Some("the quick brown fox".to_string()))),
-            Expr::Literal(ScalarValue::Utf8(Some("row".to_string()))),
+            Expr::Literal(
+                ScalarValue::Utf8(Some("the quick brown fox".to_string())),
+                None,
+            ),
+            Expr::Literal(ScalarValue::Utf8(Some("row".to_string())), None),
         );
         assert_eq!(
             expr.to_string(),

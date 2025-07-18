@@ -54,7 +54,7 @@ impl OptimizerRule for EliminateJoin {
         match plan {
             LogicalPlan::Join(join) if join.join_type == Inner && join.on.is_empty() => {
                 match join.filter {
-                    Some(Expr::Literal(ScalarValue::Boolean(Some(false)))) => Ok(
+                    Some(Expr::Literal(ScalarValue::Boolean(Some(false)), _)) => Ok(
                         Transformed::yes(LogicalPlan::EmptyRelation(EmptyRelation {
                             produce_one_row: false,
                             schema: join.schema,

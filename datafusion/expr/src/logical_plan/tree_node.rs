@@ -132,7 +132,7 @@ impl TreeNode for LogicalPlan {
                 join_type,
                 join_constraint,
                 schema,
-                null_equals_null,
+                null_equality,
             }) => (left, right).map_elements(f)?.update_data(|(left, right)| {
                 LogicalPlan::Join(Join {
                     left,
@@ -142,7 +142,7 @@ impl TreeNode for LogicalPlan {
                     join_type,
                     join_constraint,
                     schema,
-                    null_equals_null,
+                    null_equality,
                 })
             }),
             LogicalPlan::Limit(Limit { skip, fetch, input }) => input
@@ -243,6 +243,7 @@ impl TreeNode for LogicalPlan {
                 partition_by,
                 file_type,
                 options,
+                output_schema,
             }) => input.map_elements(f)?.update_data(|input| {
                 LogicalPlan::Copy(CopyTo {
                     input,
@@ -250,6 +251,7 @@ impl TreeNode for LogicalPlan {
                     partition_by,
                     file_type,
                     options,
+                    output_schema,
                 })
             }),
             LogicalPlan::Ddl(ddl) => {
@@ -313,9 +315,9 @@ impl TreeNode for LogicalPlan {
                 LogicalPlan::Unnest(Unnest {
                     input,
                     exec_columns: input_columns,
-                    dependency_indices,
                     list_type_columns,
                     struct_type_columns,
+                    dependency_indices,
                     schema,
                     options,
                 })
@@ -436,11 +438,11 @@ impl LogicalPlan {
                 filters.apply_elements(f)
             }
             LogicalPlan::Unnest(unnest) => {
-                let columns = unnest.exec_columns.clone();
-
-                let exprs = columns
+                let exprs = unnest
+                    .exec_columns
                     .iter()
-                    .map(|c| Expr::Column(c.clone()))
+                    .cloned()
+                    .map(Expr::Column)
                     .collect::<Vec<_>>();
                 exprs.apply_elements(f)
             }
@@ -561,7 +563,7 @@ impl LogicalPlan {
                 join_type,
                 join_constraint,
                 schema,
-                null_equals_null,
+                null_equality,
             }) => (on, filter).map_elements(f)?.update_data(|(on, filter)| {
                 LogicalPlan::Join(Join {
                     left,
@@ -571,7 +573,7 @@ impl LogicalPlan {
                     join_type,
                     join_constraint,
                     schema,
-                    null_equals_null,
+                    null_equality,
                 })
             }),
             LogicalPlan::Sort(Sort { expr, input, fetch }) => expr

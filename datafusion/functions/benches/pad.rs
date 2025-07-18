@@ -101,18 +101,17 @@ fn invoke_pad_with_args(
     number_rows: usize,
     left_pad: bool,
 ) -> Result<ColumnarValue, DataFusionError> {
-    let arg_fields_owned = args
+    let arg_fields = args
         .iter()
         .enumerate()
-        .map(|(idx, arg)| Field::new(format!("arg_{idx}"), arg.data_type(), true))
+        .map(|(idx, arg)| Field::new(format!("arg_{idx}"), arg.data_type(), true).into())
         .collect::<Vec<_>>();
-    let arg_fields = arg_fields_owned.iter().collect::<Vec<_>>();
 
     let scalar_args = ScalarFunctionArgs {
         args: args.clone(),
         arg_fields,
         number_rows,
-        return_field: &Field::new("f", DataType::Utf8, true),
+        return_field: Field::new("f", DataType::Utf8, true).into(),
     };
 
     if left_pad {

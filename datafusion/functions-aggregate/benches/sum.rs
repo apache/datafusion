@@ -15,24 +15,26 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::sync::Arc;
+
 use arrow::array::{ArrayRef, BooleanArray};
 use arrow::datatypes::{DataType, Field, Int64Type, Schema};
 use arrow::util::bench_util::{create_boolean_array, create_primitive_array};
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+
 use datafusion_expr::{function::AccumulatorArgs, AggregateUDFImpl, GroupsAccumulator};
 use datafusion_functions_aggregate::sum::Sum;
 use datafusion_physical_expr::expressions::col;
-use datafusion_physical_expr_common::sort_expr::LexOrdering;
-use std::sync::Arc;
+
+use criterion::{black_box, criterion_group, criterion_main, Criterion};
 
 fn prepare_accumulator(data_type: &DataType) -> Box<dyn GroupsAccumulator> {
-    let field = Field::new("f", data_type.clone(), true);
-    let schema = Arc::new(Schema::new(vec![field.clone()]));
+    let field = Field::new("f", data_type.clone(), true).into();
+    let schema = Arc::new(Schema::new(vec![Arc::clone(&field)]));
     let accumulator_args = AccumulatorArgs {
-        return_field: &field,
+        return_field: field,
         schema: &schema,
         ignore_nulls: false,
-        ordering_req: &LexOrdering::default(),
+        order_bys: &[],
         is_reversed: false,
         name: "SUM(f)",
         is_distinct: false,

@@ -18,6 +18,7 @@
 //! `lead` and `lag` window function implementations
 
 use crate::utils::{get_scalar_value_from_args, get_signed_integer};
+use arrow::datatypes::FieldRef;
 use datafusion_common::arrow::array::ArrayRef;
 use datafusion_common::arrow::datatypes::DataType;
 use datafusion_common::arrow::datatypes::Field;
@@ -274,10 +275,14 @@ impl WindowUDFImpl for WindowShift {
         }))
     }
 
-    fn field(&self, field_args: WindowUDFFieldArgs) -> Result<Field> {
+    fn field(&self, field_args: WindowUDFFieldArgs) -> Result<FieldRef> {
         let return_field = parse_expr_field(field_args.input_fields())?;
 
-        Ok(return_field.with_name(field_args.name()))
+        Ok(return_field
+            .as_ref()
+            .clone()
+            .with_name(field_args.name())
+            .into())
     }
 
     fn reverse_expr(&self) -> ReversedUDWF {
@@ -309,7 +314,7 @@ impl WindowUDFImpl for WindowShift {
 /// For more details see: <https://github.com/apache/datafusion/issues/12717>
 fn parse_expr(
     input_exprs: &[Arc<dyn PhysicalExpr>],
-    input_fields: &[Field],
+    input_fields: &[FieldRef],
 ) -> Result<Arc<dyn PhysicalExpr>> {
     assert!(!input_exprs.is_empty());
     assert!(!input_fields.is_empty());
@@ -331,31 +336,35 @@ fn parse_expr(
     })
 }
 
-static NULL_FIELD: LazyLock<Field> =
-    LazyLock::new(|| Field::new("value", DataType::Null, true));
+static NULL_FIELD: LazyLock<FieldRef> =
+    LazyLock::new(|| Field::new("value", DataType::Null, true).into());
 
 /// Returns the field of the default value(if provided) when the
 /// expression is `NULL`.
 ///
 /// Otherwise, returns the expression field unchanged.
-fn parse_expr_field(input_fields: &[Field]) -> Result<Field> {
+fn parse_expr_field(input_fields: &[FieldRef]) -> Result<FieldRef> {
     assert!(!input_fields.is_empty());
     let expr_field = input_fields.first().unwrap_or(&NULL_FIELD);
 
     // Handles the most common case where NULL is unexpected
     if !expr_field.data_type().is_null() {
-        return Ok(expr_field.clone().with_nullable(true));
+        return Ok(expr_field.as_ref().clone().with_nullable(true).into());
     }
 
     let default_value_field = input_fields.get(2).unwrap_or(&NULL_FIELD);
-    Ok(default_value_field.clone().with_nullable(true))
+    Ok(default_value_field
+        .as_ref()
+        .clone()
+        .with_nullable(true)
+        .into())
 }
 
 /// Handles type coercion and null value refinement for default value
 /// argument depending on the data type of the input expression.
 fn parse_default_value(
     input_exprs: &[Arc<dyn PhysicalExpr>],
-    input_types: &[Field],
+    input_types: &[FieldRef],
 ) -> Result<ScalarValue> {
     let expr_field = parse_expr_field(input_types)?;
     let unparsed = get_scalar_value_from_args(input_exprs, 2)?;
@@ -710,7 +719,7 @@ mod tests {
             WindowShift::lead(),
             PartitionEvaluatorArgs::new(
                 &[expr],
-                &[Field::new("f", DataType::Int32, true)],
+                &[Field::new("f", DataType::Int32, true).into()],
                 false,
                 false,
             ),
@@ -737,7 +746,7 @@ mod tests {
             WindowShift::lag(),
             PartitionEvaluatorArgs::new(
                 &[expr],
-                &[Field::new("f", DataType::Int32, true)],
+                &[Field::new("f", DataType::Int32, true).into()],
                 false,
                 false,
             ),
@@ -768,6 +777,7 @@ mod tests {
         let input_fields = [DataType::Int32, DataType::Int32, DataType::Int32]
             .into_iter()
             .map(|d| Field::new("f", d, true))
+            .map(Arc::new)
             .collect::<Vec<_>>();
 
         test_i32_result(

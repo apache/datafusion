@@ -131,4 +131,3 @@ SELECT max(column2) OVER (ORDER BY column1 ROWS BETWEEN 1 PRECEDING AND 1 FOLLOW
 ----
 [4, 5]
 [4, 5]
-

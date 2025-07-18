@@ -198,7 +198,7 @@ pub(crate) fn resolve_positions_to_exprs(
     match expr {
         // sql_expr_to_logical_expr maps number to i64
         // https://github.com/apache/datafusion/blob/8d175c759e17190980f270b5894348dc4cff9bbf/datafusion/src/sql/planner.rs#L882-L887
-        Expr::Literal(ScalarValue::Int64(Some(position)))
+        Expr::Literal(ScalarValue::Int64(Some(position)), _)
             if position > 0_i64 && position <= select_exprs.len() as i64 =>
         {
             let index = (position - 1) as usize;
@@ -208,7 +208,7 @@ pub(crate) fn resolve_positions_to_exprs(
                 _ => select_expr.clone(),
             })
         }
-        Expr::Literal(ScalarValue::Int64(Some(position))) => plan_err!(
+        Expr::Literal(ScalarValue::Int64(Some(position)), _) => plan_err!(
             "Cannot find column with position {} in SELECT clause. Valid columns: 1 to {}",
             position, select_exprs.len()
         ),
@@ -241,15 +241,21 @@ pub fn window_expr_common_partition_keys(window_exprs: &[Expr]) -> Result<&[Expr
     let all_partition_keys = window_exprs
         .iter()
         .map(|expr| match expr {
-            Expr::WindowFunction(WindowFunction {
-                params: WindowFunctionParams { partition_by, .. },
-                ..
-            }) => Ok(partition_by),
-            Expr::Alias(Alias { expr, .. }) => match expr.as_ref() {
-                Expr::WindowFunction(WindowFunction {
+            Expr::WindowFunction(window_fun) => {
+                let WindowFunction {
                     params: WindowFunctionParams { partition_by, .. },
                     ..
-                }) => Ok(partition_by),
+                } = window_fun.as_ref();
+                Ok(partition_by)
+            }
+            Expr::Alias(Alias { expr, .. }) => match expr.as_ref() {
+                Expr::WindowFunction(window_fun) => {
+                    let WindowFunction {
+                        params: WindowFunctionParams { partition_by, .. },
+                        ..
+                    } = window_fun.as_ref();
+                    Ok(partition_by)
+                }
                 expr => exec_err!("Impossibly got non-window expr {expr:?}"),
             },
             expr => exec_err!("Impossibly got non-window expr {expr:?}"),

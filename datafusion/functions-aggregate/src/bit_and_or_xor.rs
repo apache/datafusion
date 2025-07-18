@@ -25,8 +25,8 @@ use std::mem::{size_of, size_of_val};
 use ahash::RandomState;
 use arrow::array::{downcast_integer, Array, ArrayRef, AsArray};
 use arrow::datatypes::{
-    ArrowNativeType, ArrowNumericType, DataType, Field, Int16Type, Int32Type, Int64Type,
-    Int8Type, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
+    ArrowNativeType, ArrowNumericType, DataType, Field, FieldRef, Int16Type, Int32Type,
+    Int64Type, Int8Type, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
 };
 
 use datafusion_common::cast::as_list_array;
@@ -263,7 +263,7 @@ impl AggregateUDFImpl for BitwiseOperation {
         downcast_bitwise_accumulator!(acc_args, self.operation, acc_args.is_distinct)
     }
 
-    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
+    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         if self.operation == BitwiseOperationType::Xor && args.is_distinct {
             Ok(vec![Field::new_list(
                 format_state_name(
@@ -273,13 +273,15 @@ impl AggregateUDFImpl for BitwiseOperation {
                 // See COMMENTS.md to understand why nullable is set to true
                 Field::new_list_field(args.return_type().clone(), true),
                 false,
-            )])
+            )
+            .into()])
         } else {
             Ok(vec![Field::new(
                 format_state_name(args.name, self.name()),
                 args.return_field.data_type().clone(),
                 true,
-            )])
+            )
+            .into()])
         }
     }
 

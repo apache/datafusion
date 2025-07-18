@@ -21,7 +21,7 @@ use std::sync::Arc;
 use super::{
     get_query_sql, get_tbl_tpch_table_schema, get_tpch_table_schema, TPCH_TABLES,
 };
-use crate::util::{BenchmarkRun, CommonOpt};
+use crate::util::{BenchmarkRun, CommonOpt, QueryResult};
 
 use arrow::record_batch::RecordBatch;
 use arrow::util::pretty::{self, pretty_format_batches};
@@ -121,12 +121,21 @@ impl RunOpt {
 
         for query_id in query_range {
             benchmark_run.start_new_case(&format!("Query {query_id}"));
-            let query_run = self.benchmark_query(query_id, &ctx).await?;
-            for iter in query_run {
-                benchmark_run.write_iter(iter.elapsed, iter.row_count);
+            let query_run = self.benchmark_query(query_id, &ctx).await;
+            match query_run {
+                Ok(query_results) => {
+                    for iter in query_results {
+                        benchmark_run.write_iter(iter.elapsed, iter.row_count);
+                    }
+                }
+                Err(e) => {
+                    benchmark_run.mark_failed();
+                    eprintln!("Query {query_id} failed: {e}");
+                }
             }
         }
         benchmark_run.maybe_write_json(self.output_path.as_ref())?;
+        benchmark_run.maybe_print_failures();
         Ok(())
     }
 
@@ -138,10 +147,11 @@ impl RunOpt {
         let mut millis = vec![];
         // run benchmark
         let mut query_results = vec![];
+
+        let sql = &get_query_sql(query_id)?;
+
         for i in 0..self.iterations() {
             let start = Instant::now();
-
-            let sql = &get_query_sql(query_id)?;
 
             // query 15 is special, with 3 statements. the second statement is the one from which we
             // want to capture the results
@@ -264,7 +274,7 @@ impl RunOpt {
                     (Arc::new(format), path, ".tbl")
                 }
                 "csv" => {
-                    let path = format!("{path}/{table}");
+                    let path = format!("{path}/csv/{table}");
                     let format = CsvFormat::default()
                         .with_delimiter(b',')
                         .with_has_header(true);
@@ -318,11 +328,6 @@ impl RunOpt {
             .partitions
             .unwrap_or_else(get_available_parallelism)
     }
-}
-
-struct QueryResult {
-    elapsed: std::time::Duration,
-    row_count: usize,
 }
 
 #[cfg(test)]

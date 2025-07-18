@@ -75,7 +75,7 @@ impl OptimizerRule for ExtractEquijoinPredicate {
                 join_type,
                 join_constraint,
                 schema,
-                null_equals_null,
+                null_equality,
             }) => {
                 let left_schema = left.schema();
                 let right_schema = right.schema();
@@ -92,7 +92,7 @@ impl OptimizerRule for ExtractEquijoinPredicate {
                         join_type,
                         join_constraint,
                         schema,
-                        null_equals_null,
+                        null_equality,
                     })))
                 } else {
                     Ok(Transformed::no(LogicalPlan::Join(Join {
@@ -103,7 +103,7 @@ impl OptimizerRule for ExtractEquijoinPredicate {
                         join_type,
                         join_constraint,
                         schema,
-                        null_equals_null,
+                        null_equality,
                     })))
                 }
             }

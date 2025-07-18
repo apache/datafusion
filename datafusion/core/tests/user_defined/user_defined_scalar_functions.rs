@@ -20,7 +20,7 @@ use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 
-use arrow::array::{as_string_array, record_batch, Int8Array, UInt64Array};
+use arrow::array::{as_string_array, create_array, record_batch, Int8Array, UInt64Array};
 use arrow::array::{
     builder::BooleanBuilder, cast::AsArray, Array, ArrayRef, Float32Array, Float64Array,
     Int32Array, RecordBatch, StringArray,
@@ -28,7 +28,7 @@ use arrow::array::{
 use arrow::compute::kernels::numeric::add;
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow_schema::extension::{Bool8, CanonicalExtensionType, ExtensionType};
-use arrow_schema::ArrowError;
+use arrow_schema::{ArrowError, FieldRef};
 use datafusion::common::test_util::batches_to_string;
 use datafusion::execution::context::{FunctionFactory, RegisterFunction, SessionState};
 use datafusion::prelude::*;
@@ -40,11 +40,12 @@ use datafusion_common::{
     assert_batches_eq, assert_batches_sorted_eq, assert_contains, exec_err, not_impl_err,
     plan_err, DFSchema, DataFusionError, Result, ScalarValue,
 };
+use datafusion_expr::expr::FieldMetadata;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::{
-    Accumulator, ColumnarValue, CreateFunction, CreateFunctionBody, LogicalPlanBuilder,
-    OperateFunctionArg, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl,
-    Signature, Volatility,
+    lit_with_metadata, Accumulator, ColumnarValue, CreateFunction, CreateFunctionBody,
+    LogicalPlanBuilder, OperateFunctionArg, ReturnFieldArgs, ScalarFunctionArgs,
+    ScalarUDF, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_functions_nested::range::range_udf;
 use parking_lot::Mutex;
@@ -814,7 +815,7 @@ impl ScalarUDFImpl for TakeUDF {
     ///
     /// 1. If the third argument is '0', return the type of the first argument
     /// 2. If the third argument is '1', return the type of the second argument
-    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<Field> {
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         if args.arg_fields.len() != 3 {
             return plan_err!("Expected 3 arguments, got {}.", args.arg_fields.len());
         }
@@ -845,7 +846,8 @@ impl ScalarUDFImpl for TakeUDF {
             self.name(),
             args.arg_fields[take_idx].data_type().to_owned(),
             true,
-        ))
+        )
+        .into())
     }
 
     // The actual implementation
@@ -971,10 +973,6 @@ impl ScalarUDFImpl for ScalarFunctionWrapper {
         let replacement = Self::replacement(&self.expr, &args)?;
 
         Ok(ExprSimplifyResult::Simplified(replacement))
-    }
-
-    fn aliases(&self) -> &[String] {
-        &[]
     }
 }
 
@@ -1183,7 +1181,7 @@ async fn create_scalar_function_from_sql_statement_postgres_syntax() -> Result<(
                 quote_style: None,
                 span: Span::empty(),
             }),
-            data_type: DataType::Utf8,
+            data_type: DataType::Utf8View,
             default_expr: None,
         }]),
         return_type: Some(DataType::Int32),
@@ -1412,9 +1410,10 @@ impl ScalarUDFImpl for MetadataBasedUdf {
         );
     }
 
-    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<Field> {
+    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
         Ok(Field::new(self.name(), DataType::UInt64, true)
-            .with_metadata(self.metadata.clone()))
+            .with_metadata(self.metadata.clone())
+            .into())
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -1527,6 +1526,66 @@ async fn test_metadata_based_udf() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn test_metadata_based_udf_with_literal() -> Result<()> {
+    let ctx = SessionContext::new();
+    let input_metadata: HashMap<String, String> =
+        [("modify_values".to_string(), "double_output".to_string())]
+            .into_iter()
+            .collect();
+    let input_metadata = FieldMetadata::from(input_metadata);
+    let df = ctx.sql("select 0;").await?.select(vec![
+        lit(5u64).alias_with_metadata("lit_with_doubling", Some(input_metadata.clone())),
+        lit(5u64).alias("lit_no_doubling"),
+        lit_with_metadata(5u64, Some(input_metadata))
+            .alias("lit_with_double_no_alias_metadata"),
+    ])?;
+
+    let output_metadata: HashMap<String, String> =
+        [("output_metatype".to_string(), "custom_value".to_string())]
+            .into_iter()
+            .collect();
+    let custom_udf = ScalarUDF::from(MetadataBasedUdf::new(output_metadata.clone()));
+
+    let plan = LogicalPlanBuilder::from(df.into_optimized_plan()?)
+        .project(vec![
+            custom_udf
+                .call(vec![col("lit_with_doubling")])
+                .alias("doubled_output"),
+            custom_udf
+                .call(vec![col("lit_no_doubling")])
+                .alias("not_doubled_output"),
+            custom_udf
+                .call(vec![col("lit_with_double_no_alias_metadata")])
+                .alias("double_without_alias_metadata"),
+        ])?
+        .build()?;
+
+    let actual = DataFrame::new(ctx.state(), plan).collect().await?;
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("doubled_output", DataType::UInt64, false)
+            .with_metadata(output_metadata.clone()),
+        Field::new("not_doubled_output", DataType::UInt64, false)
+            .with_metadata(output_metadata.clone()),
+        Field::new("double_without_alias_metadata", DataType::UInt64, false)
+            .with_metadata(output_metadata.clone()),
+    ]));
+
+    let expected = RecordBatch::try_new(
+        schema,
+        vec![
+            create_array!(UInt64, [10]),
+            create_array!(UInt64, [5]),
+            create_array!(UInt64, [10]),
+        ],
+    )?;
+
+    assert_eq!(expected, actual[0]);
+
+    Ok(())
+}
+
 /// This UDF is to test extension handling, both on the input and output
 /// sides. For the input, we will handle the data differently if there is
 /// the canonical extension type Bool8. For the output we will add a
@@ -1562,14 +1621,15 @@ impl ScalarUDFImpl for ExtensionBasedUdf {
         Ok(DataType::Utf8)
     }
 
-    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<Field> {
+    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
         Ok(Field::new("canonical_extension_udf", DataType::Utf8, true)
-            .with_extension_type(MyUserExtentionType {}))
+            .with_extension_type(MyUserExtentionType {})
+            .into())
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         assert_eq!(args.arg_fields.len(), 1);
-        let input_field = args.arg_fields[0];
+        let input_field = args.arg_fields[0].as_ref();
 
         let output_as_bool = matches!(
             CanonicalExtensionType::try_from(input_field),

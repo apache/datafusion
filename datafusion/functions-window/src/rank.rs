@@ -18,13 +18,8 @@
 //! Implementation of `rank`, `dense_rank`, and `percent_rank` window functions,
 //! which can be evaluated at runtime during query execution.
 
-use std::any::Any;
-use std::fmt::Debug;
-use std::iter;
-use std::ops::Range;
-use std::sync::{Arc, LazyLock};
-
 use crate::define_udwf_and_expr;
+use arrow::datatypes::FieldRef;
 use datafusion_common::arrow::array::ArrayRef;
 use datafusion_common::arrow::array::{Float64Array, UInt64Array};
 use datafusion_common::arrow::compute::SortOptions;
@@ -39,6 +34,11 @@ use datafusion_expr::{
 use datafusion_functions_window_common::field;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 use field::WindowUDFFieldArgs;
+use std::any::Any;
+use std::fmt::Debug;
+use std::iter;
+use std::ops::Range;
+use std::sync::{Arc, LazyLock};
 
 define_udwf_and_expr!(
     Rank,
@@ -218,14 +218,14 @@ impl WindowUDFImpl for Rank {
         }))
     }
 
-    fn field(&self, field_args: WindowUDFFieldArgs) -> Result<Field> {
+    fn field(&self, field_args: WindowUDFFieldArgs) -> Result<FieldRef> {
         let return_type = match self.rank_type {
             RankType::Basic | RankType::Dense => DataType::UInt64,
             RankType::Percent => DataType::Float64,
         };
 
         let nullable = false;
-        Ok(Field::new(field_args.name(), return_type, nullable))
+        Ok(Field::new(field_args.name(), return_type, nullable).into())
     }
 
     fn sort_options(&self) -> Option<SortOptions> {

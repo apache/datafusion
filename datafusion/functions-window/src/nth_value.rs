@@ -19,12 +19,7 @@
 
 use crate::utils::{get_scalar_value_from_args, get_signed_integer};
 
-use std::any::Any;
-use std::cmp::Ordering;
-use std::fmt::Debug;
-use std::ops::Range;
-use std::sync::LazyLock;
-
+use arrow::datatypes::FieldRef;
 use datafusion_common::arrow::array::ArrayRef;
 use datafusion_common::arrow::datatypes::{DataType, Field};
 use datafusion_common::{exec_datafusion_err, exec_err, Result, ScalarValue};
@@ -37,6 +32,11 @@ use datafusion_expr::{
 use datafusion_functions_window_common::field;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 use field::WindowUDFFieldArgs;
+use std::any::Any;
+use std::cmp::Ordering;
+use std::fmt::Debug;
+use std::ops::Range;
+use std::sync::LazyLock;
 
 get_or_init_udwf!(
     First,
@@ -309,7 +309,7 @@ impl WindowUDFImpl for NthValue {
         }))
     }
 
-    fn field(&self, field_args: WindowUDFFieldArgs) -> Result<Field> {
+    fn field(&self, field_args: WindowUDFFieldArgs) -> Result<FieldRef> {
         let return_type = field_args
             .input_fields()
             .first()
@@ -317,7 +317,7 @@ impl WindowUDFImpl for NthValue {
             .cloned()
             .unwrap_or(DataType::Null);
 
-        Ok(Field::new(field_args.name(), return_type, true))
+        Ok(Field::new(field_args.name(), return_type, true).into())
     }
 
     fn reverse_expr(&self) -> ReversedUDWF {
@@ -557,7 +557,7 @@ mod tests {
             NthValue::first(),
             PartitionEvaluatorArgs::new(
                 &[expr],
-                &[Field::new("f", DataType::Int32, true)],
+                &[Field::new("f", DataType::Int32, true).into()],
                 false,
                 false,
             ),
@@ -572,7 +572,7 @@ mod tests {
             NthValue::last(),
             PartitionEvaluatorArgs::new(
                 &[expr],
-                &[Field::new("f", DataType::Int32, true)],
+                &[Field::new("f", DataType::Int32, true).into()],
                 false,
                 false,
             ),
@@ -599,7 +599,7 @@ mod tests {
             NthValue::nth(),
             PartitionEvaluatorArgs::new(
                 &[expr, n_value],
-                &[Field::new("f", DataType::Int32, true)],
+                &[Field::new("f", DataType::Int32, true).into()],
                 false,
                 false,
             ),
@@ -618,7 +618,7 @@ mod tests {
             NthValue::nth(),
             PartitionEvaluatorArgs::new(
                 &[expr, n_value],
-                &[Field::new("f", DataType::Int32, true)],
+                &[Field::new("f", DataType::Int32, true).into()],
                 false,
                 false,
             ),
