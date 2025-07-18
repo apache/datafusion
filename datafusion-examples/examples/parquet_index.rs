@@ -71,7 +71,7 @@ use url::Url;
 /// (using the same underlying APIs)
 ///
 /// For a more advanced example of using an index to prune row groups within a
-/// file, see the (forthcoming) `advanced_parquet_index` example.
+/// file, see the `advanced_parquet_index` example.
 ///
 /// # Diagram
 ///
