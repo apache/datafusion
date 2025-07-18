@@ -63,7 +63,7 @@ use arrow::array::{
     UInt32Array, UInt64Array,
 };
 use arrow::compute::kernels::cmp::{eq, not_distinct};
-use arrow::compute::{and, concat_batches, take, BatchCoalescer, FilterBuilder};
+use arrow::compute::{and, concat_batches, take, FilterBuilder};
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
@@ -980,7 +980,7 @@ async fn collect_left_input(
         })
         .await?;
 
-    if batches.len() == 0 {
+    if batches.is_empty() {
         return Ok(JoinLeftData::new(
             Box::new(JoinHashMapU32::with_capacity(0)),
             RecordBatch::new_empty(schema),
