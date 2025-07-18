@@ -68,7 +68,6 @@ fn merge_table_scans(left_scan: &TableScan, right_scan: &TableScan) -> TableScan
     .unwrap()
 }
 
-// TODO: equality of `inner` `apachearrow::datatypes::SchemaRef` doesn't mean equality of the tables
 fn is_table_scan_same(left: &TableScan, right: &TableScan) -> bool {
     // If the plans don't scan the same table then we cannot be sure for self-join
     left.table_name == right.table_name
