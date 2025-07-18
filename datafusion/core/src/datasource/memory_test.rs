@@ -130,12 +130,15 @@ mod tests {
             .scan(&session_ctx.state(), Some(&projection), &[], None)
             .await
         {
-            Err(DataFusionError::ArrowError(ArrowError::SchemaError(e), _)) => {
-                assert_eq!(
-                    "\"project index 4 out of bounds, max field 3\"",
-                    format!("{e:?}")
-                )
-            }
+            Err(DataFusionError::ArrowError(err, _)) => match err.as_ref() {
+                ArrowError::SchemaError(e) => {
+                    assert_eq!(
+                        "\"project index 4 out of bounds, max field 3\"",
+                        format!("{e:?}")
+                    )
+                }
+                _ => panic!("unexpected error"),
+            },
             res => panic!("Scan should failed on invalid projection, got {res:?}"),
         };
 
@@ -443,7 +446,7 @@ mod tests {
             .unwrap_err();
         // Ensure that there is a descriptive error message
         assert_eq!(
-            "Error during planning: Cannot insert into MemTable with zero partitions",
+            "Error during planning: No partitions provided, expected at least one partition",
             experiment_result.strip_backtrace()
         );
         Ok(())

@@ -35,4 +35,3 @@
 ## PySpark 3.5.5 Result: {'luhn_check(8112189876)': True, 'typeof(luhn_check(8112189876))': 'boolean', 'typeof(8112189876)': 'string'}
 #query
 #SELECT luhn_check('8112189876'::string);
-

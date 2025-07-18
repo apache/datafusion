@@ -157,12 +157,18 @@ impl MinMaxStatistics {
             &min_max_schema,
             RecordBatch::try_new(Arc::clone(&min_max_schema), min_values).map_err(
                 |e| {
-                    DataFusionError::ArrowError(e, Some("\ncreate min batch".to_string()))
+                    DataFusionError::ArrowError(
+                        Box::new(e),
+                        Some("\ncreate min batch".to_string()),
+                    )
                 },
             )?,
             RecordBatch::try_new(Arc::clone(&min_max_schema), max_values).map_err(
                 |e| {
-                    DataFusionError::ArrowError(e, Some("\ncreate max batch".to_string()))
+                    DataFusionError::ArrowError(
+                        Box::new(e),
+                        Some("\ncreate max batch".to_string()),
+                    )
                 },
             )?,
         )
@@ -224,14 +230,7 @@ impl MinMaxStatistics {
                 .zip(sort_columns.iter().copied())
                 .map(|(sort_expr, column)| {
                     let schema = values.schema();
-
                     let idx = schema.index_of(column.name())?;
-                    let field = schema.field(idx);
-
-                    // check that sort columns are non-nullable
-                    if field.is_nullable() {
-                        return plan_err!("cannot sort by nullable column");
-                    }
 
                     Ok(SortColumn {
                         values: Arc::clone(values.column(idx)),
@@ -248,7 +247,10 @@ impl MinMaxStatistics {
                         .collect::<Vec<_>>(),
                 )
                 .map_err(|e| {
-                    DataFusionError::ArrowError(e, Some("convert columns".to_string()))
+                    DataFusionError::ArrowError(
+                        Box::new(e),
+                        Some("convert columns".to_string()),
+                    )
                 })
         });
 

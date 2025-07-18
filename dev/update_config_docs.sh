@@ -25,6 +25,8 @@ cd "${SOURCE_DIR}/../" && pwd
 
 TARGET_FILE="docs/source/user-guide/configs.md"
 PRINT_CONFIG_DOCS_COMMAND="cargo run --manifest-path datafusion/core/Cargo.toml --bin print_config_docs"
+PRINT_RUNTIME_CONFIG_DOCS_COMMAND="cargo run --manifest-path datafusion/core/Cargo.toml --bin print_runtime_config_docs"
+
 
 echo "Inserting header"
 cat <<'EOF' > "$TARGET_FILE"
@@ -69,6 +71,27 @@ EOF
 
 echo "Running CLI and inserting config docs table"
 $PRINT_CONFIG_DOCS_COMMAND >> "$TARGET_FILE"
+
+echo "Inserting runtime config header"
+cat <<'EOF' >> "$TARGET_FILE"
+
+# Runtime Configuration Settings
+
+DataFusion runtime configurations can be set via SQL using the `SET` command.
+
+For example, to configure `datafusion.runtime.memory_limit`:
+
+```sql
+SET datafusion.runtime.memory_limit = '2G';
+```
+
+The following runtime configuration settings are available:
+
+EOF
+
+echo "Running CLI and inserting runtime config docs table"
+$PRINT_RUNTIME_CONFIG_DOCS_COMMAND >> "$TARGET_FILE"
+
 
 echo "Running prettier"
 npx prettier@2.3.2 --write "$TARGET_FILE"

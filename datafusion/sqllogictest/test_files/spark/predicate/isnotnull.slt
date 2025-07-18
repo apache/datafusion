@@ -25,4 +25,3 @@
 ## PySpark 3.5.5 Result: {'(1 IS NOT NULL)': True, 'typeof((1 IS NOT NULL))': 'boolean', 'typeof(1)': 'int'}
 #query
 #SELECT isnotnull(1::int);
-

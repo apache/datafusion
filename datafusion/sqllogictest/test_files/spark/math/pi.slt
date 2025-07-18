@@ -25,4 +25,3 @@
 ## PySpark 3.5.5 Result: {'PI()': 3.141592653589793, 'typeof(PI())': 'double'}
 #query
 #SELECT pi();
-

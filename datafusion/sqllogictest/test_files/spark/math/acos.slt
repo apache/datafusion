@@ -30,4 +30,3 @@
 ## PySpark 3.5.5 Result: {'ACOS(2)': nan, 'typeof(ACOS(2))': 'double', 'typeof(2)': 'int'}
 #query
 #SELECT acos(2::int);
-

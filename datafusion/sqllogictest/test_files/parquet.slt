@@ -130,8 +130,7 @@ STORED AS PARQUET;
 ----
 3
 
-# Check output plan again, expect no "output_ordering" clause in the physical_plan -> ParquetExec,
-# due to there being more files than partitions:
+# Check output plan again
 query TT
 EXPLAIN SELECT int_col, string_col
 FROM test_table
@@ -142,8 +141,7 @@ logical_plan
 02)--TableScan: test_table projection=[int_col, string_col]
 physical_plan
 01)SortPreservingMergeExec: [string_col@1 ASC NULLS LAST, int_col@0 ASC NULLS LAST]
-02)--SortExec: expr=[string_col@1 ASC NULLS LAST, int_col@0 ASC NULLS LAST], preserve_partitioning=[true]
-03)----DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_table/0.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_table/1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_table/2.parquet]]}, projection=[int_col, string_col], file_type=parquet
+02)--DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_table/0.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_table/1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_table/2.parquet]]}, projection=[int_col, string_col], output_ordering=[string_col@1 ASC NULLS LAST, int_col@0 ASC NULLS LAST], file_type=parquet
 
 
 # Perform queries using MIN and MAX
@@ -301,6 +299,54 @@ set datafusion.execution.listing_table_ignore_subdirectory = false;
 # scan file: 0.parquet 1.parquet 2.parquet 3.parquet
 query I
 select count(*) from listing_table;
+----
+12
+
+# Test table pointing to the folder with parquet files(ends with /)
+statement ok
+CREATE EXTERNAL TABLE listing_table_folder_0
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet/test_table/';
+
+statement ok
+set datafusion.execution.listing_table_ignore_subdirectory = true;
+
+# scan file: 0.parquet 1.parquet 2.parquet
+query I
+select count(*) from listing_table_folder_0;
+----
+9
+
+statement ok
+set datafusion.execution.listing_table_ignore_subdirectory = false;
+
+# scan file: 0.parquet 1.parquet 2.parquet 3.parquet
+query I
+select count(*) from listing_table_folder_0;
+----
+12
+
+# Test table pointing to the folder with parquet files(doesn't end with /)
+statement ok
+CREATE EXTERNAL TABLE listing_table_folder_1
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet/test_table';
+
+statement ok
+set datafusion.execution.listing_table_ignore_subdirectory = true;
+
+# scan file: 0.parquet 1.parquet 2.parquet
+query I
+select count(*) from listing_table_folder_1;
+----
+9
+
+statement ok
+set datafusion.execution.listing_table_ignore_subdirectory = false;
+
+# scan file: 0.parquet 1.parquet 2.parquet 3.parquet
+query I
+select count(*) from listing_table_folder_1;
 ----
 12
 

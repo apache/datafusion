@@ -158,7 +158,7 @@ impl AggregateUDF {
             args,
             false,
             None,
-            None,
+            vec![],
             None,
         ))
     }
@@ -168,6 +168,11 @@ impl AggregateUDF {
     /// See [`AggregateUDFImpl::name`] for more details.
     pub fn name(&self) -> &str {
         self.inner.name()
+    }
+
+    /// Returns the aliases for this function.
+    pub fn aliases(&self) -> &[String] {
+        self.inner.aliases()
     }
 
     /// See [`AggregateUDFImpl::schema_name`] for more details.
@@ -203,11 +208,6 @@ impl AggregateUDF {
 
     pub fn is_nullable(&self) -> bool {
         self.inner.is_nullable()
-    }
-
-    /// Returns the aliases for this function.
-    pub fn aliases(&self) -> &[String] {
-        self.inner.aliases()
     }
 
     /// Returns this function's signature (what input types are accepted)
@@ -394,7 +394,7 @@ where
 /// fn get_doc() -> &'static Documentation {
 ///     &DOCUMENTATION
 /// }
-///    
+///
 /// /// Implement the AggregateUDFImpl trait for GeoMeanUdf
 /// impl AggregateUDFImpl for GeoMeanUdf {
 ///    fn as_any(&self) -> &dyn Any { self }
@@ -415,7 +415,7 @@ where
 ///        ])
 ///    }
 ///    fn documentation(&self) -> Option<&Documentation> {
-///        Some(get_doc())  
+///        Some(get_doc())
 ///    }
 /// }
 ///
@@ -434,6 +434,14 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
 
     /// Returns this function's name
     fn name(&self) -> &str;
+
+    /// Returns any aliases (alternate names) for this function.
+    ///
+    /// Note: `aliases` should only include names other than [`Self::name`].
+    /// Defaults to `[]` (no aliases)
+    fn aliases(&self) -> &[String] {
+        &[]
+    }
 
     /// Returns the name of the column this expression would create
     ///
@@ -474,7 +482,7 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
             schema_name.write_fmt(format_args!(" FILTER (WHERE {filter})"))?;
         };
 
-        if let Some(order_by) = order_by {
+        if !order_by.is_empty() {
             let clause = match self.is_ordered_set_aggregate() {
                 true => "WITHIN GROUP",
                 false => "ORDER BY",
@@ -519,7 +527,7 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
             schema_name.write_fmt(format_args!(" FILTER (WHERE {filter})"))?;
         };
 
-        if let Some(order_by) = order_by {
+        if !order_by.is_empty() {
             schema_name.write_fmt(format_args!(
                 " ORDER BY [{}]",
                 schema_name_from_sorts(order_by)?
@@ -608,10 +616,11 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
         if let Some(fe) = filter {
             display_name.write_fmt(format_args!(" FILTER (WHERE {fe})"))?;
         }
-        if let Some(ob) = order_by {
+        if !order_by.is_empty() {
             display_name.write_fmt(format_args!(
                 " ORDER BY [{}]",
-                ob.iter()
+                order_by
+                    .iter()
                     .map(|o| format!("{o}"))
                     .collect::<Vec<String>>()
                     .join(", ")
@@ -786,14 +795,6 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
         _args: AccumulatorArgs,
     ) -> Result<Box<dyn GroupsAccumulator>> {
         not_impl_err!("GroupsAccumulator hasn't been implemented for {self:?} yet")
-    }
-
-    /// Returns any aliases (alternate names) for this function.
-    ///
-    /// Note: `aliases` should only include names other than [`Self::name`].
-    /// Defaults to `[]` (no aliases)
-    fn aliases(&self) -> &[String] {
-        &[]
     }
 
     /// Sliding accumulator is an alternative accumulator that can be used for

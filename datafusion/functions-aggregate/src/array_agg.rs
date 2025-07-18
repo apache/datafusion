@@ -461,6 +461,7 @@ impl Accumulator for DistinctArrayAggAccumulator {
         }
 
         if let Some(opts) = self.sort_options {
+            let mut delayed_cmp_err = Ok(());
             values.sort_by(|a, b| {
                 if a.is_null() {
                     return match opts.nulls_first {
@@ -475,10 +476,15 @@ impl Accumulator for DistinctArrayAggAccumulator {
                     };
                 }
                 match opts.descending {
-                    true => b.partial_cmp(a).unwrap_or(Ordering::Equal),
-                    false => a.partial_cmp(b).unwrap_or(Ordering::Equal),
+                    true => b.try_cmp(a),
+                    false => a.try_cmp(b),
                 }
+                .unwrap_or_else(|err| {
+                    delayed_cmp_err = Err(err);
+                    Ordering::Equal
+                })
             });
+            delayed_cmp_err?;
         };
 
         let arr = ScalarValue::new_list(&values, &self.datatype, true);

@@ -30,4 +30,3 @@
 ## PySpark 3.5.5 Result: {"convert_timezone(current_timezone(), Europe/Brussels, TIMESTAMP_NTZ '2021-12-05 15:00:00')": datetime.datetime(2021, 12, 6, 0, 0), "typeof(convert_timezone(current_timezone(), Europe/Brussels, TIMESTAMP_NTZ '2021-12-05 15:00:00'))": 'timestamp_ntz', 'typeof(Europe/Brussels)': 'string', "typeof(TIMESTAMP_NTZ '2021-12-05 15:00:00')": 'timestamp_ntz'}
 #query
 #SELECT convert_timezone('Europe/Brussels'::string, TIMESTAMP_NTZ '2021-12-05 15:00:00'::timestamp_ntz);
-
