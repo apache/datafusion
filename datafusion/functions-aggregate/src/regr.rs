@@ -38,6 +38,7 @@ use datafusion_expr::{
 };
 use std::any::Any;
 use std::fmt::Debug;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::mem::size_of_val;
 use std::sync::{Arc, LazyLock};
 
@@ -319,6 +320,34 @@ impl AggregateUDFImpl for Regr {
 
     fn documentation(&self) -> Option<&Documentation> {
         self.regr_type.documentation()
+    }
+
+    fn equals(&self, other: &dyn AggregateUDFImpl) -> bool {
+        let Some(other) = other.as_any().downcast_ref::<Self>() else {
+            return false;
+        };
+        let Self {
+            signature,
+            regr_type,
+            func_name,
+        } = self;
+        signature == &other.signature
+            && regr_type == &other.regr_type
+            && func_name == &other.func_name
+    }
+
+    fn hash_value(&self) -> u64 {
+        let Self {
+            signature,
+            regr_type,
+            func_name,
+        } = self;
+        let mut hasher = DefaultHasher::new();
+        std::any::type_name::<Self>().hash(&mut hasher);
+        signature.hash(&mut hasher);
+        regr_type.hash(&mut hasher);
+        func_name.hash(&mut hasher);
+        hasher.finish()
     }
 }
 

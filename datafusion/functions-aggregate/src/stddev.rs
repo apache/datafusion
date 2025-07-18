@@ -19,6 +19,7 @@
 
 use std::any::Any;
 use std::fmt::{Debug, Formatter};
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::mem::align_of_val;
 use std::sync::Arc;
 
@@ -152,6 +153,23 @@ impl AggregateUDFImpl for Stddev {
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
+    }
+
+    fn equals(&self, other: &dyn AggregateUDFImpl) -> bool {
+        let Some(other) = other.as_any().downcast_ref::<Self>() else {
+            return false;
+        };
+        let Self { signature, alias } = self;
+        signature == &other.signature && alias == &other.alias
+    }
+
+    fn hash_value(&self) -> u64 {
+        let Self { signature, alias } = self;
+        let mut hasher = DefaultHasher::new();
+        std::any::type_name::<Self>().hash(&mut hasher);
+        signature.hash(&mut hasher);
+        alias.hash(&mut hasher);
+        hasher.finish()
     }
 }
 

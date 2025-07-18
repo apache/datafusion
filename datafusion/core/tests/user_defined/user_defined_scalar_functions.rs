@@ -217,6 +217,34 @@ impl ScalarUDFImpl for Simple0ArgsScalarUDF {
     fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         Ok(ColumnarValue::Scalar(ScalarValue::Int32(Some(100))))
     }
+
+    fn equals(&self, other: &dyn ScalarUDFImpl) -> bool {
+        let Some(other) = other.as_any().downcast_ref::<Self>() else {
+            return false;
+        };
+        let Self {
+            name,
+            signature,
+            return_type,
+        } = self;
+        name == &other.name
+            && signature == &other.signature
+            && return_type == &other.return_type
+    }
+
+    fn hash_value(&self) -> u64 {
+        let Self {
+            name,
+            signature,
+            return_type,
+        } = self;
+        let mut hasher = DefaultHasher::new();
+        std::any::type_name::<Self>().hash(&mut hasher);
+        name.hash(&mut hasher);
+        signature.hash(&mut hasher);
+        return_type.hash(&mut hasher);
+        hasher.finish()
+    }
 }
 
 #[tokio::test]
@@ -556,6 +584,34 @@ impl ScalarUDFImpl for AddIndexToStringVolatileScalarUDF {
             _ => unimplemented!(),
         };
         Ok(ColumnarValue::Array(Arc::new(StringArray::from(answer))))
+    }
+
+    fn equals(&self, other: &dyn ScalarUDFImpl) -> bool {
+        let Some(other) = other.as_any().downcast_ref::<Self>() else {
+            return false;
+        };
+        let Self {
+            name,
+            signature,
+            return_type,
+        } = self;
+        name == &other.name
+            && signature == &other.signature
+            && return_type == &other.return_type
+    }
+
+    fn hash_value(&self) -> u64 {
+        let Self {
+            name,
+            signature,
+            return_type,
+        } = self;
+        let mut hasher = DefaultHasher::new();
+        std::any::type_name::<Self>().hash(&mut hasher);
+        name.hash(&mut hasher);
+        signature.hash(&mut hasher);
+        return_type.hash(&mut hasher);
+        hasher.finish()
     }
 }
 
@@ -973,6 +1029,38 @@ impl ScalarUDFImpl for ScalarFunctionWrapper {
         let replacement = Self::replacement(&self.expr, &args)?;
 
         Ok(ExprSimplifyResult::Simplified(replacement))
+    }
+
+    fn equals(&self, other: &dyn ScalarUDFImpl) -> bool {
+        let Some(other) = other.as_any().downcast_ref::<Self>() else {
+            return false;
+        };
+        let Self {
+            name,
+            expr,
+            signature,
+            return_type,
+        } = self;
+        name == &other.name
+            && expr == &other.expr
+            && signature == &other.signature
+            && return_type == &other.return_type
+    }
+
+    fn hash_value(&self) -> u64 {
+        let Self {
+            name,
+            expr,
+            signature,
+            return_type,
+        } = self;
+        let mut hasher = DefaultHasher::new();
+        std::any::type_name::<Self>().hash(&mut hasher);
+        name.hash(&mut hasher);
+        expr.hash(&mut hasher);
+        signature.hash(&mut hasher);
+        return_type.hash(&mut hasher);
+        hasher.finish()
     }
 }
 
@@ -1450,7 +1538,30 @@ impl ScalarUDFImpl for MetadataBasedUdf {
     }
 
     fn equals(&self, other: &dyn ScalarUDFImpl) -> bool {
-        self.name == other.name()
+        let Some(other) = other.as_any().downcast_ref::<Self>() else {
+            return false;
+        };
+        let Self {
+            name,
+            signature,
+            metadata,
+        } = self;
+        name == &other.name
+            && signature == &other.signature
+            && metadata == &other.metadata
+    }
+
+    fn hash_value(&self) -> u64 {
+        let Self {
+            name,
+            signature,
+            metadata: _, // unhashable
+        } = self;
+        let mut hasher = DefaultHasher::new();
+        std::any::type_name::<Self>().hash(&mut hasher);
+        name.hash(&mut hasher);
+        signature.hash(&mut hasher);
+        hasher.finish()
     }
 }
 
@@ -1668,10 +1779,6 @@ impl ScalarUDFImpl for ExtensionBasedUdf {
                 ))))
             }
         }
-    }
-
-    fn equals(&self, other: &dyn ScalarUDFImpl) -> bool {
-        self.name == other.name()
     }
 }
 
