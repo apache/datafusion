@@ -1823,11 +1823,25 @@ mod test {
         "
         )?;
 
-        let empty = empty_with_type(DataType::Int64);
+        let empty = empty_with_type(DataType::Float64);
         let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty)?);
         assert_type_coercion_error(
             plan,
-            "Cannot infer common argument type for comparison operation Int64 IS DISTINCT FROM Boolean"
+            "Cannot infer common argument type for comparison operation Float64 IS DISTINCT FROM Boolean"
+        )?;
+
+        // cast to integer
+        let expr = col("a").is_true();
+        let empty = empty_with_type(DataType::Int64);
+        let plan =
+            LogicalPlan::Projection(Projection::try_new(vec![expr.clone()], empty)?);
+
+        assert_analyzed_plan_eq!(
+            plan,
+            @r"
+        Projection: CAST(a AS Boolean) IS TRUE
+          EmptyRelation
+        "
         )?;
 
         // is not true
