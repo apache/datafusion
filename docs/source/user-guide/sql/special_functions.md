@@ -69,7 +69,7 @@ Expands an array or map into rows.
 ### `unnest (struct)`
 
 Expand a struct fields into individual columns.
-Each column of the struct will be prefixed with `__unnest_placeholder` and could be accessed via `"__unnest_placeholder(<struct>).<field>"`.
+Each field of the struct will be prefixed with `__unnest_placeholder` and could be accessed via `"__unnest_placeholder(<struct>).<field>"`.
 
 #### Arguments
 
