@@ -1,0 +1,258 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Tests for Eliminate Self Join optimizers
+
+statement ok
+set datafusion.explain.logical_plan_only = true;
+
+####
+# Data Setup for unique keyed self join tests
+####
+
+# Create table with primary key constraint on id column
+statement ok
+CREATE TABLE employees (
+    id INT PRIMARY KEY,
+    name VARCHAR,
+    department VARCHAR,
+    salary INT,
+    hire_date DATE,
+    external_id INT UNIQUE
+);
+
+statement ok
+INSERT INTO employees VALUES
+(1, 'Alice', 'HR', 50000, '2020-01-01', 100),
+(2, 'Bob', 'Engineering', 75000, '2019-06-15', 101),
+(3, 'Charlie', 'HR', 55000, '2020-03-20', 102),
+(4, 'David', 'Engineering', 80000, '2018-11-10', 103),
+(5, 'Eve', 'Sales', 60000, '2021-02-28', 104);
+
+# Create table for aggregate self join tests
+statement ok
+CREATE TABLE purchases (
+    id INT PRIMARY KEY,
+    user_id INT,
+    purchase_date DATE,
+    billed_date DATE,
+    amount DECIMAL(10,2)
+);
+
+statement ok
+INSERT INTO purchases VALUES
+(1, 1, '2023-01-01', '2023-01-02', 100.00),
+(2, 1, '2023-01-15', '2023-01-16', 150.00),
+(3, 2, '2023-01-10', '2023-01-11', 200.00),
+(4, 1, '2023-02-01', '2023-02-02', 300.00),
+(5, 2, '2023-02-15', '2023-02-16', 250.00);
+
+####
+# Test 1: Basic self join on primary key should be eliminated
+####
+
+query TT
+EXPLAIN SELECT a.id FROM employees a JOIN employees b USING (id);
+----
+logical_plan
+01)SubqueryAlias: a
+02)--TableScan: employees projection=[id]
+
+query TT
+EXPLAIN SELECT a.id FROM employees a JOIN employees b ON a.id = b.id;
+----
+logical_plan
+01)SubqueryAlias: a
+02)--TableScan: employees projection=[id]
+
+####
+# Test 2: Self join with filter on right side should be eliminated
+####
+
+query TT
+EXPLAIN SELECT a.id FROM employees a JOIN employees b ON a.id = b.id WHERE b.department = 'HR';
+----
+logical_plan
+01)SubqueryAlias: a
+02)--Projection: employees.id
+03)----Filter: employees.department = Utf8("HR")
+04)------TableScan: employees projection=[id, department]
+
+####
+# Test 3: Self join selecting from both sides with same column should still eliminate
+####
+
+query TT
+EXPLAIN SELECT a.id, b.id as b_id FROM employees a JOIN employees b ON a.id = b.id;
+----
+logical_plan
+01)Projection: a.id, a.id AS id AS b_id
+02)--SubqueryAlias: a
+03)----TableScan: employees projection=[id]
+
+####
+# Test 4: Self join on unique key (external_id) should be eliminated
+####
+
+query TT
+EXPLAIN SELECT a.id FROM employees a JOIN employees b ON a.external_id = b.external_id;
+----
+logical_plan
+01)SubqueryAlias: a
+02)--TableScan: employees projection=[id]
+
+####
+# Test 5: Self join on non-unique column should NOT be eliminated
+####
+
+query TT
+EXPLAIN SELECT a.id FROM employees a JOIN employees b ON a.name = b.name;
+----
+logical_plan
+01)Projection: a.id
+02)--Inner Join: a.name = b.name
+03)----SubqueryAlias: a
+04)------TableScan: employees projection=[id, name]
+05)----SubqueryAlias: b
+06)------Projection: employees.name
+07)--------TableScan: employees projection=[name]
+
+####
+# Test 6: Multiple self joins on unique key should all be eliminated
+####
+
+query TT
+EXPLAIN SELECT a.id FROM employees a 
+JOIN employees b ON a.id = b.id 
+JOIN employees c ON a.id = c.id
+WHERE c.department = 'HR';
+----
+logical_plan
+01)SubqueryAlias: a
+02)--Projection: employees.id
+03)----Filter: employees.department = Utf8("HR")
+04)------TableScan: employees projection=[id, department]
+
+####
+# Test 7: Self join with subquery on right side should be eliminated
+####
+
+query TT
+EXPLAIN SELECT a.id FROM employees a 
+JOIN (SELECT id FROM employees WHERE department = 'HR') b USING (id);
+----
+logical_plan
+01)SubqueryAlias: a
+02)--Projection: employees.id
+03)----Filter: employees.department = Utf8("HR")
+04)------TableScan: employees projection=[id, department]
+
+####
+# Test 8: Left join should NOT be eliminated (only inner joins are optimized)
+####
+
+query TT
+EXPLAIN SELECT a.id FROM employees a LEFT JOIN employees b ON a.id = b.id;
+----
+logical_plan
+01)Projection: a.id
+02)--Left Join: a.id = b.id
+03)----SubqueryAlias: a
+04)------TableScan: employees projection=[id]
+05)----SubqueryAlias: b
+06)------TableScan: employees projection=[id]
+
+####
+# Test 9: Self join with additional join filter should NOT be eliminated
+####
+
+query TT
+EXPLAIN SELECT a.id FROM employees a 
+JOIN employees b ON a.id = b.id AND a.department != b.department;
+----
+logical_plan
+01)Projection: a.id
+02)--Inner Join: a.id = b.id Filter: a.department != b.department
+03)----SubqueryAlias: a
+04)------TableScan: employees projection=[id, department]
+05)----SubqueryAlias: b
+06)------TableScan: employees projection=[id, department]
+
+####
+# Test 10: Self join with projection and filter should be eliminated correctly
+####
+
+query TT
+EXPLAIN SELECT a.name, a.salary FROM employees a 
+JOIN employees b ON a.id = b.id 
+WHERE b.department = 'Engineering' AND b.salary > 70000;
+----
+logical_plan
+01)SubqueryAlias: a
+02)--Projection: employees.name, employees.salary
+03)----Filter: employees.department = Utf8("Engineering") AND employees.salary > Int32(70000)
+04)------TableScan: employees projection=[name, department, salary]
+
+####
+# Test 11: Cross join that gets rewritten to inner join should be eliminated
+####
+
+query TT
+EXPLAIN SELECT a.id FROM employees a CROSS JOIN employees b WHERE a.id = b.id;
+----
+logical_plan
+01)SubqueryAlias: a
+02)--TableScan: employees projection=[id]
+
+####
+# Test 12: Self join with column aliases in subquery
+####
+
+query TT
+EXPLAIN SELECT a.id FROM employees a 
+JOIN (SELECT id as emp_id, name FROM employees WHERE department = 'HR') b 
+ON a.id = b.emp_id;
+----
+logical_plan
+01)Projection: a.id
+02)--Inner Join: a.id = b.emp_id
+03)----SubqueryAlias: a
+04)------TableScan: employees projection=[id]
+05)----SubqueryAlias: b
+06)------Projection: employees.id AS emp_id
+07)--------Filter: employees.department = Utf8("HR")
+08)----------TableScan: employees projection=[id, department]
+
+####
+# Test 13: Self join mixing table name and alias references
+####
+
+query TT
+EXPLAIN SELECT a.id FROM employees a 
+JOIN employees b ON employees.id = b.id;
+----
+logical_plan
+01)Projection: a.id
+02)--Inner Join: employees.id = b.id
+03)----SubqueryAlias: a
+04)------TableScan: employees projection=[id]
+05)----SubqueryAlias: b
+06)------TableScan: employees projection=[id]
+
+statement ok
+set datafusion.explain.logical_plan_only = false;
+

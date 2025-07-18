@@ -17,7 +17,12 @@
 
 //! [`EliminateUniqueKeyedSelfJoin`] eliminates self joins on unique constraint columns
 
+use super::{
+    is_table_scan_same, merge_table_scans, unique_indexes, OptimizationResult,
+    RenamedAlias,
+};
 use crate::{ApplyOrder, OptimizerConfig, OptimizerRule};
+
 use datafusion_common::{
     tree_node::{Transformed, TreeNode, TreeNodeRecursion},
     DFSchema, Result, TableReference,
@@ -26,12 +31,8 @@ use datafusion_expr::{
     Expr, Join, JoinType, LogicalPlan, LogicalPlanBuilder, Projection, SubqueryAlias,
     TableScan,
 };
-use indexmap::IndexSet;
 
-use super::{
-    is_table_scan_same, merge_table_scans, unique_indexes, OptimizationResult,
-    RenamedAlias,
-};
+use indexmap::IndexSet;
 
 #[derive(Default, Debug)]
 pub struct EliminateUniqueKeyedSelfJoin;
@@ -40,6 +41,81 @@ impl EliminateUniqueKeyedSelfJoin {
     #[allow(missing_docs)]
     pub fn new() -> Self {
         Self {}
+    }
+}
+
+impl OptimizerRule for EliminateUniqueKeyedSelfJoin {
+    fn name(&self) -> &str {
+        "eliminate_unique_keyed_self_join"
+    }
+
+    fn apply_order(&self) -> Option<ApplyOrder> {
+        Some(ApplyOrder::TopDown)
+    }
+
+    fn supports_rewrite(&self) -> bool {
+        true
+    }
+
+    fn rewrite(
+        &self,
+        plan: LogicalPlan,
+        _: &dyn OptimizerConfig,
+    ) -> Result<Transformed<LogicalPlan>> {
+        let mut renamed = None;
+        let Transformed {
+            data: plan,
+            transformed,
+            ..
+        } = plan
+            .transform_up(|plan| {
+                let projection = match &plan {
+                    LogicalPlan::Projection(projection) => projection,
+                    _ => return Ok(Transformed::no(plan)),
+                };
+                let join = match projection.input.as_ref() {
+                    LogicalPlan::Join(join) if join.join_type == JoinType::Inner => join,
+                    _ => return Ok(Transformed::no(plan)),
+                };
+                // If we reach here, it means we can eliminate the self join
+                if let Some(OptimizationResult {
+                    plan,
+                    renamed_alias,
+                }) = try_eliminate_unique_keyed_self_join(join)
+                {
+                    let projection_expr = projection
+                        .expr
+                        .iter()
+                        .cloned()
+                        .map(|expr| {
+                            if let Some(renamed_alias) = &renamed_alias {
+                                renamed_alias.rewrite_expression(expr).unwrap().data
+                            } else {
+                                expr
+                            }
+                        })
+                        .collect::<Vec<_>>();
+                    renamed = renamed_alias;
+
+                    let plan = Projection::try_new(projection_expr, plan.into()).unwrap();
+                    let plan = LogicalPlan::Projection(plan);
+                    Ok(Transformed::yes(plan))
+                } else {
+                    Ok(Transformed::no(plan))
+                }
+            })
+            .unwrap();
+
+        if transformed {
+            if let Some(renamed) = renamed {
+                let plan = renamed.rewrite_logical_plan(plan)?;
+                Ok(Transformed::yes(plan))
+            } else {
+                Ok(Transformed::yes(plan))
+            }
+        } else {
+            Ok(Transformed::no(plan))
+        }
     }
 }
 
@@ -246,78 +322,345 @@ fn try_eliminate_unique_keyed_self_join(join: &Join) -> Option<OptimizationResul
     optimize(&join.left, &join.right)
 }
 
-impl OptimizerRule for EliminateUniqueKeyedSelfJoin {
-    fn name(&self) -> &str {
-        "eliminate_unique_keyed_self_join"
-    }
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
 
-    fn apply_order(&self) -> Option<ApplyOrder> {
-        Some(ApplyOrder::TopDown)
-    }
+    use super::*;
 
-    fn supports_rewrite(&self) -> bool {
-        true
-    }
+    use crate::OptimizerContext;
+    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::TableReference;
+    use datafusion_expr::{
+        col, logical_plan::builder::LogicalTableSource, Expr, JoinType, LogicalPlan,
+        LogicalPlanBuilder,
+    };
 
-    fn rewrite(
-        &self,
-        plan: LogicalPlan,
-        _: &dyn OptimizerConfig,
-    ) -> Result<Transformed<LogicalPlan>> {
-        let mut renamed = None;
-        let Transformed {
-            data: plan,
-            transformed,
-            ..
-        } = plan
-            .transform_up(|plan| {
-                let projection = match &plan {
-                    LogicalPlan::Projection(projection) => projection,
-                    _ => return Ok(Transformed::no(plan)),
-                };
-                let join = match projection.input.as_ref() {
-                    LogicalPlan::Join(join) if join.join_type == JoinType::Inner => join,
-                    _ => return Ok(Transformed::no(plan)),
-                };
-                // If we reach here, it means we can eliminate the self join
-                if let Some(OptimizationResult {
-                    plan,
-                    renamed_alias,
-                }) = try_eliminate_unique_keyed_self_join(join)
-                {
-                    let projection_expr = projection
-                        .expr
-                        .iter()
-                        .cloned()
-                        .map(|expr| {
-                            if let Some(renamed_alias) = &renamed_alias {
-                                renamed_alias.rewrite_expression(expr).unwrap().data
-                            } else {
-                                expr
-                            }
-                        })
-                        .collect::<Vec<_>>();
-                    renamed = renamed_alias;
+    fn create_table_scan(alias: Option<&str>) -> LogicalPlan {
+        let table_source =
+            Arc::new(LogicalTableSource::new(Arc::new(Schema::new(vec![
+                Field::new("id", DataType::Int32, false),
+                Field::new("name", DataType::Utf8, false),
+                Field::new("department", DataType::Utf8, false),
+            ]))));
 
-                    let plan = Projection::try_new(projection_expr, plan.into()).unwrap();
-                    let plan = LogicalPlan::Projection(plan);
-                    Ok(Transformed::yes(plan))
-                } else {
-                    Ok(Transformed::no(plan))
-                }
-            })
-            .unwrap();
+        let mut builder = LogicalPlanBuilder::scan_with_filters(
+            TableReference::bare("employees"),
+            table_source,
+            None,
+            vec![],
+        )
+        .unwrap();
 
-        if transformed {
-            if let Some(renamed) = renamed {
-                let Transformed { data: plan, .. } =
-                    renamed.rewrite_logical_plan(plan)?;
-                Ok(Transformed::yes(plan))
-            } else {
-                Ok(Transformed::yes(plan))
-            }
-        } else {
-            Ok(Transformed::no(plan))
+        if let Some(alias) = alias {
+            builder = builder.alias(alias).unwrap();
         }
+
+        builder.build().unwrap()
+    }
+
+    fn optimize_plan(plan: LogicalPlan) -> Result<LogicalPlan> {
+        let optimizer = EliminateUniqueKeyedSelfJoin::new();
+        let config = OptimizerContext::default();
+        let result = optimizer.rewrite(plan, &config)?;
+        Ok(result.data)
+    }
+
+    #[test]
+    fn test_eliminate_self_join_on_unique_key() -> Result<()> {
+        // Create self join on unique key (id)
+        let left = create_table_scan(Some("a"));
+        let right = create_table_scan(Some("b"));
+
+        let join_plan = LogicalPlanBuilder::from(left)
+            .join(right, JoinType::Inner, (vec!["a.id"], vec!["b.id"]), None)?
+            .project(vec![col("a.id"), col("a.name")])?
+            .build()?;
+
+        let optimized = optimize_plan(join_plan)?;
+
+        // Verify the join was eliminated
+        match &optimized {
+            LogicalPlan::Projection(proj) => {
+                match proj.input.as_ref() {
+                    LogicalPlan::SubqueryAlias(_) => {
+                        // Success - join was eliminated
+                    }
+                    _ => panic!(
+                        "Expected SubqueryAlias after optimization, got: {:?}",
+                        proj.input
+                    ),
+                }
+            }
+            _ => panic!("Expected Projection at top level, got: {optimized:?}",),
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_no_elimination_on_non_unique_column() -> Result<()> {
+        // Create self join on non-unique column (name)
+        let left = create_table_scan(Some("a"));
+        let right = create_table_scan(Some("b"));
+
+        let join_plan = LogicalPlanBuilder::from(left)
+            .join(
+                right,
+                JoinType::Inner,
+                (vec!["a.name"], vec!["b.name"]),
+                None,
+            )?
+            .project(vec![col("a.id"), col("a.name")])?
+            .build()?;
+
+        let optimized = optimize_plan(join_plan)?;
+
+        // Verify the join was NOT eliminated
+        match &optimized {
+            LogicalPlan::Projection(proj) => {
+                match proj.input.as_ref() {
+                    LogicalPlan::Join(_) => {
+                        // Success - join was not eliminated as expected
+                    }
+                    _ => panic!(
+                        "Expected Join to remain after optimization, got: {:?}",
+                        proj.input
+                    ),
+                }
+            }
+            _ => panic!("Expected Projection at top level, got: {optimized:?}",),
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_eliminate_with_filter_on_right() -> Result<()> {
+        // Create self join with filter on right side
+        let left = create_table_scan(Some("a"));
+
+        // Build right side with filter
+        let right_base = create_table_scan(None);
+        let right = LogicalPlanBuilder::from(right_base)
+            .filter(col("department").eq(Expr::Literal(
+                datafusion_common::ScalarValue::Utf8(Some("HR".to_string())),
+                None,
+            )))?
+            .alias("b")?
+            .build()?;
+
+        let join_plan = LogicalPlanBuilder::from(left)
+            .join(right, JoinType::Inner, (vec!["a.id"], vec!["b.id"]), None)?
+            .project(vec![col("a.id")])?
+            .build()?;
+
+        let optimized = optimize_plan(join_plan)?;
+
+        // Verify the join was eliminated and filter was preserved
+        match &optimized {
+            LogicalPlan::Projection(_) => {
+                // Check that we have a filter somewhere in the plan
+                let mut has_filter = false;
+                optimized.apply(|node| {
+                    if matches!(node, LogicalPlan::Filter(_)) {
+                        has_filter = true;
+                    }
+                    Ok(TreeNodeRecursion::Continue)
+                })?;
+                assert!(
+                    has_filter,
+                    "Expected filter to be preserved after optimization"
+                );
+            }
+            _ => panic!("Expected Projection at top level, got: {optimized:?}",),
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_no_elimination_with_different_columns_selected() -> Result<()> {
+        // Create self join where we select columns from both sides with different qualifiers
+        let left = create_table_scan(Some("a"));
+        let right = create_table_scan(Some("b"));
+
+        let join_plan = LogicalPlanBuilder::from(left)
+            .join(right, JoinType::Inner, (vec!["a.id"], vec!["b.id"]), None)?
+            .project(vec![col("a.id"), col("b.id")])? // Selecting both a.id and b.id
+            .build()?;
+
+        let optimized = optimize_plan(join_plan)?;
+
+        // Verify the join was NOT eliminated (because we're selecting from both sides)
+        match &optimized {
+            LogicalPlan::Projection(proj) => {
+                match proj.input.as_ref() {
+                    LogicalPlan::Join(_) => {
+                        // Success - join was not eliminated as expected
+                    }
+                    _ => panic!(
+                        "Expected Join to remain after optimization, got: {:?}",
+                        proj.input
+                    ),
+                }
+            }
+            _ => panic!("Expected Projection at top level, got: {optimized:?}",),
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_eliminate_multiple_self_joins() -> Result<()> {
+        // Create multiple self joins on unique key
+        let a = create_table_scan(Some("a"));
+        let b = create_table_scan(Some("b"));
+        let c = create_table_scan(Some("c"));
+
+        let join_plan = LogicalPlanBuilder::from(a)
+            .join(b, JoinType::Inner, (vec!["a.id"], vec!["b.id"]), None)?
+            .join(c, JoinType::Inner, (vec!["a.id"], vec!["c.id"]), None)?
+            .project(vec![col("a.id")])?
+            .build()?;
+
+        let optimized = optimize_plan(join_plan)?;
+
+        // Verify all joins were eliminated
+        let mut join_count = 0;
+        optimized.apply(|node| {
+            if matches!(node, LogicalPlan::Join(_)) {
+                join_count += 1;
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+
+        assert_eq!(
+            join_count, 0,
+            "Expected all joins to be eliminated, but found {join_count} joins",
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_no_elimination_for_outer_join() -> Result<()> {
+        // Create left outer join on unique key
+        let left = create_table_scan(Some("a"));
+        let right = create_table_scan(Some("b"));
+
+        let join_plan = LogicalPlanBuilder::from(left)
+            .join(
+                right,
+                JoinType::Left, // Left outer join
+                (vec!["a.id"], vec!["b.id"]),
+                None,
+            )?
+            .project(vec![col("a.id")])?
+            .build()?;
+
+        let optimized = optimize_plan(join_plan)?;
+
+        // Verify the join was NOT eliminated (only inner joins are optimized)
+        match &optimized {
+            LogicalPlan::Projection(proj) => {
+                match proj.input.as_ref() {
+                    LogicalPlan::Join(_) => {
+                        // Success - join was not eliminated as expected
+                    }
+                    _ => panic!(
+                        "Expected Join to remain after optimization, got: {:?}",
+                        proj.input
+                    ),
+                }
+            }
+            _ => panic!("Expected Projection at top level, got: {optimized:?}",),
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_eliminate_with_subquery() -> Result<()> {
+        // Create self join where right side is a subquery
+        let left = create_table_scan(Some("a"));
+
+        let subquery_base = create_table_scan(None);
+        let subquery = LogicalPlanBuilder::from(subquery_base)
+            .filter(col("department").eq(Expr::Literal(
+                datafusion_common::ScalarValue::Utf8(Some("HR".to_string())),
+                None,
+            )))?
+            .project(vec![col("id")])?
+            .alias("b")?
+            .build()?;
+
+        let join_plan = LogicalPlanBuilder::from(left)
+            .join(
+                subquery,
+                JoinType::Inner,
+                (vec!["a.id"], vec!["b.id"]),
+                None,
+            )?
+            .project(vec![col("a.id")])?
+            .build()?;
+
+        let optimized = optimize_plan(join_plan)?;
+
+        // Verify the join was eliminated
+        match &optimized {
+            LogicalPlan::Projection(proj) => {
+                let mut join_count = 0;
+                proj.input.apply(|node| {
+                    if matches!(node, LogicalPlan::Join(_)) {
+                        join_count += 1;
+                    }
+                    Ok(TreeNodeRecursion::Continue)
+                })?;
+                assert_eq!(join_count, 0, "Expected join to be eliminated");
+            }
+            _ => panic!("Expected Projection at top level, got: {optimized:?}",),
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_no_elimination_with_join_filter() -> Result<()> {
+        // Create self join with additional join filter beyond key equality
+        let left = create_table_scan(Some("a"));
+        let right = create_table_scan(Some("b"));
+
+        let join_filter = Some(col("a.department").not_eq(col("b.department")));
+
+        let join_plan = LogicalPlanBuilder::from(left)
+            .join(
+                right,
+                JoinType::Inner,
+                (vec!["a.id"], vec!["b.id"]),
+                join_filter,
+            )?
+            .project(vec![col("a.id")])?
+            .build()?;
+
+        let optimized = optimize_plan(join_plan)?;
+
+        // Verify the join was NOT eliminated (has additional join filter)
+        match &optimized {
+            LogicalPlan::Projection(proj) => {
+                match proj.input.as_ref() {
+                    LogicalPlan::Join(_) => {
+                        // Success - join was not eliminated as expected
+                    }
+                    _ => panic!(
+                        "Expected Join to remain after optimization, got: {:?}",
+                        proj.input
+                    ),
+                }
+            }
+            _ => panic!("Expected Projection at top level, got: {optimized:?}",),
+        }
+
+        Ok(())
     }
 }

@@ -26,7 +26,8 @@ use datafusion_expr::{expr::Alias, Expr, LogicalPlan, TableScan};
 mod aggregation;
 mod unique_keyed;
 
-pub use aggregation::EliminateAggregationSelfJoin;
+pub use aggregation::EliminateSelfJoinAggregation;
+use datafusion_common::tree_node::TransformedResult;
 use indexmap::IndexSet;
 pub use unique_keyed::EliminateUniqueKeyedSelfJoin;
 
@@ -124,10 +125,7 @@ impl RenamedAlias {
         })
     }
 
-    fn rewrite_logical_plan(
-        &self,
-        plan: LogicalPlan,
-    ) -> Result<Transformed<LogicalPlan>> {
+    fn rewrite_logical_plan(&self, plan: LogicalPlan) -> Result<LogicalPlan> {
         plan.transform_down(|plan| {
             let Transformed {
                 data: plan,
@@ -140,6 +138,7 @@ impl RenamedAlias {
                 Ok(Transformed::no(plan))
             }
         })
+        .data()
     }
 }
 
