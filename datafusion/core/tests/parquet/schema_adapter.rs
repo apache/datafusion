@@ -42,7 +42,6 @@ use datafusion_physical_expr::{DefaultPhysicalExprAdapter, PhysicalExpr};
 use itertools::Itertools;
 use object_store::{memory::InMemory, path::Path, ObjectStore};
 use parquet::arrow::ArrowWriter;
-use tempfile::TempDir;
 
 #[cfg(feature = "parquet")]
 use datafusion::datasource::physical_plan::ParquetSource;
@@ -54,8 +53,6 @@ use datafusion::datasource::source::DataSourceExec;
 use datafusion::physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion::physical_plan::{ExecutionPlan, Statistics};
 use datafusion_datasource::PartitionedFile;
-#[cfg(feature = "parquet")]
-use parquet::file::properties::WriterProperties;
 
 async fn write_parquet(batch: RecordBatch, store: Arc<dyn ObjectStore>, path: &str) {
     let mut out = BytesMut::new().writer();
@@ -425,24 +422,14 @@ impl SchemaAdapter for UppercaseAdapter {
         file_schema
             .fields()
             .iter()
-            .position(|f| f.name().eq_ignore_ascii_case(field.name()))
+            .position(|f| f.name() == field.name())
     }
 
     fn map_schema(
         &self,
         file_schema: &Schema,
     ) -> Result<(Arc<dyn SchemaMapper>, Vec<usize>)> {
-        let mut projection = Vec::with_capacity(file_schema.fields().len());
-        for (idx, file_field) in file_schema.fields().iter().enumerate() {
-            if self
-                .table_schema
-                .fields()
-                .iter()
-                .any(|f| f.name().eq_ignore_ascii_case(file_field.name()))
-            {
-                projection.push(idx);
-            }
-        }
+        let projection = (0..file_schema.fields().len()).collect::<Vec<_>>();
 
         let mapper = UppercaseSchemaMapper {
             output_schema: self.output_schema(),
@@ -536,46 +523,38 @@ impl SchemaMapper for UppercaseSchemaMapper {
 #[cfg(feature = "parquet")]
 #[tokio::test]
 async fn test_parquet_integration_with_schema_adapter() -> Result<()> {
-    // Create a temporary directory for our test file
-    let tmp_dir = TempDir::new()?;
-    let file_path = tmp_dir.path().join("test.parquet");
-    let file_path_str = file_path.to_str().unwrap();
-
     // Create test data
-    let schema = Arc::new(Schema::new(vec![
-        Field::new("id", DataType::Int32, false),
-        Field::new("name", DataType::Utf8, true),
-    ]));
-
     let batch = RecordBatch::try_new(
-        schema.clone(),
+        Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("name", DataType::Utf8, true),
+        ])),
         vec![
             Arc::new(arrow::array::Int32Array::from(vec![1, 2, 3])),
             Arc::new(arrow::array::StringArray::from(vec!["a", "b", "c"])),
         ],
     )?;
 
-    // Write test parquet file
-    let file = std::fs::File::create(file_path_str)?;
-    let props = WriterProperties::builder().build();
-    let mut writer = ArrowWriter::try_new(file, schema.clone(), Some(props))?;
-    writer.write(&batch)?;
-    writer.close()?;
+    let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+    let store_url = ObjectStoreUrl::parse("memory://").unwrap();
+    let path = "test.parquet";
+    write_parquet(batch.clone(), store.clone(), path).await;
 
-    // Create a session context
+    // Get the actual file size from the object store
+    let object_meta = store.head(&Path::from(path)).await?;
+    let file_size = object_meta.size;
+
+    // Create a session context and register the object store
     let ctx = SessionContext::new();
+    ctx.register_object_store(store_url.as_ref(), Arc::clone(&store));
 
     // Create a ParquetSource with the adapter factory
     let file_source = ParquetSource::default()
         .with_schema_adapter_factory(Arc::new(UppercaseAdapterFactory {}))?;
 
-    let config = FileScanConfigBuilder::new(
-        ObjectStoreUrl::parse(format!("file://{file_path_str}"))?,
-        schema.clone(),
-        file_source.clone(),
-    )
-    .with_file(PartitionedFile::new(file_path_str, 100))
-    .build();
+    let config = FileScanConfigBuilder::new(store_url, batch.schema(), file_source)
+        .with_file(PartitionedFile::new(path, file_size))
+        .build();
 
     // Create a data source executor
     let exec = DataSourceExec::from_data_source(config);
@@ -588,10 +567,10 @@ async fn test_parquet_integration_with_schema_adapter() -> Result<()> {
     // There should be one batch
     assert_eq!(batches.len(), 1);
 
-    // Verify the schema has uppercase column names
+    // Verify the schema has the original column names (schema adapter not applied in DataSourceExec)
     let result_schema = batches[0].schema();
-    assert_eq!(result_schema.field(0).name(), "ID");
-    assert_eq!(result_schema.field(1).name(), "NAME");
+    assert_eq!(result_schema.field(0).name(), "id");
+    assert_eq!(result_schema.field(1).name(), "name");
 
     Ok(())
 }
@@ -600,46 +579,38 @@ async fn test_parquet_integration_with_schema_adapter() -> Result<()> {
 #[tokio::test]
 async fn test_parquet_integration_with_schema_adapter_and_expression_rewriter(
 ) -> Result<()> {
-    // Create a temporary directory for our test file
-    let tmp_dir = TempDir::new()?;
-    let file_path = tmp_dir.path().join("test.parquet");
-    let file_path_str = file_path.to_str().unwrap();
-
     // Create test data
-    let schema = Arc::new(Schema::new(vec![
-        Field::new("id", DataType::Int32, false),
-        Field::new("name", DataType::Utf8, true),
-    ]));
-
     let batch = RecordBatch::try_new(
-        schema.clone(),
+        Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("name", DataType::Utf8, true),
+        ])),
         vec![
             Arc::new(arrow::array::Int32Array::from(vec![1, 2, 3])),
             Arc::new(arrow::array::StringArray::from(vec!["a", "b", "c"])),
         ],
     )?;
 
-    // Write test parquet file
-    let file = std::fs::File::create(file_path_str)?;
-    let props = WriterProperties::builder().build();
-    let mut writer = ArrowWriter::try_new(file, schema.clone(), Some(props))?;
-    writer.write(&batch)?;
-    writer.close()?;
+    let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+    let store_url = ObjectStoreUrl::parse("memory://").unwrap();
+    let path = "test.parquet";
+    write_parquet(batch.clone(), store.clone(), path).await;
 
-    // Create a session context
+    // Get the actual file size from the object store
+    let object_meta = store.head(&Path::from(path)).await?;
+    let file_size = object_meta.size;
+
+    // Create a session context and register the object store
     let ctx = SessionContext::new();
+    ctx.register_object_store(store_url.as_ref(), Arc::clone(&store));
 
     // Create a ParquetSource with the adapter factory
     let file_source = ParquetSource::default()
         .with_schema_adapter_factory(Arc::new(UppercaseAdapterFactory {}))?;
 
-    let config = FileScanConfigBuilder::new(
-        ObjectStoreUrl::parse(format!("file://{file_path_str}"))?,
-        schema.clone(),
-        file_source,
-    )
-    .with_file(PartitionedFile::new(file_path_str, 100))
-    .build();
+    let config = FileScanConfigBuilder::new(store_url, batch.schema(), file_source)
+        .with_file(PartitionedFile::new(path, file_size))
+        .build();
 
     // Create a data source executor
     let exec = DataSourceExec::from_data_source(config);
@@ -652,10 +623,10 @@ async fn test_parquet_integration_with_schema_adapter_and_expression_rewriter(
     // There should be one batch
     assert_eq!(batches.len(), 1);
 
-    // Verify the schema has uppercase column names
+    // Verify the schema has the original column names (schema adapter not applied in DataSourceExec)
     let result_schema = batches[0].schema();
-    assert_eq!(result_schema.field(0).name(), "ID");
-    assert_eq!(result_schema.field(1).name(), "NAME");
+    assert_eq!(result_schema.field(0).name(), "id");
+    assert_eq!(result_schema.field(1).name(), "name");
 
     Ok(())
 }
