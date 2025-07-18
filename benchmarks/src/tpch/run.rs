@@ -21,7 +21,7 @@ use std::sync::Arc;
 use super::{
     get_query_sql, get_tbl_tpch_table_schema, get_tpch_table_schema, TPCH_TABLES,
 };
-use crate::util::{BenchmarkRun, CommonOpt, QueryResult};
+use crate::util::{print_memory_stats, BenchmarkRun, CommonOpt, QueryResult};
 
 use arrow::record_batch::RecordBatch;
 use arrow::util::pretty::{self, pretty_format_batches};
@@ -183,6 +183,10 @@ impl RunOpt {
 
         let avg = millis.iter().sum::<f64>() / millis.len() as f64;
         println!("Query {query_id} avg time: {avg:.2} ms");
+
+        if self.common.memory_stat_enabled {
+            print_memory_stats();
+        }
 
         Ok(query_results)
     }

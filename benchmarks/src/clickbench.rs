@@ -19,7 +19,7 @@ use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
-use crate::util::{BenchmarkRun, CommonOpt, QueryResult};
+use crate::util::{print_memory_stats, BenchmarkRun, CommonOpt, QueryResult};
 use datafusion::logical_expr::{ExplainFormat, ExplainOption};
 use datafusion::{
     error::{DataFusionError, Result},
@@ -206,6 +206,10 @@ impl RunOpt {
         }
         let avg = millis.iter().sum::<f64>() / millis.len() as f64;
         println!("Query {query_id} avg time: {avg:.2} ms");
+
+        if self.common.memory_stat_enabled {
+            print_memory_stats();
+        }
         Ok(query_results)
     }
 

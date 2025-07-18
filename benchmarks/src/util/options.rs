@@ -61,6 +61,11 @@ pub struct CommonOpt {
     /// Activate debug mode to see more details
     #[structopt(short, long)]
     pub debug: bool,
+
+    /// Enable memory profiling to see VmPeak, VmHwm for running benchmark.
+    /// See more details in TODO
+    #[structopt(long)]
+    pub memory_stat_enabled: bool,
 }
 
 impl CommonOpt {
