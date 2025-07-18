@@ -27,9 +27,11 @@ use datafusion_common::config::{EncryptionFactoryOptions, TableParquetOptions};
 use datafusion_common::{assert_batches_sorted_eq, DataFusionError};
 use datafusion_datasource_parquet::ParquetFormat;
 use datafusion_execution::parquet_encryption::EncryptionFactory;
+use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
 use parquet::arrow::ArrowWriter;
 use parquet::encryption::decrypt::FileDecryptionProperties;
 use parquet::encryption::encrypt::FileEncryptionProperties;
+use parquet::file::column_crypto_metadata::ColumnCryptoMetaData;
 use parquet::file::properties::WriterProperties;
 use std::collections::HashMap;
 use std::fs::File;
@@ -173,6 +175,8 @@ async fn round_trip_parquet_with_encryption_factory() {
     // Crypto factory should have generated one key per partition file
     assert_eq!(encryption_factory.encryption_keys.lock().unwrap().len(), 3);
 
+    verify_table_encrypted(tmpdir.path(), &encryption_factory).unwrap();
+
     // Registering table without decryption properties should fail
     let table_path = format!("file://{}/", tmpdir.path().to_str().unwrap());
     let without_decryption_register = ctx
@@ -249,6 +253,58 @@ async fn round_trip_parquet_with_encryption_factory() {
         "+-----+----+--------+",
     ];
     assert_batches_sorted_eq!(expected, &table);
+}
+
+fn verify_table_encrypted(
+    table_path: &Path,
+    encryption_factory: &Arc<MockEncryptionFactory>,
+) -> datafusion_common::Result<()> {
+    let mut directories = vec![table_path.to_path_buf()];
+    let mut files_visited = 0;
+    while let Some(directory) = directories.pop() {
+        for entry in std::fs::read_dir(&directory)? {
+            let path = entry?.path();
+            if path.is_dir() {
+                directories.push(path);
+            } else {
+                verify_file_encrypted(&path, encryption_factory)?;
+                files_visited += 1;
+            }
+        }
+    }
+    assert!(files_visited > 0);
+    Ok(())
+}
+
+fn verify_file_encrypted(
+    file_path: &Path,
+    encryption_factory: &Arc<MockEncryptionFactory>,
+) -> datafusion_common::Result<()> {
+    let mut options = EncryptionFactoryOptions::default();
+    options
+        .options
+        .insert("test_key".to_string(), "test value".to_string());
+    let object_path = object_store::path::Path::from(file_path.to_str().unwrap());
+    let decryption_properties = encryption_factory
+        .get_file_decryption_properties(&options, &object_path)?
+        .unwrap();
+
+    let reader_options =
+        ArrowReaderOptions::new().with_file_decryption_properties(decryption_properties);
+    let file = File::open(&file_path)?;
+    let reader_metadata = ArrowReaderMetadata::load(&file, reader_options)?;
+    let metadata = reader_metadata.metadata();
+    assert!(metadata.num_row_groups() > 0);
+    for row_group in metadata.row_groups() {
+        assert!(row_group.num_columns() > 0);
+        for col in row_group.columns() {
+            assert!(matches!(
+                col.crypto_metadata(),
+                Some(ColumnCryptoMetaData::EncryptionWithFooterKey)
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Encryption factory implementation for use in tests,
