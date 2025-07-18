@@ -112,7 +112,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     self.sql_expr_to_logical_expr(e, order_by_schema, planner_context)?
                 }
             };
-            sort_expr_vec.push(make_sort_expr(expr, asc, nulls_first));
+            let asc = asc.unwrap_or(true);
+            expr_vec.push(make_sort_expr(
+                expr,
+                asc,
+                nulls_first.unwrap_or(self.options.default_null_ordering.eval(asc)),
+            ))
         }
 
         Ok(sort_expr_vec)
