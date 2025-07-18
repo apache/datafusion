@@ -387,8 +387,8 @@ impl PhysicalExpr for BinaryExpr {
         let input_schema = schema.as_ref();
 
         if left_data_type.is_nested() {
-            if right_data_type != left_data_type {
-                return internal_err!("type mismatch");
+            if !left_data_type.equals_datatype(&right_data_type) {
+                return internal_err!("Cannot evaluate binary expression because of type mismatch: left {}, right {} ", left_data_type, right_data_type);
             }
             return apply_cmp_for_nested(self.op, &lhs, &rhs);
         }
