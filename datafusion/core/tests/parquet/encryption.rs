@@ -291,7 +291,7 @@ fn verify_file_encrypted(
 
     let reader_options =
         ArrowReaderOptions::new().with_file_decryption_properties(decryption_properties);
-    let file = File::open(&file_path)?;
+    let file = File::open(file_path)?;
     let reader_metadata = ArrowReaderMetadata::load(&file, reader_options)?;
     let metadata = reader_metadata.metadata();
     assert!(metadata.num_row_groups() > 0);
