@@ -23,8 +23,7 @@ use std::mem::{size_of, size_of_val, take};
 use std::sync::Arc;
 
 use arrow::array::{
-    make_array, new_empty_array, Array, ArrayRef, AsArray, BooleanArray, ListArray,
-    StructArray,
+    new_empty_array, Array, ArrayRef, AsArray, BooleanArray, ListArray, StructArray,
 };
 use arrow::compute::{filter, SortOptions};
 use arrow::datatypes::{DataType, Field, FieldRef, Fields};
@@ -335,11 +334,7 @@ impl Accumulator for ArrayAggAccumulator {
         };
 
         if !val.is_empty() {
-            // The ArrayRef might be holding a reference to its original input buffer, so
-            // storing it here directly copied/compacted avoids over accounting memory
-            // not used here.
-            self.values
-                .push(make_array(copy_array_data(&val.to_data())));
+            self.values.push(val)
         }
 
         Ok(())
@@ -398,7 +393,7 @@ impl Accumulator for ArrayAggAccumulator {
             + self
                 .values
                 .iter()
-                .map(|arr| arr.get_array_memory_size())
+                .map(|arr| arr.to_data().get_slice_memory_size().unwrap_or_default())
                 .sum::<usize>()
             + self.datatype.size()
             - size_of_val(&self.datatype)
@@ -1064,8 +1059,7 @@ mod tests {
         acc2.update_batch(&[data(["b", "c", "a"])])?;
         acc1 = merge(acc1, acc2)?;
 
-        // without compaction, the size is 2652.
-        assert_eq!(acc1.size(), 732);
+        assert_eq!(acc1.size(), 266);
 
         Ok(())
     }
