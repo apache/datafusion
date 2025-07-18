@@ -148,7 +148,7 @@ SELECT
 query error DataFusion error: Arrow error: Cast error: Cannot cast string 'foo' to value of Int64 type
 create table foo as values (1), ('foo');
 
-query error user-defined coercion failed
+query error DataFusion error: Error during planning: Substring without for/from is not valid
 select 1 group by substr('');
 
 # Error in filter should be reported
