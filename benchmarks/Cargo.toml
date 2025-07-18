@@ -45,6 +45,7 @@ mimalloc = { version = "0.1", optional = true, default-features = false }
 object_store = { workspace = true }
 parquet = { workspace = true, default-features = true }
 rand = { workspace = true }
+regex.workspace = true
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = { workspace = true }
 snmalloc-rs = { version = "0.3", optional = true }
@@ -52,6 +53,9 @@ structopt = { version = "0.3", default-features = false }
 test-utils = { path = "../test-utils/", version = "0.1.0" }
 tokio = { workspace = true, features = ["rt-multi-thread", "parking_lot"] }
 tokio-util = { version = "0.7.15" }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+procfs = "0.17.0"
 
 [dev-dependencies]
 datafusion-proto = { workspace = true }
