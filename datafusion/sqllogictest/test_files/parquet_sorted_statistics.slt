@@ -38,20 +38,22 @@ CREATE TABLE src_table (
   bigint_col BIGINT,
   date_col DATE,
   overlapping_col INT,
-  constant_col INT
+  constant_col INT,
+  nulls_first_col INT,
+  nulls_last_col INT
 ) AS VALUES
 -- first file
-(1, 3, 'aaa', 100, 1, 0, 0),
-(2, 2, 'bbb', 200, 2, 1, 0),
-(3, 1, 'ccc', 300, 3, 2, 0),
+(1, 3, 'aaa', 100, 1, 0, 0, NULL, 1),
+(2, 2, 'bbb', 200, 2, 1, 0, NULL, 2),
+(3, 1, 'ccc', 300, 3, 2, 0, 1, 3),
 -- second file
-(4, 6, 'ddd', 400, 4, 0, 0),
-(5, 5, 'eee', 500, 5, 1, 0),
-(6, 4, 'fff', 600, 6, 2, 0),
+(4, 6, 'ddd', 400, 4, 0, 0, 2, 4),
+(5, 5, 'eee', 500, 5, 1, 0, 3, 5),
+(6, 4, 'fff', 600, 6, 2, 0, 4, 6),
 -- third file
-(7, 9, 'ggg', 700, 7, 3, 0),
-(8, 8, 'hhh', 800, 8, 4, 0),
-(9, 7, 'iii', 900, 9, 5, 0);
+(7, 9, 'ggg', 700, 7, 3, 0, 5, 7),
+(8, 8, 'hhh', 800, 8, 4, 0, 6, NULL),
+(9, 7, 'iii', 900, 9, 5, 0, 7, NULL);
 
 # Setup 3 files, in particular more files than there are partitions
 
@@ -90,11 +92,18 @@ CREATE EXTERNAL TABLE test_table (
   bigint_col BIGINT NOT NULL,
   date_col DATE NOT NULL,
   overlapping_col INT NOT NULL,
-  constant_col INT NOT NULL
+  constant_col INT NOT NULL,
+  nulls_first_col INT,
+  nulls_last_col INT
 )
 STORED AS PARQUET
 PARTITIONED BY (partition_col)
-WITH ORDER (int_col ASC NULLS LAST, bigint_col ASC NULLS LAST)
+WITH ORDER (
+    int_col ASC NULLS LAST,
+    bigint_col ASC NULLS LAST,
+    nulls_first_col ASC NULLS FIRST,
+    nulls_last_col ASC NULLS LAST
+)
 LOCATION 'test_files/scratch/parquet_sorted_statistics/test_table';
 
 # Order by numeric columns
@@ -102,33 +111,33 @@ LOCATION 'test_files/scratch/parquet_sorted_statistics/test_table';
 # DataFusion doesn't currently support string column statistics
 # This should not require a sort.
 query TT
-EXPLAIN SELECT int_col, bigint_col
+EXPLAIN SELECT int_col, bigint_col, nulls_first_col, nulls_last_col
 FROM test_table
-ORDER BY int_col, bigint_col;
+ORDER BY int_col, bigint_col, nulls_first_col NULLS FIRST, nulls_last_col NULLS LAST;
 ----
 logical_plan
-01)Sort: test_table.int_col ASC NULLS LAST, test_table.bigint_col ASC NULLS LAST
-02)--TableScan: test_table projection=[int_col, bigint_col]
+01)Sort: test_table.int_col ASC NULLS LAST, test_table.bigint_col ASC NULLS LAST, test_table.nulls_first_col ASC NULLS FIRST, test_table.nulls_last_col ASC NULLS LAST
+02)--TableScan: test_table projection=[int_col, bigint_col, nulls_first_col, nulls_last_col]
 physical_plan
-01)SortPreservingMergeExec: [int_col@0 ASC NULLS LAST, bigint_col@1 ASC NULLS LAST]
-02)--DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_sorted_statistics/test_table/partition_col=A/0.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_sorted_statistics/test_table/partition_col=C/2.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_sorted_statistics/test_table/partition_col=B/1.parquet]]}, projection=[int_col, bigint_col], output_ordering=[int_col@0 ASC NULLS LAST, bigint_col@1 ASC NULLS LAST], file_type=parquet
+01)SortPreservingMergeExec: [int_col@0 ASC NULLS LAST, bigint_col@1 ASC NULLS LAST, nulls_first_col@2 ASC, nulls_last_col@3 ASC NULLS LAST]
+02)--DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_sorted_statistics/test_table/partition_col=A/0.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_sorted_statistics/test_table/partition_col=C/2.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_sorted_statistics/test_table/partition_col=B/1.parquet]]}, projection=[int_col, bigint_col, nulls_first_col, nulls_last_col], output_ordering=[int_col@0 ASC NULLS LAST, bigint_col@1 ASC NULLS LAST, nulls_first_col@2 ASC, nulls_last_col@3 ASC NULLS LAST], file_type=parquet
 
 # Another planning test, but project on a column with unsupported statistics
 # We should be able to ignore this and look at only the relevant statistics
 query TT
 EXPLAIN SELECT string_col
 FROM test_table
-ORDER BY int_col, bigint_col;
+ORDER BY int_col, bigint_col, nulls_first_col NULLS FIRST, nulls_last_col NULLS LAST;
 ----
 logical_plan
 01)Projection: test_table.string_col
-02)--Sort: test_table.int_col ASC NULLS LAST, test_table.bigint_col ASC NULLS LAST
-03)----Projection: test_table.string_col, test_table.int_col, test_table.bigint_col
-04)------TableScan: test_table projection=[int_col, string_col, bigint_col]
+02)--Sort: test_table.int_col ASC NULLS LAST, test_table.bigint_col ASC NULLS LAST, test_table.nulls_first_col ASC NULLS FIRST, test_table.nulls_last_col ASC NULLS LAST
+03)----Projection: test_table.string_col, test_table.int_col, test_table.bigint_col, test_table.nulls_first_col, test_table.nulls_last_col
+04)------TableScan: test_table projection=[int_col, string_col, bigint_col, nulls_first_col, nulls_last_col]
 physical_plan
 01)ProjectionExec: expr=[string_col@0 as string_col]
-02)--SortPreservingMergeExec: [int_col@1 ASC NULLS LAST, bigint_col@2 ASC NULLS LAST]
-03)----DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_sorted_statistics/test_table/partition_col=A/0.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_sorted_statistics/test_table/partition_col=C/2.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_sorted_statistics/test_table/partition_col=B/1.parquet]]}, projection=[string_col, int_col, bigint_col], output_ordering=[int_col@1 ASC NULLS LAST, bigint_col@2 ASC NULLS LAST], file_type=parquet
+02)--SortPreservingMergeExec: [int_col@1 ASC NULLS LAST, bigint_col@2 ASC NULLS LAST, nulls_first_col@3 ASC, nulls_last_col@4 ASC NULLS LAST]
+03)----DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_sorted_statistics/test_table/partition_col=A/0.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_sorted_statistics/test_table/partition_col=C/2.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_sorted_statistics/test_table/partition_col=B/1.parquet]]}, projection=[string_col, int_col, bigint_col, nulls_first_col, nulls_last_col], output_ordering=[int_col@1 ASC NULLS LAST, bigint_col@2 ASC NULLS LAST, nulls_first_col@3 ASC, nulls_last_col@4 ASC NULLS LAST], file_type=parquet
 
 # Clean up & recreate but sort on descending column
 statement ok
