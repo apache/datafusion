@@ -39,6 +39,44 @@ use indexmap::IndexSet;
 #[derive(Default, Debug)]
 pub struct EliminateSelfJoinAggregation;
 
+impl OptimizerRule for EliminateSelfJoinAggregation {
+    fn name(&self) -> &str {
+        "eliminate_self_join_to_window"
+    }
+
+    fn apply_order(&self) -> Option<ApplyOrder> {
+        Some(ApplyOrder::TopDown)
+    }
+
+    fn supports_rewrite(&self) -> bool {
+        true
+    }
+
+    fn rewrite(
+        &self,
+        plan: LogicalPlan,
+        _: &dyn OptimizerConfig,
+    ) -> Result<Transformed<LogicalPlan>> {
+        let mut renamed = None;
+        let Transformed {
+            data: plan,
+            transformed,
+            ..
+        } = plan.transform_up(|plan| Self::eliminate_inner(plan, &mut renamed))?;
+
+        if transformed {
+            if let Some(renamed) = renamed {
+                let plan = renamed.rewrite_logical_plan(plan)?;
+                Ok(Transformed::yes(plan))
+            } else {
+                Ok(Transformed::yes(plan))
+            }
+        } else {
+            Ok(Transformed::no(plan))
+        }
+    }
+}
+
 impl EliminateSelfJoinAggregation {
     #[allow(missing_docs)]
     pub fn new() -> Self {
@@ -49,10 +87,10 @@ impl EliminateSelfJoinAggregation {
         plan: LogicalPlan,
         renamed: &mut Option<RenamedAlias>,
     ) -> Result<Transformed<LogicalPlan>> {
-        let projection = match &plan {
-            LogicalPlan::Projection(projection) => projection,
-            _ => return Ok(Transformed::no(plan)),
+        let LogicalPlan::Projection(projection) = &plan else {
+            return Ok(Transformed::no(plan));
         };
+
         let aggregate = match projection.input.as_ref() {
             LogicalPlan::Aggregate(aggregate) if aggregate.aggr_expr.len() == 1 => {
                 aggregate
@@ -127,44 +165,6 @@ impl EliminateSelfJoinAggregation {
         let window = LogicalPlan::Window(window).into();
         let projection = Projection::try_new(projection_expr, window)?;
         Ok(Transformed::yes(LogicalPlan::Projection(projection)))
-    }
-}
-
-impl OptimizerRule for EliminateSelfJoinAggregation {
-    fn name(&self) -> &str {
-        "eliminate_self_join_to_window"
-    }
-
-    fn apply_order(&self) -> Option<ApplyOrder> {
-        Some(ApplyOrder::TopDown)
-    }
-
-    fn supports_rewrite(&self) -> bool {
-        true
-    }
-
-    fn rewrite(
-        &self,
-        plan: LogicalPlan,
-        _: &dyn OptimizerConfig,
-    ) -> Result<Transformed<LogicalPlan>> {
-        let mut renamed = None;
-        let Transformed {
-            data: plan,
-            transformed,
-            ..
-        } = plan.transform_up(|plan| Self::eliminate_inner(plan, &mut renamed))?;
-
-        if transformed {
-            if let Some(renamed) = renamed {
-                let plan = renamed.rewrite_logical_plan(plan)?;
-                Ok(Transformed::yes(plan))
-            } else {
-                Ok(Transformed::yes(plan))
-            }
-        } else {
-            Ok(Transformed::no(plan))
-        }
     }
 }
 
@@ -470,4 +470,429 @@ fn try_replace_with_window(
         window,
         renamed_alias,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::OptimizerContext;
+
+    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::{Result, TableReference};
+    use datafusion_expr::{
+        col, logical_plan::builder::LogicalTableSource, JoinType, LogicalPlan,
+        LogicalPlanBuilder,
+    };
+    use datafusion_functions_aggregate::count::count;
+    use datafusion_functions_aggregate::sum::sum;
+
+    fn create_table_scan(alias: Option<&str>) -> LogicalPlan {
+        let schema = Schema::new(vec![
+            Field::new("user_id", DataType::Int32, false),
+            Field::new("purchase_date", DataType::Date32, false),
+            Field::new("amount", DataType::Float64, false),
+        ]);
+        let table_source = Arc::new(LogicalTableSource::new(Arc::new(schema)));
+
+        let mut builder = LogicalPlanBuilder::scan_with_filters(
+            TableReference::bare("purchases"),
+            table_source,
+            None,
+            vec![],
+        )
+        .unwrap();
+
+        if let Some(alias) = alias {
+            builder = builder.alias(alias).unwrap();
+        }
+
+        builder.build().unwrap()
+    }
+
+    fn optimize_plan(plan: LogicalPlan) -> Result<LogicalPlan> {
+        let optimizer = EliminateSelfJoinAggregation::new();
+        let config = OptimizerContext::default();
+        let result = optimizer.rewrite(plan, &config)?;
+        Ok(result.data)
+    }
+
+    #[test]
+    fn test_eliminate_self_join_aggregation_less_than_equal() -> Result<()> {
+        // Create self join with <= condition
+        let left = create_table_scan(Some("a"));
+        let right = create_table_scan(Some("b"));
+
+        // Build join with filter: b.purchase_date <= a.purchase_date
+        let join_filter = col("b.purchase_date").lt_eq(col("a.purchase_date"));
+
+        let join_plan = LogicalPlanBuilder::from(left)
+            .join(
+                right,
+                JoinType::Inner,
+                (vec!["a.user_id"], vec!["b.user_id"]),
+                Some(join_filter),
+            )?
+            .aggregate(
+                vec![col("a.user_id"), col("a.purchase_date")],
+                vec![sum(col("b.amount"))],
+            )?
+            .project(vec![
+                col("a.user_id"),
+                col("a.purchase_date"),
+                col(sum(col("b.amount")).name_for_alias()?),
+            ])?
+            .build()?;
+
+        let optimized = optimize_plan(join_plan)?;
+
+        // Verify the join was eliminated and replaced with window function
+        match &optimized {
+            LogicalPlan::Projection(proj) => {
+                match proj.input.as_ref() {
+                    LogicalPlan::Window(_) => {
+                        // Success - join was replaced with window function
+                    }
+                    _ => panic!(
+                        "Expected Window after optimization, got: {:?}",
+                        proj.input
+                    ),
+                }
+            }
+            _ => panic!("Expected Projection at top level, got: {optimized:?}"),
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_eliminate_self_join_aggregation_less_than() -> Result<()> {
+        // Create self join with < condition
+        let left = create_table_scan(Some("a"));
+        let right = create_table_scan(Some("b"));
+
+        // Build join with filter: b.purchase_date < a.purchase_date
+        let join_filter = col("b.purchase_date").lt(col("a.purchase_date"));
+
+        let join_plan = LogicalPlanBuilder::from(left)
+            .join(
+                right,
+                JoinType::Inner,
+                (vec!["a.user_id"], vec!["b.user_id"]),
+                Some(join_filter),
+            )?
+            .aggregate(
+                vec![col("a.user_id"), col("a.purchase_date")],
+                vec![sum(col("b.amount"))],
+            )?
+            .project(vec![
+                col("a.user_id"),
+                col("a.purchase_date"),
+                col(sum(col("b.amount")).name_for_alias()?),
+            ])?
+            .build()?;
+
+        let optimized = optimize_plan(join_plan)?;
+
+        // Verify the join was eliminated and replaced with window function
+        match &optimized {
+            LogicalPlan::Projection(proj) => {
+                match proj.input.as_ref() {
+                    LogicalPlan::Window(_) => {
+                        // Success - join was replaced with window function
+                    }
+                    _ => panic!(
+                        "Expected Window after optimization, got: {:?}",
+                        proj.input
+                    ),
+                }
+            }
+            _ => panic!("Expected Projection at top level, got: {optimized:?}"),
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_eliminate_self_join_aggregation_greater_than_equal() -> Result<()> {
+        // Create self join with >= condition
+        let left = create_table_scan(Some("a"));
+        let right = create_table_scan(Some("b"));
+
+        // Build join with filter: b.purchase_date >= a.purchase_date
+        let join_filter = col("b.purchase_date").gt_eq(col("a.purchase_date"));
+
+        let join_plan = LogicalPlanBuilder::from(left)
+            .join(
+                right,
+                JoinType::Inner,
+                (vec!["a.user_id"], vec!["b.user_id"]),
+                Some(join_filter),
+            )?
+            .aggregate(
+                vec![col("a.user_id"), col("a.purchase_date")],
+                vec![sum(col("b.amount"))],
+            )?
+            .project(vec![
+                col("a.user_id"),
+                col("a.purchase_date"),
+                col(sum(col("b.amount")).name_for_alias()?),
+            ])?
+            .build()?;
+
+        let optimized = optimize_plan(join_plan)?;
+
+        // Verify the join was eliminated and replaced with window function
+        match &optimized {
+            LogicalPlan::Projection(proj) => {
+                match proj.input.as_ref() {
+                    LogicalPlan::Window(_) => {
+                        // Success - join was replaced with window function
+                    }
+                    _ => panic!(
+                        "Expected Window after optimization, got: {:?}",
+                        proj.input
+                    ),
+                }
+            }
+            _ => panic!("Expected Projection at top level, got: {optimized:?}"),
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_no_elimination_without_filter() -> Result<()> {
+        // Create self join without filter
+        let left = create_table_scan(Some("a"));
+        let right = create_table_scan(Some("b"));
+
+        let join_plan = LogicalPlanBuilder::from(left)
+            .join(
+                right,
+                JoinType::Inner,
+                (vec!["a.user_id"], vec!["b.user_id"]),
+                None, // No filter
+            )?
+            .aggregate(
+                vec![col("a.user_id"), col("a.purchase_date")],
+                vec![sum(col("b.amount"))],
+            )?
+            .project(vec![
+                col("a.user_id"),
+                col("a.purchase_date"),
+                col(sum(col("b.amount")).name_for_alias()?),
+            ])?
+            .build()?;
+
+        let optimized = optimize_plan(join_plan)?;
+
+        // Verify the join was NOT eliminated
+        match &optimized {
+            LogicalPlan::Projection(proj) => {
+                let mut has_join = false;
+                proj.input.apply(|node| {
+                    if matches!(node, LogicalPlan::Join(_)) {
+                        has_join = true;
+                    }
+                    Ok(datafusion_common::tree_node::TreeNodeRecursion::Continue)
+                })?;
+                assert!(has_join, "Expected join to remain without filter");
+            }
+            _ => panic!("Expected Projection at top level, got: {optimized:?}"),
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_no_elimination_with_wrong_group_by() -> Result<()> {
+        // Create self join with filter but wrong GROUP BY columns
+        let left = create_table_scan(Some("a"));
+        let right = create_table_scan(Some("b"));
+
+        let join_filter = col("b.purchase_date").lt_eq(col("a.purchase_date"));
+
+        let join_plan = LogicalPlanBuilder::from(left)
+            .join(
+                right,
+                JoinType::Inner,
+                (vec!["a.user_id"], vec!["b.user_id"]),
+                Some(join_filter),
+            )?
+            .aggregate(
+                vec![col("a.user_id")], // Missing purchase_date in GROUP BY
+                vec![sum(col("b.amount"))],
+            )?
+            .project(vec![
+                col("a.user_id"),
+                col(sum(col("b.amount")).name_for_alias()?),
+            ])?
+            .build()?;
+
+        let optimized = optimize_plan(join_plan)?;
+
+        // Verify the join was NOT eliminated
+        match &optimized {
+            LogicalPlan::Projection(proj) => {
+                let mut has_join = false;
+                proj.input.apply(|node| {
+                    if matches!(node, LogicalPlan::Join(_)) {
+                        has_join = true;
+                    }
+                    Ok(datafusion_common::tree_node::TreeNodeRecursion::Continue)
+                })?;
+                assert!(has_join, "Expected join to remain with incorrect GROUP BY");
+            }
+            _ => panic!("Expected Projection at top level, got: {optimized:?}"),
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_no_elimination_with_multiple_aggregates() -> Result<()> {
+        // Create self join with multiple aggregate expressions
+        let left = create_table_scan(Some("a"));
+        let right = create_table_scan(Some("b"));
+
+        let join_filter = col("b.purchase_date").lt_eq(col("a.purchase_date"));
+
+        let join_plan = LogicalPlanBuilder::from(left)
+            .join(
+                right,
+                JoinType::Inner,
+                (vec!["a.user_id"], vec!["b.user_id"]),
+                Some(join_filter),
+            )?
+            .aggregate(
+                vec![col("a.user_id"), col("a.purchase_date")],
+                vec![
+                    sum(col("b.amount")),
+                    count(col("b.amount")), // Multiple aggregates
+                ],
+            )?
+            .project(vec![
+                col("a.user_id"),
+                col("a.purchase_date"),
+                col(sum(col("b.amount")).name_for_alias()?),
+            ])?
+            .build()?;
+
+        let optimized = optimize_plan(join_plan)?;
+
+        // Current implementation only supports single aggregate
+        match &optimized {
+            LogicalPlan::Projection(proj) => {
+                let mut has_join = false;
+                proj.input.apply(|node| {
+                    if matches!(node, LogicalPlan::Join(_)) {
+                        has_join = true;
+                    }
+                    Ok(datafusion_common::tree_node::TreeNodeRecursion::Continue)
+                })?;
+                assert!(has_join, "Expected join to remain with multiple aggregates");
+            }
+            _ => panic!("Expected Projection at top level, got: {optimized:?}"),
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_no_elimination_with_different_filter_columns() -> Result<()> {
+        // Create self join with filter on different columns
+        let left = create_table_scan(Some("a"));
+        let right = create_table_scan(Some("b"));
+
+        // Filter uses different columns than join
+        let join_filter = col("b.amount").lt(col("a.amount"));
+
+        let join_plan = LogicalPlanBuilder::from(left)
+            .join(
+                right,
+                JoinType::Inner,
+                (vec!["a.user_id"], vec!["b.user_id"]),
+                Some(join_filter),
+            )?
+            .aggregate(
+                vec![col("a.user_id"), col("a.purchase_date")],
+                vec![sum(col("b.amount"))],
+            )?
+            .project(vec![
+                col("a.user_id"),
+                col("a.purchase_date"),
+                col(sum(col("b.amount")).name_for_alias()?),
+            ])?
+            .build()?;
+
+        let optimized = optimize_plan(join_plan)?;
+
+        // Verify the join was NOT eliminated
+        match &optimized {
+            LogicalPlan::Projection(proj) => {
+                let mut has_join = false;
+                proj.input.apply(|node| {
+                    if matches!(node, LogicalPlan::Join(_)) {
+                        has_join = true;
+                    }
+                    Ok(datafusion_common::tree_node::TreeNodeRecursion::Continue)
+                })?;
+                assert!(
+                    has_join,
+                    "Expected join to remain with filter on different columns"
+                );
+            }
+            _ => panic!("Expected Projection at top level, got: {optimized:?}"),
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_no_elimination_with_wrong_join_type() -> Result<()> {
+        // Create left join (not inner join)
+        let left = create_table_scan(Some("a"));
+        let right = create_table_scan(Some("b"));
+
+        let join_filter = col("b.purchase_date").lt_eq(col("a.purchase_date"));
+
+        let join_plan = LogicalPlanBuilder::from(left)
+            .join(
+                right,
+                JoinType::Left, // Not inner join
+                (vec!["a.user_id"], vec!["b.user_id"]),
+                Some(join_filter),
+            )?
+            .aggregate(
+                vec![col("a.user_id"), col("a.purchase_date")],
+                vec![sum(col("b.amount"))],
+            )?
+            .project(vec![
+                col("a.user_id"),
+                col("a.purchase_date"),
+                col(sum(col("b.amount")).name_for_alias()?),
+            ])?
+            .build()?;
+
+        let optimized = optimize_plan(join_plan)?;
+
+        // Verify the join was NOT eliminated
+        match &optimized {
+            LogicalPlan::Projection(proj) => {
+                let mut has_join = false;
+                proj.input.apply(|node| {
+                    if matches!(node, LogicalPlan::Join(_)) {
+                        has_join = true;
+                    }
+                    Ok(datafusion_common::tree_node::TreeNodeRecursion::Continue)
+                })?;
+                assert!(has_join, "Expected join to remain for non-inner join");
+            }
+            _ => panic!("Expected Projection at top level, got: {optimized:?}"),
+        }
+
+        Ok(())
+    }
 }

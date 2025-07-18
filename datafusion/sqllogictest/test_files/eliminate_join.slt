@@ -253,6 +253,190 @@ logical_plan
 05)----SubqueryAlias: b
 06)------TableScan: employees projection=[id]
 
+####
+# Tests for EliminateSelfJoinAggregation
+####
+
+####
+# Test 14: Self join with aggregation and <= condition should be transformed to window function
+####
+
+query TT
+EXPLAIN SELECT a.user_id, a.purchase_date, SUM(b.amount) AS running_total
+FROM purchases a
+JOIN purchases b ON a.user_id = b.user_id AND b.purchase_date <= a.purchase_date
+GROUP BY a.user_id, a.purchase_date;
+----
+logical_plan
+01)Projection: a.user_id, a.purchase_date, sum(amount) PARTITION BY [user_id, purchase_date] ORDER BY [purchase_date ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS running_total
+02)--WindowAggr: windowExpr=[[sum(amount) PARTITION BY [user_id, purchase_date] ORDER BY [purchase_date ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+03)----SubqueryAlias: a
+04)------TableScan: purchases projection=[user_id, purchase_date, amount]
+
+####
+# Test 15: Self join with aggregation and < condition should be transformed to window function
+####
+
+query TT
+EXPLAIN SELECT a.user_id, a.purchase_date, SUM(b.amount) AS prior_total
+FROM purchases a
+JOIN purchases b ON a.user_id = b.user_id AND b.purchase_date < a.purchase_date
+GROUP BY a.user_id, a.purchase_date;
+----
+logical_plan
+01)Projection: a.user_id, a.purchase_date, sum(amount) PARTITION BY [user_id, purchase_date] ORDER BY [purchase_date ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING AS prior_total
+02)--WindowAggr: windowExpr=[[sum(amount) PARTITION BY [user_id, purchase_date] ORDER BY [purchase_date ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING]]
+03)----SubqueryAlias: a
+04)------TableScan: purchases projection=[user_id, purchase_date, amount]
+
+####
+# Test 16: Self join with aggregation and >= condition should be transformed to window function
+####
+
+query TT
+EXPLAIN SELECT a.user_id, a.purchase_date, SUM(b.amount) AS future_total
+FROM purchases a
+JOIN purchases b ON a.user_id = b.user_id AND b.purchase_date >= a.purchase_date
+GROUP BY a.user_id, a.purchase_date;
+----
+logical_plan
+01)Projection: a.user_id, a.purchase_date, sum(amount) PARTITION BY [user_id, purchase_date] ORDER BY [purchase_date DESC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS future_total
+02)--WindowAggr: windowExpr=[[sum(amount) PARTITION BY [user_id, purchase_date] ORDER BY [purchase_date DESC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+03)----SubqueryAlias: a
+04)------TableScan: purchases projection=[user_id, purchase_date, amount]
+
+####
+# Test 17: Self join with aggregation and > condition should be transformed to window function
+####
+
+query TT
+EXPLAIN SELECT a.user_id, a.purchase_date, SUM(b.amount) AS later_total
+FROM purchases a
+JOIN purchases b ON a.user_id = b.user_id AND b.purchase_date > a.purchase_date
+GROUP BY a.user_id, a.purchase_date;
+----
+logical_plan
+01)Projection: a.user_id, a.purchase_date, sum(amount) PARTITION BY [user_id, purchase_date] ORDER BY [purchase_date DESC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING AS later_total
+02)--WindowAggr: windowExpr=[[sum(amount) PARTITION BY [user_id, purchase_date] ORDER BY [purchase_date DESC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING]]
+03)----SubqueryAlias: a
+04)------TableScan: purchases projection=[user_id, purchase_date, amount]
+
+####
+# Test 18: Self join aggregation with no alias for aggregate column
+####
+
+query TT
+EXPLAIN SELECT a.user_id, a.purchase_date, SUM(b.amount)
+FROM purchases a
+JOIN purchases b ON a.user_id = b.user_id AND b.purchase_date <= a.purchase_date
+GROUP BY a.user_id, a.purchase_date;
+----
+logical_plan
+01)Projection: a.user_id, a.purchase_date, sum(amount) PARTITION BY [user_id, purchase_date] ORDER BY [purchase_date ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS sum(b.amount)
+02)--WindowAggr: windowExpr=[[sum(amount) PARTITION BY [user_id, purchase_date] ORDER BY [purchase_date ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+03)----SubqueryAlias: a
+04)------TableScan: purchases projection=[user_id, purchase_date, amount]
+
+####
+# Test 19: Self join aggregation without filter should NOT be transformed
+####
+
+query TT
+EXPLAIN SELECT a.user_id, a.purchase_date, SUM(b.amount) AS total
+FROM purchases a
+JOIN purchases b ON a.user_id = b.user_id
+GROUP BY a.user_id, a.purchase_date;
+----
+logical_plan
+01)Projection: a.user_id, a.purchase_date, sum(b.amount) AS total
+02)--Aggregate: groupBy=[[a.user_id, a.purchase_date]], aggr=[[sum(b.amount)]]
+03)----Projection: a.user_id, a.purchase_date, b.amount
+04)------Inner Join: a.user_id = b.user_id
+05)--------SubqueryAlias: a
+06)----------TableScan: purchases projection=[user_id, purchase_date]
+07)--------SubqueryAlias: b
+08)----------TableScan: purchases projection=[user_id, amount]
+
+####
+# Test 20: Self join aggregation with filter on different column should NOT be transformed
+####
+
+query TT
+EXPLAIN SELECT a.user_id, a.purchase_date, SUM(b.amount) AS total
+FROM purchases a
+JOIN purchases b ON a.user_id = b.user_id AND b.amount <= a.amount
+GROUP BY a.user_id, a.purchase_date;
+----
+logical_plan
+01)Projection: a.user_id, a.purchase_date, sum(b.amount) AS total
+02)--Aggregate: groupBy=[[a.user_id, a.purchase_date]], aggr=[[sum(b.amount)]]
+03)----Projection: a.user_id, a.purchase_date, b.amount
+04)------Inner Join: a.user_id = b.user_id Filter: b.amount <= a.amount
+05)--------SubqueryAlias: a
+06)----------TableScan: purchases projection=[user_id, purchase_date, amount]
+07)--------SubqueryAlias: b
+08)----------TableScan: purchases projection=[user_id, amount]
+
+####
+# Test 21: Self join aggregation with incorrect GROUP BY should NOT be transformed
+####
+
+query TT
+EXPLAIN SELECT a.user_id, SUM(b.amount) AS total
+FROM purchases a
+JOIN purchases b ON a.user_id = b.user_id AND b.purchase_date <= a.purchase_date
+GROUP BY a.user_id;
+----
+logical_plan
+01)Projection: a.user_id, sum(b.amount) AS total
+02)--Aggregate: groupBy=[[a.user_id]], aggr=[[sum(b.amount)]]
+03)----Projection: a.user_id, b.amount
+04)------Inner Join: a.user_id = b.user_id Filter: b.purchase_date <= a.purchase_date
+05)--------SubqueryAlias: a
+06)----------TableScan: purchases projection=[user_id, purchase_date]
+07)--------SubqueryAlias: b
+08)----------TableScan: purchases projection=[user_id, purchase_date, amount]
+
+####
+# Test 22: Self join aggregation with LEFT JOIN should NOT be transformed
+####
+
+query TT
+EXPLAIN SELECT a.user_id, a.purchase_date, SUM(b.amount) AS total
+FROM purchases a
+LEFT JOIN purchases b ON a.user_id = b.user_id AND b.purchase_date <= a.purchase_date
+GROUP BY a.user_id, a.purchase_date;
+----
+logical_plan
+01)Projection: a.user_id, a.purchase_date, sum(b.amount) AS total
+02)--Aggregate: groupBy=[[a.user_id, a.purchase_date]], aggr=[[sum(b.amount)]]
+03)----Projection: a.user_id, a.purchase_date, b.amount
+04)------Left Join: a.user_id = b.user_id Filter: b.purchase_date <= a.purchase_date
+05)--------SubqueryAlias: a
+06)----------TableScan: purchases projection=[user_id, purchase_date]
+07)--------SubqueryAlias: b
+08)----------TableScan: purchases projection=[user_id, purchase_date, amount]
+
+####
+# Test 23: Self join aggregation with filter on different dates (not same column)
+####
+
+query TT
+EXPLAIN SELECT a.user_id, a.purchase_date, SUM(b.amount) AS total
+FROM purchases a
+JOIN purchases b ON a.user_id = b.user_id AND b.purchase_date <= a.billed_date
+GROUP BY a.user_id, a.purchase_date;
+----
+logical_plan
+01)Projection: a.user_id, a.purchase_date, sum(b.amount) AS total
+02)--Aggregate: groupBy=[[a.user_id, a.purchase_date]], aggr=[[sum(b.amount)]]
+03)----Projection: a.user_id, a.purchase_date, b.amount
+04)------Inner Join: a.user_id = b.user_id Filter: b.purchase_date <= a.billed_date
+05)--------SubqueryAlias: a
+06)----------TableScan: purchases projection=[user_id, purchase_date, billed_date]
+07)--------SubqueryAlias: b
+08)----------TableScan: purchases projection=[user_id, purchase_date, amount]
+
 statement ok
 set datafusion.explain.logical_plan_only = false;
 
