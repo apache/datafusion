@@ -217,7 +217,7 @@ impl RunOpt {
         // Validate that the query plan includes a Nested Loop Join
         let df = ctx.sql(sql).await?;
         let physical_plan = df.create_physical_plan().await?;
-        let plan_string = format!("{:#?}", physical_plan);
+        let plan_string = format!("{physical_plan:#?}");
 
         if !plan_string.contains("NestedLoopJoinExec") {
             return Err(exec_datafusion_err!(
