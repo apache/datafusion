@@ -60,8 +60,8 @@ rust_decimal = { version = "1.37.2", features = ["tokio-pg"] }
 sqllogictest = "0.28.3"
 sqlparser = { workspace = true }
 tempfile = { workspace = true }
-testcontainers = { version = "0.24", features = ["default"], optional = true }
-testcontainers-modules = { version = "0.12", features = ["postgres"], optional = true }
+testcontainers = { workspace = true, optional = true }
+testcontainers-modules = { workspace = true, features = ["postgres"], optional = true }
 thiserror = "2.0.12"
 tokio = { workspace = true }
 tokio-postgres = { version = "0.7.12", optional = true }
