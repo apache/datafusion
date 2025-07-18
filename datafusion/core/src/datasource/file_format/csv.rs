@@ -64,7 +64,7 @@ mod tests {
     use object_store::path::Path;
     use object_store::{
         Attributes, GetOptions, GetResult, GetResultPayload, ListResult, MultipartUpload,
-        ObjectMeta, ObjectStore, PutMultipartOpts, PutOptions, PutPayload, PutResult,
+        ObjectMeta, ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult,
     };
     use regex::Regex;
     use rstest::*;
@@ -98,7 +98,7 @@ mod tests {
         async fn put_multipart_opts(
             &self,
             _location: &Path,
-            _opts: PutMultipartOpts,
+            _opts: PutMultipartOptions,
         ) -> object_store::Result<Box<dyn MultipartUpload>> {
             unimplemented!()
         }

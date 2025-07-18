@@ -20,11 +20,11 @@
 use arrow::array::{
     ArrayRef, AsArray as _, BinaryArray, BinaryViewArray, BooleanArray, Date32Array,
     Date64Array, Decimal128Array, Decimal256Array, DurationMicrosecondArray,
-    DurationMillisecondArray, DurationNanosecondArray, DurationSecondArray, Float16Array,
-    Float32Array, Float64Array, Int16Array, Int32Array, Int64Array, Int8Array,
-    IntervalDayTimeArray, IntervalMonthDayNanoArray, IntervalYearMonthArray,
-    LargeBinaryArray, LargeStringArray, StringArray, StringViewArray,
-    Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
+    DurationMillisecondArray, DurationNanosecondArray, DurationSecondArray,
+    FixedSizeBinaryArray, Float16Array, Float32Array, Float64Array, Int16Array,
+    Int32Array, Int64Array, Int8Array, IntervalDayTimeArray, IntervalMonthDayNanoArray,
+    IntervalYearMonthArray, LargeBinaryArray, LargeStringArray, StringArray,
+    StringViewArray, Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
     Time64NanosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
     TimestampNanosecondArray, TimestampSecondArray, UInt16Array, UInt32Array,
     UInt64Array, UInt8Array,
@@ -254,6 +254,12 @@ pub fn min_batch(values: &ArrayRef) -> Result<ScalarValue> {
                 min_binary
             )
         }
+        DataType::FixedSizeBinary(size) => {
+            let array = downcast_value!(&values, FixedSizeBinaryArray);
+            let value = compute::min_fixed_size_binary(array);
+            let value = value.map(|e| e.to_vec());
+            ScalarValue::FixedSizeBinary(*size, value)
+        }
         DataType::BinaryView => {
             typed_min_max_batch_binary!(
                 &values,
@@ -338,6 +344,12 @@ pub fn max_batch(values: &ArrayRef) -> Result<ScalarValue> {
                 LargeBinary,
                 max_binary
             )
+        }
+        DataType::FixedSizeBinary(size) => {
+            let array = downcast_value!(&values, FixedSizeBinaryArray);
+            let value = compute::max_fixed_size_binary(array);
+            let value = value.map(|e| e.to_vec());
+            ScalarValue::FixedSizeBinary(*size, value)
         }
         DataType::Struct(_) => min_max_batch_generic(values, Ordering::Less)?,
         DataType::List(_) => min_max_batch_generic(values, Ordering::Less)?,

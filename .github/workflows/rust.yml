@@ -218,6 +218,8 @@ jobs:
         run: cargo check --profile ci --no-default-features -p datafusion --features=string_expressions
       - name: Check datafusion (unicode_expressions)
         run: cargo check --profile ci --no-default-features -p datafusion --features=unicode_expressions
+      - name: Check parquet encryption (parquet_encryption)
+        run: cargo check --profile ci --no-default-features -p datafusion --features=parquet_encryption
 
   # Check datafusion-functions crate features
   #
@@ -312,18 +314,6 @@ jobs:
           fetch-depth: 1
       - name: Setup Rust toolchain
         run: rustup toolchain install stable
-      - name: Setup Minio - S3-compatible storage
-        run: |
-          docker run -d --name minio-container \
-            -p 9000:9000 \
-            -e MINIO_ROOT_USER=TEST-DataFusionLogin -e MINIO_ROOT_PASSWORD=TEST-DataFusionPassword \
-            -v $(pwd)/datafusion/core/tests/data:/source quay.io/minio/minio \
-            server /data
-          docker exec minio-container /bin/sh -c "\
-            mc ready local
-            mc alias set localminio http://localhost:9000 TEST-DataFusionLogin TEST-DataFusionPassword && \
-            mc mb localminio/data && \
-            mc cp -r /source/* localminio/data"
       - name: Run tests (excluding doctests)
         env:
           RUST_BACKTRACE: 1
@@ -335,9 +325,6 @@ jobs:
         run: cargo test --profile ci -p datafusion-cli  --lib --tests --bins
       - name: Verify Working Directory Clean
         run: git diff --exit-code
-      - name: Minio Output
-        if: ${{ !cancelled() }}
-        run: docker logs minio-container
 
 
   linux-test-example:
@@ -769,10 +756,15 @@ jobs:
           # `rust-version` key of `Cargo.toml`.
           #
           # To reproduce:
-          # 1. Install the version of Rust that is failing. Example:
-          #    rustup install 1.80.1
-          # 2. Run the command that failed with that version. Example:
-          #    cargo +1.80.1 check -p datafusion
+          # 1. Install the version of Rust that is failing.
+          # 2. Run the command that failed with that version.
+          #
+          # Example:
+          #    # MSRV looks like "1.80.0" and is specified in Cargo.toml. We can read the value with the following command:
+          #    msrv="$(cargo metadata --format-version=1 | jq '.packages[] | select( .name == "datafusion" ) | .rust_version' -r)"
+          #    echo "MSRV: ${msrv}"
+          #    rustup install "${msrv}"
+          #    cargo "+${msrv}" check
           #
           # To resolve, either:
           # 1. Change your code to use older Rust features,
