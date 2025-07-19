@@ -155,6 +155,13 @@ struct CredentialsFromConfig {
 impl CredentialsFromConfig {
     /// Attempt find AWS S3 credentials via the AWS SDK
     pub async fn try_new() -> Result<Self> {
+        if cfg!(test) {
+            return Ok(Self {
+                region: None,
+                credentials: None,
+            });
+        }
+
         let config = aws_config::defaults(BehaviorVersion::latest()).load().await;
         let region = config.region().map(|r| r.to_string());
 
