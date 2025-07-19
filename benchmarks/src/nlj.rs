@@ -17,8 +17,8 @@
 
 use crate::util::{BenchmarkRun, CommonOpt, QueryResult};
 use datafusion::{error::Result, prelude::SessionContext};
-use datafusion_common::exec_datafusion_err;
 use datafusion_common::instant::Instant;
+use datafusion_common::{exec_datafusion_err, DataFusionError};
 use structopt::StructOpt;
 
 /// Run the Nested Loop Join (NLJ) benchmark
@@ -42,7 +42,7 @@ use structopt::StructOpt;
 pub struct RunOpt {
     /// Query number (between 1 and 10). If not specified, runs all queries
     #[structopt(short, long)]
-    query_name: Option<String>,
+    query: Option<usize>,
 
     /// Common options
     #[structopt(flatten)]
@@ -135,22 +135,20 @@ impl RunOpt {
     pub async fn run(self) -> Result<()> {
         println!("Running NLJ benchmarks with the following options: {self:#?}\n");
 
-        // Define available queries
-        let available_queries =
-            vec!["q1", "q2", "q3", "q4", "q5", "q6", "q7", "q8", "q9", "q10"];
-        let query_list = match &self.query_name {
-            Some(query_name) => {
-                if available_queries.contains(&query_name.as_str()) {
-                    vec![query_name.as_str()]
+        // Define query range
+        let query_range = match self.query {
+            Some(query_id) => {
+                if query_id >= 1 && query_id <= NLJ_QUERIES.len() {
+                    query_id..=query_id
                 } else {
                     return Err(exec_datafusion_err!(
-                        "Query '{}' not found. Available queries: {:?}",
-                        query_name,
-                        available_queries
+                        "Query {} not found. Available queries: 1 to {}",
+                        query_id,
+                        NLJ_QUERIES.len()
                     ));
                 }
             }
-            None => available_queries,
+            None => 1..=NLJ_QUERIES.len(),
         };
 
         let config = self.common.config()?;
@@ -158,32 +156,12 @@ impl RunOpt {
         let ctx = SessionContext::new_with_config_rt(config, rt_builder.build_arc()?);
 
         let mut benchmark_run = BenchmarkRun::new();
-        for query_name in query_list {
-            let query_index = match query_name {
-                "q1" => 0,
-                "q2" => 1,
-                "q3" => 2,
-                "q4" => 3,
-                "q5" => 4,
-                "q6" => 5,
-                "q7" => 6,
-                "q8" => 7,
-                "q9" => 8,
-                "q10" => 9,
-                _ => {
-                    if self.query_name.is_some() {
-                        return Err(exec_datafusion_err!(
-                            "Could not find query '{}'.",
-                            query_name
-                        ));
-                    }
-                    continue;
-                }
-            };
+        for query_id in query_range {
+            let query_index = query_id - 1; // Convert 1-based to 0-based index
 
             let sql = NLJ_QUERIES[query_index];
-            benchmark_run.start_new_case(&format!("Query {query_name}"));
-            let query_run = self.benchmark_query(sql, query_name, &ctx).await;
+            benchmark_run.start_new_case(&format!("Query {query_id}"));
+            let query_run = self.benchmark_query(sql, &query_id.to_string(), &ctx).await;
             match query_run {
                 Ok(query_results) => {
                     for iter in query_results {
@@ -191,8 +169,10 @@ impl RunOpt {
                     }
                 }
                 Err(e) => {
-                    eprintln!("Query {query_name} failed: {e}");
-                    benchmark_run.write_iter(std::time::Duration::from_secs(0), 0);
+                    return Err(DataFusionError::Context(
+                        "NLJ benchmark Q{query_id} failed with error:".to_string(),
+                        Box::new(e),
+                    ));
                 }
             }
         }
@@ -229,7 +209,7 @@ impl RunOpt {
             let start = Instant::now();
             let df = ctx.sql(sql).await?;
             let batches = df.collect().await?;
-            let elapsed = start.elapsed(); //.as_secs_f64() * 1000.0;
+            let elapsed = start.elapsed();
 
             let row_count = batches.iter().map(|b| b.num_rows()).sum();
             println!(
