@@ -15,6 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Self-join elimination optimizers
+//!
+//! This module contains optimizers that eliminate redundant self-joins:
+//! - [`EliminateUniqueKeyedSelfJoin`]: Eliminates self-joins on unique constraints
+//! - [`EliminateSelfJoinAggregation`]: Converts self-joins with aggregations to window functions
+
 use std::sync::Arc;
 
 use datafusion_common::{
@@ -31,6 +37,7 @@ use datafusion_common::tree_node::TransformedResult;
 use indexmap::IndexSet;
 pub use unique_keyed::EliminateUniqueKeyedSelfJoin;
 
+/// Merges two table scans into a single scan that covers all columns and filters from both.
 fn merge_table_scans(left_scan: &TableScan, right_scan: &TableScan) -> TableScan {
     let filters = left_scan
         .filters
@@ -38,17 +45,19 @@ fn merge_table_scans(left_scan: &TableScan, right_scan: &TableScan) -> TableScan
         .chain(right_scan.filters.iter())
         .cloned()
         .collect();
-    // FIXME: double iteration over the filters
     let projection = match (&left_scan.projection, &right_scan.projection) {
-        (Some(left_projection), Some(right_projection)) => Some(
-            left_projection
+        (Some(left_projection), Some(right_projection)) => {
+            // Compute the union of projections, maintaining sorted order
+            let mut union: Vec<usize> = left_projection
                 .iter()
                 .chain(right_projection.iter())
                 .cloned()
-                .collect::<IndexSet<_>>()
+                .collect::<IndexSet<_>>() // Remove duplicates while preserving encounter order
                 .into_iter()
-                .collect::<Vec<_>>(),
-        ),
+                .collect();
+            union.sort_unstable(); // Sort to ensure consistent column ordering
+            Some(union)
+        }
         (Some(left_projection), None) => Some(left_projection.clone()),
         (None, Some(right_projection)) => Some(right_projection.clone()),
         (None, None) => None,
@@ -68,11 +77,21 @@ fn merge_table_scans(left_scan: &TableScan, right_scan: &TableScan) -> TableScan
     .unwrap()
 }
 
+/// Checks if two table scans reference the same underlying table.
+///
+/// This is the basic requirement for a self-join - both sides must scan the same table.
 fn is_table_scan_same(left: &TableScan, right: &TableScan) -> bool {
-    // If the plans don't scan the same table then we cannot be sure for self-join
     left.table_name == right.table_name
 }
 
+/// Extracts unique indexes (primary keys and unique constraints) from a schema.
+///
+/// Returns a vector of index sets, where each set represents the column indices
+/// that form a unique constraint on the table.
+///
+/// # Example
+/// For a table with columns [id, email, name] where id is PRIMARY KEY and email is UNIQUE:
+/// Returns: [{0}, {1}]
 fn unique_indexes(schema: &DFSchema) -> Vec<IndexSet<usize>> {
     schema
         .functional_dependencies()
@@ -82,6 +101,10 @@ fn unique_indexes(schema: &DFSchema) -> Vec<IndexSet<usize>> {
         .collect::<Vec<_>>()
 }
 
+/// Tracks table alias renaming during self-join elimination.
+///
+/// When eliminating a self-join like `a JOIN b`, we need to rename references
+/// from the eliminated side (e.g., `b.column`) to the preserved side (e.g., `a.column`).
 #[derive(Debug, Clone)]
 struct RenamedAlias {
     from: TableReference,
@@ -89,6 +112,12 @@ struct RenamedAlias {
 }
 
 impl RenamedAlias {
+    /// Rewrites expressions to use the new table alias.
+    ///
+    /// # Behavior
+    /// - Column references like `b.column` are rewritten to `a.column`
+    /// - Top-level expressions are aliased to preserve the original name
+    ///   (e.g., `b.amount` becomes `a.amount AS b.amount`)
     fn rewrite_expression(&self, expr: Expr) -> Result<Transformed<Expr>> {
         let mut is_top_level = true;
         expr.transform(|expr| {
@@ -110,7 +139,7 @@ impl RenamedAlias {
                             name,
                             relation: Some(self.from.clone()),
                         });
-                        Ok(Transformed::yes(dbg!(alias)))
+                        Ok(Transformed::yes(alias))
                     } else {
                         Ok(Transformed::yes(col))
                     }
@@ -124,6 +153,10 @@ impl RenamedAlias {
         })
     }
 
+    /// Recursively rewrites all expressions in a logical plan to use the new table alias.
+    ///
+    /// Walks through the entire plan tree and updates all column references from
+    /// the eliminated table alias to the preserved one.
     fn rewrite_logical_plan(&self, plan: LogicalPlan) -> Result<LogicalPlan> {
         plan.transform_down(|plan| {
             let Transformed {
@@ -141,8 +174,14 @@ impl RenamedAlias {
     }
 }
 
+/// Result of a self-join elimination optimization.
+///
+/// Contains the optimized plan and any table alias renaming that needs to be
+/// propagated to parent nodes.
 #[derive(Debug, Clone)]
 struct OptimizationResult {
+    /// The optimized logical plan with the self-join eliminated
     plan: LogicalPlan,
+    /// Optional alias renaming to apply to parent expressions
     renamed_alias: Option<RenamedAlias>,
 }

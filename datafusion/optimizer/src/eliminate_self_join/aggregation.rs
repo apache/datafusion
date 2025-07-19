@@ -268,34 +268,27 @@ struct OrderBound {
 /// - `<=`: ORDER BY ASC, ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
 /// - `>` : ORDER BY DESC, ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
 /// - `>=`: ORDER BY DESC, ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
-///
-/// # Example
-///
-/// For `b.date <= a.date`:
-/// - Sort order: Ascending (earliest to latest)
-/// - Frame: All rows from start up to and including current row
-/// - This gives us cumulative/running total behavior
 fn operator_to_order_bound(op: Operator) -> OrderBound {
     match op {
         Operator::Lt => OrderBound {
             sort_order: SortOrder::Ascending,
-            start_bound: WindowFrameBound::Preceding(ScalarValue::UInt64(None)), // UNBOUNDED
-            end_bound: WindowFrameBound::Preceding(ScalarValue::UInt64(Some(1))), // Exclude current
+            start_bound: WindowFrameBound::Preceding(ScalarValue::UInt64(None)),
+            end_bound: WindowFrameBound::Preceding(ScalarValue::UInt64(Some(1))),
         },
         Operator::LtEq => OrderBound {
             sort_order: SortOrder::Ascending,
-            start_bound: WindowFrameBound::Preceding(ScalarValue::UInt64(None)), // UNBOUNDED
-            end_bound: WindowFrameBound::CurrentRow, // Include current
+            start_bound: WindowFrameBound::Preceding(ScalarValue::UInt64(None)),
+            end_bound: WindowFrameBound::CurrentRow,
         },
         Operator::Gt => OrderBound {
             sort_order: SortOrder::Descending,
-            start_bound: WindowFrameBound::Preceding(ScalarValue::UInt64(None)), // UNBOUNDED
-            end_bound: WindowFrameBound::Preceding(ScalarValue::UInt64(Some(1))), // Exclude current
+            start_bound: WindowFrameBound::Preceding(ScalarValue::UInt64(None)),
+            end_bound: WindowFrameBound::Preceding(ScalarValue::UInt64(Some(1))),
         },
         Operator::GtEq => OrderBound {
             sort_order: SortOrder::Descending,
-            start_bound: WindowFrameBound::Preceding(ScalarValue::UInt64(None)), // UNBOUNDED
-            end_bound: WindowFrameBound::CurrentRow, // Include current
+            start_bound: WindowFrameBound::Preceding(ScalarValue::UInt64(None)),
+            end_bound: WindowFrameBound::CurrentRow,
         },
         _ => {
             unreachable!("`operator_to_order_bound` called with non-comparison operator")
@@ -419,28 +412,31 @@ fn try_replace_with_window(
     // - "purchases JOIN purchases b ON ... WHERE purchases.date <= b.date" -> valid
     // - "a JOIN b ON ... WHERE a.date <= a.date" -> invalid (same side)
     // - "a JOIN b ON ... WHERE date <= other_date" -> invalid (ambiguous)
-    
-    // Since it's a self-join, both sides have the same schema
-    let table_schema = left.table_scan.projected_schema.as_ref();
-    
+
+    // Get schemas from both sides - they may have different projections
+    // Example: SELECT a.id, a.date FROM t a JOIN (SELECT id, date, amount FROM t) b ON ...
+    // Left schema: [id, date], Right schema: [id, date, amount]
+    let left_schema = left.table_scan.projected_schema.as_ref();
+    let right_schema = right.table_scan.projected_schema.as_ref();
+
     // Helper closure to resolve which side a column belongs to and get its unqualified name
     // Returns (unqualified_column_name, is_from_left_side)
-    let resolve_column_side = |col: &Column| -> Option<(&str, bool)> {
+    let resolve_column_side = |col: &Column| -> Option<(String, bool)> {
         if let Some(relation) = col.relation.as_ref() {
             // Column has a qualifier - determine which side it belongs to
             if left.alias.is_some() && Some(relation) == left.alias {
                 // Matches left alias (e.g., a.column)
-                Some((col.name(), true)) // true = left side
+                Some((col.name().to_string(), true)) // true = left side
             } else if right.alias.is_some() && Some(relation) == right.alias {
                 // Matches right alias (e.g., b.column)
-                Some((col.name(), false)) // false = right side
+                Some((col.name().to_string(), false)) // false = right side
             } else if relation == &left.table_scan.table_name {
                 // Matches table name - could be either side in a self-join
                 // If left has no alias, it belongs to left; if right has no alias, it belongs to right
                 if left.alias.is_none() {
-                    Some((col.name(), true))
+                    Some((col.name().to_string(), true))
                 } else if right.alias.is_none() {
-                    Some((col.name(), false))
+                    Some((col.name().to_string(), false))
                 } else {
                     // Both sides have aliases but column uses table name - ambiguous
                     None
@@ -454,38 +450,50 @@ fn try_replace_with_window(
             None
         }
     };
-    
+
     // Resolve both filter columns
     let (left_col_name, left_is_left_side) = resolve_column_side(left_filter_col)?;
-    let (right_col_name, right_is_right_side) = resolve_column_side(right_filter_col)?;
-    
+    let (right_col_name, right_is_left_side) = resolve_column_side(right_filter_col)?;
+
     // Step 4b: Verify the filter compares columns from different sides
     // For a valid self-join filter like "b.date <= a.date", one column should be from
     // the left side and one from the right side
-    if left_is_left_side == right_is_right_side {
+    if left_is_left_side == right_is_left_side {
         // Both columns are from the same side - invalid filter for this optimization
         return None;
     }
-    
-    // Step 4c: Get column indexes and verify they refer to the same underlying column
-    let left_filter_idx = table_schema
-        .index_of_column_by_name(None, left_col_name)?;
-    let right_filter_idx = table_schema
-        .index_of_column_by_name(None, right_col_name)?;
 
-    // Since it's a self-join, both sides should have the same schema,
-    // so the same column should have the same index
-    if left_filter_idx != right_filter_idx {
+    // Step 4c: Verify both columns exist in their respective schemas and refer to the same base column
+    // Verify the columns exist in their respective schemas
+    if left_is_left_side {
+        // left_filter_col is from the left side of the join
+        left_schema.index_of_column_by_name(None, left_col_name.as_str())?;
+    } else {
+        // left_filter_col is from the right side of the join
+        right_schema.index_of_column_by_name(None, left_col_name.as_str())?;
+    }
+
+    if right_is_left_side {
+        // right_filter_col is from the left side of the join
+        left_schema.index_of_column_by_name(None, right_col_name.as_str())?;
+    } else {
+        // right_filter_col is from the right side of the join
+        right_schema.index_of_column_by_name(None, right_col_name.as_str())?;
+    }
+
+    // Verify both columns have the same name (they should refer to the same base column)
+    if left_col_name != right_col_name {
         return None;
     }
-    
+
     // At this point, we've verified:
     // - The filter compares the same column from different sides of the join
-    // - We have the column index (left_filter_idx == right_filter_idx) for use in later steps
+    // - Both columns exist in their respective projected schemas
+    // - We have the column index in the left schema for use in later steps
 
-        // Step 5: Extract column indexes from GROUP BY
-    // Example: GROUP BY a.user_id, a.purchase_date -> [0, 1]
-    let mut group_by_idx = IndexSet::with_capacity(group_expr.len());
+    // Step 5: Extract column names from GROUP BY
+    // Example: GROUP BY a.user_id, a.purchase_date -> ["user_id", "purchase_date"]
+    let mut group_by_names = IndexSet::with_capacity(group_expr.len());
     for expr in group_expr {
         match expr {
             Expr::Column(Column { relation, name, .. }) => {
@@ -496,10 +504,15 @@ fn try_replace_with_window(
                         || relation.as_ref() == left.alias
                         || relation.as_ref() == right.alias
                 );
-                let idx = table_schema
-                    .index_of_column_by_name(None, name.as_str())
-                    .unwrap();
-                group_by_idx.insert(idx);
+                // Verify the column exists in at least one of the schemas
+                let exists_in_left =
+                    left_schema.field_with_unqualified_name(name).is_ok();
+                let exists_in_right =
+                    right_schema.field_with_unqualified_name(name).is_ok();
+                if !exists_in_left && !exists_in_right {
+                    return None;
+                }
+                group_by_names.insert(name.as_str());
             }
             // If `GROUP BY ...` expression isn't a column reference conservatively
             // assume it isn't self-join
@@ -507,9 +520,9 @@ fn try_replace_with_window(
         }
     }
 
-    // Step 6: Extract column indexes from JOIN ON
-    // Example: JOIN ON a.user_id = b.user_id -> [0]
-    let mut on_idx = IndexSet::with_capacity(join.on.len());
+    // Step 6: Extract column names from JOIN ON
+    // Example: JOIN ON a.user_id = b.user_id -> ["user_id"]
+    let mut on_names = IndexSet::with_capacity(join.on.len());
     for on in &join.on {
         match on {
             (
@@ -520,42 +533,36 @@ fn try_replace_with_window(
                     name: right_name, ..
                 }),
             ) => {
-                let left_idx = table_schema
-                    .index_of_column_by_name(None, left_name.as_str())
-                    .unwrap();
-                let right_idx = table_schema
-                    .index_of_column_by_name(None, right_name.as_str())
-                    .unwrap();
-                if left_idx != right_idx {
+                // In a self-join, the join columns should have the same name
+                if left_name != right_name {
                     return None;
                 }
-                on_idx.insert(left_idx);
+                // Verify the column exists in both schemas
+                if left_schema.field_with_unqualified_name(left_name).is_err()
+                    || right_schema
+                        .field_with_unqualified_name(right_name)
+                        .is_err()
+                {
+                    return None;
+                }
+                on_names.insert(left_name.as_str());
             }
             _ => return None,
         }
     }
 
-    // Step 7: Check if JOIN ON forms a unique constraint
-    // If it does, this should be handled by EliminateUniqueKeyedSelfJoin instead
-    let forms_unique_constraint = unique_indexes(schema)
-        .iter()
-        .any(|unique_constraint| on_idx.is_superset(unique_constraint));
-    if forms_unique_constraint {
-        return None;
-    }
-
-    // Step 8: Validate GROUP BY columns
+    // Step 7: Validate GROUP BY columns
     // GROUP BY must include all JOIN ON columns plus the filter column
-    let on_and_filter = on_idx
+    let on_and_filter = on_names
         .iter()
-        .chain(Some(left_filter_idx).iter())
+        .chain(Some(left_col_name.as_str()).iter())
         .cloned()
         .collect::<IndexSet<_>>();
-    if on_and_filter != group_by_idx {
+    if on_and_filter != group_by_names {
         return None;
     }
 
-    // Step 9: Transform filter operator to window frame specification
+    // Step 8: Transform filter operator to window frame specification
     let OrderBound {
         sort_order,
         start_bound,
@@ -563,7 +570,8 @@ fn try_replace_with_window(
     } = operator_to_order_bound(op);
 
     // Create ORDER BY clause for window function
-    let sort_col = Expr::Column(Column::new_unqualified(&left_filter_col.name));
+    // Use the unqualified column name since we're building a window over the merged table
+    let sort_col = Expr::Column(Column::new_unqualified(left_col_name));
     let order_by = vec![Sort::new(sort_col, sort_order.is_asc(), false)];
 
     // Transform GROUP BY columns to PARTITION BY columns (remove qualifiers)
@@ -577,7 +585,7 @@ fn try_replace_with_window(
         })
         .collect::<Vec<_>>();
 
-    // Step 10: Convert aggregate functions to window functions
+    // Step 9: Convert aggregate functions to window functions
     let mut window_expr = Vec::with_capacity(aggr_expr.len());
     for aggr_expr in aggr_expr {
         let AggregateFunction { func, params } = match aggr_expr {
@@ -624,7 +632,7 @@ fn try_replace_with_window(
         })));
     }
 
-    // Step 11: Create the optimized plan with window function
+    // Step 10: Create the optimized plan with window function
     let table_scan = merge_table_scans(left.table_scan, right.table_scan);
     let mut plan = LogicalPlan::TableScan(table_scan);
 

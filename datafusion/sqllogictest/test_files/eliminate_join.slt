@@ -89,7 +89,7 @@ EXPLAIN SELECT a.id FROM employees a JOIN employees b ON a.id = b.id WHERE b.dep
 logical_plan
 01)SubqueryAlias: a
 02)--Projection: employees.id
-03)----Filter: employees.department = Utf8("HR")
+03)----Filter: employees.department = Utf8View("HR")
 04)------TableScan: employees projection=[id, department]
 
 ####
@@ -128,8 +128,7 @@ logical_plan
 03)----SubqueryAlias: a
 04)------TableScan: employees projection=[id, name]
 05)----SubqueryAlias: b
-06)------Projection: employees.name
-07)--------TableScan: employees projection=[name]
+06)------TableScan: employees projection=[name]
 
 ####
 # Test 6: Multiple self joins on unique key should all be eliminated
@@ -144,7 +143,7 @@ WHERE c.department = 'HR';
 logical_plan
 01)SubqueryAlias: a
 02)--Projection: employees.id
-03)----Filter: employees.department = Utf8("HR")
+03)----Filter: employees.department = Utf8View("HR")
 04)------TableScan: employees projection=[id, department]
 
 ####
@@ -158,7 +157,7 @@ JOIN (SELECT id FROM employees WHERE department = 'HR') b USING (id);
 logical_plan
 01)SubqueryAlias: a
 02)--Projection: employees.id
-03)----Filter: employees.department = Utf8("HR")
+03)----Filter: employees.department = Utf8View("HR")
 04)------TableScan: employees projection=[id, department]
 
 ####
