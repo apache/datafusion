@@ -92,3 +92,7 @@ name = "spill_io"
 [[bench]]
 harness = false
 name = "sort_preserving_merge"
+
+[[bench]]
+harness = false
+name = "aggregate_vectorized"

@@ -28,7 +28,7 @@ use datafusion_common::Result;
 
 use datafusion_expr::EmitTo;
 
-pub(crate) mod multi_group_by;
+pub mod multi_group_by;
 
 mod row;
 mod single_group_by;
