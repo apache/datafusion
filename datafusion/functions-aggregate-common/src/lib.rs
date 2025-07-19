@@ -34,6 +34,7 @@
 pub mod accumulator;
 pub mod aggregate;
 pub mod merge_arrays;
+pub mod min_max;
 pub mod order;
 pub mod stats;
 pub mod tdigest;

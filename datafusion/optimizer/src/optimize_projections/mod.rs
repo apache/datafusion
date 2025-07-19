@@ -29,9 +29,9 @@ use datafusion_common::{
     HashMap, JoinType, Result,
 };
 use datafusion_expr::expr::Alias;
-use datafusion_expr::Unnest;
 use datafusion_expr::{
-    logical_plan::LogicalPlan, Aggregate, Distinct, Expr, Projection, TableScan, Window,
+    logical_plan::LogicalPlan, Aggregate, Distinct, Expr, Projection, TableScan, Unnest,
+    Window,
 };
 
 use crate::optimize_projections::required_indices::RequiredIndices;
@@ -386,11 +386,22 @@ fn optimize_projections(
             );
         }
         LogicalPlan::Unnest(Unnest {
-            dependency_indices, ..
+            input,
+            dependency_indices,
+            ..
         }) => {
-            vec![RequiredIndices::new_from_indices(
-                dependency_indices.clone(),
-            )]
+            // at least provide the indices for the exec-columns as a starting point
+            let required_indices =
+                RequiredIndices::new().with_plan_exprs(&plan, input.schema())?;
+
+            // Add additional required indices from the parent
+            let mut additional_necessary_child_indices = Vec::new();
+            indices.indices().iter().for_each(|idx| {
+                if let Some(index) = dependency_indices.get(*idx) {
+                    additional_necessary_child_indices.push(*index);
+                }
+            });
+            vec![required_indices.append(&additional_necessary_child_indices)]
         }
     };
 
@@ -1837,7 +1848,7 @@ mod tests {
         let table2_scan = scan_empty(Some("test2"), &schema, None)?.build()?;
 
         let plan = LogicalPlanBuilder::from(table_scan)
-            .join_using(table2_scan, JoinType::Left, vec!["a"])?
+            .join_using(table2_scan, JoinType::Left, vec!["a".into()])?
             .project(vec![col("a"), col("b")])?
             .build()?;
 

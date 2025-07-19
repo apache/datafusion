@@ -427,6 +427,7 @@ impl<'a, 'b> PgJsonVisitor<'a, 'b> {
                 file_type,
                 partition_by: _,
                 options,
+                output_schema: _,
             }) => {
                 let op_str = options
                     .iter()

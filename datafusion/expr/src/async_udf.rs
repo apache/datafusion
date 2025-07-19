@@ -17,7 +17,7 @@
 
 use crate::{ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl};
 use arrow::array::ArrayRef;
-use arrow::datatypes::{DataType, Field, FieldRef, SchemaRef};
+use arrow::datatypes::{DataType, FieldRef};
 use async_trait::async_trait;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::error::Result;
@@ -26,6 +26,7 @@ use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::signature::Signature;
 use std::any::Any;
 use std::fmt::{Debug, Display};
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 
 /// A scalar UDF that can invoke using async methods
@@ -35,34 +36,7 @@ use std::sync::Arc;
 ///
 /// The name is chosen to mirror ScalarUDFImpl
 #[async_trait]
-pub trait AsyncScalarUDFImpl: Debug + Send + Sync {
-    /// the function cast as any
-    fn as_any(&self) -> &dyn Any;
-
-    /// The name of the function
-    fn name(&self) -> &str;
-
-    /// The signature of the function
-    fn signature(&self) -> &Signature;
-
-    /// The return type of the function
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType>;
-
-    /// What type will be returned by this function, given the arguments?
-    ///
-    /// By default, this function calls [`Self::return_type`] with the
-    /// types of each argument.
-    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        let data_types = args
-            .arg_fields
-            .iter()
-            .map(|f| f.data_type())
-            .cloned()
-            .collect::<Vec<_>>();
-        let return_type = self.return_type(&data_types)?;
-        Ok(Arc::new(Field::new(self.name(), return_type, true)))
-    }
-
+pub trait AsyncScalarUDFImpl: ScalarUDFImpl {
     /// The ideal batch size for this function.
     ///
     /// This is used to determine what size of data to be evaluated at once.
@@ -74,7 +48,7 @@ pub trait AsyncScalarUDFImpl: Debug + Send + Sync {
     /// Invoke the function asynchronously with the async arguments
     async fn invoke_async_with_args(
         &self,
-        args: AsyncScalarFunctionArgs,
+        args: ScalarFunctionArgs,
         option: &ConfigOptions,
     ) -> Result<ArrayRef>;
 }
@@ -107,7 +81,7 @@ impl AsyncScalarUDF {
     /// Invoke the function asynchronously with the async arguments
     pub async fn invoke_async_with_args(
         &self,
-        args: AsyncScalarFunctionArgs,
+        args: ScalarFunctionArgs,
         option: &ConfigOptions,
     ) -> Result<ArrayRef> {
         self.inner.invoke_async_with_args(args, option).await
@@ -138,17 +112,26 @@ impl ScalarUDFImpl for AsyncScalarUDF {
     fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         internal_err!("async functions should not be called directly")
     }
+
+    fn equals(&self, other: &dyn ScalarUDFImpl) -> bool {
+        let Some(other) = other.as_any().downcast_ref::<Self>() else {
+            return false;
+        };
+        let Self { inner } = self;
+        // TODO when MSRV >= 1.86.0, switch to `inner.equals(other.inner.as_ref())` leveraging trait upcasting
+        Arc::ptr_eq(inner, &other.inner)
+    }
+
+    fn hash_value(&self) -> u64 {
+        let Self { inner } = self;
+        let mut hasher = DefaultHasher::new();
+        Arc::as_ptr(inner).hash(&mut hasher);
+        hasher.finish()
+    }
 }
 
 impl Display for AsyncScalarUDF {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f, "AsyncScalarUDF: {}", self.inner.name())
     }
-}
-
-#[derive(Debug)]
-pub struct AsyncScalarFunctionArgs {
-    pub args: Vec<ColumnarValue>,
-    pub number_rows: usize,
-    pub schema: SchemaRef,
 }

@@ -992,6 +992,7 @@ pub(crate) fn join_with_probe_batch(
             probe_indices,
             filter,
             build_hash_joiner.build_side,
+            None,
         )?
     } else {
         (build_indices, probe_indices)
@@ -1108,8 +1109,10 @@ fn lookup_join_hashmap(
     //     (5,1)
     //
     // With this approach, the lexicographic order on both the probe side and the build side is preserved.
-    let (mut matched_probe, mut matched_build) = build_hashmap
-        .get_matched_indices(hash_values.iter().enumerate().rev(), deleted_offset);
+    let (mut matched_probe, mut matched_build) = build_hashmap.get_matched_indices(
+        Box::new(hash_values.iter().enumerate().rev()),
+        deleted_offset,
+    );
 
     matched_probe.reverse();
     matched_build.reverse();
@@ -1375,8 +1378,10 @@ impl<T: BatchTransformer> SymmetricHashJoinStream<T> {
                 }
                 Some((batch, _)) => {
                     self.metrics.output_batches.add(1);
-                    self.metrics.output_rows.add(batch.num_rows());
-                    return Poll::Ready(Some(Ok(batch)));
+                    return self
+                        .metrics
+                        .baseline_metrics
+                        .record_poll(Poll::Ready(Some(Ok(batch))));
                 }
             }
         }

@@ -16,6 +16,7 @@
 // under the License.
 
 use std::any::Any;
+use std::hash::{DefaultHasher, Hash, Hasher};
 #[cfg(test)]
 use std::sync::Arc;
 use std::vec;
@@ -3348,6 +3349,34 @@ impl ScalarUDFImpl for DummyUDF {
     fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         panic!("dummy - not implemented")
     }
+
+    fn equals(&self, other: &dyn ScalarUDFImpl) -> bool {
+        let Some(other) = other.as_any().downcast_ref::<Self>() else {
+            return false;
+        };
+        let Self {
+            name,
+            signature,
+            return_type,
+        } = self;
+        name == &other.name
+            && signature == &other.signature
+            && return_type == &other.return_type
+    }
+
+    fn hash_value(&self) -> u64 {
+        let Self {
+            name,
+            signature,
+            return_type,
+        } = self;
+        let mut hasher = DefaultHasher::new();
+        std::any::type_name::<Self>().hash(&mut hasher);
+        name.hash(&mut hasher);
+        signature.hash(&mut hasher);
+        return_type.hash(&mut hasher);
+        hasher.finish()
+    }
 }
 
 fn parse_decimals_parser_options() -> ParserOptions {
@@ -4484,7 +4513,7 @@ fn assert_field_not_found(mut err: DataFusionError, name: &str) {
         }
     };
     match err {
-        DataFusionError::SchemaError { .. } => {
+        DataFusionError::SchemaError(_, _) => {
             let msg = format!("{err}");
             let expected = format!("Schema error: No field named {name}.");
             if !msg.starts_with(&expected) {

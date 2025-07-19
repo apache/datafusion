@@ -51,6 +51,7 @@ pub use crate::sample::SampleExec;
 pub use crate::stream::EmptyRecordBatchStream;
 pub use crate::topk::TopK;
 pub use crate::visitor::{accept, visit_execution_plan, ExecutionPlanVisitor};
+pub use crate::work_table::WorkTable;
 pub use spill::spill_manager::SpillManager;
 
 mod ordering;

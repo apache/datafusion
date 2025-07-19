@@ -509,13 +509,6 @@ pub fn check_integrity<T: Clone>(context: PlanContext<T>) -> Result<PlanContext<
         .data()
 }
 
-pub fn trim_plan_display(plan: &str) -> Vec<&str> {
-    plan.split('\n')
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty())
-        .collect()
-}
-
 // construct a stream partition for test purposes
 #[derive(Debug)]
 pub struct TestStreamPartition {
@@ -629,25 +622,15 @@ pub fn build_group_by(input_schema: &SchemaRef, columns: Vec<String>) -> Physica
     PhysicalGroupBy::new_single(group_by_expr.clone())
 }
 
-pub fn assert_plan_matches_expected(
-    plan: &Arc<dyn ExecutionPlan>,
-    expected: &[&str],
-) -> Result<()> {
-    let expected_lines: Vec<&str> = expected.to_vec();
+pub fn get_optimized_plan(plan: &Arc<dyn ExecutionPlan>) -> Result<String> {
     let config = ConfigOptions::new();
 
     let optimized =
         LimitedDistinctAggregation::new().optimize(Arc::clone(plan), &config)?;
 
     let optimized_result = displayable(optimized.as_ref()).indent(true).to_string();
-    let actual_lines = trim_plan_display(&optimized_result);
 
-    assert_eq!(
-        &expected_lines, &actual_lines,
-        "\n\nexpected:\n\n{expected_lines:#?}\nactual:\n\n{actual_lines:#?}\n\n"
-    );
-
-    Ok(())
+    Ok(optimized_result)
 }
 
 /// Describe the type of aggregate being tested
