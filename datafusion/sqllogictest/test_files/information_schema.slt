@@ -274,6 +274,7 @@ datafusion.explain.physical_plan_only false
 datafusion.explain.show_schema false
 datafusion.explain.show_sizes true
 datafusion.explain.show_statistics false
+datafusion.explain.tree_maximum_render_width 240
 datafusion.format.date_format %Y-%m-%d
 datafusion.format.datetime_format %Y-%m-%dT%H:%M:%S%.f
 datafusion.format.duration_format pretty
@@ -386,6 +387,7 @@ datafusion.explain.physical_plan_only false When set to true, the explain statem
 datafusion.explain.show_schema false When set to true, the explain statement will print schema information
 datafusion.explain.show_sizes true When set to true, the explain statement will print the partition sizes
 datafusion.explain.show_statistics false When set to true, the explain statement will print operator statistics for physical plans
+datafusion.explain.tree_maximum_render_width 240 (format=tree only) Maximum total width of the rendered tree. When set to 0, the tree will have no width limit.
 datafusion.format.date_format %Y-%m-%d Date format for date arrays
 datafusion.format.datetime_format %Y-%m-%dT%H:%M:%S%.f Format for DateTime arrays
 datafusion.format.duration_format pretty Duration format. Can be either `"pretty"` or `"ISO8601"`
