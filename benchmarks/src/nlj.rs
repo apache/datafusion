@@ -18,7 +18,7 @@
 use crate::util::{BenchmarkRun, CommonOpt, QueryResult};
 use datafusion::{error::Result, prelude::SessionContext};
 use datafusion_common::instant::Instant;
-use datafusion_common::{exec_datafusion_err, DataFusionError};
+use datafusion_common::{exec_datafusion_err, exec_err, DataFusionError};
 use structopt::StructOpt;
 
 /// Run the Nested Loop Join (NLJ) benchmark
@@ -141,11 +141,15 @@ impl RunOpt {
                 if query_id >= 1 && query_id <= NLJ_QUERIES.len() {
                     query_id..=query_id
                 } else {
-                    return Err(exec_datafusion_err!(
-                        "Query {} not found. Available queries: 1 to {}",
-                        query_id,
+                    return exec_err!(
+                        "Query {query_id} not found. Available queries: 1 to {}",
                         NLJ_QUERIES.len()
-                    ));
+                    );
+                    // return Err(exec_datafusion_err!(
+                    //     "Query {} not found. Available queries: 1 to {}",
+                    //     query_id,
+                    //     NLJ_QUERIES.len()
+                    // ));
                 }
             }
             None => 1..=NLJ_QUERIES.len(),
