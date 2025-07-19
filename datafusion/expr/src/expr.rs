@@ -19,7 +19,7 @@
 
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashSet};
-use std::fmt::{self, Display, Formatter, Write};
+use std::fmt::{self, Debug, Display, Formatter, Write};
 use std::hash::{Hash, Hasher};
 use std::mem;
 use std::sync::Arc;
@@ -362,7 +362,7 @@ pub enum Expr {
     Placeholder(Placeholder),
     /// A placeholder which holds a reference to a qualified field
     /// in the outer query, used for correlated sub queries.
-    OuterReferenceColumn(DataType, Column),
+    OuterReferenceColumn(Box<OuterReference>),
     /// Unnest expression
     Unnest(Unnest),
 }
@@ -410,6 +410,18 @@ impl<'a> TreeNodeContainer<'a, Self> for Expr {
         mut f: F,
     ) -> Result<Transformed<Self>> {
         f(self)
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct OuterReference {
+    pub data_type: DataType,
+    pub column: Column,
+}
+
+impl Debug for OuterReference {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{:?}, {:?}", self.data_type, self.column)
     }
 }
 
@@ -1443,7 +1455,7 @@ impl Expr {
             Expr::Case { .. } => "Case",
             Expr::Cast { .. } => "Cast",
             Expr::Column(..) => "Column",
-            Expr::OuterReferenceColumn(_, _) => "Outer",
+            Expr::OuterReferenceColumn(_) => "Outer",
             Expr::Exists { .. } => "Exists",
             Expr::GroupingSet(..) => "GroupingSet",
             Expr::InList { .. } => "InList",
@@ -2018,7 +2030,7 @@ impl Expr {
             | Expr::SimilarTo(..)
             | Expr::Not(..)
             | Expr::Negative(..)
-            | Expr::OuterReferenceColumn(_, _)
+            | Expr::OuterReferenceColumn(_)
             | Expr::TryCast(..)
             | Expr::Unnest(..)
             | Expr::Wildcard { .. }
@@ -2601,9 +2613,9 @@ impl HashNode for Expr {
             Expr::Placeholder(place_holder) => {
                 place_holder.hash(state);
             }
-            Expr::OuterReferenceColumn(data_type, column) => {
-                data_type.hash(state);
-                column.hash(state);
+            Expr::OuterReferenceColumn(boxed_orc) => {
+                boxed_orc.data_type.hash(state);
+                boxed_orc.column.hash(state);
             }
             Expr::Unnest(Unnest { expr: _expr }) => {}
         };
@@ -2908,7 +2920,7 @@ struct SqlDisplay<'a>(&'a Expr);
 impl Display for SqlDisplay<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self.0 {
-            Expr::Literal(scalar, _) => scalar.fmt(f),
+            Expr::Literal(scalar, _) => Display::fmt(&scalar, f),
             Expr::Alias(Alias { name, .. }) => write!(f, "{name}"),
             Expr::Between(Between {
                 expr,
@@ -3171,7 +3183,8 @@ impl Display for Expr {
         match self {
             Expr::Alias(Alias { expr, name, .. }) => write!(f, "{expr} AS {name}"),
             Expr::Column(c) => write!(f, "{c}"),
-            Expr::OuterReferenceColumn(_, c) => {
+            Expr::OuterReferenceColumn(boxed_orc) => {
+                let c = &boxed_orc.column;
                 write!(f, "{OUTER_REFERENCE_COLUMN_PREFIX}({c})")
             }
             Expr::ScalarVariable(_, var_names) => write!(f, "{}", var_names.join(".")),
@@ -3818,7 +3831,7 @@ mod test {
         // If this test fails when you change `Expr`, please try
         // `Box`ing the fields to make `Expr` smaller
         // See https://github.com/apache/datafusion/issues/16199 for details
-        assert_eq!(size_of::<Expr>(), 128);
+        assert_eq!(size_of::<Expr>(), 112);
         assert_eq!(size_of::<ScalarValue>(), 64);
         assert_eq!(size_of::<DataType>(), 24); // 3 ptrs
         assert_eq!(size_of::<Vec<Expr>>(), 24);
