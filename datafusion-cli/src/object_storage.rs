@@ -155,13 +155,6 @@ struct CredentialsFromConfig {
 impl CredentialsFromConfig {
     /// Attempt find AWS S3 credentials via the AWS SDK
     pub async fn try_new() -> Result<Self> {
-        if cfg!(test) {
-            return Ok(Self {
-                region: None,
-                credentials: None,
-            });
-        }
-
         let config = aws_config::defaults(BehaviorVersion::latest()).load().await;
         let region = config.region().map(|r| r.to_string());
 
@@ -587,6 +580,9 @@ mod tests {
     #[tokio::test]
     async fn s3_object_store_builder_default() -> Result<()> {
         let location = "s3://bucket/path/FAKE/file.parquet";
+        // Set it to a non-existent file to avoid reading the default configuration file
+        std::env::set_var("AWS_CONFIG_FILE", "data/aws.config");
+        std::env::set_var("AWS_SHARED_CREDENTIALS_FILE", "data/aws.credentials");
 
         // No options
         let table_url = ListingTableUrl::parse(location)?;
@@ -739,6 +735,8 @@ mod tests {
     async fn s3_object_store_builder_resolves_region_when_none_provided() -> Result<()> {
         let expected_region = "eu-central-1";
         let location = "s3://test-bucket/path/file.parquet";
+        // Set it to a non-existent file to avoid reading the default configuration file
+        std::env::set_var("AWS_CONFIG_FILE", "data/aws.config");
 
         let table_url = ListingTableUrl::parse(location)?;
         let aws_options = AwsOptions {
