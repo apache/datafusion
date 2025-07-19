@@ -434,7 +434,7 @@ impl SessionState {
             .with_dialect(dialect.as_ref())
             .with_recursion_limit(recursion_limit)
             .build()?
-            .parse_expr()?;
+            .parse_into_expr()?;
 
         Ok(expr)
     }

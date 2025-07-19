@@ -413,13 +413,18 @@ impl<'a> DFParser<'a> {
         parser.parse_statements()
     }
 
+    pub fn parse_sql_into_expr(sql: &str) -> Result<ExprWithAlias, DataFusionError> {
+        DFParserBuilder::new(sql).build()?.parse_into_expr()
+    }
+
     pub fn parse_sql_into_expr_with_dialect(
         sql: &str,
         dialect: &dyn Dialect,
     ) -> Result<ExprWithAlias, DataFusionError> {
-        let mut parser = DFParserBuilder::new(sql).with_dialect(dialect).build()?;
-
-        parser.parse_expr()
+        DFParserBuilder::new(sql)
+            .with_dialect(dialect)
+            .build()?
+            .parse_into_expr()
     }
 
     /// Parse a sql string into one or [`Statement`]s
@@ -463,6 +468,19 @@ impl<'a> DFParser<'a> {
             diagnostic=
             diagnostic
         )
+    }
+
+    fn expect_token(
+        &mut self,
+        expected: &str,
+        token: Token,
+    ) -> Result<(), DataFusionError> {
+        let next_token = self.parser.peek_token_ref();
+        if next_token.token != token {
+            self.expected(expected, next_token.clone())
+        } else {
+            Ok(())
+        }
     }
 
     /// Parse a new expression
@@ -512,6 +530,16 @@ impl<'a> DFParser<'a> {
         }
 
         Ok(self.parser.parse_expr_with_alias()?)
+    }
+
+    /// Parses the entire SQL string into an expression.
+    ///
+    /// In contrast to [`DFParser::parse_expr`], this function will report an error if the input
+    /// contains any trailing, unparsed tokens.
+    pub fn parse_into_expr(&mut self) -> Result<ExprWithAlias, DataFusionError> {
+        let expr = self.parse_expr()?;
+        self.expect_token("end of expression", Token::EOF)?;
+        Ok(expr)
     }
 
     /// Helper method to parse a statement and handle errors consistently, especially for recursion limits
@@ -1021,7 +1049,7 @@ mod tests {
     use super::*;
     use datafusion_common::assert_contains;
     use sqlparser::ast::Expr::Identifier;
-    use sqlparser::ast::{BinaryOperator, DataType, Expr, Ident};
+    use sqlparser::ast::{BinaryOperator, DataType, Expr, Ident, ValueWithSpan};
     use sqlparser::dialect::SnowflakeDialect;
     use sqlparser::tokenizer::Span;
 
@@ -1782,5 +1810,84 @@ mod tests {
             err.to_string(),
             "SQL error: RecursionLimitExceeded (current limit: 1)"
         );
+    }
+
+    fn expect_parse_expr_ok(sql: &str, expected: ExprWithAlias) {
+        let expr = DFParser::parse_sql_into_expr(sql).unwrap();
+        assert_eq!(expr, expected, "actual:\n{expr:#?}");
+    }
+
+    /// Parses sql and asserts that the expected error message was found
+    fn expect_parse_expr_error(sql: &str, expected_error: &str) {
+        match DFParser::parse_sql_into_expr(sql) {
+            Ok(expr) => {
+                panic!("Expected parse error for '{sql}', but was successful: {expr:#?}");
+            }
+            Err(e) => {
+                let error_message = e.to_string();
+                assert!(
+                    error_message.contains(expected_error),
+                    "Expected error '{expected_error}' not found in actual error '{error_message}'"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn literal() {
+        expect_parse_expr_ok(
+            "1234",
+            ExprWithAlias {
+                expr: Expr::Value(ValueWithSpan::from(Value::Number(
+                    "1234".to_string(),
+                    false,
+                ))),
+                alias: None,
+            },
+        )
+    }
+
+    #[test]
+    fn literal_with_alias() {
+        expect_parse_expr_ok(
+            "1234 as foo",
+            ExprWithAlias {
+                expr: Expr::Value(ValueWithSpan::from(Value::Number(
+                    "1234".to_string(),
+                    false,
+                ))),
+                alias: Some(Ident::from("foo")),
+            },
+        )
+    }
+
+    #[test]
+    fn literal_with_alias_and_trailing_tokens() {
+        expect_parse_expr_error(
+            "1234 as foo.bar",
+            "Expected: end of expression, found: .",
+        )
+    }
+
+    #[test]
+    fn literal_with_alias_and_trailing_whitespace() {
+        expect_parse_expr_ok(
+            "1234 as foo   ",
+            ExprWithAlias {
+                expr: Expr::Value(ValueWithSpan::from(Value::Number(
+                    "1234".to_string(),
+                    false,
+                ))),
+                alias: Some(Ident::from("foo")),
+            },
+        )
+    }
+
+    #[test]
+    fn literal_with_alias_and_trailing_whitespace_and_token() {
+        expect_parse_expr_error(
+            "1234 as foo    bar",
+            "Expected: end of expression, found: bar",
+        )
     }
 }
