@@ -130,7 +130,7 @@ use datafusion::parquet::file::reader::{FileReader, SerializedFileReader};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::*;
 use datafusion::scalar::ScalarValue;
-use std::fs::{create_dir_all, read_dir, File};
+use std::fs::{read_dir, File};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -456,7 +456,6 @@ async fn main() -> Result<()> {
     // 1. Create temp dir and write 3 Parquet files with different category sets
     let tmp = TempDir::new()?;
     let dir = tmp.path();
-    create_dir_all(dir)?;
     write_file_with_index(&dir.join("a.parquet"), &["foo", "bar", "foo"])?;
     write_file_with_index(&dir.join("b.parquet"), &["baz", "qux"])?;
     write_file_with_index(&dir.join("c.parquet"), &["foo", "quux", "quux"])?;
