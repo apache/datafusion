@@ -145,11 +145,6 @@ impl RunOpt {
                         "Query {query_id} not found. Available queries: 1 to {}",
                         NLJ_QUERIES.len()
                     );
-                    // return Err(exec_datafusion_err!(
-                    //     "Query {} not found. Available queries: 1 to {}",
-                    //     query_id,
-                    //     NLJ_QUERIES.len()
-                    // ));
                 }
             }
             None => 1..=NLJ_QUERIES.len(),
