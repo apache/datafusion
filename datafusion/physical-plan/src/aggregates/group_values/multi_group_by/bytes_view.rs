@@ -71,6 +71,12 @@ pub struct ByteViewGroupValueBuilder<B: ByteViewType> {
     _phantom: PhantomData<B>,
 }
 
+impl<B: ByteViewType> Default for ByteViewGroupValueBuilder<B> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
     pub fn new() -> Self {
         Self {
