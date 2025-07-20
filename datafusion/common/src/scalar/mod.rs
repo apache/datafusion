@@ -1382,6 +1382,12 @@ impl ScalarValue {
             DataType::Float16 => ScalarValue::Float16(Some(f16::from_f32(1.0))),
             DataType::Float32 => ScalarValue::Float32(Some(1.0)),
             DataType::Float64 => ScalarValue::Float64(Some(1.0)),
+            DataType::Decimal128(precision, scale) => {
+                ScalarValue::Decimal128(Some(1), *precision, *scale)
+            }
+            DataType::Decimal256(precision, scale) => {
+                ScalarValue::Decimal256(Some(i256::ONE), *precision, *scale)
+            }
             _ => {
                 return _not_impl_err!(
                     "Can't create an one scalar from data_type \"{datatype:?}\""
@@ -1400,6 +1406,12 @@ impl ScalarValue {
             DataType::Float16 => ScalarValue::Float16(Some(f16::from_f32(-1.0))),
             DataType::Float32 => ScalarValue::Float32(Some(-1.0)),
             DataType::Float64 => ScalarValue::Float64(Some(-1.0)),
+            DataType::Decimal128(precision, scale) => {
+                ScalarValue::Decimal128(Some(-1), *precision, *scale)
+            }
+            DataType::Decimal256(precision, scale) => {
+                ScalarValue::Decimal256(Some(i256::MINUS_ONE), *precision, *scale)
+            }
             _ => {
                 return _not_impl_err!(
                     "Can't create a negative one scalar from data_type \"{datatype:?}\""
@@ -1421,6 +1433,12 @@ impl ScalarValue {
             DataType::Float16 => ScalarValue::Float16(Some(f16::from_f32(10.0))),
             DataType::Float32 => ScalarValue::Float32(Some(10.0)),
             DataType::Float64 => ScalarValue::Float64(Some(10.0)),
+            DataType::Decimal128(precision, scale) => {
+                ScalarValue::Decimal128(Some(10), *precision, *scale)
+            }
+            DataType::Decimal256(precision, scale) => {
+                ScalarValue::Decimal256(Some(i256::from(10)), *precision, *scale)
+            }
             _ => {
                 return _not_impl_err!(
                     "Can't create a ten scalar from data_type \"{datatype:?}\""
@@ -1789,6 +1807,27 @@ impl ScalarValue {
             }
             (Self::Float64(Some(l)), Self::Float64(Some(r))) => {
                 Some((l - r).abs().round() as _)
+            }
+            (
+                Self::Decimal128(Some(l), lprecision, lscale),
+                Self::Decimal128(Some(r), rprecision, rscale),
+            ) => {
+                if lprecision == rprecision && lscale == rscale {
+                    l.checked_sub(*r)?.abs().to_usize()
+                } else {
+                    None
+                }
+            }
+            (
+                Self::Decimal256(Some(l), lprecision, lscale),
+                Self::Decimal256(Some(r), rprecision, rscale),
+            ) => {
+                if lprecision == rprecision && lscale == rscale {
+                    // l.checked_sub(*r).and_then( |v| v.checked_abs() ).and_then(|v| v.to_usize() )
+                    l.checked_sub(*r)?.checked_abs()?.to_usize()
+                } else {
+                    None
+                }
             }
             _ => None,
         }
@@ -6946,6 +6985,26 @@ mod tests {
                 ScalarValue::Float64(Some(-9.9)),
                 5,
             ),
+            (
+                ScalarValue::Decimal128(Some(10), 1, 0),
+                ScalarValue::Decimal128(Some(5), 1, 0),
+                5,
+            ),
+            (
+                ScalarValue::Decimal128(Some(5), 1, 0),
+                ScalarValue::Decimal128(Some(10), 1, 0),
+                5,
+            ),
+            (
+                ScalarValue::Decimal256(Some(10.into()), 1, 0),
+                ScalarValue::Decimal256(Some(5.into()), 1, 0),
+                5,
+            ),
+            (
+                ScalarValue::Decimal256(Some(5.into()), 1, 0),
+                ScalarValue::Decimal256(Some(10.into()), 1, 0),
+                5,
+            ),
         ];
         for (lhs, rhs, expected) in cases.iter() {
             let distance = lhs.distance(rhs).unwrap();
@@ -6994,7 +7053,33 @@ mod tests {
             (ScalarValue::Date64(Some(0)), ScalarValue::Date64(Some(1))),
             (
                 ScalarValue::Decimal128(Some(123), 5, 5),
-                ScalarValue::Decimal128(Some(120), 5, 5),
+                ScalarValue::Decimal128(Some(120), 5, 3),
+            ),
+            (
+                ScalarValue::Decimal128(Some(123), 5, 5),
+                ScalarValue::Decimal128(Some(120), 3, 5),
+            ),
+            (
+                ScalarValue::Decimal256(Some(123.into()), 5, 5),
+                ScalarValue::Decimal256(Some(120.into()), 3, 5),
+            ),
+            // Distance 2 * 2^50 is larger than usize
+            (
+                ScalarValue::Decimal256(
+                    Some(i256::from_parts(0, 2_i64.pow(50).into())),
+                    1,
+                    0,
+                ),
+                ScalarValue::Decimal256(
+                    Some(i256::from_parts(0, (-(2_i64).pow(50)).into())),
+                    1,
+                    0,
+                ),
+            ),
+            // Distance overflow
+            (
+                ScalarValue::Decimal256(Some(i256::from_parts(0, i128::MAX)), 1, 0),
+                ScalarValue::Decimal256(Some(i256::from_parts(0, -i128::MAX)), 1, 0),
             ),
         ];
         for (lhs, rhs) in cases {
