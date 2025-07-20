@@ -2607,6 +2607,7 @@ name = "datafusion-spark"
 version = "49.0.0"
 dependencies = [
  "arrow",
+ "chrono",
  "criterion",
  "datafusion-catalog",
  "datafusion-common",

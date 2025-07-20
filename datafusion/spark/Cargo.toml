@@ -44,10 +44,12 @@ datafusion-expr = { workspace = true }
 datafusion-functions = { workspace = true, features = ["crypto_expressions"] }
 datafusion-macros = { workspace = true }
 log = { workspace = true }
+chrono = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }
 rand = { workspace = true }
+chrono = { workspace = true }
 
 [[bench]]
 harness = false
