@@ -73,12 +73,13 @@ use arrow::compute::kernels::numeric::{
     add, add_wrapping, div, mul, mul_wrapping, rem, sub, sub_wrapping,
 };
 use arrow::datatypes::{
-    i256, ArrowDictionaryKeyType, ArrowNativeType, ArrowTimestampType, DataType,
-    Date32Type, Field, Float32Type, Int16Type, Int32Type, Int64Type, Int8Type,
-    IntervalDayTime, IntervalDayTimeType, IntervalMonthDayNano, IntervalMonthDayNanoType,
-    IntervalUnit, IntervalYearMonthType, TimeUnit, TimestampMicrosecondType,
-    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType, UInt16Type,
-    UInt32Type, UInt64Type, UInt8Type, UnionFields, UnionMode, DECIMAL128_MAX_PRECISION,
+    i256, validate_decimal_precision_and_scale, ArrowDictionaryKeyType, ArrowNativeType,
+    ArrowTimestampType, DataType, Date32Type, Decimal128Type, Decimal256Type, Field,
+    Float32Type, Int16Type, Int32Type, Int64Type, Int8Type, IntervalDayTime,
+    IntervalDayTimeType, IntervalMonthDayNano, IntervalMonthDayNanoType, IntervalUnit,
+    IntervalYearMonthType, TimeUnit, TimestampMicrosecondType, TimestampMillisecondType,
+    TimestampNanosecondType, TimestampSecondType, UInt16Type, UInt32Type, UInt64Type,
+    UInt8Type, UnionFields, UnionMode, DECIMAL128_MAX_PRECISION,
 };
 use arrow::util::display::{array_value_to_string, ArrayFormatter, FormatOptions};
 use chrono::{Duration, NaiveDate};
@@ -1383,10 +1384,36 @@ impl ScalarValue {
             DataType::Float32 => ScalarValue::Float32(Some(1.0)),
             DataType::Float64 => ScalarValue::Float64(Some(1.0)),
             DataType::Decimal128(precision, scale) => {
-                ScalarValue::Decimal128(Some(1), *precision, *scale)
+                if let Err(err) = validate_decimal_precision_and_scale::<Decimal128Type>(
+                    *precision, *scale,
+                ) {
+                    return _internal_err!("Invalid precision and scale {err}");
+                }
+                if *scale < 0 {
+                    return _internal_err!("Negative scale is not supported");
+                }
+                match i128::from(10).checked_pow(*scale as u32) {
+                    Some(value) => {
+                        ScalarValue::Decimal128(Some(value), *precision, *scale)
+                    }
+                    None => return _internal_err!("Unsupported scale {scale}"),
+                }
             }
             DataType::Decimal256(precision, scale) => {
-                ScalarValue::Decimal256(Some(i256::ONE), *precision, *scale)
+                if let Err(err) = validate_decimal_precision_and_scale::<Decimal256Type>(
+                    *precision, *scale,
+                ) {
+                    return _internal_err!("Invalid precision and scale {err}");
+                }
+                if *scale < 0 {
+                    return _internal_err!("Negative scale is not supported");
+                }
+                match i256::from(10).checked_pow(*scale as u32) {
+                    Some(value) => {
+                        ScalarValue::Decimal256(Some(value), *precision, *scale)
+                    }
+                    None => return _internal_err!("Unsupported scale {scale}"),
+                }
             }
             _ => {
                 return _not_impl_err!(
@@ -1407,10 +1434,36 @@ impl ScalarValue {
             DataType::Float32 => ScalarValue::Float32(Some(-1.0)),
             DataType::Float64 => ScalarValue::Float64(Some(-1.0)),
             DataType::Decimal128(precision, scale) => {
-                ScalarValue::Decimal128(Some(-1), *precision, *scale)
+                if let Err(err) = validate_decimal_precision_and_scale::<Decimal128Type>(
+                    *precision, *scale,
+                ) {
+                    return _internal_err!("Invalid precision and scale {err}");
+                }
+                if *scale < 0 {
+                    return _internal_err!("Negative scale is not supported");
+                }
+                match i128::from(10).checked_pow(*scale as u32) {
+                    Some(value) => {
+                        ScalarValue::Decimal128(Some(-value), *precision, *scale)
+                    }
+                    None => return _internal_err!("Unsupported scale {scale}"),
+                }
             }
             DataType::Decimal256(precision, scale) => {
-                ScalarValue::Decimal256(Some(i256::MINUS_ONE), *precision, *scale)
+                if let Err(err) = validate_decimal_precision_and_scale::<Decimal256Type>(
+                    *precision, *scale,
+                ) {
+                    return _internal_err!("Invalid precision and scale {err}");
+                }
+                if *scale < 0 {
+                    return _internal_err!("Negative scale is not supported");
+                }
+                match i256::from(10).checked_pow(*scale as u32) {
+                    Some(value) => {
+                        ScalarValue::Decimal256(Some(-value), *precision, *scale)
+                    }
+                    None => return _internal_err!("Unsupported scale {scale}"),
+                }
             }
             _ => {
                 return _not_impl_err!(
@@ -1434,10 +1487,36 @@ impl ScalarValue {
             DataType::Float32 => ScalarValue::Float32(Some(10.0)),
             DataType::Float64 => ScalarValue::Float64(Some(10.0)),
             DataType::Decimal128(precision, scale) => {
-                ScalarValue::Decimal128(Some(10), *precision, *scale)
+                if let Err(err) = validate_decimal_precision_and_scale::<Decimal128Type>(
+                    *precision, *scale,
+                ) {
+                    return _internal_err!("Invalid precision and scale {err}");
+                }
+                if *scale <= 0 {
+                    return _internal_err!("Negative scale is not supported");
+                }
+                match i128::from(10).checked_pow((*scale + 1) as u32) {
+                    Some(value) => {
+                        ScalarValue::Decimal128(Some(value), *precision, *scale)
+                    }
+                    None => return _internal_err!("Unsupported scale {scale}"),
+                }
             }
             DataType::Decimal256(precision, scale) => {
-                ScalarValue::Decimal256(Some(i256::from(10)), *precision, *scale)
+                if let Err(err) = validate_decimal_precision_and_scale::<Decimal256Type>(
+                    *precision, *scale,
+                ) {
+                    return _internal_err!("Invalid precision and scale {err}");
+                }
+                if *scale <= 0 {
+                    return _internal_err!("Negative scale is not supported");
+                }
+                match i256::from(10).checked_pow((*scale + 1) as u32) {
+                    Some(value) => {
+                        ScalarValue::Decimal256(Some(value), *precision, *scale)
+                    }
+                    None => return _internal_err!("Unsupported scale {scale}"),
+                }
             }
             _ => {
                 return _not_impl_err!(
@@ -1813,7 +1892,7 @@ impl ScalarValue {
                 Self::Decimal128(Some(r), rprecision, rscale),
             ) => {
                 if lprecision == rprecision && lscale == rscale {
-                    l.checked_sub(*r)?.abs().to_usize()
+                    l.checked_sub(*r)?.checked_abs()?.to_usize()
                 } else {
                     None
                 }
@@ -1823,7 +1902,6 @@ impl ScalarValue {
                 Self::Decimal256(Some(r), rprecision, rscale),
             ) => {
                 if lprecision == rprecision && lscale == rscale {
-                    // l.checked_sub(*r).and_then( |v| v.checked_abs() ).and_then(|v| v.to_usize() )
                     l.checked_sub(*r)?.checked_abs()?.to_usize()
                 } else {
                     None
@@ -4199,7 +4277,9 @@ mod tests {
     };
     use arrow::buffer::{Buffer, OffsetBuffer};
     use arrow::compute::{is_null, kernels};
-    use arrow::datatypes::{ArrowNumericType, Fields, Float64Type};
+    use arrow::datatypes::{
+        ArrowNumericType, Fields, Float64Type, DECIMAL256_MAX_PRECISION,
+    };
     use arrow::error::ArrowError;
     use arrow::util::pretty::pretty_format_columns;
     use chrono::NaiveDate;
@@ -4933,6 +5013,116 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[test]
+    fn test_new_one_decimal128() {
+        assert_eq!(
+            ScalarValue::new_one(&DataType::Decimal128(5, 0)).unwrap(),
+            ScalarValue::Decimal128(Some(1), 5, 0)
+        );
+        assert_eq!(
+            ScalarValue::new_one(&DataType::Decimal128(5, 1)).unwrap(),
+            ScalarValue::Decimal128(Some(10), 5, 1)
+        );
+        assert_eq!(
+            ScalarValue::new_one(&DataType::Decimal128(5, 2)).unwrap(),
+            ScalarValue::Decimal128(Some(100), 5, 2)
+        );
+        // More precision
+        assert_eq!(
+            ScalarValue::new_one(&DataType::Decimal128(7, 2)).unwrap(),
+            ScalarValue::Decimal128(Some(100), 7, 2)
+        );
+        // No negative scale
+        assert!(ScalarValue::new_one(&DataType::Decimal128(5, -1)).is_err());
+        // Invalid combination
+        assert!(ScalarValue::new_one(&DataType::Decimal128(0, 2)).is_err());
+        assert!(ScalarValue::new_one(&DataType::Decimal128(5, 7)).is_err());
+    }
+
+    #[test]
+    fn test_new_one_decimal256() {
+        assert_eq!(
+            ScalarValue::new_one(&DataType::Decimal256(5, 0)).unwrap(),
+            ScalarValue::Decimal256(Some(1.into()), 5, 0)
+        );
+        assert_eq!(
+            ScalarValue::new_one(&DataType::Decimal256(5, 1)).unwrap(),
+            ScalarValue::Decimal256(Some(10.into()), 5, 1)
+        );
+        assert_eq!(
+            ScalarValue::new_one(&DataType::Decimal256(5, 2)).unwrap(),
+            ScalarValue::Decimal256(Some(100.into()), 5, 2)
+        );
+        // More precision
+        assert_eq!(
+            ScalarValue::new_one(&DataType::Decimal256(7, 2)).unwrap(),
+            ScalarValue::Decimal256(Some(100.into()), 7, 2)
+        );
+        // No negative scale
+        assert!(ScalarValue::new_one(&DataType::Decimal256(5, -1)).is_err());
+        // Invalid combination
+        assert!(ScalarValue::new_one(&DataType::Decimal256(0, 2)).is_err());
+        assert!(ScalarValue::new_one(&DataType::Decimal256(5, 7)).is_err());
+    }
+
+    #[test]
+    fn test_new_ten_decimal128() {
+        assert_eq!(
+            ScalarValue::new_ten(&DataType::Decimal128(5, 1)).unwrap(),
+            ScalarValue::Decimal128(Some(100), 5, 1)
+        );
+        assert_eq!(
+            ScalarValue::new_ten(&DataType::Decimal128(5, 2)).unwrap(),
+            ScalarValue::Decimal128(Some(1000), 5, 2)
+        );
+        // More precision
+        assert_eq!(
+            ScalarValue::new_ten(&DataType::Decimal128(7, 2)).unwrap(),
+            ScalarValue::Decimal128(Some(1000), 7, 2)
+        );
+        // No negative or zero scale
+        assert!(ScalarValue::new_ten(&DataType::Decimal128(5, 0)).is_err());
+        assert!(ScalarValue::new_ten(&DataType::Decimal128(5, -1)).is_err());
+        // Invalid combination
+        assert!(ScalarValue::new_ten(&DataType::Decimal128(0, 2)).is_err());
+        assert!(ScalarValue::new_ten(&DataType::Decimal128(5, 7)).is_err());
+    }
+
+    #[test]
+    fn test_new_ten_decimal256() {
+        assert_eq!(
+            ScalarValue::new_ten(&DataType::Decimal256(5, 1)).unwrap(),
+            ScalarValue::Decimal256(Some(100.into()), 5, 1)
+        );
+        assert_eq!(
+            ScalarValue::new_ten(&DataType::Decimal256(5, 2)).unwrap(),
+            ScalarValue::Decimal256(Some(1000.into()), 5, 2)
+        );
+        // More precision
+        assert_eq!(
+            ScalarValue::new_ten(&DataType::Decimal256(7, 2)).unwrap(),
+            ScalarValue::Decimal256(Some(1000.into()), 7, 2)
+        );
+        // No negative or zero scale
+        assert!(ScalarValue::new_ten(&DataType::Decimal256(5, 0)).is_err());
+        assert!(ScalarValue::new_ten(&DataType::Decimal256(5, -1)).is_err());
+        // Invalid combination
+        assert!(ScalarValue::new_ten(&DataType::Decimal256(0, 2)).is_err());
+        assert!(ScalarValue::new_ten(&DataType::Decimal256(5, 7)).is_err());
+    }
+
+    #[test]
+    fn test_new_negative_one_decimal128() {
+        assert_eq!(
+            ScalarValue::new_negative_one(&DataType::Decimal128(5, 0)).unwrap(),
+            ScalarValue::Decimal128(Some(-1), 5, 0)
+        );
+        assert_eq!(
+            ScalarValue::new_negative_one(&DataType::Decimal128(5, 2)).unwrap(),
+            ScalarValue::Decimal128(Some(-100), 5, 2)
+        );
     }
 
     #[test]
@@ -7009,6 +7199,24 @@ mod tests {
         for (lhs, rhs, expected) in cases.iter() {
             let distance = lhs.distance(rhs).unwrap();
             assert_eq!(distance, *expected);
+        }
+    }
+
+    #[test]
+    fn test_distance_none() {
+        let cases = [
+            (
+                ScalarValue::Decimal128(Some(i128::MAX), DECIMAL128_MAX_PRECISION, 0),
+                ScalarValue::Decimal128(Some(-i128::MAX), DECIMAL128_MAX_PRECISION, 0),
+            ),
+            (
+                ScalarValue::Decimal256(Some(i256::MAX), DECIMAL256_MAX_PRECISION, 0),
+                ScalarValue::Decimal256(Some(-i256::MAX), DECIMAL256_MAX_PRECISION, 0),
+            ),
+        ];
+        for (lhs, rhs) in cases.iter() {
+            let distance = lhs.distance(rhs);
+            assert!(distance.is_none(), "{lhs} vs {rhs}");
         }
     }
 
