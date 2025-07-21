@@ -427,17 +427,30 @@ struct UppercaseAdapter {
 impl SchemaAdapter for UppercaseAdapter {
     fn map_column_index(&self, index: usize, file_schema: &Schema) -> Option<usize> {
         let field = self.table_schema.field(index);
+        let uppercase_name = field.name().to_uppercase();
         file_schema
             .fields()
             .iter()
-            .position(|f| f.name() == field.name())
+            .position(|f| f.name().to_uppercase() == uppercase_name)
     }
 
     fn map_schema(
         &self,
         file_schema: &Schema,
     ) -> Result<(Arc<dyn SchemaMapper>, Vec<usize>)> {
-        let projection = (0..file_schema.fields().len()).collect::<Vec<_>>();
+        let mut projection = Vec::new();
+        
+        // Map each field in the table schema to the corresponding field in the file schema
+        for table_field in self.table_schema.fields() {
+            let uppercase_name = table_field.name().to_uppercase();
+            if let Some(pos) = file_schema
+                .fields()
+                .iter()
+                .position(|f| f.name().to_uppercase() == uppercase_name)
+            {
+                projection.push(pos);
+            }
+        }
 
         let mapper = UppercaseSchemaMapper {
             output_schema: self.output_schema(),
@@ -560,7 +573,13 @@ async fn test_parquet_integration_with_schema_adapter() -> Result<()> {
     let file_source = ParquetSource::default()
         .with_schema_adapter_factory(Arc::new(UppercaseAdapterFactory {}))?;
 
-    let config = FileScanConfigBuilder::new(store_url, batch.schema(), file_source)
+    // Create a table schema with uppercase column names
+    let table_schema = Arc::new(Schema::new(vec![
+        Field::new("ID", DataType::Int32, false),
+        Field::new("NAME", DataType::Utf8, true),
+    ]));
+
+    let config = FileScanConfigBuilder::new(store_url, table_schema.clone(), file_source)
         .with_file(PartitionedFile::new(path, file_size))
         .build();
 
@@ -575,10 +594,10 @@ async fn test_parquet_integration_with_schema_adapter() -> Result<()> {
     // There should be one batch
     assert_eq!(batches.len(), 1);
 
-    // Verify the schema has the original column names (schema adapter not applied in DataSourceExec)
+    // Verify the schema has the uppercase column names
     let result_schema = batches[0].schema();
-    assert_eq!(result_schema.field(0).name(), "id");
-    assert_eq!(result_schema.field(1).name(), "name");
+    assert_eq!(result_schema.field(0).name(), "ID");
+    assert_eq!(result_schema.field(1).name(), "NAME");
 
     Ok(())
 }
