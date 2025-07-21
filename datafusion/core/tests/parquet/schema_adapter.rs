@@ -657,15 +657,12 @@ async fn test_multi_source_schema_adapter_reuse() -> Result<()> {
     assert!(arrow_source.schema_adapter_factory().is_none());
     // Verify adapters were properly set
     assert!(arrow_source_with_adapter.schema_adapter_factory().is_some());
-    let arrow_source_adapter_factory =
-        arrow_source_with_adapter.schema_adapter_factory().unwrap();
-
-    let arrow_source_adapter_factory =
+    let _arrow_source_adapter_factory =
         arrow_source_with_adapter.schema_adapter_factory().unwrap();
 
     // Verify the factory is the same as the one we created
     assert_eq!(
-        arrow_source_adapter_factory
+        _arrow_source_adapter_factory
             .as_any()
             .downcast_ref::<UppercaseAdapterFactory>(),
         Some(factory.as_ref())
