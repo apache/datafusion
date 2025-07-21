@@ -17,6 +17,7 @@
 
 //! [`ScalarValue`]: stores single  values
 
+mod cache;
 mod consts;
 mod struct_builder;
 
@@ -81,6 +82,7 @@ use arrow::datatypes::{
     UInt32Type, UInt64Type, UInt8Type, UnionFields, UnionMode, DECIMAL128_MAX_PRECISION,
 };
 use arrow::util::display::{array_value_to_string, ArrayFormatter, FormatOptions};
+use cache::{get_or_create_cached_key_array, get_or_create_cached_null_array};
 use chrono::{Duration, NaiveDate};
 use half::f16;
 pub use struct_builder::ScalarStructBuilder;
@@ -864,15 +866,9 @@ fn dict_from_scalar<K: ArrowDictionaryKeyType>(
     let values_array = value.to_array_of_size(1)?;
 
     // Create a key array with `size` elements, each of 0
-    let key_array: PrimitiveArray<K> = repeat_n(
-        if value.is_null() {
-            None
-        } else {
-            Some(K::default_value())
-        },
-        size,
-    )
-    .collect();
+    // Use cache to avoid repeated allocations for the same size
+    let key_array: PrimitiveArray<K> =
+        get_or_create_cached_key_array::<K>(size, value.is_null());
 
     // create a new DictionaryArray
     //
@@ -2675,7 +2671,7 @@ impl ScalarValue {
                     _ => unreachable!("Invalid dictionary keys type: {:?}", key_type),
                 }
             }
-            ScalarValue::Null => new_null_array(&DataType::Null, size),
+            ScalarValue::Null => get_or_create_cached_null_array(size),
         })
     }
 
