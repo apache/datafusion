@@ -22,12 +22,12 @@ use std::sync::Arc;
 
 use crate::PhysicalExpr;
 use arrow::compute;
-use arrow::compute::{cast_with_options, CastOptions};
+use arrow::compute::CastOptions;
 use arrow::datatypes::{DataType, FieldRef, Schema};
 use arrow::record_batch::RecordBatch;
 use compute::can_cast_types;
 use datafusion_common::format::DEFAULT_FORMAT_OPTIONS;
-use datafusion_common::{not_impl_err, Result, ScalarValue};
+use datafusion_common::{not_impl_err, Result};
 use datafusion_expr::ColumnarValue;
 
 /// TRY_CAST expression casts an expression to a specific data type and returns NULL on invalid cast
