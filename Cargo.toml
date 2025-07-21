@@ -75,7 +75,7 @@ license = "Apache-2.0"
 readme = "README.md"
 repository = "https://github.com/apache/datafusion"
 # Define Minimum Supported Rust Version (MSRV)
-rust-version = "1.82.0"
+rust-version = "1.85.1"
 # Define DataFusion version
 version = "48.0.0"
 
@@ -150,10 +150,11 @@ env_logger = "0.11"
 futures = "0.3"
 half = { version = "2.6.0", default-features = false }
 hashbrown = { version = "0.14.5", features = ["raw"] }
+hex = { version = "0.4.3" }
 indexmap = "2.10.0"
 itertools = "0.14"
 log = "^0.4"
-object_store = { version = "0.12.2", default-features = false }
+object_store = { version = "0.12.3", default-features = false }
 parking_lot = "0.12"
 parquet = { version = "55.2.0", default-features = false, features = [
     "arrow",
@@ -173,6 +174,8 @@ rstest = "0.25.0"
 serde_json = "1"
 sqlparser = { version = "0.55.0", default-features = false, features = ["std", "visitor"] }
 tempfile = "3"
+testcontainers = { version = "0.24", features = ["default"] }
+testcontainers-modules = { version = "0.12" }
 tokio = { version = "1.46", features = ["macros", "rt", "sync"] }
 url = "2.5.4"
 

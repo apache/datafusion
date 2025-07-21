@@ -134,6 +134,10 @@ impl FileFormat for ArrowFormat {
         }
     }
 
+    fn compression_type(&self) -> Option<FileCompressionType> {
+        None
+    }
+
     async fn infer_schema(
         &self,
         _state: &dyn Session,

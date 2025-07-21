@@ -2181,6 +2181,7 @@ mod tests {
     };
     use datafusion_functions_window_common::field::WindowUDFFieldArgs;
     use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
+    use std::hash::{DefaultHasher, Hash, Hasher};
     use std::{
         collections::HashMap,
         ops::{BitAnd, BitOr, BitXor},
@@ -2432,7 +2433,7 @@ mod tests {
 
     #[test]
     fn test_simplify_multiply_by_null() {
-        let null = Expr::Literal(ScalarValue::Null, None);
+        let null = lit(ScalarValue::Null);
         // A * null --> null
         {
             let expr = col("c2") * null.clone();
@@ -4404,6 +4405,21 @@ mod tests {
                 None
             }
         }
+
+        fn equals(&self, other: &dyn AggregateUDFImpl) -> bool {
+            let Some(other) = other.as_any().downcast_ref::<Self>() else {
+                return false;
+            };
+            let Self { simplify } = self;
+            simplify == &other.simplify
+        }
+
+        fn hash_value(&self) -> u64 {
+            let Self { simplify } = self;
+            let mut hasher = DefaultHasher::new();
+            simplify.hash(&mut hasher);
+            hasher.finish()
+        }
     }
 
     #[test]
@@ -4473,6 +4489,22 @@ mod tests {
 
         fn field(&self, _field_args: WindowUDFFieldArgs) -> Result<FieldRef> {
             unimplemented!("not needed for tests")
+        }
+
+        fn equals(&self, other: &dyn WindowUDFImpl) -> bool {
+            let Some(other) = other.as_any().downcast_ref::<Self>() else {
+                return false;
+            };
+            let Self { simplify } = self;
+            simplify == &other.simplify
+        }
+
+        fn hash_value(&self) -> u64 {
+            let Self { simplify } = self;
+            let mut hasher = DefaultHasher::new();
+            std::any::type_name::<Self>().hash(&mut hasher);
+            simplify.hash(&mut hasher);
+            hasher.finish()
         }
     }
     #[derive(Debug)]
