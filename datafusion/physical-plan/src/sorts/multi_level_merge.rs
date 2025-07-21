@@ -41,6 +41,92 @@ use futures::TryStreamExt;
 use futures::{Stream, StreamExt};
 
 /// Merges a stream of sorted cursors and record batches into a single sorted stream
+///
+/// This is a wrapper around [`SortPreservingMergeStream`](crate::sorts::merge::SortPreservingMergeStream)
+/// that provide it the sorted streams/files to merge while making sure we can merge them in memory.
+/// In case we can't merge all of them in a single pass we will spill the intermediate results to disk
+/// and repeat the process.
+///
+/// ## High level Algorithm
+/// 1. Get the maximum amount of sorted in-memory streams and spill files we can merge with the available memory
+/// 2. Sort them to a sorted stream
+/// 3. Do we have more spill files to to merge?
+///    - Yes: write that sorted stream to a spill file,
+///           add that spill file back to the spill files to merge and
+///           repeat the process
+///    - No: return that sorted stream as the final output stream
+///
+/// ```text
+/// Initial State: Multiple sorted streams + spill files
+///      ┌───────────┐
+///      │  Phase 1  │
+///      └───────────┘
+/// ┌──Can hold in memory─┐
+/// │   ┌──────────────┐  │
+/// │   │  In-memory   │
+/// │   │sorted stream │──┼────────┐
+/// │   │      1       │  │        │
+///     └──────────────┘  │        │
+/// │   ┌──────────────┐  │        │
+/// │   │  In-memory   │           │
+/// │   │sorted stream │──┼────────┤
+/// │   │      2       │  │        │
+///     └──────────────┘  │        │
+/// │   ┌──────────────┐  │        │
+/// │   │  In-memory   │           │
+/// │   │sorted stream │──┼────────┤
+/// │   │      3       │  │        │
+///     └──────────────┘  │        │
+/// │   ┌──────────────┐  │        │            ┌───────────┐
+/// │   │ Sorted Spill │           │            │  Phase 2  │
+/// │   │    file 1    │──┼────────┤            └───────────┘
+/// │   └──────────────┘  │        │
+///  ──── ──── ──── ──── ─┘        │       ┌──Can hold in memory─┐
+///                                │       │                     │
+///     ┌──────────────┐           │       │   ┌──────────────┐
+///     │ Sorted Spill │           │       │   │ Sorted Spill │  │
+///     │    file 2    │──────────────────────▶│    file 2    │──┼─────┐
+///     └──────────────┘           │           └──────────────┘  │     │
+///     ┌──────────────┐           │       │   ┌──────────────┐  │     │
+///     │ Sorted Spill │           │       │   │ Sorted Spill │        │
+///     │    file 3    │──────────────────────▶│    file 3    │──┼─────┤
+///     └──────────────┘           │       │   └──────────────┘  │     │
+///     ┌──────────────┐           │           ┌──────────────┐  │     │
+///     │ Sorted Spill │           │       │   │ Sorted Spill │  │     │
+///     │    file 4    │──────────────────────▶│    file 4    │────────┤          ┌───────────┐
+///     └──────────────┘           │       │   └──────────────┘  │     │          │  Phase 3  │
+///                                │       │                     │     │          └───────────┘
+///                                │        ──── ──── ──── ──── ─┘     │     ┌──Can hold in memory─┐
+///                                │                                   │     │                     │
+///     ┌──────────────┐           │           ┌──────────────┐        │     │  ┌──────────────┐
+///     │ Sorted Spill │           │           │ Sorted Spill │        │     │  │ Sorted Spill │   │
+///     │    file 5    │──────────────────────▶│    file 5    │────────────────▶│    file 5    │───┼───┐
+///     └──────────────┘           │           └──────────────┘        │     │  └──────────────┘   │   │
+///                                │                                   │     │                     │   │
+///                                │           ┌──────────────┐        │     │  ┌──────────────┐       │
+///                                │           │ Sorted Spill │        │     │  │ Sorted Spill │   │   │       ┌── ─── ─── ─── ─── ─── ─── ──┐
+///                                └──────────▶│    file 6    │────────────────▶│    file 6    │───┼───┼──────▶         Output Stream
+///                                            └──────────────┘        │     │  └──────────────┘   │   │       └── ─── ─── ─── ─── ─── ─── ──┘
+///                                                                    │     │                     │   │
+///                                                                    │     │  ┌──────────────┐       │
+///                                                                    │     │  │ Sorted Spill │   │   │
+///                                                                    └───────▶│    file 7    │───┼───┘
+///                                                                          │  └──────────────┘   │
+///                                                                          │                     │
+///                                                                          └─ ──── ──── ──── ────
+/// ```
+///
+/// ## Memory Management Strategy
+///
+/// This multi-level merge make sure that we can handle any amount of data to sort as long as
+/// we have enough memory to merge at least 2 streams at a time.
+///
+/// 1. **Worst-Case Memory Reservation**: Reserves memory based on the largest
+///    batch size encountered in each spill file to merge, ensuring sufficient memory is always
+///    available during merge operations.
+/// 2. **Adaptive Buffer Sizing**: Reduces buffer sizes when memory is constrained
+/// 3. **Spill-to-Disk**: Spill to disk when we cannot merge all files in memory
+///
 pub(crate) struct MultiLevelMergeBuilder {
     spill_manager: SpillManager,
     schema: SchemaRef,
@@ -114,6 +200,7 @@ impl MultiLevelMergeBuilder {
             // If no spill files are left, we can return the stream as this is the last sorted run
             // TODO - We can write to disk before reading it back to avoid having multiple streams in memory
             if self.sorted_spill_files.is_empty() {
+                assert!(self.sorted_streams.is_empty(), "We should not have any sorted streams left");
                 // Attach the memory reservation to the stream as we are done with it
                 // but because we replaced the memory reservation of the merge stream, we must hold
                 // this to make sure we have enough memory
