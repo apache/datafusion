@@ -657,11 +657,11 @@ async fn test_multi_source_schema_adapter_reuse() -> Result<()> {
             .clone()
             .with_schema_adapter_factory(factory.clone())
             .unwrap();
-        
+
         let base_source: Arc<dyn FileSource> = source.into();
         assert!(base_source.schema_adapter_factory().is_none());
         assert!(source_with_adapter.schema_adapter_factory().is_some());
-        
+
         let retrieved_factory = source_with_adapter.schema_adapter_factory().unwrap();
         assert_eq!(
             retrieved_factory
@@ -679,11 +679,11 @@ async fn test_multi_source_schema_adapter_reuse() -> Result<()> {
             .clone()
             .with_schema_adapter_factory(factory.clone())
             .unwrap();
-        
+
         let base_source: Arc<dyn FileSource> = source.into();
         assert!(base_source.schema_adapter_factory().is_none());
         assert!(source_with_adapter.schema_adapter_factory().is_some());
-        
+
         let retrieved_factory = source_with_adapter.schema_adapter_factory().unwrap();
         assert_eq!(
             retrieved_factory
@@ -700,11 +700,11 @@ async fn test_multi_source_schema_adapter_reuse() -> Result<()> {
             .clone()
             .with_schema_adapter_factory(factory.clone())
             .unwrap();
-        
+
         let base_source: Arc<dyn FileSource> = source.into();
         assert!(base_source.schema_adapter_factory().is_none());
         assert!(source_with_adapter.schema_adapter_factory().is_some());
-        
+
         let retrieved_factory = source_with_adapter.schema_adapter_factory().unwrap();
         assert_eq!(
             retrieved_factory
@@ -721,11 +721,11 @@ async fn test_multi_source_schema_adapter_reuse() -> Result<()> {
             .clone()
             .with_schema_adapter_factory(factory.clone())
             .unwrap();
-        
+
         let base_source: Arc<dyn FileSource> = source.into();
         assert!(base_source.schema_adapter_factory().is_none());
         assert!(source_with_adapter.schema_adapter_factory().is_some());
-        
+
         let retrieved_factory = source_with_adapter.schema_adapter_factory().unwrap();
         assert_eq!(
             retrieved_factory
@@ -759,7 +759,7 @@ fn test_from_implementations() {
 }
 
 /// A simple test schema adapter factory that doesn't modify the schema
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 struct TestSchemaAdapterFactory {}
 
 impl SchemaAdapterFactory for TestSchemaAdapterFactory {
@@ -843,7 +843,15 @@ fn test_schema_adapter_preservation() {
     let config = config_builder.build();
 
     // Verify the schema adapter factory is present in the file source
+    let test_factory = TestSchemaAdapterFactory {};
     assert!(config.file_source().schema_adapter_factory().is_some());
+    let _adapter_factory = config.file_source().schema_adapter_factory().unwrap();
+    assert_eq!(
+        _adapter_factory
+            .as_any()
+            .downcast_ref::<TestSchemaAdapterFactory>(),
+        Some(&test_factory)
+    );
 }
 
 /// A test source for testing schema adapters
