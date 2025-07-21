@@ -354,7 +354,7 @@ async fn main() {
 }
 ```
 
-## Adding a Scalar Async UDF
+## Adding a Async Scalar UDF
 
 An `Async` Scalar UDF allows you to implement user-defined functions that support
 asynchronous execution, such as performing network or I/O operations within the
