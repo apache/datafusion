@@ -35,6 +35,7 @@ use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use std::any::Any;
 use std::cmp::min;
 use std::collections::VecDeque;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::ops::{Neg, Range};
 use std::sync::{Arc, LazyLock};
 
@@ -93,7 +94,7 @@ pub fn lead(
     lead_udwf().call(vec![arg, shift_offset_lit, default_lit])
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 enum WindowShiftKind {
     Lag,
     Lead,
@@ -297,6 +298,23 @@ impl WindowUDFImpl for WindowShift {
             WindowShiftKind::Lag => Some(get_lag_doc()),
             WindowShiftKind::Lead => Some(get_lead_doc()),
         }
+    }
+
+    fn equals(&self, other: &dyn WindowUDFImpl) -> bool {
+        let Some(other) = other.as_any().downcast_ref::<Self>() else {
+            return false;
+        };
+        let Self { signature, kind } = self;
+        signature == &other.signature && kind == &other.kind
+    }
+
+    fn hash_value(&self) -> u64 {
+        let Self { signature, kind } = self;
+        let mut hasher = DefaultHasher::new();
+        std::any::type_name::<Self>().hash(&mut hasher);
+        signature.hash(&mut hasher);
+        kind.hash(&mut hasher);
+        hasher.finish()
     }
 }
 

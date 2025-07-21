@@ -48,6 +48,7 @@ use datafusion_execution::{
 use datafusion_expr::{
     dml::InsertOp, Expr, SortExpr, TableProviderFilterPushDown, TableType,
 };
+use datafusion_physical_expr::schema_rewriter::PhysicalExprAdapterFactory;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::{empty::EmptyExec, ExecutionPlan, Statistics};
 use futures::{future, stream, Stream, StreamExt, TryStreamExt};
@@ -99,6 +100,8 @@ pub struct ListingTableConfig {
     schema_source: SchemaSource,
     /// Optional [`SchemaAdapterFactory`] for creating schema adapters
     schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
+    /// Optional [`PhysicalExprAdapterFactory`] for creating physical expression adapters
+    expr_adapter_factory: Option<Arc<dyn PhysicalExprAdapterFactory>>,
 }
 
 impl ListingTableConfig {
@@ -281,6 +284,7 @@ impl ListingTableConfig {
             options: Some(listing_options),
             schema_source: self.schema_source,
             schema_adapter_factory: self.schema_adapter_factory,
+            expr_adapter_factory: self.expr_adapter_factory,
         })
     }
 
@@ -300,6 +304,7 @@ impl ListingTableConfig {
                     options: _,
                     schema_source,
                     schema_adapter_factory,
+                    expr_adapter_factory: physical_expr_adapter_factory,
                 } = self;
 
                 let (schema, new_schema_source) = match file_schema {
@@ -322,6 +327,7 @@ impl ListingTableConfig {
                     options: Some(options),
                     schema_source: new_schema_source,
                     schema_adapter_factory,
+                    expr_adapter_factory: physical_expr_adapter_factory,
                 })
             }
             None => internal_err!("No `ListingOptions` set for inferring schema"),
@@ -364,6 +370,7 @@ impl ListingTableConfig {
                     options: Some(options),
                     schema_source: self.schema_source,
                     schema_adapter_factory: self.schema_adapter_factory,
+                    expr_adapter_factory: self.expr_adapter_factory,
                 })
             }
             None => config_err!("No `ListingOptions` set for inferring schema"),
@@ -414,6 +421,26 @@ impl ListingTableConfig {
     /// Get the [`SchemaAdapterFactory`] for this configuration
     pub fn schema_adapter_factory(&self) -> Option<&Arc<dyn SchemaAdapterFactory>> {
         self.schema_adapter_factory.as_ref()
+    }
+
+    /// Set the [`PhysicalExprAdapterFactory`] for the [`ListingTable`]
+    ///
+    /// The expression adapter factory is used to create physical expression adapters that can
+    /// handle schema evolution and type conversions when evaluating expressions
+    /// with different schemas than the table schema.
+    ///
+    /// If not provided, a default physical expression adapter factory will be used unless a custom
+    /// `SchemaAdapterFactory` is set, in which case only the `SchemaAdapterFactory` will be used.
+    ///
+    /// See <https://github.com/apache/datafusion/issues/16800> for details on this transition.
+    pub fn with_expr_adapter_factory(
+        self,
+        expr_adapter_factory: Arc<dyn PhysicalExprAdapterFactory>,
+    ) -> Self {
+        Self {
+            expr_adapter_factory: Some(expr_adapter_factory),
+            ..self
+        }
     }
 }
 
@@ -911,6 +938,8 @@ pub struct ListingTable {
     column_defaults: HashMap<String, Expr>,
     /// Optional [`SchemaAdapterFactory`] for creating schema adapters
     schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
+    /// Optional [`PhysicalExprAdapterFactory`] for creating physical expression adapters
+    expr_adapter_factory: Option<Arc<dyn PhysicalExprAdapterFactory>>,
 }
 
 impl ListingTable {
@@ -952,6 +981,7 @@ impl ListingTable {
             constraints: Constraints::default(),
             column_defaults: HashMap::new(),
             schema_adapter_factory: config.schema_adapter_factory,
+            expr_adapter_factory: config.expr_adapter_factory,
         };
 
         Ok(table)
@@ -1196,6 +1226,7 @@ impl TableProvider for ListingTable {
                 .with_limit(limit)
                 .with_output_ordering(output_ordering)
                 .with_table_partition_cols(table_partition_cols)
+                .with_expr_adapter(self.expr_adapter_factory.clone())
                 .build(),
             )
             .await
@@ -1995,7 +2026,6 @@ mod tests {
     #[tokio::test]
     async fn test_insert_into_append_new_parquet_files_session_overrides() -> Result<()> {
         let mut config_map: HashMap<String, String> = HashMap::new();
-        config_map.insert("datafusion.execution.batch_size".into(), "10".into());
         config_map.insert(
             "datafusion.execution.soft_max_rows_per_output_file".into(),
             "10".into(),
@@ -2060,7 +2090,7 @@ mod tests {
             "datafusion.execution.parquet.write_batch_size".into(),
             "5".into(),
         );
-        config_map.insert("datafusion.execution.batch_size".into(), "1".into());
+        config_map.insert("datafusion.execution.batch_size".into(), "10".into());
         helper_test_append_new_files_to_table(
             ParquetFormat::default().get_ext(),
             FileCompressionType::UNCOMPRESSED,

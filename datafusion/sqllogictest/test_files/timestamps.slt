@@ -177,6 +177,115 @@ SELECT TIMESTAMPTZ '2000-01-01T01:01:01'
 
 
 ##########
+## cast tests
+##########
+
+query BPPPPPP
+SELECT t1 = t2 AND t1 = t3 AND t1 = t4 AND t1 = t5 AND t1 = t6, *
+FROM (SELECT
+    (SELECT CAST(CAST(1 AS float) AS timestamp(0))) AS t1,
+    (SELECT CAST(CAST(one AS float) AS timestamp(0)) FROM (SELECT 1 AS one)) AS t2,
+    (SELECT CAST(CAST(one AS float) AS timestamp(0)) FROM (VALUES (1)) t(one)) AS t3,
+    (SELECT CAST(CAST(1 AS double) AS timestamp(0))) AS t4,
+    (SELECT CAST(CAST(one AS double) AS timestamp(0)) FROM (SELECT 1 AS one)) AS t5,
+    (SELECT CAST(CAST(one AS double) AS timestamp(0)) FROM (VALUES (1)) t(one)) AS t6
+)
+----
+true 1970-01-01T00:00:01 1970-01-01T00:00:01 1970-01-01T00:00:01 1970-01-01T00:00:01 1970-01-01T00:00:01 1970-01-01T00:00:01
+
+query BPPPPPP
+SELECT t1 = t2 AND t1 = t3 AND t1 = t4 AND t1 = t5 AND t1 = t6, *
+FROM (SELECT
+    (SELECT CAST(CAST(1 AS float) AS timestamp(3))) AS t1,
+    (SELECT CAST(CAST(one AS float) AS timestamp(3)) FROM (SELECT 1 AS one)) AS t2,
+    (SELECT CAST(CAST(one AS float) AS timestamp(3)) FROM (VALUES (1)) t(one)) AS t3,
+    (SELECT CAST(CAST(1 AS double) AS timestamp(3))) AS t4,
+    (SELECT CAST(CAST(one AS double) AS timestamp(3)) FROM (SELECT 1 AS one)) AS t5,
+    (SELECT CAST(CAST(one AS double) AS timestamp(3)) FROM (VALUES (1)) t(one)) AS t6
+)
+----
+true 1970-01-01T00:00:00.001 1970-01-01T00:00:00.001 1970-01-01T00:00:00.001 1970-01-01T00:00:00.001 1970-01-01T00:00:00.001 1970-01-01T00:00:00.001
+
+query BPPPPPP
+SELECT t1 = t2 AND t1 = t3 AND t1 = t4 AND t1 = t5 AND t1 = t6, *
+FROM (SELECT
+    (SELECT CAST(CAST(1 AS float) AS timestamp(6))) AS t1,
+    (SELECT CAST(CAST(one AS float) AS timestamp(6)) FROM (SELECT 1 AS one)) AS t2,
+    (SELECT CAST(CAST(one AS float) AS timestamp(6)) FROM (VALUES (1)) t(one)) AS t3,
+    (SELECT CAST(CAST(1 AS double) AS timestamp(6))) AS t4,
+    (SELECT CAST(CAST(one AS double) AS timestamp(6)) FROM (SELECT 1 AS one)) AS t5,
+    (SELECT CAST(CAST(one AS double) AS timestamp(6)) FROM (VALUES (1)) t(one)) AS t6
+)
+----
+true 1970-01-01T00:00:00.000001 1970-01-01T00:00:00.000001 1970-01-01T00:00:00.000001 1970-01-01T00:00:00.000001 1970-01-01T00:00:00.000001 1970-01-01T00:00:00.000001
+
+query BPPPPPP
+SELECT t1 = t2 AND t1 = t3 AND t1 = t4 AND t1 = t5 AND t1 = t6, *
+FROM (SELECT
+    (SELECT CAST(CAST(1 AS float) AS timestamp(9))) AS t1,
+    (SELECT CAST(CAST(one AS float) AS timestamp(9)) FROM (SELECT 1 AS one)) AS t2,
+    (SELECT CAST(CAST(one AS float) AS timestamp(9)) FROM (VALUES (1)) t(one)) AS t3,
+    (SELECT CAST(CAST(1 AS double) AS timestamp(9))) AS t4,
+    (SELECT CAST(CAST(one AS double) AS timestamp(9)) FROM (SELECT 1 AS one)) AS t5,
+    (SELECT CAST(CAST(one AS double) AS timestamp(9)) FROM (VALUES (1)) t(one)) AS t6
+)
+----
+true 1970-01-01T00:00:00.000000001 1970-01-01T00:00:00.000000001 1970-01-01T00:00:00.000000001 1970-01-01T00:00:00.000000001 1970-01-01T00:00:00.000000001 1970-01-01T00:00:00.000000001
+
+query BPPPPPP
+SELECT t1 = t2 AND t1 = t3 AND t1 = t4 AND t1 = t5 AND t1 = t6, *
+FROM (SELECT
+    (SELECT CAST(CAST(1.125 AS float) AS timestamp(0))) AS t1,
+    (SELECT CAST(CAST(one_and_a_bit AS float) AS timestamp(0)) FROM (SELECT 1.125 AS one_and_a_bit)) AS t2,
+    (SELECT CAST(CAST(one_and_a_bit AS float) AS timestamp(0)) FROM (VALUES (1.125)) t(one_and_a_bit)) AS t3,
+    (SELECT CAST(CAST(1.125 AS double) AS timestamp(0))) AS t4,
+    (SELECT CAST(CAST(one_and_a_bit AS double) AS timestamp(0)) FROM (SELECT 1.125 AS one_and_a_bit)) AS t5,
+    (SELECT CAST(CAST(one_and_a_bit AS double) AS timestamp(0)) FROM (VALUES (1.125)) t(one_and_a_bit)) AS t6
+)
+----
+true 1970-01-01T00:00:01 1970-01-01T00:00:01 1970-01-01T00:00:01 1970-01-01T00:00:01 1970-01-01T00:00:01 1970-01-01T00:00:01
+
+query BPPPPPP
+SELECT t1 = t2 AND t1 = t3 AND t1 = t4 AND t1 = t5 AND t1 = t6, *
+FROM (SELECT
+    (SELECT CAST(CAST(1.125 AS float) AS timestamp(3))) AS t1,
+    (SELECT CAST(CAST(one_and_a_bit AS float) AS timestamp(3)) FROM (SELECT 1.125 AS one_and_a_bit)) AS t2,
+    (SELECT CAST(CAST(one_and_a_bit AS float) AS timestamp(3)) FROM (VALUES (1.125)) t(one_and_a_bit)) AS t3,
+    (SELECT CAST(CAST(1.125 AS double) AS timestamp(3))) AS t4,
+    (SELECT CAST(CAST(one_and_a_bit AS double) AS timestamp(3)) FROM (SELECT 1.125 AS one_and_a_bit)) AS t5,
+    (SELECT CAST(CAST(one_and_a_bit AS double) AS timestamp(3)) FROM (VALUES (1.125)) t(one_and_a_bit)) AS t6
+)
+----
+true 1970-01-01T00:00:00.001 1970-01-01T00:00:00.001 1970-01-01T00:00:00.001 1970-01-01T00:00:00.001 1970-01-01T00:00:00.001 1970-01-01T00:00:00.001
+
+query BPPPPPP
+SELECT t1 = t2 AND t1 = t3 AND t1 = t4 AND t1 = t5 AND t1 = t6, *
+FROM (SELECT
+    (SELECT CAST(CAST(1.125 AS float) AS timestamp(6))) AS t1,
+    (SELECT CAST(CAST(one_and_a_bit AS float) AS timestamp(6)) FROM (SELECT 1.125 AS one_and_a_bit)) AS t2,
+    (SELECT CAST(CAST(one_and_a_bit AS float) AS timestamp(6)) FROM (VALUES (1.125)) t(one_and_a_bit)) AS t3,
+    (SELECT CAST(CAST(1.125 AS double) AS timestamp(6))) AS t4,
+    (SELECT CAST(CAST(one_and_a_bit AS double) AS timestamp(6)) FROM (SELECT 1.125 AS one_and_a_bit)) AS t5,
+    (SELECT CAST(CAST(one_and_a_bit AS double) AS timestamp(6)) FROM (VALUES (1.125)) t(one_and_a_bit)) AS t6
+)
+----
+true 1970-01-01T00:00:00.000001 1970-01-01T00:00:00.000001 1970-01-01T00:00:00.000001 1970-01-01T00:00:00.000001 1970-01-01T00:00:00.000001 1970-01-01T00:00:00.000001
+
+query BPPPPPP
+SELECT t1 = t2 AND t1 = t3 AND t1 = t4 AND t1 = t5 AND t1 = t6, *
+FROM (SELECT
+    (SELECT CAST(CAST(1.125 AS float) AS timestamp(9))) AS t1,
+    (SELECT CAST(CAST(one_and_a_bit AS float) AS timestamp(9)) FROM (SELECT 1.125 AS one_and_a_bit)) AS t2,
+    (SELECT CAST(CAST(one_and_a_bit AS float) AS timestamp(9)) FROM (VALUES (1.125)) t(one_and_a_bit)) AS t3,
+    (SELECT CAST(CAST(1.125 AS double) AS timestamp(9))) AS t4,
+    (SELECT CAST(CAST(one_and_a_bit AS double) AS timestamp(9)) FROM (SELECT 1.125 AS one_and_a_bit)) AS t5,
+    (SELECT CAST(CAST(one_and_a_bit AS double) AS timestamp(9)) FROM (VALUES (1.125)) t(one_and_a_bit)) AS t6
+)
+----
+true 1970-01-01T00:00:00.000000001 1970-01-01T00:00:00.000000001 1970-01-01T00:00:00.000000001 1970-01-01T00:00:00.000000001 1970-01-01T00:00:00.000000001 1970-01-01T00:00:00.000000001
+
+
+##########
 ## to_timestamp tests
 ##########
 
@@ -394,12 +503,12 @@ SELECT COUNT(*) FROM ts_data_secs where ts > to_timestamp_seconds('2020-09-08 12
 query PPP
 SELECT to_timestamp(1.1) as c1, cast(1.1 as timestamp) as c2, 1.1::timestamp as c3;
 ----
-1970-01-01T00:00:01.100 1970-01-01T00:00:01.100 1970-01-01T00:00:01.100
+1970-01-01T00:00:01.100 1970-01-01T00:00:00.000000001 1970-01-01T00:00:00.000000001
 
 query PPP
 SELECT to_timestamp(-1.1) as c1, cast(-1.1 as timestamp) as c2, (-1.1)::timestamp as c3;
 ----
-1969-12-31T23:59:58.900 1969-12-31T23:59:58.900 1969-12-31T23:59:58.900
+1969-12-31T23:59:58.900 1969-12-31T23:59:59.999999999 1969-12-31T23:59:59.999999999
 
 query PPP
 SELECT to_timestamp(0.0) as c1, cast(0.0 as timestamp) as c2, 0.0::timestamp as c3;
@@ -409,24 +518,24 @@ SELECT to_timestamp(0.0) as c1, cast(0.0 as timestamp) as c2, 0.0::timestamp as 
 query PPP
 SELECT to_timestamp(1.23456789) as c1, cast(1.23456789 as timestamp) as c2, 1.23456789::timestamp as c3;
 ----
-1970-01-01T00:00:01.234567890 1970-01-01T00:00:01.234567890 1970-01-01T00:00:01.234567890
+1970-01-01T00:00:01.234567890 1970-01-01T00:00:00.000000001 1970-01-01T00:00:00.000000001
 
 query PPP
 SELECT to_timestamp(123456789.123456789) as c1, cast(123456789.123456789 as timestamp) as c2, 123456789.123456789::timestamp as c3;
 ----
-1973-11-29T21:33:09.123456784 1973-11-29T21:33:09.123456784 1973-11-29T21:33:09.123456784
+1973-11-29T21:33:09.123456784 1970-01-01T00:00:00.123456789 1970-01-01T00:00:00.123456789
 
 # to_timestamp Decimal128 inputs
 
 query PPP
 SELECT to_timestamp(arrow_cast(1.1, 'Decimal128(2,1)')) as c1, cast(arrow_cast(1.1, 'Decimal128(2,1)') as timestamp) as c2, arrow_cast(1.1, 'Decimal128(2,1)')::timestamp as c3;
 ----
-1970-01-01T00:00:01.100 1970-01-01T00:00:01.100 1970-01-01T00:00:01.100
+1970-01-01T00:00:01.100 1970-01-01T00:00:00.000000001 1970-01-01T00:00:00.000000001
 
 query PPP
 SELECT to_timestamp(arrow_cast(-1.1, 'Decimal128(2,1)')) as c1, cast(arrow_cast(-1.1, 'Decimal128(2,1)') as timestamp) as c2, arrow_cast(-1.1, 'Decimal128(2,1)')::timestamp as c3;
 ----
-1969-12-31T23:59:58.900 1969-12-31T23:59:58.900 1969-12-31T23:59:58.900
+1969-12-31T23:59:58.900 1969-12-31T23:59:59.999999999 1969-12-31T23:59:59.999999999
 
 query PPP
 SELECT to_timestamp(arrow_cast(0.0, 'Decimal128(2,1)')) as c1, cast(arrow_cast(0.0, 'Decimal128(2,1)') as timestamp) as c2, arrow_cast(0.0, 'Decimal128(2,1)')::timestamp as c3;
@@ -436,12 +545,12 @@ SELECT to_timestamp(arrow_cast(0.0, 'Decimal128(2,1)')) as c1, cast(arrow_cast(0
 query PPP
 SELECT to_timestamp(arrow_cast(1.23456789, 'Decimal128(9,8)')) as c1, cast(arrow_cast(1.23456789, 'Decimal128(9,8)') as timestamp) as c2, arrow_cast(1.23456789, 'Decimal128(9,8)')::timestamp as c3;
 ----
-1970-01-01T00:00:01.234567890 1970-01-01T00:00:01.234567890 1970-01-01T00:00:01.234567890
+1970-01-01T00:00:01.234567890 1970-01-01T00:00:00.000000001 1970-01-01T00:00:00.000000001
 
 query PPP
 SELECT to_timestamp(arrow_cast(123456789.123456789, 'Decimal128(18,9)')) as c1, cast(arrow_cast(123456789.123456789, 'Decimal128(18,9)') as timestamp) as c2, arrow_cast(123456789.123456789, 'Decimal128(18,9)')::timestamp as c3;
 ----
-1973-11-29T21:33:09.123456784 1973-11-29T21:33:09.123456784 1973-11-29T21:33:09.123456784
+1973-11-29T21:33:09.123456784 1970-01-01T00:00:00.123456789 1970-01-01T00:00:00.123456789
 
 
 # from_unixtime
@@ -3420,3 +3529,67 @@ select to_timestamp('-1');
 
 query error DataFusion error: Arrow error: Parser error: Error parsing timestamp from '\-1': timestamp must contain at least 10 characters
 select to_timestamp(arrow_cast('-1', 'Utf8'));
+
+query P
+SELECT CAST(CAST(1   AS decimal(17,2)) AS timestamp(3)) AS a UNION ALL
+SELECT CAST(CAST(one AS decimal(17,2)) AS timestamp(3)) AS a FROM (VALUES (1)) t(one);
+----
+1970-01-01T00:00:00.001
+1970-01-01T00:00:00.001
+
+query P
+SELECT arrow_cast(CAST(1   AS decimal(17,2)), 'Timestamp(Nanosecond, None)') AS a UNION ALL
+SELECT arrow_cast(CAST(one AS decimal(17,2)), 'Timestamp(Nanosecond, None)') AS a FROM (VALUES (1)) t(one);
+----
+1970-01-01T00:00:00.000000001
+1970-01-01T00:00:00.000000001
+
+query P
+SELECT arrow_cast(CAST(1   AS decimal(17,2)), 'Timestamp(Microsecond, None)') AS a UNION ALL
+SELECT arrow_cast(CAST(one AS decimal(17,2)), 'Timestamp(Microsecond, None)') AS a FROM (VALUES (1)) t(one);
+----
+1970-01-01T00:00:00.000001
+1970-01-01T00:00:00.000001
+
+query P
+SELECT arrow_cast(CAST(1   AS decimal(17,2)), 'Timestamp(Millisecond, None)') AS a UNION ALL
+SELECT arrow_cast(CAST(one AS decimal(17,2)), 'Timestamp(Millisecond, None)') AS a FROM (VALUES (1)) t(one);
+----
+1970-01-01T00:00:00.001
+1970-01-01T00:00:00.001
+
+query P
+SELECT arrow_cast(CAST(1   AS decimal(17,2)), 'Timestamp(Second, None)') AS a UNION ALL
+SELECT arrow_cast(CAST(one AS decimal(17,2)), 'Timestamp(Second, None)') AS a FROM (VALUES (1)) t(one);
+----
+1970-01-01T00:00:01
+1970-01-01T00:00:01
+
+
+query P
+SELECT arrow_cast(CAST(1.123 AS decimal(17,3)), 'Timestamp(Nanosecond, None)') AS a UNION ALL
+SELECT arrow_cast(CAST(one AS decimal(17,3)), 'Timestamp(Nanosecond, None)') AS a FROM (VALUES (1.123)) t(one);
+----
+1970-01-01T00:00:00.000000001
+1970-01-01T00:00:00.000000001
+
+query P
+SELECT arrow_cast(CAST(1.123 AS decimal(17,3)), 'Timestamp(Microsecond, None)') AS a UNION ALL
+SELECT arrow_cast(CAST(one AS decimal(17,3)), 'Timestamp(Microsecond, None)') AS a FROM (VALUES (1.123)) t(one);
+----
+1970-01-01T00:00:00.000001
+1970-01-01T00:00:00.000001
+
+query P
+SELECT arrow_cast(CAST(1.123 AS decimal(17,3)), 'Timestamp(Millisecond, None)') AS a UNION ALL
+SELECT arrow_cast(CAST(one AS decimal(17,3)), 'Timestamp(Millisecond, None)') AS a FROM (VALUES (1.123)) t(one);
+----
+1970-01-01T00:00:00.001
+1970-01-01T00:00:00.001
+
+query P
+SELECT arrow_cast(CAST(1.123 AS decimal(17,3)), 'Timestamp(Second, None)') AS a UNION ALL
+SELECT arrow_cast(CAST(one AS decimal(17,3)), 'Timestamp(Second, None)') AS a FROM (VALUES (1.123)) t(one);
+----
+1970-01-01T00:00:01
+1970-01-01T00:00:01
