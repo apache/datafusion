@@ -25,7 +25,7 @@ use async_trait::async_trait;
 use datafusion::arrow::array::{UInt64Builder, UInt8Builder};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
-use datafusion::datasource::{provider_as_source, TableProvider, TableType};
+use datafusion::datasource::{DefaultTableSource, TableProvider, TableType};
 use datafusion::error::Result;
 use datafusion::execution::context::TaskContext;
 use datafusion::logical_expr::LogicalPlanBuilder;
@@ -66,7 +66,7 @@ async fn search_accounts(
     // create logical plan composed of a single TableScan
     let logical_plan = LogicalPlanBuilder::scan_with_filters(
         "accounts",
-        provider_as_source(Arc::new(db)),
+        DefaultTableSource::wrap(Arc::new(db)),
         None,
         vec![],
     )?

@@ -33,7 +33,7 @@ use crate::{
     datasource::listing::{
         ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
     },
-    datasource::{provider_as_source, MemTable, ViewTable},
+    datasource::{MemTable, ViewTable},
     error::{DataFusionError, Result},
     execution::{
         options::ArrowReadOptions,
@@ -58,6 +58,7 @@ pub use crate::execution::session_state::SessionState;
 
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
+use datafusion_catalog::default_table_source::DefaultTableSource;
 use datafusion_catalog::memory::MemorySchemaProvider;
 use datafusion_catalog::MemoryCatalogProvider;
 use datafusion_catalog::{
@@ -1387,8 +1388,12 @@ impl SessionContext {
     pub fn read_table(&self, provider: Arc<dyn TableProvider>) -> Result<DataFrame> {
         Ok(DataFrame::new(
             self.state(),
-            LogicalPlanBuilder::scan(UNNAMED_TABLE, provider_as_source(provider), None)?
-                .build()?,
+            LogicalPlanBuilder::scan(
+                UNNAMED_TABLE,
+                DefaultTableSource::wrap(provider),
+                None,
+            )?
+            .build()?,
         ))
     }
 
@@ -1399,7 +1404,7 @@ impl SessionContext {
             self.state(),
             LogicalPlanBuilder::scan(
                 UNNAMED_TABLE,
-                provider_as_source(Arc::new(provider)),
+                DefaultTableSource::wrap(Arc::new(provider)),
                 None,
             )?
             .build()?,
@@ -1422,7 +1427,7 @@ impl SessionContext {
             self.state(),
             LogicalPlanBuilder::scan(
                 UNNAMED_TABLE,
-                provider_as_source(Arc::new(provider)),
+                DefaultTableSource::wrap(Arc::new(provider)),
                 None,
             )?
             .build()?,
@@ -1586,7 +1591,7 @@ impl SessionContext {
         let provider = self.table_provider(table_ref.clone()).await?;
         let plan = LogicalPlanBuilder::scan(
             table_ref,
-            provider_as_source(Arc::clone(&provider)),
+            DefaultTableSource::wrap(Arc::clone(&provider)),
             None,
         )?
         .build()?;

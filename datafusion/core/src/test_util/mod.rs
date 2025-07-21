@@ -22,6 +22,7 @@ pub mod parquet;
 
 pub mod csv;
 
+use datafusion_catalog::default_table_source::DefaultTableSource;
 use futures::Stream;
 use std::any::Any;
 use std::collections::HashMap;
@@ -33,8 +34,8 @@ use std::task::{Context, Poll};
 
 use crate::catalog::{TableProvider, TableProviderFactory};
 use crate::dataframe::DataFrame;
+use crate::datasource::empty::EmptyTable;
 use crate::datasource::stream::{FileStreamProvider, StreamConfig, StreamTable};
-use crate::datasource::{empty::EmptyTable, provider_as_source};
 use crate::error::Result;
 use crate::logical_expr::{LogicalPlanBuilder, UNNAMED_TABLE};
 use crate::physical_plan::ExecutionPlan;
@@ -67,7 +68,7 @@ pub fn scan_empty(
     let table_schema = Arc::new(table_schema.clone());
     let provider = Arc::new(EmptyTable::new(table_schema));
     let name = TableReference::bare(name.unwrap_or(UNNAMED_TABLE));
-    LogicalPlanBuilder::scan(name, provider_as_source(provider), projection)
+    LogicalPlanBuilder::scan(name, DefaultTableSource::wrap(provider), projection)
 }
 
 /// Scan an empty data source with configured partition, mainly used in tests.
@@ -80,7 +81,7 @@ pub fn scan_empty_with_partitions(
     let table_schema = Arc::new(table_schema.clone());
     let provider = Arc::new(EmptyTable::new(table_schema).with_partitions(partitions));
     let name = TableReference::bare(name.unwrap_or(UNNAMED_TABLE));
-    LogicalPlanBuilder::scan(name, provider_as_source(provider), projection)
+    LogicalPlanBuilder::scan(name, DefaultTableSource::wrap(provider), projection)
 }
 
 /// Get the schema for the aggregate_test_* csv files
