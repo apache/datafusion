@@ -154,23 +154,27 @@ impl ScalarUDFImpl for GetFieldFunc {
             }
             (DataType::Struct(fields),sv) => {
                 sv.and_then(|sv| sv.try_as_str().flatten().filter(|s| !s.is_empty()))
-                .map_or_else(
-                    || exec_err!("Field name must be a non-empty string"),
-                    |field_name| {
-                    fields.iter().find(|f| f.name() == field_name)
-                    .ok_or(plan_datafusion_err!("Field {field_name} not found in struct"))
-                    .map(|f| {
-                        let mut child_field = f.as_ref().clone();
+                    .map_or_else(
+                        || exec_err!("Field name must be a non-empty string"),
+                        |field_name| {
+                            // First try exact match for performance
+                            let field = fields.iter().find(|f| f.name() == field_name)
+                                // If no exact match, try case-insensitive match
+                                .or_else(|| fields.iter().find(|f| f.name().to_ascii_lowercase() == field_name.to_ascii_lowercase()));
 
-                        // If the parent is nullable, then getting the child must be nullable,
-                        // so potentially override the return value
+                            field.ok_or(plan_datafusion_err!("Field {field_name} not found in struct"))
+                                .map(|f| {
+                                    let mut child_field = f.as_ref().clone();
 
-                        if args.arg_fields[0].is_nullable() {
-                            child_field = child_field.with_nullable(true);
-                        }
-                        Arc::new(child_field)
-                    })
-                })
+                                    // If the parent is nullable, then getting the child must be nullable,
+                                    // so potentially override the return value
+
+                                    if args.arg_fields[0].is_nullable() {
+                                        child_field = child_field.with_nullable(true);
+                                    }
+                                    Arc::new(child_field)
+                                })
+                        })
             },
             (DataType::Null, _) => Ok(Field::new(self.name(), DataType::Null, true).into()),
             (other, _) => exec_err!("The expression to get an indexed field is only valid for `Struct`, `Map` or `Null` types, got {other}"),
@@ -263,7 +267,19 @@ impl ScalarUDFImpl for GetFieldFunc {
             }
             (DataType::Struct(_), ScalarValue::Utf8(Some(k))) => {
                 let as_struct_array = as_struct_array(&array)?;
-                match as_struct_array.column_by_name(&k) {
+                // First try exact match for performance (delegates to Arrow's implementation)
+                let column = as_struct_array.column_by_name(&k)
+                    // If no exact match, try case-insensitive match
+                    .or_else(|| {
+                        for (field_name, column) in as_struct_array.fields().iter().zip(as_struct_array.columns()) {
+                            if field_name.name().to_ascii_lowercase() == k.to_ascii_lowercase() {
+                                return Some(column);
+                            }
+                        }
+                        None
+                    });
+
+                match column {
                     None => exec_err!("get indexed field {k} not found in struct"),
                     Some(col) => Ok(ColumnarValue::Array(Arc::clone(col))),
                 }
@@ -282,5 +298,85 @@ impl ScalarUDFImpl for GetFieldFunc {
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::{Array, Int32Array, StringArray, StructArray};
+    use arrow::datatypes::{DataType, Field};
+    use datafusion_common::{Result, ScalarValue};
+    use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
+    use std::sync::Arc;
+
+    #[test]
+    fn test_case_insensitive_struct_field_access() -> Result<()> {
+        let field1_array = Arc::new(Int32Array::from(vec![Some(1), Some(2), None]));
+        let field2_array =
+            Arc::new(StringArray::from(vec![Some("a"), Some("b"), Some("c")]));
+
+        let struct_array = StructArray::from(vec![
+            (
+                Arc::new(Field::new("fooBar", DataType::Int32, true)),
+                field1_array as Arc<dyn Array>,
+            ),
+            (
+                Arc::new(Field::new("another_field", DataType::Utf8, true)),
+                field2_array as Arc<dyn Array>,
+            ),
+        ]);
+
+        let get_field_func = GetFieldFunc::new();
+
+        let struct_field = Arc::new(Field::new(
+            "test_struct",
+            struct_array.data_type().clone(),
+            true,
+        ));
+        let string_field = Arc::new(Field::new("field_name", DataType::Utf8, false));
+        let return_field = Arc::new(Field::new("result", DataType::Int32, true));
+
+        // Access field with exact case
+        let result = get_field_func.invoke_with_args(ScalarFunctionArgs {
+            args: vec![
+                ColumnarValue::Array(Arc::new(struct_array.clone())),
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some("fooBar".to_string()))),
+            ],
+            arg_fields: vec![struct_field.clone(), string_field.clone()],
+            number_rows: 3,
+            return_field: return_field.clone(),
+        })?;
+
+        if let ColumnarValue::Array(result_array) = result {
+            let int_array = result_array.as_any().downcast_ref::<Int32Array>().unwrap();
+            assert_eq!(int_array.value(0), 1);
+            assert_eq!(int_array.value(1), 2);
+            assert!(int_array.is_null(2));
+        } else {
+            panic!("Expected array result");
+        }
+
+        // Access field with lowercase (as would come from SQL parser)
+        let result = get_field_func.invoke_with_args(ScalarFunctionArgs {
+            args: vec![
+                ColumnarValue::Array(Arc::new(struct_array)),
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some("foobar".to_string()))), // lowercase from SQL parser
+            ],
+            arg_fields: vec![struct_field, string_field],
+            number_rows: 3,
+            return_field,
+        })?;
+
+        if let ColumnarValue::Array(result_array) = result {
+            let int_array = result_array.as_any().downcast_ref::<Int32Array>().unwrap();
+            assert_eq!(int_array.value(0), 1);
+            assert_eq!(int_array.value(1), 2);
+            assert!(int_array.is_null(2));
+        } else {
+            panic!("Expected array result");
+        }
+
+        Ok(())
     }
 }
