@@ -577,8 +577,8 @@ async fn test_parquet_integration_with_schema_adapter() -> Result<()> {
 
     // Verify the schema has the original column names (schema adapter not applied in DataSourceExec)
     let result_schema = batches[0].schema();
-    assert_eq!(result_schema.field(0).name(), "ID");
-    assert_eq!(result_schema.field(1).name(), "NAME");
+    assert_eq!(result_schema.field(0).name(), "id");
+    assert_eq!(result_schema.field(1).name(), "name");
 
     Ok(())
 }
@@ -650,43 +650,90 @@ async fn test_multi_source_schema_adapter_reuse() -> Result<()> {
     // Create a test factory
     let factory = Arc::new(UppercaseAdapterFactory {});
 
-    let arrow_source = ArrowSource::default();
-    let arrow_source_with_adapter = ArrowSource::default()
-        .with_schema_adapter_factory(factory.clone())
-        .unwrap();
-    assert!(arrow_source.schema_adapter_factory().is_none());
-    // Verify adapters were properly set
-    assert!(arrow_source_with_adapter.schema_adapter_factory().is_some());
-    let _arrow_source_adapter_factory =
-        arrow_source_with_adapter.schema_adapter_factory().unwrap();
+    // Test ArrowSource
+    {
+        let source = ArrowSource::default();
+        let source_with_adapter = source
+            .clone()
+            .with_schema_adapter_factory(factory.clone())
+            .unwrap();
+        
+        let base_source: Arc<dyn FileSource> = source.into();
+        assert!(base_source.schema_adapter_factory().is_none());
+        assert!(source_with_adapter.schema_adapter_factory().is_some());
+        
+        let retrieved_factory = source_with_adapter.schema_adapter_factory().unwrap();
+        assert_eq!(
+            retrieved_factory
+                .as_any()
+                .downcast_ref::<UppercaseAdapterFactory>(),
+            Some(factory.as_ref())
+        );
+    }
 
-    // Verify the factory is the same as the one we created
-    assert_eq!(
-        _arrow_source_adapter_factory
-            .as_any()
-            .downcast_ref::<UppercaseAdapterFactory>(),
-        Some(factory.as_ref())
-    );
+    // Test ParquetSource
+    #[cfg(feature = "parquet")]
+    {
+        let source = ParquetSource::default();
+        let source_with_adapter = source
+            .clone()
+            .with_schema_adapter_factory(factory.clone())
+            .unwrap();
+        
+        let base_source: Arc<dyn FileSource> = source.into();
+        assert!(base_source.schema_adapter_factory().is_none());
+        assert!(source_with_adapter.schema_adapter_factory().is_some());
+        
+        let retrieved_factory = source_with_adapter.schema_adapter_factory().unwrap();
+        assert_eq!(
+            retrieved_factory
+                .as_any()
+                .downcast_ref::<UppercaseAdapterFactory>(),
+            Some(factory.as_ref())
+        );
+    }
 
-    #[cfg(feature = "parquet")]
-    let parquet_source = ParquetSource::default();
-    #[cfg(feature = "parquet")]
-    let parquet_source_with_adapter = ParquetSource::default()
-        .with_schema_adapter_factory(factory.clone())
-        .unwrap();
-    #[cfg(feature = "parquet")]
-    assert!(parquet_source.schema_adapter_factory().is_none());
-    #[cfg(feature = "parquet")]
-    assert!(parquet_source_with_adapter
-        .schema_adapter_factory()
-        .is_some());
+    // Test CsvSource
+    {
+        let source = CsvSource::default();
+        let source_with_adapter = source
+            .clone()
+            .with_schema_adapter_factory(factory.clone())
+            .unwrap();
+        
+        let base_source: Arc<dyn FileSource> = source.into();
+        assert!(base_source.schema_adapter_factory().is_none());
+        assert!(source_with_adapter.schema_adapter_factory().is_some());
+        
+        let retrieved_factory = source_with_adapter.schema_adapter_factory().unwrap();
+        assert_eq!(
+            retrieved_factory
+                .as_any()
+                .downcast_ref::<UppercaseAdapterFactory>(),
+            Some(factory.as_ref())
+        );
+    }
 
-    let csv_source = CsvSource::default();
-    let csv_source_with_adapter = CsvSource::default()
-        .with_schema_adapter_factory(factory.clone())
-        .unwrap();
-    assert!(csv_source.schema_adapter_factory().is_none());
-    assert!(csv_source_with_adapter.schema_adapter_factory().is_some());
+    // Test JsonSource
+    {
+        let source = JsonSource::default();
+        let source_with_adapter = source
+            .clone()
+            .with_schema_adapter_factory(factory.clone())
+            .unwrap();
+        
+        let base_source: Arc<dyn FileSource> = source.into();
+        assert!(base_source.schema_adapter_factory().is_none());
+        assert!(source_with_adapter.schema_adapter_factory().is_some());
+        
+        let retrieved_factory = source_with_adapter.schema_adapter_factory().unwrap();
+        assert_eq!(
+            retrieved_factory
+                .as_any()
+                .downcast_ref::<UppercaseAdapterFactory>(),
+            Some(factory.as_ref())
+        );
+    }
 
     Ok(())
 }
