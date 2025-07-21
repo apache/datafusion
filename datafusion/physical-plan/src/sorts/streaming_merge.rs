@@ -29,8 +29,12 @@ use arrow::array::*;
 use arrow::datatypes::{DataType, SchemaRef};
 use datafusion_common::{internal_err, Result};
 use datafusion_execution::disk_manager::RefCountedTempFile;
-use datafusion_execution::memory_pool::{human_readable_size, MemoryReservation};
+use datafusion_execution::memory_pool::{
+    human_readable_size, MemoryConsumer, MemoryPool, MemoryReservation,
+    UnboundedMemoryPool,
+};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
+use std::sync::Arc;
 
 macro_rules! primitive_merge_helper {
     ($t:ty, $($v:ident),+) => {
@@ -152,6 +156,17 @@ impl<'a> StreamingMergeBuilder<'a> {
     ) -> Self {
         self.enable_round_robin_tie_breaker = enable_round_robin_tie_breaker;
         self
+    }
+
+    /// Bypass the mempool and avoid using the memory reservation.
+    ///
+    /// This is not marked as `pub` because it is not recommended to use this method
+    pub(super) fn with_bypass_mempool(self) -> Self {
+        let mem_pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
+
+        self.with_reservation(
+            MemoryConsumer::new("merge stream mock memory").register(&mem_pool),
+        )
     }
 
     pub fn build(self) -> Result<SendableRecordBatchStream> {

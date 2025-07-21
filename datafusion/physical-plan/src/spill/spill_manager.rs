@@ -173,114 +173,29 @@ impl SpillManager {
         Ok(file.map(|f| (f, max_record_batch_size)))
     }
 
-    /// Spill the `RecordBatch` to disk as smaller batches
-    /// split by `batch_size_rows`.
-    ///
-    /// will return the spill file and the size of the largest batch in memory
-    pub async fn spill_record_batch_stream_by_size(
+    /// Spill a stream of `RecordBatch`es to disk and return the spill file and the size of the largest batch in memory
+    pub(crate) async fn spill_record_batch_stream_and_return_max_batch_memory(
         &self,
         stream: &mut SendableRecordBatchStream,
-        batch_size_rows: usize,
-        request_msg: &str,
+        request_description: &str,
     ) -> Result<Option<(RefCountedTempFile, usize)>> {
         use futures::StreamExt;
-        let mut in_progress_file = self.create_in_progress_file(request_msg)?;
+
+        let mut in_progress_file = self.create_in_progress_file(request_description)?;
 
         let mut max_record_batch_size = 0;
 
-        let mut maybe_last_batch: Option<RecordBatch> = None;
-
         while let Some(batch) = stream.next().await {
-            let mut batch = batch?;
-
-            if let Some(mut last_batch) = maybe_last_batch.take() {
-                assert!(
-                    last_batch.num_rows() < batch_size_rows,
-                    "last batch size must be smaller than the requested batch size"
-                );
-
-                // Get the number of rows to take from current batch so the last_batch
-                // will have `batch_size_rows` rows
-                let current_batch_offset = std::cmp::min(
-                    // rows needed to fill
-                    batch_size_rows - last_batch.num_rows(),
-                    // Current length of the batch
-                    batch.num_rows(),
-                );
-
-                // if have last batch that has less rows than concat and spill
-                last_batch = arrow::compute::concat_batches(
-                    &stream.schema(),
-                    &[last_batch, batch.slice(0, current_batch_offset)],
-                )?;
-
-                assert!(last_batch.num_rows() <= batch_size_rows, "must build a batch that is smaller or equal to the requested batch size from the current batch");
-
-                // If not enough rows
-                if last_batch.num_rows() < batch_size_rows {
-                    // keep the last batch for next iteration
-                    maybe_last_batch = Some(last_batch);
-                    continue;
-                }
-
-                max_record_batch_size =
-                    max_record_batch_size.max(last_batch.get_actually_used_size());
-
-                in_progress_file.append_batch(&last_batch)?;
-
-                if current_batch_offset == batch.num_rows() {
-                    // No remainder
-                    continue;
-                }
-
-                // remainder
-                batch = batch.slice(
-                    current_batch_offset,
-                    batch.num_rows() - current_batch_offset,
-                );
-            }
-
-            let mut offset = 0;
-            let total_rows = batch.num_rows();
-
-            // Keep slicing the batch until we have left with a batch that is smaller than
-            // the wanted batch size
-            while total_rows - offset >= batch_size_rows {
-                let batch = batch.slice(offset, batch_size_rows);
-                offset += batch_size_rows;
-
-                max_record_batch_size =
-                    max_record_batch_size.max(batch.get_actually_used_size());
-
-                in_progress_file.append_batch(&batch)?;
-            }
-
-            // If there is a remainder for the current batch that is smaller than the wanted batch size
-            // keep it for next iteration
-            if offset < total_rows {
-                // remainder
-                let batch = batch.slice(offset, total_rows - offset);
-
-                maybe_last_batch = Some(batch);
-            }
-        }
-        if let Some(last_batch) = maybe_last_batch.take() {
-            assert!(
-                last_batch.num_rows() < batch_size_rows,
-                "last batch size must be smaller than the requested batch size"
-            );
-
-            // Write it to disk
-            in_progress_file.append_batch(&last_batch)?;
+            let batch = batch?;
+            in_progress_file.append_batch(&batch)?;
 
             max_record_batch_size =
-                max_record_batch_size.max(last_batch.get_actually_used_size());
+                max_record_batch_size.max(batch.get_actually_used_size());
         }
 
-        // Flush disk
-        let spill_file = in_progress_file.finish()?;
+        let file = in_progress_file.finish()?;
 
-        Ok(spill_file.map(|f| (f, max_record_batch_size)))
+        Ok(file.map(|f| (f, max_record_batch_size)))
     }
 
     /// Reads a spill file as a stream. The file must be created by the current `SpillManager`.
