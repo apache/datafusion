@@ -19,6 +19,7 @@
 
 use std::cmp::Ordering;
 use std::collections::{BTreeSet, HashSet};
+use std::hash::Hasher;
 use std::sync::Arc;
 
 use crate::expr::{Alias, Sort, WildcardOptions, WindowFunctionParams};
@@ -1258,6 +1259,42 @@ pub fn collect_subquery_cols(
         cols.extend(using_cols);
         Result::<_>::Ok(cols)
     })
+}
+
+/// Generates implementation of `equals` and `hash_value` methods for a trait, delegating
+/// to PartialEq and Hash implementations on Self.
+/// Meant to be used with traits representing user-defined functions (UDFs).
+#[macro_export]
+macro_rules! udf_equals_hash {
+    ($udf_type:tt) => {
+        fn equals(&self, other: &dyn $udf_type) -> bool {
+            use ::core::any::Any;
+            use ::core::cmp::PartialEq;
+            let Some(other) = <dyn Any + 'static>::downcast_ref::<Self>(other.as_any())
+            else {
+                return false;
+            };
+            PartialEq::eq(self, other)
+        }
+
+        fn hash_value(&self) -> u64 {
+            use ::std::any::type_name;
+            use ::std::hash::{DefaultHasher, Hash, Hasher};
+            let hasher = &mut DefaultHasher::new();
+            type_name::<Self>().hash(hasher);
+            Hash::hash(self, hasher);
+            Hasher::finish(hasher)
+        }
+    };
+}
+
+pub fn arc_ptr_eq<T: ?Sized>(a: &Arc<T>, b: &Arc<T>) -> bool {
+    // Not necessarily equivalent to `Arc::ptr_eq` for fat pointers.
+    std::ptr::eq(Arc::as_ptr(a), Arc::as_ptr(b))
+}
+
+pub fn arc_ptr_hash<T: ?Sized>(a: &Arc<T>, hasher: &mut impl Hasher) {
+    std::ptr::hash(Arc::as_ptr(a), hasher)
 }
 
 #[cfg(test)]

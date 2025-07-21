@@ -20,8 +20,8 @@ use datafusion::logical_expr::ColumnarValue;
 use datafusion_common::plan_err;
 use datafusion_expr::function::AccumulatorArgs;
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, PartitionEvaluator, ScalarFunctionArgs, ScalarUDFImpl,
-    Signature, Volatility, WindowUDFImpl,
+    udf_equals_hash, Accumulator, AggregateUDFImpl, PartitionEvaluator,
+    ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility, WindowUDFImpl,
 };
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
@@ -82,33 +82,7 @@ impl ScalarUDFImpl for MyRegexUdf {
         &self.aliases
     }
 
-    fn equals(&self, other: &dyn ScalarUDFImpl) -> bool {
-        let Some(other) = other.as_any().downcast_ref::<Self>() else {
-            return false;
-        };
-        let Self {
-            signature,
-            pattern,
-            aliases,
-        } = self;
-        signature == &other.signature
-            && pattern == &other.pattern
-            && aliases == &other.aliases
-    }
-
-    fn hash_value(&self) -> u64 {
-        let Self {
-            signature,
-            pattern,
-            aliases,
-        } = self;
-        let mut hasher = DefaultHasher::new();
-        std::any::type_name::<Self>().hash(&mut hasher);
-        signature.hash(&mut hasher);
-        pattern.hash(&mut hasher);
-        aliases.hash(&mut hasher);
-        hasher.finish()
-    }
+    udf_equals_hash!(ScalarUDFImpl);
 }
 
 #[derive(Clone, PartialEq, ::prost::Message)]

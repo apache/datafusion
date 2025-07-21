@@ -21,7 +21,7 @@ use crate::async_udf::AsyncScalarUDF;
 use crate::expr::schema_name_from_exprs_comma_separated_without_space;
 use crate::simplify::{ExprSimplifyResult, SimplifyInfo};
 use crate::sort_properties::{ExprProperties, SortProperties};
-use crate::{ColumnarValue, Documentation, Expr, Signature};
+use crate::{udf_equals_hash, ColumnarValue, Documentation, Expr, Signature};
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::{not_impl_err, ExprSchema, Result, ScalarValue};
 use datafusion_expr_common::interval_arithmetic::Interval;
@@ -747,6 +747,21 @@ struct AliasedScalarUDFImpl {
     aliases: Vec<String>,
 }
 
+impl PartialEq for AliasedScalarUDFImpl {
+    fn eq(&self, other: &Self) -> bool {
+        let Self { inner, aliases } = self;
+        inner.equals(other.inner.as_ref()) && aliases == &other.aliases
+    }
+}
+
+impl Hash for AliasedScalarUDFImpl {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        let Self { inner, aliases } = self;
+        inner.hash_value().hash(state);
+        aliases.hash(state);
+    }
+}
+
 impl AliasedScalarUDFImpl {
     pub fn new(
         inner: Arc<dyn ScalarUDFImpl>,
@@ -831,21 +846,7 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
         self.inner.coerce_types(arg_types)
     }
 
-    fn equals(&self, other: &dyn ScalarUDFImpl) -> bool {
-        if let Some(other) = other.as_any().downcast_ref::<AliasedScalarUDFImpl>() {
-            self.inner.equals(other.inner.as_ref()) && self.aliases == other.aliases
-        } else {
-            false
-        }
-    }
-
-    fn hash_value(&self) -> u64 {
-        let hasher = &mut DefaultHasher::new();
-        std::any::type_name::<Self>().hash(hasher);
-        self.inner.hash_value().hash(hasher);
-        self.aliases.hash(hasher);
-        hasher.finish()
-    }
+    udf_equals_hash!(ScalarUDFImpl);
 
     fn documentation(&self) -> Option<&Documentation> {
         self.inner.documentation()
