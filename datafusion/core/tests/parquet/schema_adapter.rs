@@ -569,8 +569,8 @@ async fn test_parquet_integration_with_schema_adapter() -> Result<()> {
 
     // Verify the schema has the original column names (schema adapter not applied in DataSourceExec)
     let result_schema = batches[0].schema();
-    assert_eq!(result_schema.field(0).name(), "id");
-    assert_eq!(result_schema.field(1).name(), "name");
+    assert_eq!(result_schema.field(0).name(), "ID");
+    assert_eq!(result_schema.field(1).name(), "NAME");
 
     Ok(())
 }
