@@ -642,27 +642,33 @@ async fn test_multi_source_schema_adapter_reuse() -> Result<()> {
     // Create a test factory
     let factory = Arc::new(UppercaseAdapterFactory {});
 
-    // Apply the same adapter to different source types
-    let arrow_source = ArrowSource::default()
+    let arrow_source = ArrowSource::default();
+    let arrow_source_with_adapter = ArrowSource::default()
         .with_schema_adapter_factory(factory.clone())
         .unwrap();
-
-    #[cfg(feature = "parquet")]
-    let parquet_source = ParquetSource::default()
-        .with_schema_adapter_factory(factory.clone())
-        .unwrap();
-
-    let csv_source = CsvSource::default()
-        .with_schema_adapter_factory(factory.clone())
-        .unwrap();
-
+    assert!(arrow_source.schema_adapter_factory().is_none());
     // Verify adapters were properly set
-    assert!(arrow_source.schema_adapter_factory().is_some());
+    assert!(arrow_source_with_adapter.schema_adapter_factory().is_some());
 
     #[cfg(feature = "parquet")]
-    assert!(parquet_source.schema_adapter_factory().is_some());
+    let parquet_source = ParquetSource::default();
+    #[cfg(feature = "parquet")]
+    let parquet_source_with_adapter = ParquetSource::default()
+        .with_schema_adapter_factory(factory.clone())
+        .unwrap();
+    #[cfg(feature = "parquet")]
+    assert!(parquet_source.schema_adapter_factory().is_none());
+    #[cfg(feature = "parquet")]
+    assert!(parquet_source_with_adapter
+        .schema_adapter_factory()
+        .is_some());
 
-    assert!(csv_source.schema_adapter_factory().is_some());
+    let csv_source = CsvSource::default();
+    let csv_source_with_adapter = CsvSource::default()
+        .with_schema_adapter_factory(factory.clone())
+        .unwrap();
+    assert!(csv_source.schema_adapter_factory().is_none());
+    assert!(csv_source_with_adapter.schema_adapter_factory().is_some());
 
     Ok(())
 }
