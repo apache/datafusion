@@ -78,6 +78,10 @@ impl SchemaAdapterFactory for CustomSchemaAdapterFactory {
             logical_file_schema: projected_table_schema,
         })
     }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
 }
 
 #[derive(Debug)]
@@ -395,7 +399,7 @@ async fn test_custom_schema_adapter_and_custom_expression_adapter() {
 // ----------------------------------------------------------------------
 
 /// A schema adapter factory that transforms column names to uppercase
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 struct UppercaseAdapterFactory {}
 
 impl SchemaAdapterFactory for UppercaseAdapterFactory {
@@ -407,6 +411,10 @@ impl SchemaAdapterFactory for UppercaseAdapterFactory {
         Box::new(UppercaseAdapter {
             table_schema: projected_table_schema,
         })
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 }
 
@@ -649,6 +657,19 @@ async fn test_multi_source_schema_adapter_reuse() -> Result<()> {
     assert!(arrow_source.schema_adapter_factory().is_none());
     // Verify adapters were properly set
     assert!(arrow_source_with_adapter.schema_adapter_factory().is_some());
+    let arrow_source_adapter_factory =
+        arrow_source_with_adapter.schema_adapter_factory().unwrap();
+
+    let arrow_source_adapter_factory =
+        arrow_source_with_adapter.schema_adapter_factory().unwrap();
+
+    // Verify the factory is the same as the one we created
+    assert_eq!(
+        arrow_source_adapter_factory
+            .as_any()
+            .downcast_ref::<UppercaseAdapterFactory>(),
+        Some(factory.as_ref())
+    );
 
     #[cfg(feature = "parquet")]
     let parquet_source = ParquetSource::default();
@@ -706,6 +727,10 @@ impl SchemaAdapterFactory for TestSchemaAdapterFactory {
         Box::new(TestSchemaAdapter {
             input_schema: projected_table_schema,
         })
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 }
 

@@ -59,6 +59,7 @@ mod tests {
         record_batch::RecordBatch,
     };
     use datafusion_common::{record_batch, test_util::batches_to_sort_string};
+    use std::any::Any;
     use datafusion_datasource::{
         file::FileSource,
         file_scan_config::FileScanConfigBuilder,
@@ -213,6 +214,10 @@ mod tests {
             Box::new(TestSchemaAdapter {
                 table_schema: projected_table_schema,
             })
+        }
+
+        fn as_any(&self) -> &dyn Any {
+            self
         }
     }
 
