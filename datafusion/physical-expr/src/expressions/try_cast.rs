@@ -96,18 +96,7 @@ impl PhysicalExpr for TryCastExpr {
             safe: true,
             format_options: DEFAULT_FORMAT_OPTIONS,
         };
-        match value {
-            ColumnarValue::Array(array) => {
-                let cast = cast_with_options(&array, &self.cast_type, &options)?;
-                Ok(ColumnarValue::Array(cast))
-            }
-            ColumnarValue::Scalar(scalar) => {
-                let array = scalar.to_array()?;
-                let cast_array = cast_with_options(&array, &self.cast_type, &options)?;
-                let cast_scalar = ScalarValue::try_from_array(&cast_array, 0)?;
-                Ok(ColumnarValue::Scalar(cast_scalar))
-            }
-        }
+        value.cast_to(&self.cast_type, Some(&options))
     }
 
     fn return_field(&self, input_schema: &Schema) -> Result<FieldRef> {
