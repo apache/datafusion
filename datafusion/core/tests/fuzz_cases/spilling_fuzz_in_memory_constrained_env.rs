@@ -113,7 +113,7 @@ async fn test_sort_with_limited_memory_and_different_sizes_of_record_batch() -> 
         number_of_record_batches: 100,
         get_size_of_record_batch_to_generate: Box::pin(move |i| {
             if i % 25 == 1 {
-                pool_size / 4
+                pool_size / 6
             } else {
                 16 * KB as usize
             }
@@ -151,7 +151,7 @@ async fn test_sort_with_limited_memory_and_different_sizes_of_record_batch_and_c
         number_of_record_batches: 100,
         get_size_of_record_batch_to_generate: Box::pin(move |i| {
             if i % 25 == 1 {
-                pool_size / 4
+                pool_size / 6
             } else {
                 16 * KB as usize
             }
@@ -189,7 +189,7 @@ async fn test_sort_with_limited_memory_and_different_sizes_of_record_batch_and_t
         number_of_record_batches: 100,
         get_size_of_record_batch_to_generate: Box::pin(move |i| {
             if i % 25 == 1 {
-                pool_size / 4
+                pool_size / 6
             } else {
                 16 * KB as usize
             }
@@ -225,7 +225,7 @@ async fn test_sort_with_limited_memory_and_large_record_batch() -> Result<()> {
         pool_size,
         task_ctx: Arc::new(task_ctx),
         number_of_record_batches: 100,
-        get_size_of_record_batch_to_generate: Box::pin(move |_| pool_size / 4),
+        get_size_of_record_batch_to_generate: Box::pin(move |_| pool_size / 6),
         memory_behavior: Default::default(),
     })
     .await?;
@@ -385,7 +385,7 @@ async fn test_aggregate_with_high_cardinality_with_limited_memory_and_different_
         number_of_record_batches: 100,
         get_size_of_record_batch_to_generate: Box::pin(move |i| {
             if i % 25 == 1 {
-                pool_size / 4
+                pool_size / 6
             } else {
                 (16 * KB) as usize
             }
@@ -419,7 +419,7 @@ async fn test_aggregate_with_high_cardinality_with_limited_memory_and_different_
         number_of_record_batches: 100,
         get_size_of_record_batch_to_generate: Box::pin(move |i| {
             if i % 25 == 1 {
-                pool_size / 4
+                pool_size / 6
             } else {
                 (16 * KB) as usize
             }
@@ -453,7 +453,7 @@ async fn test_aggregate_with_high_cardinality_with_limited_memory_and_different_
         number_of_record_batches: 100,
         get_size_of_record_batch_to_generate: Box::pin(move |i| {
             if i % 25 == 1 {
-                pool_size / 4
+                pool_size / 6
             } else {
                 (16 * KB) as usize
             }
@@ -486,7 +486,7 @@ async fn test_aggregate_with_high_cardinality_with_limited_memory_and_large_reco
         pool_size,
         task_ctx: Arc::new(task_ctx),
         number_of_record_batches: 100,
-        get_size_of_record_batch_to_generate: Box::pin(move |_| pool_size / 4),
+        get_size_of_record_batch_to_generate: Box::pin(move |_| pool_size / 6),
         memory_behavior: Default::default(),
     })
     .await?;
