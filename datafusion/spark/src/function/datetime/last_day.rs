@@ -52,7 +52,7 @@ impl ScalarUDFImpl for SparkLastDay {
     }
 
     fn name(&self) -> &str {
-        "spark_last_day"
+        "last_day"
     }
 
     fn signature(&self) -> &Signature {
