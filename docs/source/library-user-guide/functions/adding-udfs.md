@@ -356,14 +356,9 @@ async fn main() {
 
 ## Adding a Async Scalar UDF
 
-An `Async` Scalar UDF allows you to implement user-defined functions that support
+An Async Scalar UDF allows you to implement user-defined functions that support
 asynchronous execution, such as performing network or I/O operations within the
 UDF.
-
-:::{note}
-DataFusion `49.0.0`
-: This feature requires DataFusion version `49.0.0` or later.
-:::
 
 To add a Scalar Async UDF, you need to:
 
