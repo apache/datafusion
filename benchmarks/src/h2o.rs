@@ -24,7 +24,7 @@ use crate::util::{BenchmarkRun, CommonOpt};
 use datafusion::logical_expr::{ExplainFormat, ExplainOption};
 use datafusion::{error::Result, prelude::SessionContext};
 use datafusion_common::{
-    exec_datafusion_err, instant::Instant, internal_err, DataFusionError,
+    exec_datafusion_err, instant::Instant, internal_err, DataFusionError, TableReference,
 };
 use std::path::{Path, PathBuf};
 use structopt::StructOpt;
@@ -92,18 +92,18 @@ impl RunOpt {
         // Register tables depending on which h2o benchmark is being run
         // (groupby/join/window)
         if self.queries_path.to_str().unwrap().ends_with("groupby.sql") {
-            self.register_data(&ctx).await?;
+            self.register_data("x", self.path.as_os_str().to_str().unwrap(), &ctx)
+                .await?;
         } else if self.queries_path.to_str().unwrap().ends_with("join.sql") {
             let join_paths: Vec<&str> = self.join_paths.split(',').collect();
             let table_name: Vec<&str> = vec!["x", "small", "medium", "large"];
             for (i, path) in join_paths.iter().enumerate() {
-                ctx.register_csv(table_name[i], path, Default::default())
-                    .await?;
+                self.register_data(table_name[i], path, &ctx).await?;
             }
         } else if self.queries_path.to_str().unwrap().ends_with("window.sql") {
             // Only register the 'large' table in h2o-join dataset
             let h2o_join_large_path = self.join_paths.split(',').nth(3).unwrap();
-            ctx.register_csv("large", h2o_join_large_path, Default::default())
+            self.register_data("large", h2o_join_large_path, &ctx)
                 .await?;
         } else {
             return internal_err!("Invalid query file path");
@@ -147,39 +147,52 @@ impl RunOpt {
         Ok(())
     }
 
-    async fn register_data(&self, ctx: &SessionContext) -> Result<()> {
+    async fn register_data(
+        &self,
+        table_ref: impl Into<TableReference>,
+        table_path: impl AsRef<str>,
+        ctx: &SessionContext,
+    ) -> Result<()> {
         let csv_options = Default::default();
         let parquet_options = Default::default();
-        let path = self.path.as_os_str().to_str().unwrap();
 
-        if self.path.extension().map(|s| s == "csv").unwrap_or(false) {
-            ctx.register_csv("x", path, csv_options)
-                .await
-                .map_err(|e| {
-                    DataFusionError::Context(
-                        format!("Registering 'table' as {path}"),
-                        Box::new(e),
-                    )
-                })
-                .expect("error registering csv");
-        }
+        let table_path_str = table_path.as_ref();
 
-        if self
-            .path
+        let extension = Path::new(table_path_str)
             .extension()
-            .map(|s| s == "parquet")
-            .unwrap_or(false)
-        {
-            ctx.register_parquet("x", path, parquet_options)
-                .await
-                .map_err(|e| {
-                    DataFusionError::Context(
-                        format!("Registering 'table' as {path}"),
-                        Box::new(e),
-                    )
-                })
-                .expect("error registering parquet");
+            .and_then(|s| s.to_str())
+            .unwrap_or("");
+
+        match extension {
+            "csv" => {
+                ctx.register_csv(table_ref, table_path_str, csv_options)
+                    .await
+                    .map_err(|e| {
+                        DataFusionError::Context(
+                            format!("Registering 'table' as {table_path_str}"),
+                            Box::new(e),
+                        )
+                    })
+                    .expect("error registering csv");
+            }
+            "parquet" => {
+                ctx.register_parquet(table_ref, table_path_str, parquet_options)
+                    .await
+                    .map_err(|e| {
+                        DataFusionError::Context(
+                            format!("Registering 'table' as {table_path_str}"),
+                            Box::new(e),
+                        )
+                    })
+                    .expect("error registering parquet");
+            }
+            _ => {
+                return Err(DataFusionError::Plan(format!(
+                    "Unsupported file extension: {extension}",
+                )));
+            }
         }
+
         Ok(())
     }
 }

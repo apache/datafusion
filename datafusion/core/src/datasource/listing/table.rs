@@ -101,7 +101,7 @@ pub struct ListingTableConfig {
     /// Optional [`SchemaAdapterFactory`] for creating schema adapters
     schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
     /// Optional [`PhysicalExprAdapterFactory`] for creating physical expression adapters
-    physical_expr_adapter_factory: Option<Arc<dyn PhysicalExprAdapterFactory>>,
+    expr_adapter_factory: Option<Arc<dyn PhysicalExprAdapterFactory>>,
 }
 
 impl ListingTableConfig {
@@ -284,7 +284,7 @@ impl ListingTableConfig {
             options: Some(listing_options),
             schema_source: self.schema_source,
             schema_adapter_factory: self.schema_adapter_factory,
-            physical_expr_adapter_factory: self.physical_expr_adapter_factory,
+            expr_adapter_factory: self.expr_adapter_factory,
         })
     }
 
@@ -304,7 +304,7 @@ impl ListingTableConfig {
                     options: _,
                     schema_source,
                     schema_adapter_factory,
-                    physical_expr_adapter_factory,
+                    expr_adapter_factory: physical_expr_adapter_factory,
                 } = self;
 
                 let (schema, new_schema_source) = match file_schema {
@@ -327,7 +327,7 @@ impl ListingTableConfig {
                     options: Some(options),
                     schema_source: new_schema_source,
                     schema_adapter_factory,
-                    physical_expr_adapter_factory,
+                    expr_adapter_factory: physical_expr_adapter_factory,
                 })
             }
             None => internal_err!("No `ListingOptions` set for inferring schema"),
@@ -370,7 +370,7 @@ impl ListingTableConfig {
                     options: Some(options),
                     schema_source: self.schema_source,
                     schema_adapter_factory: self.schema_adapter_factory,
-                    physical_expr_adapter_factory: self.physical_expr_adapter_factory,
+                    expr_adapter_factory: self.expr_adapter_factory,
                 })
             }
             None => config_err!("No `ListingOptions` set for inferring schema"),
@@ -433,12 +433,12 @@ impl ListingTableConfig {
     /// `SchemaAdapterFactory` is set, in which case only the `SchemaAdapterFactory` will be used.
     ///
     /// See <https://github.com/apache/datafusion/issues/16800> for details on this transition.
-    pub fn with_physical_expr_adapter_factory(
+    pub fn with_expr_adapter_factory(
         self,
-        physical_expr_adapter_factory: Arc<dyn PhysicalExprAdapterFactory>,
+        expr_adapter_factory: Arc<dyn PhysicalExprAdapterFactory>,
     ) -> Self {
         Self {
-            physical_expr_adapter_factory: Some(physical_expr_adapter_factory),
+            expr_adapter_factory: Some(expr_adapter_factory),
             ..self
         }
     }
@@ -981,7 +981,7 @@ impl ListingTable {
             constraints: Constraints::default(),
             column_defaults: HashMap::new(),
             schema_adapter_factory: config.schema_adapter_factory,
-            expr_adapter_factory: config.physical_expr_adapter_factory,
+            expr_adapter_factory: config.expr_adapter_factory,
         };
 
         Ok(table)
