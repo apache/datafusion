@@ -21,10 +21,80 @@
 # For more information, please see:
 #   https://github.com/apache/datafusion/issues/15914
 
-## Original Query: SELECT last_day('2009-01-12');
-## PySpark 3.5.5 Result: {'last_day(2009-01-12)': datetime.date(2009, 1, 31), 'typeof(last_day(2009-01-12))': 'date', 'typeof(2009-01-12)': 'string'}
-
 query D
 SELECT last_day('2009-01-12'::string);
 ----
 2009-01-31
+
+
+query D
+SELECT last_day('2015-02-28'::string);
+----
+2015-02-28
+
+query D
+SELECT last_day('2015-03-27'::string);
+----
+2015-03-31
+
+query D
+SELECT last_day('2015-04-26'::string);
+----
+2015-04-30
+
+query D
+SELECT last_day('2015-05-25'::string);
+----
+2015-05-31
+
+query D
+SELECT last_day('2015-06-24'::string);
+----
+2015-06-30
+
+query D
+SELECT last_day('2015-07-23'::string);
+----
+2015-07-31
+
+query D
+SELECT last_day('2015-08-01'::string);
+----
+2015-08-31
+
+query D
+SELECT last_day('2015-09-02'::string);
+----
+2015-09-30
+
+query D
+SELECT last_day('2015-10-03'::string);
+----
+2015-10-31
+
+query D
+SELECT last_day('2015-11-04'::string);
+----
+2015-11-30
+
+query D
+SELECT last_day('2015-12-05'::string);
+----
+2015-12-31
+
+
+query D
+SELECT last_day('2016-01-06'::string);
+----
+2016-01-31
+
+query D
+SELECT last_day('2016-02-07'::string);
+----
+2016-02-29
+
+
+query ?
+SELECT NULL;
+----
+NULL
