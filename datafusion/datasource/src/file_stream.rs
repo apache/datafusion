@@ -436,7 +436,7 @@ impl StartableTime {
 /// (not cpu time) so they include time spent waiting on I/O as well
 /// as other operators.
 ///
-/// [`FileStream`]: <https://github.com/apache/datafusion/blob/main/datafusion/core/src/datasource/physical_plan/file_stream.rs>
+/// [`FileStream`]: <https://github.com/apache/datafusion/blob/main/datafusion/datasource/src/file_stream.rs>
 pub struct FileStreamMetrics {
     /// Wall clock time elapsed for file opening.
     ///
@@ -447,13 +447,13 @@ pub struct FileStreamMetrics {
     /// will open the next file in the background while scanning the
     /// current file. This metric will only capture time spent opening
     /// while not also scanning.
-    /// [`FileStream`]: <https://github.com/apache/datafusion/blob/main/datafusion/core/src/datasource/physical_plan/file_stream.rs>
+    /// [`FileStream`]: <https://github.com/apache/datafusion/blob/main/datafusion/datasource/src/file_stream.rs>
     pub time_opening: StartableTime,
     /// Wall clock time elapsed for file scanning + first record batch of decompression + decoding
     ///
     /// Time between when the [`FileStream`] requests data from the
     /// stream and when the first [`RecordBatch`] is produced.
-    /// [`FileStream`]: <https://github.com/apache/datafusion/blob/main/datafusion/core/src/datasource/physical_plan/file_stream.rs>
+    /// [`FileStream`]: <https://github.com/apache/datafusion/blob/main/datafusion/datasource/src/file_stream.rs>
     pub time_scanning_until_data: StartableTime,
     /// Total elapsed wall clock time for scanning + record batch decompression / decoding
     ///
