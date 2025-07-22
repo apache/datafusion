@@ -59,7 +59,6 @@ mod tests {
         record_batch::RecordBatch,
     };
     use datafusion_common::{record_batch, test_util::batches_to_sort_string};
-    use std::any::Any;
     use datafusion_datasource::{
         file::FileSource,
         file_scan_config::FileScanConfigBuilder,
@@ -72,6 +71,7 @@ mod tests {
     };
     use datafusion_datasource_parquet::source::ParquetSource;
     use datafusion_physical_plan::collect;
+    use std::any::Any;
     use std::{fs, sync::Arc};
     use tempfile::TempDir;
 
