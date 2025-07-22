@@ -55,7 +55,15 @@ pub async fn main() -> Result<()> {
     // check binary file location
     println!("Pre-building benchmark binary...");
     let status = Command::new("cargo")
-        .args(["build", "--profile", "release-nonlto", "--bin", "dfbench"])
+        .args([
+            "build",
+            "--profile",
+            "release-nonlto",
+            "--features",
+            "mimalloc_extended",
+            "--bin",
+            "dfbench",
+        ])
         .status()
         .expect("Failed to build dfbench");
 
@@ -87,7 +95,6 @@ async fn run_tpch_benchmark(opt: TpchOpt) -> Result<()> {
         "parquet".to_string(),
         "--partitions".to_string(),
         "4".to_string(),
-        "--memory-stat-enabled".to_string(),
         "--query".to_string(),
     ];
 
@@ -140,13 +147,15 @@ fn run_query(args: &[String], results: &mut Vec<QueryResult>) -> Result<()> {
     while let Some(line) = iter.next() {
         if let Some((query, duration_ms)) = parse_query_time(line) {
             if let Some(next_line) = iter.peek() {
-                if let Some((vmpeak, vmhwm, resident)) = parse_vm_line(next_line) {
+                if let Some((peak_rss, peak_commit, page_faults)) =
+                    parse_vm_line(next_line)
+                {
                     results.push(QueryResult {
                         query,
                         duration_ms,
-                        vmpeak,
-                        vmhwm,
-                        resident,
+                        peak_rss,
+                        peak_commit,
+                        page_faults,
                     });
                     break;
                 }
@@ -161,9 +170,9 @@ fn run_query(args: &[String], results: &mut Vec<QueryResult>) -> Result<()> {
 struct QueryResult {
     query: usize,
     duration_ms: f64,
-    vmpeak: String,
-    vmhwm: String,
-    resident: String,
+    peak_rss: String,
+    peak_commit: String,
+    page_faults: String,
 }
 
 fn parse_query_time(line: &str) -> Option<(usize, f64)> {
@@ -179,27 +188,27 @@ fn parse_query_time(line: &str) -> Option<(usize, f64)> {
 
 fn parse_vm_line(line: &str) -> Option<(String, String, String)> {
     let re = regex::Regex::new(
-        r"VmPeak:\s*([\d.]+\s*[A-Z]+),\s*VmHWM:\s*([\d.]+\s*[A-Z]+),\s*RSS:\s*([\d.]+\s*[A-Z]+)"
+        r"Peak RSS:\s*([\d.]+\s*[A-Z]+),\s*Peak Commit:\s*([\d.]+\s*[A-Z]+),\s*Page Faults:\s*([\d.]+)"
     ).ok()?;
     let caps = re.captures(line)?;
-    let vmpeak = caps.get(1)?.as_str().to_string();
-    let vmhwm = caps.get(2)?.as_str().to_string();
-    let resident = caps.get(3)?.as_str().to_string();
-    Some((vmpeak, vmhwm, resident))
+    let peak_rss = caps.get(1)?.as_str().to_string();
+    let peak_commit = caps.get(2)?.as_str().to_string();
+    let page_faults = caps.get(3)?.as_str().to_string();
+    Some((peak_rss, peak_commit, page_faults))
 }
 
 // Print as simple aligned table
 fn print_summary_table(results: &[QueryResult]) {
     println!(
         "\n{:<8} {:>10} {:>12} {:>12} {:>12}",
-        "Query", "Time (ms)", "VmPeak", "VmHWM", "RSS"
+        "Query", "Time (ms)", "Peak RSS", "Peak Commit", "Page Faults"
     );
     println!("{}", "-".repeat(68));
 
     for r in results {
         println!(
             "{:<8} {:>10.2} {:>12} {:>12} {:>12}",
-            r.query, r.duration_ms, r.vmpeak, r.vmhwm, r.resident
+            r.query, r.duration_ms, r.peak_rss, r.peak_commit, r.page_faults
         );
     }
 }

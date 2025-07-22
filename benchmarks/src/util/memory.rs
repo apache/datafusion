@@ -15,40 +15,40 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion::execution::memory_pool::human_readable_size;
-
-#[derive(Debug)]
-pub struct MemoryStats {
-    pub vm_rss_kb: Option<u64>,
-    pub vm_hwm_kb: Option<u64>,
-    pub vm_size_kb: Option<u64>,
-    pub vm_peak_kb: Option<u64>,
-}
-
+/// Print Peak RSS, Peak Commit, Page Faults based on mimalloc api
 pub fn print_memory_stats() {
-    #[cfg(target_os = "linux")]
+    #[cfg(all(feature = "mimalloc", feature = "mimalloc_extended"))]
     {
-        use procfs::process::Process;
-
-        let pid = std::process::id();
-        let process = Process::new(pid as i32).unwrap();
-        let statm = process.statm().unwrap();
-        let status = process.status().unwrap();
-        let page_size = procfs::page_size();
-
-        let resident_bytes = (statm.resident * page_size) as usize;
-        let vmpeak_bytes = status.vmpeak.map(|kb| (kb * 1024) as usize);
-        let vmhwm_bytes = status.vmhwm.map(|kb| (kb * 1024) as usize);
+        use datafusion::execution::memory_pool::human_readable_size;
+        let mut peak_rss = 0;
+        let mut peak_commit = 0;
+        let mut page_faults = 0;
+        unsafe {
+            libmimalloc_sys::mi_process_info(
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                &mut peak_rss,
+                std::ptr::null_mut(),
+                &mut peak_commit,
+                &mut page_faults,
+            );
+        }
 
         println!(
-            "VmPeak: {}, VmHWM: {}, RSS: {}",
-            vmpeak_bytes
-                .map(human_readable_size)
-                .unwrap_or_else(|| "N/A".to_string()),
-            vmhwm_bytes
-                .map(human_readable_size)
-                .unwrap_or_else(|| "N/A".to_string()),
-            human_readable_size(resident_bytes)
+            "Peak RSS: {}, Peak Commit: {}, Page Faults: {}",
+            if peak_rss == 0 {
+                "N/A".to_string()
+            } else {
+                human_readable_size(peak_rss)
+            },
+            if peak_commit == 0 {
+                "N/A".to_string()
+            } else {
+                human_readable_size(peak_commit)
+            },
+            page_faults
         );
     }
 }
