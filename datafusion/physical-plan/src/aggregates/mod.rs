@@ -332,10 +332,17 @@ impl PhysicalGroupBy {
                 )
                 .collect();
         let num_exprs = expr.len();
+        let groups = if self.expr.is_empty() {
+            // No GROUP BY expressions - should have no groups
+            vec![]
+        } else {
+            // Has GROUP BY expressions - create a single group
+            vec![vec![false; num_exprs]]
+        };
         Self {
             expr,
             null_expr: vec![],
-            groups: vec![vec![false; num_exprs]],
+            groups,
         }
     }
 }
