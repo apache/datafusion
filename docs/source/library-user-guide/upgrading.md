@@ -26,7 +26,7 @@ You can see the current [status of the `49.0.0 `release here](https://github.com
 
 ### `MSRV` updated to 1.85.1
 
-The Minimum Supported Rust Version (MSRV) for `DataFusionError` has been updated to [`1.85.1`]. See
+The Minimum Supported Rust Version (MSRV) has been updated to [`1.85.1`]. See
 [#16728] for details.
 
 [`1.85.1`]: https://releases.rs/docs/1.85.1/
