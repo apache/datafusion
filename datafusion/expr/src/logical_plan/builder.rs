@@ -2090,10 +2090,19 @@ pub fn unnest(input: LogicalPlan, columns: Vec<Column>) -> Result<LogicalPlan> {
 pub fn get_struct_unnested_columns(
     col_name: &String,
     inner_fields: &Fields,
-) -> Vec<Column> {
+    alias: Option<&String>,
+) -> Vec<Expr> {
     inner_fields
         .iter()
-        .map(|f| Column::from_name(format!("{}.{}", col_name, f.name())))
+        .map(|f| {
+            let col =
+                Expr::Column(Column::from_name(format!("{}.{}", col_name, f.name())));
+            if let Some(alias_name) = alias {
+                col.alias(format!("{alias_name}.{}", f.name()))
+            } else {
+                col
+            }
+        })
         .collect()
 }
 
@@ -2660,12 +2669,12 @@ mod tests {
 
         assert_snapshot!(plan, @r"
         Union
-          Cross Join: 
+          Cross Join:
             SubqueryAlias: left
               Values: (Int32(1))
             SubqueryAlias: right
               Values: (Int32(1))
-          Cross Join: 
+          Cross Join:
             SubqueryAlias: left
               Values: (Int32(1))
             SubqueryAlias: right
