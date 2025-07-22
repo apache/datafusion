@@ -157,11 +157,11 @@ mod tests {
         ]));
         let result = chr(&[input]).unwrap();
         let string_array = result.as_any().downcast_ref::<StringArray>().unwrap();
-        let expected = vec!["A", "B", "C", "🚀", "€", "α", "", " ", "\n", "\t"];
+        let expected = ["A", "B", "C", "🚀", "€", "α", "", " ", "\n", "\t"];
 
         assert_eq!(string_array.len(), 10);
-        for i in 0..string_array.len() {
-            assert_eq!(string_array.value(i), expected[i]);
+        for (i, e) in expected.iter().enumerate() {
+            assert_eq!(string_array.value(i), *e);
         }
     }
 
