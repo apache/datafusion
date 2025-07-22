@@ -1,6 +1,6 @@
 #!/bin/bash
 
-set -e
+set -euo pipefail  # Add -u for undefined variables and -o pipefail for pipe failures
 
 # Ensure we're in the repository root
 if [ ! -f "Cargo.toml" ] || [ ! -d ".git" ]; then
@@ -34,7 +34,7 @@ detect_datafusion_breaking_changes() {
     # Only run git-based checks if we have a valid base ref
     if [ -n "$BASE_REF" ]; then
         echo "Checking for Rust source file changes..."
-        if git diff "$BASE_REF" --name-only 2>/dev/null | grep -qE "\.rs$"; then
+        if git diff "$BASE_REF"..HEAD --name-only 2>/dev/null | grep -qE "\.rs$"; then
             echo "Rust files modified - running detailed checks..."
 
             echo "Checking LogicalPlan stability..."
@@ -93,11 +93,12 @@ check_logical_plan_changes() {
 
 check_dataframe_api_changes() {
     # Check if DataFrame public methods were changed
-    if git diff "$BASE_REF" --name-only 2>/dev/null | grep -qE "dataframe"; then
+    if git diff "$BASE_REF"..HEAD --name-only 2>/dev/null | grep -qE "dataframe.*\.rs$"; then
         echo "    DataFrame files modified, checking for API changes..."
 
         # Check for ANY changes to public methods (additions, removals, modifications)
-        if git diff "$BASE_REF" 2>/dev/null | grep -qE "^[-+].*pub fn"; then
+        # Only look at actual DataFrame source files, not test files
+        if git diff "$BASE_REF"..HEAD 2>/dev/null -- "datafusion/core/src/dataframe/" | grep -qE "^[-+].*pub fn"; then
             echo "    Public DataFrame API methods modified"
             return 0  # Breaking change detected
         fi
@@ -144,9 +145,9 @@ EOF
         local changes_found=false
 
         # Check for DataFrame API changes with details - EXCLUDE script files
-        if git diff "$BASE_REF" --name-only 2>/dev/null | grep -qE "dataframe.*\.rs$"; then
-            # Only look at .rs files, exclude ci/scripts
-            local dataframe_diff=$(git diff "$BASE_REF" 2>/dev/null -- "datafusion/*/src/**/*.rs" | grep -E "^[-+].*pub fn")
+        if git diff "$BASE_REF"..HEAD --name-only 2>/dev/null | grep -qE "dataframe.*\.rs$"; then
+            # Only look at .rs files in DataFrame source directories
+            local dataframe_diff=$(git diff "$BASE_REF"..HEAD 2>/dev/null -- "datafusion/core/src/dataframe/" | grep -E "^[-+].*pub fn")
             if [ -n "$dataframe_diff" ]; then
                 echo "- ⚠️  **DataFrame API changes detected:**" >> "$output_file"
                 echo "\`\`\`diff" >> "$output_file"
@@ -166,8 +167,8 @@ EOF
             changes_found=true
         fi
 
-        # Show general public API changes - ONLY in .rs files, EXCLUDE ci/scripts
-        local api_changes=$(git diff "$BASE_REF" 2>/dev/null -- "datafusion/" "ballista/" | grep -E "^[-+].*pub (fn|struct|enum)")
+        # Show general public API changes - ONLY in .rs files, EXCLUDE ci/scripts and tests
+        local api_changes=$(git diff "$BASE_REF"..HEAD 2>/dev/null -- "datafusion/" "ballista/" | grep -E "^[-+].*pub (fn|struct|enum)" | grep -v "/tests/")
         if [ -n "$api_changes" ]; then
             echo "- ⚠️  **Public API signature changes:**" >> "$output_file"
             echo "\`\`\`diff" >> "$output_file"
@@ -185,13 +186,13 @@ EOF
         # Add list of changed SOURCE files only
         echo "" >> "$output_file"
         echo "### Source Files Modified:" >> "$output_file"
-        git diff "$BASE_REF" --name-only 2>/dev/null | grep -E "\.rs$" | head -20 | sed 's/^/- /' >> "$output_file" || {
+        git diff "$BASE_REF"..HEAD --name-only 2>/dev/null | grep -E "\.rs$" | head -20 | sed 's/^/- /' >> "$output_file" || {
             echo "- No Rust source files modified" >> "$output_file"
         }
 
         echo "" >> "$output_file"
         echo "### All Files Modified:" >> "$output_file"
-        git diff "$BASE_REF" --name-only 2>/dev/null | head -20 | sed 's/^/- /' >> "$output_file"
+        git diff "$BASE_REF"..HEAD --name-only 2>/dev/null | head -20 | sed 's/^/- /' >> "$output_file"
     else
         echo "- ⚠️  Git-based analysis skipped (no base ref available)" >> "$output_file"
     fi
