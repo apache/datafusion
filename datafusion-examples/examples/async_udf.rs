@@ -31,17 +31,22 @@ use datafusion::common::error::Result;
 use datafusion::common::not_impl_err;
 use datafusion::common::utils::take_function_args;
 use datafusion::config::ConfigOptions;
+use datafusion::execution::SessionStateBuilder;
 use datafusion::logical_expr::async_udf::{AsyncScalarUDF, AsyncScalarUDFImpl};
 use datafusion::logical_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
-use datafusion::prelude::SessionContext;
+use datafusion::prelude::{SessionConfig, SessionContext};
 use std::any::Any;
 use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let ctx: SessionContext = SessionContext::new();
+    // Use a hard coded parallelism level of 4 so the explain plan
+    // is consistent across machines.
+    let config = SessionConfig::new().with_target_partitions(4);
+    let ctx =
+        SessionContext::from(SessionStateBuilder::new().with_config(config).build());
 
     // Similarly to regular UDFs, you create an AsyncScalarUDF by implementing
     // `AsyncScalarUDFImpl` and creating an instance of `AsyncScalarUDF`.
@@ -95,7 +100,7 @@ async fn main() -> Result<()> {
     "|               |     TableScan: animal projection=[id, name]                                                                                    |",
     "| physical_plan | CoalesceBatchesExec: target_batch_size=8192                                                                                    |",
     "|               |   FilterExec: __async_fn_0@2, projection=[id@0, name@1]                                                                        |",
-    "|               |     RepartitionExec: partitioning=RoundRobinBatch(16), input_partitions=1                                                      |",
+    "|               |     RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1                                                       |",
     "|               |       AsyncFuncExec: async_expr=[async_expr(name=__async_fn_0, expr=ask_llm(CAST(name@1 AS Utf8View), Is this animal furry?))] |",
     "|               |         CoalesceBatchesExec: target_batch_size=8192                                                                            |",
     "|               |           DataSourceExec: partitions=1, partition_sizes=[1]                                                                    |",
