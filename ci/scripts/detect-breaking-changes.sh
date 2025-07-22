@@ -13,6 +13,13 @@ fi
 BASE_REF="${GITHUB_BASE_REF:-main}"
 HEAD_REF="${GITHUB_HEAD_REF:-HEAD}"
 
+# In GitHub Actions PR context, use the proper base reference
+if [ -n "$GITHUB_BASE_REF" ]; then
+    # For PRs, GitHub provides GITHUB_BASE_REF (e.g., "main")
+    # We need to reference it as origin/$GITHUB_BASE_REF
+    BASE_REF="origin/$GITHUB_BASE_REF"
+fi
+
 echo "🔍 DataFusion Breaking Changes Detection"
 echo "Comparing against: $BASE_REF"
 echo "Current ref: $HEAD_REF"

@@ -35,8 +35,10 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
+          # Need full history to access base branch for git diff operations
+          # GitHub Actions only fetches single commit by default (fetch-depth: 1)
+          # Our script uses: git diff "$BASE_REF"..HEAD which requires base branch
           fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Run breaking changes detection
         shell: bash
