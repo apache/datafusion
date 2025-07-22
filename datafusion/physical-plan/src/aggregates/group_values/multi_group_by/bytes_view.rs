@@ -142,6 +142,52 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
 
     fn vectorized_append_inner(&mut self, array: &ArrayRef, rows: &[usize]) {
         let arr = array.as_byte_view::<B>();
+
+        // Reserve space for views and nulls
+        let num_rows = rows.len();
+        self.views.reserve(num_rows);
+
+        // Fast-path: no external buffers, pure inline views
+        if arr.data_buffers().is_empty() {
+            // Pointer to the start of uninitialized memory in `views`
+            let base_ptr = unsafe {
+                self.views.as_mut_ptr().add(self.views.len())
+            };
+
+            // Handle nulls in bulk
+            let null_count = array.null_count();
+            if null_count == 0 {
+                self.nulls.append_n(num_rows, false);
+            } else if null_count == array.len() {
+                self.nulls.append_n(num_rows, true);
+                unsafe {
+                    std::ptr::write_bytes(base_ptr, 0, num_rows);
+                    self.views.set_len(self.views.len() + num_rows);
+                }
+                return;
+            } else {
+                for &row in rows {
+                    self.nulls.append(array.is_null(row));
+                }
+            }
+            // SAFETY:
+            // - We have reserved sufficient capacity for `views` to hold `rows.len()` new elements.
+            // - Pointer arithmetic below is guaranteed to stay within the Vec's allocation (no OOB).
+            // - We do not perform any operations that could reallocate `self.views` during this block.
+            unsafe {
+                // Write each inline view directly without bounds or capacity checks
+                for (i, &row) in rows.iter().enumerate() {
+                    // Read view without bounds check
+                    let view = *arr.views().as_ptr().add(row);
+                    // Write view into uninitialized slot
+                    base_ptr.add(i).write(view);
+                }
+                // Update Vec length to include the newly initialized elements
+                self.views.set_len(self.views.len() + num_rows);
+            }
+            return;
+        }
+
         let null_count = array.null_count();
         let num_rows = array.len();
         let all_null_or_non_null = if null_count == 0 {
@@ -153,23 +199,87 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
         };
 
         match all_null_or_non_null {
-            None => {
-                for &row in rows {
-                    self.append_val_inner(array, row);
-                }
-            }
-
-            Some(true) => {
-                self.nulls.append_n(rows.len(), false);
-                for &row in rows {
-                    self.do_append_val_inner(arr, row);
-                }
-            }
-
-            Some(false) => {
-                self.nulls.append_n(rows.len(), true);
+            None => unsafe {
                 let new_len = self.views.len() + rows.len();
-                self.views.resize(new_len, 0);
+                let base_ptr = self.views.as_mut_ptr().add(self.views.len());
+                for (i, &row) in rows.iter().enumerate() {
+                    // Null row case, set and return
+                    if arr.is_null(row) {
+                        self.nulls.append(true);
+                        base_ptr.add(i).write(0);
+                        continue;
+                    }
+
+                    // Not null row case
+                    self.nulls.append(false);
+                    let view = *arr.views().as_ptr().add(row);
+
+                    let value_len = (view as u32) as usize;
+                    let view = if value_len <= 12 {
+                        view
+                    } else {
+                        let value:&[u8] =
+                            // Safety: `view` is guaranteed to be valid
+                            // and we can safely read the value from it
+                           arr.value_unchecked(row).as_ref();
+
+                        // Ensure big enough block to hold the value firstly
+                        self.ensure_in_progress_big_enough(value_len);
+
+                        // Append value
+                        let buffer_index = self.completed.len();
+                        let offset = self.in_progress.len();
+                        self.in_progress.extend_from_slice(value);
+
+                        make_view(value, buffer_index as u32, offset as u32)
+                    };
+
+                    // Append view
+                    base_ptr.add(i).write(view);
+                }
+                self.views.set_len(new_len);
+            }
+
+            Some(true) => unsafe {
+                self.nulls.append_n(rows.len(), false);
+                let base_ptr = self.views.as_mut_ptr().add(self.views.len());
+                let new_len = self.views.len() + rows.len();
+
+                for (i, &row) in rows.iter().enumerate() {
+                    let view = *arr.views().as_ptr().add(row);
+                    let value_len = (view as u32) as usize;
+
+                    let view = if value_len <= 12 {
+                        view
+                    } else {
+                        // Ensure buffer has enough space
+                        self.ensure_in_progress_big_enough(value_len);
+
+                        let value:&[u8] =
+                            // Safety: `view` is guaranteed to be valid
+                            // and we can safely read the value from it
+                            arr.value_unchecked(row).as_ref();
+                        // Append value
+                        let buffer_index = self.completed.len();
+                        let offset = self.in_progress.len();
+                        self.in_progress.extend_from_slice(value);
+
+                        make_view(value, buffer_index as u32, offset as u32)
+                    };
+
+                    base_ptr.add(i).write(view);
+                }
+
+                self.views.set_len(new_len);
+            }
+
+            // Safety: we already reserve space for `views`
+            Some(false) => unsafe {
+                self.nulls.append_n(rows.len(), true);
+                let base_ptr = self.views.as_mut_ptr().add(self.views.len());
+                let new_len = self.views.len() + rows.len();
+                std::ptr::write_bytes(base_ptr, 0, rows.len());
+                self.views.set_len(new_len);
             }
         }
     }
