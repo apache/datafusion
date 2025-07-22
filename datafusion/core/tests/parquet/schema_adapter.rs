@@ -433,7 +433,7 @@ impl SchemaAdapter for UppercaseAdapter {
         file_schema: &Schema,
     ) -> Result<(Arc<dyn SchemaMapper>, Vec<usize>)> {
         let mut projection = Vec::new();
-        
+
         // Map each field in the table schema to the corresponding field in the file schema
         for table_field in self.table_schema.fields() {
             let uppercase_name = table_field.name().to_uppercase();
@@ -484,11 +484,6 @@ impl SchemaMapper for TestSchemaMapping {
 }
 
 impl UppercaseAdapter {
-    #[allow(dead_code)]
-    fn adapt(&self, record_batch: RecordBatch) -> Result<RecordBatch> {
-        Ok(record_batch)
-    }
-
     fn output_schema(&self) -> SchemaRef {
         let fields: Vec<Field> = self
             .table_schema
