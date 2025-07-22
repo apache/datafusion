@@ -520,6 +520,23 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_expressions_in_virtual_table() -> Result<()> {
+        let plan_str = test_plan_to_string(
+            "select_count_from_select_1_virtual_table_expressions.substrait.json",
+        )
+        .await?;
+
+        assert_snapshot!(
+        plan_str,
+        @r#"
+            Aggregate: groupBy=[[]], aggr=[[count(Int64(1)) AS count(*)]]
+              Values: (Int64(0))
+            "#
+                );
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_multiple_joins() -> Result<()> {
         let plan_str = test_plan_to_string("multiple_joins.json").await?;
         assert_eq!(
