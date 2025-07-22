@@ -555,6 +555,16 @@
   </a>
   <ul class="nav section-nav flex-column">
    <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#msrv-updated-to-1-85-1">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       MSRV
+      </span>
+     </code>
+     updated to 1.85.1
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
     <a class="reference internal nav-link" href="#datafusionerror-variants-are-now-boxed">
      <code class="docutils literal notranslate">
       <span class="pre">
@@ -1046,6 +1056,11 @@
 <h2>DataFusion <code class="docutils literal notranslate"><span class="pre">49.0.0</span></code><a class="headerlink" href="#datafusion-49-0-0" title="Link to this heading">¶</a></h2>
 <p><strong>Note:</strong> DataFusion <code class="docutils literal notranslate"><span class="pre">49.0.0</span></code> has not been released yet. The information provided in this section pertains to features and changes that have already been merged to the main branch and are awaiting release in this version.
 You can see the current <a class="reference external" href="https://github.com/apache/datafusion/issues/16235">status of the <code class="docutils literal notranslate"><span class="pre">49.0.0</span> </code>release here</a></p>
+<section id="msrv-updated-to-1-85-1">
+<h3><code class="docutils literal notranslate"><span class="pre">MSRV</span></code> updated to 1.85.1<a class="headerlink" href="#msrv-updated-to-1-85-1" title="Link to this heading">¶</a></h3>
+<p>The Minimum Supported Rust Version (MSRV) has been updated to <a class="reference external" href="https://releases.rs/docs/1.85.1/"><code class="docutils literal notranslate"><span class="pre">1.85.1</span></code></a>. See
+<a class="reference external" href="https://github.com/apache/datafusion/pull/16728">#16728</a> for details.</p>
+</section>
 <section id="datafusionerror-variants-are-now-boxed">
 <h3><code class="docutils literal notranslate"><span class="pre">DataFusionError</span></code> variants are now <code class="docutils literal notranslate"><span class="pre">Box</span></code>ed<a class="headerlink" href="#datafusionerror-variants-are-now-boxed" title="Link to this heading">¶</a></h3>
 <p>To reduce the size of <code class="docutils literal notranslate"><span class="pre">DataFusionError</span></code>, several variants that were previously stored inline are now <code class="docutils literal notranslate"><span class="pre">Box</span></code>ed. This reduces the size of <code class="docutils literal notranslate"><span class="pre">Result&lt;T,</span> <span class="pre">DataFusionError&gt;</span></code> and thus stack usage and async state machine size. Please see <a class="reference external" href="https://github.com/apache/datafusion/issues/16652">#16652</a> for more details.</p>

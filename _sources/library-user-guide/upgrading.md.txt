@@ -24,6 +24,14 @@
 **Note:** DataFusion `49.0.0` has not been released yet. The information provided in this section pertains to features and changes that have already been merged to the main branch and are awaiting release in this version.
 You can see the current [status of the `49.0.0 `release here](https://github.com/apache/datafusion/issues/16235)
 
+### `MSRV` updated to 1.85.1
+
+The Minimum Supported Rust Version (MSRV) has been updated to [`1.85.1`]. See
+[#16728] for details.
+
+[`1.85.1`]: https://releases.rs/docs/1.85.1/
+[#16728]: https://github.com/apache/datafusion/pull/16728
+
 ### `DataFusionError` variants are now `Box`ed
 
 To reduce the size of `DataFusionError`, several variants that were previously stored inline are now `Box`ed. This reduces the size of `Result<T, DataFusionError>` and thus stack usage and async state machine size. Please see [#16652] for more details.
