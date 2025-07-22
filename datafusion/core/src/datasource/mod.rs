@@ -71,8 +71,7 @@ mod tests {
     };
     use datafusion_datasource_parquet::source::ParquetSource;
     use datafusion_physical_plan::collect;
-    use std::any::Any;
-    use std::{fs, sync::Arc};
+    use std::{any::Any, fs, sync::Arc};
     use tempfile::TempDir;
 
     #[tokio::test]
