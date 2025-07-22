@@ -21,12 +21,11 @@
 //! making network requests. This can be used for tasks like fetching
 //! data from an external API such as a LLM service or an external database.
 
-use arrow::array::{
-    ArrayRef, AsArray, BooleanArray, Int64Array, RecordBatch, StringArray,
-};
+use arrow::array::{ArrayRef, BooleanArray, Int64Array, RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema};
 use async_trait::async_trait;
 use datafusion::assert_batches_eq;
+use datafusion::common::cast::as_string_view_array;
 use datafusion::common::error::Result;
 use datafusion::common::not_impl_err;
 use datafusion::common::utils::take_function_args;
@@ -205,7 +204,7 @@ impl AsyncScalarUDFImpl for AskLLM {
         // arguments to improve performance, but this example converts the
         // arguments to arrays for simplicity.
         let args = ColumnarValue::values_to_arrays(&args.args)?;
-        let [arg1, arg2] = take_function_args(self.name(), args)?;
+        let [content_column, question_column] = take_function_args(self.name(), args)?;
 
         // In a real function, you would use a library such as `request` here to
         // make an async HTTP request. Credentials and other configurations can
@@ -213,10 +212,12 @@ impl AsyncScalarUDFImpl for AskLLM {
 
         // In this example, we will simulate the LLM response by comparing the two
         // input arguments using some static strings
-        let results: BooleanArray = arg1
-            .as_string_view()
+        let content_column = as_string_view_array(&content_column)?;
+        let question_column = as_string_view_array(&question_column)?;
+
+        let result_array: BooleanArray = content_column
             .iter()
-            .zip(arg2.as_string_view().iter())
+            .zip(question_column.iter())
             .map(|(a, b)| {
                 // If either value is null, return None
                 let a = a?;
@@ -233,6 +234,6 @@ impl AsyncScalarUDFImpl for AskLLM {
             })
             .collect();
 
-        Ok(Arc::new(results))
+        Ok(Arc::new(result_array))
     }
 }
