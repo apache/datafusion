@@ -25,4 +25,3 @@
 ## PySpark 3.5.5 Result: {'ucase(SparkSql)': 'SPARKSQL', 'typeof(ucase(SparkSql))': 'string', 'typeof(SparkSql)': 'string'}
 #query
 #SELECT ucase('SparkSql'::string);
-

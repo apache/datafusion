@@ -46,6 +46,7 @@ use datafusion::{
 use return_type_args::{
     FFI_ReturnFieldArgs, ForeignReturnFieldArgs, ForeignReturnFieldArgsOwned,
 };
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::{ffi::c_void, sync::Arc};
 
 pub mod return_type_args;
@@ -406,6 +407,38 @@ impl ScalarUDFImpl for ForeignScalarUDF {
             let result_types = df_result!((self.udf.coerce_types)(&self.udf, arg_types))?;
             Ok(rvec_wrapped_to_vec_datatype(&result_types)?)
         }
+    }
+
+    fn equals(&self, other: &dyn ScalarUDFImpl) -> bool {
+        let Some(other) = other.as_any().downcast_ref::<Self>() else {
+            return false;
+        };
+        let Self {
+            name,
+            aliases,
+            udf,
+            signature,
+        } = self;
+        name == &other.name
+            && aliases == &other.aliases
+            && std::ptr::eq(udf, &other.udf)
+            && signature == &other.signature
+    }
+
+    fn hash_value(&self) -> u64 {
+        let Self {
+            name,
+            aliases,
+            udf,
+            signature,
+        } = self;
+        let mut hasher = DefaultHasher::new();
+        std::any::type_name::<Self>().hash(&mut hasher);
+        name.hash(&mut hasher);
+        aliases.hash(&mut hasher);
+        std::ptr::hash(udf, &mut hasher);
+        signature.hash(&mut hasher);
+        hasher.finish()
     }
 }
 

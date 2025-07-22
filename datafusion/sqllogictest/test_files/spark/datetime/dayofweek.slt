@@ -25,4 +25,3 @@
 ## PySpark 3.5.5 Result: {'dayofweek(2009-07-30)': 5, 'typeof(dayofweek(2009-07-30))': 'int', 'typeof(2009-07-30)': 'string'}
 #query
 #SELECT dayofweek('2009-07-30'::string);
-

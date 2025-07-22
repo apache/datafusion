@@ -25,4 +25,3 @@
 ## PySpark 3.5.5 Result: {'monotonically_increasing_id()': 0, 'typeof(monotonically_increasing_id())': 'bigint'}
 #query
 #SELECT monotonically_increasing_id();
-

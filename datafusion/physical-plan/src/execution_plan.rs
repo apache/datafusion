@@ -17,8 +17,8 @@
 
 pub use crate::display::{DefaultDisplay, DisplayAs, DisplayFormatType, VerboseDisplay};
 use crate::filter_pushdown::{
-    ChildPushdownResult, FilterDescription, FilterPushdownPhase,
-    FilterPushdownPropagation,
+    ChildFilterDescription, ChildPushdownResult, FilterDescription, FilterPushdownPhase,
+    FilterPushdownPropagation, PushedDownPredicate,
 };
 pub use crate::metrics::Metric;
 pub use crate::ordering::InputOrderMode;
@@ -33,6 +33,7 @@ pub use datafusion_physical_expr::window::WindowExpr;
 pub use datafusion_physical_expr::{
     expressions, Distribution, Partitioning, PhysicalExpr,
 };
+use itertools::Itertools;
 
 use std::any::Any;
 use std::fmt::Debug;
@@ -520,10 +521,19 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
         parent_filters: Vec<Arc<dyn PhysicalExpr>>,
         _config: &ConfigOptions,
     ) -> Result<FilterDescription> {
-        Ok(
-            FilterDescription::new_with_child_count(self.children().len())
-                .all_parent_filters_unsupported(parent_filters),
-        )
+        // Default implementation: mark all filters as unsupported for all children
+        let mut desc = FilterDescription::new();
+        let child_filters = parent_filters
+            .iter()
+            .map(|f| PushedDownPredicate::unsupported(Arc::clone(f)))
+            .collect_vec();
+        for _ in 0..self.children().len() {
+            desc = desc.with_child(ChildFilterDescription {
+                parent_filters: child_filters.clone(),
+                self_filters: vec![],
+            });
+        }
+        Ok(desc)
     }
 
     /// Handle the result of a child pushdown.
@@ -553,7 +563,7 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     ///   they have been handled.
     /// - A `HashJoinExec` might ignore the pushdown result if filters need to
     ///   be applied during the join operation. It passes the parent filters back
-    ///   up wrapped in [`FilterPushdownPropagation::transparent`], discarding
+    ///   up wrapped in [`FilterPushdownPropagation::if_any`], discarding
     ///   any self-filters from children.
     ///
     /// **Example Walkthrough:**
@@ -587,16 +597,16 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     ///
     /// **Helper Methods for Customization:**
     /// There are various helper methods to simplify implementing this method:
-    /// - [`FilterPushdownPropagation::unsupported`]: Indicates that the node
-    ///   does not support filter pushdown at all, rejecting all filters.
-    /// - [`FilterPushdownPropagation::transparent`]: Indicates that the node
-    ///   supports filter pushdown but does not modify it, simply transmitting
-    ///   the children's pushdown results back up to its parent.
-    /// - [`PredicateSupports::new_with_supported_check`]: Takes a callback to
-    ///   dynamically determine support for each filter, useful with
-    ///   [`FilterPushdownPropagation::with_filters`] and
-    ///   [`FilterPushdownPropagation::with_updated_node`] to build mixed results
-    ///   of supported and unsupported filters.
+    /// - [`FilterPushdownPropagation::if_any`]: Marks all parent filters as
+    ///   supported as long as at least one child supports them.
+    /// - [`FilterPushdownPropagation::if_all`]: Marks all parent filters as
+    ///   supported as long as all children support them.
+    /// - [`FilterPushdownPropagation::with_parent_pushdown_result`]: Allows adding filters
+    ///   to the propagation result, indicating which filters are supported by
+    ///   the current node.
+    /// - [`FilterPushdownPropagation::with_updated_node`]: Allows updating the
+    ///   current node in the propagation result, used if the node
+    ///   has modified its plan based on the pushdown results.
     ///
     /// **Filter Pushdown Phases:**
     /// There are two different phases in filter pushdown (`Pre` and others),
@@ -604,17 +614,14 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// operator may or may not be allowed to modify the plan. See
     /// [`FilterPushdownPhase`] for more details on phase-specific behavior.
     ///
-    /// [`PredicateSupport::Supported`]: crate::filter_pushdown::PredicateSupport::Supported
-    /// [`PredicateSupports::new_with_supported_check`]: crate::filter_pushdown::PredicateSupports::new_with_supported_check
+    /// [`PushedDownPredicate::supported`]: crate::filter_pushdown::PushedDownPredicate::supported
     fn handle_child_pushdown_result(
         &self,
         _phase: FilterPushdownPhase,
         child_pushdown_result: ChildPushdownResult,
         _config: &ConfigOptions,
     ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
-        Ok(FilterPushdownPropagation::transparent(
-            child_pushdown_result,
-        ))
+        Ok(FilterPushdownPropagation::if_all(child_pushdown_result))
     }
 
     /// Injects arbitrary run-time state into this execution plan, returning a new plan
