@@ -1213,6 +1213,10 @@ mod test {
             ) -> Box<dyn SchemaAdapter> {
                 Box::new(CustomSchemaAdapter)
             }
+
+            fn as_any(&self) -> &dyn std::any::Any {
+                self
+            }
         }
 
         // Test that if no expression rewriter is provided we use a schemaadapter to adapt the data to the expresssion
