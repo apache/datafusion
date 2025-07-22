@@ -533,177 +533,217 @@ impl SchemaMapper for UppercaseSchemaMapper {
 #[cfg(feature = "parquet")]
 #[tokio::test]
 async fn test_parquet_integration_with_schema_adapter() -> Result<()> {
-    let (exec, ctx) = setup_parquet_test_with_schema_adapter(
-        vec![1, 2, 3], 
-        vec!["a", "b", "c"],
-        Arc::new(UppercaseAdapterFactory {}),
-        create_uppercase_table_schema(),
-    ).await?;
-    
-    let batches = execute_data_source(exec, ctx).await?;
-    assert_parquet_results(&batches, vec!["ID", "NAME"])
+    // Create test data
+    let batch = RecordBatch::try_new(
+        Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("name", DataType::Utf8, true),
+        ])),
+        vec![
+            Arc::new(arrow::array::Int32Array::from(vec![1, 2, 3])),
+            Arc::new(arrow::array::StringArray::from(vec!["a", "b", "c"])),
+        ],
+    )?;
+
+    let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+    let store_url = ObjectStoreUrl::parse("memory://").unwrap();
+    let path = "test.parquet";
+    write_parquet(batch.clone(), store.clone(), path).await;
+
+    // Get the actual file size from the object store
+    let object_meta = store.head(&Path::from(path)).await?;
+    let file_size = object_meta.size;
+
+    // Create a session context and register the object store
+    let ctx = SessionContext::new();
+    ctx.register_object_store(store_url.as_ref(), Arc::clone(&store));
+
+    // Create a ParquetSource with the adapter factory
+    let file_source = ParquetSource::default()
+        .with_schema_adapter_factory(Arc::new(UppercaseAdapterFactory {}))?;
+
+    // Create a table schema with uppercase column names
+    let table_schema = Arc::new(Schema::new(vec![
+        Field::new("ID", DataType::Int32, false),
+        Field::new("NAME", DataType::Utf8, true),
+    ]));
+
+    let config = FileScanConfigBuilder::new(store_url, table_schema.clone(), file_source)
+        .with_file(PartitionedFile::new(path, file_size))
+        .build();
+
+    // Create a data source executor
+    let exec = DataSourceExec::from_data_source(config);
+
+    // Collect results
+    let task_ctx = ctx.task_ctx();
+    let stream = exec.execute(0, task_ctx)?;
+    let batches = datafusion::physical_plan::common::collect(stream).await?;
+
+    // There should be one batch
+    assert_eq!(batches.len(), 1);
+
+    // Verify the schema has the uppercase column names
+    let result_schema = batches[0].schema();
+    assert_eq!(result_schema.field(0).name(), "ID");
+    assert_eq!(result_schema.field(1).name(), "NAME");
+
+    Ok(())
 }
 
 #[cfg(feature = "parquet")]
 #[tokio::test]
 async fn test_parquet_integration_with_schema_adapter_and_expression_rewriter(
 ) -> Result<()> {
-    let (exec, ctx) = setup_parquet_test_with_schema_adapter(
-        vec![1, 2, 3], 
-        vec!["a", "b", "c"],
-        Arc::new(UppercaseAdapterFactory {}),
-        create_test_batch(vec![1, 2, 3], vec!["a", "b", "c"])?.schema(),
-    ).await?;
-    
-    let batches = execute_data_source(exec, ctx).await?;
-    assert_parquet_results(&batches, vec!["id", "name"])
-}
-
-// Helper function to test schema adapter factory reuse for a specific source type
-fn test_schema_adapter_factory_reuse<T: FileSource + Default + Clone + Into<Arc<dyn FileSource>>>(
-    factory: Arc<dyn SchemaAdapterFactory>,
-) {
-    let source = T::default();
-    let source_with_adapter = source
-        .clone()
-        .with_schema_adapter_factory(factory.clone())
-        .unwrap();
-
-    let base_source: Arc<dyn FileSource> = source.into();
-    assert!(base_source.schema_adapter_factory().is_none());
-    assert!(source_with_adapter.schema_adapter_factory().is_some());
-
-    let retrieved_factory = source_with_adapter.schema_adapter_factory().unwrap();
-    assert_eq!(
-        retrieved_factory
-            .as_any()
-            .downcast_ref::<UppercaseAdapterFactory>(),
-        Some(&*factory
-            .as_any()
-            .downcast_ref::<UppercaseAdapterFactory>()
-            .unwrap())
-    );
-}
-
-#[test]
-fn test_multi_source_schema_adapter_reuse() {
-    test_schema_adapter_reuse_across_sources(Arc::new(UppercaseAdapterFactory {}))
-}
-
-/// Tests schema adapter factory reuse across all supported file source types
-fn test_schema_adapter_reuse_across_sources(factory: Arc<dyn SchemaAdapterFactory>) {
-    // Test ArrowSource
-    test_schema_adapter_factory_reuse::<ArrowSource>(factory.clone());
-
-    // Test ParquetSource
-    #[cfg(feature = "parquet")]
-    test_schema_adapter_factory_reuse::<ParquetSource>(factory.clone());
-
-    // Test CsvSource
-    test_schema_adapter_factory_reuse::<CsvSource>(factory.clone());
-
-    // Test JsonSource
-    test_schema_adapter_factory_reuse::<JsonSource>(factory.clone());
-}
-
-// Common assertion utilities
-
-/// Asserts parquet test results have expected field names
-fn assert_parquet_results(batches: &[RecordBatch], expected_field_names: Vec<&str>) -> Result<()> {
-    assert_eq!(batches.len(), 1);
-    let result_schema = batches[0].schema();
-    for (i, expected_name) in expected_field_names.iter().enumerate() {
-        assert_eq!(result_schema.field(i).name(), *expected_name);
-    }
-    Ok(())
-}
-
-/// Sets up a complete parquet test with schema adapter
-#[cfg(feature = "parquet")]
-async fn setup_parquet_test_with_schema_adapter(
-    id_data: Vec<i32>,
-    name_data: Vec<&str>,
-    adapter_factory: Arc<dyn SchemaAdapterFactory>,
-    table_schema: SchemaRef,
-) -> Result<(Arc<dyn ExecutionPlan>, SessionContext)> {
-    let batch = create_test_batch(id_data, name_data)?;
-    let (store, store_url) = setup_test_store_with_parquet(batch, "test.parquet").await?;
-    let file_size = get_file_size(store.clone(), "test.parquet").await?;
-    let ctx = setup_test_context(store, &store_url).await?;
-
-    let file_source = ParquetSource::default()
-        .with_schema_adapter_factory(adapter_factory)?;
-
-    let config = FileScanConfigBuilder::new(store_url, table_schema, file_source)
-        .with_file(PartitionedFile::new("test.parquet", file_size))
-        .build();
-
-    let exec = DataSourceExec::from_data_source(config);
-    Ok((exec, ctx))
-}
-
-/// Executes a data source and returns the resulting batches
-async fn execute_data_source(
-    exec: Arc<dyn ExecutionPlan>,
-    ctx: SessionContext,
-) -> Result<Vec<RecordBatch>> {
-    let task_ctx = ctx.task_ctx();
-    let stream = exec.execute(0, task_ctx)?;
-    datafusion::physical_plan::common::collect(stream).await
-}
-
-// Common test helper functions
-
-/// Creates a test RecordBatch with the provided schema and data
-fn create_test_batch(
-    id_data: Vec<i32>,
-    name_data: Vec<&str>,
-) -> Result<RecordBatch> {
-    Ok(RecordBatch::try_new(
+    // Create test data
+    let batch = RecordBatch::try_new(
         Arc::new(Schema::new(vec![
             Field::new("id", DataType::Int32, false),
             Field::new("name", DataType::Utf8, true),
         ])),
         vec![
-            Arc::new(arrow::array::Int32Array::from(id_data)),
-            Arc::new(arrow::array::StringArray::from(name_data)),
+            Arc::new(arrow::array::Int32Array::from(vec![1, 2, 3])),
+            Arc::new(arrow::array::StringArray::from(vec!["a", "b", "c"])),
         ],
-    )?)
-}
+    )?;
 
-/// Sets up an in-memory object store and writes test data to parquet
-async fn setup_test_store_with_parquet(
-    batch: RecordBatch,
-    path: &str,
-) -> Result<(Arc<dyn ObjectStore>, ObjectStoreUrl)> {
     let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
-    let store_url = ObjectStoreUrl::parse("memory://")?;
-    write_parquet(batch, store.clone(), path).await;
-    Ok((store, store_url))
-}
+    let store_url = ObjectStoreUrl::parse("memory://").unwrap();
+    let path = "test.parquet";
+    write_parquet(batch.clone(), store.clone(), path).await;
 
-/// Gets file size from object store
-async fn get_file_size(store: Arc<dyn ObjectStore>, path: &str) -> Result<u64> {
+    // Get the actual file size from the object store
     let object_meta = store.head(&Path::from(path)).await?;
-    Ok(object_meta.size)
-}
+    let file_size = object_meta.size;
 
-/// Creates a session context with object store registered
-async fn setup_test_context(
-    store: Arc<dyn ObjectStore>,
-    store_url: &ObjectStoreUrl,
-) -> Result<SessionContext> {
+    // Create a session context and register the object store
     let ctx = SessionContext::new();
     ctx.register_object_store(store_url.as_ref(), Arc::clone(&store));
-    Ok(ctx)
+
+    // Create a ParquetSource with the adapter factory
+    let file_source = ParquetSource::default()
+        .with_schema_adapter_factory(Arc::new(UppercaseAdapterFactory {}))?;
+
+    let config = FileScanConfigBuilder::new(store_url, batch.schema(), file_source)
+        .with_file(PartitionedFile::new(path, file_size))
+        .build();
+
+    // Create a data source executor
+    let exec = DataSourceExec::from_data_source(config);
+
+    // Collect results
+    let task_ctx = ctx.task_ctx();
+    let stream = exec.execute(0, task_ctx)?;
+    let batches = datafusion::physical_plan::common::collect(stream).await?;
+
+    // There should be one batch
+    assert_eq!(batches.len(), 1);
+
+    // Verify the schema has the original column names (schema adapter not applied in DataSourceExec)
+    let result_schema = batches[0].schema();
+    assert_eq!(result_schema.field(0).name(), "id");
+    assert_eq!(result_schema.field(1).name(), "name");
+
+    Ok(())
 }
 
-/// Creates a table schema with uppercase column names for testing schema adapters
-fn create_uppercase_table_schema() -> SchemaRef {
-    Arc::new(Schema::new(vec![
-        Field::new("ID", DataType::Int32, false),
-        Field::new("NAME", DataType::Utf8, true),
-    ]))
+#[tokio::test]
+async fn test_multi_source_schema_adapter_reuse() -> Result<()> {
+    // This test verifies that the same schema adapter factory can be reused
+    // across different file source types. This is important for ensuring that:
+    // 1. The schema adapter factory interface works uniformly across all source types
+    // 2. The factory can be shared and cloned efficiently using Arc
+    // 3. Various data source implementations correctly implement the schema adapter factory pattern
+
+    // Create a test factory
+    let factory = Arc::new(UppercaseAdapterFactory {});
+
+    // Test ArrowSource
+    {
+        let source = ArrowSource::default();
+        let source_with_adapter = source
+            .clone()
+            .with_schema_adapter_factory(factory.clone())
+            .unwrap();
+
+        let base_source: Arc<dyn FileSource> = source.into();
+        assert!(base_source.schema_adapter_factory().is_none());
+        assert!(source_with_adapter.schema_adapter_factory().is_some());
+
+        let retrieved_factory = source_with_adapter.schema_adapter_factory().unwrap();
+        assert_eq!(
+            retrieved_factory
+                .as_any()
+                .downcast_ref::<UppercaseAdapterFactory>(),
+            Some(factory.as_ref())
+        );
+    }
+
+    // Test ParquetSource
+    #[cfg(feature = "parquet")]
+    {
+        let source = ParquetSource::default();
+        let source_with_adapter = source
+            .clone()
+            .with_schema_adapter_factory(factory.clone())
+            .unwrap();
+
+        let base_source: Arc<dyn FileSource> = source.into();
+        assert!(base_source.schema_adapter_factory().is_none());
+        assert!(source_with_adapter.schema_adapter_factory().is_some());
+
+        let retrieved_factory = source_with_adapter.schema_adapter_factory().unwrap();
+        assert_eq!(
+            retrieved_factory
+                .as_any()
+                .downcast_ref::<UppercaseAdapterFactory>(),
+            Some(factory.as_ref())
+        );
+    }
+
+    // Test CsvSource
+    {
+        let source = CsvSource::default();
+        let source_with_adapter = source
+            .clone()
+            .with_schema_adapter_factory(factory.clone())
+            .unwrap();
+
+        let base_source: Arc<dyn FileSource> = source.into();
+        assert!(base_source.schema_adapter_factory().is_none());
+        assert!(source_with_adapter.schema_adapter_factory().is_some());
+
+        let retrieved_factory = source_with_adapter.schema_adapter_factory().unwrap();
+        assert_eq!(
+            retrieved_factory
+                .as_any()
+                .downcast_ref::<UppercaseAdapterFactory>(),
+            Some(factory.as_ref())
+        );
+    }
+
+    // Test JsonSource
+    {
+        let source = JsonSource::default();
+        let source_with_adapter = source
+            .clone()
+            .with_schema_adapter_factory(factory.clone())
+            .unwrap();
+
+        let base_source: Arc<dyn FileSource> = source.into();
+        assert!(base_source.schema_adapter_factory().is_none());
+        assert!(source_with_adapter.schema_adapter_factory().is_some());
+
+        let retrieved_factory = source_with_adapter.schema_adapter_factory().unwrap();
+        assert_eq!(
+            retrieved_factory
+                .as_any()
+                .downcast_ref::<UppercaseAdapterFactory>(),
+            Some(factory.as_ref())
+        );
+    }
+
+    Ok(())
 }
 
 // Helper function to test From<T> for Arc<dyn FileSource> implementations
