@@ -132,3 +132,70 @@ impl ScalarUDFImpl for ChrFunc {
         self.doc()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::{Array, Int64Array, StringArray};
+    use datafusion_common::assert_contains;
+
+    #[test]
+    fn test_chr_normal() {
+        let input = Arc::new(Int64Array::from(vec![
+            Some(65),     // A
+            Some(66),     // B
+            Some(67),     // C
+            Some(128640), // 🚀
+            Some(8364),   // €
+            Some(945),    // α
+            None,         // NULL
+            Some(32),     // space
+            Some(10),     // newline
+            Some(9),      // tab
+        ]));
+        let result = chr(&[input]).unwrap();
+        let string_array = result.as_any().downcast_ref::<StringArray>().unwrap();
+        let expected = vec!["A", "B", "C", "🚀", "€", "α", "", " ", "\n", "\t"];
+
+        assert_eq!(string_array.len(), 10);
+        for i in 0..string_array.len() {
+            assert_eq!(string_array.value(i), expected[i]);
+        }
+    }
+
+    #[test]
+    fn test_chr_error() {
+        // chr(0) returns an error
+        let input = Arc::new(Int64Array::from(vec![0]));
+        let result = chr(&[input]);
+        assert!(result.is_err());
+        assert_contains!(
+            result.err().unwrap().to_string(),
+            "null character not permitted"
+        );
+
+        // invalid Unicode code points (too large)
+        let input = Arc::new(Int64Array::from(vec![i64::MAX]));
+        let result = chr(&[input]);
+        assert!(result.is_err());
+        assert_contains!(
+            result.err().unwrap().to_string(),
+            "requested character too large for encoding"
+        );
+
+        // one error with valid values after
+        let input = Arc::new(Int64Array::from(vec![65, 0, 66])); // A, NULL_CHAR, B
+        let result = chr(&[input]);
+        assert!(result.is_err());
+        assert_contains!(
+            result.err().unwrap().to_string(),
+            "null character not permitted"
+        );
+
+        // empty input array
+        let input = Arc::new(Int64Array::from(Vec::<i64>::new()));
+        let result = chr(&[input]).unwrap();
+        let string_array = result.as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!(string_array.len(), 0);
+    }
+}
