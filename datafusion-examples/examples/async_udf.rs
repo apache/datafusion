@@ -206,7 +206,7 @@ impl AsyncScalarUDFImpl for AskLLM {
         let args = ColumnarValue::values_to_arrays(&args.args)?;
         let [content_column, question_column] = take_function_args(self.name(), args)?;
 
-        // In a real function, you would use a library such as `request` here to
+        // In a real function, you would use a library such as `reqwest` here to
         // make an async HTTP request. Credentials and other configurations can
         // be supplied via the `ConfigOptions` parameter.
 
