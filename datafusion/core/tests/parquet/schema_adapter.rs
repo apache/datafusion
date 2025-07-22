@@ -388,6 +388,10 @@ async fn test_custom_schema_adapter_and_custom_expression_adapter() {
     assert_batches_eq!(expected, &batches);
 }
 
+// ----------------------------------------------------------------------
+// Tests migrated from schema_adaptation/schema_adapter_integration_tests.rs
+// ----------------------------------------------------------------------
+
 /// A schema adapter factory that transforms column names to uppercase
 #[derive(Debug, PartialEq)]
 struct UppercaseAdapterFactory {}
