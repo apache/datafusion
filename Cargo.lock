@@ -1762,6 +1762,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4f211af61d8efdd104f96e57adf5e426ba1bc3ed7a4ead616e15e5881fd79c4d"
 
 [[package]]
+name = "cty"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b365fabc795046672053e29c954733ec3b05e4be654ab130fe8f1f94d7051f35"
+
+[[package]]
 name = "darling"
 version = "0.20.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1898,6 +1904,7 @@ dependencies = [
  "datafusion-proto",
  "env_logger",
  "futures",
+ "libmimalloc-sys",
  "log",
  "mimalloc",
  "object_store",
@@ -4013,6 +4020,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bf88cd67e9de251c1781dbe2f641a1a3ad66eaae831b8a2c38fbdc5ddae16d4d"
 dependencies = [
  "cc",
+ "cty",
  "libc",
 ]
 

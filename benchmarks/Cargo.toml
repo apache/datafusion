@@ -33,6 +33,7 @@ workspace = true
 ci = []
 default = ["mimalloc"]
 snmalloc = ["snmalloc-rs"]
+mimalloc_extended = ["libmimalloc-sys/extended"]
 
 [dependencies]
 arrow = { workspace = true }
@@ -42,6 +43,7 @@ env_logger = { workspace = true }
 futures = { workspace = true }
 log = { workspace = true }
 mimalloc = { version = "0.1", optional = true, default-features = false }
+libmimalloc-sys = { version = "0.1", optional = true }
 object_store = { workspace = true }
 parquet = { workspace = true, default-features = true }
 rand = { workspace = true }
