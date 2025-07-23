@@ -71,7 +71,8 @@ use datafusion_expr::{
     Statement, WindowUDF,
 };
 use datafusion_expr::{
-    AggregateUDF, DmlStatement, FetchType, RecursiveQuery, SkipType, TableSource, Unnest,
+    AggregateUDF, DmlStatement, FetchType, RecursiveQuery, Sample, SkipType, TableSource,
+    Unnest,
 };
 
 use self::to_proto::{serialize_expr, serialize_exprs};
@@ -966,6 +967,16 @@ impl AsLogicalPlan for LogicalPlanNode {
                     Arc::new(into_logical_plan!(dml_node.input, ctx, extension_codec)?),
                 ),
             )),
+            LogicalPlanType::Sample(sample) => {
+                let input = into_logical_plan!(sample.input, ctx, extension_codec)?;
+                Ok(LogicalPlan::Sample(Sample {
+                    input: Arc::new(input),
+                    lower_bound: sample.lower_bound,
+                    upper_bound: sample.upper_bound,
+                    with_replacement: sample.with_replacement,
+                    seed: sample.seed,
+                }))
+            }
         }
     }
 
@@ -1774,6 +1785,23 @@ impl AsLogicalPlan for LogicalPlanNode {
                             static_term: Some(Box::new(static_term)),
                             recursive_term: Some(Box::new(recursive_term)),
                             is_distinct: recursive.is_distinct,
+                        },
+                    ))),
+                })
+            }
+            LogicalPlan::Sample(sample) => {
+                let input = LogicalPlanNode::try_from_logical_plan(
+                    sample.input.as_ref(),
+                    extension_codec,
+                )?;
+                Ok(LogicalPlanNode {
+                    logical_plan_type: Some(LogicalPlanType::Sample(Box::new(
+                        protobuf::SampleNode {
+                            input: Some(Box::new(input)),
+                            lower_bound: sample.lower_bound,
+                            upper_bound: sample.upper_bound,
+                            with_replacement: sample.with_replacement,
+                            seed: sample.seed,
                         },
                     ))),
                 })

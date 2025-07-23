@@ -30,6 +30,7 @@ use crate::expr_rewriter::{
     normalize_col_with_schemas_and_ambiguity_check, normalize_cols, normalize_sorts,
     rewrite_sort_cols_by_aggs,
 };
+use crate::logical_plan::plan::Sample;
 use crate::logical_plan::{
     Aggregate, Analyze, Distinct, DistinctOn, EmptyRelation, Explain, Filter, Join,
     JoinConstraint, JoinType, Limit, LogicalPlan, Partitioning, PlanType, Prepare,
@@ -1479,6 +1480,21 @@ impl LogicalPlanBuilder {
     ) -> Result<Self> {
         unnest_with_options(Arc::unwrap_or_clone(self.plan), columns, options)
             .map(Self::new)
+    }
+
+    pub fn sample(
+        self,
+        fraction: f64,
+        with_replacement: Option<bool>,
+        seed: Option<u64>,
+    ) -> Result<Self> {
+        Ok(Self::new(LogicalPlan::Sample(Sample {
+            input: self.plan,
+            lower_bound: 0.0,
+            upper_bound: fraction,
+            with_replacement: with_replacement.unwrap_or(false),
+            seed: seed.unwrap_or_else(rand::random),
+        })))
     }
 }
 
