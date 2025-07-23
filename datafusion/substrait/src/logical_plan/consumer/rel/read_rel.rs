@@ -121,7 +121,7 @@ pub async fn from_read_rel(
                 }));
             }
 
-            let values = if vt.values.is_empty() {
+            let values = if !vt.expressions.is_empty() {
                 let mut exprs = vec![];
                 for row in &vt.expressions {
                     let mut name_idx = 0;

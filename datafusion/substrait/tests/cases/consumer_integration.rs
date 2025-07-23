@@ -521,16 +521,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_expressions_in_virtual_table() -> Result<()> {
-        let plan_str = test_plan_to_string(
-            "select_count_from_select_1_virtual_table_expressions.substrait.json",
-        )
-        .await?;
+        let plan_str =
+            test_plan_to_string("virtual_table_with_expressions.substrait.json").await?;
 
         assert_snapshot!(
         plan_str,
         @r#"
-            Aggregate: groupBy=[[]], aggr=[[count(Int64(1)) AS count(*)]]
-              Values: (Int64(0))
+            Projection: dummy1 AS result1, dummy2 AS result2
+              Values: (Int64(0), Utf8("temp")), (Int64(1), Utf8("test"))
             "#
                 );
         Ok(())
