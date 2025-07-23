@@ -150,9 +150,7 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
         // Fast-path: no external buffers, pure inline views
         if arr.data_buffers().is_empty() {
             // Pointer to the start of uninitialized memory in `views`
-            let base_ptr = unsafe {
-                self.views.as_mut_ptr().add(self.views.len())
-            };
+            let base_ptr = unsafe { self.views.as_mut_ptr().add(self.views.len()) };
 
             // Handle nulls in bulk
             let null_count = array.null_count();
@@ -238,7 +236,7 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
                     base_ptr.add(i).write(view);
                 }
                 self.views.set_len(new_len);
-            }
+            },
 
             Some(true) => unsafe {
                 self.nulls.append_n(rows.len(), false);
@@ -271,7 +269,7 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
                 }
 
                 self.views.set_len(new_len);
-            }
+            },
 
             // Safety: we already reserve space for `views`
             Some(false) => unsafe {
@@ -280,7 +278,7 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
                 let new_len = self.views.len() + rows.len();
                 std::ptr::write_bytes(base_ptr, 0, rows.len());
                 self.views.set_len(new_len);
-            }
+            },
         }
     }
 
