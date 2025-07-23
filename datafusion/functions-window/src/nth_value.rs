@@ -35,6 +35,7 @@ use field::WindowUDFFieldArgs;
 use std::any::Any;
 use std::cmp::Ordering;
 use std::fmt::Debug;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::ops::Range;
 use std::sync::LazyLock;
 
@@ -76,7 +77,7 @@ pub fn nth_value(arg: datafusion_expr::Expr, n: i64) -> datafusion_expr::Expr {
 }
 
 /// Tag to differentiate special use cases of the NTH_VALUE built-in window function.
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub enum NthValueKind {
     First,
     Last,
@@ -334,6 +335,23 @@ impl WindowUDFImpl for NthValue {
             NthValueKind::Last => Some(get_last_value_doc()),
             NthValueKind::Nth => Some(get_nth_value_doc()),
         }
+    }
+
+    fn equals(&self, other: &dyn WindowUDFImpl) -> bool {
+        let Some(other) = other.as_any().downcast_ref::<Self>() else {
+            return false;
+        };
+        let Self { signature, kind } = self;
+        signature == &other.signature && kind == &other.kind
+    }
+
+    fn hash_value(&self) -> u64 {
+        let Self { signature, kind } = self;
+        let mut hasher = DefaultHasher::new();
+        std::any::type_name::<Self>().hash(&mut hasher);
+        signature.hash(&mut hasher);
+        kind.hash(&mut hasher);
+        hasher.finish()
     }
 }
 

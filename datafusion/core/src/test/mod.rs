@@ -38,6 +38,7 @@ use crate::test_util::{aggr_test_schema, arrow_test_data};
 use arrow::array::{self, Array, ArrayRef, Decimal128Builder, Int32Array};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
+#[cfg(feature = "compression")]
 use datafusion_common::DataFusionError;
 use datafusion_datasource::source::DataSourceExec;
 

@@ -556,8 +556,15 @@ impl DefaultPhysicalPlanner {
                     file_extension,
                 };
 
+                let ordering = input_exec.properties().output_ordering().cloned();
+
                 sink_format
-                    .create_writer_physical_plan(input_exec, session_state, config, None)
+                    .create_writer_physical_plan(
+                        input_exec,
+                        session_state,
+                        config,
+                        ordering.map(Into::into),
+                    )
                     .await?
             }
             LogicalPlan::Dml(DmlStatement {
@@ -1849,6 +1856,7 @@ impl DefaultPhysicalPlanner {
                 stringified_plans.push(StringifiedPlan::new(
                     FinalPhysicalPlan,
                     displayable(optimized_plan.as_ref())
+                        .set_tree_maximum_render_width(config.tree_maximum_render_width)
                         .tree_render()
                         .to_string(),
                 ));
