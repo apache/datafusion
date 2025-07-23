@@ -29,10 +29,9 @@ const SIZES: [usize; 3] = [1_000, 10_000, 100_000];
 const NULL_DENSITIES: [f32; 4] = [0.0, 0.1, 0.5, 1.0];
 
 fn bench_byte_view_group_operation(c: &mut Criterion) {
+    let mut group = c.benchmark_group("ByteViewGroupValueBuilder_inlined");
     // test all inlined scenarios random from 0 ~ 12
     for &size in &SIZES {
-        let mut group = c.benchmark_group("ByteViewGroupValueBuilder_inlined");
-
         let rows: Vec<usize> = (0..size).collect();
 
         for &null_density in &NULL_DENSITIES {
@@ -80,12 +79,13 @@ fn bench_byte_view_group_operation(c: &mut Criterion) {
                 });
             });
         }
-        group.finish();
     }
+    group.finish();
 
+    group = c.benchmark_group("ByteViewGroupValueBuilder_mixed");
     // test mixed length from 0 ~ 64
     for &size in &SIZES {
-        let mut group = c.benchmark_group("ByteViewGroupValueBuilder_mixed");
+
         let rows: Vec<usize> = (0..size).collect();
 
         for &null_density in &NULL_DENSITIES {
@@ -134,12 +134,13 @@ fn bench_byte_view_group_operation(c: &mut Criterion) {
                 });
             });
         }
-        group.finish();
     }
+    group.finish();
 
+    group = c.benchmark_group("ByteViewGroupValueBuilder_fixed");
     // test fixed length 64
     for &size in &SIZES {
-        let mut group = c.benchmark_group("ByteViewGroupValueBuilder_fixed");
+
         let rows: Vec<usize> = (0..size).collect();
 
         for &null_density in &NULL_DENSITIES {
@@ -188,12 +189,12 @@ fn bench_byte_view_group_operation(c: &mut Criterion) {
                 });
             });
         }
-        group.finish();
     }
+    group.finish();
 
+    group = c.benchmark_group("ByteViewGroupValueBuilder_random");
     // test random length from 0 ~ 400
     for &size in &SIZES {
-        let mut group = c.benchmark_group("ByteViewGroupValueBuilder_random");
         let rows: Vec<usize> = (0..size).collect();
 
         for &null_density in &NULL_DENSITIES {
@@ -242,8 +243,8 @@ fn bench_byte_view_group_operation(c: &mut Criterion) {
                 });
             });
         }
-        group.finish();
     }
+    group.finish();
 }
 
 criterion_group!(benches, bench_byte_view_group_operation);
