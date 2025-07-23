@@ -207,9 +207,9 @@ impl RunOpt {
         let avg = millis.iter().sum::<f64>() / millis.len() as f64;
         println!("Query {query_id} avg time: {avg:.2} ms");
 
-        if self.common.memory_stat_enabled {
-            print_memory_stats();
-        }
+        // Print memory usage stats using mimalloc (only when compiled with --features mimalloc_extended)
+        print_memory_stats();
+
         Ok(query_results)
     }
 

@@ -18,47 +18,62 @@
 //! mem_profile binary entrypoint
 use datafusion::error::Result;
 use std::{
+    env,
     io::{BufRead, BufReader},
     process::{Command, Stdio},
 };
 use structopt::StructOpt;
 
-#[derive(Debug, StructOpt)]
-#[structopt(about = "memory profile command")]
-struct MemProfileOpt {
-    #[structopt(subcommand)]
-    command: BenchmarkCommand,
-}
+use datafusion_benchmarks::{
+    clickbench,
+    h2o::{self, AllQueries},
+    imdb, sort_tpch, tpch,
+};
 
 #[derive(Debug, StructOpt)]
-enum BenchmarkCommand {
-    Tpch(TpchOpt),
-    // TODO Add other benchmark commands here
-}
-
-#[derive(Debug, StructOpt)]
-struct TpchOpt {
-    #[structopt(long, required = true)]
-    path: String,
-
-    /// Query number. If not specified, runs all queries
-    #[structopt(short, long)]
-    query: Option<usize>,
+#[structopt(about = "benchmark command")]
+#[allow(dead_code)]
+enum Options {
+    Clickbench(clickbench::RunOpt),
+    H2o(h2o::RunOpt),
+    Imdb(imdb::RunOpt),
+    SortTpch(sort_tpch::RunOpt),
+    Tpch(tpch::RunOpt),
 }
 
 #[tokio::main]
 pub async fn main() -> Result<()> {
     // 1. parse args and check which benchmarks should be run
-    let opt = MemProfileOpt::from_args();
+    // let opt = MemProfileOpt::from_args();
+    let profile = env::var("PROFILE").unwrap_or_else(|_| "release".to_string());
+
+    let args = env::args().skip(1);
+    // let opt = Options::from_iter(args);
+    let query_range = match Options::from_args() {
+        // TODO clickbench
+        // TODO run for specific query id
+        Options::Clickbench(_) => 0..=42,
+        Options::H2o(opt) => {
+            let queries = AllQueries::try_new(&opt.queries_path)?;
+            match opt.query {
+                Some(query_id) => query_id..=query_id,
+                None => queries.min_query_id()..=queries.max_query_id(),
+            }
+        }
+        Options::Imdb(_) => imdb::IMDB_QUERY_START_ID..=imdb::IMDB_QUERY_END_ID,
+        Options::SortTpch(_) => {
+            sort_tpch::SORT_TPCH_QUERY_START_ID..=sort_tpch::SORT_TPCH_QUERY_END_ID
+        }
+        Options::Tpch(_) => tpch::TPCH_QUERY_START_ID..=tpch::TPCH_QUERY_END_ID,
+    };
 
     // 2. prebuild test binary so that memory does not blow up due to build process
-    // check binary file location
     println!("Pre-building benchmark binary...");
     let status = Command::new("cargo")
         .args([
             "build",
             "--profile",
-            "release-nonlto",
+            &profile,
             "--features",
             "mimalloc_extended",
             "--bin",
@@ -66,52 +81,35 @@ pub async fn main() -> Result<()> {
         ])
         .status()
         .expect("Failed to build dfbench");
-
-    if !status.success() {
-        panic!("Failed to build dfbench");
-    }
+    assert!(status.success());
     println!("Benchmark binary built successfully.");
 
-    // 3. create a subprocess, run each benchmark with args (1) (2)
-    match opt.command {
-        BenchmarkCommand::Tpch(tpch_opt) => {
-            run_tpch_benchmark(tpch_opt).await?;
-        }
-    }
+    // 3. spawn a new process per each benchmark query and print summary
+    let mut dfbench_args: Vec<String> = args.collect();
+    println!("{dfbench_args:?}");
+    run_benchmark_as_child_process(&profile, query_range, &mut dfbench_args)?;
 
-    // (maybe we cannot support result file.. and just have to print..)
     Ok(())
 }
 
-async fn run_tpch_benchmark(opt: TpchOpt) -> Result<()> {
-    let mut args: Vec<String> = vec![
-        "./target/release-nonlto/dfbench".to_string(),
-        "tpch".to_string(),
-        "--iterations".to_string(),
-        "1".to_string(),
-        "--path".to_string(),
-        opt.path.clone(),
-        "--format".to_string(),
-        "parquet".to_string(),
-        "--partitions".to_string(),
-        "4".to_string(),
-        "--query".to_string(),
-    ];
-
+fn run_benchmark_as_child_process(
+    profile: &str,
+    query_range: std::ops::RangeInclusive<usize>,
+    args: &mut Vec<String>,
+) -> Result<()> {
     let mut query_strings: Vec<String> = Vec::new();
-    if let Some(query_id) = opt.query {
-        query_strings.push(query_id.to_string());
-    } else {
-        // run all queries.
-        for i in 1..=22 {
-            query_strings.push(i.to_string());
-        }
+    for i in query_range {
+        query_strings.push(i.to_string());
     }
+
+    let command = format!("target/{profile}/dfbench");
+    args.insert(0, command);
+    args.push("--query".to_string());
 
     let mut results = vec![];
     for query_str in query_strings {
         args.push(query_str);
-        let _ = run_query(&args, &mut results);
+        let _ = run_query(args, &mut results);
         args.pop();
     }
 
