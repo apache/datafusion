@@ -497,8 +497,18 @@ fn push_down_filters(
         // currently. `self_filters` are the predicates which are provided by the current node,
         // and tried to be pushed down over the child similarly.
 
-        let num_self_filters = self_filters.len();
-        let mut all_predicates = self_filters.clone();
+        // Filter out self_filters that contain volatile expressions and track indices
+        let mut filtered_self_filters = vec![];
+        let mut self_filter_indices = vec![];
+        for (idx, filter) in self_filters.iter().enumerate() {
+            if allow_pushdown_for_expr(filter) {
+                filtered_self_filters.push(filter.clone());
+                self_filter_indices.push(idx);
+            }
+        }
+
+        let num_self_filters = filtered_self_filters.len();
+        let mut all_predicates = filtered_self_filters;
 
         // Track which parent filters are supported for this child
         let mut parent_filter_indices = vec![];
@@ -553,13 +563,24 @@ fn push_down_filters(
             .split_off(num_self_filters)
             .into_iter()
             .collect_vec();
-        self_filters_pushdown_supports.push(
-            all_filters
-                .into_iter()
-                .zip(self_filters)
-                .map(|(s, f)| s.wrap_expression(f))
-                .collect(),
-        );
+        // We need to reconstruct the self_filters results, accounting for filtered-out expressions
+        let mut self_filter_results = vec![PushedDown::No; self_filters.len()];
+
+        // Map the results from filtered self filters back to their original positions
+        for (result_idx, support) in all_filters.into_iter().enumerate() {
+            // all_filters now contains only self filters
+            let original_idx = self_filter_indices[result_idx];
+            self_filter_results[original_idx] = support;
+        }
+
+        // Wrap each result with its corresponding expression
+        let self_filter_results: Vec<_> = self_filter_results
+            .into_iter()
+            .zip(self_filters)
+            .map(|(support, filter)| support.wrap_expression(filter))
+            .collect();
+
+        self_filters_pushdown_supports.push(self_filter_results);
 
         // Start by marking all parent filters as unsupported for this child
         for parent_filter_pushdown_support in parent_filter_pushdown_supports.iter_mut() {
@@ -614,10 +635,12 @@ fn push_down_filters(
 fn allow_pushdown_for_expr(expr: &Arc<dyn PhysicalExpr>) -> bool {
     let mut allow_pushdown = true;
     expr.apply(|e| {
-        if !allow_pushdown_for_expr_inner(e) {
-            allow_pushdown = false;
+        allow_pushdown = allow_pushdown && allow_pushdown_for_expr_inner(e);
+        if allow_pushdown {
+            Ok(TreeNodeRecursion::Continue)
+        } else {
+            Ok(TreeNodeRecursion::Stop)
         }
-        Ok(TreeNodeRecursion::Continue)
     })
     .expect("Infallible traversal of PhysicalExpr tree failed");
     allow_pushdown
@@ -630,8 +653,9 @@ fn allow_pushdown_for_expr_inner(expr: &Arc<dyn PhysicalExpr>) -> bool {
         expr.as_any()
             .downcast_ref::<datafusion_physical_expr::ScalarFunctionExpr>()
     {
+        let name = scalar_function.fun().name();
         // Check if the function is volatile
-        if scalar_function.fun().name() == "random" {
+        if name == "random" {
             // Random function is volatile, do not allow pushdown
             return false;
         }
