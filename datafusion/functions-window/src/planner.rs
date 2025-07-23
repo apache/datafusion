@@ -293,6 +293,14 @@ impl ExprPlanner for WindowFunctionPlanner {
                                 );
                             }
 
+                            // Only rewrite if the expression references at least one symbol predicate.
+                            if symbols.is_empty() {
+                                // No symbol predicates → leave expression untouched
+                                return Ok(
+                                    datafusion_common::tree_node::Transformed::no(e),
+                                );
+                            }
+
                             // Build the classifier predicate:
                             //   • If a specific symbol is referenced:  __mr_classifier = '<symbol>'
                             //   • Otherwise (any symbol):            __mr_classifier != '(empty)'
@@ -343,6 +351,8 @@ impl ExprPlanner for WindowFunctionPlanner {
                             ));
                         }
                     }
+                    // If we didn't match any of the above rewrite rules, leave the
+                    // window function expression unchanged.
 
                     // Stop recursion inside window function: do not traverse inside
                     return Ok(datafusion_common::tree_node::Transformed::no(e));

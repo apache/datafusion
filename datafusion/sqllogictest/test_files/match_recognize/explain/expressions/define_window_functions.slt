@@ -239,10 +239,28 @@ MATCH_RECOGNIZE (
 )
 
 # Test aggregate window functions
-query error DataFusion error: Schema error: No field named __mr_classifier\. Valid fields are stock_price\.company, stock_price\.price_date, stock_price\.price\.
+query TT
 EXPLAIN SELECT * FROM stock_price
 MATCH_RECOGNIZE (
     ALL ROWS PER MATCH
     PATTERN (A+)
     DEFINE A AS price > SUM(price) OVER (ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
 )
+----
+logical_plan
+01)Projection: stock_price.company, stock_price.price_date, stock_price.price
+02)--Filter: __mr_is_included_row
+03)----Projection: stock_price.company, stock_price.price_date, stock_price.price, __mr_is_included_row
+04)------MatchRecognizePattern: pattern=[A+]
+05)--------Projection: stock_price.company, stock_price.price_date, stock_price.price, sum(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, CAST(stock_price.price AS Int64) > sum(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS __mr_symbol_A
+06)----------WindowAggr: windowExpr=[[sum(CAST(stock_price.price AS Int64)) ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+07)------------TableScan: stock_price projection=[company, price_date, price]
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=8192, schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]
+02)--FilterExec: __mr_is_included_row@3, projection=[company@0, price_date@1, price@2], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]
+03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_is_included_row:Boolean]
+04)------ProjectionExec: expr=[company@0 as company, price_date@1 as price_date, price@2 as price, __mr_is_included_row@9 as __mr_is_included_row], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, __mr_is_included_row:Boolean]
+05)--------MatchRecognizePatternExec: pattern=[A+], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, sum(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW:Int64;N, __mr_symbol_A:Boolean;N, __mr_classifier:Utf8, __mr_match_number:UInt64, __mr_match_sequence_number:UInt64, __mr_is_last_match_row:Boolean, __mr_is_included_row:Boolean]
+06)----------ProjectionExec: expr=[company@0 as company, price_date@1 as price_date, price@2 as price, sum(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as sum(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, CAST(price@2 AS Int64) > sum(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as __mr_symbol_A], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, sum(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW:Int64;N, __mr_symbol_A:Boolean;N]
+07)------------BoundedWindowAggExec: wdw=[sum(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { name: "sum(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N, sum(stock_price.price) ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW:Int64;N]
+08)--------------DataSourceExec: partitions=1, partition_sizes=[0], schema=[company:Utf8View;N, price_date:Date32;N, price:Int32;N]

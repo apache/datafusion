@@ -23,7 +23,6 @@ pub mod pattern_exec;
 pub mod compile;
 pub mod matcher;
 pub mod nfa;
-
 // Re-export the main public API
 pub use matcher::PatternMatcher;
 pub use pattern_exec::MatchRecognizePatternExec;

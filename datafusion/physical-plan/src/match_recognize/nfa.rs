@@ -134,6 +134,9 @@ pub struct NFAState {
     pub is_excluded: bool,
     /// Transitions from this state: symbol -> set of next state IDs
     pub transitions: HashMap<String, HashSet<usize>>,
+    /// Dense transition matrix indexed by numeric symbol id (0 = Empty).
+    /// Populated by the compiler once all user-defined symbols are known.
+    pub numeric_transitions: Vec<Vec<usize>>,
     /// Epsilon transitions (do not consume input) with an optional position predicate.
     /// `None` means unconditional; `Some(pred)` restricts the transition to positions
     /// where the predicate is satisfied.
@@ -141,6 +144,8 @@ pub struct NFAState {
     /// Pre-computed ε-closure for this state (includes the state itself).
     /// Stored densely as a sorted vector for cache-friendly iteration and deterministic order
     pub epsilon_closure: Vec<usize>,
+    /// Pre-computed ε-closure using only unconditional (None) transitions.
+    pub unconditional_closure: Vec<usize>,
 }
 
 /// Thin wrapper around an immutable slice of NFA states.

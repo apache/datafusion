@@ -1,0 +1,353 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+include ../../../tpch/create_tables.slt.part
+
+query TT
+EXPLAIN ANALYZE
+SELECT *
+FROM lineitem
+MATCH_RECOGNIZE (
+    PARTITION BY l_orderkey
+    ORDER BY l_linenumber
+    PATTERN (A B+)
+    DEFINE
+    B AS l_quantity > LAG(l_quantity)
+) mr
+----
+Plan with Metrics
+01)CoalesceBatchesExec: target_batch_size=8192, metrics=[output_rows=170314, elapsed_compute=494.125µs]
+02)--FilterExec: __mr_is_last_match_row@1, projection=[l_orderkey@0], metrics=[output_rows=170314, elapsed_compute=6.142372ms]
+03)----ProjectionExec: expr=[l_orderkey@0 as l_orderkey, __mr_is_last_match_row@23 as __mr_is_last_match_row], metrics=[output_rows=391160, elapsed_compute=237.925µs]
+04)------MatchRecognizePatternExec: pattern=[A B+], metrics=[output_rows=391160, elapsed_compute=2.148522083s, define_pred_evals=1660596, input_batches=76, input_rows=600572, matches_emitted=170314, nfa_state_transitions=600572, nfa_active_states_max=4, alloc_time=44.510297ms, candidate_time=66.961413ms, epsilon_eval_time=4ns, match_compute_time=1.976790642s, nfa_eval_time=1.605120796s, row_loop_time=1.290603212s, slice_time=90.348348ms, symbol_eval_time=112.046086ms, transition_time=452.946633ms]
+05)--------ProjectionExec: expr=[l_orderkey@0 as l_orderkey, l_partkey@1 as l_partkey, l_suppkey@2 as l_suppkey, l_linenumber@3 as l_linenumber, l_quantity@4 as l_quantity, l_extendedprice@5 as l_extendedprice, l_discount@6 as l_discount, l_tax@7 as l_tax, l_returnflag@8 as l_returnflag, l_linestatus@9 as l_linestatus, l_shipdate@10 as l_shipdate, l_commitdate@11 as l_commitdate, l_receiptdate@12 as l_receiptdate, l_shipinstruct@13 as l_shipinstruct, l_shipmode@14 as l_shipmode, l_comment@15 as l_comment, l_rev@16 as l_rev, lag(lineitem.l_quantity) PARTITION BY [lineitem.l_orderkey] ORDER BY [lineitem.l_linenumber ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@17 as lag(lineitem.l_quantity) PARTITION BY [lineitem.l_orderkey] ORDER BY [lineitem.l_linenumber ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, true as __mr_symbol_A, l_quantity@4 > lag(lineitem.l_quantity) PARTITION BY [lineitem.l_orderkey] ORDER BY [lineitem.l_linenumber ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@17 as __mr_symbol_B], metrics=[output_rows=600572, elapsed_compute=35.095505ms]
+06)----------BoundedWindowAggExec: wdw=[lag(lineitem.l_quantity) PARTITION BY [lineitem.l_orderkey] ORDER BY [lineitem.l_linenumber ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Field { name: "lag(lineitem.l_quantity) PARTITION BY [lineitem.l_orderkey] ORDER BY [lineitem.l_linenumber ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Decimal128(15, 2), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING], mode=[Sorted], metrics=[output_rows=600572, elapsed_compute=9.878683832s]
+07)------------SortExec: expr=[l_orderkey@0 ASC NULLS LAST, l_linenumber@3 ASC NULLS LAST], preserve_partitioning=[true], metrics=[output_rows=600572, elapsed_compute=1.377238123s, spill_count=0, spilled_bytes=0.0 B, spilled_rows=0]
+08)--------------CoalesceBatchesExec: target_batch_size=8192, metrics=[output_rows=600572, elapsed_compute=470.215046ms]
+09)----------------RepartitionExec: partitioning=Hash([l_orderkey@0], 4), input_partitions=4, metrics=[fetch_time=4.639972463s, repartition_time=132.460051ms, send_time=62.138139ms]
+10)------------------DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:0..18561749], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:18561749..37123498], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:37123498..55685247], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:55685247..74246996]]}, projection=[l_orderkey, l_partkey, l_suppkey, l_linenumber, l_quantity, l_extendedprice, l_discount, l_tax, l_returnflag, l_linestatus, l_shipdate, l_commitdate, l_receiptdate, l_shipinstruct, l_shipmode, l_comment, l_rev], file_type=csv, has_header=false, metrics=[output_rows=600572, elapsed_compute=4ns, batches_splitted=0, file_open_errors=0, file_scan_errors=0, time_elapsed_opening=24.620167ms, time_elapsed_processing=4.616593503s, time_elapsed_scanning_total=4.830265923s, time_elapsed_scanning_until_data=317.454958ms]
+
+
+query TT
+EXPLAIN ANALYZE
+SELECT *
+FROM lineitem
+MATCH_RECOGNIZE (
+    PARTITION BY l_orderkey
+    ORDER BY l_linenumber
+    PATTERN (A B+)
+    DEFINE
+    B AS l_quantity < LAG(l_quantity)
+) mr
+----
+Plan with Metrics
+01)CoalesceBatchesExec: target_batch_size=8192, metrics=[output_rows=170161, elapsed_compute=535.464µs]
+02)--FilterExec: __mr_is_last_match_row@1, projection=[l_orderkey@0], metrics=[output_rows=170161, elapsed_compute=6.197334ms]
+03)----ProjectionExec: expr=[l_orderkey@0 as l_orderkey, __mr_is_last_match_row@23 as __mr_is_last_match_row], metrics=[output_rows=390861, elapsed_compute=249.832µs]
+04)------MatchRecognizePatternExec: pattern=[A B+], metrics=[output_rows=390861, elapsed_compute=2.157116541s, define_pred_evals=1660888, input_batches=76, input_rows=600572, matches_emitted=170161, nfa_state_transitions=600572, nfa_active_states_max=4, alloc_time=45.88061ms, candidate_time=67.286171ms, epsilon_eval_time=4ns, match_compute_time=1.985379321s, nfa_eval_time=1.608019508s, row_loop_time=1.290753009s, slice_time=93.398676ms, symbol_eval_time=112.054144ms, transition_time=452.358144ms]
+05)--------ProjectionExec: expr=[l_orderkey@0 as l_orderkey, l_partkey@1 as l_partkey, l_suppkey@2 as l_suppkey, l_linenumber@3 as l_linenumber, l_quantity@4 as l_quantity, l_extendedprice@5 as l_extendedprice, l_discount@6 as l_discount, l_tax@7 as l_tax, l_returnflag@8 as l_returnflag, l_linestatus@9 as l_linestatus, l_shipdate@10 as l_shipdate, l_commitdate@11 as l_commitdate, l_receiptdate@12 as l_receiptdate, l_shipinstruct@13 as l_shipinstruct, l_shipmode@14 as l_shipmode, l_comment@15 as l_comment, l_rev@16 as l_rev, lag(lineitem.l_quantity) PARTITION BY [lineitem.l_orderkey] ORDER BY [lineitem.l_linenumber ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@17 as lag(lineitem.l_quantity) PARTITION BY [lineitem.l_orderkey] ORDER BY [lineitem.l_linenumber ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, true as __mr_symbol_A, l_quantity@4 < lag(lineitem.l_quantity) PARTITION BY [lineitem.l_orderkey] ORDER BY [lineitem.l_linenumber ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@17 as __mr_symbol_B], metrics=[output_rows=600572, elapsed_compute=34.892254ms]
+06)----------BoundedWindowAggExec: wdw=[lag(lineitem.l_quantity) PARTITION BY [lineitem.l_orderkey] ORDER BY [lineitem.l_linenumber ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Field { name: "lag(lineitem.l_quantity) PARTITION BY [lineitem.l_orderkey] ORDER BY [lineitem.l_linenumber ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Decimal128(15, 2), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING], mode=[Sorted], metrics=[output_rows=600572, elapsed_compute=9.92605958s]
+07)------------SortExec: expr=[l_orderkey@0 ASC NULLS LAST, l_linenumber@3 ASC NULLS LAST], preserve_partitioning=[true], metrics=[output_rows=600572, elapsed_compute=1.363007918s, spill_count=0, spilled_bytes=0.0 B, spilled_rows=0]
+08)--------------CoalesceBatchesExec: target_batch_size=8192, metrics=[output_rows=600572, elapsed_compute=466.127669ms]
+09)----------------RepartitionExec: partitioning=Hash([l_orderkey@0], 4), input_partitions=4, metrics=[fetch_time=4.55887737s, repartition_time=129.301563ms, send_time=37.279375ms]
+10)------------------DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:0..18561749], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:18561749..37123498], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:37123498..55685247], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:55685247..74246996]]}, projection=[l_orderkey, l_partkey, l_suppkey, l_linenumber, l_quantity, l_extendedprice, l_discount, l_tax, l_returnflag, l_linestatus, l_shipdate, l_commitdate, l_receiptdate, l_shipinstruct, l_shipmode, l_comment, l_rev], file_type=csv, has_header=false, metrics=[output_rows=600572, elapsed_compute=4ns, batches_splitted=0, file_open_errors=0, file_scan_errors=0, time_elapsed_opening=1.773792ms, time_elapsed_processing=4.557853209s, time_elapsed_scanning_total=4.754497375s, time_elapsed_scanning_until_data=265.126083ms]
+
+
+
+query TT
+EXPLAIN ANALYZE
+SELECT *
+FROM lineitem
+MATCH_RECOGNIZE (
+    PARTITION BY l_orderkey
+    ORDER BY l_linenumber
+    PATTERN (A B C)
+    DEFINE
+    B AS l_extendedprice > LAG(l_extendedprice),
+    C AS l_extendedprice < LAG(l_extendedprice)
+) mr
+----
+Plan with Metrics
+01)CoalesceBatchesExec: target_batch_size=8192, metrics=[output_rows=91403, elapsed_compute=523.159µs]
+02)--FilterExec: __mr_is_last_match_row@1, projection=[l_orderkey@0], metrics=[output_rows=91403, elapsed_compute=3.821331ms]
+03)----ProjectionExec: expr=[l_orderkey@0 as l_orderkey, __mr_is_last_match_row@24 as __mr_is_last_match_row], metrics=[output_rows=274209, elapsed_compute=285µs]
+04)------MatchRecognizePatternExec: pattern=[A B C], metrics=[output_rows=274209, elapsed_compute=2.315933584s, define_pred_evals=2738892, input_batches=76, input_rows=600572, matches_emitted=91403, nfa_state_transitions=695317, nfa_active_states_max=4, alloc_time=56.258541ms, candidate_time=29.298946ms, epsilon_eval_time=4ns, match_compute_time=2.160073659s, nfa_eval_time=1.765024604s, row_loop_time=1.414634215s, slice_time=146.979377ms, symbol_eval_time=138.498992ms, transition_time=461.503124ms]
+05)--------ProjectionExec: expr=[l_orderkey@0 as l_orderkey, l_partkey@1 as l_partkey, l_suppkey@2 as l_suppkey, l_linenumber@3 as l_linenumber, l_quantity@4 as l_quantity, l_extendedprice@5 as l_extendedprice, l_discount@6 as l_discount, l_tax@7 as l_tax, l_returnflag@8 as l_returnflag, l_linestatus@9 as l_linestatus, l_shipdate@10 as l_shipdate, l_commitdate@11 as l_commitdate, l_receiptdate@12 as l_receiptdate, l_shipinstruct@13 as l_shipinstruct, l_shipmode@14 as l_shipmode, l_comment@15 as l_comment, l_rev@16 as l_rev, lag(lineitem.l_extendedprice) PARTITION BY [lineitem.l_orderkey] ORDER BY [lineitem.l_linenumber ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@17 as lag(lineitem.l_extendedprice) PARTITION BY [lineitem.l_orderkey] ORDER BY [lineitem.l_linenumber ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, true as __mr_symbol_A, l_extendedprice@5 > lag(lineitem.l_extendedprice) PARTITION BY [lineitem.l_orderkey] ORDER BY [lineitem.l_linenumber ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@17 as __mr_symbol_B, l_extendedprice@5 < lag(lineitem.l_extendedprice) PARTITION BY [lineitem.l_orderkey] ORDER BY [lineitem.l_linenumber ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@17 as __mr_symbol_C], metrics=[output_rows=600572, elapsed_compute=58.946499ms]
+06)----------BoundedWindowAggExec: wdw=[lag(lineitem.l_extendedprice) PARTITION BY [lineitem.l_orderkey] ORDER BY [lineitem.l_linenumber ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Field { name: "lag(lineitem.l_extendedprice) PARTITION BY [lineitem.l_orderkey] ORDER BY [lineitem.l_linenumber ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Decimal128(15, 2), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING], mode=[Sorted], metrics=[output_rows=600572, elapsed_compute=9.96449425s]
+07)------------SortExec: expr=[l_orderkey@0 ASC NULLS LAST, l_linenumber@3 ASC NULLS LAST], preserve_partitioning=[true], metrics=[output_rows=600572, elapsed_compute=1.38845538s, spill_count=0, spilled_bytes=0.0 B, spilled_rows=0]
+08)--------------CoalesceBatchesExec: target_batch_size=8192, metrics=[output_rows=600572, elapsed_compute=466.016461ms]
+09)----------------RepartitionExec: partitioning=Hash([l_orderkey@0], 4), input_partitions=4, metrics=[fetch_time=4.534812916s, repartition_time=128.776577ms, send_time=44.483254ms]
+10)------------------DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:0..18561749], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:18561749..37123498], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:37123498..55685247], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:55685247..74246996]]}, projection=[l_orderkey, l_partkey, l_suppkey, l_linenumber, l_quantity, l_extendedprice, l_discount, l_tax, l_returnflag, l_linestatus, l_shipdate, l_commitdate, l_receiptdate, l_shipinstruct, l_shipmode, l_comment, l_rev], file_type=csv, has_header=false, metrics=[output_rows=600572, elapsed_compute=4ns, batches_splitted=0, file_open_errors=0, file_scan_errors=0, time_elapsed_opening=1.876958ms, time_elapsed_processing=4.533560291s, time_elapsed_scanning_total=4.728817419s, time_elapsed_scanning_until_data=261.112668ms]
+
+
+
+query TT
+EXPLAIN ANALYZE
+SELECT l_orderkey, l_discount, cnt
+FROM (
+    SELECT *
+    FROM lineitem
+    MATCH_RECOGNIZE (
+    PARTITION BY l_orderkey
+    ORDER BY l_linenumber
+    MEASURES COUNT(A.l_discount) AS cnt
+    ALL ROWS PER MATCH
+    PATTERN (A{3,})
+    DEFINE
+        A AS l_discount = LAG(l_discount)
+    )
+) t
+----
+Plan with Metrics
+01)ProjectionExec: expr=[l_orderkey@0 as l_orderkey, l_discount@1 as l_discount, count(CASE WHEN __mr_classifier = Utf8("A") THEN a.l_discount ELSE NULL END) PARTITION BY [lineitem.l_orderkey, __mr_match_number] ORDER BY [lineitem.l_linenumber ASC NULLS LAST, __mr_match_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as cnt], metrics=[output_rows=733, elapsed_compute=6.748µs]
+02)--CoalesceBatchesExec: target_batch_size=8192, metrics=[output_rows=733, elapsed_compute=21.877µs]
+03)----FilterExec: __mr_is_included_row@2, projection=[l_orderkey@0, l_discount@1, count(CASE WHEN __mr_classifier = Utf8("A") THEN a.l_discount ELSE NULL END) PARTITION BY [lineitem.l_orderkey, __mr_match_number] ORDER BY [lineitem.l_linenumber ASC NULLS LAST, __mr_match_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3], metrics=[output_rows=733, elapsed_compute=25.126µs]
+04)------ProjectionExec: expr=[l_orderkey@0 as l_orderkey, l_discount@2 as l_discount, __mr_is_included_row@5 as __mr_is_included_row, count(CASE WHEN __mr_classifier = Utf8("A") THEN a.l_discount ELSE NULL END) PARTITION BY [lineitem.l_orderkey, __mr_match_number] ORDER BY [lineitem.l_linenumber ASC NULLS LAST, __mr_match_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@6 as count(CASE WHEN __mr_classifier = Utf8("A") THEN a.l_discount ELSE NULL END) PARTITION BY [lineitem.l_orderkey, __mr_match_number] ORDER BY [lineitem.l_linenumber ASC NULLS LAST, __mr_match_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], metrics=[output_rows=733, elapsed_compute=8.959µs]
+05)--------BoundedWindowAggExec: wdw=[count(CASE WHEN __mr_classifier = Utf8("A") THEN a.l_discount ELSE NULL END) PARTITION BY [lineitem.l_orderkey, __mr_match_number] ORDER BY [lineitem.l_linenumber ASC NULLS LAST, __mr_match_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { name: "count(CASE WHEN __mr_classifier = Utf8(\"A\") THEN a.l_discount ELSE NULL END) PARTITION BY [lineitem.l_orderkey, __mr_match_number] ORDER BY [lineitem.l_linenumber ASC NULLS LAST, __mr_match_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted], metrics=[output_rows=733, elapsed_compute=10.435249ms]
+06)----------SortExec: expr=[l_orderkey@0 ASC NULLS LAST, __mr_match_number@4 ASC NULLS LAST, l_linenumber@1 ASC NULLS LAST], preserve_partitioning=[true], metrics=[output_rows=733, elapsed_compute=357.25µs, spill_count=0, spilled_bytes=0.0 B, spilled_rows=0]
+07)------------CoalesceBatchesExec: target_batch_size=8192, metrics=[output_rows=733, elapsed_compute=2.154505ms]
+08)--------------RepartitionExec: partitioning=Hash([l_orderkey@0, __mr_match_number@4], 4), input_partitions=4, metrics=[fetch_time=16.927012212s, repartition_time=2.123293ms, send_time=1.596348ms]
+09)----------------ProjectionExec: expr=[l_orderkey@0 as l_orderkey, l_linenumber@3 as l_linenumber, l_discount@6 as l_discount, __mr_classifier@19 as __mr_classifier, __mr_match_number@20 as __mr_match_number, __mr_is_included_row@23 as __mr_is_included_row], metrics=[output_rows=733, elapsed_compute=345.087µs]
+10)------------------MatchRecognizePatternExec: pattern=[A{3,}], metrics=[output_rows=733, elapsed_compute=1.285240585s, define_pred_evals=643080, input_batches=76, input_rows=600572, matches_emitted=240, nfa_state_transitions=57501, nfa_active_states_max=4, alloc_time=4.55322ms, candidate_time=317.595µs, epsilon_eval_time=4ns, match_compute_time=1.218631248s, nfa_eval_time=1.033338563s, row_loop_time=677.092537ms, slice_time=73.73482ms, symbol_eval_time=74.047341ms, transition_time=143.635286ms]
+11)--------------------ProjectionExec: expr=[l_orderkey@0 as l_orderkey, l_partkey@1 as l_partkey, l_suppkey@2 as l_suppkey, l_linenumber@3 as l_linenumber, l_quantity@4 as l_quantity, l_extendedprice@5 as l_extendedprice, l_discount@6 as l_discount, l_tax@7 as l_tax, l_returnflag@8 as l_returnflag, l_linestatus@9 as l_linestatus, l_shipdate@10 as l_shipdate, l_commitdate@11 as l_commitdate, l_receiptdate@12 as l_receiptdate, l_shipinstruct@13 as l_shipinstruct, l_shipmode@14 as l_shipmode, l_comment@15 as l_comment, l_rev@16 as l_rev, lag(lineitem.l_discount) PARTITION BY [lineitem.l_orderkey] ORDER BY [lineitem.l_linenumber ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@17 as lag(lineitem.l_discount) PARTITION BY [lineitem.l_orderkey] ORDER BY [lineitem.l_linenumber ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, l_discount@6 = lag(lineitem.l_discount) PARTITION BY [lineitem.l_orderkey] ORDER BY [lineitem.l_linenumber ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@17 as __mr_symbol_A], metrics=[output_rows=600572, elapsed_compute=17.583291ms]
+12)----------------------BoundedWindowAggExec: wdw=[lag(lineitem.l_discount) PARTITION BY [lineitem.l_orderkey] ORDER BY [lineitem.l_linenumber ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Field { name: "lag(lineitem.l_discount) PARTITION BY [lineitem.l_orderkey] ORDER BY [lineitem.l_linenumber ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Decimal128(15, 2), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING], mode=[Sorted], metrics=[output_rows=600572, elapsed_compute=9.813732462s]
+13)------------------------SortExec: expr=[l_orderkey@0 ASC NULLS LAST, l_linenumber@3 ASC NULLS LAST], preserve_partitioning=[true], metrics=[output_rows=600572, elapsed_compute=1.347165373s, spill_count=0, spilled_bytes=0.0 B, spilled_rows=0]
+14)--------------------------CoalesceBatchesExec: target_batch_size=8192, metrics=[output_rows=600572, elapsed_compute=472.883906ms]
+15)----------------------------RepartitionExec: partitioning=Hash([l_orderkey@0], 4), input_partitions=4, metrics=[fetch_time=4.523726457s, repartition_time=128.874585ms, send_time=44.777416ms]
+16)------------------------------DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:0..18561749], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:18561749..37123498], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:37123498..55685247], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:55685247..74246996]]}, projection=[l_orderkey, l_partkey, l_suppkey, l_linenumber, l_quantity, l_extendedprice, l_discount, l_tax, l_returnflag, l_linestatus, l_shipdate, l_commitdate, l_receiptdate, l_shipinstruct, l_shipmode, l_comment, l_rev], file_type=csv, has_header=false, metrics=[output_rows=600572, elapsed_compute=4ns, batches_splitted=0, file_open_errors=0, file_scan_errors=0, time_elapsed_opening=1.809332ms, time_elapsed_processing=4.522599208s, time_elapsed_scanning_total=4.712664832s, time_elapsed_scanning_until_data=260.286832ms]
+
+
+
+query TT
+EXPLAIN ANALYZE
+SELECT l_orderkey, l_linenumber
+FROM lineitem
+MATCH_RECOGNIZE (
+    PARTITION BY l_orderkey
+    ORDER BY l_linenumber
+    ALL ROWS PER MATCH
+    PATTERN (^ B)
+    DEFINE B AS l_tax > 0.05
+) mr
+----
+Plan with Metrics
+01)CoalesceBatchesExec: target_batch_size=8192, metrics=[output_rows=49951, elapsed_compute=331.498µs]
+02)--FilterExec: __mr_is_included_row@2, projection=[l_orderkey@0, l_linenumber@1], metrics=[output_rows=49951, elapsed_compute=386.626µs]
+03)----ProjectionExec: expr=[l_orderkey@0 as l_orderkey, l_linenumber@3 as l_linenumber, __mr_is_included_row@22 as __mr_is_included_row], metrics=[output_rows=49951, elapsed_compute=217.25µs]
+04)------MatchRecognizePatternExec: pattern=[^ B], metrics=[output_rows=49951, elapsed_compute=1.40500783s, define_pred_evals=643308, input_batches=76, input_rows=600572, matches_emitted=49951, nfa_state_transitions=49951, nfa_active_states_max=4, alloc_time=4.351918ms, candidate_time=12.738715ms, epsilon_eval_time=112.998439ms, match_compute_time=1.334156935s, nfa_eval_time=1.158283957s, row_loop_time=810.045905ms, slice_time=38.830382ms, symbol_eval_time=70.399732ms, transition_time=223.643141ms]
+05)--------SortExec: expr=[l_orderkey@0 ASC NULLS LAST, l_linenumber@3 ASC NULLS LAST], preserve_partitioning=[true], metrics=[output_rows=600572, elapsed_compute=1.405435294s, spill_count=0, spilled_bytes=0.0 B, spilled_rows=0]
+06)----------CoalesceBatchesExec: target_batch_size=8192, metrics=[output_rows=600572, elapsed_compute=466.799509ms]
+07)------------RepartitionExec: partitioning=Hash([l_orderkey@0], 4), input_partitions=4, metrics=[fetch_time=4.551283122s, repartition_time=145.202959ms, send_time=46.97792ms]
+08)--------------ProjectionExec: expr=[l_orderkey@0 as l_orderkey, l_partkey@1 as l_partkey, l_suppkey@2 as l_suppkey, l_linenumber@3 as l_linenumber, l_quantity@4 as l_quantity, l_extendedprice@5 as l_extendedprice, l_discount@6 as l_discount, l_tax@7 as l_tax, l_returnflag@8 as l_returnflag, l_linestatus@9 as l_linestatus, l_shipdate@10 as l_shipdate, l_commitdate@11 as l_commitdate, l_receiptdate@12 as l_receiptdate, l_shipinstruct@13 as l_shipinstruct, l_shipmode@14 as l_shipmode, l_comment@15 as l_comment, l_rev@16 as l_rev, l_tax@7 > Some(5),15,2 as __mr_symbol_B], metrics=[output_rows=600572, elapsed_compute=17.414501ms]
+09)----------------DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:0..18561749], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:18561749..37123498], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:37123498..55685247], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:55685247..74246996]]}, projection=[l_orderkey, l_partkey, l_suppkey, l_linenumber, l_quantity, l_extendedprice, l_discount, l_tax, l_returnflag, l_linestatus, l_shipdate, l_commitdate, l_receiptdate, l_shipinstruct, l_shipmode, l_comment, l_rev], file_type=csv, has_header=false, metrics=[output_rows=600572, elapsed_compute=4ns, batches_splitted=0, file_open_errors=0, file_scan_errors=0, time_elapsed_opening=2.02425ms, time_elapsed_processing=4.532490504s, time_elapsed_scanning_total=4.762892667s, time_elapsed_scanning_until_data=262.130709ms]
+
+
+
+query TT
+EXPLAIN ANALYZE
+SELECT l_orderkey, l_linenumber
+FROM lineitem
+MATCH_RECOGNIZE (
+    PARTITION BY l_orderkey
+    ORDER BY l_linenumber
+    ALL ROWS PER MATCH
+    PATTERN (A $)
+    DEFINE A AS l_quantity > 20
+) mr
+----
+Plan with Metrics
+01)CoalesceBatchesExec: target_batch_size=8192, metrics=[output_rows=90476, elapsed_compute=416.66µs]
+02)--FilterExec: __mr_is_included_row@2, projection=[l_orderkey@0, l_linenumber@1], metrics=[output_rows=90476, elapsed_compute=371.086µs]
+03)----ProjectionExec: expr=[l_orderkey@0 as l_orderkey, l_linenumber@3 as l_linenumber, __mr_is_included_row@22 as __mr_is_included_row], metrics=[output_rows=90476, elapsed_compute=186.129µs]
+04)------MatchRecognizePatternExec: pattern=[A $], metrics=[output_rows=90476, elapsed_compute=1.908494213s, define_pred_evals=871374, input_batches=76, input_rows=600572, matches_emitted=90476, nfa_state_transitions=361278, nfa_active_states_max=4, alloc_time=31.494288ms, candidate_time=17.772308ms, epsilon_eval_time=139.859737ms, match_compute_time=1.831464883s, nfa_eval_time=1.629981026s, row_loop_time=1.219635458s, slice_time=40.194365ms, symbol_eval_time=98.034801ms, transition_time=377.162808ms]
+05)--------SortExec: expr=[l_orderkey@0 ASC NULLS LAST, l_linenumber@3 ASC NULLS LAST], preserve_partitioning=[true], metrics=[output_rows=600572, elapsed_compute=1.358064539s, spill_count=0, spilled_bytes=0.0 B, spilled_rows=0]
+06)----------CoalesceBatchesExec: target_batch_size=8192, metrics=[output_rows=600572, elapsed_compute=467.25662ms]
+07)------------RepartitionExec: partitioning=Hash([l_orderkey@0], 4), input_partitions=4, metrics=[fetch_time=4.550309957s, repartition_time=145.574948ms, send_time=45.481176ms]
+08)--------------ProjectionExec: expr=[l_orderkey@0 as l_orderkey, l_partkey@1 as l_partkey, l_suppkey@2 as l_suppkey, l_linenumber@3 as l_linenumber, l_quantity@4 as l_quantity, l_extendedprice@5 as l_extendedprice, l_discount@6 as l_discount, l_tax@7 as l_tax, l_returnflag@8 as l_returnflag, l_linestatus@9 as l_linestatus, l_shipdate@10 as l_shipdate, l_commitdate@11 as l_commitdate, l_receiptdate@12 as l_receiptdate, l_shipinstruct@13 as l_shipinstruct, l_shipmode@14 as l_shipmode, l_comment@15 as l_comment, l_rev@16 as l_rev, l_quantity@4 > Some(2000),15,2 as __mr_symbol_A], metrics=[output_rows=600572, elapsed_compute=17.409833ms]
+09)----------------DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:0..18561749], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:18561749..37123498], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:37123498..55685247], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:55685247..74246996]]}, projection=[l_orderkey, l_partkey, l_suppkey, l_linenumber, l_quantity, l_extendedprice, l_discount, l_tax, l_returnflag, l_linestatus, l_shipdate, l_commitdate, l_receiptdate, l_shipinstruct, l_shipmode, l_comment, l_rev], file_type=csv, has_header=false, metrics=[output_rows=600572, elapsed_compute=4ns, batches_splitted=0, file_open_errors=0, file_scan_errors=0, time_elapsed_opening=1.941334ms, time_elapsed_processing=4.531520915s, time_elapsed_scanning_total=4.762080082s, time_elapsed_scanning_until_data=262.058167ms]
+
+
+
+query TT
+EXPLAIN ANALYZE
+SELECT l_partkey, l_orderkey, l_linenumber, match_no
+FROM lineitem
+MATCH_RECOGNIZE (
+    PARTITION BY l_partkey
+    ORDER BY l_orderkey, l_linenumber
+    MEASURES MATCH_NUMBER() AS match_no
+    ALL ROWS PER MATCH
+    AFTER MATCH SKIP PAST LAST ROW
+    PATTERN (A+ B)
+    DEFINE
+    A AS l_quantity < 10,
+    B AS l_quantity >= 10
+) t
+----
+Plan with Metrics
+01)ProjectionExec: expr=[l_partkey@1 as l_partkey, l_orderkey@0 as l_orderkey, l_linenumber@2 as l_linenumber, match_number(__mr_match_number) PARTITION BY [lineitem.l_partkey, __mr_match_number] ORDER BY [lineitem.l_orderkey ASC NULLS LAST, lineitem.l_linenumber ASC NULLS LAST, __mr_match_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as match_no], metrics=[output_rows=188458, elapsed_compute=29.958µs]
+02)--CoalesceBatchesExec: target_batch_size=8192, metrics=[output_rows=188458, elapsed_compute=397.878µs]
+03)----FilterExec: __mr_is_included_row@3, projection=[l_orderkey@0, l_partkey@1, l_linenumber@2, match_number(__mr_match_number) PARTITION BY [lineitem.l_partkey, __mr_match_number] ORDER BY [lineitem.l_orderkey ASC NULLS LAST, lineitem.l_linenumber ASC NULLS LAST, __mr_match_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@4], metrics=[output_rows=188458, elapsed_compute=262.583µs]
+04)------ProjectionExec: expr=[l_orderkey@0 as l_orderkey, l_partkey@1 as l_partkey, l_linenumber@2 as l_linenumber, __mr_is_included_row@4 as __mr_is_included_row, match_number(__mr_match_number) PARTITION BY [lineitem.l_partkey, __mr_match_number] ORDER BY [lineitem.l_orderkey ASC NULLS LAST, lineitem.l_linenumber ASC NULLS LAST, __mr_match_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@5 as match_number(__mr_match_number) PARTITION BY [lineitem.l_partkey, __mr_match_number] ORDER BY [lineitem.l_orderkey ASC NULLS LAST, lineitem.l_linenumber ASC NULLS LAST, __mr_match_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], metrics=[output_rows=188458, elapsed_compute=112.96µs]
+05)--------BoundedWindowAggExec: wdw=[match_number(__mr_match_number) PARTITION BY [lineitem.l_partkey, __mr_match_number] ORDER BY [lineitem.l_orderkey ASC NULLS LAST, lineitem.l_linenumber ASC NULLS LAST, __mr_match_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { name: "match_number(__mr_match_number) PARTITION BY [lineitem.l_partkey, __mr_match_number] ORDER BY [lineitem.l_orderkey ASC NULLS LAST, lineitem.l_linenumber ASC NULLS LAST, __mr_match_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted], metrics=[output_rows=188458, elapsed_compute=2.234463751s]
+06)----------SortExec: expr=[l_partkey@1 ASC NULLS LAST, __mr_match_number@3 ASC NULLS LAST, l_orderkey@0 ASC NULLS LAST, l_linenumber@2 ASC NULLS LAST], preserve_partitioning=[true], metrics=[output_rows=188458, elapsed_compute=272.064789ms, spill_count=0, spilled_bytes=0.0 B, spilled_rows=0]
+07)------------CoalesceBatchesExec: target_batch_size=8192, metrics=[output_rows=188458, elapsed_compute=1.786163ms]
+08)--------------RepartitionExec: partitioning=Hash([l_partkey@1, __mr_match_number@3], 4), input_partitions=4, metrics=[fetch_time=7.349895919s, repartition_time=23.480792ms, send_time=1.334335ms]
+09)----------------ProjectionExec: expr=[l_orderkey@0 as l_orderkey, l_partkey@1 as l_partkey, l_linenumber@3 as l_linenumber, __mr_match_number@20 as __mr_match_number, __mr_is_included_row@23 as __mr_is_included_row], metrics=[output_rows=188458, elapsed_compute=224.584µs]
+10)------------------MatchRecognizePatternExec: pattern=[A+ B], metrics=[output_rows=188458, elapsed_compute=1.215874455s, define_pred_evals=1367980, input_batches=76, input_rows=600572, matches_emitted=85273, nfa_state_transitions=193974, nfa_active_states_max=4, alloc_time=17.01549ms, candidate_time=24.199556ms, epsilon_eval_time=4ns, match_compute_time=1.122915428s, nfa_eval_time=979.95792ms, row_loop_time=727.098601ms, slice_time=7.807805ms, symbol_eval_time=85.452616ms, transition_time=209.864436ms]
+11)--------------------SortExec: expr=[l_partkey@1 ASC NULLS LAST, l_orderkey@0 ASC NULLS LAST, l_linenumber@3 ASC NULLS LAST], preserve_partitioning=[true], metrics=[output_rows=600572, elapsed_compute=1.68671904s, spill_count=0, spilled_bytes=0.0 B, spilled_rows=0]
+12)----------------------CoalesceBatchesExec: target_batch_size=8192, metrics=[output_rows=600572, elapsed_compute=467.711613ms]
+13)------------------------RepartitionExec: partitioning=Hash([l_partkey@1], 4), input_partitions=4, metrics=[fetch_time=4.561557537s, repartition_time=160.627417ms, send_time=48.900629ms]
+14)--------------------------ProjectionExec: expr=[l_orderkey@0 as l_orderkey, l_partkey@1 as l_partkey, l_suppkey@2 as l_suppkey, l_linenumber@3 as l_linenumber, l_quantity@4 as l_quantity, l_extendedprice@5 as l_extendedprice, l_discount@6 as l_discount, l_tax@7 as l_tax, l_returnflag@8 as l_returnflag, l_linestatus@9 as l_linestatus, l_shipdate@10 as l_shipdate, l_commitdate@11 as l_commitdate, l_receiptdate@12 as l_receiptdate, l_shipinstruct@13 as l_shipinstruct, l_shipmode@14 as l_shipmode, l_comment@15 as l_comment, l_rev@16 as l_rev, l_quantity@4 < Some(1000),15,2 as __mr_symbol_A, l_quantity@4 >= Some(1000),15,2 as __mr_symbol_B], metrics=[output_rows=600572, elapsed_compute=34.657579ms]
+15)----------------------------DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:0..18561749], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:18561749..37123498], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:37123498..55685247], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:55685247..74246996]]}, projection=[l_orderkey, l_partkey, l_suppkey, l_linenumber, l_quantity, l_extendedprice, l_discount, l_tax, l_returnflag, l_linestatus, l_shipdate, l_commitdate, l_receiptdate, l_shipinstruct, l_shipmode, l_comment, l_rev], file_type=csv, has_header=false, metrics=[output_rows=600572, elapsed_compute=4ns, batches_splitted=0, file_open_errors=0, file_scan_errors=0, time_elapsed_opening=1.784499ms, time_elapsed_processing=4.525709002s, time_elapsed_scanning_total=4.789723126s, time_elapsed_scanning_until_data=260.391333ms]
+
+
+
+query TT
+EXPLAIN ANALYZE
+SELECT l_partkey, l_orderkey, l_linenumber, match_no
+FROM lineitem
+MATCH_RECOGNIZE (
+    PARTITION BY l_partkey
+    ORDER BY l_orderkey, l_linenumber
+    MEASURES MATCH_NUMBER() AS match_no
+    ALL ROWS PER MATCH
+    AFTER MATCH SKIP TO LAST B
+    PATTERN (A+ B)
+    DEFINE
+    A AS l_quantity < 10,
+    B AS l_quantity >= 10
+) t
+----
+Plan with Metrics
+01)ProjectionExec: expr=[l_partkey@1 as l_partkey, l_orderkey@0 as l_orderkey, l_linenumber@2 as l_linenumber, match_number(__mr_match_number) PARTITION BY [lineitem.l_partkey, __mr_match_number] ORDER BY [lineitem.l_orderkey ASC NULLS LAST, lineitem.l_linenumber ASC NULLS LAST, __mr_match_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as match_no], metrics=[output_rows=188458, elapsed_compute=31.707µs]
+02)--CoalesceBatchesExec: target_batch_size=8192, metrics=[output_rows=188458, elapsed_compute=1.057542ms]
+03)----FilterExec: __mr_is_included_row@3, projection=[l_orderkey@0, l_partkey@1, l_linenumber@2, match_number(__mr_match_number) PARTITION BY [lineitem.l_partkey, __mr_match_number] ORDER BY [lineitem.l_orderkey ASC NULLS LAST, lineitem.l_linenumber ASC NULLS LAST, __mr_match_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@4], metrics=[output_rows=188458, elapsed_compute=271.459µs]
+04)------ProjectionExec: expr=[l_orderkey@0 as l_orderkey, l_partkey@1 as l_partkey, l_linenumber@2 as l_linenumber, __mr_is_included_row@4 as __mr_is_included_row, match_number(__mr_match_number) PARTITION BY [lineitem.l_partkey, __mr_match_number] ORDER BY [lineitem.l_orderkey ASC NULLS LAST, lineitem.l_linenumber ASC NULLS LAST, __mr_match_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@5 as match_number(__mr_match_number) PARTITION BY [lineitem.l_partkey, __mr_match_number] ORDER BY [lineitem.l_orderkey ASC NULLS LAST, lineitem.l_linenumber ASC NULLS LAST, __mr_match_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], metrics=[output_rows=188458, elapsed_compute=124.5µs]
+05)--------BoundedWindowAggExec: wdw=[match_number(__mr_match_number) PARTITION BY [lineitem.l_partkey, __mr_match_number] ORDER BY [lineitem.l_orderkey ASC NULLS LAST, lineitem.l_linenumber ASC NULLS LAST, __mr_match_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { name: "match_number(__mr_match_number) PARTITION BY [lineitem.l_partkey, __mr_match_number] ORDER BY [lineitem.l_orderkey ASC NULLS LAST, lineitem.l_linenumber ASC NULLS LAST, __mr_match_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted], metrics=[output_rows=188458, elapsed_compute=2.264471958s]
+06)----------SortExec: expr=[l_partkey@1 ASC NULLS LAST, __mr_match_number@3 ASC NULLS LAST, l_orderkey@0 ASC NULLS LAST, l_linenumber@2 ASC NULLS LAST], preserve_partitioning=[true], metrics=[output_rows=188458, elapsed_compute=275.070416ms, spill_count=0, spilled_bytes=0.0 B, spilled_rows=0]
+07)------------CoalesceBatchesExec: target_batch_size=8192, metrics=[output_rows=188458, elapsed_compute=1.952748ms]
+08)--------------RepartitionExec: partitioning=Hash([l_partkey@1, __mr_match_number@3], 4), input_partitions=4, metrics=[fetch_time=7.630985378s, repartition_time=23.393039ms, send_time=1.253638ms]
+09)----------------ProjectionExec: expr=[l_orderkey@0 as l_orderkey, l_partkey@1 as l_partkey, l_linenumber@3 as l_linenumber, __mr_match_number@20 as __mr_match_number, __mr_is_included_row@23 as __mr_is_included_row], metrics=[output_rows=188458, elapsed_compute=245.792µs]
+10)------------------MatchRecognizePatternExec: pattern=[A+ B], metrics=[output_rows=188458, elapsed_compute=1.538981382s, define_pred_evals=1538526, input_batches=76, input_rows=600572, matches_emitted=85273, nfa_state_transitions=193974, nfa_active_states_max=4, alloc_time=16.257282ms, candidate_time=24.911333ms, epsilon_eval_time=4ns, match_compute_time=1.444475078s, nfa_eval_time=1.127234733s, row_loop_time=823.219121ms, slice_time=7.948317ms, symbol_eval_time=98.415253ms, transition_time=229.821199ms]
+11)--------------------SortExec: expr=[l_partkey@1 ASC NULLS LAST, l_orderkey@0 ASC NULLS LAST, l_linenumber@3 ASC NULLS LAST], preserve_partitioning=[true], metrics=[output_rows=600572, elapsed_compute=1.582683036s, spill_count=0, spilled_bytes=0.0 B, spilled_rows=0]
+12)----------------------CoalesceBatchesExec: target_batch_size=8192, metrics=[output_rows=600572, elapsed_compute=468.218172ms]
+13)------------------------RepartitionExec: partitioning=Hash([l_partkey@1], 4), input_partitions=4, metrics=[fetch_time=4.567262751s, repartition_time=159.918088ms, send_time=51.403674ms]
+14)--------------------------ProjectionExec: expr=[l_orderkey@0 as l_orderkey, l_partkey@1 as l_partkey, l_suppkey@2 as l_suppkey, l_linenumber@3 as l_linenumber, l_quantity@4 as l_quantity, l_extendedprice@5 as l_extendedprice, l_discount@6 as l_discount, l_tax@7 as l_tax, l_returnflag@8 as l_returnflag, l_linestatus@9 as l_linestatus, l_shipdate@10 as l_shipdate, l_commitdate@11 as l_commitdate, l_receiptdate@12 as l_receiptdate, l_shipinstruct@13 as l_shipinstruct, l_shipmode@14 as l_shipmode, l_comment@15 as l_comment, l_rev@16 as l_rev, l_quantity@4 < Some(1000),15,2 as __mr_symbol_A, l_quantity@4 >= Some(1000),15,2 as __mr_symbol_B], metrics=[output_rows=600572, elapsed_compute=34.475292ms]
+15)----------------------------DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:0..18561749], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:18561749..37123498], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:37123498..55685247], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:55685247..74246996]]}, projection=[l_orderkey, l_partkey, l_suppkey, l_linenumber, l_quantity, l_extendedprice, l_discount, l_tax, l_returnflag, l_linestatus, l_shipdate, l_commitdate, l_receiptdate, l_shipinstruct, l_shipmode, l_comment, l_rev], file_type=csv, has_header=false, metrics=[output_rows=600572, elapsed_compute=4ns, batches_splitted=0, file_open_errors=0, file_scan_errors=0, time_elapsed_opening=1.851375ms, time_elapsed_processing=4.531518378s, time_elapsed_scanning_total=4.797744253s, time_elapsed_scanning_until_data=260.61496ms]
+
+
+
+query error DataFusion error: SQL error: ParserError\("Expected: PATTERN, found: ROWS at Line: 10, Column: 5"\)
+EXPLAIN ANALYZE
+SELECT l_orderkey, first_qty, last_qty
+FROM lineitem
+MATCH_RECOGNIZE (
+    PARTITION BY l_orderkey
+    ORDER BY l_linenumber
+    MEASURES
+    FIRST_VALUE(l_quantity) AS first_qty,
+    LAST_VALUE(l_quantity) AS last_qty
+    ROWS PER MATCH ONE ROW
+    PATTERN (A+ B+)
+    DEFINE
+    A AS l_quantity < 15,
+    B AS l_quantity >= 15
+) t
+
+
+
+query TT
+EXPLAIN ANALYZE
+SELECT l_orderkey, cnt
+FROM (
+    SELECT *
+    FROM lineitem
+    MATCH_RECOGNIZE (
+    PARTITION BY l_orderkey
+    ORDER BY l_linenumber
+    MEASURES COUNT(A.l_quantity) AS cnt
+    PATTERN ((A B){2,4} C)
+    DEFINE
+        A AS l_quantity < 5,
+        B AS l_quantity BETWEEN 5 AND 10,
+        C AS l_quantity > 10
+    )
+) sub
+----
+Plan with Metrics
+01)ProjectionExec: expr=[l_orderkey@0 as l_orderkey, count(CASE WHEN __mr_classifier = Utf8("A") THEN a.l_quantity ELSE NULL END) PARTITION BY [lineitem.l_orderkey, __mr_match_number] ORDER BY [lineitem.l_linenumber ASC NULLS LAST, __mr_match_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@1 as cnt], metrics=[output_rows=0, elapsed_compute=4ns]
+02)--CoalesceBatchesExec: target_batch_size=8192, metrics=[output_rows=0, elapsed_compute=168ns]
+03)----FilterExec: __mr_is_last_match_row@1, projection=[l_orderkey@0, count(CASE WHEN __mr_classifier = Utf8("A") THEN a.l_quantity ELSE NULL END) PARTITION BY [lineitem.l_orderkey, __mr_match_number] ORDER BY [lineitem.l_linenumber ASC NULLS LAST, __mr_match_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@2], metrics=[output_rows=0, elapsed_compute=4ns]
+04)------ProjectionExec: expr=[l_orderkey@0 as l_orderkey, __mr_is_last_match_row@5 as __mr_is_last_match_row, count(CASE WHEN __mr_classifier = Utf8("A") THEN a.l_quantity ELSE NULL END) PARTITION BY [lineitem.l_orderkey, __mr_match_number] ORDER BY [lineitem.l_linenumber ASC NULLS LAST, __mr_match_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@6 as count(CASE WHEN __mr_classifier = Utf8("A") THEN a.l_quantity ELSE NULL END) PARTITION BY [lineitem.l_orderkey, __mr_match_number] ORDER BY [lineitem.l_linenumber ASC NULLS LAST, __mr_match_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING], metrics=[output_rows=0, elapsed_compute=4ns]
+05)--------WindowAggExec: wdw=[count(CASE WHEN __mr_classifier = Utf8("A") THEN a.l_quantity ELSE NULL END) PARTITION BY [lineitem.l_orderkey, __mr_match_number] ORDER BY [lineitem.l_linenumber ASC NULLS LAST, __mr_match_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "count(CASE WHEN __mr_classifier = Utf8(\"A\") THEN a.l_quantity ELSE NULL END) PARTITION BY [lineitem.l_orderkey, __mr_match_number] ORDER BY [lineitem.l_linenumber ASC NULLS LAST, __mr_match_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }], metrics=[output_rows=0, elapsed_compute=56.458µs]
+06)----------SortExec: expr=[l_orderkey@0 ASC NULLS LAST, __mr_match_number@4 ASC NULLS LAST, l_linenumber@1 ASC NULLS LAST], preserve_partitioning=[true], metrics=[output_rows=0, elapsed_compute=4ns, spill_count=0, spilled_bytes=0.0 B, spilled_rows=0]
+07)------------CoalesceBatchesExec: target_batch_size=8192, metrics=[output_rows=0, elapsed_compute=250ns]
+08)--------------RepartitionExec: partitioning=Hash([l_orderkey@0, __mr_match_number@4], 4), input_partitions=4, metrics=[fetch_time=7.536210544s, repartition_time=4ns, send_time=16ns]
+09)----------------ProjectionExec: expr=[l_orderkey@0 as l_orderkey, l_linenumber@3 as l_linenumber, l_quantity@4 as l_quantity, __mr_classifier@20 as __mr_classifier, __mr_match_number@21 as __mr_match_number, __mr_is_last_match_row@23 as __mr_is_last_match_row], metrics=[output_rows=0, elapsed_compute=4ns]
+10)------------------MatchRecognizePatternExec: pattern=[(A B){2,4} C], metrics=[output_rows=0, elapsed_compute=1.53641546s, define_pred_evals=1919229, input_batches=76, input_rows=600572, matches_emitted=0, nfa_state_transitions=52438, nfa_active_states_max=4, alloc_time=4.89886ms, candidate_time=4ns, epsilon_eval_time=4ns, match_compute_time=1.476157286s, nfa_eval_time=1.265899223s, row_loop_time=770.364627ms, slice_time=68.928682ms, symbol_eval_time=93.447951ms, transition_time=178.006553ms]
+11)--------------------SortExec: expr=[l_orderkey@0 ASC NULLS LAST, l_linenumber@3 ASC NULLS LAST], preserve_partitioning=[true], metrics=[output_rows=600572, elapsed_compute=1.454450706s, spill_count=0, spilled_bytes=0.0 B, spilled_rows=0]
+12)----------------------CoalesceBatchesExec: target_batch_size=8192, metrics=[output_rows=600572, elapsed_compute=469.897255ms]
+13)------------------------RepartitionExec: partitioning=Hash([l_orderkey@0], 4), input_partitions=4, metrics=[fetch_time=4.594519252s, repartition_time=178.585456ms, send_time=71.454124ms]
+14)--------------------------ProjectionExec: expr=[l_orderkey@0 as l_orderkey, l_partkey@1 as l_partkey, l_suppkey@2 as l_suppkey, l_linenumber@3 as l_linenumber, l_quantity@4 as l_quantity, l_extendedprice@5 as l_extendedprice, l_discount@6 as l_discount, l_tax@7 as l_tax, l_returnflag@8 as l_returnflag, l_linestatus@9 as l_linestatus, l_shipdate@10 as l_shipdate, l_commitdate@11 as l_commitdate, l_receiptdate@12 as l_receiptdate, l_shipinstruct@13 as l_shipinstruct, l_shipmode@14 as l_shipmode, l_comment@15 as l_comment, l_rev@16 as l_rev, l_quantity@4 < Some(500),15,2 as __mr_symbol_A, l_quantity@4 >= Some(500),15,2 AND l_quantity@4 <= Some(1000),15,2 as __mr_symbol_B, l_quantity@4 > Some(1000),15,2 as __mr_symbol_C], metrics=[output_rows=600572, elapsed_compute=67.898542ms]
+15)----------------------------DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:0..18561749], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:18561749..37123498], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:37123498..55685247], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:55685247..74246996]]}, projection=[l_orderkey, l_partkey, l_suppkey, l_linenumber, l_quantity, l_extendedprice, l_discount, l_tax, l_returnflag, l_linestatus, l_shipdate, l_commitdate, l_receiptdate, l_shipinstruct, l_shipmode, l_comment, l_rev], file_type=csv, has_header=false, metrics=[output_rows=600572, elapsed_compute=4ns, batches_splitted=0, file_open_errors=0, file_scan_errors=0, time_elapsed_opening=2.291291ms, time_elapsed_processing=4.525036705s, time_elapsed_scanning_total=4.863781083s, time_elapsed_scanning_until_data=262.457834ms]
+
+
+
+query TT
+EXPLAIN ANALYZE
+SELECT l_orderkey, classifier, match_no
+FROM lineitem
+MATCH_RECOGNIZE (
+    PARTITION BY l_orderkey
+    ORDER BY l_linenumber
+    MEASURES CLASSIFIER() AS classifier,
+            MATCH_NUMBER() AS match_no
+    ALL ROWS PER MATCH
+    PATTERN (PERMUTE(A,B,C,D,E,F,G,H))
+    DEFINE
+    A AS l_quantity < 5,
+    B AS l_quantity BETWEEN 5 AND 10,
+    C AS l_discount < 0.05,
+    D AS l_discount >= 0.05,
+    E AS l_extendedprice > 1000,
+    F AS l_extendedprice <= 1000,
+    G AS l_tax < 0.05,
+    H AS l_tax >= 0.05
+) t
+----
+Plan with Metrics
+01)ProjectionExec: expr=[l_orderkey@0 as l_orderkey, classifier(__mr_classifier) PARTITION BY [lineitem.l_orderkey, __mr_match_number] ORDER BY [lineitem.l_linenumber ASC NULLS LAST, __mr_match_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@1 as classifier, match_number(__mr_match_number) PARTITION BY [lineitem.l_orderkey, __mr_match_number] ORDER BY [lineitem.l_linenumber ASC NULLS LAST, __mr_match_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as match_no], metrics=[output_rows=0, elapsed_compute=4ns]
+02)--CoalesceBatchesExec: target_batch_size=8192, metrics=[output_rows=0, elapsed_compute=126ns]
+03)----FilterExec: __mr_is_included_row@1, projection=[l_orderkey@0, classifier(__mr_classifier) PARTITION BY [lineitem.l_orderkey, __mr_match_number] ORDER BY [lineitem.l_linenumber ASC NULLS LAST, __mr_match_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2, match_number(__mr_match_number) PARTITION BY [lineitem.l_orderkey, __mr_match_number] ORDER BY [lineitem.l_linenumber ASC NULLS LAST, __mr_match_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3], metrics=[output_rows=0, elapsed_compute=4ns]
+04)------ProjectionExec: expr=[l_orderkey@0 as l_orderkey, __mr_is_included_row@4 as __mr_is_included_row, classifier(__mr_classifier) PARTITION BY [lineitem.l_orderkey, __mr_match_number] ORDER BY [lineitem.l_linenumber ASC NULLS LAST, __mr_match_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@5 as classifier(__mr_classifier) PARTITION BY [lineitem.l_orderkey, __mr_match_number] ORDER BY [lineitem.l_linenumber ASC NULLS LAST, __mr_match_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, match_number(__mr_match_number) PARTITION BY [lineitem.l_orderkey, __mr_match_number] ORDER BY [lineitem.l_linenumber ASC NULLS LAST, __mr_match_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@6 as match_number(__mr_match_number) PARTITION BY [lineitem.l_orderkey, __mr_match_number] ORDER BY [lineitem.l_linenumber ASC NULLS LAST, __mr_match_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], metrics=[output_rows=0, elapsed_compute=4ns]
+05)--------BoundedWindowAggExec: wdw=[classifier(__mr_classifier) PARTITION BY [lineitem.l_orderkey, __mr_match_number] ORDER BY [lineitem.l_linenumber ASC NULLS LAST, __mr_match_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { name: "classifier(__mr_classifier) PARTITION BY [lineitem.l_orderkey, __mr_match_number] ORDER BY [lineitem.l_linenumber ASC NULLS LAST, __mr_match_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, match_number(__mr_match_number) PARTITION BY [lineitem.l_orderkey, __mr_match_number] ORDER BY [lineitem.l_linenumber ASC NULLS LAST, __mr_match_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { name: "match_number(__mr_match_number) PARTITION BY [lineitem.l_orderkey, __mr_match_number] ORDER BY [lineitem.l_linenumber ASC NULLS LAST, __mr_match_number ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted], metrics=[output_rows=0, elapsed_compute=59.917µs]
+06)----------SortExec: expr=[l_orderkey@0 ASC NULLS LAST, __mr_match_number@3 ASC NULLS LAST, l_linenumber@1 ASC NULLS LAST], preserve_partitioning=[true], metrics=[output_rows=0, elapsed_compute=4ns, spill_count=0, spilled_bytes=0.0 B, spilled_rows=0]
+07)------------CoalesceBatchesExec: target_batch_size=8192, metrics=[output_rows=0, elapsed_compute=416ns]
+08)--------------RepartitionExec: partitioning=Hash([l_orderkey@0, __mr_match_number@3], 4), input_partitions=4, metrics=[fetch_time=18.801187414s, repartition_time=4ns, send_time=16ns]
+09)----------------ProjectionExec: expr=[l_orderkey@0 as l_orderkey, l_linenumber@3 as l_linenumber, __mr_classifier@25 as __mr_classifier, __mr_match_number@26 as __mr_match_number, __mr_is_included_row@29 as __mr_is_included_row], metrics=[output_rows=0, elapsed_compute=4ns]
+10)------------------MatchRecognizePatternExec: pattern=[PERMUTE(A,B,C,D,E,F,G,H)], metrics=[output_rows=0, elapsed_compute=12.612504082s, define_pred_evals=14324840, input_batches=76, input_rows=600572, matches_emitted=0, nfa_state_transitions=14908692, nfa_active_states_max=258, alloc_time=1.165747637s, candidate_time=4ns, epsilon_eval_time=4ns, match_compute_time=12.541242068s, nfa_eval_time=12.191648569s, row_loop_time=9.777872841s, slice_time=138.922072ms, symbol_eval_time=421.144176ms, transition_time=6.236556045s]
+11)--------------------SortExec: expr=[l_orderkey@0 ASC NULLS LAST, l_linenumber@3 ASC NULLS LAST], preserve_partitioning=[true], metrics=[output_rows=600572, elapsed_compute=1.587877416s, spill_count=0, spilled_bytes=0.0 B, spilled_rows=0]
+12)----------------------CoalesceBatchesExec: target_batch_size=8192, metrics=[output_rows=600572, elapsed_compute=470.291796ms]
+13)------------------------RepartitionExec: partitioning=Hash([l_orderkey@0], 4), input_partitions=4, metrics=[fetch_time=4.678454088s, repartition_time=260.171009ms, send_time=44.613745ms]
+14)--------------------------ProjectionExec: expr=[l_orderkey@0 as l_orderkey, l_partkey@1 as l_partkey, l_suppkey@2 as l_suppkey, l_linenumber@3 as l_linenumber, l_quantity@4 as l_quantity, l_extendedprice@5 as l_extendedprice, l_discount@6 as l_discount, l_tax@7 as l_tax, l_returnflag@8 as l_returnflag, l_linestatus@9 as l_linestatus, l_shipdate@10 as l_shipdate, l_commitdate@11 as l_commitdate, l_receiptdate@12 as l_receiptdate, l_shipinstruct@13 as l_shipinstruct, l_shipmode@14 as l_shipmode, l_comment@15 as l_comment, l_rev@16 as l_rev, l_quantity@4 < Some(500),15,2 as __mr_symbol_A, l_quantity@4 >= Some(500),15,2 AND l_quantity@4 <= Some(1000),15,2 as __mr_symbol_B, l_discount@6 < Some(5),15,2 as __mr_symbol_C, l_discount@6 >= Some(5),15,2 as __mr_symbol_D, l_extendedprice@5 > Some(100000),15,2 as __mr_symbol_E, l_extendedprice@5 <= Some(100000),15,2 as __mr_symbol_F, l_tax@7 < Some(5),15,2 as __mr_symbol_G, l_tax@7 >= Some(5),15,2 as __mr_symbol_H], metrics=[output_rows=600572, elapsed_compute=150.721289ms]
+15)----------------------------DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:0..18561749], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:18561749..37123498], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:37123498..55685247], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:55685247..74246996]]}, projection=[l_orderkey, l_partkey, l_suppkey, l_linenumber, l_quantity, l_extendedprice, l_discount, l_tax, l_returnflag, l_linestatus, l_shipdate, l_commitdate, l_receiptdate, l_shipinstruct, l_shipmode, l_comment, l_rev], file_type=csv, has_header=false, metrics=[output_rows=600572, elapsed_compute=4ns, batches_splitted=0, file_open_errors=0, file_scan_errors=0, time_elapsed_opening=1.821542ms, time_elapsed_processing=4.526513958s, time_elapsed_scanning_total=5.001085701s, time_elapsed_scanning_until_data=261.36625ms]
+
+
+
+
+include ../../../tpch/drop_tables.slt.part
