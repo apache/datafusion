@@ -4165,6 +4165,7 @@ AS VALUES
 (3, 3, false);
 
 query IIIIB rowsort
+-- Note: using LIMIT value higher than cardinality before LIMIT to avoid query non-determinism
 SELECT * FROM t0 FULL JOIN t1 ON t0.c1 = t1.c1 LIMIT 20;
 ----
 1 1 NULL NULL NULL
