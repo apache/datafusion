@@ -49,8 +49,7 @@ use datafusion::datasource::physical_plan::{
     ArrowSource, CsvSource, FileScanConfigBuilder, FileSource, JsonSource,
 };
 use datafusion::datasource::source::DataSourceExec;
-use datafusion::physical_plan::metrics::ExecutionPlanMetricsSet;
-use datafusion::physical_plan::{ExecutionPlan, Statistics};
+use datafusion::physical_plan::ExecutionPlan;
 use datafusion_datasource::PartitionedFile;
 
 async fn write_parquet(batch: RecordBatch, store: Arc<dyn ObjectStore>, path: &str) {
