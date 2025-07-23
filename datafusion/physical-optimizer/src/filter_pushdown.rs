@@ -35,6 +35,7 @@ use std::sync::Arc;
 
 use crate::PhysicalOptimizerRule;
 
+use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{config::ConfigOptions, Result};
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_plan::filter_pushdown::{
@@ -447,8 +448,19 @@ fn push_down_filters(
     let mut new_children = Vec::with_capacity(node.children().len());
 
     let children = node.children();
+
+    // Filter out expressions that are not allowed for pushdown
+    let mut allowed_predicates = vec![];
+    let mut allowed_indices = vec![];
+    for (idx, predicate) in parent_predicates.iter().enumerate() {
+        if allow_pushdown_for_expr(predicate) {
+            allowed_predicates.push(predicate.clone());
+            allowed_indices.push(idx);
+        }
+    }
+
     let filter_description =
-        node.gather_filters_for_pushdown(phase, parent_predicates.clone(), config)?;
+        node.gather_filters_for_pushdown(phase, allowed_predicates, config)?;
 
     let filter_description_parent_filters = filter_description.parent_filters();
     let filter_description_self_filters = filter_description.self_filters();
@@ -492,14 +504,15 @@ fn push_down_filters(
         let mut parent_filter_indices = vec![];
 
         // Iterate over each predicate coming from the parent
-        for (parent_filter_idx, filter) in parent_filters.into_iter().enumerate() {
+        for (allowed_idx, filter) in parent_filters.into_iter().enumerate() {
             // Check if we can push this filter down to our child.
             // These supports are defined in `gather_filters_for_pushdown()`
             match filter.discriminant {
                 PushedDown::Yes => {
                     // Queue this filter up for pushdown to this child
                     all_predicates.push(filter.predicate);
-                    parent_filter_indices.push(parent_filter_idx);
+                    // Map back to the original parent predicate index
+                    parent_filter_indices.push(allowed_indices[allowed_idx]);
                 }
                 PushedDown::No => {
                     // This filter won't be pushed down to this child
@@ -596,4 +609,32 @@ fn push_down_filters(
         res.updated_node = Some(updated_node)
     }
     Ok(res)
+}
+
+fn allow_pushdown_for_expr(expr: &Arc<dyn PhysicalExpr>) -> bool {
+    let mut allow_pushdown = true;
+    expr.apply(|e| {
+        if !allow_pushdown_for_expr_inner(e) {
+            allow_pushdown = false;
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })
+    .expect("Infallible traversal of PhysicalExpr tree failed");
+    allow_pushdown
+}
+
+fn allow_pushdown_for_expr_inner(expr: &Arc<dyn PhysicalExpr>) -> bool {
+    // TODO: do downcast matching on specific expressions, or add a method to the PhysicalExpr trait
+    // to check if the expression is volatile or otherwise unsuitable for pushdown.
+    if let Some(scalar_function) =
+        expr.as_any()
+            .downcast_ref::<datafusion_physical_expr::ScalarFunctionExpr>()
+    {
+        // Check if the function is volatile
+        if scalar_function.fun().name() == "random" {
+            // Random function is volatile, do not allow pushdown
+            return false;
+        }
+    }
+    true
 }

@@ -34,8 +34,12 @@ use datafusion::{
 };
 use datafusion_common::config::ConfigOptions;
 use datafusion_execution::object_store::ObjectStoreUrl;
+use datafusion_expr::ScalarUDF;
+use datafusion_functions::math::random::RandomFunc;
 use datafusion_functions_aggregate::count::count_udaf;
-use datafusion_physical_expr::{aggregate::AggregateExprBuilder, Partitioning};
+use datafusion_physical_expr::{
+    aggregate::AggregateExprBuilder, Partitioning, ScalarFunctionExpr,
+};
 use datafusion_physical_expr::{expressions::col, LexOrdering, PhysicalSortExpr};
 use datafusion_physical_optimizer::{
     filter_pushdown::FilterPushdown, PhysicalOptimizerRule,
@@ -73,6 +77,39 @@ fn test_pushdown_into_scan() {
         Ok:
           - DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@0 = foo
     "
+    );
+}
+
+#[test]
+fn test_pushdown_volatile_functions_not_allowed() {
+    // Test that we do not push down filters with volatile functions
+    // Use random() as an example of a volatile function
+    let scan = TestScanBuilder::new(schema()).with_support(true).build();
+    let predicate = Arc::new(BinaryExpr::new(
+        Arc::new(Column::new_with_schema("a", &schema()).unwrap()),
+        Operator::Eq,
+        Arc::new(
+            ScalarFunctionExpr::try_new(
+                Arc::new(ScalarUDF::from(RandomFunc::new())),
+                vec![],
+                &schema(),
+            )
+            .unwrap(),
+        ),
+    )) as Arc<dyn PhysicalExpr>;
+    let plan = Arc::new(FilterExec::try_new(predicate, scan).unwrap());
+    // expect the filter to not be pushed down
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, FilterPushdown::new(), true),
+        @r"
+    OptimizationTest:
+      input:
+        - FilterExec: a@0 = random()
+        -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+      output:
+        Ok:
+          - DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@0 = random()
+    ",
     );
 }
 
