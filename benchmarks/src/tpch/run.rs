@@ -19,7 +19,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use super::{
-    get_query_sql, get_tbl_tpch_table_schema, get_tpch_table_schema, TPCH_TABLES,
+    get_query_sql, get_tbl_tpch_table_schema, get_tpch_table_schema, TPCH_QUERY_END_ID,
+    TPCH_QUERY_START_ID, TPCH_TABLES,
 };
 use crate::util::{print_memory_stats, BenchmarkRun, CommonOpt, QueryResult};
 
@@ -96,9 +97,6 @@ pub struct RunOpt {
     #[structopt(short = "t", long = "sorted")]
     sorted: bool,
 }
-
-const TPCH_QUERY_START_ID: usize = 1;
-const TPCH_QUERY_END_ID: usize = 22;
 
 impl RunOpt {
     pub async fn run(self) -> Result<()> {
