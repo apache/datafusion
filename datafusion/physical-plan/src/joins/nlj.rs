@@ -159,14 +159,20 @@ impl NLJStream {
             for i in joined_right_indices.iter() {
                 // After the initial join, indices must all be Some
                 bitmap.set_bit(i.unwrap() as usize, true);
+                // println!("Setting bit {i:?} to true");
             }
         }
 
-        // For the following join types: here we only have to set the left
+        // For the following join types: here we only have to set the left/right
         // bitmap, and no need to output result
         if matches!(
             self.join_type,
-            JoinType::LeftAnti | JoinType::LeftSemi | JoinType::LeftMark
+            JoinType::LeftAnti
+                | JoinType::LeftSemi
+                | JoinType::LeftMark
+                | JoinType::RightAnti
+                | JoinType::RightMark
+                | JoinType::RightSemi
         ) {
             return Ok(RecordBatch::new_empty(self.schema.clone()));
         }
@@ -278,7 +284,17 @@ impl NLJStream {
         // iterate through the bitmap
         let mut right_indices_builder = UInt32Builder::new();
         for i in 0..cur_right_batch.num_rows() {
-            if !bitmap.value(i) {
+            let i_joined = bitmap.value(i);
+            // TODO(polish): make those flips more understandable
+            let should_output = match self.join_type {
+                JoinType::Right => !i_joined,
+                JoinType::Full => !i_joined,
+                JoinType::RightAnti => !i_joined,
+                JoinType::RightMark => i_joined,
+                JoinType::RightSemi => i_joined,
+                _ => unreachable!("Not possible for other join types"),
+            };
+            if should_output {
                 right_indices_builder.append_value(i as u32);
             }
         }
