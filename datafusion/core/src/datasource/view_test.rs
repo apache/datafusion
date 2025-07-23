@@ -326,7 +326,10 @@ mod tests {
         let formatted = arrow::util::pretty::pretty_format_batches(&plan)
             .unwrap()
             .to_string();
-        assert!(formatted.contains("FilterExec: id@0 = 1"));
+        assert!(
+            formatted.contains("file_type=parquet, predicate=id@0 = 1"),
+            "formatted:\n{formatted}",
+        );
         Ok(())
     }
 

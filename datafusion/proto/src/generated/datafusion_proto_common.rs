@@ -115,7 +115,21 @@ pub struct Timestamp {
     pub timezone: ::prost::alloc::string::String,
 }
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]
-pub struct Decimal {
+pub struct Decimal32Type {
+    #[prost(uint32, tag = "3")]
+    pub precision: u32,
+    #[prost(int32, tag = "4")]
+    pub scale: i32,
+}
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+pub struct Decimal64Type {
+    #[prost(uint32, tag = "3")]
+    pub precision: u32,
+    #[prost(int32, tag = "4")]
+    pub scale: i32,
+}
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+pub struct Decimal128Type {
     #[prost(uint32, tag = "3")]
     pub precision: u32,
     #[prost(int32, tag = "4")]
@@ -295,7 +309,7 @@ pub struct ScalarFixedSizeBinary {
 pub struct ScalarValue {
     #[prost(
         oneof = "scalar_value::Value",
-        tags = "33, 1, 2, 3, 23, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 32, 41, 20, 39, 21, 24, 35, 36, 37, 38, 26, 27, 28, 29, 22, 30, 25, 31, 34, 42"
+        tags = "33, 1, 2, 3, 23, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 32, 41, 43, 44, 20, 39, 21, 24, 35, 36, 37, 38, 26, 27, 28, 29, 22, 30, 25, 31, 34, 42"
     )]
     pub value: ::core::option::Option<scalar_value::Value>,
 }
@@ -350,6 +364,10 @@ pub mod scalar_value {
         StructValue(super::ScalarNestedValue),
         #[prost(message, tag = "41")]
         MapValue(super::ScalarNestedValue),
+        #[prost(message, tag = "43")]
+        Decimal32Value(super::Decimal32),
+        #[prost(message, tag = "44")]
+        Decimal64Value(super::Decimal64),
         #[prost(message, tag = "20")]
         Decimal128Value(super::Decimal128),
         #[prost(message, tag = "39")]
@@ -389,6 +407,24 @@ pub mod scalar_value {
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Decimal32 {
+    #[prost(bytes = "vec", tag = "1")]
+    pub value: ::prost::alloc::vec::Vec<u8>,
+    #[prost(int64, tag = "2")]
+    pub p: i64,
+    #[prost(int64, tag = "3")]
+    pub s: i64,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Decimal64 {
+    #[prost(bytes = "vec", tag = "1")]
+    pub value: ::prost::alloc::vec::Vec<u8>,
+    #[prost(int64, tag = "2")]
+    pub p: i64,
+    #[prost(int64, tag = "3")]
+    pub s: i64,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Decimal128 {
     #[prost(bytes = "vec", tag = "1")]
     pub value: ::prost::alloc::vec::Vec<u8>,
@@ -411,7 +447,7 @@ pub struct Decimal256 {
 pub struct ArrowType {
     #[prost(
         oneof = "arrow_type::ArrowTypeEnum",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 35, 32, 15, 34, 16, 31, 17, 18, 19, 20, 21, 22, 23, 24, 36, 25, 26, 27, 28, 29, 30, 33"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 35, 32, 15, 34, 16, 31, 17, 18, 19, 20, 21, 22, 23, 40, 41, 24, 36, 25, 26, 27, 28, 29, 30, 33"
     )]
     pub arrow_type_enum: ::core::option::Option<arrow_type::ArrowTypeEnum>,
 }
@@ -478,8 +514,12 @@ pub mod arrow_type {
         Time64(i32),
         #[prost(enumeration = "super::IntervalUnit", tag = "23")]
         Interval(i32),
+        #[prost(message, tag = "40")]
+        Decimal32(super::Decimal32Type),
+        #[prost(message, tag = "41")]
+        Decimal64(super::Decimal64Type),
         #[prost(message, tag = "24")]
-        Decimal(super::Decimal),
+        Decimal128(super::Decimal128Type),
         #[prost(message, tag = "36")]
         Decimal256(super::Decimal256Type),
         #[prost(message, tag = "25")]
@@ -660,10 +700,6 @@ pub struct ParquetColumnOptions {
     pub bloom_filter_ndv_opt: ::core::option::Option<
         parquet_column_options::BloomFilterNdvOpt,
     >,
-    #[prost(oneof = "parquet_column_options::MaxStatisticsSizeOpt", tags = "8")]
-    pub max_statistics_size_opt: ::core::option::Option<
-        parquet_column_options::MaxStatisticsSizeOpt,
-    >,
 }
 /// Nested message and enum types in `ParquetColumnOptions`.
 pub mod parquet_column_options {
@@ -701,11 +737,6 @@ pub mod parquet_column_options {
     pub enum BloomFilterNdvOpt {
         #[prost(uint64, tag = "7")]
         BloomFilterNdv(u64),
-    }
-    #[derive(Clone, Copy, PartialEq, ::prost::Oneof)]
-    pub enum MaxStatisticsSizeOpt {
-        #[prost(uint32, tag = "8")]
-        MaxStatisticsSize(u32),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -784,10 +815,6 @@ pub struct ParquetOptions {
     pub statistics_enabled_opt: ::core::option::Option<
         parquet_options::StatisticsEnabledOpt,
     >,
-    #[prost(oneof = "parquet_options::MaxStatisticsSizeOpt", tags = "14")]
-    pub max_statistics_size_opt: ::core::option::Option<
-        parquet_options::MaxStatisticsSizeOpt,
-    >,
     #[prost(oneof = "parquet_options::ColumnIndexTruncateLengthOpt", tags = "17")]
     pub column_index_truncate_length_opt: ::core::option::Option<
         parquet_options::ColumnIndexTruncateLengthOpt,
@@ -826,11 +853,6 @@ pub mod parquet_options {
     pub enum StatisticsEnabledOpt {
         #[prost(string, tag = "13")]
         StatisticsEnabled(::prost::alloc::string::String),
-    }
-    #[derive(Clone, Copy, PartialEq, ::prost::Oneof)]
-    pub enum MaxStatisticsSizeOpt {
-        #[prost(uint64, tag = "14")]
-        MaxStatisticsSize(u64),
     }
     #[derive(Clone, Copy, PartialEq, ::prost::Oneof)]
     pub enum ColumnIndexTruncateLengthOpt {
