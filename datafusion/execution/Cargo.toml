@@ -37,6 +37,11 @@ workspace = true
 [lib]
 name = "datafusion_execution"
 
+[features]
+parquet_encryption = [
+    "parquet/encryption",
+]
+
 [dependencies]
 arrow = { workspace = true }
 dashmap = { workspace = true }
@@ -46,6 +51,7 @@ futures = { workspace = true }
 log = { workspace = true }
 object_store = { workspace = true, features = ["fs"] }
 parking_lot = { workspace = true }
+parquet = { workspace = true, optional = true }
 rand = { workspace = true }
 tempfile = { workspace = true }
 url = { workspace = true }
