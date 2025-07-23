@@ -4164,23 +4164,40 @@ AS VALUES
 (3, 3, true),
 (3, 3, false);
 
-query IIIIB
-SELECT * FROM t0 FULL JOIN t1 ON t0.c1 = t1.c1 LIMIT 2;
+query IIIIB rowsort
+SELECT * FROM t0 FULL JOIN t1 ON t0.c1 = t1.c1 LIMIT 20;
 ----
-2 2 2 2 true
+1 1 NULL NULL NULL
 2 2 2 2 false
-
-query IIIIB
-SELECT * FROM t0 FULL JOIN t1 ON t0.c2 >= t1.c2 LIMIT 2;
-----
 2 2 2 2 true
+3 3 3 3 false
+3 3 3 3 true
+4 4 NULL NULL NULL
+
+query IIIIB rowsort
+SELECT * FROM t0 FULL JOIN t1 ON t0.c2 >= t1.c2 LIMIT 20;
+----
+1 1 NULL NULL NULL
+2 2 2 2 false
+2 2 2 2 true
+3 3 2 2 false
 3 3 2 2 true
+3 3 3 3 false
+3 3 3 3 true
+4 4 2 2 false
+4 4 2 2 true
+4 4 3 3 false
+4 4 3 3 true
 
-query IIIIB
-SELECT * FROM t0 FULL JOIN t1 ON t0.c1 = t1.c1 AND t0.c2 >= t1.c2 LIMIT 2;
+query IIIIB rowsort
+SELECT * FROM t0 FULL JOIN t1 ON t0.c1 = t1.c1 AND t0.c2 >= t1.c2 LIMIT 20;
 ----
-2 2 2 2 true
+1 1 NULL NULL NULL
 2 2 2 2 false
+2 2 2 2 true
+3 3 3 3 false
+3 3 3 3 true
+4 4 NULL NULL NULL
 
 ## Test !join.on.is_empty() && join.filter.is_none()
 query TT
