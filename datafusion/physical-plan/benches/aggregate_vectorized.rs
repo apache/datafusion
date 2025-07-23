@@ -26,16 +26,17 @@ use datafusion_physical_plan::aggregates::group_values::multi_group_by::GroupCol
 use std::sync::Arc;
 
 const SIZES: [usize; 3] = [1_000, 10_000, 100_000];
-const NULL_DENSITIES: [f32; 3] = [0.0, 0.1, 0.5];
+const NULL_DENSITIES: [f32; 4] = [0.0, 0.1, 0.5, 1.0];
 
-fn bench_vectorized_append(c: &mut Criterion) {
-    let mut group = c.benchmark_group("ByteViewGroupValueBuilder_vectorized_append");
-
+fn bench_byte_view_group_operation(c: &mut Criterion) {
+    // test all inlined scenarios random from 0 ~ 12
     for &size in &SIZES {
+        let mut group = c.benchmark_group("ByteViewGroupValueBuilder_inlined");
+
         let rows: Vec<usize> = (0..size).collect();
 
         for &null_density in &NULL_DENSITIES {
-            let input = create_string_view_array_with_len(size, null_density, 8, false);
+            let input = create_string_view_array_with_max_len(size, null_density, 12);
             let input: ArrayRef = Arc::new(input);
 
             // vectorized_append
@@ -69,18 +70,22 @@ fn bench_vectorized_append(c: &mut Criterion) {
                 format!("inlined_null_{null_density:.1}_size_{size}"),
                 "vectorized_equal_to",
             );
+
+            let mut builder = ByteViewGroupValueBuilder::<StringViewType>::new();
+            builder.vectorized_append(&input, &rows).unwrap();
+            let mut results = vec![true; size];
             group.bench_function(id, |b| {
-                let mut builder = ByteViewGroupValueBuilder::<StringViewType>::new();
-                builder.vectorized_append(&input, &rows).unwrap();
-                let mut results = vec![true; size];
                 b.iter(|| {
                     builder.vectorized_equal_to(&rows, &input, &rows, &mut results);
                 });
             });
         }
+        group.finish();
     }
 
+    // test mixed length from 0 ~ 64
     for &size in &SIZES {
+        let mut group = c.benchmark_group("ByteViewGroupValueBuilder_mixed");
         let rows: Vec<usize> = (0..size).collect();
 
         for &null_density in &NULL_DENSITIES {
@@ -119,18 +124,76 @@ fn bench_vectorized_append(c: &mut Criterion) {
                 format!("{scenario}_null_{null_density:.1}_size_{size}"),
                 "vectorized_equal_to",
             );
+
+            let mut builder = ByteViewGroupValueBuilder::<StringViewType>::new();
+            builder.vectorized_append(&input, &rows).unwrap();
+            let mut results = vec![true; size];
             group.bench_function(id, |b| {
-                let mut builder = ByteViewGroupValueBuilder::<StringViewType>::new();
-                builder.vectorized_append(&input, &rows).unwrap();
-                let mut results = vec![true; size];
                 b.iter(|| {
                     builder.vectorized_equal_to(&rows, &input, &rows, &mut results);
                 });
             });
         }
+        group.finish();
     }
 
+    // test fixed length 64
     for &size in &SIZES {
+        let mut group = c.benchmark_group("ByteViewGroupValueBuilder_fixed");
+        let rows: Vec<usize> = (0..size).collect();
+
+        for &null_density in &NULL_DENSITIES {
+            let scenario = "fixed";
+            let input = create_string_view_array_with_len(size, null_density, 64, false);
+            let input: ArrayRef = Arc::new(input);
+
+            // vectorized_append
+            let id = BenchmarkId::new(
+                format!("{scenario}_null_{null_density:.1}_size_{size}"),
+                "vectorized_append",
+            );
+            group.bench_function(id, |b| {
+                b.iter(|| {
+                    let mut builder = ByteViewGroupValueBuilder::<StringViewType>::new();
+                    builder.vectorized_append(&input, &rows).unwrap();
+                });
+            });
+
+            // append_val
+            let id = BenchmarkId::new(
+                format!("{scenario}_null_{null_density:.1}_size_{size}"),
+                "append_val",
+            );
+            group.bench_function(id, |b| {
+                b.iter(|| {
+                    let mut builder = ByteViewGroupValueBuilder::<StringViewType>::new();
+                    for &i in &rows {
+                        builder.append_val(&input, i).unwrap();
+                    }
+                });
+            });
+
+            // vectorized_equal_to
+            let id = BenchmarkId::new(
+                format!("{scenario}_null_{null_density:.1}_size_{size}"),
+                "vectorized_equal_to",
+            );
+
+            let mut builder = ByteViewGroupValueBuilder::<StringViewType>::new();
+            builder.vectorized_append(&input, &rows).unwrap();
+            let mut results = vec![true; size];
+            group.bench_function(id, |b| {
+                b.iter(|| {
+                    builder.vectorized_equal_to(&rows, &input, &rows, &mut results);
+                });
+            });
+        }
+        group.finish();
+    }
+
+    // test random length from 0 ~ 400
+    for &size in &SIZES {
+        let mut group = c.benchmark_group("ByteViewGroupValueBuilder_random");
         let rows: Vec<usize> = (0..size).collect();
 
         for &null_density in &NULL_DENSITIES {
@@ -169,19 +232,19 @@ fn bench_vectorized_append(c: &mut Criterion) {
                 format!("{scenario}_null_{null_density:.1}_size_{size}"),
                 "vectorized_equal_to",
             );
+
+            let mut builder = ByteViewGroupValueBuilder::<StringViewType>::new();
+            builder.vectorized_append(&input, &rows).unwrap();
+            let mut results = vec![true; size];
             group.bench_function(id, |b| {
-                let mut builder = ByteViewGroupValueBuilder::<StringViewType>::new();
-                builder.vectorized_append(&input, &rows).unwrap();
-                let mut results = vec![true; size];
                 b.iter(|| {
                     builder.vectorized_equal_to(&rows, &input, &rows, &mut results);
                 });
             });
         }
+        group.finish();
     }
-
-    group.finish();
 }
 
-criterion_group!(benches, bench_vectorized_append);
+criterion_group!(benches, bench_byte_view_group_operation);
 criterion_main!(benches);
