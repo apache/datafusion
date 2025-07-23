@@ -144,22 +144,35 @@ mod tests {
     #[test]
     fn test_chr_normal() {
         let input = Arc::new(Int64Array::from(vec![
-            Some(65),     // A
-            Some(66),     // B
-            Some(67),     // C
-            Some(128640), // 🚀
-            Some(8364),   // €
-            Some(945),    // α
-            None,         // NULL
-            Some(32),     // space
-            Some(10),     // newline
-            Some(9),      // tab
+            Some(65),       // A
+            Some(66),       // B
+            Some(67),       // C
+            Some(128640),   // 🚀
+            Some(8364),     // €
+            Some(945),      // α
+            None,           // NULL
+            Some(32),       // space
+            Some(10),       // newline
+            Some(9),        // tab
+            Some(0x10FFFF), // 0x10FFFF, the largest Unicode code point
         ]));
         let result = chr(&[input]).unwrap();
         let string_array = result.as_any().downcast_ref::<StringArray>().unwrap();
-        let expected = ["A", "B", "C", "🚀", "€", "α", "", " ", "\n", "\t"];
+        let expected = [
+            "A",
+            "B",
+            "C",
+            "🚀",
+            "€",
+            "α",
+            "",
+            " ",
+            "\n",
+            "\t",
+            "\u{10ffff}",
+        ];
 
-        assert_eq!(string_array.len(), 10);
+        assert_eq!(string_array.len(), 11);
         for (i, e) in expected.iter().enumerate() {
             assert_eq!(string_array.value(i), *e);
         }
@@ -185,8 +198,26 @@ mod tests {
             "requested character too large for encoding"
         );
 
+        // invalid Unicode code points (too large) case 2
+        let input = Arc::new(Int64Array::from(vec![0x10FFFF + 1]));
+        let result = chr(&[input]);
+        assert!(result.is_err());
+        assert_contains!(
+            result.err().unwrap().to_string(),
+            "requested character too large for encoding"
+        );
+
         // negative input
         let input = Arc::new(Int64Array::from(vec![i64::MIN + 2i64])); // will be 2 if cast to u32
+        let result = chr(&[input]);
+        assert!(result.is_err());
+        assert_contains!(
+            result.err().unwrap().to_string(),
+            "negative input not permitted"
+        );
+
+        // negative input case 2
+        let input = Arc::new(Int64Array::from(vec![-1]));
         let result = chr(&[input]);
         assert!(result.is_err());
         assert_contains!(
@@ -202,7 +233,10 @@ mod tests {
             result.err().unwrap().to_string(),
             "null character not permitted"
         );
+    }
 
+    #[test]
+    fn test_chr_empty() {
         // empty input array
         let input = Arc::new(Int64Array::from(Vec::<i64>::new()));
         let result = chr(&[input]).unwrap();
