@@ -1,0 +1,612 @@
+# # Licensed to the Apache Software Foundation (ASF) under one
+# # or more contributor license agreements.  See the NOTICE file
+# # distributed with this work for additional information
+# # regarding copyright ownership.  The ASF licenses this file
+# # to you under the Apache License, Version 2.0 (the
+# # "License"); you may not use this file except in compliance
+# # with the License.  You may obtain a copy of the License at
+
+# #   http://www.apache.org/licenses/LICENSE-2.0
+
+# # Unless required by applicable law or agreed to in writing,
+# # software distributed under the License is distributed on an
+# # "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# # KIND, either express or implied.  See the License for the
+# # specific language governing permissions and limitations
+# # under the License.
+
+# ##########
+# ## Comprehensive NLJ (Nested Loop Join) Testing
+# ## Testing all join types with various table size combinations
+# ##########
+
+# # Test combinations:
+# # Join types: inner, left, right, full, left semi, right semi, left anti, right anti, left mark, right mark
+# # Table sizes: (10,10), (10,10000), (10000,10), (10000,10000), (1,1), (1,10), (10,1)
+
+# #######################
+# ## INNER JOIN TESTS
+# #######################
+
+# # Inner join: (10, 10)
+# query III rowsort
+# select t1.v1, t2.v1, ((t1.v1 + t2.v1) % 100) as p
+# from range(10) as t1(v1)
+# inner join range(10) as t2(v1)
+# on ((t1.v1 + t2.v1) % 100) = 42
+# ----
+
+# # Inner join: (10, 10000)
+# query III rowsort
+# select t1.v1, t2.v1, ((t1.v1 + t2.v1) % 10000) as p
+# from range(10) as t1(v1)
+# inner join range(10000) as t2(v1)
+# on ((t1.v1 + t2.v1) % 10000) = 42
+# ----
+# 0 42 42
+# 1 41 42
+# 2 40 42
+# 3 39 42
+# 4 38 42
+# 5 37 42
+# 6 36 42
+# 7 35 42
+# 8 34 42
+# 9 33 42
+
+# # Inner join: (10000, 10)
+# query III rowsort
+# select t1.v1, t2.v1, ((t1.v1 + t2.v1) % 10000) as p
+# from range(10000) as t1(v1)
+# inner join range(10) as t2(v1)
+# on ((t1.v1 + t2.v1) % 10000) = 42
+# ----
+# 33 9 42
+# 34 8 42
+# 35 7 42
+# 36 6 42
+# 37 5 42
+# 38 4 42
+# 39 3 42
+# 40 2 42
+# 41 1 42
+# 42 0 42
+
+# # Inner join: (10000, 10000) - high selectivity
+# query III rowsort
+# select t1.v1, t2.v1, ((t1.v1 + t2.v1) % 100000) as p
+# from range(10000) as t1(v1)
+# inner join range(10000) as t2(v1)
+# on ((t1.v1 + t2.v1) % 100000) = 42
+# ----
+# 0 42 42
+# 1 41 42
+# 10 32 42
+# 11 31 42
+# 12 30 42
+# 13 29 42
+# 14 28 42
+# 15 27 42
+# 16 26 42
+# 17 25 42
+# 18 24 42
+# 19 23 42
+# 2 40 42
+# 20 22 42
+# 21 21 42
+# 22 20 42
+# 23 19 42
+# 24 18 42
+# 25 17 42
+# 26 16 42
+# 27 15 42
+# 28 14 42
+# 29 13 42
+# 3 39 42
+# 30 12 42
+# 31 11 42
+# 32 10 42
+# 33 9 42
+# 34 8 42
+# 35 7 42
+# 36 6 42
+# 37 5 42
+# 38 4 42
+# 39 3 42
+# 4 38 42
+# 40 2 42
+# 41 1 42
+# 42 0 42
+# 5 37 42
+# 6 36 42
+# 7 35 42
+# 8 34 42
+# 9 33 42
+
+# # Inner join: (1, 1)
+# query III rowsort
+# select t1.v1, t2.v1, ((t1.v1 + t2.v1) % 10) as p
+# from range(1) as t1(v1)
+# inner join range(1) as t2(v1)
+# on ((t1.v1 + t2.v1) % 10) = 2
+# ----
+
+# # Inner join: (1, 10)
+# query III rowsort
+# select t1.v1, t2.v1, ((t1.v1 + t2.v1) % 10) as p
+# from range(1) as t1(v1)
+# inner join range(10) as t2(v1)
+# on ((t1.v1 + t2.v1) % 10) = 2
+# ----
+# 0 2 2
+
+# # Inner join: (10, 1)
+# query III rowsort
+# select t1.v1, t2.v1, ((t1.v1 + t2.v1) % 10) as p
+# from range(10) as t1(v1)
+# inner join range(1) as t2(v1)
+# on ((t1.v1 + t2.v1) % 10) = 2
+# ----
+# 2 0 2
+
+# #######################
+# ## LEFT JOIN TESTS
+# #######################
+
+# # Left join: (10, 10)
+# query III rowsort
+# select t1.v1, t2.v1, ((t1.v1 + t2.v1) % 100) as p
+# from range(10) as t1(v1)
+# left join range(10) as t2(v1)
+# on ((t1.v1 + t2.v1) % 100) = 42
+# ----
+# 0 NULL NULL
+# 1 NULL NULL
+# 2 NULL NULL
+# 3 NULL NULL
+# 4 NULL NULL
+# 5 NULL NULL
+# 6 NULL NULL
+# 7 NULL NULL
+# 8 NULL NULL
+# 9 NULL NULL
+
+# # Left join: (10, 10000)
+# query III rowsort
+# select t1.v1, t2.v1, ((t1.v1 + t2.v1) % 10000) as p
+# from range(10) as t1(v1)
+# left join range(10000) as t2(v1)
+# on ((t1.v1 + t2.v1) % 10000) = 42
+# ----
+# 0 42 42
+# 1 41 42
+# 2 40 42
+# 3 39 42
+# 4 38 42
+# 5 37 42
+# 6 36 42
+# 7 35 42
+# 8 34 42
+# 9 33 42
+
+# # Left join: (10000, 10)
+# query III rowsort
+# select t1.v1, t2.v1, ((t1.v1 + t2.v1) % 10000) as p
+# from range(10000) as t1(v1)
+# left join range(10) as t2(v1)
+# on ((t1.v1 + t2.v1) % 10000) = 42
+# where (t1.v1 IS NOT NULL) AND (t2.v1 IS NOT NULL);
+# ----
+# 33 9 42
+# 34 8 42
+# 35 7 42
+# 36 6 42
+# 37 5 42
+# 38 4 42
+# 39 3 42
+# 40 2 42
+# 41 1 42
+# 42 0 42
+
+# # Left join: (10000, 10000) - high selectivity
+# query III rowsort
+# select t1.v1, t2.v1, ((t1.v1 + t2.v1) % 100000) as p
+# from range(10000) as t1(v1)
+# left join range(10000) as t2(v1)
+# on ((t1.v1 + t2.v1) % 100000) = 42
+# where (t1.v1 IS NOT NULL) AND (t2.v1 IS NOT NULL);
+# ----
+# 0 42 42
+# 1 41 42
+# 10 32 42
+# 11 31 42
+# 12 30 42
+# 13 29 42
+# 14 28 42
+# 15 27 42
+# 16 26 42
+# 17 25 42
+# 18 24 42
+# 19 23 42
+# 2 40 42
+# 20 22 42
+# 21 21 42
+# 22 20 42
+# 23 19 42
+# 24 18 42
+# 25 17 42
+# 26 16 42
+# 27 15 42
+# 28 14 42
+# 29 13 42
+# 3 39 42
+# 30 12 42
+# 31 11 42
+# 32 10 42
+# 33 9 42
+# 34 8 42
+# 35 7 42
+# 36 6 42
+# 37 5 42
+# 38 4 42
+# 39 3 42
+# 4 38 42
+# 40 2 42
+# 41 1 42
+# 42 0 42
+# 5 37 42
+# 6 36 42
+# 7 35 42
+# 8 34 42
+# 9 33 42
+
+# # Left join: (1, 1)
+# query III rowsort
+# select t1.v1, t2.v1, ((t1.v1 + t2.v1) % 10) as p
+# from range(1) as t1(v1)
+# left join range(1) as t2(v1)
+# on ((t1.v1 + t2.v1) % 10) = 2
+# ----
+# 0 NULL NULL
+
+# # Left join: (1, 10)
+# query III rowsort
+# select t1.v1, t2.v1, ((t1.v1 + t2.v1) % 10) as p
+# from range(1) as t1(v1)
+# left join range(10) as t2(v1)
+# on ((t1.v1 + t2.v1) % 10) = 2
+# ----
+# 0 2 2
+
+# # Left join: (10, 1)
+# query III rowsort
+# select t1.v1, t2.v1, ((t1.v1 + t2.v1) % 10) as p
+# from range(10) as t1(v1)
+# left join range(1) as t2(v1)
+# on ((t1.v1 + t2.v1) % 10) = 2
+# ----
+# 0 NULL NULL
+# 1 NULL NULL
+# 2 0 2
+# 3 NULL NULL
+# 4 NULL NULL
+# 5 NULL NULL
+# 6 NULL NULL
+# 7 NULL NULL
+# 8 NULL NULL
+# 9 NULL NULL
+
+# #######################
+# ## RIGHT JOIN TESTS
+# #######################
+
+# # Right join: (10, 10)
+# query III rowsort
+# select t1.v1, t2.v1, ((t1.v1 + t2.v1) % 100) as p
+# from range(10) as t1(v1)
+# right join range(10) as t2(v1)
+# on ((t1.v1 + t2.v1) % 100) = 42
+# ----
+# NULL 0 NULL
+# NULL 1 NULL
+# NULL 2 NULL
+# NULL 3 NULL
+# NULL 4 NULL
+# NULL 5 NULL
+# NULL 6 NULL
+# NULL 7 NULL
+# NULL 8 NULL
+# NULL 9 NULL
+
+# # Right join: (10, 10000)
+# query III rowsort
+# select t1.v1, t2.v1, ((t1.v1 + t2.v1) % 10000) as p
+# from range(10) as t1(v1)
+# right join range(10000) as t2(v1)
+# on ((t1.v1 + t2.v1) % 10000) = 42
+# where (t1.v1 is not null) and (t2.v1 is not null)
+# ----
+# 0 42 42
+# 1 41 42
+# 2 40 42
+# 3 39 42
+# 4 38 42
+# 5 37 42
+# 6 36 42
+# 7 35 42
+# 8 34 42
+# 9 33 42
+
+# # Right join: (10000, 10)
+# query III rowsort
+# select t1.v1, t2.v1, ((t1.v1 + t2.v1) % 10000) as p
+# from range(10000) as t1(v1)
+# right join range(10) as t2(v1)
+# on ((t1.v1 + t2.v1) % 10000) = 42
+# ----
+# 33 9 42
+# 34 8 42
+# 35 7 42
+# 36 6 42
+# 37 5 42
+# 38 4 42
+# 39 3 42
+# 40 2 42
+# 41 1 42
+# 42 0 42
+
+# # Right join: (10000, 10000) - high selectivity
+# query III rowsort
+# select t1.v1, t2.v1, ((t1.v1 + t2.v1) % 100000) as p
+# from range(10000) as t1(v1)
+# right join range(10000) as t2(v1)
+# on ((t1.v1 + t2.v1) % 100000) = 42
+# where (t1.v1 is not null) and (t2.v1 is not null)
+# ----
+# 0 42 42
+# 1 41 42
+# 10 32 42
+# 11 31 42
+# 12 30 42
+# 13 29 42
+# 14 28 42
+# 15 27 42
+# 16 26 42
+# 17 25 42
+# 18 24 42
+# 19 23 42
+# 2 40 42
+# 20 22 42
+# 21 21 42
+# 22 20 42
+# 23 19 42
+# 24 18 42
+# 25 17 42
+# 26 16 42
+# 27 15 42
+# 28 14 42
+# 29 13 42
+# 3 39 42
+# 30 12 42
+# 31 11 42
+# 32 10 42
+# 33 9 42
+# 34 8 42
+# 35 7 42
+# 36 6 42
+# 37 5 42
+# 38 4 42
+# 39 3 42
+# 4 38 42
+# 40 2 42
+# 41 1 42
+# 42 0 42
+# 5 37 42
+# 6 36 42
+# 7 35 42
+# 8 34 42
+# 9 33 42
+
+# # Right join: (1, 1)
+# query III rowsort
+# select t1.v1, t2.v1, ((t1.v1 + t2.v1) % 10) as p
+# from range(1) as t1(v1)
+# right join range(1) as t2(v1)
+# on ((t1.v1 + t2.v1) % 10) = 2
+# ----
+# NULL 0 NULL
+
+# # Right join: (1, 10)
+# query III rowsort
+# select t1.v1, t2.v1, ((t1.v1 + t2.v1) % 10) as p
+# from range(1) as t1(v1)
+# right join range(10) as t2(v1)
+# on ((t1.v1 + t2.v1) % 10) = 2
+# ----
+# 0 2 2
+# NULL 0 NULL
+# NULL 1 NULL
+# NULL 3 NULL
+# NULL 4 NULL
+# NULL 5 NULL
+# NULL 6 NULL
+# NULL 7 NULL
+# NULL 8 NULL
+# NULL 9 NULL
+
+# # Right join: (10, 1)
+# query III rowsort
+# select t1.v1, t2.v1, ((t1.v1 + t2.v1) % 10) as p
+# from range(10) as t1(v1)
+# right join range(1) as t2(v1)
+# on ((t1.v1 + t2.v1) % 10) = 2
+# ----
+# 2 0 2
+
+# #######################
+# ## FULL JOIN TESTS
+# #######################
+
+# # Full join: (10, 10)
+# query III rowsort
+# select t1.v1, t2.v1, ((t1.v1 + t2.v1) % 100) as p
+# from range(10) as t1(v1)
+# full join range(10) as t2(v1)
+# on ((t1.v1 + t2.v1) % 100) = 42
+# ----
+# 0 NULL NULL
+# 1 NULL NULL
+# 2 NULL NULL
+# 3 NULL NULL
+# 4 NULL NULL
+# 5 NULL NULL
+# 6 NULL NULL
+# 7 NULL NULL
+# 8 NULL NULL
+# 9 NULL NULL
+# NULL 0 NULL
+# NULL 1 NULL
+# NULL 2 NULL
+# NULL 3 NULL
+# NULL 4 NULL
+# NULL 5 NULL
+# NULL 6 NULL
+# NULL 7 NULL
+# NULL 8 NULL
+# NULL 9 NULL
+
+# # Full join: (10, 10000)
+# query III rowsort
+# select t1.v1, t2.v1, ((t1.v1 + t2.v1) % 10000) as p
+# from range(10) as t1(v1)
+# full join range(10000) as t2(v1)
+# on ((t1.v1 + t2.v1) % 10000) = 42
+# where (t1.v1 is not null) and (t2.v1 is not null)
+# ----
+# 0 42 42
+# 1 41 42
+# 2 40 42
+# 3 39 42
+# 4 38 42
+# 5 37 42
+# 6 36 42
+# 7 35 42
+# 8 34 42
+# 9 33 42
+
+# # Full join: (10000, 10)
+# query III rowsort
+# select t1.v1, t2.v1, ((t1.v1 + t2.v1) % 10000) as p
+# from range(10000) as t1(v1)
+# full join range(10) as t2(v1)
+# on ((t1.v1 + t2.v1) % 10000) = 42
+# where (t1.v1 is not null) and (t2.v1 is not null)
+# ----
+# 33 9 42
+# 34 8 42
+# 35 7 42
+# 36 6 42
+# 37 5 42
+# 38 4 42
+# 39 3 42
+# 40 2 42
+# 41 1 42
+# 42 0 42
+
+# # Full join: (10000, 10000) - high selectivity
+# query III rowsort
+# select t1.v1, t2.v1, ((t1.v1 + t2.v1) % 100000) as p
+# from range(10000) as t1(v1)
+# full join range(10000) as t2(v1)
+# on ((t1.v1 + t2.v1) % 100000) = 42
+# where (t1.v1 is not null) and (t2.v1 is not null)
+# ----
+# 0 42 42
+# 1 41 42
+# 10 32 42
+# 11 31 42
+# 12 30 42
+# 13 29 42
+# 14 28 42
+# 15 27 42
+# 16 26 42
+# 17 25 42
+# 18 24 42
+# 19 23 42
+# 2 40 42
+# 20 22 42
+# 21 21 42
+# 22 20 42
+# 23 19 42
+# 24 18 42
+# 25 17 42
+# 26 16 42
+# 27 15 42
+# 28 14 42
+# 29 13 42
+# 3 39 42
+# 30 12 42
+# 31 11 42
+# 32 10 42
+# 33 9 42
+# 34 8 42
+# 35 7 42
+# 36 6 42
+# 37 5 42
+# 38 4 42
+# 39 3 42
+# 4 38 42
+# 40 2 42
+# 41 1 42
+# 42 0 42
+# 5 37 42
+# 6 36 42
+# 7 35 42
+# 8 34 42
+# 9 33 42
+
+# # Full join: (1, 1)
+# query III rowsort
+# select t1.v1, t2.v1, ((t1.v1 + t2.v1) % 10) as p
+# from range(1) as t1(v1)
+# full join range(1) as t2(v1)
+# on ((t1.v1 + t2.v1) % 10) = 2
+# ----
+# 0 NULL NULL
+# NULL 0 NULL
+
+# # Full join: (1, 10)
+# query III rowsort
+# select t1.v1, t2.v1, ((t1.v1 + t2.v1) % 10) as p
+# from range(1) as t1(v1)
+# full join range(10) as t2(v1)
+# on ((t1.v1 + t2.v1) % 10) = 2
+# ----
+# 0 2 2
+# NULL 0 NULL
+# NULL 1 NULL
+# NULL 3 NULL
+# NULL 4 NULL
+# NULL 5 NULL
+# NULL 6 NULL
+# NULL 7 NULL
+# NULL 8 NULL
+# NULL 9 NULL
+
+# # Full join: (10, 1)
+# query III rowsort
+# select t1.v1, t2.v1, ((t1.v1 + t2.v1) % 10) as p
+# from range(10) as t1(v1)
+# full join range(1) as t2(v1)
+# on ((t1.v1 + t2.v1) % 10) = 2
+# ----
+# 0 NULL NULL
+# 1 NULL NULL
+# 2 0 2
+# 3 NULL NULL
+# 4 NULL NULL
+# 5 NULL NULL
+# 6 NULL NULL
+# 7 NULL NULL
+# 8 NULL NULL
+# 9 NULL NULL
