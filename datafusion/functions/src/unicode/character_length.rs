@@ -141,6 +141,7 @@ where
         if is_array_ascii_only {
             let values: Vec<_> = (0..array.len())
                 .map(|i| {
+                    // Safety: we are iterating with array.len() so the index is always valid
                     let value = unsafe { array.value_unchecked(i) };
                     T::Native::usize_as(value.len())
                 })
@@ -149,6 +150,7 @@ where
         } else {
             let values: Vec<_> = (0..array.len())
                 .map(|i| {
+                    // Safety: we are iterating with array.len() so the index is always valid
                     let value = unsafe { array.value_unchecked(i) };
                     if value.is_ascii() {
                         T::Native::usize_as(value.len())
