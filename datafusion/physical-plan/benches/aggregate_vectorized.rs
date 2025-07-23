@@ -85,7 +85,6 @@ fn bench_byte_view_group_operation(c: &mut Criterion) {
     group = c.benchmark_group("ByteViewGroupValueBuilder_mixed");
     // test mixed length from 0 ~ 64
     for &size in &SIZES {
-
         let rows: Vec<usize> = (0..size).collect();
 
         for &null_density in &NULL_DENSITIES {
@@ -140,7 +139,6 @@ fn bench_byte_view_group_operation(c: &mut Criterion) {
     group = c.benchmark_group("ByteViewGroupValueBuilder_fixed");
     // test fixed length 64
     for &size in &SIZES {
-
         let rows: Vec<usize> = (0..size).collect();
 
         for &null_density in &NULL_DENSITIES {
