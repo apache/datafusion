@@ -35,6 +35,7 @@
 use arrow::buffer::MutableBuffer;
 use arrow::compute::BatchCoalescer;
 use futures::{ready, StreamExt};
+use log::debug;
 use std::sync::Arc;
 use std::task::Poll;
 
@@ -58,8 +59,6 @@ use datafusion_common::{
 use datafusion_expr::JoinType;
 
 use futures::Stream;
-
-const OUTPUT_BUFFER_LIMIT: usize = 8192;
 
 /// Simplified state enum without inner structs
 #[derive(Debug, Clone, Copy)]
@@ -279,6 +278,46 @@ impl NLJStream {
         let cur_right_batch = unwrap_or_internal_err!(right_batch);
 
         // ==== Setup unmatched indices ====
+        // If Right Mark
+        // ----
+        if self.join_type == JoinType::RightMark {
+            // For RightMark, output all right rows, left is null where bitmap is unset, right is 0..N
+            let right_row_count = cur_right_batch.num_rows();
+            let right_indices = UInt64Array::from_iter_values(0..right_row_count as u64);
+            // TODO(now-perf): directly copy the null buffer to make this step
+            // faster
+            let mut left_indices_builder = UInt32Builder::new();
+            for i in 0..right_row_count {
+                if bitmap.value(i) {
+                    left_indices_builder.append_value(i as u32);
+                } else {
+                    left_indices_builder.append_null();
+                }
+            }
+            let left_indices = left_indices_builder.finish();
+
+            let left_data = self.buffered_left_data.as_ref().ok_or_else(|| {
+                internal_datafusion_err!("LeftData should be available")
+            })?;
+            let left_batch = left_data.batch();
+            let empty_left_batch = RecordBatch::new_empty(left_batch.schema().clone());
+
+            let result_batch = build_batch_from_indices_maybe_empty(
+                &self.schema,
+                &cur_right_batch, // swapped: right is build side
+                &empty_left_batch,
+                &right_indices,
+                &left_indices,
+                &self.column_indices,
+                JoinSide::Right,
+            )?;
+
+            self.current_right_batch_matched = None;
+            return Ok(result_batch);
+        }
+
+        // Non Right Mark
+        // ----
         // TODO(polish): now the actual length of bitmap might be longer than
         // the actual in-use. So we have to use right batch length here to
         // iterate through the bitmap
@@ -362,7 +401,7 @@ impl NLJStream {
             inner_table,
             join_metrics,
             buffered_left_data: None,
-            output_buffer: Box::new(BatchCoalescer::new(schema, OUTPUT_BUFFER_LIMIT)),
+            output_buffer: Box::new(BatchCoalescer::new(schema, cfg_batch_size)),
             cfg_batch_size,
             current_right_batch: None,
             current_right_batch_matched,
@@ -404,6 +443,7 @@ impl Stream for NLJStream {
                 //   better performance, by buffering many build-side batches
                 //   up front.
                 NLJState::BufferingLeft => {
+                    debug!("[NLJState] Entering: {:?}", self.state);
                     match ready!(self.inner_table.get_shared(cx)) {
                         Ok(left_data) => {
                             self.buffered_left_data = Some(left_data);
@@ -439,9 +479,16 @@ impl Stream for NLJStream {
                 // the next `EmitUnmatched` phase to check if there is any
                 // special handling (e.g., in cases like left join).
                 NLJState::FetchingRight => {
+                    debug!("[NLJState] Entering: {:?}", self.state);
                     match ready!(self.outer_table.poll_next_unpin(cx)) {
                         Some(Ok(right_batch)) => {
                             let right_batch_size = right_batch.num_rows();
+
+                            // Skip the empty batch
+                            if right_batch_size == 0 {
+                                continue;
+                            }
+
                             self.current_right_batch = Some(right_batch);
 
                             // TOOD(polish): make it more understandable
@@ -482,10 +529,12 @@ impl Stream for NLJStream {
                 //    After it has done with the current right batch, it will
                 //    go to FetchRight state to check what to do next.
                 NLJState::ProbeJoin => {
+                    debug!("[NLJState] Entering: {:?}", self.state);
                     // Return any completed batches first
                     if self.output_buffer.has_completed_batch() {
                         if let Some(batch) = self.output_buffer.next_completed_batch() {
-                            return Poll::Ready(Some(Ok(batch)));
+                            let poll = Poll::Ready(Some(Ok(batch)));
+                            return self.join_metrics.baseline.record_poll(poll);
                         }
                     }
 
@@ -523,6 +572,7 @@ impl Stream for NLJStream {
                 // Precondition: we have checked the join type so that it's
                 // possible to output right unmatched (e.g. it's right join)
                 NLJState::EmitRightUnmatched => {
+                    debug!("[NLJState] Entering: {:?}", self.state);
                     debug_assert!(self.current_right_batch.is_some());
                     debug_assert!(self.current_right_batch_matched.is_some());
 
@@ -546,10 +596,12 @@ impl Stream for NLJStream {
                 //    the same state, to check if there are any more final
                 //    results to output.
                 NLJState::EmitLeftUnmatched => {
+                    debug!("[NLJState] Entering: {:?}", self.state);
                     // Return any completed batches first
                     if self.output_buffer.has_completed_batch() {
                         if let Some(batch) = self.output_buffer.next_completed_batch() {
-                            return Poll::Ready(Some(Ok(batch)));
+                            let poll = Poll::Ready(Some(Ok(batch)));
+                            return self.join_metrics.baseline.record_poll(poll);
                         }
                     }
 
@@ -570,10 +622,12 @@ impl Stream for NLJStream {
                 }
 
                 NLJState::Done => {
+                    debug!("[NLJState] Entering: {:?}", self.state);
                     // Return any remaining completed batches before final termination
                     if self.output_buffer.has_completed_batch() {
                         if let Some(batch) = self.output_buffer.next_completed_batch() {
-                            return Poll::Ready(Some(Ok(batch)));
+                            let poll = Poll::Ready(Some(Ok(batch)));
+                            return self.join_metrics.baseline.record_poll(poll);
                         }
                     }
 
@@ -606,12 +660,6 @@ impl NLJStream {
             .as_ref()
             .ok_or_else(|| internal_datafusion_err!("Right batch should be available"))?
             .clone();
-
-        // Skip this empty batch and continue probing the next one
-        let right_row_count = right_batch.num_rows();
-        if right_row_count == 0 {
-            return Ok(true);
-        }
 
         // stop probing, the caller will go to the next state
         if self.l_index >= left_data.batch().num_rows() {
@@ -669,7 +717,7 @@ impl NLJStream {
         // ========
         let start_idx = self.emit_cursor as usize;
         let end_idx =
-            std::cmp::min(start_idx + OUTPUT_BUFFER_LIMIT, left_batch.num_rows());
+            std::cmp::min(start_idx + self.cfg_batch_size, left_batch.num_rows());
 
         let result_batch = self.process_unmatched_rows(left_data, start_idx, end_idx)?;
 
@@ -679,35 +727,5 @@ impl NLJStream {
 
         // Return true to continue processing unmatched rows
         Ok(true)
-    }
-}
-
-#[cfg(test)]
-pub(crate) mod tests {
-    use super::*;
-    use arrow::datatypes::{DataType, Field};
-
-    #[test]
-    fn test_nlj_basic_compilation() {
-        let _schema = Arc::new(Schema::new(vec![
-            Field::new("l_id", DataType::Int32, false),
-            Field::new("r_id", DataType::Int32, false),
-        ]));
-
-        let _column_indices = vec![
-            ColumnIndex {
-                index: 0,
-                side: JoinSide::Left,
-            },
-            ColumnIndex {
-                index: 0,
-                side: JoinSide::Right,
-            },
-        ];
-
-        // Verify OUTPUT_BUFFER_LIMIT constant
-        assert_eq!(OUTPUT_BUFFER_LIMIT, 8192);
-
-        println!("Test passed: simplified NLJ structures compile correctly");
     }
 }
