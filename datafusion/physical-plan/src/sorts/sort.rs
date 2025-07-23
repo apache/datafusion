@@ -37,9 +37,8 @@ use crate::metrics::{
 use crate::projection::{make_with_child, update_ordering, ProjectionExec};
 use crate::sorts::streaming_merge::{SortedSpillFile, StreamingMergeBuilder};
 use crate::spill::get_record_batch_memory_size;
-use crate::spill::get_size::GetActualSize;
 use crate::spill::in_progress_spill_file::InProgressSpillFile;
-use crate::spill::spill_manager::SpillManager;
+use crate::spill::spill_manager::{GetSlicedSize, SpillManager};
 use crate::stream::RecordBatchStreamAdapter;
 use crate::topk::TopK;
 use crate::{
@@ -413,7 +412,7 @@ impl ExternalSorter {
             in_progress_file.append_batch(&batch)?;
 
             *max_record_batch_size =
-                (*max_record_batch_size).max(batch.get_actually_used_size());
+                (*max_record_batch_size).max(batch.get_sliced_size());
         }
 
         if !globally_sorted_batches.is_empty() {

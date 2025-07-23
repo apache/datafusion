@@ -28,7 +28,6 @@ use datafusion_execution::SendableRecordBatchStream;
 
 use super::{in_progress_spill_file::InProgressSpillFile, SpillReaderStream};
 use crate::coop::cooperative;
-use crate::spill::get_size::GetActualSize;
 use crate::{common::spawn_buffered, metrics::SpillMetrics};
 
 /// The `SpillManager` is responsible for the following tasks:
@@ -164,8 +163,7 @@ impl SpillManager {
         for batch in batches {
             in_progress_file.append_batch(&batch)?;
 
-            max_record_batch_size =
-                max_record_batch_size.max(batch.get_actually_used_size());
+            max_record_batch_size = max_record_batch_size.max(batch.get_sliced_size());
         }
 
         let file = in_progress_file.finish()?;
@@ -189,8 +187,7 @@ impl SpillManager {
             let batch = batch?;
             in_progress_file.append_batch(&batch)?;
 
-            max_record_batch_size =
-                max_record_batch_size.max(batch.get_actually_used_size());
+            max_record_batch_size = max_record_batch_size.max(batch.get_sliced_size());
         }
 
         let file = in_progress_file.finish()?;
@@ -211,5 +208,21 @@ impl SpillManager {
         )));
 
         Ok(spawn_buffered(stream, self.batch_read_buffer_capacity))
+    }
+}
+
+pub(crate) trait GetSlicedSize {
+    /// Returns the size of the `RecordBatch` when sliced.
+    fn get_sliced_size(&self) -> usize;
+}
+
+impl GetSlicedSize for RecordBatch {
+    fn get_sliced_size(&self) -> usize {
+        let mut total = 0;
+        for array in self.columns() {
+            let data = array.to_data();
+            total += data.get_slice_memory_size().unwrap();
+        }
+        total
     }
 }
