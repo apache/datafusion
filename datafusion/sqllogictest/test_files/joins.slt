@@ -725,24 +725,24 @@ SELECT t1_id, t1_name, t2_name FROM t1, t2 WHERE 1=1 ORDER BY t1_id, t1_name, t2
 44 d z
 
 query ITT nosort
-SELECT t1_id, t1_name, t2_name FROM t1 CROSS JOIN t2 ORDER BY t1_id
+SELECT t1_id, t1_name, t2_name FROM t1 CROSS JOIN t2 ORDER BY t1_id, t1_name, t2_name
 ----
-11 a z
-11 a y
-11 a x
 11 a w
-22 b z
-22 b y
-22 b x
+11 a x
+11 a y
+11 a z
 22 b w
-33 c z
-33 c y
-33 c x
+22 b x
+22 b y
+22 b z
 33 c w
-44 d z
-44 d y
-44 d x
+33 c x
+33 c y
+33 c z
 44 d w
+44 d x
+44 d y
+44 d z
 
 query ITITI rowsort
 SELECT * FROM (SELECT t1_id, t1_name FROM t1 UNION ALL SELECT t1_id, t1_name FROM t1) AS t1 CROSS JOIN t2
@@ -5064,7 +5064,7 @@ physical_plan
 05)--------DataSourceExec: partitions=1, partition_sizes=[0]
 06)--------DataSourceExec: partitions=1, partition_sizes=[10000]
 
-query II 
+query II
 SELECT *
 FROM t2
 WHERE k2 > 0
