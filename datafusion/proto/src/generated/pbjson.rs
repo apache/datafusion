@@ -9907,6 +9907,9 @@ impl serde::Serialize for ListingTableScanNode {
                 listing_table_scan_node::FileFormatType::Json(v) => {
                     struct_ser.serialize_field("json", v)?;
                 }
+                listing_table_scan_node::FileFormatType::Arrow(v) => {
+                    struct_ser.serialize_field("arrow", v)?;
+                }
             }
         }
         struct_ser.end()
@@ -9939,6 +9942,7 @@ impl<'de> serde::Deserialize<'de> for ListingTableScanNode {
             "parquet",
             "avro",
             "json",
+            "arrow",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -9957,6 +9961,7 @@ impl<'de> serde::Deserialize<'de> for ListingTableScanNode {
             Parquet,
             Avro,
             Json,
+            Arrow,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -9992,6 +9997,7 @@ impl<'de> serde::Deserialize<'de> for ListingTableScanNode {
                             "parquet" => Ok(GeneratedField::Parquet),
                             "avro" => Ok(GeneratedField::Avro),
                             "json" => Ok(GeneratedField::Json),
+                            "arrow" => Ok(GeneratedField::Arrow),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -10112,6 +10118,13 @@ impl<'de> serde::Deserialize<'de> for ListingTableScanNode {
                                 return Err(serde::de::Error::duplicate_field("json"));
                             }
                             file_format_type__ = map_.next_value::<::std::option::Option<_>>()?.map(listing_table_scan_node::FileFormatType::Json)
+;
+                        }
+                        GeneratedField::Arrow => {
+                            if file_format_type__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("arrow"));
+                            }
+                            file_format_type__ = map_.next_value::<::std::option::Option<_>>()?.map(listing_table_scan_node::FileFormatType::Arrow)
 ;
                         }
                     }
