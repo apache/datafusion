@@ -587,8 +587,8 @@
   </ul>
  </li>
  <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#adding-a-scalar-async-udf">
-   Adding a Scalar Async UDF
+  <a class="reference internal nav-link" href="#adding-a-async-scalar-udf">
+   Adding a Async Scalar UDF
   </a>
   <ul class="nav section-nav flex-column">
    <li class="toc-h3 nav-item toc-entry">
@@ -713,29 +713,29 @@
 <thead>
 <tr class="row-odd"><th class="head"><p>UDF Type</p></th>
 <th class="head"><p>Description</p></th>
-<th class="head"><p>Example</p></th>
+<th class="head"><p>Example(s)</p></th>
 </tr>
 </thead>
 <tbody>
 <tr class="row-even"><td><p>Scalar</p></td>
 <td><p>A function that takes a row of data and returns a single value.</p></td>
-<td><p>[simple_udf.rs][1]</p></td>
+<td><p><a class="reference external" href="https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/simple_udf.rs">simple_udf.rs</a> / <a class="reference external" href="https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udf.rs">advanced_udf.rs</a></p></td>
 </tr>
 <tr class="row-odd"><td><p>Window</p></td>
 <td><p>A function that takes a row of data and returns a single value, but also has access to the rows around it.</p></td>
-<td><p>[simple_udwf.rs][2]</p></td>
+<td><p><a class="reference external" href="https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/simple_udwf.rs">simple_udwf.rs</a> / <a class="reference external" href="https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udwf.rs">advanced_udwf.rs</a></p></td>
 </tr>
 <tr class="row-even"><td><p>Aggregate</p></td>
 <td><p>A function that takes a group of rows and returns a single value.</p></td>
-<td><p>[simple_udaf.rs][3]</p></td>
+<td><p><a class="reference external" href="https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/simple_udaf.rs">simple_udaf.rs</a> / <a class="reference external" href="https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udaf.rs">advanced_udaf.rs</a></p></td>
 </tr>
 <tr class="row-odd"><td><p>Table</p></td>
 <td><p>A function that takes parameters and returns a <code class="docutils literal notranslate"><span class="pre">TableProvider</span></code> to be used in an query plan.</p></td>
-<td><p>[simple_udtf.rs][4]</p></td>
+<td><p><a class="reference external" href="https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/simple_udtf.rs">simple_udtf.rs</a></p></td>
 </tr>
-<tr class="row-even"><td><p>Async Scalar</p></td>
-<td><p>A scalar function that natively supports asynchronous execution, allowing you to perform async operations (such as network or I/O calls) within the UDF.</p></td>
-<td><p>[async_udf.rs][5]</p></td>
+<tr class="row-even"><td><p>Scalar (async)</p></td>
+<td><p>A scalar function for performing <code class="docutils literal notranslate"><span class="pre">async</span></code> operations (such as network or I/O calls) within the UDF.</p></td>
+<td><p><a class="reference external" href="https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/async_udf.rs">async_udf.rs</a></p></td>
 </tr>
 </tbody>
 </table>
@@ -929,9 +929,9 @@ for the same input.</p></li>
 </section>
 </section>
 </section>
-<section id="adding-a-scalar-async-udf">
-<h2>Adding a Scalar Async UDF<a class="headerlink" href="#adding-a-scalar-async-udf" title="Link to this heading">¶</a></h2>
-<p>A Scalar Async UDF allows you to implement user-defined functions that support
+<section id="adding-a-async-scalar-udf">
+<h2>Adding a Async Scalar UDF<a class="headerlink" href="#adding-a-async-scalar-udf" title="Link to this heading">¶</a></h2>
+<p>An Async Scalar UDF allows you to implement user-defined functions that support
 asynchronous execution, such as performing network or I/O operations within the
 UDF.</p>
 <p>To add a Scalar Async UDF, you need to:</p>
@@ -941,24 +941,7 @@ UDF.</p>
 </ol>
 <section id="adding-by-impl-asyncscalarudfimpl">
 <h3>Adding by <code class="docutils literal notranslate"><span class="pre">impl</span> <span class="pre">AsyncScalarUDFImpl</span></code><a class="headerlink" href="#adding-by-impl-asyncscalarudfimpl" title="Link to this heading">¶</a></h3>
-<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">arrow</span><span class="p">::</span><span class="n">array</span><span class="p">::{</span><span class="n">ArrayIter</span><span class="p">,</span><span class="w"> </span><span class="n">ArrayRef</span><span class="p">,</span><span class="w"> </span><span class="n">AsArray</span><span class="p">,</span><span class="w"> </span><span class="n">StringArray</span><span class="p">};</span>
-<span class="k">use</span><span class="w"> </span><span class="n">arrow_schema</span><span class="p">::</span><span class="n">DataType</span><span class="p">;</span>
-<span class="k">use</span><span class="w"> </span><span class="n">async_trait</span><span class="p">::</span><span class="n">async_trait</span><span class="p">;</span>
-<span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">common</span><span class="p">::</span><span class="n">error</span><span class="p">::</span><span class="nb">Result</span><span class="p">;</span>
-<span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">common</span><span class="p">::{</span><span class="n">internal_err</span><span class="p">,</span><span class="w"> </span><span class="n">not_impl_err</span><span class="p">};</span>
-<span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">common</span><span class="p">::</span><span class="n">types</span><span class="p">::</span><span class="n">logical_string</span><span class="p">;</span>
-<span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">config</span><span class="p">::</span><span class="n">ConfigOptions</span><span class="p">;</span>
-<span class="k">use</span><span class="w"> </span><span class="n">datafusion_expr</span><span class="p">::</span><span class="n">ScalarUDFImpl</span><span class="p">;</span>
-<span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">logical_expr</span><span class="p">::</span><span class="n">async_udf</span><span class="p">::</span><span class="n">AsyncScalarUDFImpl</span><span class="p">;</span>
-<span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">logical_expr</span><span class="p">::{</span>
-<span class="w">    </span><span class="n">ColumnarValue</span><span class="p">,</span><span class="w"> </span><span class="n">Signature</span><span class="p">,</span><span class="w"> </span><span class="n">TypeSignature</span><span class="p">,</span><span class="w"> </span><span class="n">TypeSignatureClass</span><span class="p">,</span><span class="w"> </span><span class="n">Volatility</span><span class="p">,</span><span class="w"> </span><span class="n">ScalarFunctionArgs</span>
-<span class="p">};</span>
-<span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">logical_expr_common</span><span class="p">::</span><span class="n">signature</span><span class="p">::</span><span class="n">Coercion</span><span class="p">;</span>
-<span class="k">use</span><span class="w"> </span><span class="n">log</span><span class="p">::</span><span class="n">trace</span><span class="p">;</span>
-<span class="k">use</span><span class="w"> </span><span class="n">std</span><span class="p">::</span><span class="n">any</span><span class="p">::</span><span class="n">Any</span><span class="p">;</span>
-<span class="k">use</span><span class="w"> </span><span class="n">std</span><span class="p">::</span><span class="n">sync</span><span class="p">::</span><span class="n">Arc</span><span class="p">;</span>
-
-<span class="cp">#[derive(Debug)]</span>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="cp">#[derive(Debug)]</span>
 <span class="k">pub</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">AsyncUpper</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="n">signature</span><span class="p">:</span><span class="w"> </span><span class="nc">Signature</span><span class="p">,</span>
 <span class="p">}</span>
@@ -1001,6 +984,7 @@ UDF.</p>
 <span class="w">        </span><span class="nb">Ok</span><span class="p">(</span><span class="n">DataType</span><span class="p">::</span><span class="n">Utf8</span><span class="p">)</span>
 <span class="w">    </span><span class="p">}</span>
 
+<span class="w">    </span><span class="c1">// Note the normal invoke_with_args method is not called for Async UDFs</span>
 <span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">invoke_with_args</span><span class="p">(</span>
 <span class="w">        </span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span>
 <span class="w">        </span><span class="n">_args</span><span class="p">:</span><span class="w"> </span><span class="nc">ScalarFunctionArgs</span><span class="p">,</span>
@@ -1016,13 +1000,17 @@ UDF.</p>
 <span class="w">        </span><span class="nb">Some</span><span class="p">(</span><span class="mi">10</span><span class="p">)</span>
 <span class="w">    </span><span class="p">}</span>
 
+<span class="w">    </span><span class="sd">/// This method is called to execute the async UDF and is similar</span>
+<span class="w">    </span><span class="sd">/// to the normal `invoke_with_args` except it returns an `ArrayRef`</span>
+<span class="w">    </span><span class="sd">/// instead of `ColumnarValue` and is `async`.</span>
 <span class="w">    </span><span class="k">async</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">invoke_async_with_args</span><span class="p">(</span>
 <span class="w">        </span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span>
 <span class="w">        </span><span class="n">args</span><span class="p">:</span><span class="w"> </span><span class="nc">ScalarFunctionArgs</span><span class="p">,</span>
 <span class="w">        </span><span class="n">_option</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">ConfigOptions</span><span class="p">,</span>
 <span class="w">    </span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="n">ArrayRef</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
-<span class="w">        </span><span class="n">trace</span><span class="o">!</span><span class="p">(</span><span class="s">&quot;Invoking async_upper with args: {:?}&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">args</span><span class="p">);</span>
 <span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">value</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="o">&amp;</span><span class="n">args</span><span class="p">.</span><span class="n">args</span><span class="p">[</span><span class="mi">0</span><span class="p">];</span>
+<span class="w">        </span><span class="c1">// This function simply implements a simple string to uppercase conversion</span>
+<span class="w">        </span><span class="c1">// but can be used for any async operation such as network calls.</span>
 <span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">result</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">match</span><span class="w"> </span><span class="n">value</span><span class="w"> </span><span class="p">{</span>
 <span class="w">            </span><span class="n">ColumnarValue</span><span class="p">::</span><span class="n">Array</span><span class="p">(</span><span class="n">array</span><span class="p">)</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="p">{</span>
 <span class="w">                </span><span class="kd">let</span><span class="w"> </span><span class="n">string_array</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">array</span><span class="p">.</span><span class="n">as_string</span><span class="p">::</span><span class="o">&lt;</span><span class="kt">i32</span><span class="o">&gt;</span><span class="p">();</span>
