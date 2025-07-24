@@ -1063,6 +1063,11 @@ fn create_schema(
 ///   physical GROUP BY expression.
 /// - `agg_mode`: A reference to an `AggregateMode` instance representing the
 ///   mode of aggregation.
+/// - `include_soft_requirement`: When `false`, only hard requirements are
+///   considered, as indicated by [`AggregateFunctionExpr::order_sensitivity`]
+///   returning [`AggregateOrderSensitivity::HardRequirement`].
+///   Otherwise, also soft requirements ([`AggregateOrderSensitivity::SoftRequirement`])
+///   are considered.
 ///
 /// # Returns
 ///
