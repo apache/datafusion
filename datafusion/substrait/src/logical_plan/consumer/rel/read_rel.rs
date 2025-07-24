@@ -129,7 +129,7 @@ pub async fn from_read_rel(
                     for expression in &row.fields {
                         name_idx += 1;
                         let expr = consumer
-                            .consume_expression(expression, &substrait_schema)
+                            .consume_expression(expression, &DFSchema::empty())
                             .await?;
                         row_exprs.push(expr);
                     }
