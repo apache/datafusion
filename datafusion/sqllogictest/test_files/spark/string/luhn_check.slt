@@ -72,6 +72,26 @@ true
 
 
 query B
+select luhn_check('79927398713'::string)
+----
+true
+
+query B
+select luhn_check('4417123456789113'::string)
+----
+true
+
+query B
+select luhn_check('7992 7398 714'::string)
+----
+false
+
+query B
+select luhn_check('79927398714'::string)
+----
+false
+
+query B
 select luhn_check('4111111111111111    '::string)
 ----
 false
