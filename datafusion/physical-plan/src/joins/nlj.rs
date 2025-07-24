@@ -41,9 +41,9 @@ use std::task::Poll;
 
 use crate::joins::nested_loop_join::JoinLeftData;
 use crate::joins::utils::{
-    adjust_indices_by_join_type, apply_join_filter_to_indices,
-    build_batch_from_indices_maybe_empty, need_produce_result_in_final,
-    BuildProbeJoinMetrics, ColumnIndex, JoinFilter, OnceFut,
+    apply_join_filter_to_indices, build_batch_from_indices_maybe_empty,
+    need_produce_result_in_final, BuildProbeJoinMetrics, ColumnIndex, JoinFilter,
+    OnceFut,
 };
 use crate::metrics::Count;
 use crate::{RecordBatchStream, SendableRecordBatchStream};
@@ -100,6 +100,8 @@ pub(crate) struct NLJStream {
     // state is over.
     left_exhausted: bool,
     // If we can buffer all left data in one pass
+    // TODO(now): this is for the (unimplemented) memory-limited execution
+    #[allow(dead_code)]
     left_buffered_in_one_pass: bool,
 
     current_right_batch: Option<RecordBatch>,
@@ -125,7 +127,7 @@ impl NLJStream {
     ) -> Result<RecordBatch> {
         let right_row_count = right_batch.num_rows();
         if right_row_count == 0 {
-            return Ok(RecordBatch::new_empty(self.schema.clone()));
+            return Ok(RecordBatch::new_empty(Arc::clone(&self.schema)));
         }
 
         // Create indices for cross-join: current left row with all right rows
@@ -175,7 +177,7 @@ impl NLJStream {
                 | JoinType::RightMark
                 | JoinType::RightSemi
         ) {
-            return Ok(RecordBatch::new_empty(self.schema.clone()));
+            return Ok(RecordBatch::new_empty(Arc::clone(&self.schema)));
         }
 
         // TODO(now): check if we're missed something inside the original
@@ -194,7 +196,7 @@ impl NLJStream {
             )?;
             Ok(join_batch)
         } else {
-            Ok(RecordBatch::new_empty(self.schema.clone()))
+            Ok(RecordBatch::new_empty(Arc::clone(&self.schema)))
         }
     }
 
@@ -216,8 +218,6 @@ impl NLJStream {
         start_idx: usize,
         end_idx: usize,
     ) -> Result<RecordBatch> {
-        let left_batch = left_data.batch();
-
         let mut left_indices_builder = UInt64Builder::new();
         let mut right_indices_builder = UInt32Builder::new();
 
@@ -259,7 +259,7 @@ impl NLJStream {
             )?;
             Ok(result_batch)
         } else {
-            Ok(RecordBatch::new_empty(self.schema.clone()))
+            Ok(RecordBatch::new_empty(Arc::clone(&self.schema)))
         }
     }
 
@@ -302,7 +302,8 @@ impl NLJStream {
                 internal_datafusion_err!("LeftData should be available")
             })?;
             let left_batch = left_data.batch();
-            let empty_left_batch = RecordBatch::new_empty(left_batch.schema().clone());
+            let empty_left_batch =
+                RecordBatch::new_empty(Arc::clone(&left_batch.schema()));
 
             let result_batch = build_batch_from_indices_maybe_empty(
                 &self.schema,
@@ -348,7 +349,7 @@ impl NLJStream {
             .as_ref()
             .ok_or_else(|| internal_datafusion_err!("LeftData should be available"))?;
         let left_batch = left_data.batch();
-        let empty_left_batch = RecordBatch::new_empty(left_batch.schema().clone());
+        let empty_left_batch = RecordBatch::new_empty(Arc::clone(&left_batch.schema()));
 
         let result_batch = build_batch_from_indices_maybe_empty(
             &self.schema,
@@ -366,6 +367,7 @@ impl NLJStream {
         Ok(result_batch)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         schema: Arc<Schema>,
         filter: Option<JoinFilter>,
@@ -395,7 +397,7 @@ impl NLJStream {
         };
 
         Self {
-            schema: schema.clone(),
+            schema: Arc::clone(&schema),
             filter,
             join_type,
             outer_table,
@@ -495,7 +497,7 @@ impl Stream for NLJStream {
                             self.current_right_batch = Some(right_batch);
 
                             // TOOD(polish): make it more understandable
-                            if (self.current_right_batch_matched.is_some()) {
+                            if self.current_right_batch_matched.is_some() {
                                 // We have to resize the right bitmap.
                                 let new_size = right_batch_size;
                                 let zeroed_buf = MutableBuffer::from_len_zeroed(new_size);
@@ -554,7 +556,7 @@ impl Stream for NLJStream {
                             // Left exhausted, transition to FetchingRight
                             // TODO(polish): use a flag for clarity
                             self.l_index = 0;
-                            if (self.current_right_batch_matched.is_some()) {
+                            if self.current_right_batch_matched.is_some() {
                                 // Don't reset current_right_batch, it'll be
                                 // cleared inside `EmitRightUnmatched` state
                                 self.state = NLJState::EmitRightUnmatched;
@@ -634,15 +636,16 @@ impl Stream for NLJStream {
                         }
                     }
 
-                    // // HACK for the doc test in https://github.com/apache/datafusion/blob/main/datafusion/core/src/dataframe/mod.rs#L1265
-                    // if !self.handled_empty_output {
-                    //     let zero_count = Count::new();
-                    //     if *self.join_metrics.baseline.output_rows() == zero_count {
-                    //         let empty_batch = RecordBatch::new_empty(self.schema.clone());
-                    //         self.handled_empty_output = true;
-                    //         return Poll::Ready(Some(Ok(empty_batch)));
-                    //     }
-                    // }
+                    // HACK for the doc test in https://github.com/apache/datafusion/blob/main/datafusion/core/src/dataframe/mod.rs#L1265
+                    if !self.handled_empty_output {
+                        let zero_count = Count::new();
+                        if *self.join_metrics.baseline.output_rows() == zero_count {
+                            let empty_batch =
+                                RecordBatch::new_empty(Arc::clone(&self.schema));
+                            self.handled_empty_output = true;
+                            return Poll::Ready(Some(Ok(empty_batch)));
+                        }
+                    }
 
                     return Poll::Ready(None);
                 }
@@ -663,11 +666,10 @@ impl NLJStream {
     // false -> It has done with the (buffered_left x cur_right_batch), go to
     // next state (ProbeRight)
     fn process_probe_batch(&mut self) -> Result<bool> {
-        let left_data = self
-            .buffered_left_data
-            .as_ref()
-            .ok_or_else(|| internal_datafusion_err!("LeftData should be available"))?
-            .clone();
+        let left_data =
+            Arc::clone(self.buffered_left_data.as_ref().ok_or_else(|| {
+                internal_datafusion_err!("LeftData should be available")
+            })?);
         let right_batch = self
             .current_right_batch
             .as_ref()

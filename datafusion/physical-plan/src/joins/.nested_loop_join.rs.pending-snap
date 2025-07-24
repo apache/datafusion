@@ -38,3 +38,33 @@
 {"run_id":"1753330548-240053000","line":2023,"new":{"module_name":"datafusion_physical_plan__joins__nested_loop_join__tests","snapshot_name":"join_dataframe_example_with_filter","metadata":{"source":"datafusion/physical-plan/src/joins/nested_loop_join.rs","assertion_line":2023,"expression":"batches_to_sort_string(&batches)"},"snapshot":"++\n++"},"old":{"module_name":"datafusion_physical_plan__joins__nested_loop_join__tests","metadata":{},"snapshot":"+---+---+---+----+----+----+\n| a | b | c | a2 | b2 | c2 |\n+---+---+---+----+----+----+\n+---+---+---+----+----+----+"}}
 {"run_id":"1753330548-240053000","line":2023,"new":{"module_name":"datafusion_physical_plan__joins__nested_loop_join__tests","snapshot_name":"join_dataframe_example_with_filter","metadata":{"source":"datafusion/physical-plan/src/joins/nested_loop_join.rs","assertion_line":2023,"expression":"batches_to_sort_string(&batches)"},"snapshot":"++\n++"},"old":{"module_name":"datafusion_physical_plan__joins__nested_loop_join__tests","metadata":{},"snapshot":"+---+---+---+----+----+----+\n| a | b | c | a2 | b2 | c2 |\n+---+---+---+----+----+----+\n+---+---+---+----+----+----+"}}
 {"run_id":"1753330548-240053000","line":2023,"new":{"module_name":"datafusion_physical_plan__joins__nested_loop_join__tests","snapshot_name":"join_dataframe_example_with_filter","metadata":{"source":"datafusion/physical-plan/src/joins/nested_loop_join.rs","assertion_line":2023,"expression":"batches_to_sort_string(&batches)"},"snapshot":"++\n++"},"old":{"module_name":"datafusion_physical_plan__joins__nested_loop_join__tests","metadata":{},"snapshot":"+---+---+---+----+----+----+\n| a | b | c | a2 | b2 | c2 |\n+---+---+---+----+----+----+\n+---+---+---+----+----+----+"}}
+{"run_id":"d7c81af6-44d1-460e-b9a6-f2d14efc3f9f","line":1497,"new":null,"old":null}
+{"run_id":"d7c81af6-44d1-460e-b9a6-f2d14efc3f9f","line":1497,"new":null,"old":null}
+{"run_id":"d7c81af6-44d1-460e-b9a6-f2d14efc3f9f","line":1497,"new":null,"old":null}
+{"run_id":"d7c81af6-44d1-460e-b9a6-f2d14efc3f9f","line":1403,"new":null,"old":null}
+{"run_id":"d7c81af6-44d1-460e-b9a6-f2d14efc3f9f","line":1403,"new":null,"old":null}
+{"run_id":"d7c81af6-44d1-460e-b9a6-f2d14efc3f9f","line":1565,"new":null,"old":null}
+{"run_id":"d7c81af6-44d1-460e-b9a6-f2d14efc3f9f","line":1403,"new":null,"old":null}
+{"run_id":"d7c81af6-44d1-460e-b9a6-f2d14efc3f9f","line":1565,"new":null,"old":null}
+{"run_id":"d7c81af6-44d1-460e-b9a6-f2d14efc3f9f","line":1663,"new":null,"old":null}
+{"run_id":"d7c81af6-44d1-460e-b9a6-f2d14efc3f9f","line":1663,"new":null,"old":null}
+{"run_id":"d7c81af6-44d1-460e-b9a6-f2d14efc3f9f","line":1565,"new":null,"old":null}
+{"run_id":"d7c81af6-44d1-460e-b9a6-f2d14efc3f9f","line":1663,"new":null,"old":null}
+{"run_id":"d7c81af6-44d1-460e-b9a6-f2d14efc3f9f","line":1533,"new":null,"old":null}
+{"run_id":"d7c81af6-44d1-460e-b9a6-f2d14efc3f9f","line":1533,"new":null,"old":null}
+{"run_id":"d7c81af6-44d1-460e-b9a6-f2d14efc3f9f","line":1533,"new":null,"old":null}
+{"run_id":"d7c81af6-44d1-460e-b9a6-f2d14efc3f9f","line":1433,"new":null,"old":null}
+{"run_id":"d7c81af6-44d1-460e-b9a6-f2d14efc3f9f","line":1433,"new":null,"old":null}
+{"run_id":"d7c81af6-44d1-460e-b9a6-f2d14efc3f9f","line":1433,"new":null,"old":null}
+{"run_id":"d7c81af6-44d1-460e-b9a6-f2d14efc3f9f","line":1630,"new":null,"old":null}
+{"run_id":"d7c81af6-44d1-460e-b9a6-f2d14efc3f9f","line":1630,"new":null,"old":null}
+{"run_id":"d7c81af6-44d1-460e-b9a6-f2d14efc3f9f","line":1630,"new":null,"old":null}
+{"run_id":"d7c81af6-44d1-460e-b9a6-f2d14efc3f9f","line":1698,"new":null,"old":null}
+{"run_id":"d7c81af6-44d1-460e-b9a6-f2d14efc3f9f","line":1698,"new":null,"old":null}
+{"run_id":"d7c81af6-44d1-460e-b9a6-f2d14efc3f9f","line":1698,"new":null,"old":null}
+{"run_id":"d7c81af6-44d1-460e-b9a6-f2d14efc3f9f","line":1598,"new":null,"old":null}
+{"run_id":"d7c81af6-44d1-460e-b9a6-f2d14efc3f9f","line":1598,"new":null,"old":null}
+{"run_id":"d7c81af6-44d1-460e-b9a6-f2d14efc3f9f","line":1465,"new":null,"old":null}
+{"run_id":"d7c81af6-44d1-460e-b9a6-f2d14efc3f9f","line":1598,"new":null,"old":null}
+{"run_id":"d7c81af6-44d1-460e-b9a6-f2d14efc3f9f","line":1465,"new":null,"old":null}
+{"run_id":"d7c81af6-44d1-460e-b9a6-f2d14efc3f9f","line":1465,"new":null,"old":null}
