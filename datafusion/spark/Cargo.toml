@@ -47,7 +47,6 @@ datafusion-macros = { workspace = true }
 log = { workspace = true }
 
 [dev-dependencies]
-chrono = { workspace = true }
 criterion = { workspace = true }
 rand = { workspace = true }
 
