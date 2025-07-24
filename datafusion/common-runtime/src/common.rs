@@ -82,6 +82,23 @@ impl<R: 'static> SpawnedTask<R> {
             }
         })
     }
+
+    /// Joins the task using a mutable reference and unwinds the panic if it happens.
+    ///
+    /// This method is similar to [`join_unwind`](Self::join_unwind), but takes a mutable
+    /// reference instead of consuming `self`. This allows the `SpawnedTask` to remain
+    /// usable after the call, though once a task completes, subsequent calls will continue
+    /// to return the same `JoinError`.
+    pub async fn join_unwind_mut(&mut self) -> Result<R, JoinError> {
+        self.await.map_err(|e| {
+            if e.is_panic() {
+                std::panic::resume_unwind(e.into_panic());
+            } else {
+                log::warn!("SpawnedTask was polled during shutdown");
+                e
+            }
+        })
+    }
 }
 
 impl<R> Future for SpawnedTask<R> {
