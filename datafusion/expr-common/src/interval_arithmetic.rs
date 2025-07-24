@@ -3816,4 +3816,139 @@ mod tests {
         let upper = 1.5;
         capture_mode_change_f32((lower, upper), true, true);
     }
+
+    #[test]
+    fn test_is_superset() -> Result<()> {
+        // Test cases: (interval1, interval2, strict, expected)
+        let test_cases = vec![
+            // Equal intervals - non-strict should be true, strict should be false
+            (
+                Interval::make(Some(10_i32), Some(50_i32))?,
+                Interval::make(Some(10_i32), Some(50_i32))?,
+                false,
+                true,
+            ),
+            (
+                Interval::make(Some(10_i32), Some(50_i32))?,
+                Interval::make(Some(10_i32), Some(50_i32))?,
+                true,
+                false,
+            ),
+            // Unbounded intervals
+            (
+                Interval::make::<i32>(None, None)?,
+                Interval::make(Some(10_i32), Some(50_i32))?,
+                false,
+                true,
+            ),
+            (
+                Interval::make::<i32>(None, None)?,
+                Interval::make::<i32>(None, None)?,
+                false,
+                true,
+            ),
+            (
+                Interval::make::<i32>(None, None)?,
+                Interval::make::<i32>(None, None)?,
+                true,
+                false,
+            ),
+            // Half-bounded intervals
+            (
+                Interval::make(Some(0_i32), None)?,
+                Interval::make(Some(10_i32), Some(50_i32))?,
+                false,
+                true,
+            ),
+            (
+                Interval::make(None, Some(100_i32))?,
+                Interval::make(Some(10_i32), Some(50_i32))?,
+                false,
+                true,
+            ),
+            // Non-superset cases - partial overlap
+            (
+                Interval::make(Some(0_i32), Some(50_i32))?,
+                Interval::make(Some(25_i32), Some(75_i32))?,
+                false,
+                false,
+            ),
+            (
+                Interval::make(Some(0_i32), Some(50_i32))?,
+                Interval::make(Some(25_i32), Some(75_i32))?,
+                true,
+                false,
+            ),
+            // Non-superset cases - disjoint intervals
+            (
+                Interval::make(Some(0_i32), Some(50_i32))?,
+                Interval::make(Some(60_i32), Some(100_i32))?,
+                false,
+                false,
+            ),
+            // Subset relationship (reversed)
+            (
+                Interval::make(Some(20_i32), Some(80_i32))?,
+                Interval::make(Some(0_i32), Some(100_i32))?,
+                false,
+                false,
+            ),
+            // Float cases
+            (
+                Interval::make(Some(0.0_f32), Some(100.0_f32))?,
+                Interval::make(Some(25.5_f32), Some(75.5_f32))?,
+                false,
+                true,
+            ),
+            (
+                Interval::make(Some(0.0_f64), Some(100.0_f64))?,
+                Interval::make(Some(0.0_f64), Some(100.0_f64))?,
+                true,
+                false,
+            ),
+            // Edge cases with single point intervals
+            (
+                Interval::make(Some(0_i32), Some(100_i32))?,
+                Interval::make(Some(50_i32), Some(50_i32))?,
+                false,
+                true,
+            ),
+            (
+                Interval::make(Some(50_i32), Some(50_i32))?,
+                Interval::make(Some(50_i32), Some(50_i32))?,
+                false,
+                true,
+            ),
+            (
+                Interval::make(Some(50_i32), Some(50_i32))?,
+                Interval::make(Some(50_i32), Some(50_i32))?,
+                true,
+                false,
+            ),
+            // Boundary touch cases
+            (
+                Interval::make(Some(0_i32), Some(50_i32))?,
+                Interval::make(Some(0_i32), Some(25_i32))?,
+                false,
+                true,
+            ),
+            (
+                Interval::make(Some(0_i32), Some(50_i32))?,
+                Interval::make(Some(25_i32), Some(50_i32))?,
+                false,
+                true,
+            ),
+        ];
+
+        for (interval1, interval2, strict, expected) in test_cases {
+            let result = interval1.is_superset(&interval2, strict)?;
+            assert_eq!(
+                result, expected,
+                "Failed for interval1: {}, interval2: {}, strict: {}",
+                interval1, interval2, strict
+            );
+        }
+
+        Ok(())
+    }
 }
