@@ -22,18 +22,18 @@ pub enum AggregateOrderSensitivity {
     /// Ordering at the input is not important for the result of the aggregator.
     Insensitive,
     /// Indicates that the aggregate expression has a hard requirement on ordering.
-    /// The aggregator can not produce a correct result unless its ordering
+    /// The aggregator cannot produce a correct result unless its ordering
     /// requirement is satisfied.
     HardRequirement,
     /// Indicates that the aggregator is more efficient when the input is ordered
     /// but can still produce its result correctly regardless of the input ordering.
-    /// This is a similar to, but stronger than, [`Self::Beneficial`].
+    /// This is similar to, but stronger than, [`Self::Beneficial`].
     ///
     /// Similarly to [`Self::HardRequirement`], when possible DataFusion will insert
     /// a `SortExec`, to reorder the input to match the SoftRequirement. However,
     /// when such a `SortExec` cannot be inserted, (for example, due to conflicting
-    /// [`Self::HardRequirements`] with other ordered aggregates in the query),
-    /// the aggregate function will still execute, without the preferred order, unlike with
+    /// [`Self::HardRequirement`] with other ordered aggregates in the query),
+    /// the aggregate function will still execute, without the preferred order, unlike
     /// with [`Self::HardRequirement`]
     SoftRequirement,
     /// Indicates that ordering is beneficial for the aggregate expression in terms
