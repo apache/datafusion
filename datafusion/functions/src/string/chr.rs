@@ -207,6 +207,16 @@ mod tests {
             "requested character too large for encoding"
         );
 
+        // invalid Unicode code points (surrogate code point)
+        // link: <https://learn.microsoft.com/en-us/globalization/encoding/unicode-standard#surrogate-pairs>
+        let input = Arc::new(Int64Array::from(vec![0xD800 + 1]));
+        let result = chr(&[input]);
+        assert!(result.is_err());
+        assert_contains!(
+            result.err().unwrap().to_string(),
+            "requested character too large for encoding"
+        );
+
         // negative input
         let input = Arc::new(Int64Array::from(vec![i64::MIN + 2i64])); // will be 2 if cast to u32
         let result = chr(&[input]);
