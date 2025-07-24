@@ -1384,11 +1384,9 @@ impl ScalarValue {
             DataType::Float32 => ScalarValue::Float32(Some(1.0)),
             DataType::Float64 => ScalarValue::Float64(Some(1.0)),
             DataType::Decimal128(precision, scale) => {
-                if let Err(err) = validate_decimal_precision_and_scale::<Decimal128Type>(
+                validate_decimal_precision_and_scale::<Decimal128Type>(
                     *precision, *scale,
-                ) {
-                    return _internal_err!("Invalid precision and scale {err}");
-                }
+                )?;
                 if *scale < 0 {
                     return _internal_err!("Negative scale is not supported");
                 }
@@ -1400,11 +1398,9 @@ impl ScalarValue {
                 }
             }
             DataType::Decimal256(precision, scale) => {
-                if let Err(err) = validate_decimal_precision_and_scale::<Decimal256Type>(
+                validate_decimal_precision_and_scale::<Decimal256Type>(
                     *precision, *scale,
-                ) {
-                    return _internal_err!("Invalid precision and scale {err}");
-                }
+                )?;
                 if *scale < 0 {
                     return _internal_err!("Negative scale is not supported");
                 }
@@ -1434,11 +1430,9 @@ impl ScalarValue {
             DataType::Float32 => ScalarValue::Float32(Some(-1.0)),
             DataType::Float64 => ScalarValue::Float64(Some(-1.0)),
             DataType::Decimal128(precision, scale) => {
-                if let Err(err) = validate_decimal_precision_and_scale::<Decimal128Type>(
+                validate_decimal_precision_and_scale::<Decimal128Type>(
                     *precision, *scale,
-                ) {
-                    return _internal_err!("Invalid precision and scale {err}");
-                }
+                )?;
                 if *scale < 0 {
                     return _internal_err!("Negative scale is not supported");
                 }
@@ -1450,11 +1444,9 @@ impl ScalarValue {
                 }
             }
             DataType::Decimal256(precision, scale) => {
-                if let Err(err) = validate_decimal_precision_and_scale::<Decimal256Type>(
+                validate_decimal_precision_and_scale::<Decimal256Type>(
                     *precision, *scale,
-                ) {
-                    return _internal_err!("Invalid precision and scale {err}");
-                }
+                )?;
                 if *scale < 0 {
                     return _internal_err!("Negative scale is not supported");
                 }
