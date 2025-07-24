@@ -412,7 +412,7 @@ impl ExternalSorter {
             in_progress_file.append_batch(&batch)?;
 
             *max_record_batch_size =
-                (*max_record_batch_size).max(batch.get_sliced_size());
+                (*max_record_batch_size).max(batch.get_sliced_size()?);
         }
 
         if !globally_sorted_batches.is_empty() {

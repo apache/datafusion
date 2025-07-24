@@ -163,7 +163,7 @@ impl SpillManager {
         for batch in batches {
             in_progress_file.append_batch(&batch)?;
 
-            max_record_batch_size = max_record_batch_size.max(batch.get_sliced_size());
+            max_record_batch_size = max_record_batch_size.max(batch.get_sliced_size()?);
         }
 
         let file = in_progress_file.finish()?;
@@ -187,7 +187,7 @@ impl SpillManager {
             let batch = batch?;
             in_progress_file.append_batch(&batch)?;
 
-            max_record_batch_size = max_record_batch_size.max(batch.get_sliced_size());
+            max_record_batch_size = max_record_batch_size.max(batch.get_sliced_size()?);
         }
 
         let file = in_progress_file.finish()?;
@@ -213,16 +213,16 @@ impl SpillManager {
 
 pub(crate) trait GetSlicedSize {
     /// Returns the size of the `RecordBatch` when sliced.
-    fn get_sliced_size(&self) -> usize;
+    fn get_sliced_size(&self) -> Result<usize>;
 }
 
 impl GetSlicedSize for RecordBatch {
-    fn get_sliced_size(&self) -> usize {
+    fn get_sliced_size(&self) -> Result<usize> {
         let mut total = 0;
         for array in self.columns() {
             let data = array.to_data();
-            total += data.get_slice_memory_size().unwrap();
+            total += data.get_slice_memory_size()?;
         }
-        total
+        Ok(total)
     }
 }
