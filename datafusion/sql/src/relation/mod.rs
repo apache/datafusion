@@ -19,14 +19,15 @@ use std::sync::Arc;
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 
+use arrow::array::Array;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{
-    not_impl_err, plan_err, DFSchema, Diagnostic, Result, Span, Spans, TableReference,
+    not_impl_err, plan_err, DFSchema, Diagnostic, Result, ScalarValue, Span, Spans, TableReference
 };
 use datafusion_expr::builder::subquery_alias;
 use datafusion_expr::{expr::Unnest, Expr, LogicalPlan, LogicalPlanBuilder};
 use datafusion_expr::{Subquery, SubqueryAlias};
-use sqlparser::ast::{FunctionArg, FunctionArgExpr, Spanned, TableFactor};
+use sqlparser::ast::{FunctionArg, FunctionArgExpr, PivotValueSource, Spanned, TableFactor};
 
 mod join;
 
@@ -181,6 +182,74 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 let plan =
                     LogicalPlanBuilder::scan(tbl_func_ref.table(), provider, None)?
                         .build()?;
+                (plan, alias)
+            }
+            TableFactor::Pivot { table, aggregate_functions, value_column, value_source, default_on_null, alias } => {
+                let plan = self.create_relation(table.as_ref().clone(), planner_context)?;
+                let schema = plan.schema();
+                let aggregate_functions = aggregate_functions
+                    .into_iter()
+                    .map(|func| {
+                        self.sql_expr_to_logical_expr(
+                            func.expr,
+                            schema,
+                            planner_context,
+                        ).map(|expr| 
+                            match func.alias {
+                                Some(name) => expr.alias(name.value),
+                                None => expr,
+                            }
+                        )
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                let value_column = value_column.into_iter().map(|id| {
+                    match self.sql_identifier_to_expr(id, schema, planner_context)? {
+                        Expr::Column(col) => Ok(col),
+                        expr => plan_err!(
+                            "Expected column identifier, found: {expr:?} in pivot value column"
+                        ),
+                    }
+                }).collect::<Result<Vec<_>>>()?;
+
+                let PivotValueSource::List(source) = value_source else {
+                    // Dynamic pivot: the output schema is determined by the data in the source table at runtime.
+                    return plan_err!("Dynamic pivot is not supported yet");
+                };
+                let value_source = source.into_iter().map(|expr_with_alias| {
+                    self.sql_expr_to_logical_expr(
+                            expr_with_alias.expr,
+                            schema,
+                            planner_context,
+                        ).map(|expr|
+                            match expr_with_alias.alias {
+                                Some(name) => expr.alias(name.value),
+                                None => expr,
+                            }
+                        )
+                }).collect::<Result<Vec<_>>>()?;
+
+                let default_on_null = default_on_null
+                    .map(|expr| {
+                        let expr = self.sql_expr_to_logical_expr(
+                            expr,
+                            schema,
+                            planner_context,
+                        )?;
+                        match expr {
+                            Expr::Literal(ScalarValue::List(list), _) => {
+                                (0..list.len()).map(|idx| Ok(Expr::Literal(ScalarValue::try_from_array(list.values(), idx)?, None))).collect::<Result<Vec<_>>>()
+                            }
+                            _ => return plan_err!("Pivot default value cannot be NULL"),
+                        }
+                    })
+                    .transpose()?;
+                
+                let plan = LogicalPlanBuilder::from(plan).pivot(
+                    aggregate_functions,
+                    value_column,
+                    value_source,
+                    default_on_null,
+                )?.build()?;
                 (plan, alias)
             }
             // @todo Support TableFactory::TableFunction?

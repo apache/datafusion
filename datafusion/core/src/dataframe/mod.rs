@@ -2359,6 +2359,54 @@ impl DataFrame {
         let df = ctx.read_batch(batch)?;
         Ok(df)
     }
+
+    /// Pivot the DataFrame, transforming rows into columns based on the specified value columns and aggregation functions.
+    ///
+    /// # Arguments
+    /// * `aggregate_functions` - Aggregation expressions to apply (e.g., sum, count).
+    /// * `value_column` - Columns whose unique values will become new columns in the output.
+    /// * `value_source` - Columns to use as values for the pivoted columns.
+    /// * `default_on_null` - Optional expressions to use as default values when a pivoted value is null.
+    ///
+    /// # Example
+    /// ```
+    /// # use datafusion::prelude::*;
+    /// # use datafusion::arrow::array::{Int32Array, StringArray};
+    /// # use std::sync::Arc;
+    /// # let ctx = SessionContext::new();
+    /// # let batch = RecordBatch::try_new(
+    /// #     Arc::new(Schema::new(vec![
+    /// #         Field::new("category", DataType::Utf8, false),
+    /// #         Field::new("value", DataType::Int32, false),
+    /// #     ])),
+    /// #     vec![
+    /// #         Arc::new(StringArray::from(vec!["A", "B", "A"])),
+    /// #         Arc::new(Int32Array::from(vec![1, 2, 3]))
+    /// #     ]
+    /// # ).unwrap();
+    /// # let df = ctx.read_batch(batch).unwrap();
+    /// // Pivot the DataFrame so each unique category becomes a column
+    /// let pivoted = df.pivot(
+    ///     vec![sum(col("value"))],
+    ///     vec![col("category")],
+    ///     vec![col("value")],
+    ///     None
+    /// ).unwrap();
+    /// ```
+    pub fn pivot(self, 
+        aggregate_functions: Vec<Expr>, 
+        value_column: Vec<Column>, 
+        value_source: Vec<Expr>,
+        default_on_null: Option<Vec<Expr>>) -> Result<Self> {
+        let plan = LogicalPlanBuilder::from(self.plan)
+            .pivot(aggregate_functions, value_column, value_source, default_on_null)?
+            .build()?;
+        Ok(DataFrame {
+            session_state: self.session_state,
+            plan,
+            projection_requires_validation: self.projection_requires_validation,
+        })
+    }
 }
 
 /// Macro for creating DataFrame.
