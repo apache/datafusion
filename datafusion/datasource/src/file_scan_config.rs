@@ -706,9 +706,6 @@ impl FileScanConfig {
         }
     }
 
-
-
-
     fn projection_indices(&self) -> Vec<usize> {
         match &self.projection {
             Some(proj) => proj.clone(),
@@ -768,16 +765,6 @@ impl FileScanConfig {
         let indexes = self.projection_indices();
         self.constraints.project(&indexes).unwrap_or_default()
     }
-
-
-
-
-
-
-
-
-
-
 
     /// Specifies whether newlines in (quoted) values are supported.
     ///
@@ -1007,7 +994,6 @@ impl FileScanConfig {
             })
             .collect())
     }
-
 
     /// Write the data_type based on file_source
     fn fmt_file_source(&self, t: DisplayFormatType, f: &mut Formatter) -> FmtResult {
