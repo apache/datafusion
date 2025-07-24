@@ -296,6 +296,10 @@ impl ExecutionPlan for OutputRequirementExec {
             Some(Arc::new(e) as _)
         })
     }
+
+    fn fetch(&self) -> Option<usize> {
+        self.fetch
+    }
 }
 
 impl PhysicalOptimizerRule for OutputRequirements {
