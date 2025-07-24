@@ -210,7 +210,7 @@ impl LogicalPlanBuilder {
     /// so it's usually better to override the default names with a table alias list.
     ///
     /// If the values include params/binders such as $1, $2, $3, etc, then the `param_data_types` should be provided.
-    pub fn values(values: Vec<Vec<Expr>>) -> Result<Self> {
+    pub fn values(values: Vec<Vec<Expr>>, map_string_types_to_utf8view: bool) -> Result<Self> {
         if values.is_empty() {
             return plan_err!("Values list cannot be empty");
         }
@@ -230,7 +230,7 @@ impl LogicalPlanBuilder {
         }
 
         // Infer from data itself
-        Self::infer_data(values)
+        Self::infer_data(values, map_string_types_to_utf8view)
     }
 
     /// Create a values list based relation, and the schema is inferred from data itself or table schema if provided, consuming
@@ -298,7 +298,7 @@ impl LogicalPlanBuilder {
         Self::infer_inner(values, fields, schema)
     }
 
-    fn infer_data(values: Vec<Vec<Expr>>) -> Result<Self> {
+    fn infer_data(values: Vec<Vec<Expr>>, map_string_types_to_utf8view: bool) -> Result<Self> {
         let n_cols = values[0].len();
         let schema = DFSchema::empty();
         let mut fields = ValuesFields::new();
@@ -323,9 +323,12 @@ impl LogicalPlanBuilder {
                     common_type = Some(data_type);
                 }
             }
-            // assuming common_type was not set, and no error, therefore the type should be NULL
-            // since the code loop skips NULL
-            fields.push(common_type.unwrap_or(DataType::Null), true);
+            // Map Utf8 to Utf8View if requested
+            let mut dtype = common_type.unwrap_or(DataType::Null);
+            if map_string_types_to_utf8view && dtype == DataType::Utf8 {
+                dtype = DataType::Utf8View;
+            }
+            fields.push(dtype, true);
         }
 
         Self::infer_inner(values, fields, &schema)
@@ -2660,12 +2663,12 @@ mod tests {
 
         assert_snapshot!(plan, @r"
         Union
-          Cross Join: 
+          Cross Join:
             SubqueryAlias: left
               Values: (Int32(1))
             SubqueryAlias: right
               Values: (Int32(1))
-          Cross Join: 
+          Cross Join:
             SubqueryAlias: left
               Values: (Int32(1))
             SubqueryAlias: right

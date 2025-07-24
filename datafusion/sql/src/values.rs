@@ -45,7 +45,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
         let schema = planner_context.table_schema().unwrap_or(empty_schema);
         if schema.fields().is_empty() {
-            LogicalPlanBuilder::values(values)?.build()
+            LogicalPlanBuilder::values(values, self.options.map_string_types_to_utf8view)?.build()
         } else {
             LogicalPlanBuilder::values_with_schema(values, &schema)?.build()
         }

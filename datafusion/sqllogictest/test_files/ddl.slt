@@ -65,7 +65,6 @@ select * from users;
 2 3
 2 4
 
-
 # Dropping table
 statement ok
 DROP TABLE users;
@@ -294,7 +293,6 @@ DROP TABLE IF EXISTS my_table;
 statement error Table 'non_existent_table' doesn't exist.
 DROP TABLE non_existent_table;
 
-
 # create_table_with_schema_as_select
 statement ok
 CREATE TABLE my_table(c1 float, c2 double, c3 boolean, c4 varchar) AS SELECT *,c3 as c4_tmp FROM aggregate_simple;
@@ -325,7 +323,6 @@ DROP TABLE arrow_simple
 # create_table_with_schema_as_select_mismatch
 statement error table 'datafusion.public.aggregate_simple' not found
 CREATE TABLE my_table(c1 float, c2 double, c3 boolean, c4 varchar) AS SELECT * FROM aggregate_simple;
-
 
 # create_table_with_schema_as_values
 statement ok
@@ -415,7 +412,6 @@ CREATE OR REPLACE TABLE if not exists y AS VALUES (7,8);
 statement ok
 DROP TABLE y
 
-
 # drop_view_cant_drop_table
 statement ok
 CREATE TABLE t AS SELECT 1
@@ -435,7 +431,6 @@ DROP TABLE v;
 
 statement ok
 DROP VIEW v;
-
 
 # csv_query_create_external_table
 statement ok
@@ -462,8 +457,6 @@ query TIIIIIIIIIRRT
 SELECT c1, c2, c3, c4, c5, c6, c7, c8, c9, 10, c11, c12, c13 FROM aggregate_test_100 LIMIT 1;
 ----
 c 2 1 18109 2033001162 -6513304855495910254 25 43062 1491205016 10 0.110830784 0.929409733247 6WfVFBVGJSQb7FhA7E0lBwdvjfZnSW
-
-
 
 # create_external_table_with_timestamps
 statement ok
@@ -510,7 +503,6 @@ Andrew 2018-11-13T17:11:10.011 2018-11-13
 statement ok
 DROP TABLE csv_with_timestamps
 
-
 # sql_create_duplicate_table
 # Can not recreate the same table
 statement ok
@@ -522,7 +514,6 @@ CREATE TABLE y AS VALUES (1,2,3);
 statement ok
 DROP TABLE y;
 
-
 # Can not recreate the same view
 statement ok
 CREATE VIEW y AS VALUES (1,2,3);
@@ -533,13 +524,10 @@ CREATE VIEW y AS VALUES (1,2,3);
 statement ok
 DROP VIEW y;
 
-
-
 # create_pipe_delimited_csv_table()
 
 statement ok
 CREATE EXTERNAL TABLE aggregate_simple STORED AS CSV LOCATION '../core/tests/data/aggregate_simple_pipe.csv' OPTIONS ('format.delimiter' '|', 'format.has_header' 'true');
-
 
 query RRB
 SELECT * FROM aggregate_simple order by c1 LIMIT 1;
@@ -551,10 +539,8 @@ SELECT * FROM aggregate_simple order by c1 DESC LIMIT 1;
 ----
 0.00005 0.000000000005 true
 
-
 statement ok
 DROP TABLE aggregate_simple
-
 
 # sql_table_insert
 statement ok
@@ -578,7 +564,6 @@ SELECT * FROM abc
 statement ok
 CREATE TABLE table_without_values(field1 BIGINT NULL, field2 BIGINT NULL);
 
-
 # Should skip existing table
 statement ok
 CREATE TABLE IF NOT EXISTS table_without_values(field1 BIGINT, field2 BIGINT);
@@ -597,11 +582,9 @@ CREATE EXTERNAL TABLE IF NOT EXISTS aggregate_simple STORED AS CSV LOCATION '../
 statement error DataFusion error: Execution error: Unable to find factory for DELTATABLE
 CREATE EXTERNAL TABLE dt STORED AS DELTATABLE LOCATION 's3://bucket/schema/table';
 
-
 # Should not recreate the same table
 statement error Table 'table_without_values' already exists
 CREATE TABLE table_without_values(field1 BIGINT, field2 BIGINT);
-
 
 # 'IF NOT EXISTS' cannot coexist with 'REPLACE'
 statement error Execution error: 'IF NOT EXISTS' cannot coexist with 'REPLACE'
@@ -618,11 +601,9 @@ select * from table_without_values
 2 3
 2 4
 
-
 # Should recreate existing table
 statement ok
 CREATE OR REPLACE TABLE table_without_values(field1 BIGINT NULL, field2 BIGINT NULL);
-
 
 # Should insert into a recreated table
 statement ok
@@ -661,7 +642,6 @@ select column_name, data_type, ordinal_position from information_schema.columns 
 c1 Utf8 0
 c2 Utf8 1
 c3 Utf8 2
-
 
 ## should allow any type of exprs as values
 statement ok
@@ -717,7 +697,6 @@ physical_plan StreamingTableExec: partition_sizes=1, projection=[c1], infinite_s
 
 statement ok
 drop table t;
-
 
 # external table without explicit non infinite source
 statement ok
@@ -881,3 +860,24 @@ drop view v;
 
 statement count 0
 drop table t;
+
+# Test VALUES string columns are mapped to Utf8View with map_string_types_to_utf8view = true
+
+statement ok
+set datafusion.sql_parser.map_string_types_to_utf8view = true;
+
+statement ok
+CREATE TABLE t1 AS VALUES
+            ('2021', 3, 'A'),
+            ('2022', 4, 'B'),
+            ('2023', 5, 'C');
+
+query TTT
+describe t1;
+----
+column1 Utf8View YES
+column2 Int64 YES
+column3 Utf8View YES
+
+statement ok
+drop table t1;
