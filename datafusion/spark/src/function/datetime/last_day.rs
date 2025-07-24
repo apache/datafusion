@@ -21,8 +21,7 @@ use std::sync::Arc;
 use arrow::array::{ArrayRef, AsArray, Date32Array};
 use arrow::datatypes::{DataType, Date32Type};
 use chrono::{Datelike, Duration, NaiveDate};
-use datafusion_common::types::NativeType;
-use datafusion_common::{exec_datafusion_err, exec_err, plan_err, Result, ScalarValue};
+use datafusion_common::{exec_datafusion_err, internal_err, Result, ScalarValue};
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
@@ -41,7 +40,7 @@ impl Default for SparkLastDay {
 impl SparkLastDay {
     pub fn new() -> Self {
         Self {
-            signature: Signature::user_defined(Volatility::Immutable),
+            signature: Signature::exact(vec![DataType::Date32], Volatility::Immutable),
         }
     }
 }
@@ -66,7 +65,7 @@ impl ScalarUDFImpl for SparkLastDay {
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let ScalarFunctionArgs { args, .. } = args;
         let [arg] = args.as_slice() else {
-            return exec_err!(
+            return internal_err!(
                 "Spark `last_day` function requires 1 argument, got {}",
                 args.len()
             );
@@ -91,33 +90,14 @@ impl ScalarUDFImpl for SparkLastDay {
                         Ok(Arc::new(result) as ArrayRef)
                     }
                     other => {
-                        exec_err!("Unsupported data type {other:?} for Spark function `last_day`")
+                        internal_err!("Unsupported data type {other:?} for Spark function `last_day`")
                     }
                 }?;
                 Ok(ColumnarValue::Array(result))
             }
-            other => exec_err!("Unsupported arg {other:?} for Spark function `last_day"),
-        }
-    }
-
-    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        if arg_types.len() != 1 {
-            return exec_err!(
-                "Spark `last_day` function requires 1 argument, got {}",
-                arg_types.len()
-            );
-        }
-
-        let current_native_type: NativeType = (&arg_types[0]).into();
-        if matches!(current_native_type, NativeType::Date)
-            || matches!(current_native_type, NativeType::String)
-            || matches!(current_native_type, NativeType::Null)
-        {
-            Ok(vec![DataType::Date32])
-        } else {
-            plan_err!(
-                "The first argument of the Spark `last_day` function can only be a date or string, but got {}", &arg_types[0]
-            )
+            other => {
+                internal_err!("Unsupported arg {other:?} for Spark function `last_day")
+            }
         }
     }
 }
