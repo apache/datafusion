@@ -45,6 +45,7 @@ use crate::joins::utils::{
     build_batch_from_indices_maybe_empty, need_produce_result_in_final,
     BuildProbeJoinMetrics, ColumnIndex, JoinFilter, OnceFut,
 };
+use crate::metrics::Count;
 use crate::{RecordBatchStream, SendableRecordBatchStream};
 
 use arrow::array::{
@@ -110,6 +111,7 @@ pub(crate) struct NLJStream {
 
     output_buffer: Box<BatchCoalescer>,
     emit_cursor: u64,
+    handled_empty_output: bool,
 }
 
 impl NLJStream {
@@ -410,6 +412,7 @@ impl NLJStream {
             emit_cursor: 0,
             left_exhausted: false,
             left_buffered_in_one_pass: true,
+            handled_empty_output: false,
         }
     }
 }
@@ -630,6 +633,16 @@ impl Stream for NLJStream {
                             return self.join_metrics.baseline.record_poll(poll);
                         }
                     }
+
+                    // // HACK for the doc test in https://github.com/apache/datafusion/blob/main/datafusion/core/src/dataframe/mod.rs#L1265
+                    // if !self.handled_empty_output {
+                    //     let zero_count = Count::new();
+                    //     if *self.join_metrics.baseline.output_rows() == zero_count {
+                    //         let empty_batch = RecordBatch::new_empty(self.schema.clone());
+                    //         self.handled_empty_output = true;
+                    //         return Poll::Ready(Some(Ok(empty_batch)));
+                    //     }
+                    // }
 
                     return Poll::Ready(None);
                 }
