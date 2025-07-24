@@ -8035,4 +8035,323 @@ mod tests {
             "Expected '{actual}' to start with '{expected_prefix}'"
         );
     }
+
+    #[test]
+    fn test_new_default() {
+        // Test numeric types
+        assert_eq!(
+            ScalarValue::new_default(&DataType::Int32).unwrap(),
+            ScalarValue::Int32(Some(0))
+        );
+        assert_eq!(
+            ScalarValue::new_default(&DataType::Float64).unwrap(),
+            ScalarValue::Float64(Some(0.0))
+        );
+        assert_eq!(
+            ScalarValue::new_default(&DataType::Boolean).unwrap(),
+            ScalarValue::Boolean(Some(false))
+        );
+
+        // Test string types
+        assert_eq!(
+            ScalarValue::new_default(&DataType::Utf8).unwrap(),
+            ScalarValue::Utf8(Some("".to_string()))
+        );
+        assert_eq!(
+            ScalarValue::new_default(&DataType::LargeUtf8).unwrap(),
+            ScalarValue::LargeUtf8(Some("".to_string()))
+        );
+
+        // Test binary types
+        assert_eq!(
+            ScalarValue::new_default(&DataType::Binary).unwrap(),
+            ScalarValue::Binary(Some(vec![]))
+        );
+
+        // Test fixed size binary
+        assert_eq!(
+            ScalarValue::new_default(&DataType::FixedSizeBinary(5)).unwrap(),
+            ScalarValue::FixedSizeBinary(5, Some(vec![0, 0, 0, 0, 0]))
+        );
+
+        // Test temporal types
+        assert_eq!(
+            ScalarValue::new_default(&DataType::Date32).unwrap(),
+            ScalarValue::Date32(Some(0))
+        );
+        assert_eq!(
+            ScalarValue::new_default(&DataType::Time32(TimeUnit::Second)).unwrap(),
+            ScalarValue::Time32Second(Some(0))
+        );
+
+        // Test decimal types
+        assert_eq!(
+            ScalarValue::new_default(&DataType::Decimal128(10, 2)).unwrap(),
+            ScalarValue::Decimal128(Some(0), 10, 2)
+        );
+
+        // Test list type
+        let list_field = Field::new_list_field(DataType::Int32, true);
+        let list_result =
+            ScalarValue::new_default(&DataType::List(Arc::new(list_field.clone())))
+                .unwrap();
+        match list_result {
+            ScalarValue::List(arr) => {
+                assert_eq!(arr.len(), 1);
+                assert_eq!(arr.value_length(0), 0); // empty list
+            }
+            _ => panic!("Expected List"),
+        }
+
+        // Test struct type
+        let struct_fields = Fields::from(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Utf8, false),
+        ]);
+        let struct_result =
+            ScalarValue::new_default(&DataType::Struct(struct_fields.clone())).unwrap();
+        match struct_result {
+            ScalarValue::Struct(arr) => {
+                assert_eq!(arr.len(), 1);
+                assert_eq!(arr.column(0).as_primitive::<Int32Type>().value(0), 0);
+                assert_eq!(arr.column(1).as_string::<i32>().value(0), "");
+            }
+            _ => panic!("Expected Struct"),
+        }
+
+        // Test union type
+        let union_fields = UnionFields::new(
+            vec![0, 1],
+            vec![
+                Field::new("i32", DataType::Int32, false),
+                Field::new("f64", DataType::Float64, false),
+            ],
+        );
+        let union_result = ScalarValue::new_default(&DataType::Union(
+            union_fields.clone(),
+            UnionMode::Sparse,
+        ))
+        .unwrap();
+        match union_result {
+            ScalarValue::Union(Some((type_id, value)), _, _) => {
+                assert_eq!(type_id, 0);
+                assert_eq!(*value, ScalarValue::Int32(Some(0)));
+            }
+            _ => panic!("Expected Union"),
+        }
+    }
+
+    #[test]
+    fn test_scalar_min() {
+        // Test integer types
+        assert_eq!(
+            ScalarValue::min(&DataType::Int8),
+            Some(ScalarValue::Int8(Some(i8::MIN)))
+        );
+        assert_eq!(
+            ScalarValue::min(&DataType::Int32),
+            Some(ScalarValue::Int32(Some(i32::MIN)))
+        );
+        assert_eq!(
+            ScalarValue::min(&DataType::UInt8),
+            Some(ScalarValue::UInt8(Some(0)))
+        );
+        assert_eq!(
+            ScalarValue::min(&DataType::UInt64),
+            Some(ScalarValue::UInt64(Some(0)))
+        );
+
+        // Test float types
+        assert_eq!(
+            ScalarValue::min(&DataType::Float32),
+            Some(ScalarValue::Float32(Some(f32::NEG_INFINITY)))
+        );
+        assert_eq!(
+            ScalarValue::min(&DataType::Float64),
+            Some(ScalarValue::Float64(Some(f64::NEG_INFINITY)))
+        );
+
+        // Test decimal types
+        let decimal_min = ScalarValue::min(&DataType::Decimal128(5, 2)).unwrap();
+        match decimal_min {
+            ScalarValue::Decimal128(Some(val), 5, 2) => {
+                assert_eq!(val, -99999); // -999.99 with scale 2
+            }
+            _ => panic!("Expected Decimal128"),
+        }
+
+        // Test temporal types
+        assert_eq!(
+            ScalarValue::min(&DataType::Date32),
+            Some(ScalarValue::Date32(Some(i32::MIN)))
+        );
+        assert_eq!(
+            ScalarValue::min(&DataType::Time32(TimeUnit::Second)),
+            Some(ScalarValue::Time32Second(Some(0)))
+        );
+        assert_eq!(
+            ScalarValue::min(&DataType::Timestamp(TimeUnit::Nanosecond, None)),
+            Some(ScalarValue::TimestampNanosecond(Some(i64::MIN), None))
+        );
+
+        // Test duration types
+        assert_eq!(
+            ScalarValue::min(&DataType::Duration(TimeUnit::Second)),
+            Some(ScalarValue::DurationSecond(Some(i64::MIN)))
+        );
+
+        // Test unsupported types
+        assert_eq!(ScalarValue::min(&DataType::Utf8), None);
+        assert_eq!(ScalarValue::min(&DataType::Binary), None);
+        assert_eq!(
+            ScalarValue::min(&DataType::List(Arc::new(Field::new(
+                "item",
+                DataType::Int32,
+                true
+            )))),
+            None
+        );
+    }
+
+    #[test]
+    fn test_scalar_max() {
+        // Test integer types
+        assert_eq!(
+            ScalarValue::max(&DataType::Int8),
+            Some(ScalarValue::Int8(Some(i8::MAX)))
+        );
+        assert_eq!(
+            ScalarValue::max(&DataType::Int32),
+            Some(ScalarValue::Int32(Some(i32::MAX)))
+        );
+        assert_eq!(
+            ScalarValue::max(&DataType::UInt8),
+            Some(ScalarValue::UInt8(Some(u8::MAX)))
+        );
+        assert_eq!(
+            ScalarValue::max(&DataType::UInt64),
+            Some(ScalarValue::UInt64(Some(u64::MAX)))
+        );
+
+        // Test float types
+        assert_eq!(
+            ScalarValue::max(&DataType::Float32),
+            Some(ScalarValue::Float32(Some(f32::INFINITY)))
+        );
+        assert_eq!(
+            ScalarValue::max(&DataType::Float64),
+            Some(ScalarValue::Float64(Some(f64::INFINITY)))
+        );
+
+        // Test decimal types
+        let decimal_max = ScalarValue::max(&DataType::Decimal128(5, 2)).unwrap();
+        match decimal_max {
+            ScalarValue::Decimal128(Some(val), 5, 2) => {
+                assert_eq!(val, 99999); // 999.99 with scale 2
+            }
+            _ => panic!("Expected Decimal128"),
+        }
+
+        // Test temporal types
+        assert_eq!(
+            ScalarValue::max(&DataType::Date32),
+            Some(ScalarValue::Date32(Some(i32::MAX)))
+        );
+        assert_eq!(
+            ScalarValue::max(&DataType::Time32(TimeUnit::Second)),
+            Some(ScalarValue::Time32Second(Some(86_399))) // 23:59:59
+        );
+        assert_eq!(
+            ScalarValue::max(&DataType::Time64(TimeUnit::Microsecond)),
+            Some(ScalarValue::Time64Microsecond(Some(86_399_999_999))) // 23:59:59.999999
+        );
+        assert_eq!(
+            ScalarValue::max(&DataType::Timestamp(TimeUnit::Nanosecond, None)),
+            Some(ScalarValue::TimestampNanosecond(Some(i64::MAX), None))
+        );
+
+        // Test duration types
+        assert_eq!(
+            ScalarValue::max(&DataType::Duration(TimeUnit::Millisecond)),
+            Some(ScalarValue::DurationMillisecond(Some(i64::MAX)))
+        );
+
+        // Test unsupported types
+        assert_eq!(ScalarValue::max(&DataType::Utf8), None);
+        assert_eq!(ScalarValue::max(&DataType::Binary), None);
+        assert_eq!(
+            ScalarValue::max(&DataType::Struct(Fields::from(vec![Field::new(
+                "field",
+                DataType::Int32,
+                true
+            )]))),
+            None
+        );
+    }
+
+    #[test]
+    fn test_min_max_float16() {
+        // Test Float16 min and max
+        let min_f16 = ScalarValue::min(&DataType::Float16).unwrap();
+        match min_f16 {
+            ScalarValue::Float16(Some(val)) => {
+                assert_eq!(val, f16::NEG_INFINITY);
+            }
+            _ => panic!("Expected Float16"),
+        }
+
+        let max_f16 = ScalarValue::max(&DataType::Float16).unwrap();
+        match max_f16 {
+            ScalarValue::Float16(Some(val)) => {
+                assert_eq!(val, f16::INFINITY);
+            }
+            _ => panic!("Expected Float16"),
+        }
+    }
+
+    #[test]
+    fn test_new_default_interval() {
+        // Test all interval types
+        assert_eq!(
+            ScalarValue::new_default(&DataType::Interval(IntervalUnit::YearMonth))
+                .unwrap(),
+            ScalarValue::IntervalYearMonth(Some(0))
+        );
+        assert_eq!(
+            ScalarValue::new_default(&DataType::Interval(IntervalUnit::DayTime)).unwrap(),
+            ScalarValue::IntervalDayTime(Some(IntervalDayTime::ZERO))
+        );
+        assert_eq!(
+            ScalarValue::new_default(&DataType::Interval(IntervalUnit::MonthDayNano))
+                .unwrap(),
+            ScalarValue::IntervalMonthDayNano(Some(IntervalMonthDayNano::ZERO))
+        );
+    }
+
+    #[test]
+    fn test_min_max_with_timezone() {
+        let tz = Some(Arc::from("UTC"));
+
+        // Test timestamp with timezone
+        let min_ts =
+            ScalarValue::min(&DataType::Timestamp(TimeUnit::Second, tz.clone())).unwrap();
+        match min_ts {
+            ScalarValue::TimestampSecond(Some(val), Some(tz_str)) => {
+                assert_eq!(val, i64::MIN);
+                assert_eq!(tz_str.as_ref(), "UTC");
+            }
+            _ => panic!("Expected TimestampSecond with timezone"),
+        }
+
+        let max_ts =
+            ScalarValue::max(&DataType::Timestamp(TimeUnit::Millisecond, tz.clone()))
+                .unwrap();
+        match max_ts {
+            ScalarValue::TimestampMillisecond(Some(val), Some(tz_str)) => {
+                assert_eq!(val, i64::MAX);
+                assert_eq!(tz_str.as_ref(), "UTC");
+            }
+            _ => panic!("Expected TimestampMillisecond with timezone"),
+        }
+    }
 }
