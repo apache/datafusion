@@ -706,27 +706,8 @@ impl FileScanConfig {
         }
     }
 
-    /// Set the file source
-    #[deprecated(since = "47.0.0", note = "use FileScanConfigBuilder instead")]
-    pub fn with_source(mut self, file_source: Arc<dyn FileSource>) -> Self {
-        self.file_source =
-            file_source.with_statistics(Statistics::new_unknown(&self.file_schema));
-        self
-    }
 
-    /// Set the table constraints of the files
-    #[deprecated(since = "47.0.0", note = "use FileScanConfigBuilder instead")]
-    pub fn with_constraints(mut self, constraints: Constraints) -> Self {
-        self.constraints = constraints;
-        self
-    }
 
-    /// Set the statistics of the files
-    #[deprecated(since = "47.0.0", note = "use FileScanConfigBuilder instead")]
-    pub fn with_statistics(mut self, statistics: Statistics) -> Self {
-        self.file_source = self.file_source.with_statistics(statistics);
-        self
-    }
 
     fn projection_indices(&self) -> Vec<usize> {
         match &self.projection {
@@ -788,87 +769,15 @@ impl FileScanConfig {
         self.constraints.project(&indexes).unwrap_or_default()
     }
 
-    /// Set the projection of the files
-    #[deprecated(since = "47.0.0", note = "use FileScanConfigBuilder instead")]
-    pub fn with_projection(mut self, projection: Option<Vec<usize>>) -> Self {
-        self.projection = projection;
-        self
-    }
 
-    /// Set the limit of the files
-    #[deprecated(since = "47.0.0", note = "use FileScanConfigBuilder instead")]
-    pub fn with_limit(mut self, limit: Option<usize>) -> Self {
-        self.limit = limit;
-        self
-    }
 
-    /// Add a file as a single group
-    ///
-    /// See [Self::file_groups] for more information.
-    #[deprecated(since = "47.0.0", note = "use FileScanConfigBuilder instead")]
-    #[allow(deprecated)]
-    pub fn with_file(self, file: PartitionedFile) -> Self {
-        self.with_file_group(FileGroup::new(vec![file]))
-    }
 
-    /// Add the file groups
-    ///
-    /// See [Self::file_groups] for more information.
-    #[deprecated(since = "47.0.0", note = "use FileScanConfigBuilder instead")]
-    pub fn with_file_groups(mut self, mut file_groups: Vec<FileGroup>) -> Self {
-        self.file_groups.append(&mut file_groups);
-        self
-    }
 
-    /// Add a new file group
-    ///
-    /// See [Self::file_groups] for more information
-    #[deprecated(since = "47.0.0", note = "use FileScanConfigBuilder instead")]
-    pub fn with_file_group(mut self, file_group: FileGroup) -> Self {
-        self.file_groups.push(file_group);
-        self
-    }
 
-    /// Set the partitioning columns of the files
-    #[deprecated(since = "47.0.0", note = "use FileScanConfigBuilder instead")]
-    pub fn with_table_partition_cols(mut self, table_partition_cols: Vec<Field>) -> Self {
-        self.table_partition_cols = table_partition_cols
-            .into_iter()
-            .map(|f| Arc::new(f) as FieldRef)
-            .collect();
-        self
-    }
 
-    /// Set the output ordering of the files
-    #[deprecated(since = "47.0.0", note = "use FileScanConfigBuilder instead")]
-    pub fn with_output_ordering(mut self, output_ordering: Vec<LexOrdering>) -> Self {
-        self.output_ordering = output_ordering;
-        self
-    }
 
-    /// Set the file compression type
-    #[deprecated(since = "47.0.0", note = "use FileScanConfigBuilder instead")]
-    pub fn with_file_compression_type(
-        mut self,
-        file_compression_type: FileCompressionType,
-    ) -> Self {
-        self.file_compression_type = file_compression_type;
-        self
-    }
 
-    /// Set the new_lines_in_values property
-    #[deprecated(since = "47.0.0", note = "use FileScanConfigBuilder instead")]
-    pub fn with_newlines_in_values(mut self, new_lines_in_values: bool) -> Self {
-        self.new_lines_in_values = new_lines_in_values;
-        self
-    }
 
-    /// Set the batch_size property
-    #[deprecated(since = "47.0.0", note = "use FileScanConfigBuilder instead")]
-    pub fn with_batch_size(mut self, batch_size: Option<usize>) -> Self {
-        self.batch_size = batch_size;
-        self
-    }
 
     /// Specifies whether newlines in (quoted) values are supported.
     ///
@@ -1099,11 +1008,6 @@ impl FileScanConfig {
             .collect())
     }
 
-    /// Returns a new [`DataSourceExec`] to scan the files specified by this config
-    #[deprecated(since = "47.0.0", note = "use DataSourceExec::new instead")]
-    pub fn build(self) -> Arc<DataSourceExec> {
-        DataSourceExec::from_data_source(self)
-    }
 
     /// Write the data_type based on file_source
     fn fmt_file_source(&self, t: DisplayFormatType, f: &mut Formatter) -> FmtResult {
