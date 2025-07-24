@@ -1157,6 +1157,9 @@ pub fn get_finer_aggregate_exprs_requirement(
 ) -> Result<Vec<PhysicalSortRequirement>> {
     let mut requirement = None;
 
+    // First try and find a match for all hard and soft requirements. 
+    // If a match can't be found, try a second time just matching hard 
+    // requirements.
     for include_soft_requirement in [false, true] {
         for aggr_expr in aggr_exprs.iter_mut() {
             let Some(aggr_req) = get_aggregate_expr_req(
