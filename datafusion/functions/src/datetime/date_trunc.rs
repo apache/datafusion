@@ -191,8 +191,13 @@ impl ScalarUDFImpl for DateTruncFunc {
             // fast path for fine granularities
             if matches!(
                 granularity.as_str(),
+                // For morden timezones, it's correct to truncate "minute" in this way.
+                // Both datafusion and arrow are ignoring historical timezone's non-minute granularity
+                // bias (e.g., Asia/Kathmandu before 1919 is UTC+05:41:16).
                 "second" | "minute" | "millisecond" | "microsecond"
-            ) || (parsed_tz.is_none() && granularity.as_str() == "hour")
+            ) ||
+            // In UTC, "hour" and "day" have uniform durations and can be truncated with simple arithmetic
+            (parsed_tz.is_none() && matches!(granularity.as_str(), "hour" | "day"))
             {
                 let result = general_date_trunc_array_fine_granularity(
                     T::UNIT,
@@ -454,21 +459,25 @@ fn general_date_trunc_array_fine_granularity<T: ArrowTimestampType>(
     let unit = match (tu, granularity) {
         (Second, "minute") => Some(Int64Array::new_scalar(60)),
         (Second, "hour") => Some(Int64Array::new_scalar(3600)),
+        (Second, "day") => Some(Int64Array::new_scalar(86400)),
 
         (Millisecond, "second") => Some(Int64Array::new_scalar(1_000)),
         (Millisecond, "minute") => Some(Int64Array::new_scalar(60_000)),
         (Millisecond, "hour") => Some(Int64Array::new_scalar(3_600_000)),
+        (Millisecond, "day") => Some(Int64Array::new_scalar(86_400_000)),
 
         (Microsecond, "millisecond") => Some(Int64Array::new_scalar(1_000)),
         (Microsecond, "second") => Some(Int64Array::new_scalar(1_000_000)),
         (Microsecond, "minute") => Some(Int64Array::new_scalar(60_000_000)),
         (Microsecond, "hour") => Some(Int64Array::new_scalar(3_600_000_000)),
+        (Microsecond, "day") => Some(Int64Array::new_scalar(86_400_000_000)),
 
         (Nanosecond, "microsecond") => Some(Int64Array::new_scalar(1_000)),
         (Nanosecond, "millisecond") => Some(Int64Array::new_scalar(1_000_000)),
         (Nanosecond, "second") => Some(Int64Array::new_scalar(1_000_000_000)),
         (Nanosecond, "minute") => Some(Int64Array::new_scalar(60_000_000_000)),
         (Nanosecond, "hour") => Some(Int64Array::new_scalar(3_600_000_000_000)),
+        (Nanosecond, "day") => Some(Int64Array::new_scalar(86_400_000_000_000)),
         _ => None,
     };
 
