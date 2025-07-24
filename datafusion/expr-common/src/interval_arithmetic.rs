@@ -3944,8 +3944,7 @@ mod tests {
             let result = interval1.is_superset(&interval2, strict)?;
             assert_eq!(
                 result, expected,
-                "Failed for interval1: {}, interval2: {}, strict: {}",
-                interval1, interval2, strict
+                "Failed for interval1: {interval1}, interval2: {interval2}, strict: {strict}",
             );
         }
 
