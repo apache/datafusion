@@ -16,7 +16,6 @@
 // under the License.
 
 use crate::{ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl};
-use arrow::array::ArrayRef;
 use arrow::datatypes::{DataType, FieldRef};
 use async_trait::async_trait;
 use datafusion_common::config::ConfigOptions;
@@ -50,7 +49,7 @@ pub trait AsyncScalarUDFImpl: ScalarUDFImpl {
         &self,
         args: ScalarFunctionArgs,
         option: &ConfigOptions,
-    ) -> Result<ArrayRef>;
+    ) -> Result<ColumnarValue>;
 }
 
 /// A scalar UDF that must be invoked using async methods
@@ -83,7 +82,7 @@ impl AsyncScalarUDF {
         &self,
         args: ScalarFunctionArgs,
         option: &ConfigOptions,
-    ) -> Result<ArrayRef> {
+    ) -> Result<ColumnarValue> {
         self.inner.invoke_async_with_args(args, option).await
     }
 }
