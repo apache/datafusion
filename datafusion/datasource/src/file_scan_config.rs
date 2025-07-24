@@ -72,7 +72,7 @@ use log::{debug, warn};
 /// The base configurations for a [`DataSourceExec`], the a physical plan for
 /// any given file format.
 ///
-/// Use [`Self::build`] to create a [`DataSourceExec`] from a ``FileScanConfig`.
+/// Use [`DataSourceExec::from_data_source`] to create a [`DataSourceExec`] from a ``FileScanConfig`.
 ///
 /// # Example
 /// ```
@@ -669,43 +669,6 @@ impl DataSource for FileScanConfig {
 }
 
 impl FileScanConfig {
-    /// Create a new [`FileScanConfig`] with default settings for scanning files.
-    ///
-    /// See example on [`FileScanConfig`]
-    ///
-    /// No file groups are added by default. See [`Self::with_file`], [`Self::with_file_group`] and
-    /// [`Self::with_file_groups`].
-    ///
-    /// # Parameters:
-    /// * `object_store_url`: See [`Self::object_store_url`]
-    /// * `file_schema`: See [`Self::file_schema`]
-    #[allow(deprecated)] // `new` will be removed same time as `with_source`
-    pub fn new(
-        object_store_url: ObjectStoreUrl,
-        file_schema: SchemaRef,
-        file_source: Arc<dyn FileSource>,
-    ) -> Self {
-        let statistics = Statistics::new_unknown(&file_schema);
-        let file_source = file_source
-            .with_statistics(statistics.clone())
-            .with_schema(Arc::clone(&file_schema));
-        Self {
-            object_store_url,
-            file_schema,
-            file_groups: vec![],
-            constraints: Constraints::default(),
-            projection: None,
-            limit: None,
-            table_partition_cols: vec![],
-            output_ordering: vec![],
-            file_compression_type: FileCompressionType::UNCOMPRESSED,
-            new_lines_in_values: false,
-            file_source: Arc::clone(&file_source),
-            batch_size: None,
-            expr_adapter_factory: None,
-        }
-    }
-
     fn projection_indices(&self) -> Vec<usize> {
         match &self.projection {
             Some(proj) => proj.clone(),
