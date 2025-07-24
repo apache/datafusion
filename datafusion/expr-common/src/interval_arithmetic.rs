@@ -754,6 +754,17 @@ impl Interval {
         }
     }
 
+    /// Decide if this interval is a superset of `other`. If argument `strict`
+    /// is `true`, only returns `true` if this interval is a strict superset.
+    ///
+    /// NOTE: This function only works with intervals of the same data type.
+    ///       Attempting to compare intervals of different data types will lead
+    ///       to an error.
+    pub fn is_superset(&self, other: &Interval, strict: bool) -> Result<bool> {
+        Ok(!(strict && self.eq(other))
+            && (self.contains(other)? == Interval::CERTAINLY_TRUE))
+    }
+
     /// Add the given interval (`other`) to this interval. Say we have intervals
     /// `[a1, b1]` and `[a2, b2]`, then their sum is `[a1 + a2, b1 + b2]`. Note
     /// that this represents all possible values the sum can take if one can
