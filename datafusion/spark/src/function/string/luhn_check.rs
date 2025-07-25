@@ -20,12 +20,10 @@ use std::{any::Any, sync::Arc};
 use arrow::array::{Array, AsArray, BooleanArray};
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::Boolean;
-use datafusion_common::types::logical_string;
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{exec_err, Result, ScalarValue};
 use datafusion_expr::{
-    Coercion, ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature,
-    TypeSignatureClass, Volatility,
+    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
 
 /// Spark-compatible `luhn_check` expression
@@ -44,12 +42,7 @@ impl Default for SparkLuhnCheck {
 impl SparkLuhnCheck {
     pub fn new() -> Self {
         Self {
-            signature: Signature::coercible(
-                vec![Coercion::new_exact(TypeSignatureClass::Native(
-                    logical_string(),
-                ))],
-                Volatility::Immutable,
-            ),
+            signature: Signature::exact(vec![DataType::Utf8], Volatility::Immutable),
         }
     }
 }
