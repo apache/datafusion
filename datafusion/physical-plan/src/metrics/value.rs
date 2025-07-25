@@ -222,6 +222,16 @@ impl Time {
     pub fn value(&self) -> usize {
         self.nanos.load(Ordering::Relaxed)
     }
+
+    /// Return a scoped guard that adds the amount of time elapsed between its
+    /// creation and its drop (or the call to `stop`) to the underlying metric
+    /// according to the given instant.
+    pub fn timer_with(&self, now: Instant) -> ScopedTimerGuard<'_> {
+        ScopedTimerGuard {
+            inner: self,
+            start: Some(now),
+        }
+    }
 }
 
 /// Stores a single timestamp, stored as the number of nanoseconds
@@ -330,6 +340,20 @@ impl ScopedTimerGuard<'_> {
     /// Stop the timer, record the time taken and consume self
     pub fn done(mut self) {
         self.stop()
+    }
+
+    /// Stop the timer timing and record the time taken with the given endpoint.
+    pub fn stop_with(&mut self, end_time: Instant) {
+        if let Some(start) = self.start.take() {
+            let elapsed = end_time - start;
+            self.inner.add_duration(elapsed)
+        }
+    }
+
+    /// Stop the timer, record the time taken with the given endpoint, and
+    /// consume self.
+    pub fn done_with(mut self, end_time: Instant) {
+        self.stop_with(end_time)
     }
 }
 
@@ -840,5 +864,103 @@ mod tests {
                 "value {value:?}"
             );
         }
+    }
+
+    #[test]
+    fn test_timer_with_custom_instant() {
+        let time = Time::new();
+        let start_time = Instant::now();
+
+        // Sleep a bit to ensure some time passes
+        std::thread::sleep(Duration::from_millis(1));
+
+        // Create timer with the earlier start time
+        let mut timer = time.timer_with(start_time);
+
+        // Sleep a bit more
+        std::thread::sleep(Duration::from_millis(1));
+
+        // Stop the timer
+        timer.stop();
+
+        // The recorded time should be at least 20ms (both sleeps)
+        assert!(
+            time.value() >= 2_000_000,
+            "Expected at least 2ms, got {} ns",
+            time.value()
+        );
+    }
+
+    #[test]
+    fn test_stop_with_custom_endpoint() {
+        let time = Time::new();
+        let start = Instant::now();
+        let mut timer = time.timer_with(start);
+
+        // Simulate exactly 10ms passing
+        let end = start + Duration::from_millis(10);
+
+        // Stop with custom endpoint
+        timer.stop_with(end);
+
+        // Should record exactly 10ms (10_000_000 nanoseconds)
+        // Allow for small variations due to timer resolution
+        let recorded = time.value();
+        assert!(
+            recorded >= 10_000_000 && recorded <= 10_100_000,
+            "Expected ~10ms, got {} ns",
+            recorded
+        );
+
+        // Calling stop_with again should not add more time
+        timer.stop_with(end);
+        assert_eq!(
+            recorded,
+            time.value(),
+            "Time should not change after second stop"
+        );
+    }
+
+    #[test]
+    fn test_done_with_custom_endpoint() {
+        let time = Time::new();
+        let start = Instant::now();
+
+        // Create a new scope for the timer
+        {
+            let timer = time.timer_with(start);
+
+            // Simulate 50ms passing
+            let end = start + Duration::from_millis(5);
+
+            // Call done_with to stop and consume the timer
+            timer.done_with(end);
+
+            // Timer is consumed, can't use it anymore
+        }
+
+        // Should record exactly 5ms
+        let recorded = time.value();
+        assert!(
+            recorded >= 5_000_000 && recorded <= 5_100_000,
+            "Expected ~5ms, got {} ns",
+            recorded
+        );
+
+        // Test that done_with prevents drop from recording time again
+        {
+            let timer2 = time.timer_with(start);
+            let end2 = start + Duration::from_millis(5);
+            timer2.done_with(end2);
+            // drop happens here but should not record additional time
+        }
+
+        // Should have added only 5ms more
+        let new_recorded = time.value();
+        assert!(
+            new_recorded >= 10_000_000 && new_recorded <= 10_100_000,
+            "Expected ~10ms total, got {} ns",
+            new_recorded
+        );
     }
 }
