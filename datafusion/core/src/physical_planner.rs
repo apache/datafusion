@@ -47,6 +47,7 @@ use crate::physical_plan::joins::{
 use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use crate::physical_plan::projection::ProjectionExec;
 use crate::physical_plan::repartition::RepartitionExec;
+use crate::physical_plan::sorts::partial_sort::PartialSortExec;
 use crate::physical_plan::sorts::sort::SortExec;
 use crate::physical_plan::union::UnionExec;
 use crate::physical_plan::unnest::UnnestExec;
@@ -886,6 +887,26 @@ impl DefaultPhysicalPlanner {
                         "SortExec requires at least one sort expression"
                     );
                 };
+
+                // Check if we can use PartialSortExec instead of SortExec
+                if let Some(input_ordering) = physical_input.output_ordering() {
+                    // Only apply optimization for simple, safe cases
+                    if Self::is_safe_for_partial_sort_optimization(&physical_input) {
+                        if let Some(common_prefix_length) =
+                            Self::find_sort_prefix_length(input_ordering, &ordering)
+                        {
+                            let partial_sort = PartialSortExec::new(
+                                ordering,
+                                physical_input,
+                                common_prefix_length,
+                            )
+                            .with_fetch(*fetch);
+                            return Ok(Arc::new(partial_sort));
+                        }
+                    }
+                }
+
+                // Fall back to full sort
                 let new_sort = SortExec::new(ordering, physical_input).with_fetch(*fetch);
                 Arc::new(new_sort)
             }
@@ -1370,6 +1391,76 @@ impl DefaultPhysicalPlanner {
                     })
                     .collect::<Result<Vec<_>>>()?,
             ))
+        }
+    }
+    /// Determines if input ordering is a prefix of requested ordering
+    /// Returns Some(prefix_length) if compatible, None otherwise
+    fn find_sort_prefix_length(
+        input_ordering: &LexOrdering,
+        requested_ordering: &LexOrdering,
+    ) -> Option<usize> {
+        if input_ordering.is_empty() || requested_ordering.is_empty() {
+            return None;
+        }
+
+        let common_prefix_length = input_ordering
+            .iter()
+            .zip(requested_ordering.iter())
+            .take_while(|(input_expr, requested_expr)| input_expr.eq(requested_expr))
+            .count();
+
+        // Use PartialSort only when we have a partial prefix match
+        // For exact matches, let the existing optimization logic handle it
+        if common_prefix_length > 0 && common_prefix_length < requested_ordering.len() {
+            Some(common_prefix_length)
+        } else {
+            None
+        }
+    }
+
+    /// Check if it's safe to apply PartialSort optimization
+    fn is_safe_for_partial_sort_optimization(plan: &Arc<dyn ExecutionPlan>) -> bool {
+        // Safe for direct table scans
+        if plan.children().is_empty() {
+            return true;
+        }
+
+        // Check the plan type
+        let plan_name = plan.name();
+        match plan_name {
+            // Always safe operations that preserve ordering reliably
+            "ProjectionExec"
+            | "FilterExec"
+            | "GlobalLimitExec"
+            | "LocalLimitExec"
+            | "CoalescePartitionsExec" => {
+                // Recursively check the child
+                plan.children()
+                    .iter()
+                    .all(|child| Self::is_safe_for_partial_sort_optimization(child))
+            }
+            // Window functions and aggregates are safe when they preserve ordering
+            "WindowAggExec" | "BoundedWindowAggExec" | "AggregateExec" => {
+                // These are safe if they have declared output ordering that matches what we expect
+                plan.output_ordering().is_some()
+                    && plan
+                        .children()
+                        .iter()
+                        .all(|child| Self::is_safe_for_partial_sort_optimization(child))
+            }
+            // SortMergeJoin can preserve ordering if it has explicit output ordering
+            "SortMergeJoinExec" => plan.output_ordering().is_some(),
+            // These operations can scramble ordering unpredictably
+            "HashJoinExec" | "CrossJoinExec" | "NestedLoopJoinExec"
+            | "RepartitionExec" | "UnionExec" => false,
+            // For other operations, trust them if they have explicit ordering
+            _ => {
+                plan.output_ordering().is_some()
+                    && plan
+                        .children()
+                        .iter()
+                        .all(|child| Self::is_safe_for_partial_sort_optimization(child))
+            }
         }
     }
 }
