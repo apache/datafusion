@@ -21,11 +21,9 @@ use std::sync::Arc;
 use arrow::array::{new_null_array, ArrayRef, AsArray, Date32Array, StringArrayType};
 use arrow::datatypes::{DataType, Date32Type};
 use chrono::{Datelike, Duration, Weekday};
-use datafusion_common::types::NativeType;
-// use datafusion_expr_common::signature::TypeSignature;
-use datafusion_common::{exec_err, plan_err, Result, ScalarValue};
+use datafusion_common::{exec_err, Result, ScalarValue};
 use datafusion_expr::{
-    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
+    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature,
     Volatility,
 };
 
