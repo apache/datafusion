@@ -23,13 +23,22 @@ User Defined Functions (UDFs) are functions that can be used in the context of D
 
 This page covers how to add UDFs to DataFusion. In particular, it covers how to add Scalar, Window, and Aggregate UDFs.
 
-| UDF Type     | Description                                                                                                                                              | Example             |
-| ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------- |
-| Scalar       | A function that takes a row of data and returns a single value.                                                                                          | [simple_udf.rs][1]  |
-| Window       | A function that takes a row of data and returns a single value, but also has access to the rows around it.                                               | [simple_udwf.rs][2] |
-| Aggregate    | A function that takes a group of rows and returns a single value.                                                                                        | [simple_udaf.rs][3] |
-| Table        | A function that takes parameters and returns a `TableProvider` to be used in an query plan.                                                              | [simple_udtf.rs][4] |
-| Async Scalar | A scalar function that natively supports asynchronous execution, allowing you to perform async operations (such as network or I/O calls) within the UDF. | [async_udf.rs][5]   |
+| UDF Type       | Description                                                                                                | Example(s)                            |
+| -------------- | ---------------------------------------------------------------------------------------------------------- | ------------------------------------- |
+| Scalar         | A function that takes a row of data and returns a single value.                                            | [simple_udf.rs] / [advanced_udf.rs]   |
+| Window         | A function that takes a row of data and returns a single value, but also has access to the rows around it. | [simple_udwf.rs] / [advanced_udwf.rs] |
+| Aggregate      | A function that takes a group of rows and returns a single value.                                          | [simple_udaf.rs] / [advanced_udaf.rs] |
+| Table          | A function that takes parameters and returns a `TableProvider` to be used in an query plan.                | [simple_udtf.rs]                      |
+| Scalar (async) | A scalar function for performing `async` operations (such as network or I/O calls) within the UDF.         | [async_udf.rs]                        |
+
+[simple_udf.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/simple_udf.rs
+[advanced_udf.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udf.rs
+[simple_udwf.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/simple_udwf.rs
+[advanced_udwf.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udwf.rs
+[simple_udaf.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/simple_udaf.rs
+[advanced_udaf.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udaf.rs
+[simple_udtf.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/simple_udtf.rs
+[async_udf.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/async_udf.rs
 
 First we'll talk about adding an Scalar UDF end-to-end, then we'll talk about the differences between the different
 types of UDFs.
@@ -345,9 +354,9 @@ async fn main() {
 }
 ```
 
-## Adding a Scalar Async UDF
+## Adding a Async Scalar UDF
 
-A Scalar Async UDF allows you to implement user-defined functions that support
+An Async Scalar UDF allows you to implement user-defined functions that support
 asynchronous execution, such as performing network or I/O operations within the
 UDF.
 
@@ -359,22 +368,21 @@ To add a Scalar Async UDF, you need to:
 ### Adding by `impl AsyncScalarUDFImpl`
 
 ```rust
-use arrow::array::{ArrayIter, ArrayRef, AsArray, StringArray};
-use arrow_schema::DataType;
-use async_trait::async_trait;
-use datafusion::common::error::Result;
-use datafusion::common::{internal_err, not_impl_err};
-use datafusion::common::types::logical_string;
-use datafusion::config::ConfigOptions;
-use datafusion_expr::ScalarUDFImpl;
-use datafusion::logical_expr::async_udf::AsyncScalarUDFImpl;
-use datafusion::logical_expr::{
-    ColumnarValue, Signature, TypeSignature, TypeSignatureClass, Volatility, ScalarFunctionArgs
-};
-use datafusion::logical_expr_common::signature::Coercion;
-use log::trace;
-use std::any::Any;
-use std::sync::Arc;
+# use arrow::array::{ArrayIter, ArrayRef, AsArray, StringArray};
+# use arrow_schema::DataType;
+# use async_trait::async_trait;
+# use datafusion::common::error::Result;
+# use datafusion::common::{internal_err, not_impl_err};
+# use datafusion::common::types::logical_string;
+# use datafusion::config::ConfigOptions;
+# use datafusion_expr::ScalarUDFImpl;
+# use datafusion::logical_expr::async_udf::AsyncScalarUDFImpl;
+# use datafusion::logical_expr::{
+#     ColumnarValue, Signature, TypeSignature, TypeSignatureClass, Volatility, ScalarFunctionArgs
+# };
+# use datafusion::logical_expr_common::signature::Coercion;
+# use std::any::Any;
+# use std::sync::Arc;
 
 #[derive(Debug)]
 pub struct AsyncUpper {
@@ -419,6 +427,7 @@ impl ScalarUDFImpl for AsyncUpper {
         Ok(DataType::Utf8)
     }
 
+    // Note the normal invoke_with_args method is not called for Async UDFs
     fn invoke_with_args(
         &self,
         _args: ScalarFunctionArgs,
@@ -434,13 +443,17 @@ impl AsyncScalarUDFImpl for AsyncUpper {
         Some(10)
     }
 
+    /// This method is called to execute the async UDF and is similar
+    /// to the normal `invoke_with_args` except it returns an `ArrayRef`
+    /// instead of `ColumnarValue` and is `async`.
     async fn invoke_async_with_args(
         &self,
         args: ScalarFunctionArgs,
         _option: &ConfigOptions,
     ) -> Result<ArrayRef> {
-        trace!("Invoking async_upper with args: {:?}", args);
         let value = &args.args[0];
+        // This function simply implements a simple string to uppercase conversion
+        // but can be used for any async operation such as network calls.
         let result = match value {
             ColumnarValue::Array(array) => {
                 let string_array = array.as_string::<i32>();
