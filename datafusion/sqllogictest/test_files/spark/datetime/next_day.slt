@@ -66,6 +66,9 @@ SELECT next_day('2020-01-01'::DATE, 'invalid_day'::string);
 ----
 NULL
 
+query error Cast error: Cannot cast string '2015-13-32' to value of Date32 type
+SELECT next_day('2015-13-32'::DATE, 'Sun'::string);
+
 query D
 SELECT next_day(a, b)
 FROM VALUES
