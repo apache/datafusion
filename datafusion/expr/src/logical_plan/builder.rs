@@ -210,7 +210,10 @@ impl LogicalPlanBuilder {
     /// so it's usually better to override the default names with a table alias list.
     ///
     /// If the values include params/binders such as $1, $2, $3, etc, then the `param_data_types` should be provided.
-    pub fn values(values: Vec<Vec<Expr>>, map_string_types_to_utf8view: bool) -> Result<Self> {
+    pub fn values(
+        values: Vec<Vec<Expr>>,
+        map_string_types_to_utf8view: bool,
+    ) -> Result<Self> {
         if values.is_empty() {
             return plan_err!("Values list cannot be empty");
         }
@@ -298,7 +301,10 @@ impl LogicalPlanBuilder {
         Self::infer_inner(values, fields, schema)
     }
 
-    fn infer_data(values: Vec<Vec<Expr>>, map_string_types_to_utf8view: bool) -> Result<Self> {
+    fn infer_data(
+        values: Vec<Vec<Expr>>,
+        map_string_types_to_utf8view: bool,
+    ) -> Result<Self> {
         let n_cols = values[0].len();
         let schema = DFSchema::empty();
         let mut fields = ValuesFields::new();
