@@ -22,9 +22,11 @@ use arrow::array::{new_null_array, ArrayRef, AsArray, Date32Array, StringArrayTy
 use arrow::datatypes::{DataType, Date32Type};
 use chrono::{Datelike, Duration, Weekday};
 use datafusion_common::types::NativeType;
+// use datafusion_expr_common::signature::TypeSignature;
 use datafusion_common::{exec_err, plan_err, Result, ScalarValue};
 use datafusion_expr::{
-    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
+    Volatility,
 };
 
 /// <https://spark.apache.org/docs/latest/api/sql/index.html#next_day>
@@ -42,7 +44,10 @@ impl Default for SparkNextDay {
 impl SparkNextDay {
     pub fn new() -> Self {
         Self {
-            signature: Signature::user_defined(Volatility::Immutable),
+            signature: Signature::exact(
+                vec![DataType::Date32, DataType::Utf8],
+                Volatility::Immutable,
+            ),
         }
     }
 }
@@ -154,37 +159,6 @@ impl ScalarUDFImpl for SparkNextDay {
                 Ok(ColumnarValue::Array(result))
             }
             _ => exec_err!("Unsupported args {args:?} for Spark function `next_day`"),
-        }
-    }
-
-    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        if arg_types.len() != 2 {
-            return exec_err!(
-                "Spark `next_day` function requires 2 arguments, got {}",
-                arg_types.len()
-            );
-        }
-
-        let current_native_type: NativeType = (&arg_types[0]).into();
-        if matches!(current_native_type, NativeType::Date)
-            || matches!(current_native_type, NativeType::String)
-            || matches!(current_native_type, NativeType::Null)
-        {
-            if matches!(&arg_types[1], DataType::Utf8)
-                || matches!(&arg_types[1], DataType::LargeUtf8)
-                || matches!(&arg_types[1], DataType::Utf8View)
-            {
-                Ok(vec![DataType::Date32, arg_types[1].clone()])
-            } else {
-                plan_err!(
-                    "The second argument of the Spark `next_day` function must be a string, but got {}",
-                    &arg_types[1]
-                )
-            }
-        } else {
-            plan_err!(
-                "The first argument of the Spark `next_day` function can only be a date or string, but got {}", &arg_types[0]
-            )
         }
     }
 }
