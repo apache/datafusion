@@ -23,8 +23,7 @@ use arrow::datatypes::{DataType, Date32Type};
 use chrono::{Datelike, Duration, Weekday};
 use datafusion_common::{exec_err, Result, ScalarValue};
 use datafusion_expr::{
-    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature,
-    Volatility,
+    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
 
 /// <https://spark.apache.org/docs/latest/api/sql/index.html#next_day>
