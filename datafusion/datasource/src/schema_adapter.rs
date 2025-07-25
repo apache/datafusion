@@ -29,7 +29,7 @@ use datafusion_common::{
     nested_struct::{cast_column, validate_struct_compatibility},
     plan_err, ColumnStatistics,
 };
-use std::{any::Any, fmt::Debug, sync::Arc};
+use std::{fmt::Debug, sync::Arc};
 /// Function used by [`SchemaMapping`] to adapt a column from the file schema to
 /// the table schema.
 pub type CastColumnFn =
@@ -68,8 +68,6 @@ pub trait SchemaAdapterFactory: Debug + Send + Sync + 'static {
     ) -> Box<dyn SchemaAdapter> {
         self.create(Arc::clone(&projected_table_schema), projected_table_schema)
     }
-    /// Give us access to Any so callers can downcast.
-    fn as_any(&self) -> &dyn Any;
 }
 
 /// Creates [`SchemaMapper`]s to map file-level [`RecordBatch`]es to a table
@@ -233,10 +231,6 @@ impl SchemaAdapterFactory for DefaultSchemaAdapterFactory {
         Box::new(DefaultSchemaAdapter {
             projected_table_schema,
         })
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 }
 

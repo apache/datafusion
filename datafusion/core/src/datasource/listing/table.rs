@@ -2912,10 +2912,6 @@ mod tests {
                 error_type: self.error_type,
             })
         }
-
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
     }
 
     #[derive(Debug)]
@@ -2963,10 +2959,6 @@ mod tests {
             Box::new(NullStatsAdapter {
                 schema: projected_table_schema,
             })
-        }
-
-        fn as_any(&self) -> &dyn Any {
-            self
         }
     }
 

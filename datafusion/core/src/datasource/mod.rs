@@ -71,7 +71,7 @@ mod tests {
     };
     use datafusion_datasource_parquet::source::ParquetSource;
     use datafusion_physical_plan::collect;
-    use std::{any::Any, fs, sync::Arc};
+    use std::{fs, sync::Arc};
     use tempfile::TempDir;
 
     #[tokio::test]
@@ -213,10 +213,6 @@ mod tests {
             Box::new(TestSchemaAdapter {
                 table_schema: projected_table_schema,
             })
-        }
-
-        fn as_any(&self) -> &dyn Any {
-            self
         }
     }
 

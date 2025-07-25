@@ -47,10 +47,6 @@ mod parquet_adapter_tests {
                 prefix: self.prefix.clone(),
             })
         }
-
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
     }
 
     /// A test schema adapter that adds prefix to column names

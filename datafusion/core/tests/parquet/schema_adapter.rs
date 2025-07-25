@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::{record_batch, RecordBatch, RecordBatchOptions};
@@ -43,15 +42,6 @@ use itertools::Itertools;
 use object_store::{memory::InMemory, path::Path, ObjectStore};
 use parquet::arrow::ArrowWriter;
 
-#[cfg(feature = "parquet")]
-use datafusion::datasource::physical_plan::ParquetSource;
-use datafusion::datasource::physical_plan::{
-    ArrowSource, CsvSource, FileScanConfigBuilder, FileSource, JsonSource,
-};
-use datafusion::datasource::source::DataSourceExec;
-use datafusion::physical_plan::ExecutionPlan;
-use datafusion_datasource::PartitionedFile;
-
 async fn write_parquet(batch: RecordBatch, store: Arc<dyn ObjectStore>, path: &str) {
     let mut out = BytesMut::new().writer();
     {
@@ -75,10 +65,6 @@ impl SchemaAdapterFactory for CustomSchemaAdapterFactory {
         Box::new(CustomSchemaAdapter {
             logical_file_schema: projected_table_schema,
         })
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 }
 
