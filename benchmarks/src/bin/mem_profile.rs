@@ -32,7 +32,6 @@ use datafusion_benchmarks::{
 
 #[derive(Debug, StructOpt)]
 #[structopt(about = "benchmark command")]
-#[allow(dead_code)]
 enum Options {
     Clickbench(clickbench::RunOpt),
     H2o(h2o::RunOpt),
@@ -43,16 +42,25 @@ enum Options {
 
 #[tokio::main]
 pub async fn main() -> Result<()> {
-    // 1. parse args and check which benchmarks should be run
-    // let opt = MemProfileOpt::from_args();
+    // 1. Parse args and check which benchmarks should be run
     let profile = env::var("PROFILE").unwrap_or_else(|_| "release".to_string());
-
     let args = env::args().skip(1);
-    // let opt = Options::from_iter(args);
     let query_range = match Options::from_args() {
-        // TODO clickbench
-        // TODO run for specific query id
-        Options::Clickbench(_) => 0..=42,
+        Options::Clickbench(opt) => {
+            let entries = std::fs::read_dir(&opt.queries_path)?
+                .filter_map(Result::ok)
+                .filter(|e| {
+                    let path = e.path();
+                    path.extension().map(|ext| ext == "sql").unwrap_or(false)
+                })
+                .collect::<Vec<_>>();
+
+            let max_query_id = entries.len().saturating_sub(1);
+            match opt.query {
+                Some(query_id) => query_id..=query_id,
+                None => 0..=max_query_id,
+            }
+        }
         Options::H2o(opt) => {
             let queries = AllQueries::try_new(&opt.queries_path)?;
             match opt.query {
@@ -60,14 +68,23 @@ pub async fn main() -> Result<()> {
                 None => queries.min_query_id()..=queries.max_query_id(),
             }
         }
-        Options::Imdb(_) => imdb::IMDB_QUERY_START_ID..=imdb::IMDB_QUERY_END_ID,
-        Options::SortTpch(_) => {
-            sort_tpch::SORT_TPCH_QUERY_START_ID..=sort_tpch::SORT_TPCH_QUERY_END_ID
-        }
-        Options::Tpch(_) => tpch::TPCH_QUERY_START_ID..=tpch::TPCH_QUERY_END_ID,
+        Options::Imdb(opt) => match opt.query {
+            Some(query_id) => query_id..=query_id,
+            None => imdb::IMDB_QUERY_START_ID..=imdb::IMDB_QUERY_END_ID,
+        },
+        Options::SortTpch(opt) => match opt.query {
+            Some(query_id) => query_id..=query_id,
+            None => {
+                sort_tpch::SORT_TPCH_QUERY_START_ID..=sort_tpch::SORT_TPCH_QUERY_END_ID
+            }
+        },
+        Options::Tpch(opt) => match opt.query {
+            Some(query_id) => query_id..=query_id,
+            None => tpch::TPCH_QUERY_START_ID..=tpch::TPCH_QUERY_END_ID,
+        },
     };
 
-    // 2. prebuild test binary so that memory does not blow up due to build process
+    // 2. Prebuild dfbench binary so that memory does not blow up due to build process
     println!("Pre-building benchmark binary...");
     let status = Command::new("cargo")
         .args([
@@ -84,9 +101,8 @@ pub async fn main() -> Result<()> {
     assert!(status.success());
     println!("Benchmark binary built successfully.");
 
-    // 3. spawn a new process per each benchmark query and print summary
+    // 3. Create a new process per each benchmark query and print summary
     let mut dfbench_args: Vec<String> = args.collect();
-    println!("{dfbench_args:?}");
     run_benchmark_as_child_process(&profile, query_range, &mut dfbench_args)?;
 
     Ok(())
@@ -104,9 +120,17 @@ fn run_benchmark_as_child_process(
 
     let command = format!("target/{profile}/dfbench");
     args.insert(0, command);
-    args.push("--query".to_string());
-
     let mut results = vec![];
+
+    // Run Single Query (args already contain --query num)
+    if args.contains(&"--query".to_string()) {
+        let _ = run_query(args, &mut results);
+        print_summary_table(&results);
+        return Ok(());
+    }
+
+    // Run All Queries
+    args.push("--query".to_string());
     for query_str in query_strings {
         args.push(query_str);
         let _ = run_query(args, &mut results);
@@ -130,7 +154,7 @@ fn run_query(args: &[String], results: &mut Vec<QueryResult>) -> Result<()> {
     let stdout = child.stdout.take().unwrap();
     let reader = BufReader::new(stdout);
 
-    // buffer stdout
+    // Buffer child's stdout
     let lines: Result<Vec<String>, std::io::Error> =
         reader.lines().collect::<Result<_, _>>();
 
@@ -138,10 +162,11 @@ fn run_query(args: &[String], results: &mut Vec<QueryResult>) -> Result<()> {
         .wait()
         .expect("Benchmark process exited with an error");
 
-    // parse after child process terminates
+    // Parse after child process terminates
     let lines = lines?;
     let mut iter = lines.iter().peekable();
 
+    // Look for lines that contain execution time / memory stats
     while let Some(line) = iter.next() {
         if let Some((query, duration_ms)) = parse_query_time(line) {
             if let Some(next_line) = iter.peek() {
@@ -201,7 +226,7 @@ fn print_summary_table(results: &[QueryResult]) {
         "\n{:<8} {:>10} {:>12} {:>12} {:>12}",
         "Query", "Time (ms)", "Peak RSS", "Peak Commit", "Page Faults"
     );
-    println!("{}", "-".repeat(68));
+    println!("{}", "-".repeat(62));
 
     for r in results {
         println!(

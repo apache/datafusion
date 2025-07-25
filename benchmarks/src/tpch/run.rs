@@ -61,7 +61,7 @@ type BoolDefaultTrue = bool;
 pub struct RunOpt {
     /// Query number. If not specified, runs all queries
     #[structopt(short, long)]
-    query: Option<usize>,
+    pub query: Option<usize>,
 
     /// Common options
     #[structopt(flatten)]

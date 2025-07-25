@@ -283,6 +283,7 @@ This will produce output like:
 └──────────────┴──────────────┴──────────────┴───────────────┘
 ```
 
+
 # Benchmark Runner
 
 The `dfbench` program contains subcommands to run the various
@@ -321,6 +322,64 @@ FLAGS:
 ...
 ```
 
+# Profiling Memory Stats for each benchmark query
+The `mem_profile` program wraps benchmark execution to measure memory usage statistics, such as peak RSS. It runs each benchmark query in a separate subprocess, capturing the child process’s stdout to print structured output.
+
+Subcommands supported by mem_profile are the subset of those in `dfbench`.
+Currently supported benchmarks include: Clickbench, H2o, Imdb, SortTpch, Tpch
+
+Before running benchmarks, `mem_profile` automatically compiles the benchmark binary (`dfbench`) using `cargo build` with the same cargo profile (e.g., --release) as mem_profile itself. By prebuilding the binary and running each query in a separate process, we can ensure accurate memory statistics.
+
+Currently, `mem_profile` only supports `mimalloc` as the memory allocator, since it relies on `mimalloc`'s API to collect memory statistics.
+
+Because it runs the compiled binary directly from the target directory, make sure your working directory is the top-level datafusion/ directory, where the target/ is also located. 
+
+Example: 
+```shell
+datafusion$ cargo run --profile release-nonlto --bin mem_profile -- tpch --path benchmarks/data/tpch_sf1 --partitions 4 --format parquet
+```
+Example Output:
+```
+Query     Time (ms)     Peak RSS  Peak Commit  Page Faults
+--------------------------------------------------------------
+1            539.96     252.4 MB       2.0 GB            0
+2            444.21     221.7 MB       2.0 GB            0
+3            607.90     317.7 MB       2.0 GB            0
+4            440.49     503.7 MB       3.0 GB            0
+5            673.57     361.1 MB       3.0 GB            0
+6            297.92     241.9 MB       2.0 GB            0
+7            690.04     615.8 MB       3.0 GB            0
+8            722.96     378.6 MB       3.0 GB            0
+9            817.40     581.5 MB       3.0 GB            0
+10           704.04     406.8 MB       2.0 GB            0
+11           264.40     194.2 MB       2.0 GB            0
+12           478.89     192.2 MB       2.0 GB            0
+13           502.77     349.1 MB       3.0 GB            0
+14           397.61     309.5 MB       2.0 GB            0
+15           501.35     273.4 MB       2.0 GB            0
+16           341.21     222.5 MB       2.0 GB            0
+17           724.57     481.9 MB       2.0 GB            0
+18          1035.77     604.2 MB       3.0 GB            0
+19           639.52     278.1 MB       3.0 GB            0
+20           566.33     405.8 MB       2.0 GB            0
+21           910.40     387.4 MB       3.0 GB            0
+22           381.24     149.2 MB       3.0 GB            0
+```
+
+## Reported Metrics
+When running benchmarks, `mem_profile` collects several memory-related statistics using the mimalloc API:
+
+- Peak RSS (Resident Set Size): 
+The maximum amount of physical memory used by the process.
+This is a process-level metric collected via OS-specific mechanisms and is not mimalloc-specific.
+
+- Peak Commit:
+The peak amount of memory committed by the allocator (i.e., total virtual memory reserved).
+This is mimalloc-specific. It gives a more allocator-aware view of memory usage than RSS.
+
+- Page Faults:
+The number of page faults triggered during execution.
+This metric is obtained from the operating system and is not mimalloc-specific.
 # Writing a new benchmark
 
 ## Creating or downloading data outside of the benchmark
