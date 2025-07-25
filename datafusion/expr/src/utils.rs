@@ -1357,9 +1357,13 @@ mod tests {
         expr::WindowFunction,
         expr_vec_fmt, grouping_set, lit, rollup,
         test::function_stub::{max_udaf, min_udaf, sum_udaf},
-        Cast, ExprFunctionExt, WindowFunctionDefinition,
+        Cast, ExprFunctionExt, ScalarFunctionArgs, ScalarUDFImpl,
+        WindowFunctionDefinition,
     };
     use arrow::datatypes::{UnionFields, UnionMode};
+    use datafusion_expr_common::columnar_value::ColumnarValue;
+    use datafusion_expr_common::signature::Volatility;
+    use std::any::Any;
 
     #[test]
     fn test_group_window_expr_by_sort_keys_empty_case() -> Result<()> {
@@ -1778,5 +1782,92 @@ mod tests {
         let list_union_type =
             DataType::List(Arc::new(Field::new("my_union", union_type, true)));
         assert!(!can_hash(&list_union_type));
+    }
+
+    #[test]
+    fn test_udf_equals_hash() {
+        #[derive(Debug, PartialEq, Hash)]
+        struct StatefulFunctionWithEqHash {
+            signature: Signature,
+            state: bool,
+        }
+        impl ScalarUDFImpl for StatefulFunctionWithEqHash {
+            fn as_any(&self) -> &dyn Any {
+                self
+            }
+            fn name(&self) -> &str {
+                "StatefulFunctionWithEqHash"
+            }
+            fn signature(&self) -> &Signature {
+                &self.signature
+            }
+            fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+                todo!()
+            }
+            fn invoke_with_args(
+                &self,
+                _args: ScalarFunctionArgs,
+            ) -> Result<ColumnarValue> {
+                todo!()
+            }
+        }
+
+        #[derive(Debug, PartialEq, Hash)]
+        struct StatefulFunctionWithEqHashWithUdfEqualsHash {
+            signature: Signature,
+            state: bool,
+        }
+        impl ScalarUDFImpl for StatefulFunctionWithEqHashWithUdfEqualsHash {
+            fn as_any(&self) -> &dyn Any {
+                self
+            }
+            fn name(&self) -> &str {
+                "StatefulFunctionWithEqHashWithUdfEqualsHash"
+            }
+            fn signature(&self) -> &Signature {
+                &self.signature
+            }
+            fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+                todo!()
+            }
+            fn invoke_with_args(
+                &self,
+                _args: ScalarFunctionArgs,
+            ) -> Result<ColumnarValue> {
+                todo!()
+            }
+            udf_equals_hash!(ScalarUDFImpl);
+        }
+
+        let signature = Signature::exact(vec![DataType::Utf8], Volatility::Immutable);
+
+        // Sadly, without `udf_equals_hash!` macro, the equals and hash_value ignore state fields,
+        // even though the struct implements `PartialEq` and `Hash`.
+        let a: Box<dyn ScalarUDFImpl> = Box::new(StatefulFunctionWithEqHash {
+            signature: signature.clone(),
+            state: true,
+        });
+        let b: Box<dyn ScalarUDFImpl> = Box::new(StatefulFunctionWithEqHash {
+            signature: signature.clone(),
+            state: false,
+        });
+        assert!(a.equals(b.as_ref()));
+        assert_eq!(a.hash_value(), b.hash_value());
+
+        // With udf_equals_hash! macro, the equals and hash_value compare the state.
+        // even though the struct implements `PartialEq` and `Hash`.
+        let a: Box<dyn ScalarUDFImpl> =
+            Box::new(StatefulFunctionWithEqHashWithUdfEqualsHash {
+                signature: signature.clone(),
+                state: true,
+            });
+        let b: Box<dyn ScalarUDFImpl> =
+            Box::new(StatefulFunctionWithEqHashWithUdfEqualsHash {
+                signature: signature.clone(),
+                state: false,
+            });
+        assert!(!a.equals(b.as_ref()));
+        // This could be true, but it's very unlikely that boolean true and false hash the same
+        assert_ne!(a.hash_value(), b.hash_value());
     }
 }
