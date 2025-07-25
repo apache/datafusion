@@ -50,7 +50,7 @@ pub struct RunOpt {
 
     /// Sort query number. If not specified, runs all queries
     #[structopt(short, long)]
-    query: Option<usize>,
+    pub query: Option<usize>,
 
     /// Path to data files (lineitem). Only parquet format is supported
     #[structopt(parse(from_os_str), required = true, short = "p", long = "path")]

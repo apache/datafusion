@@ -42,7 +42,7 @@ use structopt::StructOpt;
 pub struct RunOpt {
     /// Query number (between 0 and 42). If not specified, runs all queries
     #[structopt(short, long)]
-    query: Option<usize>,
+    pub query: Option<usize>,
 
     /// If specified, enables Parquet Filter Pushdown.
     ///
@@ -73,7 +73,7 @@ pub struct RunOpt {
         long = "queries-path",
         default_value = "benchmarks/queries/clickbench/queries"
     )]
-    queries_path: PathBuf,
+    pub queries_path: PathBuf,
 
     /// If present, write results json here
     #[structopt(parse(from_os_str), short = "o", long = "output")]
