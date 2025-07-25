@@ -23,14 +23,20 @@ use arrow_schema::{DataType, Field, FieldRef, Schema, SchemaRef};
 use bytes::{BufMut, BytesMut};
 use datafusion::assert_batches_eq;
 use datafusion::common::Result;
+use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::listing::{ListingTable, ListingTableConfig};
+use datafusion::datasource::physical_plan::{
+    ArrowSource, CsvSource, FileSource, JsonSource, ParquetSource,
+};
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::DataFusionError;
 use datafusion_common::{ColumnStatistics, ScalarValue};
+use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_datasource::schema_adapter::{
     DefaultSchemaAdapterFactory, SchemaAdapter, SchemaAdapterFactory, SchemaMapper,
 };
+use datafusion_datasource::source::DataSourceExec;
 use datafusion_datasource::ListingTableUrl;
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_physical_expr::expressions::{self, Column};
@@ -38,6 +44,7 @@ use datafusion_physical_expr::schema_rewriter::{
     DefaultPhysicalExprAdapterFactory, PhysicalExprAdapter, PhysicalExprAdapterFactory,
 };
 use datafusion_physical_expr::{DefaultPhysicalExprAdapter, PhysicalExpr};
+use datafusion_physical_plan::ExecutionPlan;
 use itertools::Itertools;
 use object_store::{memory::InMemory, path::Path, ObjectStore};
 use parquet::arrow::ArrowWriter;
@@ -390,10 +397,6 @@ impl SchemaAdapterFactory for UppercaseAdapterFactory {
             table_schema: projected_table_schema,
         })
     }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 }
 
 /// Schema adapter that transforms column names to uppercase
@@ -627,12 +630,7 @@ async fn test_multi_source_schema_adapter_reuse() -> Result<()> {
         assert!(source_with_adapter.schema_adapter_factory().is_some());
 
         let retrieved_factory = source_with_adapter.schema_adapter_factory().unwrap();
-        assert_eq!(
-            retrieved_factory
-                .as_any()
-                .downcast_ref::<UppercaseAdapterFactory>(),
-            Some(factory.as_ref())
-        );
+        assert_eq!(format!("{:?}", retrieved_factory.as_ref()), format!("{:?}", factory.as_ref()));
     }
 
     // Test ParquetSource
@@ -649,12 +647,7 @@ async fn test_multi_source_schema_adapter_reuse() -> Result<()> {
         assert!(source_with_adapter.schema_adapter_factory().is_some());
 
         let retrieved_factory = source_with_adapter.schema_adapter_factory().unwrap();
-        assert_eq!(
-            retrieved_factory
-                .as_any()
-                .downcast_ref::<UppercaseAdapterFactory>(),
-            Some(factory.as_ref())
-        );
+        assert_eq!(format!("{:?}", retrieved_factory.as_ref()), format!("{:?}", factory.as_ref()));
     }
 
     // Test CsvSource
@@ -670,12 +663,7 @@ async fn test_multi_source_schema_adapter_reuse() -> Result<()> {
         assert!(source_with_adapter.schema_adapter_factory().is_some());
 
         let retrieved_factory = source_with_adapter.schema_adapter_factory().unwrap();
-        assert_eq!(
-            retrieved_factory
-                .as_any()
-                .downcast_ref::<UppercaseAdapterFactory>(),
-            Some(factory.as_ref())
-        );
+        assert_eq!(format!("{:?}", retrieved_factory.as_ref()), format!("{:?}", factory.as_ref()));
     }
 
     // Test JsonSource
@@ -691,12 +679,7 @@ async fn test_multi_source_schema_adapter_reuse() -> Result<()> {
         assert!(source_with_adapter.schema_adapter_factory().is_some());
 
         let retrieved_factory = source_with_adapter.schema_adapter_factory().unwrap();
-        assert_eq!(
-            retrieved_factory
-                .as_any()
-                .downcast_ref::<UppercaseAdapterFactory>(),
-            Some(factory.as_ref())
-        );
+        assert_eq!(format!("{:?}", retrieved_factory.as_ref()), format!("{:?}", factory.as_ref()));
     }
 
     Ok(())
