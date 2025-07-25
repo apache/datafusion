@@ -619,11 +619,13 @@ impl AggregateFunctionExpr {
         args: Vec<Arc<dyn PhysicalExpr>>,
         order_by_exprs: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Option<AggregateFunctionExpr> {
-        debug_assert_eq!(args.len(), self.args.len());
-
-        if self.order_sensitivity() != AggregateOrderSensitivity::Insensitive {
-            debug_assert_eq!(order_by_exprs.len(), self.order_bys.len());
+        if args.len() != self.args.len()
+            || (self.order_sensitivity() != AggregateOrderSensitivity::Insensitive
+                && order_by_exprs.len() != self.order_bys.len())
+        {
+            return None;
         }
+
         let new_order_bys = self
             .order_bys
             .iter()
@@ -638,8 +640,8 @@ impl AggregateFunctionExpr {
             fun: self.fun.clone(),
             args,
             return_field: Arc::clone(&self.return_field),
-            // TODO: This name and display fields should be updated after re-write to not mislead
             name: self.name.clone(),
+            // TODO: Human name should be updated after re-write to not mislead
             human_display: self.human_display.clone(),
             schema: self.schema.clone(),
             order_bys: new_order_bys,
