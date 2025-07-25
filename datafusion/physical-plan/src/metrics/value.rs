@@ -907,9 +907,8 @@ mod tests {
         // Allow for small variations due to timer resolution
         let recorded = time.value();
         assert!(
-            recorded >= 10_000_000 && recorded <= 10_100_000,
-            "Expected ~10ms, got {} ns",
-            recorded
+           (10_000_000..=10_100_000).contains(&recorded)
+            "Expected ~10ms, got {recorded} ns"
         );
 
         // Calling stop_with again should not add more time
@@ -942,9 +941,9 @@ mod tests {
         // Should record exactly 5ms
         let recorded = time.value();
         assert!(
-            recorded >= 5_000_000 && recorded <= 5_100_000,
-            "Expected ~5ms, got {} ns",
-            recorded
+           (5_000_000..=5_100_000).contains(&recorded)
+            "Expected ~5ms, got {recorded} ns",
+
         );
 
         // Test that done_with prevents drop from recording time again
@@ -958,9 +957,9 @@ mod tests {
         // Should have added only 5ms more
         let new_recorded = time.value();
         assert!(
-            new_recorded >= 10_000_000 && new_recorded <= 10_100_000,
-            "Expected ~10ms total, got {} ns",
-            new_recorded
+            (10_000_000..=10_100_000).contains(&new_recorded)
+            "Expected ~10ms total, got {new_recorded} ns",
+
         );
     }
 }
