@@ -387,7 +387,7 @@ impl ExecutionPlanMetricsSet {
 /// "tags" in
 /// [InfluxDB](https://docs.influxdata.com/influxdb/v1.8/write_protocols/line_protocol_tutorial/)
 /// , "attributes" in [open
-/// telemetry]<https://github.com/open-telemetry/opentelemetry-specification/blob/main/specification/metrics/datamodel.md>,
+/// telemetry]<https://github.com/open-telemetry/opentelemetry-specification/blob/main/specification/metrics/data-model.md>,
 /// etc.
 ///
 /// As the name and value are expected to mostly be constant strings,
