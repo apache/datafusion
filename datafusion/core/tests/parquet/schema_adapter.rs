@@ -630,7 +630,10 @@ async fn test_multi_source_schema_adapter_reuse() -> Result<()> {
         assert!(source_with_adapter.schema_adapter_factory().is_some());
 
         let retrieved_factory = source_with_adapter.schema_adapter_factory().unwrap();
-        assert_eq!(format!("{:?}", retrieved_factory.as_ref()), format!("{:?}", factory.as_ref()));
+        assert_eq!(
+            format!("{:?}", retrieved_factory.as_ref()),
+            format!("{:?}", factory.as_ref())
+        );
     }
 
     // Test ParquetSource
@@ -647,7 +650,10 @@ async fn test_multi_source_schema_adapter_reuse() -> Result<()> {
         assert!(source_with_adapter.schema_adapter_factory().is_some());
 
         let retrieved_factory = source_with_adapter.schema_adapter_factory().unwrap();
-        assert_eq!(format!("{:?}", retrieved_factory.as_ref()), format!("{:?}", factory.as_ref()));
+        assert_eq!(
+            format!("{:?}", retrieved_factory.as_ref()),
+            format!("{:?}", factory.as_ref())
+        );
     }
 
     // Test CsvSource
@@ -663,7 +669,10 @@ async fn test_multi_source_schema_adapter_reuse() -> Result<()> {
         assert!(source_with_adapter.schema_adapter_factory().is_some());
 
         let retrieved_factory = source_with_adapter.schema_adapter_factory().unwrap();
-        assert_eq!(format!("{:?}", retrieved_factory.as_ref()), format!("{:?}", factory.as_ref()));
+        assert_eq!(
+            format!("{:?}", retrieved_factory.as_ref()),
+            format!("{:?}", factory.as_ref())
+        );
     }
 
     // Test JsonSource
@@ -679,7 +688,10 @@ async fn test_multi_source_schema_adapter_reuse() -> Result<()> {
         assert!(source_with_adapter.schema_adapter_factory().is_some());
 
         let retrieved_factory = source_with_adapter.schema_adapter_factory().unwrap();
-        assert_eq!(format!("{:?}", retrieved_factory.as_ref()), format!("{:?}", factory.as_ref()));
+        assert_eq!(
+            format!("{:?}", retrieved_factory.as_ref()),
+            format!("{:?}", factory.as_ref())
+        );
     }
 
     Ok(())
