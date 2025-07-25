@@ -33,8 +33,6 @@ use datafusion_expr::{Expr, TableProviderFilterPushDown, TableSource, TableType}
 ///
 /// It is used so logical plans in the `datafusion_expr` crate do not have a
 /// direct dependency on physical plans, such as [`TableProvider`]s.
-///
-/// [`TableProvider`]: https://docs.rs/datafusion/latest/datafusion/datasource/provider/trait.TableProvider.html
 pub struct DefaultTableSource {
     /// table provider
     pub table_provider: Arc<dyn TableProvider>,

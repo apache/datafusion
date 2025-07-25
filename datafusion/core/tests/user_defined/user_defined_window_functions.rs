@@ -40,6 +40,7 @@ use datafusion_physical_expr::{
     PhysicalExpr,
 };
 use std::collections::HashMap;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::{
     any::Any,
     ops::Range,
@@ -568,6 +569,33 @@ impl OddCounter {
             fn field(&self, field_args: WindowUDFFieldArgs) -> Result<FieldRef> {
                 Ok(Field::new(field_args.name(), DataType::Int64, true).into())
             }
+
+            fn equals(&self, other: &dyn WindowUDFImpl) -> bool {
+                let Some(other) = other.as_any().downcast_ref::<Self>() else {
+                    return false;
+                };
+                let Self {
+                    signature,
+                    test_state,
+                    aliases,
+                } = self;
+                signature == &other.signature
+                    && Arc::ptr_eq(test_state, &other.test_state)
+                    && aliases == &other.aliases
+            }
+
+            fn hash_value(&self) -> u64 {
+                let Self {
+                    signature,
+                    test_state,
+                    aliases,
+                } = self;
+                let mut hasher = DefaultHasher::new();
+                signature.hash(&mut hasher);
+                Arc::as_ptr(test_state).hash(&mut hasher);
+                aliases.hash(&mut hasher);
+                hasher.finish()
+            }
         }
 
         ctx.register_udwf(WindowUDF::from(SimpleWindowUDF::new(test_state)))
@@ -814,6 +842,33 @@ impl WindowUDFImpl for MetadataBasedWindowUdf {
         Ok(Field::new(field_args.name(), DataType::UInt64, true)
             .with_metadata(self.metadata.clone())
             .into())
+    }
+
+    fn equals(&self, other: &dyn WindowUDFImpl) -> bool {
+        let Some(other) = other.as_any().downcast_ref::<Self>() else {
+            return false;
+        };
+        let Self {
+            name,
+            signature,
+            metadata,
+        } = self;
+        name == &other.name
+            && signature == &other.signature
+            && metadata == &other.metadata
+    }
+
+    fn hash_value(&self) -> u64 {
+        let Self {
+            name,
+            signature,
+            metadata: _, // unhashable
+        } = self;
+        let mut hasher = DefaultHasher::new();
+        std::any::type_name::<Self>().hash(&mut hasher);
+        name.hash(&mut hasher);
+        signature.hash(&mut hasher);
+        hasher.finish()
     }
 }
 
