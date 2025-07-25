@@ -263,8 +263,20 @@ impl<'a> BinaryTypeCoercer<'a> {
                         rhs: coerced,
                         ret,
                     })
+                } else if let Some((lhs, rhs)) = temporal_coercion_resolve_ints_to_intervals(lhs, rhs) {
+                    // e.g. Date32 + Int32
+                    let ret = self.get_result(&lhs, &rhs).map_err(|e| {
+                        plan_datafusion_err!(
+                            "Cannot get result type for temporal operation {} {} {}: {e}", self.lhs, self.op, self.rhs
+                        )
+                    })?;
+                    Ok(Signature{
+                        lhs: lhs.clone(),
+                        rhs: rhs.clone(),
+                        ret,
+                    })
                 } else if let Some((lhs, rhs)) = math_decimal_coercion(lhs, rhs) {
-                    // Decimal arithmetic, e.g. Decimal(10, 2) + Decimal(10, 0)
+                    // decimal arithmetic, e.g. Decimal(10, 2) + Decimal(10, 0)
                     let ret = self.get_result(&lhs, &rhs).map_err(|e| {
                         plan_datafusion_err!(
                             "Cannot get result type for decimal operation {} {} {}: {e}", self.lhs, self.op, self.rhs
@@ -1423,6 +1435,18 @@ fn temporal_coercion_nonstrict_timezone(
             Some(Timestamp(unit, tz))
         }
         _ => temporal_coercion(lhs_type, rhs_type),
+    }
+}
+
+fn temporal_coercion_resolve_ints_to_intervals(
+    lhs: &DataType,
+    rhs: &DataType,
+) -> Option<(DataType, DataType)> {
+    use arrow::datatypes::DataType::{Date32, Int32, Int64, Interval};
+    use arrow::datatypes::IntervalUnit::DayTime;
+    match (lhs, rhs) {
+        (Date32, Int32 | Int64) => Some((lhs.clone(), Interval(DayTime))),
+        _ => None,
     }
 }
 
