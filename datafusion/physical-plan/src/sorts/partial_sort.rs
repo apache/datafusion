@@ -381,7 +381,7 @@ impl PartialSortStream {
                 return Poll::Ready(None);
             }
 
-            return Poll::Ready(match ready!(self.input.poll_next_unpin(cx)) {
+            match ready!(self.input.poll_next_unpin(cx)) {
                 Some(Ok(batch)) => {
                     // Merge new batch into in_mem_batch
                     self.in_mem_batch = concat_batches(
@@ -401,33 +401,25 @@ impl PartialSortStream {
                         let sorted_batch = sort_batch(&sorted, &self.expr, self.fetch)?;
                         if let Some(fetch) = self.fetch.as_mut() {
                             *fetch -= sorted_batch.num_rows();
-                            // If we've reached the fetch limit, close the stream
-                            if *fetch == 0 {
-                                self.is_closed = true;
-                            }
                         }
 
                         if sorted_batch.num_rows() > 0 {
-                            Some(Ok(sorted_batch))
-                        } else {
-                            continue;
+                            return Poll::Ready(Some(Ok(sorted_batch)));
                         }
-                    } else {
-                        continue;
                     }
                 }
-                Some(Err(e)) => Some(Err(e)),
+                Some(Err(e)) => return Poll::Ready(Some(Err(e))),
                 None => {
                     self.is_closed = true;
                     // Once input is consumed, sort the rest of the inserted batches
                     let remaining_batch = self.sort_in_mem_batch()?;
-                    if remaining_batch.num_rows() > 0 {
-                        Some(Ok(remaining_batch))
+                    return if remaining_batch.num_rows() > 0 {
+                        Poll::Ready(Some(Ok(remaining_batch)))
                     } else {
-                        None
-                    }
+                        Poll::Ready(None)
+                    };
                 }
-            });
+            };
         }
     }
 
