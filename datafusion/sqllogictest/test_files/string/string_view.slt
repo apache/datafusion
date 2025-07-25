@@ -1157,8 +1157,8 @@ create table temp as values
 query TTT
 select arrow_typeof(column1), arrow_typeof(column2), arrow_typeof(column3) from temp;
 ----
-Utf8 Utf8View Utf8View
-Utf8 Utf8View Utf8View
+Utf8View Utf8View Utf8View
+Utf8View Utf8View Utf8View
 
 query TT
 explain select column2 || 'is' || column3 from temp;

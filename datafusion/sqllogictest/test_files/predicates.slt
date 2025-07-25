@@ -380,7 +380,7 @@ query TT
 EXPLAIN SELECT * FROM test WHERE column1 = 'foo' OR column1 = 'bar' OR column1 = 'fazzz'
 ----
 logical_plan
-01)Filter: test.column1 = Utf8("foo") OR test.column1 = Utf8("bar") OR test.column1 = Utf8("fazzz")
+01)Filter: test.column1 = Utf8View("foo") OR test.column1 = Utf8View("bar") OR test.column1 = Utf8View("fazzz")
 02)--TableScan: test projection=[column1]
 
 # Number of OR statements is greater than threshold
@@ -388,7 +388,7 @@ query TT
 EXPLAIN SELECT * FROM test WHERE column1 = 'foo' OR column1 = 'bar' OR column1 = 'fazzz' OR column1 = 'barfoo'
 ----
 logical_plan
-01)Filter: test.column1 IN ([Utf8("foo"), Utf8("bar"), Utf8("fazzz"), Utf8("barfoo")])
+01)Filter: test.column1 IN ([Utf8View("foo"), Utf8View("bar"), Utf8View("fazzz"), Utf8View("barfoo")])
 02)--TableScan: test projection=[column1]
 
 # Complex OR statements
@@ -396,7 +396,7 @@ query TT
 EXPLAIN SELECT * FROM test WHERE column1 = 'foo' OR column1 = 'bar' OR column1 = 'fazzz' OR column1 = 'barfoo' OR false OR column1 = 'foobar'
 ----
 logical_plan
-01)Filter: test.column1 IN ([Utf8("foo"), Utf8("bar"), Utf8("fazzz"), Utf8("barfoo"), Utf8("foobar")])
+01)Filter: test.column1 IN ([Utf8View("foo"), Utf8View("bar"), Utf8View("fazzz"), Utf8View("barfoo"), Utf8View("foobar")])
 02)--TableScan: test projection=[column1]
 
 # Balanced OR structures
@@ -404,7 +404,7 @@ query TT
 EXPLAIN SELECT * FROM test WHERE (column1 = 'foo' OR column1 = 'bar') OR (column1 = 'fazzz' OR column1 = 'barfoo')
 ----
 logical_plan
-01)Filter: test.column1 IN ([Utf8("foo"), Utf8("bar"), Utf8("fazzz"), Utf8("barfoo")])
+01)Filter: test.column1 IN ([Utf8View("foo"), Utf8View("bar"), Utf8View("fazzz"), Utf8View("barfoo")])
 02)--TableScan: test projection=[column1]
 
 # Right-deep OR structures
@@ -412,7 +412,7 @@ query TT
 EXPLAIN SELECT * FROM test WHERE column1 = 'foo' OR (column1 = 'bar' OR (column1 = 'fazzz' OR column1 = 'barfoo'))
 ----
 logical_plan
-01)Filter: test.column1 IN ([Utf8("foo"), Utf8("bar"), Utf8("fazzz"), Utf8("barfoo")])
+01)Filter: test.column1 IN ([Utf8View("foo"), Utf8View("bar"), Utf8View("fazzz"), Utf8View("barfoo")])
 02)--TableScan: test projection=[column1]
 
 # Not simplifiable, mixed column

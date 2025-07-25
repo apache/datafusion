@@ -48,7 +48,7 @@ create table dictionary_encoded_values as values
 query TTT
 describe dictionary_encoded_values;
 ----
-column1 Utf8 YES
+column1 Utf8View YES
 column2 Dictionary(Int32, Utf8) YES
 
 statement ok
