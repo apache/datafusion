@@ -199,7 +199,7 @@ impl AsyncScalarUDFImpl for AskLLM {
         &self,
         args: ScalarFunctionArgs,
         _option: &ConfigOptions,
-    ) -> Result<ArrayRef> {
+    ) -> Result<ColumnarValue> {
         // in a real UDF you would likely want to special case constant
         // arguments to improve performance, but this example converts the
         // arguments to arrays for simplicity.
@@ -234,6 +234,6 @@ impl AsyncScalarUDFImpl for AskLLM {
             })
             .collect();
 
-        Ok(Arc::new(result_array))
+        Ok(ColumnarValue::from(Arc::new(result_array) as ArrayRef))
     }
 }
