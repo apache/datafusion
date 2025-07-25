@@ -123,11 +123,14 @@ use itertools::Itertools;
 /// let mut eq_properties = EquivalenceProperties::new(schema);
 /// eq_properties.add_constants(vec![ConstExpr::from(col_b)]);
 /// eq_properties.add_ordering([
-///   PhysicalSortExpr::new_default(col_a).asc(),
-///   PhysicalSortExpr::new_default(col_c).desc(),
+///     PhysicalSortExpr::new_default(col_a).asc(),
+///     PhysicalSortExpr::new_default(col_c).desc(),
 /// ]);
 ///
-/// assert_eq!(eq_properties.to_string(), "order: [[a@0 ASC, c@2 DESC]], eq: [{members: [b@1], constant: (heterogeneous)}]");
+/// assert_eq!(
+///     eq_properties.to_string(),
+///     "order: [[a@0 ASC, c@2 DESC]], eq: [{members: [b@1], constant: (heterogeneous)}]"
+/// );
 /// ```
 #[derive(Clone, Debug)]
 pub struct EquivalenceProperties {

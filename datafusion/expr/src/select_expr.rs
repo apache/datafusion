@@ -44,10 +44,8 @@ use crate::{expr::WildcardOptions, Expr};
 /// let wildcard = SelectExpr::Wildcard(WildcardOptions::default());
 ///
 /// // SELECT mytable.*
-/// let qualified = SelectExpr::QualifiedWildcard(
-///     "mytable".into(),
-///     WildcardOptions::default()
-/// );
+/// let qualified =
+///     SelectExpr::QualifiedWildcard("mytable".into(), WildcardOptions::default());
 ///
 /// // SELECT col1
 /// let expr = SelectExpr::Expression(col("col1").into());

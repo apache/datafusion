@@ -253,7 +253,6 @@ impl AggregationFuzzer {
 ///
 ///   - `dataset_ref`, the input dataset, store it for error reported when found
 ///     the inconsistency between the one for `ctx` and `expected results`.
-///
 struct AggregationFuzzTestTask {
     /// Generated session context in current test case
     ctx_with_params: SessionContextWithParams,

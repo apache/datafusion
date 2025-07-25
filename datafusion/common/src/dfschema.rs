@@ -56,12 +56,10 @@ pub type DFSchemaRef = Arc<DFSchema>;
 /// an Arrow schema.
 ///
 /// ```rust
-/// use datafusion_common::{DFSchema, Column};
 /// use arrow::datatypes::{DataType, Field, Schema};
+/// use datafusion_common::{Column, DFSchema};
 ///
-/// let arrow_schema = Schema::new(vec![
-///    Field::new("c1", DataType::Int32, false),
-/// ]);
+/// let arrow_schema = Schema::new(vec![Field::new("c1", DataType::Int32, false)]);
 ///
 /// let df_schema = DFSchema::try_from_qualified_schema("t1", &arrow_schema).unwrap();
 /// let column = Column::from_qualified_name("t1.c1");
@@ -77,12 +75,10 @@ pub type DFSchemaRef = Arc<DFSchema>;
 /// Create an unqualified schema using TryFrom:
 ///
 /// ```rust
-/// use datafusion_common::{DFSchema, Column};
 /// use arrow::datatypes::{DataType, Field, Schema};
+/// use datafusion_common::{Column, DFSchema};
 ///
-/// let arrow_schema = Schema::new(vec![
-///    Field::new("c1", DataType::Int32, false),
-/// ]);
+/// let arrow_schema = Schema::new(vec![Field::new("c1", DataType::Int32, false)]);
 ///
 /// let df_schema = DFSchema::try_from(arrow_schema).unwrap();
 /// let column = Column::new_unqualified("c1");
@@ -94,13 +90,15 @@ pub type DFSchemaRef = Arc<DFSchema>;
 /// Use the `Into` trait to convert `DFSchema` into an Arrow schema:
 ///
 /// ```rust
+/// use arrow::datatypes::{Field, Schema};
 /// use datafusion_common::DFSchema;
-/// use arrow::datatypes::{Schema, Field};
 /// use std::collections::HashMap;
 ///
-/// let df_schema = DFSchema::from_unqualified_fields(vec![
-///    Field::new("c1", arrow::datatypes::DataType::Int32, false),
-/// ].into(),HashMap::new()).unwrap();
+/// let df_schema = DFSchema::from_unqualified_fields(
+///     vec![Field::new("c1", arrow::datatypes::DataType::Int32, false)].into(),
+///     HashMap::new(),
+/// )
+/// .unwrap();
 /// let schema = Schema::from(df_schema);
 /// assert_eq!(schema.fields().len(), 1);
 /// ```

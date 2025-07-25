@@ -37,9 +37,16 @@ impl SessionContext {
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
     /// // You can read a single file using `read_csv`
-    /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
+    /// let df = ctx
+    ///     .read_csv("tests/data/example.csv", CsvReadOptions::new())
+    ///     .await?;
     /// // you can also read multiple files:
-    /// let df = ctx.read_csv(vec!["tests/data/example.csv", "tests/data/example.csv"], CsvReadOptions::new()).await?;
+    /// let df = ctx
+    ///     .read_csv(
+    ///         vec!["tests/data/example.csv", "tests/data/example.csv"],
+    ///         CsvReadOptions::new(),
+    ///     )
+    ///     .await?;
     /// # Ok(())
     /// # }
     /// ```

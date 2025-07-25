@@ -32,7 +32,6 @@
 //! [DataFusion]: https://crates.io/crates/datafusion
 //!
 //! You can register the functions in this crate using the [`register_all`] function.
-//!
 
 #[macro_use]
 pub mod macros;

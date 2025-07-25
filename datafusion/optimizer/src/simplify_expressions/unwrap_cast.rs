@@ -53,7 +53,6 @@
 //! ```text
 //! c1 > INT32(10)
 //! ```
-//!
 
 use arrow::datatypes::DataType;
 use datafusion_common::{internal_err, tree_node::Transformed};

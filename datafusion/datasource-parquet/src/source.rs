@@ -80,7 +80,6 @@ use object_store::ObjectStore;
 ///  │.───────────────────.│
 ///  │                     )
 ///   `───────────────────'
-///
 /// ```
 ///
 /// # Example: Create a `DataSourceExec`
@@ -338,7 +337,6 @@ impl ParquetSource {
     }
 
     /// Optional user defined parquet file reader factory.
-    ///
     pub fn with_parquet_file_reader_factory(
         mut self,
         parquet_file_reader_factory: Arc<dyn ParquetFileReaderFactory>,

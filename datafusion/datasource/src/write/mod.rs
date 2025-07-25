@@ -162,7 +162,11 @@ impl ObjectWriterBuilder {
     /// # let object_store = Arc::new(InMemory::new());
     /// let mut builder = ObjectWriterBuilder::new(compression_type, &location, object_store);
     /// builder.set_buffer_size(Some(20 * 1024 * 1024)); //20 MiB
-    /// assert_eq!(builder.get_buffer_size(), Some(20 * 1024 * 1024), "Internal error: Builder buffer size doesn't match");
+    /// assert_eq!(
+    ///     builder.get_buffer_size(),
+    ///     Some(20 * 1024 * 1024),
+    ///     "Internal error: Builder buffer size doesn't match"
+    /// );
     /// ```
     pub fn set_buffer_size(&mut self, buffer_size: Option<usize>) {
         self.buffer_size = buffer_size;
@@ -182,7 +186,11 @@ impl ObjectWriterBuilder {
     /// # let object_store = Arc::new(InMemory::new());
     /// let builder = ObjectWriterBuilder::new(compression_type, &location, object_store)
     ///     .with_buffer_size(Some(20 * 1024 * 1024)); //20 MiB
-    /// assert_eq!(builder.get_buffer_size(), Some(20 * 1024 * 1024), "Internal error: Builder buffer size doesn't match");
+    /// assert_eq!(
+    ///     builder.get_buffer_size(),
+    ///     Some(20 * 1024 * 1024),
+    ///     "Internal error: Builder buffer size doesn't match"
+    /// );
     /// ```
     pub fn with_buffer_size(mut self, buffer_size: Option<usize>) -> Self {
         self.buffer_size = buffer_size;

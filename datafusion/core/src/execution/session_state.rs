@@ -108,12 +108,12 @@ use uuid::Uuid;
 /// # use std::sync::Arc;
 /// # #[tokio::main]
 /// # async fn main() -> Result<()> {
-///     let state = SessionStateBuilder::new()
-///         .with_config(SessionConfig::new())  
-///         .with_runtime_env(Arc::new(RuntimeEnv::default()))
-///         .with_default_features()
-///         .build();
-///     Ok(())  
+/// let state = SessionStateBuilder::new()
+///     .with_config(SessionConfig::new())
+///     .with_runtime_env(Arc::new(RuntimeEnv::default()))
+///     .with_default_features()
+///     .build();
+/// Ok(())
 /// # }
 /// ```
 ///
@@ -1300,7 +1300,7 @@ impl SessionStateBuilder {
     /// let url = Url::try_from("file://").unwrap();
     /// let object_store = object_store::local::LocalFileSystem::new();
     /// let state = SessionStateBuilder::new()
-    ///     .with_config(SessionConfig::new())  
+    ///     .with_config(SessionConfig::new())
     ///     .with_object_store(&url, Arc::new(object_store))
     ///     .with_default_features()
     ///     .build();

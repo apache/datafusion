@@ -760,7 +760,6 @@ mod test {
 
         /// Calls `NullState::accumulate` and `accumulate_indices` to
         /// ensure it generates the correct values.
-        ///
         fn accumulate_test(
             group_indices: &[usize],
             values: &UInt32Array,

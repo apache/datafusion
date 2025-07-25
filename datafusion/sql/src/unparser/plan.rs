@@ -82,8 +82,11 @@ use std::{sync::Arc, vec};
 ///     .build()
 ///     .unwrap();
 /// let sql = plan_to_sql(&plan).unwrap(); // convert to AST
-/// // use the Display impl to convert to SQL text
-/// assert_eq!(sql.to_string(), "SELECT \"table\".id, \"table\".\"value\" FROM \"table\"")
+///                                        // use the Display impl to convert to SQL text
+/// assert_eq!(
+///     sql.to_string(),
+///     "SELECT \"table\".id, \"table\".\"value\" FROM \"table\""
+/// )
 /// ```
 ///
 /// [`SqlToRel::sql_statement_to_plan`]: crate::planner::SqlToRel::sql_statement_to_plan

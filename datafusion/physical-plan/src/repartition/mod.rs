@@ -429,10 +429,10 @@ impl BatchPartitioner {
 ///        │                  │                  │
 ///        │                  │                  │
 ///        │                  │                  │
-///┌───────────────┐  ┌───────────────┐  ┌───────────────┐
-///│    GroupBy    │  │    GroupBy    │  │    GroupBy    │
-///│   (Partial)   │  │   (Partial)   │  │   (Partial)   │
-///└───────────────┘  └───────────────┘  └───────────────┘
+/// ┌───────────────┐  ┌───────────────┐  ┌───────────────┐
+/// │    GroupBy    │  │    GroupBy    │  │    GroupBy    │
+/// │   (Partial)   │  │   (Partial)   │  │   (Partial)   │
+/// └───────────────┘  └───────────────┘  └───────────────┘
 ///        ▲                  ▲                  ▲
 ///        └──────────────────┼──────────────────┘
 ///                           │
@@ -451,7 +451,7 @@ impl BatchPartitioner {
 ///     ╲               ╱           ╲               ╱
 ///      '─.         ,─'             '─.         ,─'
 ///         `───────'                   `───────'
-///```
+/// ```
 ///
 /// # Error Handling
 ///
@@ -1724,7 +1724,6 @@ mod test {
     ///
     /// `$EXPECTED_PLAN_LINES`: input plan
     /// `$PLAN`: the plan to optimized
-    ///
     macro_rules! assert_plan {
         ($EXPECTED_PLAN_LINES: expr,  $PLAN: expr) => {
             let physical_plan = $PLAN;

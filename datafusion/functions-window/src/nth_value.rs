@@ -59,19 +59,16 @@ get_or_init_udwf!(
 );
 
 /// Create an expression to represent the `first_value` window function
-///
 pub fn first_value(arg: datafusion_expr::Expr) -> datafusion_expr::Expr {
     first_value_udwf().call(vec![arg])
 }
 
 /// Create an expression to represent the `last_value` window function
-///
 pub fn last_value(arg: datafusion_expr::Expr) -> datafusion_expr::Expr {
     last_value_udwf().call(vec![arg])
 }
 
 /// Create an expression to represent the `nth_value` window function
-///
 pub fn nth_value(arg: datafusion_expr::Expr, n: i64) -> datafusion_expr::Expr {
     nth_value_udwf().call(vec![arg, n.lit()])
 }

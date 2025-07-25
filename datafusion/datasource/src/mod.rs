@@ -310,7 +310,6 @@ pub async fn calculate_range(
 /// Returns a `Result` wrapping a `usize` that represents the position of the first newline character found within the specified range. If no newline is found, it returns the length of the scanned data, effectively indicating the end of the range.
 ///
 /// The function returns an `Error` if any issues arise while reading from the object store or processing the data stream.
-///
 async fn find_first_newline(
     object_store: &Arc<dyn ObjectStore>,
     location: &Path,

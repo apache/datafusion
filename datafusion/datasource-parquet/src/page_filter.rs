@@ -90,7 +90,6 @@ use parquet::{
 ///  ━━━ ━━━ ━━━ ━━━ ━━━ ━━━ ━━━ ━━━ ━━━ ━━━ ━━━ ━━━ ━━┛
 ///
 ///   Total rows: 300
-///
 /// ```
 ///
 /// Given the predicate `A > 35 AND B = 'F'`:

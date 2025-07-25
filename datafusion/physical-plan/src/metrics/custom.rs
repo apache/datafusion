@@ -64,7 +64,8 @@ use std::{any::Any, fmt::Debug, fmt::Display, sync::Arc};
 ///
 ///     fn aggregate(&self, other: Arc<dyn CustomMetricValue>) {
 ///         let other = other.as_any().downcast_ref::<Self>().unwrap();
-///         self.count.fetch_add(other.count.load(Ordering::Relaxed), Ordering::Relaxed);
+///         self.count
+///             .fetch_add(other.count.load(Ordering::Relaxed), Ordering::Relaxed);
 ///     }
 ///
 ///     fn as_any(&self) -> &dyn Any {

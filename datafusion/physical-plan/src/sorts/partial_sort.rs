@@ -32,7 +32,7 @@
 //! | 0 | 1 | 1 |
 //! | 0 | 2 | 0 |
 //! +---+---+---+
-//!```
+//! ```
 //!
 //! and required ordering for the plan is `a ASC, b ASC, d ASC`.
 //! The first 3 rows(segment) can be sorted as the segment already
@@ -46,7 +46,7 @@
 //! +---+---+---+
 //! | 0 | 2 | 4 |
 //! +---+---+---+
-//!```
+//! ```
 //!
 //! The plan concats incoming data with such last rows of previous input
 //! and continues partial sorting of the segments.

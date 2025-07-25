@@ -150,7 +150,6 @@ use substrait::proto::{
 ///     }
 /// }
 /// ```
-///
 pub trait SubstraitConsumer: Send + Sync + Sized {
     async fn resolve_table_ref(
         &self,

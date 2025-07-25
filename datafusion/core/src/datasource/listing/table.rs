@@ -82,7 +82,6 @@ pub enum SchemaSource {
 ///
 /// If not specified, a [`DefaultSchemaAdapterFactory`] will be used, which handles
 /// basic schema compatibility cases.
-///
 #[derive(Debug, Clone, Default)]
 pub struct ListingTableConfig {
     /// Paths on the `ObjectStore` for creating `ListingTable`.
@@ -894,17 +893,17 @@ impl ListingOptions {
 ///
 /// // Create default parquet options
 /// let file_format = ParquetFormat::new();
-/// let listing_options = ListingOptions::new(Arc::new(file_format))
-///   .with_file_extension(".parquet");
+/// let listing_options =
+///     ListingOptions::new(Arc::new(file_format)).with_file_extension(".parquet");
 ///
 /// // Resolve the schema
 /// let resolved_schema = listing_options
-///    .infer_schema(&session_state, &table_path)
-///    .await?;
+///     .infer_schema(&session_state, &table_path)
+///     .await?;
 ///
 /// let config = ListingTableConfig::new(table_path)
-///   .with_listing_options(listing_options)
-///   .with_schema(resolved_schema);
+///     .with_listing_options(listing_options)
+///     .with_schema(resolved_schema);
 ///
 /// // Create a new TableProvider
 /// let provider = Arc::new(ListingTable::try_new(config)?);

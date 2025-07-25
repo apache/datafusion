@@ -57,9 +57,12 @@ use std::sync::{Arc, Weak};
 /// // Given a `Session` reference, get the concrete `SessionState` reference
 /// // Note: this may stop working in future versions,
 /// fn session_state_from_session(session: &dyn Session) -> Result<&SessionState> {
-///    session.as_any()
-///     .downcast_ref::<SessionState>()
-///     .ok_or_else(|| exec_datafusion_err!("Failed to downcast Session to SessionState"))
+///     session
+///         .as_any()
+///         .downcast_ref::<SessionState>()
+///         .ok_or_else(|| {
+///             exec_datafusion_err!("Failed to downcast Session to SessionState")
+///         })
 /// }
 /// ```
 ///

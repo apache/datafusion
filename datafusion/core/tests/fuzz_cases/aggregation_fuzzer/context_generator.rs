@@ -44,7 +44,6 @@ use crate::fuzz_cases::aggregation_fuzzer::data_generator::Dataset;
 ///   - hint `sorted` or not
 ///   - `spilling` or not (TODO, I think a special `MemoryPool` may be needed
 ///     to support this)
-///
 pub struct SessionContextGenerator {
     /// Current testing dataset
     dataset: Arc<Dataset>,
