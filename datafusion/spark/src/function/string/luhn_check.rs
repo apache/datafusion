@@ -23,7 +23,8 @@ use arrow::datatypes::DataType::Boolean;
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{exec_err, Result, ScalarValue};
 use datafusion_expr::{
-    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
+    Volatility,
 };
 
 /// Spark-compatible `luhn_check` expression
@@ -42,7 +43,14 @@ impl Default for SparkLuhnCheck {
 impl SparkLuhnCheck {
     pub fn new() -> Self {
         Self {
-            signature: Signature::exact(vec![DataType::Utf8], Volatility::Immutable),
+            signature: Signature::one_of(
+                vec![
+                    TypeSignature::Exact(vec![DataType::Utf8]),
+                    TypeSignature::Exact(vec![DataType::Utf8View]),
+                    TypeSignature::Exact(vec![DataType::LargeUtf8]),
+                ],
+                Volatility::Immutable,
+            ),
         }
     }
 }
