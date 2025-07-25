@@ -287,10 +287,6 @@ impl ExecutionPlan for DataSourceExec {
         Some(self.data_source.metrics().clone_inner())
     }
 
-    fn statistics(&self) -> Result<Statistics> {
-        self.data_source.statistics()
-    }
-
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
         if let Some(partition) = partition {
             let mut statistics = Statistics::new_unknown(&self.schema());
