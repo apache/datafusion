@@ -151,3 +151,9 @@ query B
 select luhn_check(123.456::decimal(6,3))
 ----
 false
+
+query B
+SELECT luhn_check(a) FROM (VALUES ('79927398713'::string), ('79927398714'::string)) AS t(a);
+----
+true
+false
