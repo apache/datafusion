@@ -833,8 +833,11 @@ impl Accumulator for TrivialFirstValueAccumulator {
                 filter_states_according_to_is_set(&states[0..1], flags)?;
             if let Some(first) = filtered_states.first() {
                 if !first.is_empty() {
-                    self.first = ScalarValue::try_from_array(first, 0)?;
-                    self.is_set = true;
+                    let first = ScalarValue::try_from_array(first, 0)?;
+                    if !self.ignore_nulls || !first.is_null() {
+                        self.first = first;
+                        self.is_set = true;
+                    }
                 }
             }
         }
@@ -1326,8 +1329,11 @@ impl Accumulator for TrivialLastValueAccumulator {
         let filtered_states = filter_states_according_to_is_set(&states[0..1], flags)?;
         if let Some(last) = filtered_states.last() {
             if !last.is_empty() {
-                self.last = ScalarValue::try_from_array(last, 0)?;
-                self.is_set = true;
+                let last = ScalarValue::try_from_array(last, 0)?;
+                if !self.ignore_nulls || !last.is_null() {
+                    self.last = last;
+                    self.is_set = true;
+                }
             }
         }
         Ok(())
