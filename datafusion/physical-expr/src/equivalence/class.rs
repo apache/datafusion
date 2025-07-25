@@ -22,7 +22,7 @@ use std::vec::IntoIter;
 
 use super::projection::ProjectionTargets;
 use super::ProjectionMapping;
-use crate::expressions::Literal;
+use crate::expressions::{Column, Literal};
 use crate::physical_expr::add_offset_to_expr;
 use crate::{PhysicalExpr, PhysicalExprRef, PhysicalSortExpr, PhysicalSortRequirement};
 
@@ -851,6 +851,26 @@ impl EquivalenceGroup {
             .zip(right_children)
             .all(|(left_child, right_child)| self.exprs_equal(left_child, right_child))
     }
+
+    /// Determine whether fields at indices `lhs` and `rhs` are equal.
+    pub fn fields_equal(&self, lhs: usize, rhs: usize) -> bool {
+        (lhs == rhs)
+            || self.classes.iter().any(|cls| {
+                let (mut left_contains, mut right_contains) = (false, false);
+                for item in cls.iter() {
+                    if let Some(column) = item.as_any().downcast_ref::<Column>() {
+                        let idx = column.index();
+                        left_contains |= idx == lhs;
+                        right_contains |= idx == rhs;
+                        // Equal fields contain both left and right field indices:
+                        if left_contains && right_contains {
+                            return true;
+                        }
+                    }
+                }
+                false
+            })
+    }
 }
 
 impl Deref for EquivalenceGroup {
@@ -904,10 +924,10 @@ impl From<Vec<EquivalenceClass>> for EquivalenceGroup {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::equivalence::tests::create_test_params;
+    use crate::equivalence::tests::{create_test_params, create_test_schema};
     use crate::expressions::{binary, col, lit, BinaryExpr, Column, Literal};
-    use arrow::datatypes::{DataType, Field, Schema};
 
+    use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::{Result, ScalarValue};
     use datafusion_expr::Operator;
 
@@ -1228,6 +1248,35 @@ mod tests {
         let second_normalized = projected.normalize_expr(col("b+c", &projected_schema)?);
 
         assert!(first_normalized.eq(&second_normalized));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_fields_equal() -> Result<()> {
+        let schema = create_test_schema()?;
+        let col_a = &col("a", &schema)?;
+        let col_c = &col("c", &schema)?;
+        let col_d = &col("d", &schema)?;
+        let col_e = &col("e", &schema)?;
+        // Field indices are 0, 1, 2, 3, 4 respectively
+        let test_cases = vec![(
+            // Equal expressions a=c
+            vec![vec![col_a, col_c], vec![col_d, col_e]],
+            // first two entry field indices to compare third is expected result
+            // of fields equal check.
+            vec![(0, 1, false), (0, 2, true), (2, 4, false), (3, 4, true)],
+        )];
+        for (eq_classes, expected) in test_cases {
+            let eq_classes = eq_classes
+                .into_iter()
+                .map(|cls| EquivalenceClass::new(cls.into_iter().cloned()))
+                .collect::<Vec<_>>();
+            let eq_group = EquivalenceGroup::new(eq_classes);
+            for (left_idx, right_idx, expected) in expected {
+                assert_eq!(eq_group.fields_equal(left_idx, right_idx), expected);
+            }
+        }
 
         Ok(())
     }
