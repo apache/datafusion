@@ -241,13 +241,13 @@ impl RunOpt {
             millis.push(ms);
 
             println!(
-                "Q{query_id} iteration {i} took {ms:.1} ms and returned {row_count} rows"
+                "Query {query_id} iteration {i} took {ms:.1} ms and returned {row_count} rows"
             );
             query_results.push(QueryResult { elapsed, row_count });
         }
 
         let avg = millis.iter().sum::<f64>() / millis.len() as f64;
-        println!("Q{query_id} avg time: {avg:.2} ms");
+        println!("Query {query_id} avg time: {avg:.2} ms");
 
         // Print memory usage stats using mimalloc (only when compiled with --features mimalloc_extended)
         print_memory_stats();
