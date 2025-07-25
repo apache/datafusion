@@ -16,7 +16,7 @@
 // under the License.
 
 use std::any::Any;
-use std::hash::{DefaultHasher, Hash, Hasher};
+use std::hash::Hash;
 #[cfg(test)]
 use std::sync::Arc;
 use std::vec;
@@ -25,9 +25,9 @@ use arrow::datatypes::{TimeUnit::Nanosecond, *};
 use common::MockContextProvider;
 use datafusion_common::{assert_contains, DataFusionError, Result};
 use datafusion_expr::{
-    col, logical_plan::LogicalPlan, test::function_stub::sum_udaf, ColumnarValue,
-    CreateIndex, DdlStatement, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
-    Volatility,
+    col, logical_plan::LogicalPlan, test::function_stub::sum_udaf, udf_equals_hash,
+    ColumnarValue, CreateIndex, DdlStatement, ScalarFunctionArgs, ScalarUDF,
+    ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_functions::{string, unicode};
 use datafusion_sql::{
@@ -3312,7 +3312,7 @@ fn make_udf(name: &'static str, args: Vec<DataType>, return_type: DataType) -> S
 }
 
 /// Mocked UDF
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Hash)]
 struct DummyUDF {
     name: &'static str,
     signature: Signature,
@@ -3350,33 +3350,7 @@ impl ScalarUDFImpl for DummyUDF {
         panic!("dummy - not implemented")
     }
 
-    fn equals(&self, other: &dyn ScalarUDFImpl) -> bool {
-        let Some(other) = other.as_any().downcast_ref::<Self>() else {
-            return false;
-        };
-        let Self {
-            name,
-            signature,
-            return_type,
-        } = self;
-        name == &other.name
-            && signature == &other.signature
-            && return_type == &other.return_type
-    }
-
-    fn hash_value(&self) -> u64 {
-        let Self {
-            name,
-            signature,
-            return_type,
-        } = self;
-        let mut hasher = DefaultHasher::new();
-        std::any::type_name::<Self>().hash(&mut hasher);
-        name.hash(&mut hasher);
-        signature.hash(&mut hasher);
-        return_type.hash(&mut hasher);
-        hasher.finish()
-    }
+    udf_equals_hash!(ScalarUDFImpl);
 }
 
 fn parse_decimals_parser_options() -> ParserOptions {
