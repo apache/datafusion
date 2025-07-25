@@ -1262,8 +1262,60 @@ pub fn collect_subquery_cols(
 }
 
 /// Generates implementation of `equals` and `hash_value` methods for a trait, delegating
-/// to PartialEq and Hash implementations on Self.
+/// to [`PartialEq`] and [`Hash`] implementations on Self.
 /// Meant to be used with traits representing user-defined functions (UDFs).
+///
+/// Example showing generation of [`ScalarUDFImpl::equals`] and [`ScalarUDFImpl::hash_value`]
+/// implementations.
+///
+/// ```
+/// # use arrow::datatypes::DataType;
+/// # use datafusion_expr::{udf_equals_hash, ScalarFunctionArgs, ScalarUDFImpl};
+/// # use datafusion_expr_common::columnar_value::ColumnarValue;
+/// # use datafusion_expr_common::signature::Signature;
+/// # use std::any::Any;
+///
+/// // Implementing PartialEq & Hash is a prerequisite for using this macro,
+/// // but the implementation can be derived.
+/// #[derive(Debug, PartialEq, Hash)]
+/// struct VarcharToTimestampTz {
+///     safe: bool,
+/// }
+///
+/// impl ScalarUDFImpl for VarcharToTimestampTz {
+///     /* other methods omitted for brevity */
+/// #    fn as_any(&self) -> &dyn Any {
+/// #        self
+/// #    }
+/// #
+/// #    fn name(&self) -> &str {
+/// #        "varchar_to_timestamp_tz"
+/// #    }
+/// #
+/// #    fn signature(&self) -> &Signature {
+/// #        todo!()
+/// #    }
+/// #
+/// #    fn return_type(
+/// #        &self,
+/// #        _arg_types: &[DataType],
+/// #    ) -> datafusion_common::Result<DataType> {
+/// #        todo!()
+/// #    }
+/// #
+/// #    fn invoke_with_args(
+/// #        &self,
+/// #        args: ScalarFunctionArgs,
+/// #    ) -> datafusion_common::Result<ColumnarValue> {
+/// #        todo!()
+/// #    }
+/// #
+///     udf_equals_hash!(ScalarUDFImpl);
+/// }
+/// ```
+///
+/// [`ScalarUDFImpl::equals`]: crate::ScalarUDFImpl::equals
+/// [`ScalarUDFImpl::hash_value`]: crate::ScalarUDFImpl::hash_value
 #[macro_export]
 macro_rules! udf_equals_hash {
     ($udf_type:tt) => {
