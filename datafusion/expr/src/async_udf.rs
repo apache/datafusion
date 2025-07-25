@@ -26,6 +26,7 @@ use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::signature::Signature;
 use std::any::Any;
 use std::fmt::{Debug, Display};
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 
 /// A scalar UDF that can invoke using async methods
@@ -110,6 +111,22 @@ impl ScalarUDFImpl for AsyncScalarUDF {
 
     fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         internal_err!("async functions should not be called directly")
+    }
+
+    fn equals(&self, other: &dyn ScalarUDFImpl) -> bool {
+        let Some(other) = other.as_any().downcast_ref::<Self>() else {
+            return false;
+        };
+        let Self { inner } = self;
+        // TODO when MSRV >= 1.86.0, switch to `inner.equals(other.inner.as_ref())` leveraging trait upcasting
+        Arc::ptr_eq(inner, &other.inner)
+    }
+
+    fn hash_value(&self) -> u64 {
+        let Self { inner } = self;
+        let mut hasher = DefaultHasher::new();
+        Arc::as_ptr(inner).hash(&mut hasher);
+        hasher.finish()
     }
 }
 

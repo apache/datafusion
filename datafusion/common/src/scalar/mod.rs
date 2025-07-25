@@ -17,6 +17,7 @@
 
 //! [`ScalarValue`]: stores single  values
 
+mod cache;
 mod consts;
 mod struct_builder;
 
@@ -81,6 +82,7 @@ use arrow::datatypes::{
     UInt32Type, UInt64Type, UInt8Type, UnionFields, UnionMode, DECIMAL128_MAX_PRECISION,
 };
 use arrow::util::display::{array_value_to_string, ArrayFormatter, FormatOptions};
+use cache::{get_or_create_cached_key_array, get_or_create_cached_null_array};
 use chrono::{Duration, NaiveDate};
 use half::f16;
 pub use struct_builder::ScalarStructBuilder;
@@ -864,15 +866,9 @@ fn dict_from_scalar<K: ArrowDictionaryKeyType>(
     let values_array = value.to_array_of_size(1)?;
 
     // Create a key array with `size` elements, each of 0
-    let key_array: PrimitiveArray<K> = repeat_n(
-        if value.is_null() {
-            None
-        } else {
-            Some(K::default_value())
-        },
-        size,
-    )
-    .collect();
+    // Use cache to avoid repeated allocations for the same size
+    let key_array: PrimitiveArray<K> =
+        get_or_create_cached_key_array::<K>(size, value.is_null());
 
     // create a new DictionaryArray
     //
@@ -2677,7 +2673,7 @@ impl ScalarValue {
                     _ => unreachable!("Invalid dictionary keys type: {:?}", key_type),
                 }
             }
-            ScalarValue::Null => new_null_array(&DataType::Null, size),
+            ScalarValue::Null => get_or_create_cached_null_array(size),
         })
     }
 
@@ -3075,43 +3071,7 @@ impl ScalarValue {
         target_type: &DataType,
         cast_options: &CastOptions<'static>,
     ) -> Result<Self> {
-        let scalar_array = match (self, target_type) {
-            (
-                ScalarValue::Float64(Some(float_ts)),
-                DataType::Timestamp(TimeUnit::Nanosecond, None),
-            ) => ScalarValue::Int64(Some((float_ts * 1_000_000_000_f64).trunc() as i64))
-                .to_array()?,
-            (
-                ScalarValue::Decimal128(Some(decimal_value), _, scale),
-                DataType::Timestamp(time_unit, None),
-            ) => {
-                let scale_factor = 10_i128.pow(*scale as u32);
-                let seconds = decimal_value / scale_factor;
-                let fraction = decimal_value % scale_factor;
-
-                let timestamp_value = match time_unit {
-                    TimeUnit::Second => ScalarValue::Int64(Some(seconds as i64)),
-                    TimeUnit::Millisecond => {
-                        let millis = seconds * 1_000 + (fraction * 1_000) / scale_factor;
-                        ScalarValue::Int64(Some(millis as i64))
-                    }
-                    TimeUnit::Microsecond => {
-                        let micros =
-                            seconds * 1_000_000 + (fraction * 1_000_000) / scale_factor;
-                        ScalarValue::Int64(Some(micros as i64))
-                    }
-                    TimeUnit::Nanosecond => {
-                        let nanos = seconds * 1_000_000_000
-                            + (fraction * 1_000_000_000) / scale_factor;
-                        ScalarValue::Int64(Some(nanos as i64))
-                    }
-                };
-
-                timestamp_value.to_array()?
-            }
-            _ => self.to_array()?,
-        };
-
+        let scalar_array = self.to_array()?;
         let cast_arr = cast_with_options(&scalar_array, target_type, cast_options)?;
         ScalarValue::try_from_array(&cast_arr, 0)
     }

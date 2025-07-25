@@ -39,6 +39,7 @@ use datafusion_common::{DataFusionError, Statistics};
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_physical_expr::conjunction;
+use datafusion_physical_expr::schema_rewriter::DefaultPhysicalExprAdapterFactory;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_plan::filter_pushdown::PushedDown;
@@ -168,7 +169,7 @@ use object_store::ObjectStore;
 /// ```no_run
 /// # use std::sync::Arc;
 /// # use arrow::datatypes::Schema;
-/// # use datafusion_datasource::file_scan_config::FileScanConfig;
+/// # use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 /// # use datafusion_datasource::PartitionedFile;
 /// # use datafusion_datasource::source::DataSourceExec;
 ///
@@ -182,9 +183,9 @@ use object_store::ObjectStore;
 ///   .iter()
 ///   .map(|file_group| {
 ///     // create a new exec by copying the existing exec's source config
-///     let new_config = base_config
-///         .clone()
-///        .with_file_groups(vec![file_group.clone()]);
+///     let new_config = FileScanConfigBuilder::from(base_config.clone())
+///        .with_file_groups(vec![file_group.clone()])
+///       .build();
 ///
 ///     (DataSourceExec::from_data_source(new_config))
 ///   })
@@ -467,10 +468,50 @@ impl FileSource for ParquetSource {
         let projection = base_config
             .file_column_projection_indices()
             .unwrap_or_else(|| (0..base_config.file_schema.fields().len()).collect());
-        let schema_adapter_factory = self
-            .schema_adapter_factory
-            .clone()
-            .unwrap_or_else(|| Arc::new(DefaultSchemaAdapterFactory));
+
+        if self.schema_adapter_factory.is_some() {
+            log::warn!("The SchemaAdapter API will be removed from ParquetSource in a future release. \
+                Use PhysicalExprAdapterFactory API instead. \
+                See https://github.com/apache/datafusion/issues/16800 for discussion and https://datafusion.apache.org/library-user-guide/upgrading.html#datafusion-49-0-0 for upgrade instructions.");
+        }
+
+        let (expr_adapter_factory, schema_adapter_factory) = match (
+            base_config.expr_adapter_factory.as_ref(),
+            self.schema_adapter_factory.as_ref(),
+        ) {
+            (Some(expr_adapter_factory), Some(schema_adapter_factory)) => {
+                // Use both the schema adapter factory and the expr adapter factory.
+                // This results in the the SchemaAdapter being used for projections (e.g. a column was selected that is a UInt32 in the file and a UInt64 in the table schema)
+                // but the PhysicalExprAdapterFactory being used for predicate pushdown and stats pruning.
+                (
+                    Some(Arc::clone(expr_adapter_factory)),
+                    Arc::clone(schema_adapter_factory),
+                )
+            }
+            (Some(expr_adapter_factory), None) => {
+                // If no custom schema adapter factory is provided but an expr adapter factory is provided use the expr adapter factory alongside the default schema adapter factory.
+                // This means that the PhysicalExprAdapterFactory will be used for predicate pushdown and stats pruning, while the default schema adapter factory will be used for projections.
+                (
+                    Some(Arc::clone(expr_adapter_factory)),
+                    Arc::new(DefaultSchemaAdapterFactory) as _,
+                )
+            }
+            (None, Some(schema_adapter_factory)) => {
+                // If a custom schema adapter factory is provided but no expr adapter factory is provided use the custom SchemaAdapter for both projections and predicate pushdown.
+                // This maximizes compatiblity with existing code that uses the SchemaAdapter API and did not explicitly opt into the PhysicalExprAdapterFactory API.
+                (None, Arc::clone(schema_adapter_factory) as _)
+            }
+            (None, None) => {
+                // If no custom schema adapter factory or expr adapter factory is provided, use the default schema adapter factory and the default physical expr adapter factory.
+                // This means that the default SchemaAdapter will be used for projections (e.g. a column was selected that is a UInt32 in the file and a UInt64 in the table schema)
+                // and the default PhysicalExprAdapterFactory will be used for predicate pushdown and stats pruning.
+                // This is the default behavior with not customization and means that most users of DataFusion will be cut over to the new PhysicalExprAdapterFactory API.
+                (
+                    Some(Arc::new(DefaultPhysicalExprAdapterFactory) as _),
+                    Arc::new(DefaultSchemaAdapterFactory) as _,
+                )
+            }
+        };
 
         let parquet_file_reader_factory =
             self.parquet_file_reader_factory.clone().unwrap_or_else(|| {
@@ -510,6 +551,7 @@ impl FileSource for ParquetSource {
             schema_adapter_factory,
             coerce_int96,
             file_decryption_properties,
+            expr_adapter_factory,
         })
     }
 
