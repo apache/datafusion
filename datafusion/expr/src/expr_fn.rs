@@ -26,10 +26,11 @@ use crate::function::{
     StateFieldsArgs,
 };
 use crate::select_expr::SelectExpr;
+use crate::utils::{arc_ptr_eq, arc_ptr_hash};
 use crate::{
     conditional_expressions::CaseBuilder, expr::Sort, logical_plan::Subquery,
-    AggregateUDF, Expr, LogicalPlan, Operator, PartitionEvaluator, ScalarFunctionArgs,
-    ScalarFunctionImplementation, ScalarUDF, Signature, Volatility,
+    udf_equals_hash, AggregateUDF, Expr, LogicalPlan, Operator, PartitionEvaluator,
+    ScalarFunctionArgs, ScalarFunctionImplementation, ScalarUDF, Signature, Volatility,
 };
 use crate::{
     AggregateUDFImpl, ColumnarValue, ScalarUDFImpl, WindowFrame, WindowUDF, WindowUDFImpl,
@@ -409,6 +410,36 @@ pub struct SimpleScalarUDF {
     fun: ScalarFunctionImplementation,
 }
 
+impl PartialEq for SimpleScalarUDF {
+    fn eq(&self, other: &Self) -> bool {
+        let Self {
+            name,
+            signature,
+            return_type,
+            fun,
+        } = self;
+        name == &other.name
+            && signature == &other.signature
+            && return_type == &other.return_type
+            && arc_ptr_eq(fun, &other.fun)
+    }
+}
+
+impl Hash for SimpleScalarUDF {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        let Self {
+            name,
+            signature,
+            return_type,
+            fun,
+        } = self;
+        name.hash(state);
+        signature.hash(state);
+        return_type.hash(state);
+        arc_ptr_hash(fun, state);
+    }
+}
+
 impl Debug for SimpleScalarUDF {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.debug_struct("SimpleScalarUDF")
@@ -476,37 +507,7 @@ impl ScalarUDFImpl for SimpleScalarUDF {
         (self.fun)(&args.args)
     }
 
-    fn equals(&self, other: &dyn ScalarUDFImpl) -> bool {
-        let Some(other) = other.as_any().downcast_ref::<Self>() else {
-            return false;
-        };
-        let Self {
-            name,
-            signature,
-            return_type,
-            fun,
-        } = self;
-        name == &other.name
-            && signature == &other.signature
-            && return_type == &other.return_type
-            && Arc::ptr_eq(fun, &other.fun)
-    }
-
-    fn hash_value(&self) -> u64 {
-        let Self {
-            name,
-            signature,
-            return_type,
-            fun,
-        } = self;
-        let mut hasher = DefaultHasher::new();
-        std::any::type_name::<Self>().hash(&mut hasher);
-        name.hash(&mut hasher);
-        signature.hash(&mut hasher);
-        return_type.hash(&mut hasher);
-        Arc::as_ptr(fun).hash(&mut hasher);
-        hasher.finish()
-    }
+    udf_equals_hash!(ScalarUDFImpl);
 }
 
 /// Creates a new UDAF with a specific signature, state type and return type.

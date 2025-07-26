@@ -169,7 +169,7 @@ use object_store::ObjectStore;
 /// ```no_run
 /// # use std::sync::Arc;
 /// # use arrow::datatypes::Schema;
-/// # use datafusion_datasource::file_scan_config::FileScanConfig;
+/// # use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 /// # use datafusion_datasource::PartitionedFile;
 /// # use datafusion_datasource::source::DataSourceExec;
 ///
@@ -183,9 +183,9 @@ use object_store::ObjectStore;
 ///   .iter()
 ///   .map(|file_group| {
 ///     // create a new exec by copying the existing exec's source config
-///     let new_config = base_config
-///         .clone()
-///        .with_file_groups(vec![file_group.clone()]);
+///     let new_config = FileScanConfigBuilder::from(base_config.clone())
+///        .with_file_groups(vec![file_group.clone()])
+///       .build();
 ///
 ///     (DataSourceExec::from_data_source(new_config))
 ///   })
