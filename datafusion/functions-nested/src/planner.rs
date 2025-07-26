@@ -31,6 +31,7 @@ use datafusion_functions::core::get_field as get_field_inner;
 use datafusion_functions::expr_fn::get_field;
 use datafusion_functions_aggregate::nth_value::nth_value_udaf;
 use sqlparser::ast::BinaryOperator;
+use std::intrinsics::unreachable;
 use std::sync::Arc;
 
 use crate::map::map_udf;
@@ -95,8 +96,46 @@ impl ExprPlanner for NestedFunctionPlanner {
             && matches!(left.get_type(schema)?, DataType::Date32)
             && matches!(right.get_type(schema)?, DataType::Int32 | DataType::Int64)
         {
-            // FIXME
-            return Ok(PlannerResult::Planned(array_concat(vec![left, right])));
+            use datafusion_common::ScalarValue;
+            use datafusion_expr::BinaryExpr;
+            use datafusion_expr::Operator;
+            use sqlparser::ast::BinaryOperator;
+
+            let op = match op {
+                BinaryOperator::Plus => Operator::Plus,
+                BinaryOperator::Minus => Operator::Minus,
+                _ => unreachable!(),
+            };
+
+            // let new_right = match right {
+            //     Expr::Literal(ScalarValue::Int32(Option(i))) => {
+            //         let days = format!("{} days", i);
+            //         Expr::Literal(ScalarValue::Utf8(Some(days)))
+            //     }
+            //     _ => unreachable!(),
+            // };
+
+            let new_right = match right {
+                Expr::Literal(scalar_value, meta) => match scalar_value {
+                    ScalarValue::Int32(Some(i)) => {
+                        let days = format!("{} days", i);
+                        Expr::Literal(ScalarValue::Utf8(Some(days)), meta)
+                    }
+                    ScalarValue::Int64(Some(i)) => {
+                        let days = format!("{} days", i);
+                        Expr::Literal(ScalarValue::Utf8(Some(days)), meta)
+                    }
+                    _ => unreachable!(),
+                },
+                _ => unreachable!(),
+            };
+
+            let planned = Expr::BinaryExpr(BinaryExpr {
+                left: Box::new(left.clone()),
+                right: Box::new(right.clone()),
+                op,
+            });
+            return Ok(PlannerResult::Planned(planned));
         }
 
         Ok(PlannerResult::Original(RawBinaryExpr { op, left, right }))
