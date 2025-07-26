@@ -712,6 +712,7 @@ fn test_output_req_after_projection() -> Result<()> {
             Arc::new(Column::new("a", 0)),
             Arc::new(Column::new("b", 1)),
         ]),
+        None,
     ));
     let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
         vec![
