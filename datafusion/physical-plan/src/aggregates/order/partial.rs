@@ -61,7 +61,7 @@ use datafusion_expr::EmitTo;
 ///  group indices
 /// (in group value  group_values               current tracks the most
 ///      order)                                    recent group index
-///```
+/// ```
 #[derive(Debug)]
 pub struct GroupOrderingPartial {
     /// State machine

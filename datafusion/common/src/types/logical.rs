@@ -67,12 +67,12 @@ pub type LogicalTypeRef = Arc<dyn LogicalType>;
 ///         &NativeType::String
 ///     }
 ///
-///    fn signature(&self) -> TypeSignature<'_> {
-///        TypeSignature::Extension {
-///            name: "JSON",
-///            parameters: &[],
-///        }
-///    }
+///     fn signature(&self) -> TypeSignature<'_> {
+///         TypeSignature::Extension {
+///             name: "JSON",
+///             parameters: &[],
+///         }
+///     }
 /// }
 /// ```
 pub trait LogicalType: Sync + Send {

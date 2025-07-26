@@ -42,13 +42,15 @@ impl DataFrame {
     /// use datafusion::dataframe::DataFrameWriteOptions;
     /// let ctx = SessionContext::new();
     /// // Sort the data by column "b" and write it to a new location
-    /// ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?
-    ///   .sort(vec![col("b").sort(true, true)])? // sort by b asc, nulls first
-    ///   .write_parquet(
-    ///     "output.parquet",
-    ///     DataFrameWriteOptions::new(),
-    ///     None, // can also specify parquet writing options here
-    /// ).await?;
+    /// ctx.read_csv("tests/data/example.csv", CsvReadOptions::new())
+    ///     .await?
+    ///     .sort(vec![col("b").sort(true, true)])? // sort by b asc, nulls first
+    ///     .write_parquet(
+    ///         "output.parquet",
+    ///         DataFrameWriteOptions::new(),
+    ///         None, // can also specify parquet writing options here
+    ///     )
+    ///     .await?;
     /// # fs::remove_file("output.parquet")?;
     /// # Ok(())
     /// # }

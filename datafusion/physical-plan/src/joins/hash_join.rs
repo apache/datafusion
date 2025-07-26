@@ -216,7 +216,7 @@ impl JoinLeftData {
 ///
 ///
 /// ```text
-///
+/// 
 ///  Original build-side data   Inserting build-side values into hashmap    Concatenated build-side batch
 ///                                                                         ┌───────────────────────────┐
 ///                             hashmap.insert(row-hash, row-idx + offset)  │                      idx  │
@@ -241,7 +241,6 @@ impl JoinLeftData {
 ///            └───────┘                                                    │          └───────┘        │
 ///                                                                         │                           │
 ///                                                                         └───────────────────────────┘
-///
 /// ```
 ///
 /// 2. the **probe phase** where the tuples of the probe side are streamed
@@ -276,7 +275,6 @@ impl JoinLeftData {
 ///     └────────────┘                                            └────────────┘
 ///
 ///        build side                                                probe side
-///
 /// ```
 ///
 /// # Example "Optimal" Plans
@@ -1155,7 +1153,7 @@ impl BuildSide {
 /// Expected state transitions performed by HashJoinStream are:
 ///
 /// ```text
-///
+/// 
 ///       WaitBuildSide
 ///             │
 ///             ▼
@@ -1163,7 +1161,6 @@ impl BuildSide {
 ///  │          │
 ///  │          ▼
 ///  └─ ProcessProbeBatch
-///
 /// ```
 #[derive(Debug, Clone)]
 enum HashJoinStreamState {

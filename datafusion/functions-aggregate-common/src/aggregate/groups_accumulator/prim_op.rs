@@ -142,7 +142,6 @@ where
     /// The state is:
     /// - self.prim_fn for all non null, non filtered values
     /// - null otherwise
-    ///
     fn convert_to_state(
         &self,
         values: &[ArrayRef],

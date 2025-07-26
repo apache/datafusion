@@ -307,7 +307,6 @@ impl WindowFrame {
 /// 3. CURRENT ROW
 /// 4. `<expr>` FOLLOWING
 /// 5. UNBOUNDED FOLLOWING
-///
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub enum WindowFrameBound {
     /// 1. UNBOUNDED PRECEDING

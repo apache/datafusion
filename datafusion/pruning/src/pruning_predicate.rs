@@ -882,7 +882,7 @@ impl From<Vec<(phys_expr::Column, StatisticsType, Field)>> for RequiredColumns {
 /// ```text
 /// ("s1", Min, Field:s1_min)
 /// ("s2", Max, field:s2_max)
-///```
+/// ```
 ///
 /// And the input statistics had
 /// ```text
@@ -5108,7 +5108,6 @@ mod tests {
     ///
     /// `expected` is a vector of bools, where true means the row group should
     /// be kept, and false means it should be pruned.
-    ///
     // TODO refactor other tests to use this to reduce boiler plate
     fn prune_with_expr(
         expr: Expr,
