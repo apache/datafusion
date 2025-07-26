@@ -256,3 +256,7 @@ name = "dataframe"
 [[bench]]
 harness = false
 name = "spm"
+
+[[bench]]
+harness = false
+name = "partial_sort_benchmark"
