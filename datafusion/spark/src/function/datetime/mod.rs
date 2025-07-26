@@ -15,11 +15,24 @@
 // specific language governing permissions and limitations
 // under the License.
 
+pub mod last_day;
+
 use datafusion_expr::ScalarUDF;
+use datafusion_functions::make_udf_function;
 use std::sync::Arc;
 
-pub mod expr_fn {}
+make_udf_function!(last_day::SparkLastDay, last_day);
+
+pub mod expr_fn {
+    use datafusion_functions::export_functions;
+
+    export_functions!((
+        last_day,
+        "Returns the last day of the month which the date belongs to.",
+        arg1
+    ));
+}
 
 pub fn functions() -> Vec<Arc<ScalarUDF>> {
-    vec![]
+    vec![last_day()]
 }
