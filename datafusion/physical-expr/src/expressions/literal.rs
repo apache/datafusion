@@ -36,7 +36,7 @@ use datafusion_expr_common::interval_arithmetic::Interval;
 use datafusion_expr_common::sort_properties::{ExprProperties, SortProperties};
 
 /// Represents a literal value
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Literal {
     value: ScalarValue,
     field: FieldRef,
