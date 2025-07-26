@@ -123,7 +123,10 @@ pub struct ListingTableScanNode {
     pub target_partitions: u32,
     #[prost(message, repeated, tag = "13")]
     pub file_sort_order: ::prost::alloc::vec::Vec<SortExprNodeCollection>,
-    #[prost(oneof = "listing_table_scan_node::FileFormatType", tags = "10, 11, 12, 15")]
+    #[prost(
+        oneof = "listing_table_scan_node::FileFormatType",
+        tags = "10, 11, 12, 15, 16"
+    )]
     pub file_format_type: ::core::option::Option<
         listing_table_scan_node::FileFormatType,
     >,
@@ -140,6 +143,8 @@ pub mod listing_table_scan_node {
         Avro(super::super::datafusion_common::AvroFormat),
         #[prost(message, tag = "15")]
         Json(super::super::datafusion_common::NdJsonFormat),
+        #[prost(message, tag = "16")]
+        Arrow(super::super::datafusion_common::ArrowFormat),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1305,6 +1310,8 @@ pub struct PhysicalScalarUdfNode {
     pub return_type: ::core::option::Option<super::datafusion_common::ArrowType>,
     #[prost(bool, tag = "5")]
     pub nullable: bool,
+    #[prost(string, tag = "6")]
+    pub return_field_name: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PhysicalAggregateExprNode {
@@ -1318,6 +1325,8 @@ pub struct PhysicalAggregateExprNode {
     pub ignore_nulls: bool,
     #[prost(bytes = "vec", optional, tag = "7")]
     pub fun_definition: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
+    #[prost(string, tag = "8")]
+    pub human_display: ::prost::alloc::string::String,
     #[prost(oneof = "physical_aggregate_expr_node::AggregateFunction", tags = "4")]
     pub aggregate_function: ::core::option::Option<
         physical_aggregate_expr_node::AggregateFunction,

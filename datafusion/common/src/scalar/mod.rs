@@ -17,6 +17,7 @@
 
 //! [`ScalarValue`]: stores single  values
 
+mod cache;
 mod consts;
 mod struct_builder;
 
@@ -81,6 +82,7 @@ use arrow::datatypes::{
     UInt32Type, UInt64Type, UInt8Type, UnionFields, UnionMode, DECIMAL128_MAX_PRECISION,
 };
 use arrow::util::display::{array_value_to_string, ArrayFormatter, FormatOptions};
+use cache::{get_or_create_cached_key_array, get_or_create_cached_null_array};
 use chrono::{Duration, NaiveDate};
 use half::f16;
 pub use struct_builder::ScalarStructBuilder;
@@ -864,15 +866,9 @@ fn dict_from_scalar<K: ArrowDictionaryKeyType>(
     let values_array = value.to_array_of_size(1)?;
 
     // Create a key array with `size` elements, each of 0
-    let key_array: PrimitiveArray<K> = repeat_n(
-        if value.is_null() {
-            None
-        } else {
-            Some(K::default_value())
-        },
-        size,
-    )
-    .collect();
+    // Use cache to avoid repeated allocations for the same size
+    let key_array: PrimitiveArray<K> =
+        get_or_create_cached_key_array::<K>(size, value.is_null());
 
     // create a new DictionaryArray
     //
@@ -1366,6 +1362,144 @@ impl ScalarValue {
                 );
             }
         })
+    }
+
+    /// Returns a default value for the given `DataType`.
+    ///
+    /// This function is useful when you need to initialize a column with
+    /// non-null values in a DataFrame or when you need a "zero" value
+    /// for a specific data type.
+    ///
+    /// # Default Values
+    ///
+    /// - **Numeric types**: Returns zero (via [`new_zero`])
+    /// - **String types**: Returns empty string (`""`)
+    /// - **Binary types**: Returns empty byte array
+    /// - **Temporal types**: Returns zero/epoch value
+    /// - **List types**: Returns empty list
+    /// - **Struct types**: Returns struct with all fields set to their defaults
+    /// - **Dictionary types**: Returns dictionary with default value
+    /// - **Map types**: Returns empty map
+    /// - **Union types**: Returns first variant with default value
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for data types that don't have a clear default value
+    /// or are not yet supported (e.g., `RunEndEncoded`).
+    ///
+    /// [`new_zero`]: Self::new_zero
+    pub fn new_default(datatype: &DataType) -> Result<ScalarValue> {
+        match datatype {
+            // Null type
+            DataType::Null => Ok(ScalarValue::Null),
+
+            // Numeric types
+            DataType::Boolean
+            | DataType::Int8
+            | DataType::Int16
+            | DataType::Int32
+            | DataType::Int64
+            | DataType::UInt8
+            | DataType::UInt16
+            | DataType::UInt32
+            | DataType::UInt64
+            | DataType::Float16
+            | DataType::Float32
+            | DataType::Float64
+            | DataType::Decimal128(_, _)
+            | DataType::Decimal256(_, _)
+            | DataType::Timestamp(_, _)
+            | DataType::Time32(_)
+            | DataType::Time64(_)
+            | DataType::Interval(_)
+            | DataType::Duration(_)
+            | DataType::Date32
+            | DataType::Date64 => ScalarValue::new_zero(datatype),
+
+            // String types
+            DataType::Utf8 => Ok(ScalarValue::Utf8(Some("".to_string()))),
+            DataType::LargeUtf8 => Ok(ScalarValue::LargeUtf8(Some("".to_string()))),
+            DataType::Utf8View => Ok(ScalarValue::Utf8View(Some("".to_string()))),
+
+            // Binary types
+            DataType::Binary => Ok(ScalarValue::Binary(Some(vec![]))),
+            DataType::LargeBinary => Ok(ScalarValue::LargeBinary(Some(vec![]))),
+            DataType::BinaryView => Ok(ScalarValue::BinaryView(Some(vec![]))),
+
+            // Fixed-size binary
+            DataType::FixedSizeBinary(size) => Ok(ScalarValue::FixedSizeBinary(
+                *size,
+                Some(vec![0; *size as usize]),
+            )),
+
+            // List types
+            DataType::List(field) => {
+                let list =
+                    ScalarValue::new_list(&[], field.data_type(), field.is_nullable());
+                Ok(ScalarValue::List(list))
+            }
+            DataType::FixedSizeList(field, _size) => {
+                let empty_arr = new_empty_array(field.data_type());
+                let values = Arc::new(
+                    SingleRowListArrayBuilder::new(empty_arr)
+                        .with_nullable(field.is_nullable())
+                        .build_fixed_size_list_array(0),
+                );
+                Ok(ScalarValue::FixedSizeList(values))
+            }
+            DataType::LargeList(field) => {
+                let list = ScalarValue::new_large_list(&[], field.data_type());
+                Ok(ScalarValue::LargeList(list))
+            }
+
+            // Struct types
+            DataType::Struct(fields) => {
+                let values = fields
+                    .iter()
+                    .map(|f| ScalarValue::new_default(f.data_type()))
+                    .collect::<Result<Vec<_>>>()?;
+                Ok(ScalarValue::Struct(Arc::new(StructArray::new(
+                    fields.clone(),
+                    values
+                        .into_iter()
+                        .map(|v| v.to_array())
+                        .collect::<Result<_>>()?,
+                    None,
+                ))))
+            }
+
+            // Dictionary types
+            DataType::Dictionary(key_type, value_type) => Ok(ScalarValue::Dictionary(
+                key_type.clone(),
+                Box::new(ScalarValue::new_default(value_type)?),
+            )),
+
+            // Map types
+            DataType::Map(field, _) => Ok(ScalarValue::Map(Arc::new(MapArray::from(
+                ArrayData::new_empty(field.data_type()),
+            )))),
+
+            // Union types - return first variant with default value
+            DataType::Union(fields, mode) => {
+                if let Some((type_id, field)) = fields.iter().next() {
+                    let default_value = ScalarValue::new_default(field.data_type())?;
+                    Ok(ScalarValue::Union(
+                        Some((type_id, Box::new(default_value))),
+                        fields.clone(),
+                        *mode,
+                    ))
+                } else {
+                    _internal_err!("Union type must have at least one field")
+                }
+            }
+
+            // Unsupported types for now
+            _ => {
+                _not_impl_err!(
+                    "Default value for data_type \"{datatype:?}\" is not implemented yet"
+                )
+            }
+        }
     }
 
     /// Create an one value in the given type.
@@ -2677,7 +2811,7 @@ impl ScalarValue {
                     _ => unreachable!("Invalid dictionary keys type: {:?}", key_type),
                 }
             }
-            ScalarValue::Null => new_null_array(&DataType::Null, size),
+            ScalarValue::Null => get_or_create_cached_null_array(size),
         })
     }
 
@@ -3075,43 +3209,7 @@ impl ScalarValue {
         target_type: &DataType,
         cast_options: &CastOptions<'static>,
     ) -> Result<Self> {
-        let scalar_array = match (self, target_type) {
-            (
-                ScalarValue::Float64(Some(float_ts)),
-                DataType::Timestamp(TimeUnit::Nanosecond, None),
-            ) => ScalarValue::Int64(Some((float_ts * 1_000_000_000_f64).trunc() as i64))
-                .to_array()?,
-            (
-                ScalarValue::Decimal128(Some(decimal_value), _, scale),
-                DataType::Timestamp(time_unit, None),
-            ) => {
-                let scale_factor = 10_i128.pow(*scale as u32);
-                let seconds = decimal_value / scale_factor;
-                let fraction = decimal_value % scale_factor;
-
-                let timestamp_value = match time_unit {
-                    TimeUnit::Second => ScalarValue::Int64(Some(seconds as i64)),
-                    TimeUnit::Millisecond => {
-                        let millis = seconds * 1_000 + (fraction * 1_000) / scale_factor;
-                        ScalarValue::Int64(Some(millis as i64))
-                    }
-                    TimeUnit::Microsecond => {
-                        let micros =
-                            seconds * 1_000_000 + (fraction * 1_000_000) / scale_factor;
-                        ScalarValue::Int64(Some(micros as i64))
-                    }
-                    TimeUnit::Nanosecond => {
-                        let nanos = seconds * 1_000_000_000
-                            + (fraction * 1_000_000_000) / scale_factor;
-                        ScalarValue::Int64(Some(nanos as i64))
-                    }
-                };
-
-                timestamp_value.to_array()?
-            }
-            _ => self.to_array()?,
-        };
-
+        let scalar_array = self.to_array()?;
         let cast_arr = cast_with_options(&scalar_array, target_type, cast_options)?;
         ScalarValue::try_from_array(&cast_arr, 0)
     }
@@ -3559,6 +3657,201 @@ impl ScalarValue {
     pub fn compacted(mut self) -> Self {
         self.compact();
         self
+    }
+
+    /// Returns the minimum value for the given numeric `DataType`.
+    ///
+    /// This function returns the smallest representable value for numeric
+    /// and temporal data types. For non-numeric types, it returns `None`.
+    ///
+    /// # Supported Types
+    ///
+    /// - **Integer types**: `i8::MIN`, `i16::MIN`, etc.
+    /// - **Unsigned types**: Always 0 (`u8::MIN`, `u16::MIN`, etc.)
+    /// - **Float types**: Negative infinity (IEEE 754)
+    /// - **Decimal types**: Smallest value based on precision
+    /// - **Temporal types**: Minimum timestamp/date values
+    /// - **Time types**: 0 (midnight)
+    /// - **Duration types**: `i64::MIN`
+    pub fn min(datatype: &DataType) -> Option<ScalarValue> {
+        match datatype {
+            DataType::Int8 => Some(ScalarValue::Int8(Some(i8::MIN))),
+            DataType::Int16 => Some(ScalarValue::Int16(Some(i16::MIN))),
+            DataType::Int32 => Some(ScalarValue::Int32(Some(i32::MIN))),
+            DataType::Int64 => Some(ScalarValue::Int64(Some(i64::MIN))),
+            DataType::UInt8 => Some(ScalarValue::UInt8(Some(u8::MIN))),
+            DataType::UInt16 => Some(ScalarValue::UInt16(Some(u16::MIN))),
+            DataType::UInt32 => Some(ScalarValue::UInt32(Some(u32::MIN))),
+            DataType::UInt64 => Some(ScalarValue::UInt64(Some(u64::MIN))),
+            DataType::Float16 => Some(ScalarValue::Float16(Some(f16::NEG_INFINITY))),
+            DataType::Float32 => Some(ScalarValue::Float32(Some(f32::NEG_INFINITY))),
+            DataType::Float64 => Some(ScalarValue::Float64(Some(f64::NEG_INFINITY))),
+            DataType::Decimal128(precision, scale) => {
+                // For decimal, min is -10^(precision-scale) + 10^(-scale)
+                // But for simplicity, we use the minimum i128 value that fits the precision
+                let max_digits = 10_i128.pow(*precision as u32) - 1;
+                Some(ScalarValue::Decimal128(
+                    Some(-max_digits),
+                    *precision,
+                    *scale,
+                ))
+            }
+            DataType::Decimal256(precision, scale) => {
+                // Similar to Decimal128 but with i256
+                // For now, use a large negative value
+                let max_digits = i256::from_i128(10_i128)
+                    .checked_pow(*precision as u32)
+                    .and_then(|v| v.checked_sub(i256::from_i128(1)))
+                    .unwrap_or(i256::MAX);
+                Some(ScalarValue::Decimal256(
+                    Some(max_digits.neg_wrapping()),
+                    *precision,
+                    *scale,
+                ))
+            }
+            DataType::Date32 => Some(ScalarValue::Date32(Some(i32::MIN))),
+            DataType::Date64 => Some(ScalarValue::Date64(Some(i64::MIN))),
+            DataType::Time32(TimeUnit::Second) => {
+                Some(ScalarValue::Time32Second(Some(0)))
+            }
+            DataType::Time32(TimeUnit::Millisecond) => {
+                Some(ScalarValue::Time32Millisecond(Some(0)))
+            }
+            DataType::Time64(TimeUnit::Microsecond) => {
+                Some(ScalarValue::Time64Microsecond(Some(0)))
+            }
+            DataType::Time64(TimeUnit::Nanosecond) => {
+                Some(ScalarValue::Time64Nanosecond(Some(0)))
+            }
+            DataType::Timestamp(unit, tz) => match unit {
+                TimeUnit::Second => {
+                    Some(ScalarValue::TimestampSecond(Some(i64::MIN), tz.clone()))
+                }
+                TimeUnit::Millisecond => Some(ScalarValue::TimestampMillisecond(
+                    Some(i64::MIN),
+                    tz.clone(),
+                )),
+                TimeUnit::Microsecond => Some(ScalarValue::TimestampMicrosecond(
+                    Some(i64::MIN),
+                    tz.clone(),
+                )),
+                TimeUnit::Nanosecond => {
+                    Some(ScalarValue::TimestampNanosecond(Some(i64::MIN), tz.clone()))
+                }
+            },
+            DataType::Duration(unit) => match unit {
+                TimeUnit::Second => Some(ScalarValue::DurationSecond(Some(i64::MIN))),
+                TimeUnit::Millisecond => {
+                    Some(ScalarValue::DurationMillisecond(Some(i64::MIN)))
+                }
+                TimeUnit::Microsecond => {
+                    Some(ScalarValue::DurationMicrosecond(Some(i64::MIN)))
+                }
+                TimeUnit::Nanosecond => {
+                    Some(ScalarValue::DurationNanosecond(Some(i64::MIN)))
+                }
+            },
+            _ => None,
+        }
+    }
+
+    /// Returns the maximum value for the given numeric `DataType`.
+    ///
+    /// This function returns the largest representable value for numeric
+    /// and temporal data types. For non-numeric types, it returns `None`.
+    ///
+    /// # Supported Types
+    ///
+    /// - **Integer types**: `i8::MAX`, `i16::MAX`, etc.
+    /// - **Unsigned types**: `u8::MAX`, `u16::MAX`, etc.
+    /// - **Float types**: Positive infinity (IEEE 754)
+    /// - **Decimal types**: Largest value based on precision
+    /// - **Temporal types**: Maximum timestamp/date values
+    /// - **Time types**: Maximum time in the day (1 day - 1 unit)
+    /// - **Duration types**: `i64::MAX`
+    pub fn max(datatype: &DataType) -> Option<ScalarValue> {
+        match datatype {
+            DataType::Int8 => Some(ScalarValue::Int8(Some(i8::MAX))),
+            DataType::Int16 => Some(ScalarValue::Int16(Some(i16::MAX))),
+            DataType::Int32 => Some(ScalarValue::Int32(Some(i32::MAX))),
+            DataType::Int64 => Some(ScalarValue::Int64(Some(i64::MAX))),
+            DataType::UInt8 => Some(ScalarValue::UInt8(Some(u8::MAX))),
+            DataType::UInt16 => Some(ScalarValue::UInt16(Some(u16::MAX))),
+            DataType::UInt32 => Some(ScalarValue::UInt32(Some(u32::MAX))),
+            DataType::UInt64 => Some(ScalarValue::UInt64(Some(u64::MAX))),
+            DataType::Float16 => Some(ScalarValue::Float16(Some(f16::INFINITY))),
+            DataType::Float32 => Some(ScalarValue::Float32(Some(f32::INFINITY))),
+            DataType::Float64 => Some(ScalarValue::Float64(Some(f64::INFINITY))),
+            DataType::Decimal128(precision, scale) => {
+                // For decimal, max is 10^(precision-scale) - 10^(-scale)
+                // But for simplicity, we use the maximum i128 value that fits the precision
+                let max_digits = 10_i128.pow(*precision as u32) - 1;
+                Some(ScalarValue::Decimal128(
+                    Some(max_digits),
+                    *precision,
+                    *scale,
+                ))
+            }
+            DataType::Decimal256(precision, scale) => {
+                // Similar to Decimal128 but with i256
+                let max_digits = i256::from_i128(10_i128)
+                    .checked_pow(*precision as u32)
+                    .and_then(|v| v.checked_sub(i256::from_i128(1)))
+                    .unwrap_or(i256::MAX);
+                Some(ScalarValue::Decimal256(
+                    Some(max_digits),
+                    *precision,
+                    *scale,
+                ))
+            }
+            DataType::Date32 => Some(ScalarValue::Date32(Some(i32::MAX))),
+            DataType::Date64 => Some(ScalarValue::Date64(Some(i64::MAX))),
+            DataType::Time32(TimeUnit::Second) => {
+                // 86399 seconds = 23:59:59
+                Some(ScalarValue::Time32Second(Some(86_399)))
+            }
+            DataType::Time32(TimeUnit::Millisecond) => {
+                // 86_399_999 milliseconds = 23:59:59.999
+                Some(ScalarValue::Time32Millisecond(Some(86_399_999)))
+            }
+            DataType::Time64(TimeUnit::Microsecond) => {
+                // 86_399_999_999 microseconds = 23:59:59.999999
+                Some(ScalarValue::Time64Microsecond(Some(86_399_999_999)))
+            }
+            DataType::Time64(TimeUnit::Nanosecond) => {
+                // 86_399_999_999_999 nanoseconds = 23:59:59.999999999
+                Some(ScalarValue::Time64Nanosecond(Some(86_399_999_999_999)))
+            }
+            DataType::Timestamp(unit, tz) => match unit {
+                TimeUnit::Second => {
+                    Some(ScalarValue::TimestampSecond(Some(i64::MAX), tz.clone()))
+                }
+                TimeUnit::Millisecond => Some(ScalarValue::TimestampMillisecond(
+                    Some(i64::MAX),
+                    tz.clone(),
+                )),
+                TimeUnit::Microsecond => Some(ScalarValue::TimestampMicrosecond(
+                    Some(i64::MAX),
+                    tz.clone(),
+                )),
+                TimeUnit::Nanosecond => {
+                    Some(ScalarValue::TimestampNanosecond(Some(i64::MAX), tz.clone()))
+                }
+            },
+            DataType::Duration(unit) => match unit {
+                TimeUnit::Second => Some(ScalarValue::DurationSecond(Some(i64::MAX))),
+                TimeUnit::Millisecond => {
+                    Some(ScalarValue::DurationMillisecond(Some(i64::MAX)))
+                }
+                TimeUnit::Microsecond => {
+                    Some(ScalarValue::DurationMicrosecond(Some(i64::MAX)))
+                }
+                TimeUnit::Nanosecond => {
+                    Some(ScalarValue::DurationNanosecond(Some(i64::MAX)))
+                }
+            },
+            _ => None,
+        }
     }
 }
 
@@ -7741,5 +8034,324 @@ mod tests {
             actual.starts_with(expected_prefix),
             "Expected '{actual}' to start with '{expected_prefix}'"
         );
+    }
+
+    #[test]
+    fn test_new_default() {
+        // Test numeric types
+        assert_eq!(
+            ScalarValue::new_default(&DataType::Int32).unwrap(),
+            ScalarValue::Int32(Some(0))
+        );
+        assert_eq!(
+            ScalarValue::new_default(&DataType::Float64).unwrap(),
+            ScalarValue::Float64(Some(0.0))
+        );
+        assert_eq!(
+            ScalarValue::new_default(&DataType::Boolean).unwrap(),
+            ScalarValue::Boolean(Some(false))
+        );
+
+        // Test string types
+        assert_eq!(
+            ScalarValue::new_default(&DataType::Utf8).unwrap(),
+            ScalarValue::Utf8(Some("".to_string()))
+        );
+        assert_eq!(
+            ScalarValue::new_default(&DataType::LargeUtf8).unwrap(),
+            ScalarValue::LargeUtf8(Some("".to_string()))
+        );
+
+        // Test binary types
+        assert_eq!(
+            ScalarValue::new_default(&DataType::Binary).unwrap(),
+            ScalarValue::Binary(Some(vec![]))
+        );
+
+        // Test fixed size binary
+        assert_eq!(
+            ScalarValue::new_default(&DataType::FixedSizeBinary(5)).unwrap(),
+            ScalarValue::FixedSizeBinary(5, Some(vec![0, 0, 0, 0, 0]))
+        );
+
+        // Test temporal types
+        assert_eq!(
+            ScalarValue::new_default(&DataType::Date32).unwrap(),
+            ScalarValue::Date32(Some(0))
+        );
+        assert_eq!(
+            ScalarValue::new_default(&DataType::Time32(TimeUnit::Second)).unwrap(),
+            ScalarValue::Time32Second(Some(0))
+        );
+
+        // Test decimal types
+        assert_eq!(
+            ScalarValue::new_default(&DataType::Decimal128(10, 2)).unwrap(),
+            ScalarValue::Decimal128(Some(0), 10, 2)
+        );
+
+        // Test list type
+        let list_field = Field::new_list_field(DataType::Int32, true);
+        let list_result =
+            ScalarValue::new_default(&DataType::List(Arc::new(list_field.clone())))
+                .unwrap();
+        match list_result {
+            ScalarValue::List(arr) => {
+                assert_eq!(arr.len(), 1);
+                assert_eq!(arr.value_length(0), 0); // empty list
+            }
+            _ => panic!("Expected List"),
+        }
+
+        // Test struct type
+        let struct_fields = Fields::from(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Utf8, false),
+        ]);
+        let struct_result =
+            ScalarValue::new_default(&DataType::Struct(struct_fields.clone())).unwrap();
+        match struct_result {
+            ScalarValue::Struct(arr) => {
+                assert_eq!(arr.len(), 1);
+                assert_eq!(arr.column(0).as_primitive::<Int32Type>().value(0), 0);
+                assert_eq!(arr.column(1).as_string::<i32>().value(0), "");
+            }
+            _ => panic!("Expected Struct"),
+        }
+
+        // Test union type
+        let union_fields = UnionFields::new(
+            vec![0, 1],
+            vec![
+                Field::new("i32", DataType::Int32, false),
+                Field::new("f64", DataType::Float64, false),
+            ],
+        );
+        let union_result = ScalarValue::new_default(&DataType::Union(
+            union_fields.clone(),
+            UnionMode::Sparse,
+        ))
+        .unwrap();
+        match union_result {
+            ScalarValue::Union(Some((type_id, value)), _, _) => {
+                assert_eq!(type_id, 0);
+                assert_eq!(*value, ScalarValue::Int32(Some(0)));
+            }
+            _ => panic!("Expected Union"),
+        }
+    }
+
+    #[test]
+    fn test_scalar_min() {
+        // Test integer types
+        assert_eq!(
+            ScalarValue::min(&DataType::Int8),
+            Some(ScalarValue::Int8(Some(i8::MIN)))
+        );
+        assert_eq!(
+            ScalarValue::min(&DataType::Int32),
+            Some(ScalarValue::Int32(Some(i32::MIN)))
+        );
+        assert_eq!(
+            ScalarValue::min(&DataType::UInt8),
+            Some(ScalarValue::UInt8(Some(0)))
+        );
+        assert_eq!(
+            ScalarValue::min(&DataType::UInt64),
+            Some(ScalarValue::UInt64(Some(0)))
+        );
+
+        // Test float types
+        assert_eq!(
+            ScalarValue::min(&DataType::Float32),
+            Some(ScalarValue::Float32(Some(f32::NEG_INFINITY)))
+        );
+        assert_eq!(
+            ScalarValue::min(&DataType::Float64),
+            Some(ScalarValue::Float64(Some(f64::NEG_INFINITY)))
+        );
+
+        // Test decimal types
+        let decimal_min = ScalarValue::min(&DataType::Decimal128(5, 2)).unwrap();
+        match decimal_min {
+            ScalarValue::Decimal128(Some(val), 5, 2) => {
+                assert_eq!(val, -99999); // -999.99 with scale 2
+            }
+            _ => panic!("Expected Decimal128"),
+        }
+
+        // Test temporal types
+        assert_eq!(
+            ScalarValue::min(&DataType::Date32),
+            Some(ScalarValue::Date32(Some(i32::MIN)))
+        );
+        assert_eq!(
+            ScalarValue::min(&DataType::Time32(TimeUnit::Second)),
+            Some(ScalarValue::Time32Second(Some(0)))
+        );
+        assert_eq!(
+            ScalarValue::min(&DataType::Timestamp(TimeUnit::Nanosecond, None)),
+            Some(ScalarValue::TimestampNanosecond(Some(i64::MIN), None))
+        );
+
+        // Test duration types
+        assert_eq!(
+            ScalarValue::min(&DataType::Duration(TimeUnit::Second)),
+            Some(ScalarValue::DurationSecond(Some(i64::MIN)))
+        );
+
+        // Test unsupported types
+        assert_eq!(ScalarValue::min(&DataType::Utf8), None);
+        assert_eq!(ScalarValue::min(&DataType::Binary), None);
+        assert_eq!(
+            ScalarValue::min(&DataType::List(Arc::new(Field::new(
+                "item",
+                DataType::Int32,
+                true
+            )))),
+            None
+        );
+    }
+
+    #[test]
+    fn test_scalar_max() {
+        // Test integer types
+        assert_eq!(
+            ScalarValue::max(&DataType::Int8),
+            Some(ScalarValue::Int8(Some(i8::MAX)))
+        );
+        assert_eq!(
+            ScalarValue::max(&DataType::Int32),
+            Some(ScalarValue::Int32(Some(i32::MAX)))
+        );
+        assert_eq!(
+            ScalarValue::max(&DataType::UInt8),
+            Some(ScalarValue::UInt8(Some(u8::MAX)))
+        );
+        assert_eq!(
+            ScalarValue::max(&DataType::UInt64),
+            Some(ScalarValue::UInt64(Some(u64::MAX)))
+        );
+
+        // Test float types
+        assert_eq!(
+            ScalarValue::max(&DataType::Float32),
+            Some(ScalarValue::Float32(Some(f32::INFINITY)))
+        );
+        assert_eq!(
+            ScalarValue::max(&DataType::Float64),
+            Some(ScalarValue::Float64(Some(f64::INFINITY)))
+        );
+
+        // Test decimal types
+        let decimal_max = ScalarValue::max(&DataType::Decimal128(5, 2)).unwrap();
+        match decimal_max {
+            ScalarValue::Decimal128(Some(val), 5, 2) => {
+                assert_eq!(val, 99999); // 999.99 with scale 2
+            }
+            _ => panic!("Expected Decimal128"),
+        }
+
+        // Test temporal types
+        assert_eq!(
+            ScalarValue::max(&DataType::Date32),
+            Some(ScalarValue::Date32(Some(i32::MAX)))
+        );
+        assert_eq!(
+            ScalarValue::max(&DataType::Time32(TimeUnit::Second)),
+            Some(ScalarValue::Time32Second(Some(86_399))) // 23:59:59
+        );
+        assert_eq!(
+            ScalarValue::max(&DataType::Time64(TimeUnit::Microsecond)),
+            Some(ScalarValue::Time64Microsecond(Some(86_399_999_999))) // 23:59:59.999999
+        );
+        assert_eq!(
+            ScalarValue::max(&DataType::Timestamp(TimeUnit::Nanosecond, None)),
+            Some(ScalarValue::TimestampNanosecond(Some(i64::MAX), None))
+        );
+
+        // Test duration types
+        assert_eq!(
+            ScalarValue::max(&DataType::Duration(TimeUnit::Millisecond)),
+            Some(ScalarValue::DurationMillisecond(Some(i64::MAX)))
+        );
+
+        // Test unsupported types
+        assert_eq!(ScalarValue::max(&DataType::Utf8), None);
+        assert_eq!(ScalarValue::max(&DataType::Binary), None);
+        assert_eq!(
+            ScalarValue::max(&DataType::Struct(Fields::from(vec![Field::new(
+                "field",
+                DataType::Int32,
+                true
+            )]))),
+            None
+        );
+    }
+
+    #[test]
+    fn test_min_max_float16() {
+        // Test Float16 min and max
+        let min_f16 = ScalarValue::min(&DataType::Float16).unwrap();
+        match min_f16 {
+            ScalarValue::Float16(Some(val)) => {
+                assert_eq!(val, f16::NEG_INFINITY);
+            }
+            _ => panic!("Expected Float16"),
+        }
+
+        let max_f16 = ScalarValue::max(&DataType::Float16).unwrap();
+        match max_f16 {
+            ScalarValue::Float16(Some(val)) => {
+                assert_eq!(val, f16::INFINITY);
+            }
+            _ => panic!("Expected Float16"),
+        }
+    }
+
+    #[test]
+    fn test_new_default_interval() {
+        // Test all interval types
+        assert_eq!(
+            ScalarValue::new_default(&DataType::Interval(IntervalUnit::YearMonth))
+                .unwrap(),
+            ScalarValue::IntervalYearMonth(Some(0))
+        );
+        assert_eq!(
+            ScalarValue::new_default(&DataType::Interval(IntervalUnit::DayTime)).unwrap(),
+            ScalarValue::IntervalDayTime(Some(IntervalDayTime::ZERO))
+        );
+        assert_eq!(
+            ScalarValue::new_default(&DataType::Interval(IntervalUnit::MonthDayNano))
+                .unwrap(),
+            ScalarValue::IntervalMonthDayNano(Some(IntervalMonthDayNano::ZERO))
+        );
+    }
+
+    #[test]
+    fn test_min_max_with_timezone() {
+        let tz = Some(Arc::from("UTC"));
+
+        // Test timestamp with timezone
+        let min_ts =
+            ScalarValue::min(&DataType::Timestamp(TimeUnit::Second, tz.clone())).unwrap();
+        match min_ts {
+            ScalarValue::TimestampSecond(Some(val), Some(tz_str)) => {
+                assert_eq!(val, i64::MIN);
+                assert_eq!(tz_str.as_ref(), "UTC");
+            }
+            _ => panic!("Expected TimestampSecond with timezone"),
+        }
+
+        let max_ts =
+            ScalarValue::max(&DataType::Timestamp(TimeUnit::Millisecond, tz.clone()))
+                .unwrap();
+        match max_ts {
+            ScalarValue::TimestampMillisecond(Some(val), Some(tz_str)) => {
+                assert_eq!(val, i64::MAX);
+                assert_eq!(tz_str.as_ref(), "UTC");
+            }
+            _ => panic!("Expected TimestampMillisecond with timezone"),
+        }
     }
 }
