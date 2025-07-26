@@ -345,6 +345,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
             if let Ok(fun) = self.find_window_func(&name) {
                 let args = self.function_args_to_expr(args, schema, planner_context)?;
+                println!("function name: {name}");
+                println!("distinct {:?}", function_args.distinct);
                 let mut window_expr = RawWindowExpr {
                     func_def: fun,
                     args,
@@ -352,6 +354,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     order_by,
                     window_frame,
                     null_treatment,
+                    distinct:function_args.distinct ,
                 };
 
                 for planner in self.context_provider.get_expr_planners().iter() {
@@ -368,7 +371,18 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     order_by,
                     window_frame,
                     null_treatment,
+                    distinct,
                 } = window_expr;
+
+                if distinct {
+                    return Expr::from(expr::WindowFunction::new(func_def, args))
+                        .partition_by(partition_by)
+                        .order_by(order_by)
+                        .window_frame(window_frame)
+                        .null_treatment(null_treatment)
+                        .distinct()
+                        .build();
+                }
 
                 return Expr::from(expr::WindowFunction::new(func_def, args))
                     .partition_by(partition_by)

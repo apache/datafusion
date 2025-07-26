@@ -29,10 +29,7 @@ use arrow::{
         UInt16Type, UInt32Type, UInt64Type, UInt8Type,
     },
 };
-use datafusion_common::{
-    downcast_value, internal_err, not_impl_err, stats::Precision,
-    utils::expr::COUNT_STAR_EXPANSION, Result, ScalarValue,
-};
+use datafusion_common::{downcast_value, internal_err, not_impl_err, stats::Precision, utils::expr::COUNT_STAR_EXPANSION, HashMap, Result, ScalarValue};
 use datafusion_expr::{
     expr::WindowFunction,
     function::{AccumulatorArgs, StateFieldsArgs},
@@ -59,6 +56,8 @@ use std::{
     ops::BitAnd,
     sync::Arc,
 };
+use crate::min_max::SlidingMinAccumulator;
+
 make_udaf_expr_and_func!(
     Count,
     count,
@@ -406,7 +405,176 @@ impl AggregateUDFImpl for Count {
         // the same as new values are seen.
         SetMonotonicity::Increasing
     }
+
+    fn create_sliding_accumulator(
+        &self,
+        args: AccumulatorArgs,
+    ) -> Result<Box<dyn Accumulator>> {
+
+        if args.is_distinct {
+            // 先用 `?` 解包 Result，然后再 Box
+            let acc = SlidingDistinctCountAccumulator::try_new(
+                args.return_field.data_type(),
+            )?;
+            Ok(Box::new(acc))
+        } else {
+            let acc = SlidingCountAccumulator::try_new(
+                args.return_field.data_type(),
+            )?;
+            Ok(Box::new(acc))
+        }
+    }
 }
+
+/// 滑动窗口 Count 累加器
+#[derive(Debug)]
+pub struct SlidingCountAccumulator {
+    /// 当前窗口内的非空总数
+    count: i64,
+    /// 返回类型，永远是 Int64
+    data_type: DataType,
+}
+
+impl SlidingCountAccumulator {
+    /// 构造函数，根据 `return_field.data_type()` 创建
+    pub fn try_new(data_type: &DataType) -> Result<Self> {
+        Ok(Self {
+            count: 0,
+            data_type: data_type.clone(),
+        })
+    }
+}
+
+/// 滑动窗口 DISTINCT 计数累加器
+#[derive(Debug)]
+pub struct SlidingDistinctCountAccumulator {
+    /// 当前窗口中每个值的计数
+    counts: HashMap<ScalarValue, usize, RandomState>,
+    /// 返回类型，Int64
+    data_type: DataType,
+}
+
+impl SlidingDistinctCountAccumulator {
+    pub fn try_new(data_type: &DataType) -> Result<Self> {
+        Ok(Self {
+            counts: HashMap::default(),
+            data_type: data_type.clone(),
+        })
+    }
+}
+
+impl Accumulator for SlidingDistinctCountAccumulator {
+
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
+        // 序列化用，可按需返回 map 中所有键的列表
+        let keys = self.counts.keys().cloned().collect::<Vec<_>>();
+        Ok(vec![ScalarValue::List(ScalarValue::new_list_nullable(
+            keys.as_slice(),
+            &self.data_type,
+        ))])
+    }
+
+    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        // 窗口右移，加入新数据
+        let arr = &values[0];
+        for i in 0..arr.len() {
+            let v = ScalarValue::try_from_array(arr, i)?;
+            if !v.is_null() {
+                *self.counts.entry(v).or_default() += 1;
+            }
+        }
+        Ok(())
+    }
+
+    fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        // 窗口左移，移除过期数据
+        let arr = &values[0];
+        for i in 0..arr.len() {
+            let v = ScalarValue::try_from_array(arr, i)?;
+            if !v.is_null() {
+                if let Some(cnt) = self.counts.get_mut(&v) {
+                    *cnt -= 1;
+                    if *cnt == 0 {
+                        self.counts.remove(&v);
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        // 合并分片时，把其它滑动累加器的 map 合并过来
+        let list_arr = states[0].as_list::<i32>();
+        for opt in list_arr.iter() {
+            if let Some(inner) = opt {
+                for j in 0..inner.len() {
+                    let v = ScalarValue::try_from_array(&*inner, j)?;
+                    *self.counts.entry(v).or_default() += 1;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn evaluate(&mut self) -> Result<ScalarValue> {
+        // 直接返回当前去重后元素个数
+        Ok(ScalarValue::Int64(Some(self.counts.len() as i64)))
+    }
+
+    fn supports_retract_batch(&self) -> bool {
+        true
+    }
+
+    fn size(&self) -> usize {
+        size_of_val(self)
+    }
+}
+
+impl Accumulator for SlidingCountAccumulator {
+    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        // 新增批次，累加非空数量
+        let array = &values[0];
+        let non_nulls = (array.len() - array.null_count()) as i64;
+        self.count += non_nulls;
+        Ok(())
+    }
+
+    fn evaluate(&mut self) -> Result<ScalarValue> {
+        // 输出当前窗口的 count
+        Ok(ScalarValue::Int64(Some(self.count)))
+    }
+
+    fn size(&self) -> usize {
+        size_of_val(self)
+    }
+
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
+        // 保留当前计数，以供合并或序列化
+        Ok(vec![ScalarValue::Int64(Some(self.count))])
+    }
+
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        // 在部分聚合时合并状态：把其它分片的 count 累加过来
+        let counts = downcast_value!(states[0], Int64Array);
+        let sum = compute::sum(&counts).unwrap_or(0);
+        self.count += sum;
+        Ok(())
+    }
+
+    fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        // 滑出批次，累减非空数量
+        let array = &values[0];
+        let non_nulls = (array.len() - array.null_count()) as i64;
+        self.count -= non_nulls;
+        Ok(())
+    }
+
+    fn supports_retract_batch(&self) -> bool {
+        true
+    }
+}
+
 
 #[derive(Debug)]
 struct CountAccumulator {
@@ -748,6 +916,29 @@ impl Accumulator for DistinctCountAccumulator {
             d if d.is_primitive() => self.fixed_size(),
             _ => self.full_size(),
         }
+    }
+
+    fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        if values.is_empty() {
+            return Ok(());
+        }
+
+        let arr = &values[0];
+        if arr.data_type() == &DataType::Null {
+            return Ok(());
+        }
+
+        for i in 0..arr.len() {
+            let scalar = ScalarValue::try_from_array(arr, i)?;
+            if !scalar.is_null() {
+                self.values.remove(&scalar);
+            }
+        }
+        Ok(())
+    }
+
+    fn supports_retract_batch(&self) -> bool {
+        true
     }
 }
 
