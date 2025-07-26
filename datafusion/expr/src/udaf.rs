@@ -671,11 +671,11 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
                 expr_vec_fmt!(args)
             ))?;
         } else {
-        display_name.write_fmt(format_args!(
-            "{}({})",
-            self.name(),
-            expr_vec_fmt!(args)
-        ))?;
+            display_name.write_fmt(format_args!(
+                "{}({})",
+                self.name(),
+                expr_vec_fmt!(args)
+            ))?;
         }
 
         if let Some(null_treatment) = null_treatment {

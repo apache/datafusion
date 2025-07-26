@@ -1678,7 +1678,7 @@ pub fn create_window_expr_with_name(
                 window_frame,
                 physical_schema,
                 ignore_nulls,
-                *distinct
+                *distinct,
             )
         }
         other => plan_err!("Invalid window expression '{other:?}'"),

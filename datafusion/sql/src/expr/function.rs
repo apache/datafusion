@@ -354,7 +354,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     order_by,
                     window_frame,
                     null_treatment,
-                    distinct:function_args.distinct ,
+                    distinct: function_args.distinct,
                 };
 
                 for planner in self.context_provider.get_expr_planners().iter() {

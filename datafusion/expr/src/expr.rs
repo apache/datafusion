@@ -2877,7 +2877,7 @@ impl Display for SchemaDisplay<'_> {
                         } = params;
 
                         // Write function name and open parenthesis
-                        write!(f, "{}(", fun)?;
+                        write!(f, "{fun}(")?;
 
                         // If DISTINCT, emit the keyword
                         if *distinct {
@@ -2893,7 +2893,6 @@ impl Display for SchemaDisplay<'_> {
                             "{}",
                             schema_name_from_exprs_comma_separated_without_space(args)?
                         )?;
-
 
                         if let Some(null_treatment) = null_treatment {
                             write!(f, " {null_treatment}")?;

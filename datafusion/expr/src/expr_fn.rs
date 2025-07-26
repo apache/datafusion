@@ -946,7 +946,7 @@ impl ExprFuncBuilder {
                         window_frame: window_frame
                             .unwrap_or_else(|| WindowFrame::new(has_order_by)),
                         null_treatment,
-                        distinct
+                        distinct,
                     },
                 })
             }

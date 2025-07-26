@@ -100,7 +100,6 @@ impl ExprPlanner for WindowFunctionPlanner {
                 distinct,
             } = raw_expr;
 
-
             let mut new_expr_before_build = Expr::from(WindowFunction::new(
                 func_def,
                 vec![Expr::Literal(COUNT_STAR_EXPANSION, None)],
@@ -116,9 +115,6 @@ impl ExprPlanner for WindowFunctionPlanner {
 
             let new_expr = new_expr_before_build.build()?;
             let new_expr = saved_name.restore(new_expr);
-
-
-            println!("new_expr: {:?}", new_expr);
 
             return Ok(PlannerResult::Planned(new_expr));
         }

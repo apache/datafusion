@@ -121,7 +121,7 @@ pub fn create_window_expr(
                     window_frame,
                     aggregate,
                 )
-            }  else {
+            } else {
                 let aggregate = AggregateExprBuilder::new(Arc::clone(fun), args.to_vec())
                     .schema(Arc::new(input_schema.clone()))
                     .alias(name)
@@ -822,7 +822,7 @@ mod tests {
                 Arc::new(WindowFrame::new(None)),
                 schema.as_ref(),
                 false,
-                false
+                false,
             )?],
             blocking_exec,
             false,

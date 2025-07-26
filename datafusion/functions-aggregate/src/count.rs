@@ -29,7 +29,10 @@ use arrow::{
         UInt16Type, UInt32Type, UInt64Type, UInt8Type,
     },
 };
-use datafusion_common::{downcast_value, internal_err, not_impl_err, stats::Precision, utils::expr::COUNT_STAR_EXPANSION, HashMap, Result, ScalarValue};
+use datafusion_common::{
+    downcast_value, internal_err, not_impl_err, stats::Precision,
+    utils::expr::COUNT_STAR_EXPANSION, HashMap, Result, ScalarValue,
+};
 use datafusion_expr::{
     expr::WindowFunction,
     function::{AccumulatorArgs, StateFieldsArgs},
@@ -56,7 +59,6 @@ use std::{
     ops::BitAnd,
     sync::Arc,
 };
-use crate::min_max::SlidingMinAccumulator;
 
 make_udaf_expr_and_func!(
     Count,
@@ -410,47 +412,31 @@ impl AggregateUDFImpl for Count {
         &self,
         args: AccumulatorArgs,
     ) -> Result<Box<dyn Accumulator>> {
-
         if args.is_distinct {
-            // 先用 `?` 解包 Result，然后再 Box
-            let acc = SlidingDistinctCountAccumulator::try_new(
-                args.return_field.data_type(),
-            )?;
+            let acc =
+                SlidingDistinctCountAccumulator::try_new(args.return_field.data_type())?;
             Ok(Box::new(acc))
         } else {
-            let acc = SlidingCountAccumulator::try_new(
-                args.return_field.data_type(),
-            )?;
+            let acc = SlidingCountAccumulator::try_new()?;
             Ok(Box::new(acc))
         }
     }
 }
 
-/// 滑动窗口 Count 累加器
 #[derive(Debug)]
 pub struct SlidingCountAccumulator {
-    /// 当前窗口内的非空总数
     count: i64,
-    /// 返回类型，永远是 Int64
-    data_type: DataType,
 }
 
 impl SlidingCountAccumulator {
-    /// 构造函数，根据 `return_field.data_type()` 创建
-    pub fn try_new(data_type: &DataType) -> Result<Self> {
-        Ok(Self {
-            count: 0,
-            data_type: data_type.clone(),
-        })
+    pub fn try_new() -> Result<Self> {
+        Ok(Self { count: 0 })
     }
 }
 
-/// 滑动窗口 DISTINCT 计数累加器
 #[derive(Debug)]
 pub struct SlidingDistinctCountAccumulator {
-    /// 当前窗口中每个值的计数
     counts: HashMap<ScalarValue, usize, RandomState>,
-    /// 返回类型，Int64
     data_type: DataType,
 }
 
@@ -464,9 +450,7 @@ impl SlidingDistinctCountAccumulator {
 }
 
 impl Accumulator for SlidingDistinctCountAccumulator {
-
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
-        // 序列化用，可按需返回 map 中所有键的列表
         let keys = self.counts.keys().cloned().collect::<Vec<_>>();
         Ok(vec![ScalarValue::List(ScalarValue::new_list_nullable(
             keys.as_slice(),
@@ -475,7 +459,6 @@ impl Accumulator for SlidingDistinctCountAccumulator {
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        // 窗口右移，加入新数据
         let arr = &values[0];
         for i in 0..arr.len() {
             let v = ScalarValue::try_from_array(arr, i)?;
@@ -487,7 +470,6 @@ impl Accumulator for SlidingDistinctCountAccumulator {
     }
 
     fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        // 窗口左移，移除过期数据
         let arr = &values[0];
         for i in 0..arr.len() {
             let v = ScalarValue::try_from_array(arr, i)?;
@@ -504,21 +486,17 @@ impl Accumulator for SlidingDistinctCountAccumulator {
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
-        // 合并分片时，把其它滑动累加器的 map 合并过来
         let list_arr = states[0].as_list::<i32>();
-        for opt in list_arr.iter() {
-            if let Some(inner) = opt {
-                for j in 0..inner.len() {
-                    let v = ScalarValue::try_from_array(&*inner, j)?;
-                    *self.counts.entry(v).or_default() += 1;
-                }
+        for inner in list_arr.iter().flatten() {
+            for j in 0..inner.len() {
+                let v = ScalarValue::try_from_array(&*inner, j)?;
+                *self.counts.entry(v).or_default() += 1;
             }
         }
         Ok(())
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        // 直接返回当前去重后元素个数
         Ok(ScalarValue::Int64(Some(self.counts.len() as i64)))
     }
 
@@ -533,7 +511,6 @@ impl Accumulator for SlidingDistinctCountAccumulator {
 
 impl Accumulator for SlidingCountAccumulator {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        // 新增批次，累加非空数量
         let array = &values[0];
         let non_nulls = (array.len() - array.null_count()) as i64;
         self.count += non_nulls;
@@ -541,7 +518,6 @@ impl Accumulator for SlidingCountAccumulator {
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        // 输出当前窗口的 count
         Ok(ScalarValue::Int64(Some(self.count)))
     }
 
@@ -555,9 +531,8 @@ impl Accumulator for SlidingCountAccumulator {
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
-        // 在部分聚合时合并状态：把其它分片的 count 累加过来
         let counts = downcast_value!(states[0], Int64Array);
-        let sum = compute::sum(&counts).unwrap_or(0);
+        let sum = compute::sum(counts).unwrap_or(0);
         self.count += sum;
         Ok(())
     }
@@ -574,7 +549,6 @@ impl Accumulator for SlidingCountAccumulator {
         true
     }
 }
-
 
 #[derive(Debug)]
 struct CountAccumulator {
