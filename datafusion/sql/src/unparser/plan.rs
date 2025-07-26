@@ -124,7 +124,10 @@ impl Unparser<'_> {
             | LogicalPlan::Copy(_)
             | LogicalPlan::DescribeTable(_)
             | LogicalPlan::RecursiveQuery(_)
-            | LogicalPlan::Unnest(_) => not_impl_err!("Unsupported plan: {plan:?}"),
+            | LogicalPlan::Unnest(_)
+            | LogicalPlan::MatchRecognizePattern(_) => {
+                not_impl_err!("Unsupported plan: {plan:?}")
+            }
         }
     }
 
@@ -1286,11 +1289,13 @@ impl Unparser<'_> {
                 (
                     Expr::Column(Column {
                         relation: _,
+                        symbol: _,
                         name: left_name,
                         spans: _,
                     }),
                     Expr::Column(Column {
                         relation: _,
+                        symbol: _,
                         name: right_name,
                         spans: _,
                     }),

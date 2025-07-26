@@ -2385,6 +2385,7 @@ mod tests {
                 if let SchemaError::AmbiguousReference { field } = *err {
                     let Column {
                         relation,
+                        symbol: _,
                         name,
                         spans: _,
                     } = *field;

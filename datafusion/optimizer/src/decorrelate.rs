@@ -551,6 +551,7 @@ fn proj_exprs_evaluation_result_on_empty_batch(
                 Expr::Alias(Alias { name, .. }) => name.to_string(),
                 Expr::Column(Column {
                     relation: _,
+                    symbol: _,
                     name,
                     spans: _,
                 }) => name.to_string(),
