@@ -341,7 +341,7 @@ impl ScopedTimerGuard<'_> {
         self.stop()
     }
 
-    /// Stop the timer timing and record the time taken with the given endpoint.
+    /// Stop the timer timing and record the time taken since the given endpoint.
     pub fn stop_with(&mut self, end_time: Instant) {
         if let Some(start) = self.start.take() {
             let elapsed = end_time - start;
