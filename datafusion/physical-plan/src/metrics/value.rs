@@ -223,9 +223,8 @@ impl Time {
         self.nanos.load(Ordering::Relaxed)
     }
 
-    /// Return a scoped guard that adds the amount of time elapsed between its
-    /// creation and its drop (or the call to `stop`) to the underlying metric
-    /// according to the given instant.
+    /// Return a scoped guard that adds the amount of time elapsed between the
+    /// given instant and its drop (or the call to `stop`) to the underlying metric
     pub fn timer_with(&self, now: Instant) -> ScopedTimerGuard<'_> {
         ScopedTimerGuard {
             inner: self,
