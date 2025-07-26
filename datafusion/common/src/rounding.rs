@@ -20,11 +20,6 @@
 //!       floating-point rounding mode manipulation functions become available
 //!       in Rust.
 
-#[cfg(all(
-    any(target_arch = "x86_64", target_arch = "aarch64"),
-    not(target_os = "windows")
-))]
-extern crate libc;
 use std::ops::{Add, BitAnd, Sub};
 
 use crate::Result;
@@ -41,6 +36,12 @@ const FE_DOWNWARD: i32 = 0x00800000;
 const FE_UPWARD: i32 = 0x0800;
 #[cfg(all(target_arch = "x86_64", not(target_os = "windows")))]
 const FE_DOWNWARD: i32 = 0x0400;
+
+#[cfg(all(
+    any(target_arch = "x86_64", target_arch = "aarch64"),
+    not(target_os = "windows")
+))]
+extern crate libc;
 
 #[cfg(all(
     any(target_arch = "x86_64", target_arch = "aarch64"),
