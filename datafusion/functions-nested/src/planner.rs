@@ -31,7 +31,6 @@ use datafusion_functions::core::get_field as get_field_inner;
 use datafusion_functions::expr_fn::get_field;
 use datafusion_functions_aggregate::nth_value::nth_value_udaf;
 use sqlparser::ast::BinaryOperator;
-use std::intrinsics::unreachable;
 use std::sync::Arc;
 
 use crate::map::map_udf;
@@ -96,43 +95,39 @@ impl ExprPlanner for NestedFunctionPlanner {
             && matches!(left.get_type(schema)?, DataType::Date32)
             && matches!(right.get_type(schema)?, DataType::Int32 | DataType::Int64)
         {
+            use arrow::datatypes::IntervalDayTime;
             use datafusion_common::ScalarValue;
             use datafusion_expr::BinaryExpr;
             use datafusion_expr::Operator;
             use sqlparser::ast::BinaryOperator;
 
-            let op = match op {
+            let op: Operator = match op {
                 BinaryOperator::Plus => Operator::Plus,
                 BinaryOperator::Minus => Operator::Minus,
                 _ => unreachable!(),
             };
 
-            // let new_right = match right {
-            //     Expr::Literal(ScalarValue::Int32(Option(i))) => {
-            //         let days = format!("{} days", i);
-            //         Expr::Literal(ScalarValue::Utf8(Some(days)))
-            //     }
-            //     _ => unreachable!(),
-            // };
-
-            let new_right = match right {
-                Expr::Literal(scalar_value, meta) => match scalar_value {
-                    ScalarValue::Int32(Some(i)) => {
-                        let days = format!("{} days", i);
-                        Expr::Literal(ScalarValue::Utf8(Some(days)), meta)
-                    }
-                    ScalarValue::Int64(Some(i)) => {
-                        let days = format!("{} days", i);
-                        Expr::Literal(ScalarValue::Utf8(Some(days)), meta)
-                    }
-                    _ => unreachable!(),
-                },
+            let new_right: Expr = match right {
+                Expr::Literal(ScalarValue::Int32(Some(i)), meta) => Expr::Literal(
+                    ScalarValue::IntervalDayTime(Some(IntervalDayTime {
+                        days: i,
+                        milliseconds: 0,
+                    })),
+                    meta,
+                ),
+                Expr::Literal(ScalarValue::Int64(Some(i)), meta) => Expr::Literal(
+                    ScalarValue::IntervalDayTime(Some(IntervalDayTime {
+                        days: i as i32,
+                        milliseconds: 0,
+                    })),
+                    meta,
+                ),
                 _ => unreachable!(),
             };
 
             let planned = Expr::BinaryExpr(BinaryExpr {
                 left: Box::new(left.clone()),
-                right: Box::new(right.clone()),
+                right: Box::new(new_right),
                 op,
             });
             return Ok(PlannerResult::Planned(planned));
@@ -165,7 +160,7 @@ impl ExprPlanner for NestedFunctionPlanner {
     }
 
     fn plan_any(&self, expr: RawBinaryExpr) -> Result<PlannerResult<RawBinaryExpr>> {
-        if expr.op == sqlparser::ast::BinaryOperator::Eq {
+        if expr.op == BinaryOperator::Eq {
             Ok(PlannerResult::Planned(Expr::ScalarFunction(
                 ScalarFunction::new_udf(
                     array_has_udf(),
