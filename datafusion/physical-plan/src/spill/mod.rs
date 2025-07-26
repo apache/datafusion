@@ -523,6 +523,7 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(all(feature = "lz4", feature = "zstd"))]
     #[tokio::test]
     async fn test_spill_compression() -> Result<()> {
         let batch = build_compressible_batch();
