@@ -30,6 +30,7 @@ use datafusion_expr::{
 use datafusion_functions::core::get_field as get_field_inner;
 use datafusion_functions::expr_fn::get_field;
 use datafusion_functions_aggregate::nth_value::nth_value_udaf;
+use sqlparser::ast::BinaryOperator;
 use std::sync::Arc;
 
 use crate::map::map_udf;
@@ -51,7 +52,7 @@ impl ExprPlanner for NestedFunctionPlanner {
     ) -> Result<PlannerResult<RawBinaryExpr>> {
         let RawBinaryExpr { op, left, right } = expr;
 
-        if op == sqlparser::ast::BinaryOperator::StringConcat {
+        if op == BinaryOperator::StringConcat {
             let left_type = left.get_type(schema)?;
             let right_type = right.get_type(schema)?;
             let left_list_ndims = list_ndims(&left_type);
@@ -75,18 +76,14 @@ impl ExprPlanner for NestedFunctionPlanner {
             } else if left_list_ndims < right_list_ndims {
                 return Ok(PlannerResult::Planned(array_prepend(left, right)));
             }
-        } else if matches!(
-            op,
-            sqlparser::ast::BinaryOperator::AtArrow
-                | sqlparser::ast::BinaryOperator::ArrowAt
-        ) {
+        } else if matches!(op, BinaryOperator::AtArrow | BinaryOperator::ArrowAt) {
             let left_type = left.get_type(schema)?;
             let right_type = right.get_type(schema)?;
             let left_list_ndims = list_ndims(&left_type);
             let right_list_ndims = list_ndims(&right_type);
             // if both are list
             if left_list_ndims > 0 && right_list_ndims > 0 {
-                if op == sqlparser::ast::BinaryOperator::AtArrow {
+                if op == BinaryOperator::AtArrow {
                     // array1 @> array2 -> array_has_all(array1, array2)
                     return Ok(PlannerResult::Planned(array_has_all(left, right)));
                 } else {
@@ -94,6 +91,12 @@ impl ExprPlanner for NestedFunctionPlanner {
                     return Ok(PlannerResult::Planned(array_has_all(right, left)));
                 }
             }
+        } else if matches!(op, BinaryOperator::Plus | BinaryOperator::Minus)
+            && matches!(left.get_type(schema)?, DataType::Date32)
+            && matches!(right.get_type(schema)?, DataType::Int32 | DataType::Int64)
+        {
+            // FIXME
+            return Ok(PlannerResult::Planned(array_concat(vec![left, right])));
         }
 
         Ok(PlannerResult::Original(RawBinaryExpr { op, left, right }))
