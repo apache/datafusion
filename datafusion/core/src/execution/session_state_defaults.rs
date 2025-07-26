@@ -81,6 +81,7 @@ impl SessionStateDefaults {
         default_catalog
     }
 
+    /// NOTE!
     /// returns the list of default [`ExprPlanner`]s
     pub fn default_expr_planners() -> Vec<Arc<dyn ExprPlanner>> {
         let expr_planners: Vec<Arc<dyn ExprPlanner>> = vec![

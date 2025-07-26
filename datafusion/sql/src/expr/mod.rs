@@ -102,10 +102,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         }
                     }
                 }
-                StackEntry::Operator(op) => {
+                StackEntry::Operator(binaryOp) => {
                     let right = eval_stack.pop().unwrap();
                     let left = eval_stack.pop().unwrap();
-                    let expr = self.build_logical_expr(op, left, right, schema)?;
+                    let expr = self.build_logical_expr(binaryOp, left, right, schema)?;
                     eval_stack.push(expr);
                 }
             }
