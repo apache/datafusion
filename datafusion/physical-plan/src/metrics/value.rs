@@ -349,7 +349,7 @@ impl ScopedTimerGuard<'_> {
         }
     }
 
-    /// Stop the timer, record the time taken with the given endpoint, and
+    /// Stop the timer, record the time taken since `end_time` endpoint, and
     /// consume self.
     pub fn done_with(mut self, end_time: Instant) {
         self.stop_with(end_time)
