@@ -35,6 +35,7 @@ use std::sync::Arc;
 
 use crate::PhysicalOptimizerRule;
 
+use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{config::ConfigOptions, Result};
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_plan::filter_pushdown::{
@@ -447,8 +448,19 @@ fn push_down_filters(
     let mut new_children = Vec::with_capacity(node.children().len());
 
     let children = node.children();
+
+    // Filter out expressions that are not allowed for pushdown
+    let mut allowed_predicates = vec![];
+    let mut allowed_indices = vec![];
+    for (idx, predicate) in parent_predicates.iter().enumerate() {
+        if allow_pushdown_for_expr(predicate) {
+            allowed_predicates.push(predicate.clone());
+            allowed_indices.push(idx);
+        }
+    }
+
     let filter_description =
-        node.gather_filters_for_pushdown(phase, parent_predicates.clone(), config)?;
+        node.gather_filters_for_pushdown(phase, allowed_predicates, config)?;
 
     let filter_description_parent_filters = filter_description.parent_filters();
     let filter_description_self_filters = filter_description.self_filters();
@@ -485,21 +497,32 @@ fn push_down_filters(
         // currently. `self_filters` are the predicates which are provided by the current node,
         // and tried to be pushed down over the child similarly.
 
-        let num_self_filters = self_filters.len();
-        let mut all_predicates = self_filters.clone();
+        // Filter out self_filters that contain volatile expressions and track indices
+        let mut filtered_self_filters = vec![];
+        let mut self_filter_indices = vec![];
+        for (idx, filter) in self_filters.iter().enumerate() {
+            if allow_pushdown_for_expr(filter) {
+                filtered_self_filters.push(filter.clone());
+                self_filter_indices.push(idx);
+            }
+        }
+
+        let num_self_filters = filtered_self_filters.len();
+        let mut all_predicates = filtered_self_filters;
 
         // Track which parent filters are supported for this child
         let mut parent_filter_indices = vec![];
 
         // Iterate over each predicate coming from the parent
-        for (parent_filter_idx, filter) in parent_filters.into_iter().enumerate() {
+        for (allowed_idx, filter) in parent_filters.into_iter().enumerate() {
             // Check if we can push this filter down to our child.
             // These supports are defined in `gather_filters_for_pushdown()`
             match filter.discriminant {
                 PushedDown::Yes => {
                     // Queue this filter up for pushdown to this child
                     all_predicates.push(filter.predicate);
-                    parent_filter_indices.push(parent_filter_idx);
+                    // Map back to the original parent predicate index
+                    parent_filter_indices.push(allowed_indices[allowed_idx]);
                 }
                 PushedDown::No => {
                     // This filter won't be pushed down to this child
@@ -540,13 +563,24 @@ fn push_down_filters(
             .split_off(num_self_filters)
             .into_iter()
             .collect_vec();
-        self_filters_pushdown_supports.push(
-            all_filters
-                .into_iter()
-                .zip(self_filters)
-                .map(|(s, f)| s.wrap_expression(f))
-                .collect(),
-        );
+        // We need to reconstruct the self_filters results, accounting for filtered-out expressions
+        let mut self_filter_results = vec![PushedDown::No; self_filters.len()];
+
+        // Map the results from filtered self filters back to their original positions
+        for (result_idx, support) in all_filters.into_iter().enumerate() {
+            // all_filters now contains only self filters
+            let original_idx = self_filter_indices[result_idx];
+            self_filter_results[original_idx] = support;
+        }
+
+        // Wrap each result with its corresponding expression
+        let self_filter_results: Vec<_> = self_filter_results
+            .into_iter()
+            .zip(self_filters)
+            .map(|(support, filter)| support.wrap_expression(filter))
+            .collect();
+
+        self_filters_pushdown_supports.push(self_filter_results);
 
         // Start by marking all parent filters as unsupported for this child
         for parent_filter_pushdown_support in parent_filter_pushdown_supports.iter_mut() {
@@ -596,4 +630,35 @@ fn push_down_filters(
         res.updated_node = Some(updated_node)
     }
     Ok(res)
+}
+
+fn allow_pushdown_for_expr(expr: &Arc<dyn PhysicalExpr>) -> bool {
+    let mut allow_pushdown = true;
+    expr.apply(|e| {
+        allow_pushdown = allow_pushdown && allow_pushdown_for_expr_inner(e);
+        if allow_pushdown {
+            Ok(TreeNodeRecursion::Continue)
+        } else {
+            Ok(TreeNodeRecursion::Stop)
+        }
+    })
+    .expect("Infallible traversal of PhysicalExpr tree failed");
+    allow_pushdown
+}
+
+fn allow_pushdown_for_expr_inner(expr: &Arc<dyn PhysicalExpr>) -> bool {
+    // TODO: do downcast matching on specific expressions, or add a method to the PhysicalExpr trait
+    // to check if the expression is volatile or otherwise unsuitable for pushdown.
+    if let Some(scalar_function) =
+        expr.as_any()
+            .downcast_ref::<datafusion_physical_expr::ScalarFunctionExpr>()
+    {
+        let name = scalar_function.fun().name();
+        // Check if the function is volatile
+        if name == "random" {
+            // Random function is volatile, do not allow pushdown
+            return false;
+        }
+    }
+    true
 }
