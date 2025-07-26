@@ -31,7 +31,7 @@ use arrow::{
 };
 use datafusion_common::{
     downcast_value, internal_err, not_impl_err, stats::Precision,
-    utils::expr::COUNT_STAR_EXPANSION, Result, ScalarValue,
+    utils::expr::COUNT_STAR_EXPANSION, HashMap, Result, ScalarValue,
 };
 use datafusion_expr::{
     expr::WindowFunction,
@@ -59,6 +59,7 @@ use std::{
     ops::BitAnd,
     sync::Arc,
 };
+
 make_udaf_expr_and_func!(
     Count,
     count,
@@ -406,6 +407,147 @@ impl AggregateUDFImpl for Count {
         // the same as new values are seen.
         SetMonotonicity::Increasing
     }
+
+    fn create_sliding_accumulator(
+        &self,
+        args: AccumulatorArgs,
+    ) -> Result<Box<dyn Accumulator>> {
+        if args.is_distinct {
+            let acc =
+                SlidingDistinctCountAccumulator::try_new(args.return_field.data_type())?;
+            Ok(Box::new(acc))
+        } else {
+            let acc = SlidingCountAccumulator::try_new()?;
+            Ok(Box::new(acc))
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct SlidingCountAccumulator {
+    count: i64,
+}
+
+impl SlidingCountAccumulator {
+    pub fn try_new() -> Result<Self> {
+        Ok(Self { count: 0 })
+    }
+}
+
+#[derive(Debug)]
+pub struct SlidingDistinctCountAccumulator {
+    counts: HashMap<ScalarValue, usize, RandomState>,
+    data_type: DataType,
+}
+
+impl SlidingDistinctCountAccumulator {
+    pub fn try_new(data_type: &DataType) -> Result<Self> {
+        Ok(Self {
+            counts: HashMap::default(),
+            data_type: data_type.clone(),
+        })
+    }
+}
+
+impl Accumulator for SlidingDistinctCountAccumulator {
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
+        let keys = self.counts.keys().cloned().collect::<Vec<_>>();
+        Ok(vec![ScalarValue::List(ScalarValue::new_list_nullable(
+            keys.as_slice(),
+            &self.data_type,
+        ))])
+    }
+
+    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        let arr = &values[0];
+        for i in 0..arr.len() {
+            let v = ScalarValue::try_from_array(arr, i)?;
+            if !v.is_null() {
+                *self.counts.entry(v).or_default() += 1;
+            }
+        }
+        Ok(())
+    }
+
+    fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        let arr = &values[0];
+        for i in 0..arr.len() {
+            let v = ScalarValue::try_from_array(arr, i)?;
+            if !v.is_null() {
+                if let Some(cnt) = self.counts.get_mut(&v) {
+                    *cnt -= 1;
+                    if *cnt == 0 {
+                        self.counts.remove(&v);
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        let list_arr = states[0].as_list::<i32>();
+        for inner in list_arr.iter().flatten() {
+            for j in 0..inner.len() {
+                let v = ScalarValue::try_from_array(&*inner, j)?;
+                *self.counts.entry(v).or_default() += 1;
+            }
+        }
+        Ok(())
+    }
+
+    fn evaluate(&mut self) -> Result<ScalarValue> {
+        Ok(ScalarValue::Int64(Some(self.counts.len() as i64)))
+    }
+
+    fn supports_retract_batch(&self) -> bool {
+        true
+    }
+
+    fn size(&self) -> usize {
+        size_of_val(self)
+    }
+}
+
+impl Accumulator for SlidingCountAccumulator {
+    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        let array = &values[0];
+        let non_nulls = (array.len() - array.null_count()) as i64;
+        self.count += non_nulls;
+        Ok(())
+    }
+
+    fn evaluate(&mut self) -> Result<ScalarValue> {
+        Ok(ScalarValue::Int64(Some(self.count)))
+    }
+
+    fn size(&self) -> usize {
+        size_of_val(self)
+    }
+
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
+        // 保留当前计数，以供合并或序列化
+        Ok(vec![ScalarValue::Int64(Some(self.count))])
+    }
+
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        let counts = downcast_value!(states[0], Int64Array);
+        let sum = compute::sum(counts).unwrap_or(0);
+        self.count += sum;
+        Ok(())
+    }
+
+    fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        // 滑出批次，累减非空数量
+        let array = &values[0];
+        let non_nulls = (array.len() - array.null_count()) as i64;
+        self.count -= non_nulls;
+        Ok(())
+    }
+
+    fn supports_retract_batch(&self) -> bool {
+        true
+    }
 }
 
 #[derive(Debug)]
@@ -748,6 +890,29 @@ impl Accumulator for DistinctCountAccumulator {
             d if d.is_primitive() => self.fixed_size(),
             _ => self.full_size(),
         }
+    }
+
+    fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        if values.is_empty() {
+            return Ok(());
+        }
+
+        let arr = &values[0];
+        if arr.data_type() == &DataType::Null {
+            return Ok(());
+        }
+
+        for i in 0..arr.len() {
+            let scalar = ScalarValue::try_from_array(arr, i)?;
+            if !scalar.is_null() {
+                self.values.remove(&scalar);
+            }
+        }
+        Ok(())
+    }
+
+    fn supports_retract_batch(&self) -> bool {
+        true
     }
 }
 

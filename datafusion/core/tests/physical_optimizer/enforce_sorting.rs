@@ -3675,6 +3675,7 @@ async fn test_window_partial_constant_and_set_monotonicity() -> Result<()> {
             case.window_frame,
             input_schema.as_ref(),
             false,
+            false,
         )?;
         let window_exec = if window_expr.uses_bounded_memory() {
             Arc::new(BoundedWindowAggExec::try_new(

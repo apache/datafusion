@@ -199,6 +199,7 @@ impl WindowUDFImpl for SimplifySmoothItUdf {
                     order_by: window_function.params.order_by,
                     window_frame: window_function.params.window_frame,
                     null_treatment: window_function.params.null_treatment,
+                    distinct: window_function.params.distinct,
                 },
             }))
         };

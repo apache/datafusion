@@ -242,10 +242,22 @@ impl TreeNode for Expr {
                             order_by,
                             window_frame,
                             null_treatment,
+                            distinct,
                         },
                 } = *window_fun;
                 (args, partition_by, order_by).map_elements(f)?.update_data(
                     |(new_args, new_partition_by, new_order_by)| {
+                        if distinct {
+                            return Expr::from(WindowFunction::new(fun, new_args))
+                                .partition_by(new_partition_by)
+                                .order_by(new_order_by)
+                                .window_frame(window_frame)
+                                .null_treatment(null_treatment)
+                                .distinct()
+                                .build()
+                                .unwrap();
+                        }
+
                         Expr::from(WindowFunction::new(fun, new_args))
                             .partition_by(new_partition_by)
                             .order_by(new_order_by)

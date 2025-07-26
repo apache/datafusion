@@ -308,6 +308,7 @@ pub struct RawWindowExpr {
     pub order_by: Vec<SortExpr>,
     pub window_frame: WindowFrame,
     pub null_treatment: Option<NullTreatment>,
+    pub distinct: bool,
 }
 
 /// Result of planning a raw expr with [`ExprPlanner`]
