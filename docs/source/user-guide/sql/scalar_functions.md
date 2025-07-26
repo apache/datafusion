@@ -2150,6 +2150,8 @@ date_trunc(precision, expression)
   - hour / HOUR
   - minute / MINUTE
   - second / SECOND
+  - millisecond / MILLISECOND
+  - microsecond / MICROSECOND
 
 - **expression**: Time expression to operate on. Can be a constant, column, or function.
 
