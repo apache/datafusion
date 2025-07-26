@@ -282,8 +282,9 @@ fn replace_with_partial_sort(
     let sort_exprs = sort_plan.expr().clone();
 
     let mut common_prefix_length = 0;
-    while child_eq_properties
-        .ordering_satisfy(sort_exprs[0..common_prefix_length + 1].to_vec())?
+    while common_prefix_length < sort_exprs.len()
+        && child_eq_properties
+            .ordering_satisfy(sort_exprs[0..common_prefix_length + 1].to_vec())?
     {
         common_prefix_length += 1;
     }

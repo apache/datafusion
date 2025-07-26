@@ -3842,3 +3842,34 @@ fn test_parallelize_sort_preserves_fetch() -> Result<()> {
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn test_partial_sort_with_prefix_ordering() -> Result<()> {
+    // Reproduces issue #16899: When sorting by [column1, column2] but data
+    // is already sorted by column1, should use PartialSortExec not SortExec
+    let schema = create_test_schema3()?;
+    
+    // Data is pre-sorted by column "a"
+    let input_ordering = [sort_expr("a", &schema)].into();
+    let unbounded_input = stream_exec_ordered(&schema, input_ordering);
+    
+    // We want to sort by both "a" and "b" columns
+    let physical_plan = sort_exec(
+        [sort_expr("a", &schema), sort_expr("b", &schema)].into(),
+        unbounded_input,
+    );
+    
+    let expected_input = [
+        "SortExec: expr=[a@0 ASC, b@1 ASC], preserve_partitioning=[false]",
+        "  StreamingTableExec: partition_sizes=1, projection=[a, b, c, d, e], infinite_source=true, output_ordering=[a@0 ASC]"
+    ];
+    
+    // Should be optimized to PartialSortExec with common_prefix_length=1
+    let expected_optimized = [
+        "PartialSortExec: expr=[a@0 ASC, b@1 ASC], common_prefix_length=[1]",
+        "  StreamingTableExec: partition_sizes=1, projection=[a, b, c, d, e], infinite_source=true, output_ordering=[a@0 ASC]",
+    ];
+    
+    assert_optimized!(expected_input, expected_optimized, physical_plan, true);
+    Ok(())
+}
