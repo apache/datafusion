@@ -15,17 +15,24 @@
 // specific language governing permissions and limitations
 // under the License.
 
+pub mod last_day;
 pub mod next_day;
 
 use datafusion_expr::ScalarUDF;
 use datafusion_functions::make_udf_function;
 use std::sync::Arc;
 
+make_udf_function!(last_day::SparkLastDay, last_day);
 make_udf_function!(next_day::SparkNextDay, next_day);
 
 pub mod expr_fn {
     use datafusion_functions::export_functions;
 
+    export_functions!((
+        last_day,
+        "Returns the last day of the month which the date belongs to.",
+        arg1
+    ));
     // TODO: add once ANSI support is added:
     // "When both of the input parameters are not NULL and day_of_week is an invalid input, the function throws SparkIllegalArgumentException if spark.sql.ansi.enabled is set to true, otherwise NULL."
     export_functions!((
@@ -36,5 +43,5 @@ pub mod expr_fn {
 }
 
 pub fn functions() -> Vec<Arc<ScalarUDF>> {
-    vec![next_day()]
+    vec![last_day(), next_day()]
 }

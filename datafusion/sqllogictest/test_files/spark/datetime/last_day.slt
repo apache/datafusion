@@ -21,7 +21,99 @@
 # For more information, please see:
 #   https://github.com/apache/datafusion/issues/15914
 
-## Original Query: SELECT last_day('2009-01-12');
-## PySpark 3.5.5 Result: {'last_day(2009-01-12)': datetime.date(2009, 1, 31), 'typeof(last_day(2009-01-12))': 'date', 'typeof(2009-01-12)': 'string'}
-#query
-#SELECT last_day('2009-01-12'::string);
+query D
+SELECT last_day('2009-01-12'::DATE);
+----
+2009-01-31
+
+
+query D
+SELECT last_day('2015-02-28'::DATE);
+----
+2015-02-28
+
+query D
+SELECT last_day('2015-03-27'::DATE);
+----
+2015-03-31
+
+query D
+SELECT last_day('2015-04-26'::DATE);
+----
+2015-04-30
+
+query D
+SELECT last_day('2015-05-25'::DATE);
+----
+2015-05-31
+
+query D
+SELECT last_day('2015-06-24'::DATE);
+----
+2015-06-30
+
+query D
+SELECT last_day('2015-07-23'::DATE);
+----
+2015-07-31
+
+query D
+SELECT last_day('2015-08-01'::DATE);
+----
+2015-08-31
+
+query D
+SELECT last_day('2015-09-02'::DATE);
+----
+2015-09-30
+
+query D
+SELECT last_day('2015-10-03'::DATE);
+----
+2015-10-31
+
+query D
+SELECT last_day('2015-11-04'::DATE);
+----
+2015-11-30
+
+query D
+SELECT last_day('2015-12-05'::DATE);
+----
+2015-12-31
+
+
+query D
+SELECT last_day('2016-01-06'::DATE);
+----
+2016-01-31
+
+query D
+SELECT last_day('2016-02-07'::DATE);
+----
+2016-02-29
+
+
+query D
+SELECT last_day(null::DATE);
+----
+NULL
+
+
+statement error Failed to coerce arguments to satisfy a call to 'last_day' function
+select last_day('foo');
+
+
+statement error Failed to coerce arguments to satisfy a call to 'last_day' function
+select last_day(123);
+
+
+statement error 'last_day' does not support zero arguments
+select last_day();
+
+statement error Failed to coerce arguments to satisfy a call to 'last_day' function
+select last_day(last_day('2016-02-07'::string, 'foo'));
+
+statement error Failed to coerce arguments to satisfy a call to 'last_day' function
+select last_day(last_day('2016-02-31'::string));
+

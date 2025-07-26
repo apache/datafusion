@@ -859,6 +859,7 @@ message PhysicalScalarUdfNode {
   optional bytes fun_definition = 3;
   datafusion_common.ArrowType return_type = 4;
   bool nullable = 5;
+  string return_field_name = 6;
 }
 
 message PhysicalAggregateExprNode {
@@ -870,6 +871,7 @@ message PhysicalAggregateExprNode {
   bool distinct = 3;
   bool ignore_nulls = 6;
   optional bytes fun_definition = 7;
+  string human_display = 8;
 }
 
 message PhysicalWindowExprNode {
