@@ -20,6 +20,11 @@
 //!       floating-point rounding mode manipulation functions become available
 //!       in Rust.
 
+#[cfg(all(
+    any(target_arch = "x86_64", target_arch = "aarch64"),
+    not(target_os = "windows")
+))]
+extern crate libc;
 use std::ops::{Add, BitAnd, Sub};
 
 use crate::Result;
@@ -36,12 +41,6 @@ const FE_DOWNWARD: i32 = 0x00800000;
 const FE_UPWARD: i32 = 0x0800;
 #[cfg(all(target_arch = "x86_64", not(target_os = "windows")))]
 const FE_DOWNWARD: i32 = 0x0400;
-
-#[cfg(all(
-    any(target_arch = "x86_64", target_arch = "aarch64"),
-    not(target_os = "windows")
-))]
-extern crate libc;
 
 #[cfg(all(
     any(target_arch = "x86_64", target_arch = "aarch64"),
@@ -77,8 +76,6 @@ pub trait FloatBits {
 
     /// The integer value 0, used in bitwise operations.
     const ZERO: Self::Item;
-
-    /// The integer value -0, used in bitwise operations.
     const NEG_ZERO: Self::Item;
 
     /// Converts the floating-point value to its bitwise representation.
@@ -104,7 +101,7 @@ impl FloatBits for f32 {
     const CLEAR_SIGN_MASK: u32 = 0x7fff_ffff;
     const ONE: Self::Item = 1;
     const ZERO: Self::Item = 0;
-    const NEG_ZERO: Self::Item = 0x8000_0000; // -0.0 in f32 bit representation
+    const NEG_ZERO: Self::Item = 0x8000_0000;
 
     fn to_bits(self) -> Self::Item {
         self.to_bits()
@@ -134,7 +131,7 @@ impl FloatBits for f64 {
     const CLEAR_SIGN_MASK: u64 = 0x7fff_ffff_ffff_ffff;
     const ONE: Self::Item = 1;
     const ZERO: Self::Item = 0;
-    const NEG_ZERO: Self::Item = 0x8000_0000_0000_0000; // -0.0 in f64 bit representation
+    const NEG_ZERO: Self::Item = 0x8000_0000_0000_0000;
 
     fn to_bits(self) -> Self::Item {
         self.to_bits()
@@ -179,14 +176,11 @@ pub fn next_up<F: FloatBits + Copy>(float: F) -> F {
         return float;
     }
 
-    // Special case: -0.0 → +0.0
-    if bits == F::NEG_ZERO {
-        return F::from_bits(F::ZERO);
-    }
-
     let abs = bits & F::CLEAR_SIGN_MASK;
-    let next_bits = if abs == F::ZERO {
+    let next_bits = if bits == F::ZERO {
         F::TINY_BITS
+    } else if abs == F::ZERO {
+        F::ZERO
     } else if bits == abs {
         bits + F::ONE
     } else {
@@ -217,13 +211,10 @@ pub fn next_down<F: FloatBits + Copy>(float: F) -> F {
         return float;
     }
 
-    // Special case: +0.0 → -0.0
-    if bits == F::ZERO {
-        return F::from_bits(F::NEG_ZERO);
-    }
-
     let abs = bits & F::CLEAR_SIGN_MASK;
-    let next_bits = if abs == F::ZERO {
+    let next_bits = if bits == F::ZERO {
+        F::NEG_ZERO
+    } else if abs == F::ZERO {
         F::NEG_TINY_BITS
     } else if bits == abs {
         bits - F::ONE
