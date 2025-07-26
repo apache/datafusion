@@ -1181,25 +1181,27 @@ impl GroupedHashAggregateStream {
 }
 
 impl ExplainMemory for GroupedHashAggregateStream {
-    fn explain_memory(&self) -> String {
+    fn explain_memory(&self) -> Result<String> {
+        fn part(label: &str, size: usize) -> String {
+            format!("{}: {}", label, human_readable_size(size))
+        }
+
         let mut parts = vec![
-            format!("groups: {}", human_readable_size(self.group_values.size())),
-            format!(
-                "ordering: {}",
-                human_readable_size(self.group_ordering.size())
-            ),
-            format!(
-                "indices: {}",
-                human_readable_size(self.current_group_indices.allocated_size())
-            ),
+            part("groups", self.group_values.size()),
+            part("ordering", self.group_ordering.size()),
+            part("indices", self.current_group_indices.allocated_size()),
         ];
         for (i, acc) in self.accumulators.iter().enumerate() {
+<<<<<<< ours
             parts.push(format!("acc[{i}]: {}", human_readable_size(acc.size())));
+=======
+            parts.push(part(&format!("acc[{i}]"), acc.size()));
+>>>>>>> theirs
         }
         parts.push(format!(
             "reservation: {}",
-            self.reservation.explain_memory()
+            self.reservation.explain_memory()?
         ));
-        parts.join(", ")
+        Ok(parts.join(", "))
     }
 }
