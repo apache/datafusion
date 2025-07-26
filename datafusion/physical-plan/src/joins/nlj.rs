@@ -84,6 +84,13 @@ pub(crate) struct NLJStream {
     /// `batch_size` from configuration
     cfg_batch_size: usize,
 
+    /// Should we use a bitmap to track each incoming right batch's each row's
+    /// 'joined' status.
+    /// For example in right joins, we have to use a bit map to track matched
+    /// right side rows, and later enter a `EmitRightUnmatched` stage to emit
+    /// unmatched right rows.
+    should_track_unmatched_right: bool,
+
     // ========================================================================
     // STATE FLAGS/BUFFERS:
     // Fields that hold intermediate data/flags during execution
@@ -117,9 +124,7 @@ pub(crate) struct NLJStream {
     /// The current probe batch to process
     current_right_batch: Option<RecordBatch>,
     // For right join, keep track of matched rows in `current_right_batch`
-    // - Constructured (with Some(..)) on initialization
-    // - After done joining (left_row x right_batch), output those unmatched rows
-    // - Resets when fetching a new right batch.
+    // Constructed when fetching each new incoming right batch in `FetchingRight` state.
     current_right_batch_matched: Option<BooleanBufferBuilder>,
 }
 
@@ -127,7 +132,7 @@ impl Stream for NLJStream {
     type Item = Result<RecordBatch>;
 
     /// # Design
-    /// 
+    ///
     /// The high-level control flow for this operator is:
     /// 1. Buffer all batches from the left side (unless memory limit is reached,
     ///    in which case see notes at 'Memory-limited Execution').
@@ -145,19 +150,19 @@ impl Stream for NLJStream {
     ///    buffer size are `batch_size` from the configuration (default 8192).
     ///    We might try to tune it slightly for performance in the future.
     ///
-    /// 
-    /// 
+    ///
+    ///
     /// # Memory-limited Execution
-    /// 
+    ///
     /// TODO.
     /// The idea is each time buffer as much batches from the left side as
     /// possible, then scan the right side once for all buffered left data.
     /// Then buffer another left batches, scan right side again until finish.
     ///
-    /// 
-    /// 
+    ///
+    ///
     /// # Implementation
-    /// 
+    ///
     /// This function is the entry point of NLJ operator's state machine
     /// transitions. The rough state transition graph is as follow, for more
     /// details see the comment in each state's matching arm.
@@ -242,9 +247,8 @@ impl Stream for NLJStream {
 
                             self.current_right_batch = Some(right_batch);
 
-                            // TOOD(polish): make it more understandable
-                            if self.current_right_batch_matched.is_some() {
-                                // We have to resize the right bitmap.
+                            // Prepare right bitmap
+                            if self.should_track_unmatched_right {
                                 let new_size = right_batch_size;
                                 let zeroed_buf = MutableBuffer::from_len_zeroed(new_size);
                                 self.current_right_batch_matched =
@@ -430,23 +434,14 @@ impl NLJStream {
         join_metrics: BuildProbeJoinMetrics,
         cfg_batch_size: usize,
     ) -> Self {
-        let current_right_batch_matched = if matches!(
+        let should_track_unmatched_right = matches!(
             join_type,
             JoinType::Full
                 | JoinType::Right
                 | JoinType::RightAnti
                 | JoinType::RightMark
                 | JoinType::RightSemi
-        ) {
-            // Now we don't have interface to init with 0-init for `BooleanBufferBuilder`
-            let buffer = MutableBuffer::from_len_zeroed(cfg_batch_size);
-            Some(BooleanBufferBuilder::new_from_buffer(
-                buffer,
-                cfg_batch_size,
-            ))
-        } else {
-            None
-        };
+        );
 
         Self {
             output_schema: Arc::clone(&schema),
@@ -460,13 +455,14 @@ impl NLJStream {
             output_buffer: Box::new(BatchCoalescer::new(schema, cfg_batch_size)),
             cfg_batch_size,
             current_right_batch: None,
-            current_right_batch_matched,
+            current_right_batch_matched: None,
             state: NLJState::BufferingLeft,
             l_index: 0,
             emit_cursor: 0,
             left_exhausted: false,
             left_buffered_in_one_pass: true,
             handled_empty_output: false,
+            should_track_unmatched_right,
         }
     }
 
