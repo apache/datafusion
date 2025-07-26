@@ -55,6 +55,8 @@ message NdJsonFormat {
   JsonOptions options = 1;
 }
 
+message ArrowFormat {}
+
 
 message PrimaryKeyConstraint{
   repeated uint64 indices = 1;
