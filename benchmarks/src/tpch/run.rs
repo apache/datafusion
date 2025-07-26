@@ -19,9 +19,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use super::{
-    get_query_sql, get_tbl_tpch_table_schema, get_tpch_table_schema, TPCH_TABLES,
+    get_query_sql, get_tbl_tpch_table_schema, get_tpch_table_schema, TPCH_QUERY_END_ID,
+    TPCH_QUERY_START_ID, TPCH_TABLES,
 };
-use crate::util::{BenchmarkRun, CommonOpt, QueryResult};
+use crate::util::{print_memory_stats, BenchmarkRun, CommonOpt, QueryResult};
 
 use arrow::record_batch::RecordBatch;
 use arrow::util::pretty::{self, pretty_format_batches};
@@ -60,7 +61,7 @@ type BoolDefaultTrue = bool;
 pub struct RunOpt {
     /// Query number. If not specified, runs all queries
     #[structopt(short, long)]
-    query: Option<usize>,
+    pub query: Option<usize>,
 
     /// Common options
     #[structopt(flatten)]
@@ -96,9 +97,6 @@ pub struct RunOpt {
     #[structopt(short = "t", long = "sorted")]
     sorted: bool,
 }
-
-const TPCH_QUERY_START_ID: usize = 1;
-const TPCH_QUERY_END_ID: usize = 22;
 
 impl RunOpt {
     pub async fn run(self) -> Result<()> {
@@ -170,7 +168,7 @@ impl RunOpt {
                 }
             }
 
-            let elapsed = start.elapsed(); //.as_secs_f64() * 1000.0;
+            let elapsed = start.elapsed();
             let ms = elapsed.as_secs_f64() * 1000.0;
             millis.push(ms);
             info!("output:\n\n{}\n\n", pretty_format_batches(&result)?);
@@ -183,6 +181,9 @@ impl RunOpt {
 
         let avg = millis.iter().sum::<f64>() / millis.len() as f64;
         println!("Query {query_id} avg time: {avg:.2} ms");
+
+        // Print memory stats using mimalloc (only when compiled with --features mimalloc_extended)
+        print_memory_stats();
 
         Ok(query_results)
     }

@@ -20,7 +20,7 @@
 //! - [H2O AI Benchmark](https://duckdb.org/2023/04/14/h2oai.html)
 //! - [Extended window function benchmark](https://duckdb.org/2024/06/26/benchmarks-over-time.html#window-functions-benchmark)
 
-use crate::util::{BenchmarkRun, CommonOpt};
+use crate::util::{print_memory_stats, BenchmarkRun, CommonOpt};
 use datafusion::logical_expr::{ExplainFormat, ExplainOption};
 use datafusion::{error::Result, prelude::SessionContext};
 use datafusion_common::{
@@ -34,7 +34,7 @@ use structopt::StructOpt;
 #[structopt(verbatim_doc_comment)]
 pub struct RunOpt {
     #[structopt(short, long)]
-    query: Option<usize>,
+    pub query: Option<usize>,
 
     /// Common options
     #[structopt(flatten)]
@@ -48,7 +48,7 @@ pub struct RunOpt {
         long = "queries-path",
         default_value = "benchmarks/queries/h2o/groupby.sql"
     )]
-    queries_path: PathBuf,
+    pub queries_path: PathBuf,
 
     /// Path to data file (parquet or csv)
     /// Default value is the G1_1e7_1e7_100_0.csv file in the h2o benchmark
@@ -132,6 +132,9 @@ impl RunOpt {
             let avg = millis.iter().sum::<f64>() / millis.len() as f64;
             println!("Query {query_id} avg time: {avg:.2} ms");
 
+            // Print memory usage stats using mimalloc (only when compiled with --features mimalloc_extended)
+            print_memory_stats();
+
             if self.common.debug {
                 ctx.sql(sql)
                     .await?
@@ -197,12 +200,12 @@ impl RunOpt {
     }
 }
 
-struct AllQueries {
+pub struct AllQueries {
     queries: Vec<String>,
 }
 
 impl AllQueries {
-    fn try_new(path: &Path) -> Result<Self> {
+    pub fn try_new(path: &Path) -> Result<Self> {
         let all_queries = std::fs::read_to_string(path)
             .map_err(|e| exec_datafusion_err!("Could not open {path:?}: {e}"))?;
 
@@ -212,7 +215,7 @@ impl AllQueries {
     }
 
     /// Returns the text of query `query_id`
-    fn get_query(&self, query_id: usize) -> Result<&str> {
+    pub fn get_query(&self, query_id: usize) -> Result<&str> {
         self.queries
             .get(query_id - 1)
             .ok_or_else(|| {
@@ -225,11 +228,11 @@ impl AllQueries {
             .map(|s| s.as_str())
     }
 
-    fn min_query_id(&self) -> usize {
+    pub fn min_query_id(&self) -> usize {
         1
     }
 
-    fn max_query_id(&self) -> usize {
+    pub fn max_query_id(&self) -> usize {
         self.queries.len()
     }
 }

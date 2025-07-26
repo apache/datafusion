@@ -33,6 +33,7 @@ workspace = true
 ci = []
 default = ["mimalloc"]
 snmalloc = ["snmalloc-rs"]
+mimalloc_extended = ["libmimalloc-sys/extended"]
 
 [dependencies]
 arrow = { workspace = true }
@@ -40,11 +41,13 @@ datafusion = { workspace = true, default-features = true }
 datafusion-common = { workspace = true, default-features = true }
 env_logger = { workspace = true }
 futures = { workspace = true }
+libmimalloc-sys = { version = "0.1", optional = true }
 log = { workspace = true }
 mimalloc = { version = "0.1", optional = true, default-features = false }
 object_store = { workspace = true }
 parquet = { workspace = true, default-features = true }
 rand = { workspace = true }
+regex.workspace = true
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = { workspace = true }
 snmalloc-rs = { version = "0.3", optional = true }

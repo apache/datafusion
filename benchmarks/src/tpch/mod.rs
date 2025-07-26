@@ -34,6 +34,9 @@ pub const TPCH_TABLES: &[&str] = &[
     "part", "supplier", "partsupp", "customer", "orders", "lineitem", "nation", "region",
 ];
 
+pub const TPCH_QUERY_START_ID: usize = 1;
+pub const TPCH_QUERY_END_ID: usize = 22;
+
 /// The `.tbl` file contains a trailing column
 pub fn get_tbl_tpch_table_schema(table: &str) -> Schema {
     let mut schema = SchemaBuilder::from(get_tpch_table_schema(table).fields);
