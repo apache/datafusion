@@ -40,10 +40,12 @@ mod test {
     };
     use datafusion_physical_plan::coalesce_batches::CoalesceBatchesExec;
     use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
+    use datafusion_physical_plan::common::compute_record_batch_statistics;
     use datafusion_physical_plan::empty::EmptyExec;
     use datafusion_physical_plan::filter::FilterExec;
     use datafusion_physical_plan::joins::CrossJoinExec;
     use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
+    use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
     use datafusion_physical_plan::projection::ProjectionExec;
     use datafusion_physical_plan::sorts::sort::SortExec;
     use datafusion_physical_plan::union::UnionExec;
@@ -725,6 +727,34 @@ mod test {
         assert_eq!(1, partitions.len());
         let result: Vec<RecordBatch> = partitions.remove(0).try_collect().await?;
         assert_eq!(1, result[0].num_rows());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_statistic_by_partition_of_placeholder_rows() -> Result<()> {
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+        let plan = Arc::new(PlaceholderRowExec::new(schema).with_partitions(2))
+            as Arc<dyn ExecutionPlan>;
+        let schema = plan.schema();
+
+        let ctx = TaskContext::default();
+        let partitions = execute_stream_partitioned(Arc::clone(&plan), Arc::new(ctx))?;
+
+        let mut all_batches = vec![];
+        for (i, partition_stream) in partitions.into_iter().enumerate() {
+            let batches: Vec<RecordBatch> = partition_stream.try_collect().await?;
+            let actual = plan.partition_statistics(Some(i))?;
+            let expected =
+                compute_record_batch_statistics(&[batches.clone()], &schema, None);
+            assert_eq!(actual, expected);
+            all_batches.push(batches);
+        }
+
+        let actual = plan.partition_statistics(None)?;
+        let expected = compute_record_batch_statistics(&all_batches, &schema, None);
+        assert_eq!(actual, expected);
 
         Ok(())
     }
