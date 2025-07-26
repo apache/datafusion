@@ -200,8 +200,9 @@ pub fn unnormalize_cols(exprs: impl IntoIterator<Item = Expr>) -> Vec<Expr> {
 pub fn strip_outer_reference(expr: Expr) -> Expr {
     expr.transform(|expr| {
         Ok({
-            if let Expr::OuterReferenceColumn(_, col) = expr {
-                Transformed::yes(Expr::Column(col))
+            // Match the boxed (DataType, Column) tuple and extract the Column
+            if let Expr::OuterReferenceColumn(boxed_pair) = expr {
+                Transformed::yes(Expr::Column(boxed_pair.column))
             } else {
                 Transformed::no(expr)
             }

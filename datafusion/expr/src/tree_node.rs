@@ -71,7 +71,7 @@ impl TreeNode for Expr {
             #[expect(deprecated)]
             Expr::Column(_)
             // Treat OuterReferenceColumn as a leaf expression
-            | Expr::OuterReferenceColumn(_, _)
+            | Expr::OuterReferenceColumn(_)
             | Expr::ScalarVariable(_, _)
             | Expr::Literal(_, _)
             | Expr::Exists { .. }
@@ -122,7 +122,7 @@ impl TreeNode for Expr {
             Expr::Column(_)
             | Expr::Wildcard { .. }
             | Expr::Placeholder(Placeholder { .. })
-            | Expr::OuterReferenceColumn(_, _)
+            | Expr::OuterReferenceColumn(_)
             | Expr::Exists { .. }
             | Expr::ScalarSubquery(_)
             | Expr::ScalarVariable(_, _)
