@@ -3,10 +3,7 @@ use crate::memory_pool::pool::{
     FairSpillPool, GreedyMemoryPool, TrackConsumersPool, UnboundedMemoryPool,
 };
 use crate::memory_pool::MemoryPool;
-<<<<<<< ours
-=======
 use datafusion_common::Result;
->>>>>>> theirs
 use datafusion_expr::Accumulator;
 use std::any::Any;
 
@@ -22,11 +19,7 @@ use std::any::Any;
 /// let pool = Arc::new(GreedyMemoryPool::new(1024));
 /// let mut reservation = MemoryConsumer::new("example").register(&pool);
 /// reservation.try_grow(256).unwrap();
-<<<<<<< ours
-/// println!("{}", reservation.explain_memory());
-=======
 /// println!("{}", reservation.explain_memory().unwrap());
->>>>>>> theirs
 /// ```
 pub trait ExplainMemory {
     /// Returns a human readable string describing memory usage.
@@ -45,17 +38,10 @@ impl ExplainMemory for MemoryReservation {
 }
 
 impl<T: Accumulator + ?Sized> ExplainMemory for T {
-<<<<<<< ours
-    fn explain_memory(&self) -> String {
-        // `Accumulator` requires implementers to provide `size()` which
-        // we leverage here to report memory usage.
-        human_readable_size(self.size())
-=======
     fn explain_memory(&self) -> Result<String> {
         // `Accumulator` requires implementers to provide `size()` which
         // we leverage here to report memory usage.
         Ok(human_readable_size(self.size()))
->>>>>>> theirs
     }
 }
 
@@ -72,8 +58,6 @@ pub fn report_top_consumers(
     ) -> Option<String> {
         pool.downcast_ref::<TrackConsumersPool<I>>()
             .map(|tracked| tracked.report_top(top))
-<<<<<<< ours
-=======
     }
 
     try_report::<GreedyMemoryPool>(pool, top)
@@ -130,7 +114,6 @@ mod tests {
         let acc = DummyAcc(42);
         assert_eq!(acc.explain_memory()?, human_readable_size(42));
         Ok(())
->>>>>>> theirs
     }
 
     try_report::<GreedyMemoryPool>(pool, top)

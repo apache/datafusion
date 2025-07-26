@@ -1192,11 +1192,7 @@ impl ExplainMemory for GroupedHashAggregateStream {
             part("indices", self.current_group_indices.allocated_size()),
         ];
         for (i, acc) in self.accumulators.iter().enumerate() {
-<<<<<<< ours
-            parts.push(format!("acc[{i}]: {}", human_readable_size(acc.size())));
-=======
             parts.push(part(&format!("acc[{i}]"), acc.size()));
->>>>>>> theirs
         }
         parts.push(format!(
             "reservation: {}",
