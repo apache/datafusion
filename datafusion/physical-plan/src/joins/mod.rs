@@ -29,6 +29,7 @@ pub use symmetric_hash_join::SymmetricHashJoinExec;
 mod cross_join;
 mod hash_join;
 mod nested_loop_join;
+mod nlj;
 mod sort_merge_join;
 mod stream_join_utils;
 mod symmetric_hash_join;
