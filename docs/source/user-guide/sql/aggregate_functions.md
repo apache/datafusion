@@ -618,6 +618,27 @@ regr_avgx(expression_y, expression_x)
 - **expression_y**: Dependent variable expression to operate on. Can be a constant, column, or function, and any combination of operators.
 - **expression_x**: Independent variable expression to operate on. Can be a constant, column, or function, and any combination of operators.
 
+### Exmaple
+
+consider the table:
+
+```text
++-----+-------------+
+| day | temperature |
+| --- | ----------- |
+| 1   | 35          |
+| 2   | 36          |
+| 3   | NULL        |
+| 4   | 37          |
+| 5   | 38          |
++-----+-------------+
+```
+
+```sql
+SELECT regr_avgx(total_sales, day) AS avg_day --considering day(x) independent variable
+FROM daily_sales; --output = (1+2+4+5)/4 = 3.0
+```
+
 ### `regr_avgy`
 
 Computes the average of the dependent variable (output) expression_y for the non-null paired data points.
@@ -630,6 +651,13 @@ regr_avgy(expression_y, expression_x)
 
 - **expression_y**: Dependent variable expression to operate on. Can be a constant, column, or function, and any combination of operators.
 - **expression_x**: Independent variable expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+### Example
+
+```sql
+SELECT regr_avgy(temperature, day) AS avg_temperature --temperature as Dependent Variable(Y)
+FROM daily_temperature; --output = 33.25
+```
 
 ### `regr_count`
 
@@ -644,6 +672,28 @@ regr_count(expression_y, expression_x)
 - **expression_y**: Dependent variable expression to operate on. Can be a constant, column, or function, and any combination of operators.
 - **expression_x**: Independent variable expression to operate on. Can be a constant, column, or function, and any combination of operators.
 
+### Example
+
+consider the following table:
+
+```text
++-----+---------------+
+| day | user_signups  |
+| --- | ------------- |
+| 1   | 100           |
+| 2   | 120           |
+| 3   | NULL          |
+| 4   | 110           |
+| 5   | NULL          |
++-----+---------------+
+```
+
+```sql
+SELECT regr_count(user_signups, day) AS valid_pairs
+FROM daily_metrics; -- output = 3 pairs i.e (1,100),(2,120),(4,110)
+
+```
+
 ### `regr_intercept`
 
 Computes the y-intercept of the linear regression line. For the equation (y = kx + b), this function returns b.
@@ -656,6 +706,28 @@ regr_intercept(expression_y, expression_x)
 
 - **expression_y**: Dependent variable expression to operate on. Can be a constant, column, or function, and any combination of operators.
 - **expression_x**: Independent variable expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+### Example
+
+consider the table `weekly_performance`:
+
+```text
++------+---------------------+
+| week | productivity_score  |
+| ---- | ------------------- |
+| 1    | 60                  |
+| 2    | 65                  |
+| 3    | 70                  |
+| 4    | 75                  |
+| 5    | 80                  |
++------+---------------------+
+```
+
+```sql
+SELECT regr_intercept(productivity_score, week) AS intercept -- week(x),productivity_score(y)
+FROM weekly_performance; --k = 5
+-- y = kx+b ->60 = 5*1+b -->b = 55
+```
 
 ### `regr_r2`
 
@@ -670,6 +742,13 @@ regr_r2(expression_y, expression_x)
 - **expression_y**: Dependent variable expression to operate on. Can be a constant, column, or function, and any combination of operators.
 - **expression_x**: Independent variable expression to operate on. Can be a constant, column, or function, and any combination of operators.
 
+### Example
+
+```sql
+SELECT regr_r2(productivity_score, week) AS r_squared
+FROM weekly_performance; -- Output - 1.0 as data is perfect linear
+```
+
 ### `regr_slope`
 
 Returns the slope of the linear regression line for non-null pairs in aggregate columns. Given input column Y and X: regr_slope(Y, X) returns the slope (k in Y = k\*X + b) using minimal RSS fitting.
@@ -682,6 +761,16 @@ regr_slope(expression_y, expression_x)
 
 - **expression_y**: Dependent variable expression to operate on. Can be a constant, column, or function, and any combination of operators.
 - **expression_x**: Independent variable expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+### Example
+
+```sql
+--in simpler words slope = Δx/Δy
+SELECT regr_slope(productivity_score, week) AS slope
+FROM weekly_performance;
+```
+
+**Remember**: the slops tells _how much y changes when x increases by 1._
 
 ### `regr_sxx`
 
@@ -696,6 +785,27 @@ regr_sxx(expression_y, expression_x)
 - **expression_y**: Dependent variable expression to operate on. Can be a constant, column, or function, and any combination of operators.
 - **expression_x**: Independent variable expression to operate on. Can be a constant, column, or function, and any combination of operators.
 
+### Example
+
+consider the following table `study_hours`:
+
+```text
++-------------+-----------+-----------------+
+| student_id  | hours (x) | test_score (y)  |
+| ----------- | --------- | --------------- |
+| 1           | 2         | 55              |
+| 2           | 4         | 65              |
+| 3           | 6         | 75              |
+| 4           | 8         | 85              |
+| 5           | 10        | 95              |
++-------------+-----------+-----------------+
+```
+
+```sql
+SELECT regr_sxx(test_score, hours) AS sxx
+FROM study_hours; --Output - 40
+```
+
 ### `regr_sxy`
 
 Computes the sum of products of paired data points.
@@ -709,6 +819,13 @@ regr_sxy(expression_y, expression_x)
 - **expression_y**: Dependent variable expression to operate on. Can be a constant, column, or function, and any combination of operators.
 - **expression_x**: Independent variable expression to operate on. Can be a constant, column, or function, and any combination of operators.
 
+### Example
+
+```sql
+SELECT regr_sxy(productivity_score, week) AS sum_product_deviations
+FROM employee_productivity;
+```
+
 ### `regr_syy`
 
 Computes the sum of squares of the dependent variable.
@@ -721,6 +838,13 @@ regr_syy(expression_y, expression_x)
 
 - **expression_y**: Dependent variable expression to operate on. Can be a constant, column, or function, and any combination of operators.
 - **expression_x**: Independent variable expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+### Example
+
+```sql
+SELECT regr_syy(productivity_score, week) AS sum_squares_y
+FROM employee_productivity;
+```
 
 ### `stddev`
 
