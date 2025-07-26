@@ -115,8 +115,4 @@ mod tests {
         assert_eq!(acc.explain_memory()?, human_readable_size(42));
         Ok(())
     }
-
-    try_report::<GreedyMemoryPool>(pool, top)
-        .or_else(|| try_report::<FairSpillPool>(pool, top))
-        .or_else(|| try_report::<UnboundedMemoryPool>(pool, top))
 }
