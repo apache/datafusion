@@ -305,7 +305,7 @@ impl ExecutionPlan for PartialSortExec {
             input,
             expr: self.expr.clone(),
             common_prefix_length: self.common_prefix_length,
-            in_mem_batches: vec![],
+            in_mem_batch: RecordBatch::new_empty(Arc::clone(&self.schema())),
             fetch: self.fetch,
             is_closed: false,
             baseline_metrics: BaselineMetrics::new(&self.metrics_set, partition),
@@ -334,7 +334,7 @@ struct PartialSortStream {
     /// should be more than 0 otherwise PartialSort is not applicable
     common_prefix_length: usize,
     /// Used as a buffer for part of the input not ready for sort
-    in_mem_batches: Vec<RecordBatch>,
+    in_mem_batch: RecordBatch,
     /// Fetch top N results
     fetch: Option<usize>,
     /// Whether the stream has finished returning all of its data or not
@@ -375,51 +375,61 @@ impl PartialSortStream {
             return Poll::Ready(None);
         }
         loop {
-            return Poll::Ready(match ready!(self.input.poll_next_unpin(cx)) {
-                Some(Ok(batch)) => {
-                    if let Some(slice_point) =
-                        self.get_slice_point(self.common_prefix_length, &batch)?
-                    {
-                        self.in_mem_batches.push(batch.slice(0, slice_point));
-                        let remaining_batch =
-                            batch.slice(slice_point, batch.num_rows() - slice_point);
-                        // Extract the sorted batch
-                        let sorted_batch = self.sort_in_mem_batches();
-                        // Refill with the remaining batch
-                        self.in_mem_batches.push(remaining_batch);
+            // Check if we've already reached the fetch limit
+            if self.fetch == Some(0) {
+                self.is_closed = true;
+                return Poll::Ready(None);
+            }
 
-                        debug_assert!(sorted_batch
-                            .as_ref()
-                            .map(|batch| batch.num_rows() > 0)
-                            .unwrap_or(true));
-                        Some(sorted_batch)
-                    } else {
-                        self.in_mem_batches.push(batch);
-                        continue;
+            match ready!(self.input.poll_next_unpin(cx)) {
+                Some(Ok(batch)) => {
+                    // Merge new batch into in_mem_batch
+                    self.in_mem_batch = concat_batches(
+                        &self.schema(),
+                        &[self.in_mem_batch.clone(), batch],
+                    )?;
+
+                    // Check if we have a slice point, otherwise keep accumulating in `self.in_mem_batch`.
+                    if let Some(slice_point) = self
+                        .get_slice_point(self.common_prefix_length, &self.in_mem_batch)?
+                    {
+                        let sorted = self.in_mem_batch.slice(0, slice_point);
+                        self.in_mem_batch = self.in_mem_batch.slice(
+                            slice_point,
+                            self.in_mem_batch.num_rows() - slice_point,
+                        );
+                        let sorted_batch = sort_batch(&sorted, &self.expr, self.fetch)?;
+                        if let Some(fetch) = self.fetch.as_mut() {
+                            *fetch -= sorted_batch.num_rows();
+                        }
+
+                        if sorted_batch.num_rows() > 0 {
+                            return Poll::Ready(Some(Ok(sorted_batch)));
+                        }
                     }
                 }
-                Some(Err(e)) => Some(Err(e)),
+                Some(Err(e)) => return Poll::Ready(Some(Err(e))),
                 None => {
                     self.is_closed = true;
-                    // once input is consumed, sort the rest of the inserted batches
-                    let remaining_batch = self.sort_in_mem_batches()?;
-                    if remaining_batch.num_rows() > 0 {
-                        Some(Ok(remaining_batch))
+                    // Once input is consumed, sort the rest of the inserted batches
+                    let remaining_batch = self.sort_in_mem_batch()?;
+                    return if remaining_batch.num_rows() > 0 {
+                        Poll::Ready(Some(Ok(remaining_batch)))
                     } else {
-                        None
-                    }
+                        Poll::Ready(None)
+                    };
                 }
-            });
+            };
         }
     }
 
     /// Returns a sorted RecordBatch from in_mem_batches and clears in_mem_batches
     ///
-    /// If fetch is specified for PartialSortStream `sort_in_mem_batches` will limit
+    /// If fetch is specified for PartialSortStream `sort_in_mem_batch` will limit
     /// the last RecordBatch returned and will mark the stream as closed
-    fn sort_in_mem_batches(self: &mut Pin<&mut Self>) -> Result<RecordBatch> {
-        let input_batch = concat_batches(&self.schema(), &self.in_mem_batches)?;
-        self.in_mem_batches.clear();
+    fn sort_in_mem_batch(self: &mut Pin<&mut Self>) -> Result<RecordBatch> {
+        let input_batch = self.in_mem_batch.clone();
+        self.in_mem_batch = RecordBatch::new_empty(self.schema());
         let result = sort_batch(&input_batch, &self.expr, self.fetch)?;
         if let Some(remaining_fetch) = self.fetch {
             // remaining_fetch - result.num_rows() is always be >= 0
@@ -1089,6 +1099,89 @@ mod tests {
             "The sort should have returned all memory used back to the memory manager"
         );
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_partial_sort_with_homogeneous_batches() -> Result<()> {
+        // Test case for the bug where batches with homogeneous sort keys
+        // (e.g., [1,1,1], [2,2,2]) would not be properly detected as having
+        // slice points between batches.
+        let task_ctx = Arc::new(TaskContext::default());
+
+        // Create batches where each batch has homogeneous values for sort keys
+        let batch1 = test::build_table_i32(
+            ("a", &vec![1; 3]),
+            ("b", &vec![1; 3]),
+            ("c", &vec![3, 2, 1]),
+        );
+        let batch2 = test::build_table_i32(
+            ("a", &vec![2; 3]),
+            ("b", &vec![2; 3]),
+            ("c", &vec![4, 6, 4]),
+        );
+        let batch3 = test::build_table_i32(
+            ("a", &vec![3; 3]),
+            ("b", &vec![3; 3]),
+            ("c", &vec![9, 7, 8]),
+        );
+
+        let schema = batch1.schema();
+        let mem_exec = TestMemoryExec::try_new_exec(
+            &[vec![batch1, batch2, batch3]],
+            Arc::clone(&schema),
+            None,
+        )?;
+
+        let option_asc = SortOptions {
+            descending: false,
+            nulls_first: false,
+        };
+
+        // Partial sort with common prefix of 2 (sorting by a, b, c)
+        let partial_sort_exec = Arc::new(PartialSortExec::new(
+            [
+                PhysicalSortExpr {
+                    expr: col("a", &schema)?,
+                    options: option_asc,
+                },
+                PhysicalSortExpr {
+                    expr: col("b", &schema)?,
+                    options: option_asc,
+                },
+                PhysicalSortExpr {
+                    expr: col("c", &schema)?,
+                    options: option_asc,
+                },
+            ]
+            .into(),
+            mem_exec,
+            2,
+        ));
+
+        let result = collect(partial_sort_exec, Arc::clone(&task_ctx)).await?;
+
+        assert_eq!(result.len(), 3,);
+
+        allow_duplicates! {
+            assert_snapshot!(batches_to_string(&result), @r#"
+                +---+---+---+
+                | a | b | c |
+                +---+---+---+
+                | 1 | 1 | 1 |
+                | 1 | 1 | 2 |
+                | 1 | 1 | 3 |
+                | 2 | 2 | 4 |
+                | 2 | 2 | 4 |
+                | 2 | 2 | 6 |
+                | 3 | 3 | 7 |
+                | 3 | 3 | 8 |
+                | 3 | 3 | 9 |
+                +---+---+---+
+                "#);
+        }
+
+        assert_eq!(task_ctx.runtime_env().memory_pool.reserved(), 0,);
         Ok(())
     }
 }
