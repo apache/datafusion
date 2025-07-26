@@ -26,6 +26,7 @@ impl<T: Accumulator + ?Sized> ExplainMemory for T {
     }
 }
 
+
 /// Try to downcast a pooled type to [`TrackConsumersPool`] and report
 /// the largest consumers. Returns `None` if the pool does not track
 /// consumers.
