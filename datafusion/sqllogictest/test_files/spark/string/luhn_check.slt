@@ -15,23 +15,145 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# This file was originally created by a porting script from:
-#   https://github.com/lakehq/sail/tree/43b6ed8221de5c4c4adbedbb267ae1351158b43c/crates/sail-spark-connect/tests/gold_data/function
-# This file is part of the implementation of the datafusion-spark function library.
-# For more information, please see:
-#   https://github.com/apache/datafusion/issues/15914
 
-## Original Query: SELECT luhn_check('79927398713');
-## PySpark 3.5.5 Result: {'luhn_check(79927398713)': True, 'typeof(luhn_check(79927398713))': 'boolean', 'typeof(79927398713)': 'string'}
-#query
-#SELECT luhn_check('79927398713'::string);
+query B
+SELECT luhn_check('79927398713'::string);
+----
+true
 
-## Original Query: SELECT luhn_check('79927398714');
-## PySpark 3.5.5 Result: {'luhn_check(79927398714)': False, 'typeof(luhn_check(79927398714))': 'boolean', 'typeof(79927398714)': 'string'}
-#query
-#SELECT luhn_check('79927398714'::string);
 
-## Original Query: SELECT luhn_check('8112189876');
-## PySpark 3.5.5 Result: {'luhn_check(8112189876)': True, 'typeof(luhn_check(8112189876))': 'boolean', 'typeof(8112189876)': 'string'}
-#query
-#SELECT luhn_check('8112189876'::string);
+query B
+SELECT luhn_check('79927398714'::string);
+----
+false
+
+
+query B
+SELECT luhn_check('8112189876'::string);
+----
+true
+
+query B
+select luhn_check('4111111111111111'::string);
+----
+true
+
+query B
+select luhn_check('5500000000000004'::string);
+----
+true
+
+query B
+select luhn_check('340000000000009'::string);
+----
+true
+
+query B
+select luhn_check('6011000000000004'::string);
+----
+true
+
+
+query B
+select luhn_check('6011000000000005'::string);
+----
+false
+
+
+query B
+select luhn_check('378282246310006'::string);
+----
+false
+
+
+query B
+select luhn_check('0'::string);
+----
+true
+
+
+query B
+select luhn_check('79927398713'::string)
+----
+true
+
+query B
+select luhn_check('4417123456789113'::string)
+----
+true
+
+query B
+select luhn_check('7992 7398 714'::string)
+----
+false
+
+query B
+select luhn_check('79927398714'::string)
+----
+false
+
+query B
+select luhn_check('4111111111111111    '::string)
+----
+false
+
+
+query B
+select luhn_check('4111111 111111111'::string)
+----
+false
+
+query B
+select luhn_check(' 4111111111111111'::string)
+----
+false
+
+query B
+select luhn_check(''::string)
+----
+false
+
+query B
+select luhn_check('  ')
+----
+false
+
+
+query B
+select luhn_check('510B105105105106'::string)
+----
+false
+
+
+query B
+select luhn_check('ABCDED'::string)
+----
+false
+
+query B
+select luhn_check(null);
+----
+NULL
+
+query B
+select luhn_check(6011111111111117::BIGINT)
+----
+true
+
+
+query B
+select luhn_check(6011111111111118::BIGINT)
+----
+false
+
+
+query B
+select luhn_check(123.456::decimal(6,3))
+----
+false
+
+query B
+SELECT luhn_check(a) FROM (VALUES ('79927398713'::string), ('79927398714'::string)) AS t(a);
+----
+true
+false
