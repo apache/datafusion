@@ -19,10 +19,12 @@
 
 # Upgrade Guides
 
-## DataFusion `49.0.0`
+## DataFusion `50.0.0`
 
-**Note:** DataFusion `49.0.0` has not been released yet. The information provided in this section pertains to features and changes that have already been merged to the main branch and are awaiting release in this version.
-You can see the current [status of the `49.0.0 `release here](https://github.com/apache/datafusion/issues/16235)
+**Note:** DataFusion `50.0.0` has not been released yet. The information provided in this section pertains to features and changes that have already been merged to the main branch and are awaiting release in this version.
+You can see the current [status of the `50.0.0 `release here](https://github.com/apache/datafusion/issues/16799)
+
+## DataFusion `49.0.0`
 
 ### `MSRV` updated to 1.85.1
 
