@@ -695,7 +695,8 @@ Can be a constant, column, or function, and any combination of array operators.<
 </section>
 <section id="unnest-struct">
 <h3><code class="docutils literal notranslate"><span class="pre">unnest</span> <span class="pre">(struct)</span></code><a class="headerlink" href="#unnest-struct" title="Link to this heading">¶</a></h3>
-<p>Expand a struct fields into individual columns.</p>
+<p>Expand a struct fields into individual columns.
+Each field of the struct will be prefixed with <code class="docutils literal notranslate"><span class="pre">__unnest_placeholder</span></code> and could be accessed via <code class="docutils literal notranslate"><span class="pre">&quot;__unnest_placeholder(&lt;struct&gt;).&lt;field&gt;&quot;</span></code>.</p>
 <section id="id1">
 <h4>Arguments<a class="headerlink" href="#id1" title="Link to this heading">¶</a></h4>
 <ul class="simple">
@@ -718,12 +719,12 @@ Can be a constant, column, or function, and any combination of object operators.
 <span class="o">+</span><span class="c1">---------------------------+</span>
 
 <span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="k">unnest</span><span class="p">(</span><span class="n">struct_column</span><span class="p">)</span><span class="w"> </span><span class="k">from</span><span class="w"> </span><span class="n">foov</span><span class="p">;</span>
-<span class="o">+</span><span class="c1">------------------------------------------+------------------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="n">unnest_placeholder</span><span class="p">(</span><span class="n">foov</span><span class="p">.</span><span class="n">struct_column</span><span class="p">).</span><span class="n">a</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">unnest_placeholder</span><span class="p">(</span><span class="n">foov</span><span class="p">.</span><span class="n">struct_column</span><span class="p">).</span><span class="n">b</span><span class="w"> </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">------------------------------------------+------------------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="mi">5</span><span class="w">                                        </span><span class="o">|</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="n">string</span><span class="w">                                 </span><span class="o">|</span>
-<span class="o">|</span><span class="w"> </span><span class="mi">6</span><span class="w">                                        </span><span class="o">|</span><span class="w"> </span><span class="n">another</span><span class="w"> </span><span class="n">string</span><span class="w">                           </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">------------------------------------------+------------------------------------------+</span>
+<span class="o">+</span><span class="c1">--------------------------------------------+--------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">__unnest_placeholder</span><span class="p">(</span><span class="n">foov</span><span class="p">.</span><span class="n">struct_column</span><span class="p">).</span><span class="n">a</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">__unnest_placeholder</span><span class="p">(</span><span class="n">foov</span><span class="p">.</span><span class="n">struct_column</span><span class="p">).</span><span class="n">b</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">--------------------------------------------+--------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">5</span><span class="w">                                          </span><span class="o">|</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="n">string</span><span class="w">                                   </span><span class="o">|</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">6</span><span class="w">                                          </span><span class="o">|</span><span class="w"> </span><span class="n">another</span><span class="w"> </span><span class="n">string</span><span class="w">                             </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">--------------------------------------------+--------------------------------------------+</span>
 </pre></div>
 </div>
 </section>
