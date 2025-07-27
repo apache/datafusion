@@ -21,8 +21,6 @@
 # For more information, please see:
 #   https://github.com/apache/datafusion/issues/15914
 
-## Original Query: SELECT next_day('2015-01-14', 'TU');
-## PySpark 3.5.5 Result: {'next_day(2015-01-14, TU)': datetime.date(2015, 1, 20), 'typeof(next_day(2015-01-14, TU))': 'date', 'typeof(2015-01-14)': 'string', 'typeof(TU)': 'string'}
 query D
 SELECT next_day('2015-01-14'::DATE, 'TU'::string);
 ----
@@ -72,15 +70,11 @@ SELECT next_day('2015-13-32'::DATE, 'Sun'::string);
 query D
 SELECT next_day(a, b)
 FROM VALUES
-    ('2015-01-14'::DATE, 'TU'::string),
-    ('2015-07-27'::DATE, 'Sun'::string),
     ('2000-01-01'::DATE, 'Mon'::string),
     (NULL::DATE, NULL::string),
     (NULL::DATE, 'Mon'::string),
     ('2015-01-14'::DATE, NULL::string) as t(a, b);
 ----
-2015-01-20
-2015-08-02
 2000-01-03
 NULL
 NULL
