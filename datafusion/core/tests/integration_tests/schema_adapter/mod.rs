@@ -1,0 +1,1 @@
+mod schema_adapter_integration_tests;
