@@ -1,0 +1,301 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+##########
+## QUALIFY Clause Tests
+##########
+
+# Create test data
+statement ok
+CREATE TABLE users (
+  id INT,
+  name VARCHAR,
+  age INT,
+  salary DECIMAL(10,2),
+  dept VARCHAR
+) AS VALUES
+(1, 'Alice', 25, 50000.00, 'Engineering'),
+(2, 'Bob', 30, 60000.00, 'Engineering'),
+(3, 'Charlie', 25, 55000.00, 'Engineering'),
+(4, 'Diana', 35, 70000.00, 'Marketing'),
+(5, 'Eve', 30, 65000.00, 'Marketing'),
+(6, 'Frank', 25, 52000.00, 'Engineering'),
+(7, 'Grace', 35, 75000.00, 'Marketing'),
+(8, 'Henry', 30, 62000.00, 'Engineering');
+
+# Basic QUALIFY with ROW_NUMBER
+query ITI
+SELECT id, name, ROW_NUMBER() OVER (PARTITION BY dept ORDER BY salary DESC) as rn 
+FROM users 
+QUALIFY rn = 1
+ORDER BY dept, id;
+----
+8 Henry 1
+7 Grace 1
+
+# QUALIFY with RANK
+query ITI
+SELECT id, name, RANK() OVER (ORDER BY salary DESC) as rank 
+FROM users 
+QUALIFY rank <= 3
+ORDER BY rank, id;
+----
+7 Grace 1
+4 Diana 2
+5 Eve 3
+
+# QUALIFY with DENSE_RANK
+query ITI
+SELECT id, name, DENSE_RANK() OVER (PARTITION BY dept ORDER BY age) as dense_rank 
+FROM users 
+QUALIFY dense_rank <= 2
+ORDER BY dept, dense_rank, id;
+----
+1 Alice 1
+3 Charlie 1
+6 Frank 1
+2 Bob 2
+8 Henry 2
+5 Eve 1
+4 Diana 2
+7 Grace 2
+
+# QUALIFY with complex condition
+query ITII
+SELECT id, name, ROW_NUMBER() OVER (PARTITION BY dept ORDER BY salary DESC) as rn,
+       RANK() OVER (ORDER BY age) as age_rank
+FROM users 
+QUALIFY rn <= 2 AND age_rank <= 5
+ORDER BY dept, rn, id;
+----
+8 Henry 1 4
+2 Bob 2 4
+
+# QUALIFY with LAG function
+query ITRR
+SELECT id, name, salary, LAG(salary) OVER (PARTITION BY dept ORDER BY id) as prev_salary
+FROM users 
+QUALIFY prev_salary IS NOT NULL AND salary > prev_salary
+ORDER BY dept, id;
+----
+2 Bob 60000 50000
+8 Henry 62000 52000
+7 Grace 75000 65000
+
+# QUALIFY with LEAD function
+query ITRR
+SELECT id, name, salary, LEAD(salary) OVER (PARTITION BY dept ORDER BY id) as next_salary
+FROM users 
+QUALIFY next_salary IS NOT NULL AND salary < next_salary
+ORDER BY dept, id;
+----
+1 Alice 50000 60000
+6 Frank 52000 62000
+5 Eve 65000 75000
+
+# QUALIFY with NTILE
+query ITI
+SELECT id, name, NTILE(3) OVER (PARTITION BY dept ORDER BY salary DESC) as tile
+FROM users 
+QUALIFY tile = 1
+ORDER BY dept, id;
+----
+2 Bob 1
+8 Henry 1
+7 Grace 1
+
+# QUALIFY with PERCENT_RANK
+query ITR
+SELECT id, name, PERCENT_RANK() OVER (PARTITION BY dept ORDER BY salary) as pct_rank
+FROM users 
+QUALIFY pct_rank >= 0.5
+ORDER BY dept, pct_rank, id;
+----
+3 Charlie 0.5
+2 Bob 0.75
+8 Henry 1
+4 Diana 0.5
+7 Grace 1
+
+# QUALIFY with CUME_DIST
+query ITR
+SELECT id, name, CUME_DIST() OVER (PARTITION BY dept ORDER BY age) as cume_dist
+FROM users 
+QUALIFY cume_dist >= 0.75
+ORDER BY dept, cume_dist, id;
+----
+2 Bob 1
+8 Henry 1
+4 Diana 1
+7 Grace 1
+
+# QUALIFY with multiple window functions
+query ITIII
+SELECT id, name, 
+       ROW_NUMBER() OVER (PARTITION BY dept ORDER BY salary DESC) as rn,
+       RANK() OVER (ORDER BY age) as age_rank,
+       DENSE_RANK() OVER (PARTITION BY dept ORDER BY age) as dept_age_rank
+FROM users 
+QUALIFY rn <= 2 AND age_rank <= 4 AND dept_age_rank <= 2
+ORDER BY dept, rn, id;
+----
+8 Henry 1 4 2
+2 Bob 2 4 2
+
+# QUALIFY with arithmetic expressions
+query ITRI
+SELECT id, name, salary, 
+       ROW_NUMBER() OVER (PARTITION BY dept ORDER BY salary DESC) as rn
+FROM users 
+QUALIFY rn = 1 AND salary > 60000
+ORDER BY dept, id;
+----
+8 Henry 62000 1
+7 Grace 75000 1
+
+# QUALIFY with string functions
+query ITI
+SELECT id, name, 
+       ROW_NUMBER() OVER (PARTITION BY dept ORDER BY name) as rn
+FROM users 
+QUALIFY rn = 1
+ORDER BY dept, id;
+----
+1 Alice 1
+4 Diana 1
+
+# window function with aggregate function
+query ITI
+SELECT id, name, COUNT(*) OVER (PARTITION BY dept) as cnt
+FROM users 
+QUALIFY cnt > 4
+ORDER BY dept, id;
+----
+1 Alice 5
+2 Bob 5
+3 Charlie 5
+6 Frank 5
+8 Henry 5
+
+# QUALIFY with HAVING
+query TR
+SELECT dept, AVG(salary) OVER (PARTITION BY dept) as r
+FROM users
+WHERE salary > 5000
+GROUP BY dept, salary
+HAVING SUM(salary) > 20000
+QUALIFY r > 60000 
+----
+Marketing 70000
+Marketing 70000
+Marketing 70000
+
+# Error: QUALIFY without window functions
+query error
+SELECT id, name FROM users QUALIFY id > 1;
+
+# Window function in QUALIFY
+query IT
+SELECT id, name FROM users QUALIFY COUNT(*) OVER () > 1 ORDER BY id;
+----
+1 Alice
+2 Bob
+3 Charlie
+4 Diana
+5 Eve
+6 Frank
+7 Grace
+8 Henry
+
+# verify the logical plan and physical plan
+query TT
+EXPLAIN SELECT id, name FROM users QUALIFY COUNT(*) OVER () > 1 ORDER BY id;
+----
+logical_plan
+01)Sort: users.id ASC NULLS LAST
+02)--Projection: users.id, users.name
+03)----Filter: count(Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING > Int64(1)
+04)------WindowAggr: windowExpr=[[count(Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+05)--------TableScan: users projection=[id, name]
+physical_plan
+01)SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--CoalesceBatchesExec: target_batch_size=8192
+03)----FilterExec: count(Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@2 > 1, projection=[id@0, name@1]
+04)------WindowAggExec: wdw=[count(Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "count(Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }]
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# plan row_number()
+query TT
+explain select row_number() over (PARTITION BY dept) as rk from users qualify rk > 1;
+----
+logical_plan
+01)Projection: row_number() PARTITION BY [users.dept] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS rk
+02)--Filter: row_number() PARTITION BY [users.dept] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING > UInt64(1)
+03)----Projection: row_number() PARTITION BY [users.dept] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+04)------WindowAggr: windowExpr=[[row_number() PARTITION BY [users.dept] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+05)--------TableScan: users projection=[dept]
+physical_plan
+01)ProjectionExec: expr=[row_number() PARTITION BY [users.dept] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@0 as rk]
+02)--CoalesceBatchesExec: target_batch_size=8192
+03)----FilterExec: row_number() PARTITION BY [users.dept] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@0 > 1
+04)------ProjectionExec: expr=[row_number() PARTITION BY [users.dept] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@1 as row_number() PARTITION BY [users.dept] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]
+05)--------BoundedWindowAggExec: wdw=[row_number() PARTITION BY [users.dept] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Field { name: "row_number() PARTITION BY [users.dept] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING], mode=[Sorted]
+06)----------SortExec: expr=[dept@0 ASC NULLS LAST], preserve_partitioning=[false]
+07)------------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# plan with window function and group by
+query TT
+EXPLAIN SELECT dept, AVG(salary) OVER (PARTITION BY dept) as r
+FROM users
+WHERE salary > 5000
+GROUP BY dept, salary
+HAVING SUM(salary) > 20000
+QUALIFY r > 60000
+----
+logical_plan
+01)Projection: users.dept, avg(users.salary) PARTITION BY [users.dept] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS r
+02)--Filter: avg(users.salary) PARTITION BY [users.dept] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING > Decimal128(Some(60000000000),14,6)
+03)----Projection: users.dept, avg(users.salary) PARTITION BY [users.dept] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+04)------WindowAggr: windowExpr=[[avg(users.salary) PARTITION BY [users.dept] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+05)--------Projection: users.dept, users.salary
+06)----------Filter: sum(users.salary) > Decimal128(Some(2000000),20,2)
+07)------------Aggregate: groupBy=[[users.dept, users.salary]], aggr=[[sum(users.salary)]]
+08)--------------Filter: users.salary > Decimal128(Some(500000),10,2)
+09)----------------TableScan: users projection=[salary, dept]
+physical_plan
+01)ProjectionExec: expr=[dept@0 as dept, avg(users.salary) PARTITION BY [users.dept] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@1 as r]
+02)--CoalesceBatchesExec: target_batch_size=8192
+03)----FilterExec: avg(users.salary) PARTITION BY [users.dept] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@1 > Some(60000000000),14,6
+04)------ProjectionExec: expr=[dept@0 as dept, avg(users.salary) PARTITION BY [users.dept] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@2 as avg(users.salary) PARTITION BY [users.dept] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]
+05)--------WindowAggExec: wdw=[avg(users.salary) PARTITION BY [users.dept] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "avg(users.salary) PARTITION BY [users.dept] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Decimal128(14, 6), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }]
+06)----------SortExec: expr=[dept@0 ASC NULLS LAST], preserve_partitioning=[true]
+07)------------CoalesceBatchesExec: target_batch_size=8192
+08)--------------RepartitionExec: partitioning=Hash([dept@0], 4), input_partitions=4
+09)----------------CoalesceBatchesExec: target_batch_size=8192
+10)------------------FilterExec: sum(users.salary)@2 > Some(2000000),20,2, projection=[dept@0, salary@1]
+11)--------------------AggregateExec: mode=FinalPartitioned, gby=[dept@0 as dept, salary@1 as salary], aggr=[sum(users.salary)]
+12)----------------------CoalesceBatchesExec: target_batch_size=8192
+13)------------------------RepartitionExec: partitioning=Hash([dept@0, salary@1], 4), input_partitions=4
+14)--------------------------AggregateExec: mode=Partial, gby=[dept@1 as dept, salary@0 as salary], aggr=[sum(users.salary)]
+15)----------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+16)------------------------------CoalesceBatchesExec: target_batch_size=8192
+17)--------------------------------FilterExec: salary@0 > Some(500000),10,2
+18)----------------------------------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Clean up
+statement ok
+DROP TABLE users; 
