@@ -991,4 +991,72 @@ mod tests {
         assert_eq!(accumulator.evaluate()?, ScalarValue::Int64(Some(0)));
         Ok(())
     }
+
+    #[test]
+    fn sliding_distinct_count_accumulator_basic() -> Result<()> {
+        // Basic update_batch + evaluate functionality
+        let mut acc = SlidingDistinctCountAccumulator::try_new(&DataType::Int32)?;
+        // Create an Int32Array: [1, 2, 2, 3, null]
+        let values: ArrayRef = Arc::new(Int32Array::from(vec![
+            Some(1),
+            Some(2),
+            Some(2),
+            Some(3),
+            None,
+        ]));
+        acc.update_batch(&[values])?;
+        // Expect distinct values {1,2,3} → count = 3
+        assert_eq!(acc.evaluate()?, ScalarValue::Int64(Some(3)));
+        Ok(())
+    }
+
+    #[test]
+    fn sliding_distinct_count_accumulator_retract() -> Result<()> {
+        // Test that retract_batch properly decrements counts
+        let mut acc = SlidingDistinctCountAccumulator::try_new(&DataType::Utf8)?;
+        // Initial batch: ["a", "b", "a"]
+        let arr1 = Arc::new(StringArray::from(vec![Some("a"), Some("b"), Some("a")]))
+            as ArrayRef;
+        acc.update_batch(&[arr1])?;
+        assert_eq!(acc.evaluate()?, ScalarValue::Int64(Some(2))); // {"a","b"}
+
+        // Retract batch: ["a", null, "b"]
+        let arr2 =
+            Arc::new(StringArray::from(vec![Some("a"), None, Some("b")])) as ArrayRef;
+        acc.retract_batch(&[arr2])?;
+        // Before: a→2, b→1; after retract a→1, b→0 → b removed; remaining {"a"}
+        assert_eq!(acc.evaluate()?, ScalarValue::Int64(Some(1)));
+        Ok(())
+    }
+
+    #[test]
+    fn sliding_distinct_count_accumulator_merge_states() -> Result<()> {
+        // Test merging multiple accumulator states with merge_batch
+        let mut acc1 = SlidingDistinctCountAccumulator::try_new(&DataType::Int32)?;
+        let mut acc2 = SlidingDistinctCountAccumulator::try_new(&DataType::Int32)?;
+        // acc1 sees [1, 2]
+        acc1.update_batch(&[Arc::new(Int32Array::from(vec![Some(1), Some(2)]))])?;
+        // acc2 sees [2, 3]
+        acc2.update_batch(&[Arc::new(Int32Array::from(vec![Some(2), Some(3)]))])?;
+        // Extract their states as Vec<ScalarValue>
+        let state_sv1 = acc1.state()?;
+        let state_sv2 = acc2.state()?;
+        // Convert ScalarValue states into Vec<ArrayRef>, propagating errors
+        // NOTE we pass `1` because each ScalarValue.to_array produces a 1‑row ListArray
+        let state_arr1: Vec<ArrayRef> = state_sv1
+            .into_iter()
+            .map(|sv| sv.to_array())
+            .collect::<Result<_>>()?;
+        let state_arr2: Vec<ArrayRef> = state_sv2
+            .into_iter()
+            .map(|sv| sv.to_array())
+            .collect::<Result<_>>()?;
+        // Merge both states into a fresh accumulator
+        let mut merged = SlidingDistinctCountAccumulator::try_new(&DataType::Int32)?;
+        merged.merge_batch(&state_arr1)?;
+        merged.merge_batch(&state_arr2)?;
+        // Expect distinct {1,2,3} → count = 3
+        assert_eq!(merged.evaluate()?, ScalarValue::Int64(Some(3)));
+        Ok(())
+    }
 }
