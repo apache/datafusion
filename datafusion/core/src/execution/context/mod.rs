@@ -1067,7 +1067,7 @@ impl SessionContext {
                     .with_runtime_env(Arc::new(builder.build()?))
                     .build();
             }
-            "temp_dir" => {
+            "temp_directory" => {
                 let mut state = self.state.write();
                 let builder = RuntimeEnvBuilder::from_runtime_env(state.runtime_env())
                     .with_temp_file_path(value);
