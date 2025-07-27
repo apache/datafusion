@@ -21,6 +21,7 @@ use std::sync::Arc;
 
 use datafusion::execution::context::SessionContext;
 use datafusion::execution::context::TaskContext;
+use datafusion_common::DataFusionError;
 use datafusion_physical_plan::common::collect;
 
 #[tokio::test]
@@ -150,6 +151,51 @@ async fn test_invalid_memory_limit() {
     assert!(result.is_err());
     let error_message = result.unwrap_err().to_string();
     assert!(error_message.contains("Unsupported unit 'X'"));
+}
+
+#[tokio::test]
+async fn test_max_temp_directory_enforcement() {
+    let ctx = SessionContext::new();
+
+    ctx.sql("SET datafusion.runtime.memory_limit = '1M'")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+
+    ctx.sql("SET datafusion.execution.sort_spill_reservation_bytes = 0")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+
+    ctx.sql("SET datafusion.runtime.max_temp_directory_size = '0K'")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+
+    let query = "select * from generate_series(1,100000) as t1(v1) order by v1;";
+    let result = ctx.sql(query).await.unwrap().collect().await;
+
+    assert!(
+        result.is_err(),
+        "Should fail due to max temp directory size limit"
+    );
+
+    ctx.sql("SET datafusion.runtime.memory_limit = '100M'")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+
+    let result = ctx.sql(query).await.unwrap().collect().await;
+
+    assert!(result.is_ok(), "Should not fail due to memory limit");
 }
 
 #[tokio::test]

@@ -1075,6 +1075,15 @@ impl SessionContext {
                     .with_runtime_env(Arc::new(builder.build()?))
                     .build();
             }
+            "max_temp_directory_size" => {
+                let mut state = self.state.write();
+                let directory_size = Self::parse_memory_limit(value)?;
+                let builder = RuntimeEnvBuilder::from_runtime_env(state.runtime_env())
+                    .with_max_temp_directory_size(directory_size as u64);
+                *state = SessionStateBuilder::from(state.clone())
+                    .with_runtime_env(Arc::new(builder.build()?))
+                    .build();
+            }
             _ => {
                 return Err(DataFusionError::Plan(format!(
                     "Unknown runtime configuration: {variable}"

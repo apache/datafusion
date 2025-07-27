@@ -255,11 +255,17 @@ impl RuntimeEnvBuilder {
     }
 
     /// Use the specified path to create any needed temporary files
-    pub fn with_temp_file_path(self, path: impl Into<PathBuf>) -> Self {
+    pub fn with_temp_file_path(mut self, path: impl Into<PathBuf>) -> Self {
+        let builder = self.disk_manager_builder.take().unwrap_or_default();
         self.with_disk_manager_builder(
-            DiskManagerBuilder::default()
-                .with_mode(DiskManagerMode::Directories(vec![path.into()])),
+            builder.with_mode(DiskManagerMode::Directories(vec![path.into()])),
         )
+    }
+
+    /// Specify a limit on the size of the temporary file directory in bytes
+    pub fn with_max_temp_directory_size(mut self, size: u64) -> Self {
+        let builder = self.disk_manager_builder.take().unwrap_or_default();
+        self.with_disk_manager_builder(builder.with_max_temp_directory_size(size))
     }
 
     /// Build a RuntimeEnv
