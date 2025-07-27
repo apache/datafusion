@@ -197,6 +197,35 @@ See [#16800] for details.
 
 [#16800]: https://github.com/apache/datafusion/issues/16800
 
+### `TableParquetOptions` Updated
+
+The `TableParquetOptions` struct has a new `crypto` field to specify encryption
+options for Parquet files. The `ParquetEncryptionOptions` implements `Default`
+so you can upgrade your existing code like this:
+
+```rust
+# /* comment to avoid running
+TableParquetOptions {
+  global,
+  column_specific_options,
+  key_value_metadata,
+}
+# */
+```
+
+To this:
+
+```rust
+# /* comment to avoid running
+TableParquetOptions {
+  global,
+  column_specific_options,
+  key_value_metadata,
+  crypto: Default::default(), // New crypto field
+}
+# */
+```
+
 ## DataFusion `48.0.1`
 
 ### `datafusion.execution.collect_statistics` now defaults to `true`
