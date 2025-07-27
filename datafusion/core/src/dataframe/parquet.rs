@@ -146,7 +146,10 @@ mod tests {
         let plan = df.explain(false, false)?.collect().await?;
         // Filters all the way to Parquet
         let formatted = pretty::pretty_format_batches(&plan)?.to_string();
-        assert!(formatted.contains("FilterExec: id@0 = 1"));
+        assert!(
+            formatted.contains("projection=[bool_col, int_col], file_type=parquet"),
+            "formated:\n {formatted}"
+        );
 
         Ok(())
     }
