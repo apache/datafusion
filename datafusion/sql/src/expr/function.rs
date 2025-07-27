@@ -345,8 +345,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
             if let Ok(fun) = self.find_window_func(&name) {
                 let args = self.function_args_to_expr(args, schema, planner_context)?;
-                println!("function name: {name}");
-                println!("distinct {:?}", function_args.distinct);
                 let mut window_expr = RawWindowExpr {
                     func_def: fun,
                     args,

@@ -2884,15 +2884,15 @@ impl Display for SchemaDisplay<'_> {
                             write!(f, "DISTINCT ")?;
                         }
 
-                        // **Close the argument parenthesis**
-                        write!(f, ")")?;
-
                         // Write the comma‑separated argument list
                         write!(
                             f,
                             "{}",
                             schema_name_from_exprs_comma_separated_without_space(args)?
                         )?;
+
+                        // **Close the argument parenthesis**
+                        write!(f, ")")?;
 
                         if let Some(null_treatment) = null_treatment {
                             write!(f, " {null_treatment}")?;
