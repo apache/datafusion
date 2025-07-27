@@ -1358,6 +1358,9 @@ impl DefaultPhysicalPlanner {
                     physical_name(expr),
                 ))?])),
             }
+        } else if group_expr.is_empty() {
+            // No GROUP BY clause - create empty PhysicalGroupBy
+            Ok(PhysicalGroupBy::new(vec![], vec![], vec![]))
         } else {
             Ok(PhysicalGroupBy::new_single(
                 group_expr
@@ -1856,6 +1859,7 @@ impl DefaultPhysicalPlanner {
                 stringified_plans.push(StringifiedPlan::new(
                     FinalPhysicalPlan,
                     displayable(optimized_plan.as_ref())
+                        .set_tree_maximum_render_width(config.tree_maximum_render_width)
                         .tree_render()
                         .to_string(),
                 ));

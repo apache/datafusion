@@ -226,7 +226,7 @@ where
 /// # use datafusion::execution::SessionStateBuilder;
 /// # use datafusion_execution::runtime_env::RuntimeEnvBuilder;
 /// // Configure a 4k batch size
-/// let config = SessionConfig::new() .with_batch_size(4 * 1024);
+/// let config = SessionConfig::new().with_batch_size(4 * 1024);
 ///
 /// // configure a memory limit of 1GB with 20%  slop
 ///  let runtime_env = RuntimeEnvBuilder::new()
