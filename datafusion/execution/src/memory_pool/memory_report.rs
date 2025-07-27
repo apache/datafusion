@@ -4,13 +4,12 @@ use crate::memory_pool::pool::{
 };
 use crate::memory_pool::MemoryPool;
 use datafusion_common::Result;
-use datafusion_expr::Accumulator;
 use std::any::Any;
 
 /// Helper trait to provide memory usage breakdowns for debugging.
 ///
-/// Implemented for [`MemoryReservation`] and [`AccumulatorMemory`] which can
-/// wrap any [`Accumulator`] and report its [`Accumulator::size`].
+/// Implemented for [`MemoryReservation`] and any additional types
+/// that need to describe their memory usage.
 ///
 /// # Example
 /// ```
@@ -27,19 +26,6 @@ pub trait ExplainMemory {
 
     /// Returns the size in bytes this type accounts for
     fn memory_size(&self) -> usize;
-}
-
-/// Wrapper to provide [`ExplainMemory`] for [`Accumulator`] types
-pub struct AccumulatorMemory<'a, A: Accumulator + ?Sized>(pub &'a A);
-
-impl<'a, A: Accumulator + ?Sized> ExplainMemory for AccumulatorMemory<'a, A> {
-    fn explain_memory(&self) -> Result<String> {
-        Ok(human_readable_size(self.0.size()))
-    }
-
-    fn memory_size(&self) -> usize {
-        self.0.size()
-    }
 }
 
 impl ExplainMemory for MemoryReservation {
@@ -81,9 +67,6 @@ pub fn report_top_consumers(
 mod tests {
     use super::*;
     use crate::memory_pool::MemoryConsumer;
-    use arrow::array::ArrayRef;
-    use datafusion_common::ScalarValue;
-    use datafusion_expr::Accumulator;
     use std::sync::Arc;
 
     #[test]
@@ -97,36 +80,6 @@ mod tests {
             human_readable_size(10)
         );
         assert_eq!(r.explain_memory()?, expected);
-        Ok(())
-    }
-
-    #[derive(Debug)]
-    struct DummyAcc(usize);
-
-    impl Accumulator for DummyAcc {
-        fn update_batch(&mut self, _values: &[ArrayRef]) -> Result<()> {
-            Ok(())
-        }
-        fn evaluate(&mut self) -> Result<ScalarValue> {
-            Ok(ScalarValue::UInt64(Some(self.0 as u64)))
-        }
-        fn size(&self) -> usize {
-            self.0
-        }
-        fn state(&mut self) -> Result<Vec<ScalarValue>> {
-            Ok(vec![])
-        }
-        fn merge_batch(&mut self, _states: &[ArrayRef]) -> Result<()> {
-            Ok(())
-        }
-    }
-
-    #[test]
-    fn accumulator_explain() -> Result<()> {
-        let acc = DummyAcc(42);
-        let wrapper = AccumulatorMemory(&acc);
-        assert_eq!(wrapper.explain_memory()?, human_readable_size(42));
-        assert_eq!(wrapper.memory_size(), 42);
         Ok(())
     }
 }
