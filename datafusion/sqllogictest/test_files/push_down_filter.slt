@@ -128,11 +128,30 @@ physical_plan
 06)----------ProjectionExec: expr=[column1@0 as column1, column2@1 as __unnest_placeholder(d.column2)]
 07)------------DataSourceExec: partitions=1, partition_sizes=[1]
 
-
-
 statement ok
 drop table d;
 
+statement ok
+CREATE TABLE d AS VALUES (named_struct('a', 1, 'b', 2)), (named_struct('a', 3, 'b', 4)), (named_struct('a', 5, 'b', 6));
+
+query II
+select * from (select unnest(column1) from d) where "__unnest_placeholder(d.column1).b" > 5;
+----
+5 6
+
+query TT
+explain select * from (select unnest(column1) from d) where "__unnest_placeholder(d.column1).b" > 5;
+----
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=8192
+02)--FilterExec: __unnest_placeholder(d.column1).b@1 > 5
+03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+04)------UnnestExec
+05)--------ProjectionExec: expr=[column1@0 as __unnest_placeholder(d.column1)]
+06)----------DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+drop table d;
 
 # Test push down filter with limit for parquet
 statement ok
