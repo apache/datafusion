@@ -417,20 +417,9 @@ impl AggregateUDFImpl for Count {
                 SlidingDistinctCountAccumulator::try_new(args.return_field.data_type())?;
             Ok(Box::new(acc))
         } else {
-            let acc = SlidingCountAccumulator::try_new()?;
+            let acc = CountAccumulator::new();
             Ok(Box::new(acc))
         }
-    }
-}
-
-#[derive(Debug)]
-pub struct SlidingCountAccumulator {
-    count: i64,
-}
-
-impl SlidingCountAccumulator {
-    pub fn try_new() -> Result<Self> {
-        Ok(Self { count: 0 })
     }
 }
 
@@ -506,47 +495,6 @@ impl Accumulator for SlidingDistinctCountAccumulator {
 
     fn size(&self) -> usize {
         size_of_val(self)
-    }
-}
-
-impl Accumulator for SlidingCountAccumulator {
-    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        let array = &values[0];
-        let non_nulls = (array.len() - array.null_count()) as i64;
-        self.count += non_nulls;
-        Ok(())
-    }
-
-    fn evaluate(&mut self) -> Result<ScalarValue> {
-        Ok(ScalarValue::Int64(Some(self.count)))
-    }
-
-    fn size(&self) -> usize {
-        size_of_val(self)
-    }
-
-    fn state(&mut self) -> Result<Vec<ScalarValue>> {
-        // 保留当前计数，以供合并或序列化
-        Ok(vec![ScalarValue::Int64(Some(self.count))])
-    }
-
-    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
-        let counts = downcast_value!(states[0], Int64Array);
-        let sum = compute::sum(counts).unwrap_or(0);
-        self.count += sum;
-        Ok(())
-    }
-
-    fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        // 滑出批次，累减非空数量
-        let array = &values[0];
-        let non_nulls = (array.len() - array.null_count()) as i64;
-        self.count -= non_nulls;
-        Ok(())
-    }
-
-    fn supports_retract_batch(&self) -> bool {
-        true
     }
 }
 
