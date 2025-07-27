@@ -21,7 +21,6 @@ use std::sync::Arc;
 
 use datafusion::execution::context::SessionContext;
 use datafusion::execution::context::TaskContext;
-use datafusion_common::DataFusionError;
 use datafusion_physical_plan::common::collect;
 
 #[tokio::test]

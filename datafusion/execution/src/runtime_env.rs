@@ -321,12 +321,23 @@ impl RuntimeEnvBuilder {
 
     /// Returns a list of all available runtime configurations with their current values and descriptions
     pub fn entries(&self) -> Vec<ConfigEntry> {
-        // Memory pool configuration
-        vec![ConfigEntry {
-            key: "datafusion.runtime.memory_limit".to_string(),
-            value: None, // Default is system-dependent
-            description: "Maximum memory limit for query execution. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes). Example: '2G' for 2 gigabytes.",
-        }]
+        vec![
+            ConfigEntry {
+                key: "datafusion.runtime.memory_limit".to_string(),
+                value: None, // Default is system-dependent
+                description: "Maximum memory limit for query execution. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes). Example: '2G' for 2 gigabytes.",
+            },
+            ConfigEntry {
+                key: "datafusion.runtime.max_temp_directory_size".to_string(),
+                value: Some("100G".to_string()),
+                description: "Maximum temporary file directory size. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes). Example: '2G' for 2 gigabytes.",
+            },
+            ConfigEntry {
+                key: "datafusion.runtime.temp_directory".to_string(),
+                value: None, // Default is system-dependent
+                description: "The path to the temporary file directory.",
+            }
+        ]
     }
 
     /// Generate documentation that can be included in the user guide
