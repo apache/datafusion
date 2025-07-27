@@ -186,7 +186,7 @@ async fn test_max_temp_directory_enforcement() {
         "Should fail due to max temp directory size limit"
     );
 
-    ctx.sql("SET datafusion.runtime.memory_limit = '100M'")
+    ctx.sql("SET datafusion.runtime.max_temp_directory_size = '1M'")
         .await
         .unwrap()
         .collect()
@@ -195,7 +195,10 @@ async fn test_max_temp_directory_enforcement() {
 
     let result = ctx.sql(query).await.unwrap().collect().await;
 
-    assert!(result.is_ok(), "Should not fail due to memory limit");
+    assert!(
+        result.is_ok(),
+        "Should not fail due to max temp directory size limit"
+    );
 }
 
 #[tokio::test]
