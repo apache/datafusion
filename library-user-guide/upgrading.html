@@ -545,6 +545,16 @@
 <nav id="bd-toc-nav">
     <ul class="visible nav section-nav flex-column">
  <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#datafusion-50-0-0">
+   DataFusion
+   <code class="docutils literal notranslate">
+    <span class="pre">
+     50.0.0
+    </span>
+   </code>
+  </a>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
   <a class="reference internal nav-link" href="#datafusion-49-0-0">
    DataFusion
    <code class="docutils literal notranslate">
@@ -644,6 +654,16 @@
        SchemaAdapter
       </span>
      </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#tableparquetoptions-updated">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       TableParquetOptions
+      </span>
+     </code>
+     Updated
     </a>
    </li>
   </ul>
@@ -1052,10 +1072,13 @@
 -->
 <section id="upgrade-guides">
 <h1>Upgrade Guides<a class="headerlink" href="#upgrade-guides" title="Link to this heading">¶</a></h1>
+<section id="datafusion-50-0-0">
+<h2>DataFusion <code class="docutils literal notranslate"><span class="pre">50.0.0</span></code><a class="headerlink" href="#datafusion-50-0-0" title="Link to this heading">¶</a></h2>
+<p><strong>Note:</strong> DataFusion <code class="docutils literal notranslate"><span class="pre">50.0.0</span></code> has not been released yet. The information provided in this section pertains to features and changes that have already been merged to the main branch and are awaiting release in this version.
+You can see the current <a class="reference external" href="https://github.com/apache/datafusion/issues/16799">status of the <code class="docutils literal notranslate"><span class="pre">50.0.0</span> </code>release here</a></p>
+</section>
 <section id="datafusion-49-0-0">
 <h2>DataFusion <code class="docutils literal notranslate"><span class="pre">49.0.0</span></code><a class="headerlink" href="#datafusion-49-0-0" title="Link to this heading">¶</a></h2>
-<p><strong>Note:</strong> DataFusion <code class="docutils literal notranslate"><span class="pre">49.0.0</span></code> has not been released yet. The information provided in this section pertains to features and changes that have already been merged to the main branch and are awaiting release in this version.
-You can see the current <a class="reference external" href="https://github.com/apache/datafusion/issues/16235">status of the <code class="docutils literal notranslate"><span class="pre">49.0.0</span> </code>release here</a></p>
 <section id="msrv-updated-to-1-85-1">
 <h3><code class="docutils literal notranslate"><span class="pre">MSRV</span></code> updated to 1.85.1<a class="headerlink" href="#msrv-updated-to-1-85-1" title="Link to this heading">¶</a></h3>
 <p>The Minimum Supported Rust Version (MSRV) has been updated to <a class="reference external" href="https://releases.rs/docs/1.85.1/"><code class="docutils literal notranslate"><span class="pre">1.85.1</span></code></a>. See
@@ -1183,6 +1206,28 @@ If you do set a custom <code class="docutils literal notranslate"><span class="p
 See the <a class="reference external" href="https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/default_column_values.rs">default values</a> for an example of how to do this.
 Opting into the new APIs will set you up for future changes since we plan to expand use of <code class="docutils literal notranslate"><span class="pre">PhysicalExprAdapterFactory</span></code> to other areas of DataFusion.</p>
 <p>See <a class="reference external" href="https://github.com/apache/datafusion/issues/16800">#16800</a> for details.</p>
+</section>
+<section id="tableparquetoptions-updated">
+<h3><code class="docutils literal notranslate"><span class="pre">TableParquetOptions</span></code> Updated<a class="headerlink" href="#tableparquetoptions-updated" title="Link to this heading">¶</a></h3>
+<p>The <code class="docutils literal notranslate"><span class="pre">TableParquetOptions</span></code> struct has a new <code class="docutils literal notranslate"><span class="pre">crypto</span></code> field to specify encryption
+options for Parquet files. The <code class="docutils literal notranslate"><span class="pre">ParquetEncryptionOptions</span></code> implements <code class="docutils literal notranslate"><span class="pre">Default</span></code>
+so you can upgrade your existing code like this:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="n">TableParquetOptions</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="n">global</span><span class="p">,</span>
+<span class="w">  </span><span class="n">column_specific_options</span><span class="p">,</span>
+<span class="w">  </span><span class="n">key_value_metadata</span><span class="p">,</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>To this:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="n">TableParquetOptions</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="n">global</span><span class="p">,</span>
+<span class="w">  </span><span class="n">column_specific_options</span><span class="p">,</span>
+<span class="w">  </span><span class="n">key_value_metadata</span><span class="p">,</span>
+<span class="w">  </span><span class="n">crypto</span><span class="p">:</span><span class="w"> </span><span class="nb">Default</span><span class="p">::</span><span class="n">default</span><span class="p">(),</span><span class="w"> </span><span class="c1">// New crypto field</span>
+<span class="p">}</span>
+</pre></div>
+</div>
 </section>
 </section>
 <section id="datafusion-48-0-1">
