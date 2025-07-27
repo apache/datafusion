@@ -20,7 +20,7 @@
 
 use datafusion_common::{internal_err, Result};
 use std::hash::{Hash, Hasher};
-use std::{cmp::Ordering, sync::atomic, sync::Arc};
+use std::{cmp::Ordering, fmt, sync::atomic, sync::Arc};
 
 mod memory_report;
 mod pool;
@@ -178,7 +178,7 @@ pub use pool::*;
 ///
 /// * [`TrackConsumersPool`]: Wraps another [`MemoryPool`] and tracks consumers,
 ///   providing better error messages on the largest memory users.
-pub trait MemoryPool: Send + Sync + std::fmt::Debug {
+pub trait MemoryPool: Send + Sync + fmt::Debug {
     /// Registers a new [`MemoryConsumer`]
     ///
     /// Note: Subsequent calls to [`Self::grow`] must be made to reserve memory
@@ -474,6 +474,18 @@ impl MemoryReservation {
 impl Drop for MemoryReservation {
     fn drop(&mut self) {
         self.free();
+    }
+}
+
+impl fmt::Display for MemoryReservation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}#{} reserved {}",
+            self.consumer().name(),
+            self.consumer().id(),
+            human_readable_size(self.size())
+        )
     }
 }
 

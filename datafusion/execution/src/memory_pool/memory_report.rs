@@ -9,8 +9,8 @@ use std::any::Any;
 
 /// Helper trait to provide memory usage breakdowns for debugging.
 ///
-/// Implemented for [`MemoryReservation`] and any [`Accumulator`] via a blanket
-/// implementation that relies on [`Accumulator::size`].
+/// Implemented for [`MemoryReservation`] and [`AccumulatorMemory`] which can
+/// wrap any [`Accumulator`] and report its [`Accumulator::size`].
 ///
 /// # Example
 /// ```
@@ -24,6 +24,22 @@ use std::any::Any;
 pub trait ExplainMemory {
     /// Returns a human readable string describing memory usage.
     fn explain_memory(&self) -> Result<String>;
+
+    /// Returns the size in bytes this type accounts for
+    fn memory_size(&self) -> usize;
+}
+
+/// Wrapper to provide [`ExplainMemory`] for [`Accumulator`] types
+pub struct AccumulatorMemory<'a, A: Accumulator + ?Sized>(pub &'a A);
+
+impl<'a, A: Accumulator + ?Sized> ExplainMemory for AccumulatorMemory<'a, A> {
+    fn explain_memory(&self) -> Result<String> {
+        Ok(human_readable_size(self.0.size()))
+    }
+
+    fn memory_size(&self) -> usize {
+        self.0.size()
+    }
 }
 
 impl ExplainMemory for MemoryReservation {
@@ -35,13 +51,9 @@ impl ExplainMemory for MemoryReservation {
             human_readable_size(self.size())
         ))
     }
-}
 
-impl<T: Accumulator + ?Sized> ExplainMemory for T {
-    fn explain_memory(&self) -> Result<String> {
-        // `Accumulator` requires implementers to provide `size()` which
-        // we leverage here to report memory usage.
-        Ok(human_readable_size(self.size()))
+    fn memory_size(&self) -> usize {
+        self.size()
     }
 }
 
@@ -112,7 +124,9 @@ mod tests {
     #[test]
     fn accumulator_explain() -> Result<()> {
         let acc = DummyAcc(42);
-        assert_eq!(acc.explain_memory()?, human_readable_size(42));
+        let wrapper = AccumulatorMemory(&acc);
+        assert_eq!(wrapper.explain_memory()?, human_readable_size(42));
+        assert_eq!(wrapper.memory_size(), 42);
         Ok(())
     }
 }

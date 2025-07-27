@@ -1200,4 +1200,14 @@ impl ExplainMemory for GroupedHashAggregateStream {
         ));
         Ok(parts.join(", "))
     }
+
+    fn memory_size(&self) -> usize {
+        let mut size = self.group_values.size()
+            + self.group_ordering.size()
+            + self.current_group_indices.allocated_size();
+        for acc in &self.accumulators {
+            size += acc.size();
+        }
+        size + self.reservation.size()
+    }
 }
