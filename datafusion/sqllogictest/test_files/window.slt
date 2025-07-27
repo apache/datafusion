@@ -5687,7 +5687,7 @@ SELECT
         RANGE BETWEEN INTERVAL '2 minutes' PRECEDING AND CURRENT ROW
     ) AS distinct_count
 FROM table_test_distinct_count
-ODER BY k, time;
+ORDER BY k, time;
 ----
 a 1970-01-01T00:01:00Z 1 1
 a 1970-01-01T00:02:00Z 2 1
