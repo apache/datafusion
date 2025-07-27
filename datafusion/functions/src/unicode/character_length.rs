@@ -152,10 +152,14 @@ where
                 .map(|i| {
                     // Safety: we are iterating with array.len() so the index is always valid
                     let value = unsafe { array.value_unchecked(i) };
-                    if value.is_ascii() {
-                        T::Native::usize_as(value.len())
+                    if value.is_empty() {
+                        T::default_value()
                     } else {
-                        T::Native::usize_as(value.chars().count())
+                        if value.is_ascii() {
+                            T::Native::usize_as(value.len())
+                        } else {
+                            T::Native::usize_as(value.chars().count())
+                        }
                     }
                 })
                 .collect();
