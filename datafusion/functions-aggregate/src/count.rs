@@ -423,6 +423,9 @@ impl AggregateUDFImpl for Count {
     }
 }
 
+// DistinctCountAccumulator does not support retract_batch and sliding window
+// this is a specialized accumulator for distinct count that supports retract_batch
+// and sliding window.
 #[derive(Debug)]
 pub struct SlidingDistinctCountAccumulator {
     counts: HashMap<ScalarValue, usize, RandomState>,
@@ -838,29 +841,6 @@ impl Accumulator for DistinctCountAccumulator {
             d if d.is_primitive() => self.fixed_size(),
             _ => self.full_size(),
         }
-    }
-
-    fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        if values.is_empty() {
-            return Ok(());
-        }
-
-        let arr = &values[0];
-        if arr.data_type() == &DataType::Null {
-            return Ok(());
-        }
-
-        for i in 0..arr.len() {
-            let scalar = ScalarValue::try_from_array(arr, i)?;
-            if !scalar.is_null() {
-                self.values.remove(&scalar);
-            }
-        }
-        Ok(())
-    }
-
-    fn supports_retract_batch(&self) -> bool {
-        true
     }
 }
 
