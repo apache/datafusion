@@ -23,20 +23,14 @@ use arrow_schema::{DataType, Field, FieldRef, Schema, SchemaRef};
 use bytes::{BufMut, BytesMut};
 use datafusion::assert_batches_eq;
 use datafusion::common::Result;
-use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::listing::{ListingTable, ListingTableConfig};
-use datafusion::datasource::physical_plan::{
-    ArrowSource, CsvSource, FileSource, JsonSource, ParquetSource,
-};
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::DataFusionError;
 use datafusion_common::{ColumnStatistics, ScalarValue};
-use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_datasource::schema_adapter::{
     DefaultSchemaAdapterFactory, SchemaAdapter, SchemaAdapterFactory, SchemaMapper,
 };
-use datafusion_datasource::source::DataSourceExec;
 use datafusion_datasource::ListingTableUrl;
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_physical_expr::expressions::{self, Column};
@@ -44,7 +38,6 @@ use datafusion_physical_expr::schema_rewriter::{
     DefaultPhysicalExprAdapterFactory, PhysicalExprAdapter, PhysicalExprAdapterFactory,
 };
 use datafusion_physical_expr::{DefaultPhysicalExprAdapter, PhysicalExpr};
-use datafusion_physical_plan::ExecutionPlan;
 use itertools::Itertools;
 use object_store::{memory::InMemory, path::Path, ObjectStore};
 use parquet::arrow::ArrowWriter;
