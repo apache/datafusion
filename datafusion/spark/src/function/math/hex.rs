@@ -27,6 +27,7 @@ use arrow::{
     array::{as_dictionary_array, as_largestring_array, as_string_array},
     datatypes::Int32Type,
 };
+use datafusion_common::cast::as_string_view_array;
 use datafusion_common::{
     cast::{as_binary_array, as_fixed_size_binary_array, as_int64_array},
     exec_err, DataFusionError,
@@ -98,12 +99,14 @@ impl ScalarUDFImpl for SparkHex {
         match &arg_types[0] {
             DataType::Int64
             | DataType::Utf8
+            | DataType::Utf8View
             | DataType::LargeUtf8
             | DataType::Binary
             | DataType::LargeBinary => Ok(vec![arg_types[0].clone()]),
             DataType::Dictionary(key_type, value_type) => match value_type.as_ref() {
                 DataType::Int64
                 | DataType::Utf8
+                | DataType::Utf8View
                 | DataType::LargeUtf8
                 | DataType::Binary
                 | DataType::LargeBinary => Ok(vec![arg_types[0].clone()]),
@@ -204,6 +207,16 @@ pub fn compute_hex(
             }
             DataType::Utf8 => {
                 let array = as_string_array(array);
+
+                let hexed: StringArray = array
+                    .iter()
+                    .map(|v| v.map(|b| hex_bytes(b, lowercase)).transpose())
+                    .collect::<Result<_, _>>()?;
+
+                Ok(ColumnarValue::Array(Arc::new(hexed)))
+            }
+            DataType::Utf8View => {
+                let array = as_string_view_array(array)?;
 
                 let hexed: StringArray = array
                     .iter()
