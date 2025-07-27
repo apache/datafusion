@@ -1088,9 +1088,15 @@ impl OptimizerRule for PushDownFilter {
                 let filter_predicates = split_conjunction(&filter.predicate);
 
                 let (volatile_filters, non_volatile_filters): (Vec<&Expr>, Vec<&Expr>) =
-                    filter_predicates
-                        .into_iter()
-                        .partition(|pred| pred.is_volatile());
+                    filter_predicates.into_iter().partition(|pred| {
+                        // We allow pushing down `now`, but we want to keep it volatile to avoid other optimization passes.
+                        // Thus this special case
+                        pred.exists(|expr| match expr {
+                            Expr::ScalarFunction(fun) if fun.name() == "now" => Ok(false),
+                            _ => Ok(expr.is_volatile_node()),
+                        })
+                        .unwrap()
+                    });
 
                 // Check which non-volatile filters are supported by source
                 let supported_filters = scan
