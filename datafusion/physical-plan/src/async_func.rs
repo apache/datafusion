@@ -176,22 +176,23 @@ impl ExecutionPlan for AsyncFuncExec {
         // now, for each record batch, evaluate the async expressions and add the columns to the result
         let async_exprs_captured = Arc::new(self.async_exprs.clone());
         let schema_captured = self.schema();
-        let config_option_ref = Arc::new(context.session_config().options().clone());
+        let config_options_ref = Arc::new(context.session_config().options().clone());
 
         let stream_with_async_functions = input_stream.then(move |batch| {
             // need to clone *again* to capture the async_exprs and schema in the
             // stream and satisfy lifetime requirements.
             let async_exprs_captured = Arc::clone(&async_exprs_captured);
             let schema_captured = Arc::clone(&schema_captured);
-            let config_option = Arc::clone(&config_option_ref);
+            let config_options = Arc::clone(&config_options_ref);
 
             async move {
                 let batch = batch?;
                 // append the result of evaluating the async expressions to the output
                 let mut output_arrays = batch.columns().to_vec();
                 for async_expr in async_exprs_captured.iter() {
-                    let output =
-                        async_expr.invoke_with_args(&batch, &config_option).await?;
+                    let output = async_expr
+                        .invoke_with_args(&batch, Arc::clone(&config_options))
+                        .await?;
                     output_arrays.push(output.to_array(batch.num_rows())?);
                 }
                 let batch = RecordBatch::try_new(schema_captured, output_arrays)?;

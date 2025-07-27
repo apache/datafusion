@@ -23,6 +23,7 @@ use crate::simplify::{ExprSimplifyResult, SimplifyInfo};
 use crate::sort_properties::{ExprProperties, SortProperties};
 use crate::{udf_equals_hash, ColumnarValue, Documentation, Expr, Signature};
 use arrow::datatypes::{DataType, Field, FieldRef};
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::{not_impl_err, ExprSchema, Result, ScalarValue};
 use datafusion_expr_common::interval_arithmetic::Interval;
 use std::any::Any;
@@ -311,6 +312,8 @@ pub struct ScalarFunctionArgs {
     /// or `return_field_from_args`) when creating the physical expression
     /// from the logical expression
     pub return_field: FieldRef,
+    /// The config options at execution time
+    pub config_options: Arc<ConfigOptions>,
 }
 
 impl ScalarFunctionArgs {
