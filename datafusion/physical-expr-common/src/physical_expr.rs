@@ -106,13 +106,9 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + DynEq + DynHash {
             Ok(tmp_result)
         } else if let ColumnarValue::Array(a) = tmp_result {
             scatter(selection, a.as_ref()).map(ColumnarValue::Array)
-        } else if let ColumnarValue::Scalar(scalar) = &tmp_result {
-            if let ScalarValue::Boolean(v) = scalar {
-                let a = BooleanArray::from(vec![*v; tmp_batch.num_rows()]);
-                scatter(selection, &a).map(ColumnarValue::Array)
-            } else {
-                Ok(tmp_result)
-            }
+        } else if let ColumnarValue::Scalar(ScalarValue::Boolean(v)) = &tmp_result {
+            let a = BooleanArray::from(vec![*v; tmp_batch.num_rows()]);
+            scatter(selection, &a).map(ColumnarValue::Array)
         } else {
             Ok(tmp_result)
         }
