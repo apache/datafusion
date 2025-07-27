@@ -29,9 +29,8 @@ use std::task::Poll;
 
 use crate::joins::nested_loop_join::JoinLeftData;
 use crate::joins::utils::{
-    apply_join_filter_to_indices, build_batch_from_indices_maybe_empty,
-    need_produce_result_in_final, BuildProbeJoinMetrics, ColumnIndex, JoinFilter,
-    OnceFut,
+    apply_join_filter_to_indices, build_batch_from_indices, need_produce_result_in_final,
+    BuildProbeJoinMetrics, ColumnIndex, JoinFilter, OnceFut,
 };
 use crate::metrics::Count;
 use crate::{RecordBatchStream, SendableRecordBatchStream};
@@ -333,8 +332,9 @@ impl Stream for NLJStream {
                     debug_assert!(self.current_right_batch_matched.is_some());
 
                     // Construct the result batch for unmatched right rows using a utility function
-                    let result_batch = self.process_right_unmatched()?;
-                    self.output_buffer.push_batch(result_batch)?;
+                    if let Some(batch) = self.process_right_unmatched()? {
+                        self.output_buffer.push_batch(batch)?;
+                    }
 
                     // Processed all in one pass
                     // cleared inside `process_right_unmatched`
@@ -497,7 +497,9 @@ impl NLJStream {
         let join_batch =
             self.process_single_left_row_join(&left_data, &right_batch, l_idx)?;
 
-        self.output_buffer.push_batch(join_batch)?;
+        if let Some(batch) = join_batch {
+            self.output_buffer.push_batch(batch)?;
+        }
 
         // ==== Prepare for the next iteration ====
 
@@ -509,16 +511,16 @@ impl NLJStream {
     }
 
     /// Process a single left row join with the current right batch.
-    /// Returns a RecordBatch containing the join results (may be empty).
+    /// Returns a RecordBatch containing the join results (None if empty)
     fn process_single_left_row_join(
         &mut self,
         left_data: &JoinLeftData,
         right_batch: &RecordBatch,
         l_index: usize,
-    ) -> Result<RecordBatch> {
+    ) -> Result<Option<RecordBatch>> {
         let right_row_count = right_batch.num_rows();
         if right_row_count == 0 {
-            return Ok(RecordBatch::new_empty(Arc::clone(&self.output_schema)));
+            return Ok(None);
         }
 
         // Create indices for cross-join: current left row with all right rows
@@ -568,15 +570,13 @@ impl NLJStream {
                 | JoinType::RightMark
                 | JoinType::RightSemi
         ) {
-            return Ok(RecordBatch::new_empty(Arc::clone(&self.output_schema)));
+            return Ok(None);
         }
 
-        // TODO(now): check if we're missed something inside the original
-        // logic inside `adjust_indices_by_join_types`
-
-        // Build output batch from matching indices
-        if !joined_left_indices.is_empty() {
-            let join_batch = build_batch_from_indices_maybe_empty(
+        if joined_left_indices.is_empty() {
+            Ok(None)
+        } else {
+            let join_batch = build_batch_from_indices(
                 &self.output_schema,
                 left_data.batch(),
                 right_batch,
@@ -585,9 +585,7 @@ impl NLJStream {
                 &self.column_indices,
                 JoinSide::Left,
             )?;
-            Ok(join_batch)
-        } else {
-            Ok(RecordBatch::new_empty(Arc::clone(&self.output_schema)))
+            Ok(Some(join_batch))
         }
     }
 
@@ -624,10 +622,11 @@ impl NLJStream {
         let end_idx =
             std::cmp::min(start_idx + self.cfg_batch_size, left_batch.num_rows());
 
-        let result_batch = self.process_unmatched_rows(left_data, start_idx, end_idx)?;
+        if let Some(batch) = self.process_unmatched_rows(left_data, start_idx, end_idx)? {
+            self.output_buffer.push_batch(batch)?;
+        }
 
         // ==== Prepare for the next iteration ====
-        self.output_buffer.push_batch(result_batch)?;
         self.emit_cursor = end_idx as u64;
 
         // Return true to continue processing unmatched rows
@@ -635,7 +634,7 @@ impl NLJStream {
     }
 
     /// Process unmatched rows from the left data within the specified range.
-    /// Returns a RecordBatch containing the unmatched rows (may be empty).
+    /// Returns a RecordBatch containing the unmatched rows (None if empty).
     ///
     /// # Arguments
     /// * `left_data` - The left side data containing the batch and bitmap
@@ -651,7 +650,7 @@ impl NLJStream {
         left_data: &JoinLeftData,
         start_idx: usize,
         end_idx: usize,
-    ) -> Result<RecordBatch> {
+    ) -> Result<Option<RecordBatch>> {
         let mut left_indices_builder = UInt64Builder::new();
         let mut right_indices_builder = UInt32Builder::new();
 
@@ -682,7 +681,7 @@ impl NLJStream {
 
         if !left_indices.is_empty() {
             let empty_right_batch = RecordBatch::new_empty(self.outer_table.schema());
-            let result_batch = build_batch_from_indices_maybe_empty(
+            let result_batch = build_batch_from_indices(
                 &self.output_schema,
                 left_data.batch(),
                 &empty_right_batch,
@@ -691,17 +690,17 @@ impl NLJStream {
                 &self.column_indices,
                 JoinSide::Left,
             )?;
-            Ok(result_batch)
+            Ok(Some(result_batch))
         } else {
-            Ok(RecordBatch::new_empty(Arc::clone(&self.output_schema)))
+            Ok(None)
         }
     }
 
     /// Process unmatched rows from the current right batch and reset the bitmap.
-    /// Returns a RecordBatch containing the unmatched right rows (may be empty).
+    /// Returns a RecordBatch containing the unmatched right rows (None if empty).
     ///
     /// Side-effect: it will reset the right bitmap to all false
-    fn process_right_unmatched(&mut self) -> Result<RecordBatch> {
+    fn process_right_unmatched(&mut self) -> Result<Option<RecordBatch>> {
         // ==== Take current right batch and its bitmap ====
         let bitmap: BooleanArray = self
             .current_right_batch_matched
@@ -739,7 +738,11 @@ impl NLJStream {
             let empty_left_batch =
                 RecordBatch::new_empty(Arc::clone(&left_batch.schema()));
 
-            let result_batch = build_batch_from_indices_maybe_empty(
+            if right_indices.is_empty() {
+                return Ok(None);
+            }
+
+            let result_batch = build_batch_from_indices(
                 &self.output_schema,
                 &cur_right_batch, // swapped: right is build side
                 &empty_left_batch,
@@ -750,7 +753,7 @@ impl NLJStream {
             )?;
 
             self.current_right_batch_matched = None;
-            return Ok(result_batch);
+            return Ok(Some(result_batch));
         }
 
         // Non Right Mark
@@ -785,15 +788,20 @@ impl NLJStream {
         let left_batch = left_data.batch();
         let empty_left_batch = RecordBatch::new_empty(Arc::clone(&left_batch.schema()));
 
-        let result_batch = build_batch_from_indices_maybe_empty(
-            &self.output_schema,
-            &empty_left_batch,
-            &cur_right_batch,
-            &left_indices,
-            &right_indices,
-            &self.column_indices,
-            JoinSide::Left,
-        )?;
+        let result_batch = if left_indices.is_empty() {
+            None
+        } else {
+            let result_batch = build_batch_from_indices(
+                &self.output_schema,
+                &empty_left_batch,
+                &cur_right_batch,
+                &left_indices,
+                &right_indices,
+                &self.column_indices,
+                JoinSide::Left,
+            )?;
+            Some(result_batch)
+        };
 
         // ==== Clean-up ====
         self.current_right_batch_matched = None;

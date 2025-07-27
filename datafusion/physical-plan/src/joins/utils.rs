@@ -905,30 +905,6 @@ pub(crate) fn apply_join_filter_to_indices(
     ))
 }
 
-pub(crate) fn build_batch_from_indices_maybe_empty(
-    schema: &Schema,
-    build_input_buffer: &RecordBatch,
-    probe_batch: &RecordBatch,
-    build_indices: &UInt64Array,
-    probe_indices: &UInt32Array,
-    column_indices: &[ColumnIndex],
-    build_side: JoinSide,
-) -> Result<RecordBatch> {
-    if build_indices.is_empty() {
-        return Ok(RecordBatch::new_empty(Arc::new(schema.clone())));
-    }
-
-    build_batch_from_indices(
-        schema,
-        build_input_buffer,
-        probe_batch,
-        build_indices,
-        probe_indices,
-        column_indices,
-        build_side,
-    )
-}
-
 /// Returns a new [RecordBatch] by combining the `left` and `right` according to `indices`.
 /// The resulting batch has [Schema] `schema`.
 pub(crate) fn build_batch_from_indices(
