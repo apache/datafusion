@@ -123,7 +123,10 @@ pub struct ListingTableScanNode {
     pub target_partitions: u32,
     #[prost(message, repeated, tag = "13")]
     pub file_sort_order: ::prost::alloc::vec::Vec<SortExprNodeCollection>,
-    #[prost(oneof = "listing_table_scan_node::FileFormatType", tags = "10, 11, 12, 15")]
+    #[prost(
+        oneof = "listing_table_scan_node::FileFormatType",
+        tags = "10, 11, 12, 15, 16"
+    )]
     pub file_format_type: ::core::option::Option<
         listing_table_scan_node::FileFormatType,
     >,
@@ -140,6 +143,8 @@ pub mod listing_table_scan_node {
         Avro(super::super::datafusion_common::AvroFormat),
         #[prost(message, tag = "15")]
         Json(super::super::datafusion_common::NdJsonFormat),
+        #[prost(message, tag = "16")]
+        Arrow(super::super::datafusion_common::ArrowFormat),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
