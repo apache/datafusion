@@ -504,6 +504,7 @@ pub struct SlidingDistinctSumAccumulator {
 impl SlidingDistinctSumAccumulator {
     /// Create a new accumulator; only `DataType::Int64` is supported.
     pub fn try_new(data_type: &DataType) -> Result<Self> {
+        // TODO support other numeric types
         if *data_type != DataType::Int64 {
             return exec_err!("SlidingDistinctSumAccumulator only supports Int64");
         }

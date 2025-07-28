@@ -717,6 +717,7 @@ mod tests {
         let foreign_udaf = create_test_foreign_udaf(Sum::new())?;
 
         let schema = Schema::new(vec![Field::new("a", DataType::Float64, true)]);
+        // Note: sum distinct is only support Int64 until now
         let acc_args = AccumulatorArgs {
             return_field: Field::new("f", DataType::Float64, true).into(),
             schema: &schema,
@@ -724,7 +725,7 @@ mod tests {
             order_bys: &[PhysicalSortExpr::new_default(col("a", &schema)?)],
             is_reversed: false,
             name: "round_trip",
-            is_distinct: true,
+            is_distinct: false,
             exprs: &[col("a", &schema)?],
         };
 
