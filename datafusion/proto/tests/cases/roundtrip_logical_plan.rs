@@ -28,6 +28,7 @@ use datafusion::datasource::file_format::json::{JsonFormat, JsonFormatFactory};
 use datafusion::datasource::listing::{
     ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
 };
+use datafusion::execution::options::ArrowReadOptions;
 use datafusion::optimizer::eliminate_nested_union::EliminateNestedUnion;
 use datafusion::optimizer::Optimizer;
 use datafusion_common::parsers::CompressionTypeVariant;
@@ -2654,5 +2655,18 @@ async fn roundtrip_custom_listing_tables_schema() -> Result<()> {
     let bytes = logical_plan_to_bytes(&plan)?;
     let new_plan = logical_plan_from_bytes(&bytes, &ctx)?;
     assert_eq!(plan, new_plan);
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_arrow_scan() -> Result<()> {
+    let ctx = SessionContext::new();
+    let plan = ctx
+        .read_arrow("tests/testdata/test.arrow", ArrowReadOptions::default())
+        .await?
+        .into_optimized_plan()?;
+    let bytes = logical_plan_to_bytes(&plan)?;
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
+    assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
     Ok(())
 }

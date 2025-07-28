@@ -20,15 +20,17 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::datatypes::SchemaRef;
-use async_trait::async_trait;
-
 use crate::Session;
 use crate::TableProvider;
-use datafusion_common::{plan_err, Result};
-use datafusion_expr::{Expr, TableType};
+
+use arrow::datatypes::SchemaRef;
+use datafusion_common::{plan_err, DFSchema, Result};
+use datafusion_expr::{Expr, SortExpr, TableType};
+use datafusion_physical_expr::{create_physical_sort_exprs, LexOrdering};
 use datafusion_physical_plan::streaming::{PartitionStream, StreamingTableExec};
 use datafusion_physical_plan::ExecutionPlan;
+
+use async_trait::async_trait;
 use log::debug;
 
 /// A [`TableProvider`] that streams a set of [`PartitionStream`]
@@ -37,6 +39,7 @@ pub struct StreamingTable {
     schema: SchemaRef,
     partitions: Vec<Arc<dyn PartitionStream>>,
     infinite: bool,
+    sort_order: Vec<SortExpr>,
 }
 
 impl StreamingTable {
@@ -60,11 +63,19 @@ impl StreamingTable {
             schema,
             partitions,
             infinite: false,
+            sort_order: vec![],
         })
     }
+
     /// Sets streaming table can be infinite.
     pub fn with_infinite_table(mut self, infinite: bool) -> Self {
         self.infinite = infinite;
+        self
+    }
+
+    /// Sets the existing ordering of streaming table.
+    pub fn with_sort_order(mut self, sort_order: Vec<SortExpr>) -> Self {
+        self.sort_order = sort_order;
         self
     }
 }
@@ -85,16 +96,25 @@ impl TableProvider for StreamingTable {
 
     async fn scan(
         &self,
-        _state: &dyn Session,
+        state: &dyn Session,
         projection: Option<&Vec<usize>>,
         _filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        let physical_sort = if !self.sort_order.is_empty() {
+            let df_schema = DFSchema::try_from(self.schema.as_ref().clone())?;
+            let eqp = state.execution_props();
+
+            create_physical_sort_exprs(&self.sort_order, &df_schema, eqp)?
+        } else {
+            vec![]
+        };
+
         Ok(Arc::new(StreamingTableExec::try_new(
             Arc::clone(&self.schema),
             self.partitions.clone(),
             projection,
-            None,
+            LexOrdering::new(physical_sort),
             self.infinite,
             limit,
         )?))
