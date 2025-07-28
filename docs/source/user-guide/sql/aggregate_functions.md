@@ -668,6 +668,7 @@ regr_avgy(expression_y, expression_x)
 | 4   | 35          |
 | 5   | 36          |
 +-----+-------------+
+```
 
 ```sql
 SELECT regr_avgy(temperature, day) AS avg_temperature --temperature as Dependent Variable(Y)
