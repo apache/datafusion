@@ -423,7 +423,7 @@ SELECT * FROM (VALUES (1,'a'),(2,NULL)) AS t(c1, c2)
 query TT
 EXPLAIN VALUES (1, 'a', -1, 1.1),(NULL, 'b', -3, 0.5)
 ----
-logical_plan Values: (Int64(1), Utf8("a"), Int64(-1), Float64(1.1)), (Int64(NULL), Utf8("b"), Int64(-3), Float64(0.5))
+logical_plan Values: (Int64(1), Utf8View("a") AS Utf8("a"), Int64(-1), Float64(1.1)), (Int64(NULL), Utf8View("b") AS Utf8("b"), Int64(-3), Float64(0.5))
 physical_plan DataSourceExec: partitions=1, partition_sizes=[1]
 
 query TT
@@ -501,7 +501,7 @@ select arrow_typeof(column1), arrow_typeof(column2), arrow_typeof(column3) from 
 (1.1, null, 'b'),
 (2, 5, null)) LIMIT 1;
 ----
-Float64 Int64 Utf8
+Float64 Int64 Utf8View
 
 
 # foo distinct
