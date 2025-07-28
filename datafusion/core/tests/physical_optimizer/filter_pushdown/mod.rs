@@ -258,6 +258,51 @@ async fn test_hashjoin_parent_filter_pushdown() {
           -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[d, e, f], file_type=test, pushdown_supported=true, predicate=e@1 = ba
     "
     );
+
+    // Test left join - filters should NOT be pushed down
+    let join = Arc::new(
+        HashJoinExec::try_new(
+            TestScanBuilder::new(Arc::clone(&build_side_schema))
+                .with_support(true)
+                .build(),
+            TestScanBuilder::new(Arc::clone(&probe_side_schema))
+                .with_support(true)
+                .build(),
+            vec![(
+                col("a", &build_side_schema).unwrap(),
+                col("d", &probe_side_schema).unwrap(),
+            )],
+            None,
+            &JoinType::Left,
+            None,
+            PartitionMode::Partitioned,
+            datafusion_common::NullEquality::NullEqualsNothing,
+        )
+        .unwrap(),
+    );
+
+    let join_schema = join.schema();
+    let filter = col_lit_predicate("a", "aa", &join_schema);
+    let plan = Arc::new(FilterExec::try_new(filter, join).unwrap());
+
+    // Test that filters are NOT pushed down for left join
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, FilterPushdown::new(), true),
+        @r"
+    OptimizationTest:
+      input:
+        - FilterExec: a@0 = aa
+        -   HashJoinExec: mode=Partitioned, join_type=Left, on=[(a@0, d@0)]
+        -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+        -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[d, e, f], file_type=test, pushdown_supported=true
+      output:
+        Ok:
+          - FilterExec: a@0 = aa
+          -   HashJoinExec: mode=Partitioned, join_type=Left, on=[(a@0, d@0)]
+          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=true
+          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[d, e, f], file_type=test, pushdown_supported=true, predicate=true
+    "
+    );
 }
 
 #[test]
