@@ -620,7 +620,7 @@ regr_avgx(expression_y, expression_x)
 
 ### Exmaple
 
-consider the table:
+consider the following table:
 
 ```sql
 > create table daily_sales(day int, temperature int) as values (1,35), (2,36), (3, NULL), (4,37), (5,38);
@@ -727,7 +727,7 @@ regr_intercept(expression_y, expression_x)
 
 ### Example
 
-consider the table:
+consider the following table:
 
 ```sql
 >create table weekly_performances(int day, int user_signups) as values (1,60), (2,65), (3, 70), (4,75), (5,80);
@@ -872,7 +872,6 @@ regr_sxy(expression_y, expression_x)
 - **expression_x**: Independent variable expression to operate on. Can be a constant, column, or function, and any combination of operators.
 
 ### Example
-
 
 ```sql
 > create table employee_productivity(int week,int productivity_score) as values(1,60) , (2,65), (3,70);
