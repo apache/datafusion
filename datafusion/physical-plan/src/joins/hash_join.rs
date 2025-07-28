@@ -953,21 +953,56 @@ impl ExecutionPlan for HashJoinExec {
     }
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
-        if partition.is_some() {
-            return Ok(Statistics::new_unknown(&self.schema()));
+        match (partition, self.mode) {
+            // For CollectLeft mode, the left side is collected into a single partition,
+            // so all left partitions are available to each output partition.
+            // For the right side, we need the specific partition statistics.
+            (Some(partition), PartitionMode::CollectLeft) => {
+                let left_stats = self.left.partition_statistics(None)?;
+                let right_stats = self.right.partition_statistics(Some(partition))?;
+
+                let stats = estimate_join_statistics(
+                    left_stats,
+                    right_stats,
+                    self.on.clone(),
+                    &self.join_type,
+                    &self.join_schema,
+                )?;
+                Ok(stats.project(self.projection.as_ref()))
+            }
+
+            // For Partitioned mode, both sides are partitioned, so each output partition
+            // only has access to the corresponding partition from both sides.
+            (Some(partition), PartitionMode::Partitioned) => {
+                let left_stats = self.left.partition_statistics(Some(partition))?;
+                let right_stats = self.right.partition_statistics(Some(partition))?;
+
+                let stats = estimate_join_statistics(
+                    left_stats,
+                    right_stats,
+                    self.on.clone(),
+                    &self.join_type,
+                    &self.join_schema,
+                )?;
+                Ok(stats.project(self.projection.as_ref()))
+            }
+
+            // For Auto mode or when no specific partition is requested, fall back to
+            // the current behavior of getting all partition statistics.
+            (None, _) | (Some(_), PartitionMode::Auto) => {
+                // TODO stats: it is not possible in general to know the output size of joins
+                // There are some special cases though, for example:
+                // - `A LEFT JOIN B ON A.col=B.col` with `COUNT_DISTINCT(B.col)=COUNT(B.col)`
+                let stats = estimate_join_statistics(
+                    self.left.partition_statistics(None)?,
+                    self.right.partition_statistics(None)?,
+                    self.on.clone(),
+                    &self.join_type,
+                    &self.join_schema,
+                )?;
+                Ok(stats.project(self.projection.as_ref()))
+            }
         }
-        // TODO stats: it is not possible in general to know the output size of joins
-        // There are some special cases though, for example:
-        // - `A LEFT JOIN B ON A.col=B.col` with `COUNT_DISTINCT(B.col)=COUNT(B.col)`
-        let stats = estimate_join_statistics(
-            self.left.partition_statistics(None)?,
-            self.right.partition_statistics(None)?,
-            self.on.clone(),
-            &self.join_type,
-            &self.join_schema,
-        )?;
-        // Project statistics if there is a projection
-        Ok(stats.project(self.projection.as_ref()))
     }
 
     /// Tries to push `projection` down through `hash_join`. If possible, performs the
@@ -4900,5 +4935,97 @@ mod tests {
     /// Returns the column names on the schema
     fn columns(schema: &Schema) -> Vec<String> {
         schema.fields().iter().map(|f| f.name().clone()).collect()
+    }
+
+    #[test]
+    fn test_partition_statistics() -> Result<()> {
+        use crate::test;
+        use crate::test::exec::StatisticsExec;
+        use datafusion_common::Statistics;
+        use datafusion_physical_expr::expressions::Column;
+
+        let schema = test::aggr_test_schema();
+        let left = Arc::new(StatisticsExec::new(
+            Statistics::new_unknown(&schema),
+            schema.as_ref().clone(),
+        )) as Arc<dyn ExecutionPlan>;
+        let right = Arc::new(StatisticsExec::new(
+            Statistics::new_unknown(&schema),
+            schema.as_ref().clone(),
+        )) as Arc<dyn ExecutionPlan>;
+
+        let on = vec![(
+            Arc::new(Column::new("c1", 0)) as Arc<dyn PhysicalExpr>,
+            Arc::new(Column::new("c1", 0)) as Arc<dyn PhysicalExpr>,
+        )];
+
+        // Test CollectLeft mode
+        let collect_left_join = HashJoinExec::try_new(
+            Arc::clone(&left),
+            Arc::clone(&right),
+            on.clone(),
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::CollectLeft,
+            NullEquality::NullEqualsNothing,
+        )?;
+
+        // When partition is specified for CollectLeft mode, it should get
+        // all partitions from left and specific partition from right
+        let stats = collect_left_join.partition_statistics(Some(0))?;
+        assert!(matches!(
+            stats.num_rows,
+            datafusion_common::stats::Precision::Absent
+        ));
+
+        // Test Partitioned mode
+        let partitioned_join = HashJoinExec::try_new(
+            Arc::clone(&left),
+            Arc::clone(&right),
+            on.clone(),
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::Partitioned,
+            NullEquality::NullEqualsNothing,
+        )?;
+
+        // When partition is specified for Partitioned mode, it should get
+        // specific partition from both left and right
+        let stats = partitioned_join.partition_statistics(Some(0))?;
+        assert!(matches!(
+            stats.num_rows,
+            datafusion_common::stats::Precision::Absent
+        ));
+
+        // Test Auto mode - should fall back to getting all partition statistics
+        let auto_join = HashJoinExec::try_new(
+            Arc::clone(&left),
+            Arc::clone(&right),
+            on,
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::Auto,
+            NullEquality::NullEqualsNothing,
+        )?;
+
+        // When partition is specified for Auto mode, it should fall back to
+        // getting all partition statistics (unknown)
+        let stats = auto_join.partition_statistics(Some(0))?;
+        assert!(matches!(
+            stats.num_rows,
+            datafusion_common::stats::Precision::Absent
+        ));
+
+        // When no partition is specified, should get all partition statistics
+        let stats = auto_join.partition_statistics(None)?;
+        assert!(matches!(
+            stats.num_rows,
+            datafusion_common::stats::Precision::Absent
+        ));
+
+        Ok(())
     }
 }
