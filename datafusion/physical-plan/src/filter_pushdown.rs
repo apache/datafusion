@@ -258,6 +258,19 @@ impl<T> FilterPushdownPropagation<T> {
         }
     }
 
+    /// Create a new [`FilterPushdownPropagation`] that tells the parent node that no filters were pushed down regardless of the child results.
+    pub fn all_unsupported(child_pushdown_result: ChildPushdownResult) -> Self {
+        let filters = child_pushdown_result
+            .parent_filters
+            .into_iter()
+            .map(|_| PushedDown::No)
+            .collect();
+        Self {
+            filters,
+            updated_node: None,
+        }
+    }
+
     /// Create a new [`FilterPushdownPropagation`] with the specified filter support.
     /// This transmits up to our parent node what the result of pushing down the filters into our node and possibly our subtree was.
     pub fn with_parent_pushdown_result(filters: Vec<PushedDown>) -> Self {

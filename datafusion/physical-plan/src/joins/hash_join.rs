@@ -953,24 +953,40 @@ impl ExecutionPlan for HashJoinExec {
         parent_filters: Vec<Arc<dyn PhysicalExpr>>,
         _config: &ConfigOptions,
     ) -> Result<FilterDescription> {
-        if phase == FilterPushdownPhase::Pre && self.join_type == JoinType::Inner {
+        if self.join_type != JoinType::Inner {
+            // Other types of joins can support *some* filters, but restrictions are complex and error prone.
+            // For now we don't support them.
+            // See the logical optimizer rules for more details: datafusion/optimizer/src/push_down_filter.rs
+            return Ok(FilterDescription::all_unsupported(
+                &parent_filters,
+                &self.children(),
+            ));
+        }
+        if phase == FilterPushdownPhase::Pre {
             FilterDescription::from_children(parent_filters, &self.children())
         } else {
+            // TODO: push down our self filters to children
             Ok(FilterDescription::all_unsupported(&parent_filters, &self.children()))
         }
     }
 
     fn handle_child_pushdown_result(
         &self,
-        phase: FilterPushdownPhase,
+        _phase: FilterPushdownPhase,
         child_pushdown_result: ChildPushdownResult,
         _config: &ConfigOptions,
     ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
-        if phase == FilterPushdownPhase::Pre && self.join_type == JoinType::Inner {
-            Ok(FilterPushdownPropagation::if_any(child_pushdown_result))
-        } else {
-            Ok(FilterPushdownPropagation::if_any(child_pushdown_result))
+        // Note: this check shouldn't be necessary because we already marked all parent filters as unsupported for
+        // non-inner joins in `gather_filters_for_pushdown`.
+        // However it's a cheap check and serves to inform future devs touching this function that they need to be really
+        // careful pushing down filters through non-inner joins.
+        if self.join_type != JoinType::Inner {
+            // Other types of joins can support *some* filters, but restrictions are complex and error prone.
+            // For now we don't support them.
+            // See the logical optimizer rules for more details: datafusion/optimizer/src/push_down_filter.rs
+            return Ok(FilterPushdownPropagation::all_unsupported(child_pushdown_result));
         }
+        Ok(FilterPushdownPropagation::if_any(child_pushdown_result))
     }
 }
 
