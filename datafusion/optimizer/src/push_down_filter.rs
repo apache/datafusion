@@ -20,6 +20,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use arrow::datatypes::DataType;
 use indexmap::IndexSet;
 use itertools::Itertools;
 
@@ -875,14 +876,37 @@ impl OptimizerRule for PushDownFilter {
                 let predicates = split_conjunction_owned(filter.predicate.clone());
                 let mut non_unnest_predicates = vec![];
                 let mut unnest_predicates = vec![];
+                let mut unnest_struct_columns = vec![];
+
+                for idx in &unnest.struct_type_columns {
+                    let (sub_qualifier, field) =
+                        unnest.input.schema().qualified_field(*idx);
+                    let field_name = field.name().clone();
+
+                    if let DataType::Struct(children) = field.data_type() {
+                        for child in children {
+                            let child_name = child.name().clone();
+                            unnest_struct_columns.push(Column::new(
+                                sub_qualifier.cloned(),
+                                format!("{field_name}.{child_name}"),
+                            ));
+                        }
+                    }
+                }
+
                 for predicate in predicates {
                     // collect all the Expr::Column in predicate recursively
                     let mut accum: HashSet<Column> = HashSet::new();
                     expr_to_columns(&predicate, &mut accum)?;
 
-                    if unnest.list_type_columns.iter().any(|(_, unnest_list)| {
-                        accum.contains(&unnest_list.output_column)
-                    }) {
+                    let contains_list_columns =
+                        unnest.list_type_columns.iter().any(|(_, unnest_list)| {
+                            accum.contains(&unnest_list.output_column)
+                        });
+                    let contains_struct_columns =
+                        unnest_struct_columns.iter().any(|c| accum.contains(c));
+
+                    if contains_list_columns || contains_struct_columns {
                         unnest_predicates.push(predicate);
                     } else {
                         non_unnest_predicates.push(predicate);
