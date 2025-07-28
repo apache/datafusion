@@ -47,6 +47,61 @@ pub type SharedResult<T> = result::Result<T, Arc<DataFusionError>>;
 /// Error type for generic operations that could result in DataFusionError::External
 pub type GenericError = Box<dyn Error + Send + Sync>;
 
+#[cfg(feature = "object_store")]
+#[derive(Debug)]
+pub struct DfObjectStoreError {
+    pub source: Box<dyn Error + Send + Sync>,
+    pub context: Option<String>,
+}
+
+#[cfg(feature = "object_store")]
+impl DfObjectStoreError {
+    pub fn new(source: impl Into<Box<dyn Error + Send + Sync>>) -> Self {
+        Self {
+            source: source.into(),
+            context: None,
+        }
+    }
+
+    pub fn with_context(
+        source: impl Into<Box<dyn Error + Send + Sync>>,
+        context: impl Into<String>,
+    ) -> Self {
+        Self {
+            source: source.into(),
+            context: Some(context.into()),
+        }
+    }
+}
+
+#[cfg(feature = "object_store")]
+impl Display for DfObjectStoreError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        Display::fmt(self.source.as_ref(), f)
+    }
+}
+
+#[cfg(feature = "object_store")]
+impl Error for DfObjectStoreError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        Some(self.source.as_ref())
+    }
+}
+
+#[cfg(feature = "object_store")]
+impl From<object_store::Error> for DfObjectStoreError {
+    fn from(e: object_store::Error) -> Self {
+        Self::new(e)
+    }
+}
+
+#[cfg(feature = "object_store")]
+impl From<object_store::path::Error> for DfObjectStoreError {
+    fn from(e: object_store::path::Error) -> Self {
+        Self::new(e)
+    }
+}
+
 /// DataFusion error
 #[derive(Debug)]
 pub enum DataFusionError {
@@ -62,7 +117,7 @@ pub enum DataFusionError {
     AvroError(Box<AvroError>),
     /// Error when reading / writing to / from an object_store (e.g. S3 or LocalFile)
     #[cfg(feature = "object_store")]
-    ObjectStore(Box<object_store::Error>),
+    ObjectStore(Box<DfObjectStoreError>),
     /// Error when an I/O operation fails
     IoError(io::Error),
     /// Error when SQL is syntactically incorrect.
@@ -318,14 +373,14 @@ impl From<AvroError> for DataFusionError {
 #[cfg(feature = "object_store")]
 impl From<object_store::Error> for DataFusionError {
     fn from(e: object_store::Error) -> Self {
-        DataFusionError::ObjectStore(Box::new(e))
+        DataFusionError::ObjectStore(Box::new(DfObjectStoreError::from(e)))
     }
 }
 
 #[cfg(feature = "object_store")]
 impl From<object_store::path::Error> for DataFusionError {
     fn from(e: object_store::path::Error) -> Self {
-        DataFusionError::ObjectStore(Box::new(e.into()))
+        DataFusionError::ObjectStore(Box::new(DfObjectStoreError::from(e)))
     }
 }
 

@@ -47,7 +47,7 @@ This requires Docker to be running on your machine and port 9000 to be free.
 If you see an error mentioning "failed to load IMDS session token" such as
 
 > ---- object_storage::tests::s3_object_store_builder_resolves_region_when_none_provided stdout ----
-> Error: ObjectStore(Generic { store: "S3", source: "Error getting credentials from provider: an error occurred while loading credentials: failed to load IMDS session token" })
+> Error: ObjectStore(DfObjectStoreError { source: Generic { store: "S3", source: "Error getting credentials from provider: an error occurred while loading credentials: failed to load IMDS session token" }, context: None })
 
 You my need to disable trying to fetch S3 credentials from the environment using the `AWS_EC2_METADATA_DISABLED`, for example:
 
