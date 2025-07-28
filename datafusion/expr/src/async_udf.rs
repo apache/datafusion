@@ -19,7 +19,6 @@ use crate::utils::{arc_ptr_eq, arc_ptr_hash};
 use crate::{
     udf_equals_hash, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl,
 };
-use arrow::array::ArrayRef;
 use arrow::datatypes::{DataType, FieldRef};
 use async_trait::async_trait;
 use datafusion_common::config::ConfigOptions;
