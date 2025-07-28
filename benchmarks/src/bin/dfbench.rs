@@ -33,7 +33,10 @@ static ALLOC: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
 #[global_allocator]
 static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-use datafusion_benchmarks::{cancellation, clickbench, h2o, imdb, sort_tpch, tpch};
+use datafusion_benchmarks::{
+    cancellation, clickbench, h2o, imdb, match_recognize_tpch, sort_tpch, tpch,
+    window_tpch,
+};
 
 #[derive(Debug, StructOpt)]
 #[structopt(about = "benchmark command")]
@@ -43,6 +46,8 @@ enum Options {
     H2o(h2o::RunOpt),
     Imdb(imdb::RunOpt),
     SortTpch(sort_tpch::RunOpt),
+    WindowTpch(window_tpch::RunOpt),
+    MatchRecognizeTpch(match_recognize_tpch::RunOpt),
     Tpch(tpch::RunOpt),
     TpchConvert(tpch::ConvertOpt),
 }
@@ -58,6 +63,8 @@ pub async fn main() -> Result<()> {
         Options::H2o(opt) => opt.run().await,
         Options::Imdb(opt) => Box::pin(opt.run()).await,
         Options::SortTpch(opt) => opt.run().await,
+        Options::WindowTpch(opt) => opt.run().await,
+        Options::MatchRecognizeTpch(opt) => opt.run().await,
         Options::Tpch(opt) => Box::pin(opt.run()).await,
         Options::TpchConvert(opt) => opt.run().await,
     }

@@ -651,6 +651,14 @@ impl<'a, 'b> PgJsonVisitor<'a, 'b> {
                     "StructColumn": expr_vec_fmt!(struct_type_columns),
                 })
             }
+            LogicalPlan::MatchRecognizePattern(match_recognize) => {
+                json!({
+                    "Node Type": "MatchRecognizePattern",
+                    "Partition By": expr_vec_fmt!(match_recognize.partition_by),
+                    "Order By": expr_vec_fmt!(match_recognize.order_by),
+                    "Pattern": format!("{:?}", match_recognize.pattern),
+                })
+            }
         }
     }
 }

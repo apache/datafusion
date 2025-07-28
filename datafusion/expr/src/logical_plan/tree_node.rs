@@ -40,16 +40,18 @@
 use crate::{
     dml::CopyTo, Aggregate, Analyze, CreateMemoryTable, CreateView, DdlStatement,
     Distinct, DistinctOn, DmlStatement, Execute, Explain, Expr, Extension, Filter, Join,
-    Limit, LogicalPlan, Partitioning, Prepare, Projection, RecursiveQuery, Repartition,
-    Sort, Statement, Subquery, SubqueryAlias, TableScan, Union, Unnest,
-    UserDefinedLogicalNode, Values, Window,
+    Limit, LogicalPlan, MatchRecognizePattern, Partitioning, Prepare, Projection,
+    RecursiveQuery, Repartition, Sort, Statement, Subquery, SubqueryAlias, TableScan,
+    Union, Unnest, UserDefinedLogicalNode, Values, Window,
 };
+use datafusion_common::tree_node::Transformed;
 use datafusion_common::tree_node::TreeNodeRefContainer;
+use datafusion_common::Column;
 
 use crate::expr::{Exists, InSubquery};
 use datafusion_common::tree_node::{
-    Transformed, TreeNode, TreeNodeContainer, TreeNodeIterator, TreeNodeRecursion,
-    TreeNodeRewriter, TreeNodeVisitor,
+    TreeNode, TreeNodeContainer, TreeNodeIterator, TreeNodeRecursion, TreeNodeRewriter,
+    TreeNodeVisitor,
 };
 use datafusion_common::{internal_err, Result};
 
@@ -345,6 +347,27 @@ impl TreeNode for LogicalPlan {
                 _ => Transformed::no(stmt),
             }
             .update_data(LogicalPlan::Statement),
+            LogicalPlan::MatchRecognizePattern(MatchRecognizePattern {
+                input,
+                schema,
+                partition_by,
+                order_by,
+                after_skip,
+                rows_per_match,
+                pattern,
+                symbols,
+            }) => input.map_elements(f)?.update_data(|input| {
+                LogicalPlan::MatchRecognizePattern(MatchRecognizePattern {
+                    input,
+                    schema,
+                    partition_by,
+                    order_by,
+                    after_skip,
+                    rows_per_match,
+                    pattern,
+                    symbols,
+                })
+            }),
             // plans without inputs
             LogicalPlan::TableScan { .. }
             | LogicalPlan::EmptyRelation { .. }
@@ -461,6 +484,24 @@ impl LogicalPlan {
                 }
                 _ => Ok(TreeNodeRecursion::Continue),
             },
+            LogicalPlan::MatchRecognizePattern(MatchRecognizePattern {
+                partition_by,
+                order_by,
+                symbols,
+                ..
+            }) => {
+                partition_by.apply_elements(&mut f)?;
+                order_by.apply_elements(&mut f)?;
+                // Convert symbol names into column expressions and apply the visitor
+                symbols
+                    .iter()
+                    .map(|sym| {
+                        Expr::Column(Column::from_name(format!("__mr_symbol_{}", sym)))
+                    })
+                    .apply_until_stop(|expr| f(&expr))?;
+
+                Ok(TreeNodeRecursion::Continue)
+            }
             // plans without expressions
             LogicalPlan::EmptyRelation(_)
             | LogicalPlan::RecursiveQuery(_)
@@ -640,6 +681,29 @@ impl LogicalPlan {
                 _ => Transformed::no(stmt),
             }
             .update_data(LogicalPlan::Statement),
+            LogicalPlan::MatchRecognizePattern(MatchRecognizePattern {
+                input,
+                partition_by,
+                order_by,
+                schema,
+                after_skip,
+                rows_per_match,
+                pattern,
+                symbols,
+            }) => (partition_by, order_by).map_elements(f)?.update_data(
+                |(partition_by, order_by)| {
+                    LogicalPlan::MatchRecognizePattern(MatchRecognizePattern {
+                        input,
+                        partition_by,
+                        order_by,
+                        schema,
+                        after_skip,
+                        rows_per_match,
+                        pattern,
+                        symbols,
+                    })
+                },
+            ),
             // plans without expressions
             LogicalPlan::EmptyRelation(_)
             | LogicalPlan::Unnest(_)
@@ -866,5 +930,22 @@ impl LogicalPlan {
                 _ => Ok(Transformed::no(expr)),
             })
         })
+    }
+}
+
+impl<'a> TreeNodeContainer<'a, Expr> for (Expr, String) {
+    fn apply_elements<F: FnMut(&'a Expr) -> Result<TreeNodeRecursion>>(
+        &'a self,
+        mut f: F,
+    ) -> Result<TreeNodeRecursion> {
+        f(&self.0)
+    }
+
+    fn map_elements<F: FnMut(Expr) -> Result<Transformed<Expr>>>(
+        self,
+        mut f: F,
+    ) -> Result<Transformed<Self>> {
+        let t = f(self.0)?;
+        Ok(Transformed::new((t.data, self.1), t.transformed, t.tnr))
     }
 }

@@ -70,13 +70,13 @@ impl TreeNode for Expr {
             // TODO: remove the next line after `Expr::Wildcard` is removed
             #[expect(deprecated)]
             Expr::Column(_)
+            | Expr::Wildcard { .. }
             // Treat OuterReferenceColumn as a leaf expression
             | Expr::OuterReferenceColumn(_, _)
             | Expr::ScalarVariable(_, _)
             | Expr::Literal(_, _)
             | Expr::Exists { .. }
             | Expr::ScalarSubquery(_)
-            | Expr::Wildcard { .. }
             | Expr::Placeholder(_) => Ok(TreeNodeRecursion::Continue),
             Expr::BinaryExpr(BinaryExpr { left, right, .. }) => {
                 (left, right).apply_ref_elements(f)

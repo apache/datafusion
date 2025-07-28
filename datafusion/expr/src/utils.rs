@@ -624,6 +624,35 @@ pub fn find_out_reference_exprs(expr: &Expr) -> Vec<Expr> {
     })
 }
 
+/// Collect all symbol names referenced by `Expr::Column` nodes whose `symbol`
+/// field is set. Returned in order of occurrence (depth first) with duplicates
+/// omitted.
+/// Used exclusively in a MATCH_RECOGNIZE context.
+pub fn find_symbol_predicates(expr: &Expr) -> Vec<String> {
+    // Locate all `Expr::Column` nodes that carry a non-empty symbol (depth-first
+    // order, duplicates by `Expr` already removed by `find_exprs_in_expr`).
+    let cols = find_exprs_in_expr(
+        expr,
+        &|e| matches!(e, Expr::Column(col) if col.symbol.is_some()),
+    );
+
+    let mut seen = HashSet::new(); // track symbol strings we have already output
+    let mut symbols = Vec::with_capacity(cols.len());
+
+    for e in cols {
+        if let Expr::Column(col) = e {
+            if let Some(sym) = &col.symbol {
+                // Push symbol only the first time it appears
+                if seen.insert(sym.clone()) {
+                    symbols.push(sym.clone());
+                }
+            }
+        }
+    }
+
+    symbols
+}
+
 /// Search the provided `Expr`'s, and all of their nested `Expr`, for any that
 /// pass the provided test. The returned `Expr`'s are deduplicated and returned
 /// in order of appearance (depth first).

@@ -44,6 +44,7 @@ pub mod macros;
 
 pub mod cume_dist;
 pub mod lead_lag;
+pub mod match_recognize;
 pub mod nth_value;
 pub mod ntile;
 pub mod rank;
@@ -58,6 +59,10 @@ pub mod expr_fn {
     pub use super::cume_dist::cume_dist;
     pub use super::lead_lag::lag;
     pub use super::lead_lag::lead;
+    pub use super::match_recognize::{
+        classifier, match_number, match_sequence_number, mr_first, mr_last, mr_next,
+        mr_prev,
+    };
     pub use super::nth_value::{first_value, last_value, nth_value};
     pub use super::ntile::ntile;
     pub use super::rank::{dense_rank, percent_rank, rank};
@@ -78,6 +83,14 @@ pub fn all_default_window_functions() -> Vec<Arc<WindowUDF>> {
         nth_value::first_value_udwf(),
         nth_value::last_value_udwf(),
         nth_value::nth_value_udwf(),
+        // MATCH_RECOGNIZE specific functions
+        match_recognize::mr_first_udwf(),
+        match_recognize::mr_last_udwf(),
+        match_recognize::mr_prev_udwf(),
+        match_recognize::mr_next_udwf(),
+        match_recognize::match_number_udwf(),
+        match_recognize::match_sequence_number_udwf(),
+        match_recognize::classifier_udwf(),
     ]
 }
 /// Registers all enabled packages with a [`FunctionRegistry`]

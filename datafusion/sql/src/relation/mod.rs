@@ -17,16 +17,31 @@
 
 use std::sync::Arc;
 
-use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
+use crate::match_recognize::pattern_convert::sql_pattern_to_df;
+use crate::planner::{ContextProvider, MatchRecognizeClause, PlannerContext, SqlToRel};
+use crate::utils::rebase_expr;
 
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{
-    not_impl_err, plan_err, DFSchema, Diagnostic, Result, Span, Spans, TableReference,
+    not_impl_err, plan_err, DFSchema, DFSchemaRef, Diagnostic, Result, Span, Spans,
+    TableReference,
 };
 use datafusion_expr::builder::subquery_alias;
+use datafusion_expr::col;
+use datafusion_expr::lit;
+use datafusion_expr::logical_plan::MatchRecognizePattern;
+use datafusion_expr::utils::find_window_exprs;
+use datafusion_expr::{
+    expr::Alias,
+    match_recognize::{AfterMatchSkip, EmptyMatchesMode, RowsPerMatch},
+};
 use datafusion_expr::{expr::Unnest, Expr, LogicalPlan, LogicalPlanBuilder};
 use datafusion_expr::{Subquery, SubqueryAlias};
-use sqlparser::ast::{FunctionArg, FunctionArgExpr, Spanned, TableFactor};
+use sqlparser::ast::{
+    Expr as SQLExpr, FunctionArg, FunctionArgExpr, OrderByExpr,
+    RowsPerMatch as SQLRowsPerMatch, Spanned, TableFactor, Value, ValueWithSpan,
+};
+use sqlparser::tokenizer::Span as SQLSpan;
 
 mod join;
 
@@ -183,6 +198,254 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         .build()?;
                 (plan, alias)
             }
+            TableFactor::MatchRecognize {
+                table,
+                partition_by,
+                order_by,
+                measures,
+                rows_per_match,
+                after_match_skip,
+                pattern,
+                symbols,
+                alias: _,
+            } => {
+                // Create the input plan from the nested table
+                let input = self.create_relation(*table, planner_context)?;
+
+                let table_schema = Arc::clone(&input.schema());
+
+                // Extract symbols from the pattern before converting it
+                let pattern_symbols = self.extract_symbols_from_pattern(&pattern)?;
+
+                // Create a map of defined symbols for efficient lookup
+                let defined_symbols: std::collections::HashMap<_, _> = symbols
+                    .iter()
+                    .map(|symbol| {
+                        (symbol.symbol.value.clone(), symbol.definition.clone())
+                    })
+                    .collect();
+
+                // Build defines vector based on pattern symbols
+                let mut defines = Vec::new();
+                for symbol_name in pattern_symbols {
+                    if let Some(definition) = defined_symbols.get(&symbol_name) {
+                        // Use the actual definition
+                        let expr = self.sql_to_expr_with_match_recognize_define_context(
+                            definition.clone(),
+                            &table_schema,
+                            &partition_by,
+                            &order_by,
+                            planner_context,
+                        )?;
+                        defines.push((expr, symbol_name));
+                    } else {
+                        // Create a TRUE expression for the missing symbol
+                        let true_expr = SQLExpr::Value(ValueWithSpan {
+                            value: Value::Boolean(true),
+                            span: SQLSpan::empty(),
+                        });
+                        let expr = self.sql_to_expr_with_match_recognize_define_context(
+                            true_expr,
+                            &table_schema,
+                            &partition_by,
+                            &order_by,
+                            planner_context,
+                        )?;
+                        defines.push((expr, symbol_name));
+                    }
+                }
+
+                // Convert rows per match
+                let rows_per_match_opt = rows_per_match.clone().map(|rpm| match rpm {
+                    SQLRowsPerMatch::OneRow => RowsPerMatch::OneRow,
+                    SQLRowsPerMatch::AllRows(mode) => {
+                        let converted_mode = mode.map(|m| match m {
+                            sqlparser::ast::EmptyMatchesMode::Show => {
+                                EmptyMatchesMode::Show
+                            }
+                            sqlparser::ast::EmptyMatchesMode::Omit => {
+                                EmptyMatchesMode::Omit
+                            }
+                            sqlparser::ast::EmptyMatchesMode::WithUnmatched => {
+                                EmptyMatchesMode::WithUnmatched
+                            }
+                        });
+                        RowsPerMatch::AllRows(converted_mode)
+                    }
+                });
+
+                // Convert after match skip
+                let after_match_skip_opt = after_match_skip.map(|ams| match ams {
+                    sqlparser::ast::AfterMatchSkip::PastLastRow => {
+                        AfterMatchSkip::PastLastRow
+                    }
+                    sqlparser::ast::AfterMatchSkip::ToNextRow => {
+                        AfterMatchSkip::ToNextRow
+                    }
+                    sqlparser::ast::AfterMatchSkip::ToFirst(symbol) => {
+                        AfterMatchSkip::ToFirst(symbol.value)
+                    }
+                    sqlparser::ast::AfterMatchSkip::ToLast(symbol) => {
+                        AfterMatchSkip::ToLast(symbol.value)
+                    }
+                });
+
+                let window_exprs = find_window_exprs(
+                    defines
+                        .iter()
+                        .map(|(expr, _)| expr.clone())
+                        .collect::<Vec<_>>()
+                        .as_slice(),
+                );
+
+                let input = if window_exprs.is_empty() {
+                    input
+                } else {
+                    let window_plan =
+                        LogicalPlanBuilder::window_plan(input, window_exprs.clone())?;
+
+                    // Re-write the projection
+                    defines = defines
+                        .iter()
+                        .map(|(expr, name)| {
+                            let rebased_expr =
+                                rebase_expr(expr, &window_exprs, &window_plan)?;
+                            Ok((rebased_expr, name.clone()))
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+
+                    window_plan
+                };
+
+                let symbols = defines
+                    .iter()
+                    .map(|(_, name)| name.clone())
+                    .collect::<Vec<_>>();
+
+                // Build a Projection that extends the input with DEFINE symbol predicates
+                let projection_plan = LogicalPlanBuilder::from(input.clone())
+                    .project(
+                        input
+                            .schema()
+                            .columns()
+                            .iter()
+                            .map(|c| Expr::Column(c.clone()))
+                            .chain(defines.into_iter().map(|(expr, symbol)| {
+                                expr.alias(format!("__mr_symbol_{}", symbol))
+                            })),
+                    )?
+                    .build()?;
+
+                // Convert pattern
+                let pattern = sql_pattern_to_df(&pattern);
+
+                // Convert partition_by expressions using sql_to_expr
+                let partition_by_exprs = partition_by
+                    .clone()
+                    .into_iter()
+                    .map(|expr: SQLExpr| {
+                        self.sql_to_expr(expr, &projection_plan.schema(), planner_context)
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+
+                // Convert order_by expressions preserving sort direction information
+                let order_by_exprs = self
+                    .order_by_to_sort_expr(
+                        order_by.clone(),
+                        &projection_plan.schema(),
+                        planner_context,
+                        false, // literal_to_column: numeric literals are treated as constants
+                        None,  // additional_schema: no additional schema needed
+                    )?
+                    .into_iter()
+                    .map(|sort| sort.with_expr(sort.expr.clone()))
+                    .collect::<Vec<_>>();
+
+                let mr_pattern = MatchRecognizePattern::try_new(
+                    Arc::new(projection_plan),
+                    partition_by_exprs.clone(),
+                    order_by_exprs.clone(),
+                    after_match_skip_opt,
+                    rows_per_match_opt.clone(),
+                    pattern,
+                    symbols.clone(),
+                )?;
+
+                // Convert measures expressions using sql_to_expr with MATCH_RECOGNIZE MEASURES context
+                // Note: SQL standard requires every MEASURES expression to have an explicit alias.
+                // Each measure is stored as (expr, alias) tuple to enforce this requirement.
+                let mut measures_exprs = measures
+                    .into_iter()
+                    .map(|measure| {
+                        // First, plan the SQL expression into a logical Expr
+                        let expr = self
+                            .sql_to_expr_with_match_recognize_measures_context(
+                                measure.expr,
+                                &mr_pattern.schema,
+                                &partition_by,
+                                &order_by,
+                                rows_per_match.clone(),
+                                planner_context,
+                            )?;
+
+                        Ok((expr, measure.alias.value))
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+
+                let window_exprs = find_window_exprs(
+                    measures_exprs
+                        .iter()
+                        .map(|(expr, _)| expr.clone())
+                        .collect::<Vec<_>>()
+                        .as_slice(),
+                );
+
+                let input = if window_exprs.is_empty() {
+                    LogicalPlan::MatchRecognizePattern(mr_pattern)
+                } else {
+                    let window_plan: LogicalPlan = LogicalPlanBuilder::window_plan(
+                        LogicalPlan::MatchRecognizePattern(mr_pattern),
+                        window_exprs.clone(),
+                    )?;
+
+                    // Re-write the projection
+                    measures_exprs = measures_exprs
+                        .iter()
+                        .map(|(expr, name)| {
+                            let rebased_expr =
+                                rebase_expr(expr, &window_exprs, &window_plan)?;
+                            Ok((rebased_expr, name.clone()))
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+
+                    window_plan
+                };
+
+                // =====================================================================
+                // Build PLAN according to ROWS PER MATCH semantics using helpers
+                // =====================================================================
+
+                // 1.  Start with the input plan
+                let mut plan_builder = LogicalPlanBuilder::from(input.clone());
+
+                // 2.  Apply the optional filter derived from ROWS PER MATCH
+                if let Some(pred) = rows_filter(&rows_per_match_opt) {
+                    plan_builder = plan_builder.filter(pred)?;
+                }
+
+                // 3.  Determine the projection list
+                let projection_exprs = rows_projection(
+                    &rows_per_match_opt,
+                    &table_schema,
+                    &partition_by_exprs,
+                    &measures_exprs,
+                );
+
+                // 4.  Finish the plan
+                let final_plan = plan_builder.project(projection_exprs)?.build()?;
+
+                (final_plan, None)
+            }
             // @todo Support TableFactory::TableFunction?
             _ => {
                 return not_impl_err!(
@@ -253,6 +516,142 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             })),
         }
     }
+
+    /// Convert expression using sql_to_expr with MATCH_RECOGNIZE context
+    fn sql_to_expr_with_match_recognize_measures_context(
+        &self,
+        sql_expr: sqlparser::ast::Expr,
+        schema: &DFSchemaRef,
+        partition_by: &Vec<SQLExpr>,
+        order_by: &Vec<OrderByExpr>,
+        rows_per_match: Option<SQLRowsPerMatch>,
+        planner_context: &mut PlannerContext,
+    ) -> Result<Expr> {
+        // Set a flag in the planner context to indicate we're in MATCH_RECOGNIZE MEASURES context
+        planner_context.enable_match_recognize_context(
+            MatchRecognizeClause::Measures,
+            rows_per_match,
+            partition_by,
+            order_by,
+        )?;
+
+        // Convert the expression using sql_to_expr (which includes validation)
+        let result = self.sql_to_expr(sql_expr, schema, planner_context);
+
+        // Restore the previous context
+        planner_context.disable_match_recognize_context();
+
+        let mut expr = result?;
+
+        use datafusion_expr::planner::PlannerResult;
+
+        // Give expression planners a chance to post-process MR expressions
+        for planner in self.context_provider.get_expr_planners() {
+            match planner.plan_match_recognize(expr)? {
+                PlannerResult::Planned(e) | PlannerResult::Original(e) => expr = e,
+            }
+        }
+
+        // Remove the eventual alias from the expression as it is redundant with the String alias in the measures clause
+        match expr {
+            Expr::Alias(Alias { expr, .. }) => Ok(*expr),
+            _ => Ok(expr),
+        }
+    }
+
+    /// Convert expression using sql_to_expr with MATCH_RECOGNIZE DEFINE context
+    fn sql_to_expr_with_match_recognize_define_context(
+        &self,
+        sql_expr: sqlparser::ast::Expr,
+        schema: &DFSchemaRef,
+        partition_by: &Vec<SQLExpr>,
+        order_by: &Vec<OrderByExpr>,
+        planner_context: &mut PlannerContext,
+    ) -> Result<Expr> {
+        // Set flag to indicate we're in MATCH_RECOGNIZE DEFINE context
+        planner_context.enable_match_recognize_context(
+            MatchRecognizeClause::Define,
+            None,
+            partition_by,
+            order_by,
+        )?;
+
+        // Convert the expression using sql_to_expr (which includes validation)
+        let result: std::result::Result<Expr, datafusion_common::DataFusionError> =
+            self.sql_to_expr(sql_expr, schema, planner_context);
+
+        // Restore the previous context
+        planner_context.disable_match_recognize_context();
+
+        let mut expr = result?;
+
+        use datafusion_expr::planner::PlannerResult;
+
+        // Give expression planners a chance to post-process MR expressions
+        for planner in self.context_provider.get_expr_planners() {
+            match planner.plan_match_recognize(expr)? {
+                PlannerResult::Planned(e) | PlannerResult::Original(e) => expr = e,
+            }
+        }
+
+        Ok(expr)
+    }
+
+    /// Extract all named symbols from a MATCH_RECOGNIZE pattern
+    fn extract_symbols_from_pattern(
+        &self,
+        pattern: &sqlparser::ast::MatchRecognizePattern,
+    ) -> Result<std::collections::BTreeSet<String>> {
+        use sqlparser::ast::{
+            MatchRecognizePattern as SqlPattern, MatchRecognizeSymbol as SqlSymbol,
+        };
+
+        let mut symbols = std::collections::BTreeSet::new();
+
+        fn collect_symbols(
+            pattern: &SqlPattern,
+            symbols: &mut std::collections::BTreeSet<String>,
+        ) {
+            match pattern {
+                SqlPattern::Symbol(symbol) => {
+                    if let SqlSymbol::Named(ident) = symbol {
+                        symbols.insert(ident.value.clone());
+                    }
+                }
+                SqlPattern::Exclude(symbol) => {
+                    if let SqlSymbol::Named(ident) = symbol {
+                        symbols.insert(ident.value.clone());
+                    }
+                }
+                SqlPattern::Permute(symbols_list) => {
+                    for symbol in symbols_list {
+                        if let SqlSymbol::Named(ident) = symbol {
+                            symbols.insert(ident.value.clone());
+                        }
+                    }
+                }
+                SqlPattern::Concat(patterns) => {
+                    for p in patterns {
+                        collect_symbols(p, symbols);
+                    }
+                }
+                SqlPattern::Group(pattern) => {
+                    collect_symbols(pattern, symbols);
+                }
+                SqlPattern::Alternation(patterns) => {
+                    for p in patterns {
+                        collect_symbols(p, symbols);
+                    }
+                }
+                SqlPattern::Repetition(pattern, _) => {
+                    collect_symbols(pattern, symbols);
+                }
+            }
+        }
+
+        collect_symbols(pattern, &mut symbols);
+        Ok(symbols)
+    }
 }
 
 fn optimize_subquery_sort(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
@@ -280,4 +679,49 @@ fn optimize_subquery_sort(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>>
         }
     });
     new_plan
+}
+
+/// Helper: determine optional filter predicate based on ROWS PER MATCH
+fn rows_filter(rpm: &Option<RowsPerMatch>) -> Option<Expr> {
+    match rpm {
+        // ONE ROW PER MATCH (default): keep last match row only
+        None | Some(RowsPerMatch::OneRow) => Some(col("__mr_is_last_match_row")),
+
+        // ALL ROWS PER MATCH SHOW (default): keep included rows only
+        Some(RowsPerMatch::AllRows(None))
+        | Some(RowsPerMatch::AllRows(Some(EmptyMatchesMode::Show))) => {
+            Some(col("__mr_is_included_row"))
+        }
+        // ALL ROWS PER MATCH OMIT EMPTY MATCHES
+        Some(RowsPerMatch::AllRows(Some(EmptyMatchesMode::Omit))) => Some(
+            col("__mr_is_included_row")
+                .and(col("__mr_classifier").not_eq(lit("(empty)"))),
+        ),
+        // ALL ROWS PER MATCH WITH UNMATCHED ROWS – no extra filter
+        Some(RowsPerMatch::AllRows(Some(EmptyMatchesMode::WithUnmatched))) => None,
+    }
+}
+
+/// Helper: build projection list based on ROWS PER MATCH semantics
+fn rows_projection(
+    rpm: &Option<RowsPerMatch>,
+    table_schema: &DFSchemaRef,
+    partition_by_exprs: &[Expr],
+    measures_exprs: &[(Expr, String)],
+) -> Vec<Expr> {
+    let mut exprs: Vec<Expr> = match rpm {
+        None | Some(RowsPerMatch::OneRow) => partition_by_exprs.iter().cloned().collect(),
+        Some(RowsPerMatch::AllRows(_)) => table_schema
+            .columns()
+            .iter()
+            .map(|c| Expr::Column(c.clone()))
+            .collect(),
+    };
+
+    exprs.extend(
+        measures_exprs
+            .iter()
+            .map(|(expr, alias)| expr.clone().alias(alias.clone())),
+    );
+    exprs
 }
