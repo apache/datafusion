@@ -14,9 +14,9 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
-
 pub mod map_from_arrays;
 pub mod map_from_entries;
+pub mod map_function;
 mod utils;
 
 use datafusion_expr::ScalarUDF;
@@ -25,6 +25,7 @@ use std::sync::Arc;
 
 make_udf_function!(map_from_arrays::MapFromArrays, map_from_arrays);
 make_udf_function!(map_from_entries::MapFromEntries, map_from_entries);
+make_udf_function!(map_function::MapFunction, map_function);
 
 pub mod expr_fn {
     use datafusion_functions::export_functions;
@@ -40,8 +41,10 @@ pub mod expr_fn {
         "Creates a map from array<struct<key, value>>.",
         arg1
     ));
+
+    export_functions!((map, "Creates a map with the given key/value pairs.", args));
 }
 
 pub fn functions() -> Vec<Arc<ScalarUDF>> {
-    vec![map_from_arrays(), map_from_entries()]
+    vec![map_from_arrays(), map_from_entries(), map()]
 }
