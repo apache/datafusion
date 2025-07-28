@@ -427,7 +427,8 @@ async fn simple_scalar_function_substr() -> Result<()> {
 }
 
 #[tokio::test]
-// Test that DataFusion ISNAN function gets correctly mapped to Substrait "is_nan" in Substrait producer
+// Test that DataFusion ISNAN function gets correctly mapped to Substrait "is_nan" in Substrait producer, and checks roundtrip comparison
+// Follows the same structure as existing roundtrip tests, but more explicitly tests for name mappings
 async fn scalar_function_with_diff_substrait_df_names() -> Result<()> {
     let ctx = create_context().await?;
     let df = ctx.sql("SELECT ISNAN(a) FROM data").await?;
@@ -440,6 +441,15 @@ async fn scalar_function_with_diff_substrait_df_names() -> Result<()> {
     };
 
     assert_eq!(function_name, "is_nan");
+
+    let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
+    let plan2 = ctx.state().optimize(&plan2)?;
+
+    let plan1str = format!("{plan}");
+    let plan2str = format!("{plan2}");
+    assert_eq!(plan1str, plan2str);
+
+    assert_eq!(plan.schema(), plan2.schema());
 
     Ok(())
 }
