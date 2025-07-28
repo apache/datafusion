@@ -100,9 +100,7 @@ impl ScalarUDFImpl for SparkIf {
 
 #[cfg(test)]
 mod tests {
-    use arrow::array::{
-        Array, BooleanArray, Float64Array, Int32Array, StringArray,
-    };
+    use arrow::array::{Array, BooleanArray, Float64Array, Int32Array, StringArray};
     use std::sync::Arc;
 
     use super::*;
