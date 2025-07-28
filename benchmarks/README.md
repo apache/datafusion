@@ -342,30 +342,30 @@ datafusion$ cargo run --profile release-nonlto --bin mem_profile -- --bench-prof
 ```
 Example Output:
 ```
-Query     Time (ms)     Peak RSS  Peak Commit  Page Faults
---------------------------------------------------------------
-1            539.96     252.4 MB       2.0 GB            0
-2            444.21     221.7 MB       2.0 GB            0
-3            607.90     317.7 MB       2.0 GB            0
-4            440.49     503.7 MB       3.0 GB            0
-5            673.57     361.1 MB       3.0 GB            0
-6            297.92     241.9 MB       2.0 GB            0
-7            690.04     615.8 MB       3.0 GB            0
-8            722.96     378.6 MB       3.0 GB            0
-9            817.40     581.5 MB       3.0 GB            0
-10           704.04     406.8 MB       2.0 GB            0
-11           264.40     194.2 MB       2.0 GB            0
-12           478.89     192.2 MB       2.0 GB            0
-13           502.77     349.1 MB       3.0 GB            0
-14           397.61     309.5 MB       2.0 GB            0
-15           501.35     273.4 MB       2.0 GB            0
-16           341.21     222.5 MB       2.0 GB            0
-17           724.57     481.9 MB       2.0 GB            0
-18          1035.77     604.2 MB       3.0 GB            0
-19           639.52     278.1 MB       3.0 GB            0
-20           566.33     405.8 MB       2.0 GB            0
-21           910.40     387.4 MB       3.0 GB            0
-22           381.24     149.2 MB       3.0 GB            0
+Query     Time (ms)     Peak RSS  Peak Commit  Major Page Faults
+----------------------------------------------------------------
+1            503.42     283.4 MB       3.0 GB                  0
+2            431.09     240.7 MB       3.0 GB                  0
+3            594.28     350.1 MB       3.0 GB                  0
+4            468.90     462.4 MB       3.0 GB                  0
+5            653.58     385.4 MB       3.0 GB                  0
+6            296.79     247.3 MB       2.0 GB                  0
+7            662.32     652.4 MB       3.0 GB                  0
+8            702.48     396.0 MB       3.0 GB                  0
+9            774.21     611.5 MB       3.0 GB                  0
+10           733.62     397.9 MB       3.0 GB                  0
+11           271.71     209.6 MB       3.0 GB                  0
+12           512.60     212.5 MB       2.0 GB                  0
+13           507.83     381.5 MB       2.0 GB                  0
+14           420.89     313.5 MB       3.0 GB                  0
+15           539.97     288.0 MB       2.0 GB                  0
+16           370.91     229.8 MB       3.0 GB                  0
+17           758.33     467.0 MB       2.0 GB                  0
+18          1112.32     638.9 MB       3.0 GB                  0
+19           712.72     280.9 MB       2.0 GB                  0
+20           620.64     402.9 MB       2.9 GB                  0
+21           971.63     388.9 MB       2.9 GB                  0
+22           404.50     164.8 MB       2.0 GB                  0
 ```
 
 ## Reported Metrics
@@ -379,8 +379,8 @@ This is a process-level metric collected via OS-specific mechanisms and is not m
 The peak amount of memory committed by the allocator (i.e., total virtual memory reserved).
 This is mimalloc-specific. It gives a more allocator-aware view of memory usage than RSS.
 
-- Page Faults:
-The number of page faults triggered during execution.
+- Major Page Faults:
+The number of major page faults triggered during execution.
 This metric is obtained from the operating system and is not mimalloc-specific.
 # Writing a new benchmark
 

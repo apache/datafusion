@@ -254,14 +254,14 @@ fn parse_vm_line(line: &str) -> Option<(String, String, String)> {
 // Print as simple aligned table
 fn print_summary_table(results: &[QueryResult]) {
     println!(
-        "\n{:<8} {:>10} {:>12} {:>12} {:>12}",
-        "Query", "Time (ms)", "Peak RSS", "Peak Commit", "Page Faults"
+        "\n{:<8} {:>10} {:>12} {:>12} {:>18}",
+        "Query", "Time (ms)", "Peak RSS", "Peak Commit", "Major Page Faults"
     );
-    println!("{}", "-".repeat(62));
+    println!("{}", "-".repeat(64));
 
     for r in results {
         println!(
-            "{:<8} {:>10.2} {:>12} {:>12} {:>12}",
+            "{:<8} {:>10.2} {:>12} {:>12} {:>18}",
             r.query, r.duration_ms, r.peak_rss, r.peak_commit, r.page_faults
         );
     }
