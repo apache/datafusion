@@ -427,6 +427,24 @@ async fn simple_scalar_function_substr() -> Result<()> {
 }
 
 #[tokio::test]
+// Test that DataFusion ISNAN function gets correctly mapped to Substrait "is_nan" in Substrait producer
+async fn scalar_function_with_diff_substrait_df_names() -> Result<()> {
+    let ctx = create_context().await?;
+    let df = ctx.sql("SELECT ISNAN(a) FROM data").await?;
+    let plan = df.into_optimized_plan()?;
+    let proto = to_substrait_plan(&plan, &ctx.state())?;
+
+    let function_name = match proto.extensions[0].mapping_type.as_ref().unwrap() {
+        MappingType::ExtensionFunction(ext_f) => &ext_f.name,
+        _ => unreachable!("Expected function extension"),
+    };
+
+    assert_eq!(function_name, "is_nan");
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn simple_scalar_function_is_null() -> Result<()> {
     roundtrip("SELECT * FROM data WHERE a IS NULL").await
 }
