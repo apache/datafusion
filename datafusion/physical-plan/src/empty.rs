@@ -98,8 +98,7 @@ impl DisplayAs for EmptyExec {
                 write!(f, "EmptyExec")
             }
             DisplayFormatType::TreeRender => {
-                // TODO: collect info
-                write!(f, "")
+                write!(f, "EmptyExec: schema={}, partitions={}", self.schema, self.partitions)
             }
         }
     }
