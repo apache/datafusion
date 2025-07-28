@@ -34,7 +34,10 @@ use super::{
 };
 use super::{JoinOn, JoinOnRef};
 use crate::execution_plan::{boundedness_from_children, EmissionType};
-use crate::filter_pushdown::{ChildPushdownResult, FilterDescription, FilterPushdownPhase, FilterPushdownPropagation};
+use crate::filter_pushdown::{
+    ChildPushdownResult, FilterDescription, FilterPushdownPhase,
+    FilterPushdownPropagation,
+};
 use crate::joins::join_hash_map::{JoinHashMapU32, JoinHashMapU64};
 use crate::projection::{
     try_embed_projection, try_pushdown_through_join, EmbeddedProjection, JoinData,
@@ -966,7 +969,10 @@ impl ExecutionPlan for HashJoinExec {
             FilterDescription::from_children(parent_filters, &self.children())
         } else {
             // TODO: push down our self filters to children
-            Ok(FilterDescription::all_unsupported(&parent_filters, &self.children()))
+            Ok(FilterDescription::all_unsupported(
+                &parent_filters,
+                &self.children(),
+            ))
         }
     }
 
@@ -984,7 +990,9 @@ impl ExecutionPlan for HashJoinExec {
             // Other types of joins can support *some* filters, but restrictions are complex and error prone.
             // For now we don't support them.
             // See the logical optimizer rules for more details: datafusion/optimizer/src/push_down_filter.rs
-            return Ok(FilterPushdownPropagation::all_unsupported(child_pushdown_result));
+            return Ok(FilterPushdownPropagation::all_unsupported(
+                child_pushdown_result,
+            ));
         }
         Ok(FilterPushdownPropagation::if_any(child_pushdown_result))
     }
