@@ -21,13 +21,22 @@ use std::sync::Arc;
 
 use arrow::array::{Array, ArrayRef, ArrowPrimitiveType, AsArray, PrimitiveArray};
 use arrow::compute::try_binary;
-use arrow::datatypes::{ArrowNativeType, DataType, Int16Type, Int32Type, Int64Type, Int8Type, UInt16Type, UInt32Type, UInt64Type, UInt8Type};
-use arrow::datatypes::DataType::{Int32, Int64, Int16, Int8, UInt64, UInt32, UInt16, UInt8};
+use arrow::datatypes::DataType::{
+    Int16, Int32, Int64, Int8, UInt16, UInt32, UInt64, UInt8,
+};
+use arrow::datatypes::{
+    ArrowNativeType, DataType, Int16Type, Int32Type, Int64Type, Int8Type, UInt16Type,
+    UInt32Type, UInt64Type, UInt8Type,
+};
 use datafusion_common::{exec_err, Result};
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+};
 use datafusion_functions::utils::make_scalar_function;
 
-use crate::function::error_utils::{invalid_arg_count_exec_err, unsupported_data_type_exec_err};
+use crate::function::error_utils::{
+    invalid_arg_count_exec_err, unsupported_data_type_exec_err,
+};
 
 #[derive(Debug)]
 pub struct SparkBitGet {
@@ -57,7 +66,11 @@ impl ScalarUDFImpl for SparkBitGet {
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         if arg_types.len() != 2 {
-            return Err(invalid_arg_count_exec_err("bit_get", (2, 2), arg_types.len()));
+            return Err(invalid_arg_count_exec_err(
+                "bit_get",
+                (2, 2),
+                arg_types.len(),
+            ));
         }
         if !arg_types[0].is_integer() && !arg_types[0].is_null() {
             return Err(unsupported_data_type_exec_err(
@@ -100,22 +113,21 @@ impl ScalarUDFImpl for SparkBitGet {
     }
 }
 
-fn spark_bit_get_inner<T: ArrowPrimitiveType>(value: &PrimitiveArray<T>, pos: &PrimitiveArray<Int32Type>) -> Result<PrimitiveArray<Int8Type>> {
+fn spark_bit_get_inner<T: ArrowPrimitiveType>(
+    value: &PrimitiveArray<T>,
+    pos: &PrimitiveArray<Int32Type>,
+) -> Result<PrimitiveArray<Int8Type>> {
     let bit_length = (size_of::<T::Native>() * 8) as i32;
 
-    let result: PrimitiveArray<Int8Type> = try_binary(
-        value,
-        pos,
-        |value, pos| {
-            if pos < 0 || pos >= bit_length {
-                return Err(arrow::error::ArrowError::ComputeError(format!(
-                    "bit_get: position {} is out of bounds. Expected pos < {} and pos >= 0",
-                    pos, bit_length
-                )));
-            }
-            Ok(((value.to_i64().unwrap() >> pos) & 1) as i8)
-        },
-    )?;
+    let result: PrimitiveArray<Int8Type> = try_binary(value, pos, |value, pos| {
+        if pos < 0 || pos >= bit_length {
+            return Err(arrow::error::ArrowError::ComputeError(format!(
+                "bit_get: position {} is out of bounds. Expected pos < {} and pos >= 0",
+                pos, bit_length
+            )));
+        }
+        Ok(((value.to_i64().unwrap() >> pos) & 1) as i8)
+    })?;
     Ok(result)
 }
 
@@ -123,7 +135,7 @@ pub fn spark_bit_get(args: &[ArrayRef]) -> Result<ArrayRef> {
     if args.len() != 2 {
         return exec_err!("`bit_get` expects exactly two arguments");
     }
-    
+
     // if args[0].data_type().is_null() || args[1].data_type().is_null() {
     //     return Ok(Arc::new(PrimitiveArray::<Int8Type>::from(vec![None; args[0].len()])));
     // }
@@ -133,7 +145,7 @@ pub fn spark_bit_get(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 
     let pos_arg = args[1].as_primitive::<Int32Type>();
-    
+
     let ret = match &args[0].data_type() {
         Int64 => {
             let value_arg = args[0].as_primitive::<Int64Type>();
@@ -168,11 +180,12 @@ pub fn spark_bit_get(args: &[ArrayRef]) -> Result<ArrayRef> {
             spark_bit_get_inner(value_arg, pos_arg)
         }
         _ => {
-            exec_err!("`bit_get` expects Int64, Int32, Int16, or Int8 as the first argument")
+            exec_err!(
+                "`bit_get` expects Int64, Int32, Int16, or Int8 as the first argument"
+            )
         }
     }?;
     Ok(Arc::new(ret))
-
 }
 
 #[cfg(test)]
@@ -183,41 +196,43 @@ mod tests {
 
     #[test]
     fn test_bit_get_basic() {
-        
         // Test bit_get(11, 0) - 11 = 1011 in binary, bit 0 = 1
         let result = spark_bit_get(&[
             Arc::new(Int64Array::from(vec![11])),
             Arc::new(Int32Array::from(vec![0])),
-        ]).unwrap();
-        
+        ])
+        .unwrap();
+
         assert_eq!(result.as_primitive::<Int8Type>().value(0), 1);
 
         // Test bit_get(11, 2) - 11 = 1011 in binary, bit 2 = 0
         let result = spark_bit_get(&[
             Arc::new(Int64Array::from(vec![11])),
             Arc::new(Int32Array::from(vec![2])),
-        ]).unwrap();
-        
+        ])
+        .unwrap();
+
         assert_eq!(result.as_primitive::<Int8Type>().value(0), 0);
 
         // Test bit_get(11, 3) - 11 = 1011 in binary, bit 3 = 1
         let result = spark_bit_get(&[
             Arc::new(Int64Array::from(vec![11])),
             Arc::new(Int32Array::from(vec![3])),
-        ]).unwrap();
-        
+        ])
+        .unwrap();
+
         assert_eq!(result.as_primitive::<Int8Type>().value(0), 1);
     }
 
     #[test]
     fn test_bit_get_edge_cases() {
-        
         // Test with 0
         let result = spark_bit_get(&[
             Arc::new(Int64Array::from(vec![0])),
             Arc::new(Int32Array::from(vec![0])),
-        ]).unwrap();
-        
+        ])
+        .unwrap();
+
         assert_eq!(result.as_primitive::<Int8Type>().value(0), 0);
 
         let result = spark_bit_get(&[
@@ -230,46 +245,48 @@ mod tests {
             Arc::new(Int64Array::from(vec![11])),
             Arc::new(Int32Array::from(vec![64])),
         ]);
-        
+
         assert_eq!(result.unwrap_err().message(), "Compute error: bit_get: position 64 is out of bounds. Expected pos < 64 and pos >= 0");
     }
 
     #[test]
     fn test_bit_get_null_inputs() {
-        
         // Test with NULL value
         let result = spark_bit_get(&[
             Arc::new(Int64Array::from(vec![None])),
             Arc::new(Int32Array::from(vec![0])),
-        ]).unwrap();
-        
+        ])
+        .unwrap();
+
         assert_eq!(result.as_primitive::<Int8Type>().value(0), 0);
 
         // Test with NULL position
         let result = spark_bit_get(&[
             Arc::new(Int64Array::from(vec![11])),
             Arc::new(Int32Array::from(vec![None])),
-        ]).unwrap();
-        
+        ])
+        .unwrap();
+
         assert_eq!(result.as_primitive::<Int8Type>().value(0), 0);
     }
 
     #[test]
     fn test_bit_get_large_numbers() {
-        
         // Test with larger number
         let result = spark_bit_get(&[
             Arc::new(Int64Array::from(vec![255])), // 11111111 in binary
             Arc::new(Int32Array::from(vec![7])),   // bit 7 = 1
-        ]).unwrap();
-        
+        ])
+        .unwrap();
+
         assert_eq!(result.as_primitive::<Int8Type>().value(0), 1);
 
         let result = spark_bit_get(&[
             Arc::new(Int64Array::from(vec![255])), // 11111111 in binary
             Arc::new(Int32Array::from(vec![8])),   // bit 8 = 0
-        ]).unwrap();
-        
+        ])
+        .unwrap();
+
         assert_eq!(result.as_primitive::<Int8Type>().value(0), 0);
     }
 }

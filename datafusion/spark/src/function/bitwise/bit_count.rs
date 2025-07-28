@@ -19,9 +19,15 @@ use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, AsArray, Int32Array};
-use arrow::datatypes::{DataType, Int16Type, Int32Type, Int64Type, Int8Type, UInt16Type, UInt32Type, UInt64Type, UInt8Type};
+use arrow::datatypes::{
+    DataType, Int16Type, Int32Type, Int64Type, Int8Type, UInt16Type, UInt32Type,
+    UInt64Type, UInt8Type,
+};
 use datafusion_common::{plan_err, Result};
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility, TypeSignature};
+use datafusion_expr::{
+    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
+    Volatility,
+};
 use datafusion_functions::utils::make_scalar_function;
 
 #[derive(Debug)]
@@ -81,44 +87,62 @@ impl ScalarUDFImpl for SparkBitCount {
     }
 }
 
-
 fn spark_bit_count(value_array: &[ArrayRef]) -> Result<ArrayRef> {
     let value_array = value_array[0].as_ref();
     match value_array.data_type() {
         DataType::Int8 => {
-            let result: Int32Array = value_array.as_primitive::<Int8Type>().unary(|v| v.count_ones() as i32);
+            let result: Int32Array = value_array
+                .as_primitive::<Int8Type>()
+                .unary(|v| v.count_ones() as i32);
             Ok(Arc::new(result))
         }
         DataType::Int16 => {
-            let result: Int32Array = value_array.as_primitive::<Int16Type>().unary(|v| v.count_ones() as i32);
+            let result: Int32Array = value_array
+                .as_primitive::<Int16Type>()
+                .unary(|v| v.count_ones() as i32);
             Ok(Arc::new(result))
         }
         DataType::Int32 => {
-            let result: Int32Array = value_array.as_primitive::<Int32Type>().unary(|v| v.count_ones() as i32);
+            let result: Int32Array = value_array
+                .as_primitive::<Int32Type>()
+                .unary(|v| v.count_ones() as i32);
             Ok(Arc::new(result))
         }
         DataType::Int64 => {
-            let result: Int32Array = value_array.as_primitive::<Int64Type>().unary(|v| v.count_ones() as i32);
+            let result: Int32Array = value_array
+                .as_primitive::<Int64Type>()
+                .unary(|v| v.count_ones() as i32);
             Ok(Arc::new(result))
         }
         DataType::UInt8 => {
-            let result: Int32Array = value_array.as_primitive::<UInt8Type>().unary(|v| v.count_ones() as i32);
+            let result: Int32Array = value_array
+                .as_primitive::<UInt8Type>()
+                .unary(|v| v.count_ones() as i32);
             Ok(Arc::new(result))
         }
         DataType::UInt16 => {
-            let result: Int32Array = value_array.as_primitive::<UInt16Type>().unary(|v| v.count_ones() as i32);
+            let result: Int32Array = value_array
+                .as_primitive::<UInt16Type>()
+                .unary(|v| v.count_ones() as i32);
             Ok(Arc::new(result))
         }
         DataType::UInt32 => {
-            let result: Int32Array = value_array.as_primitive::<UInt32Type>().unary(|v| v.count_ones() as i32);
+            let result: Int32Array = value_array
+                .as_primitive::<UInt32Type>()
+                .unary(|v| v.count_ones() as i32);
             Ok(Arc::new(result))
         }
         DataType::UInt64 => {
-            let result: Int32Array = value_array.as_primitive::<UInt64Type>().unary(|v| v.count_ones() as i32);
+            let result: Int32Array = value_array
+                .as_primitive::<UInt64Type>()
+                .unary(|v| v.count_ones() as i32);
             Ok(Arc::new(result))
         }
         _ => {
-            plan_err!("bit_count function does not support data type: {:?}", value_array.data_type())
+            plan_err!(
+                "bit_count function does not support data type: {:?}",
+                value_array.data_type()
+            )
         }
     }
 }
@@ -126,154 +150,151 @@ fn spark_bit_count(value_array: &[ArrayRef]) -> Result<ArrayRef> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{Array, Int16Array, Int32Array, Int64Array, Int8Array, UInt16Array, UInt32Array, UInt64Array, UInt8Array};
-    use arrow::datatypes::{Int32Type, Int8Type, Int16Type, Int64Type, UInt8Type, UInt16Type, UInt32Type, UInt64Type};
+    use arrow::array::{
+        Array, Int16Array, Int32Array, Int64Array, Int8Array, UInt16Array, UInt32Array,
+        UInt64Array, UInt8Array,
+    };
+    use arrow::datatypes::{
+        Int16Type, Int32Type, Int64Type, Int8Type, UInt16Type, UInt32Type, UInt64Type,
+        UInt8Type,
+    };
 
     #[test]
     fn test_bit_count_basic() {
         // Test bit_count(0) - no bits set
-        let result = spark_bit_count(&[
-            Arc::new(Int32Array::from(vec![0])),
-        ]).unwrap();
-        
+        let result = spark_bit_count(&[Arc::new(Int32Array::from(vec![0]))]).unwrap();
+
         assert_eq!(result.as_primitive::<Int32Type>().value(0), 0);
 
         // Test bit_count(1) - 1 bit set
-        let result = spark_bit_count(&[
-            Arc::new(Int32Array::from(vec![1])),
-        ]).unwrap();
-        
+        let result = spark_bit_count(&[Arc::new(Int32Array::from(vec![1]))]).unwrap();
+
         assert_eq!(result.as_primitive::<Int32Type>().value(0), 1);
 
         // Test bit_count(7) - 7 = 111 in binary, 3 bits set
-        let result = spark_bit_count(&[
-            Arc::new(Int32Array::from(vec![7])),
-        ]).unwrap();
-        
+        let result = spark_bit_count(&[Arc::new(Int32Array::from(vec![7]))]).unwrap();
+
         assert_eq!(result.as_primitive::<Int32Type>().value(0), 3);
 
         // Test bit_count(15) - 15 = 1111 in binary, 4 bits set
-        let result = spark_bit_count(&[
-            Arc::new(Int32Array::from(vec![15])),
-        ]).unwrap();
-        
+        let result = spark_bit_count(&[Arc::new(Int32Array::from(vec![15]))]).unwrap();
+
         assert_eq!(result.as_primitive::<Int32Type>().value(0), 4);
     }
 
     #[test]
     fn test_bit_count_int8() {
         // Test bit_count on Int8Array
-        let result = spark_bit_count(&[
-            Arc::new(Int8Array::from(vec![0i8, 1, 3, 7, 15, -1])),
-        ]).unwrap();
+        let result =
+            spark_bit_count(&[Arc::new(Int8Array::from(vec![0i8, 1, 3, 7, 15, -1]))])
+                .unwrap();
 
         let arr = result.as_primitive::<Int32Type>();
-        // 0b00000000 = 0
         assert_eq!(arr.value(0), 0);
-        // 0b00000001 = 1
         assert_eq!(arr.value(1), 1);
-        // 0b00000011 = 2
         assert_eq!(arr.value(2), 2);
-        // 0b00000111 = 3
         assert_eq!(arr.value(3), 3);
-        // 0b00001111 = 4
         assert_eq!(arr.value(4), 4);
-        // -1 in two's complement is all bits set: 0b11111111 = 8
         assert_eq!(arr.value(5), 8);
     }
 
     #[test]
     fn test_bit_count_int16() {
         // Test bit_count on Int16Array
-        let result = spark_bit_count(&[
-            Arc::new(Int16Array::from(vec![0i16, 1, 255, 1023, -1])),
-        ]).unwrap();
+        let result =
+            spark_bit_count(&[Arc::new(Int16Array::from(vec![0i16, 1, 255, 1023, -1]))])
+                .unwrap();
 
         let arr = result.as_primitive::<Int32Type>();
-        assert_eq!(arr.value(0), 0);   // 0b0000000000000000 = 0
-        assert_eq!(arr.value(1), 1);   // 0b0000000000000001 = 1
-        assert_eq!(arr.value(2), 8);   // 0b0000000011111111 = 8
-        assert_eq!(arr.value(3), 10);  // 0b0000001111111111 = 10
-        assert_eq!(arr.value(4), 16);  // -1 in two's complement = all 16 bits set
+        assert_eq!(arr.value(0), 0);
+        assert_eq!(arr.value(1), 1);
+        assert_eq!(arr.value(2), 8);
+        assert_eq!(arr.value(3), 10);
+        assert_eq!(arr.value(4), 16);
     }
 
     #[test]
     fn test_bit_count_int32() {
         // Test bit_count on Int32Array
-        let result = spark_bit_count(&[
-            Arc::new(Int32Array::from(vec![0i32, 1, 255, 1023, -1])),
-        ]).unwrap();
+        let result =
+            spark_bit_count(&[Arc::new(Int32Array::from(vec![0i32, 1, 255, 1023, -1]))])
+                .unwrap();
 
         let arr = result.as_primitive::<Int32Type>();
-        assert_eq!(arr.value(0), 0);   // 0b00000000000000000000000000000000 = 0
-        assert_eq!(arr.value(1), 1);   // 0b00000000000000000000000000000001 = 1
-        assert_eq!(arr.value(2), 8);   // 0b00000000000000000000000011111111 = 8
-        assert_eq!(arr.value(3), 10);  // 0b00000000000000000000001111111111 = 10
-        assert_eq!(arr.value(4), 32);  // -1 in two's complement = all 32 bits set
+        assert_eq!(arr.value(0), 0); // 0b00000000000000000000000000000000 = 0
+        assert_eq!(arr.value(1), 1); // 0b00000000000000000000000000000001 = 1
+        assert_eq!(arr.value(2), 8); // 0b00000000000000000000000011111111 = 8
+        assert_eq!(arr.value(3), 10); // 0b00000000000000000000001111111111 = 10
+        assert_eq!(arr.value(4), 32); // -1 in two's complement = all 32 bits set
     }
 
     #[test]
     fn test_bit_count_int64() {
         // Test bit_count on Int64Array
-        let result = spark_bit_count(&[
-            Arc::new(Int64Array::from(vec![0i64, 1, 255, 1023, -1])),
-        ]).unwrap();
+        let result =
+            spark_bit_count(&[Arc::new(Int64Array::from(vec![0i64, 1, 255, 1023, -1]))])
+                .unwrap();
 
         let arr = result.as_primitive::<Int32Type>();
-        assert_eq!(arr.value(0), 0);   // 0b0000000000000000000000000000000000000000000000000000000000000000 = 0
-        assert_eq!(arr.value(1), 1);   // 0b0000000000000000000000000000000000000000000000000000000000000001 = 1
-        assert_eq!(arr.value(2), 8);   // 0b0000000000000000000000000000000000000000000000000000000011111111 = 8
-        assert_eq!(arr.value(3), 10);  // 0b0000000000000000000000000000000000000000000000000000001111111111 = 10
-        assert_eq!(arr.value(4), 64);  // -1 in two's complement = all 64 bits set
+        assert_eq!(arr.value(0), 0); // 0b0000000000000000000000000000000000000000000000000000000000000000 = 0
+        assert_eq!(arr.value(1), 1); // 0b0000000000000000000000000000000000000000000000000000000000000001 = 1
+        assert_eq!(arr.value(2), 8); // 0b0000000000000000000000000000000000000000000000000000000011111111 = 8
+        assert_eq!(arr.value(3), 10); // 0b0000000000000000000000000000000000000000000000000000001111111111 = 10
+        assert_eq!(arr.value(4), 64); // -1 in two's complement = all 64 bits set
     }
 
     #[test]
     fn test_bit_count_uint8() {
         // Test bit_count on UInt8Array
-        let result = spark_bit_count(&[
-            Arc::new(UInt8Array::from(vec![0u8, 1, 255])),
-        ]).unwrap();
+        let result =
+            spark_bit_count(&[Arc::new(UInt8Array::from(vec![0u8, 1, 255]))]).unwrap();
 
         let arr = result.as_primitive::<Int32Type>();
-        assert_eq!(arr.value(0), 0);   // 0b00000000 = 0
-        assert_eq!(arr.value(1), 1);   // 0b00000001 = 1
-        assert_eq!(arr.value(2), 8);   // 0b11111111 = 8
+        assert_eq!(arr.value(0), 0); // 0b00000000 = 0
+        assert_eq!(arr.value(1), 1); // 0b00000001 = 1
+        assert_eq!(arr.value(2), 8); // 0b11111111 = 8
     }
 
     #[test]
     fn test_bit_count_uint16() {
         // Test bit_count on UInt16Array
-        let result = spark_bit_count(&[
-            Arc::new(UInt16Array::from(vec![0u16, 1, 255, 65535])),
-        ]).unwrap();
+        let result =
+            spark_bit_count(&[Arc::new(UInt16Array::from(vec![0u16, 1, 255, 65535]))])
+                .unwrap();
 
         let arr = result.as_primitive::<Int32Type>();
-        assert_eq!(arr.value(0), 0);    // 0b0000000000000000 = 0
-        assert_eq!(arr.value(1), 1);    // 0b0000000000000001 = 1
-        assert_eq!(arr.value(2), 8);    // 0b0000000011111111 = 8
-        assert_eq!(arr.value(3), 16);   // 0b1111111111111111 = 16
+        assert_eq!(arr.value(0), 0); // 0b0000000000000000 = 0
+        assert_eq!(arr.value(1), 1); // 0b0000000000000001 = 1
+        assert_eq!(arr.value(2), 8); // 0b0000000011111111 = 8
+        assert_eq!(arr.value(3), 16); // 0b1111111111111111 = 16
     }
 
     #[test]
     fn test_bit_count_uint32() {
         // Test bit_count on UInt32Array
-        let result = spark_bit_count(&[
-            Arc::new(UInt32Array::from(vec![0u32, 1, 255, 4294967295])),
-        ]).unwrap();
+        let result = spark_bit_count(&[Arc::new(UInt32Array::from(vec![
+            0u32, 1, 255, 4294967295,
+        ]))])
+        .unwrap();
 
         let arr = result.as_primitive::<Int32Type>();
-        assert_eq!(arr.value(0), 0);         // 0b00000000000000000000000000000000 = 0
-        assert_eq!(arr.value(1), 1);         // 0b00000000000000000000000000000001 = 1
-        assert_eq!(arr.value(2), 8);         // 0b00000000000000000000000011111111 = 8
-        assert_eq!(arr.value(3), 32);        // 0b11111111111111111111111111111111 = 32
+        assert_eq!(arr.value(0), 0); // 0b00000000000000000000000000000000 = 0
+        assert_eq!(arr.value(1), 1); // 0b00000000000000000000000000000001 = 1
+        assert_eq!(arr.value(2), 8); // 0b00000000000000000000000011111111 = 8
+        assert_eq!(arr.value(3), 32); // 0b11111111111111111111111111111111 = 32
     }
 
     #[test]
     fn test_bit_count_uint64() {
         // Test bit_count on UInt64Array
-        let result = spark_bit_count(&[
-            Arc::new(UInt64Array::from(vec![0u64, 1, 255, 256, u64::MAX])),
-        ]).unwrap();
+        let result = spark_bit_count(&[Arc::new(UInt64Array::from(vec![
+            0u64,
+            1,
+            255,
+            256,
+            u64::MAX,
+        ]))])
+        .unwrap();
 
         let arr = result.as_primitive::<Int32Type>();
         // 0b0 = 0
