@@ -46,6 +46,7 @@ datafusion-expr = { workspace = true }
 datafusion-functions = { workspace = true, features = ["crypto_expressions"] }
 datafusion-macros = { workspace = true }
 log = { workspace = true }
+url = { workspace = true }
 sha1 = "0.10"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
 
