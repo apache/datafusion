@@ -36,6 +36,9 @@ pub fn print_memory_stats() {
             );
         }
 
+        // When modifying this output format, make sure to update the corresponding
+        // parsers in `mem_profile.rs`, specifically `parse_vm_line` and `parse_query_time`,
+        // to keep the log output and parser logic in sync.
         println!(
             "Peak RSS: {}, Peak Commit: {}, Page Faults: {}",
             if peak_rss == 0 {

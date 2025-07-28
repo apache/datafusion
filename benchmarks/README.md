@@ -328,15 +328,17 @@ The `mem_profile` program wraps benchmark execution to measure memory usage stat
 Subcommands supported by mem_profile are the subset of those in `dfbench`.
 Currently supported benchmarks include: Clickbench, H2o, Imdb, SortTpch, Tpch
 
-Before running benchmarks, `mem_profile` automatically compiles the benchmark binary (`dfbench`) using `cargo build` with the same cargo profile (e.g., --release) as mem_profile itself. By prebuilding the binary and running each query in a separate process, we can ensure accurate memory statistics.
+Before running benchmarks, `mem_profile` automatically compiles the benchmark binary (`dfbench`) using `cargo build`. Note that the build profile used for `dfbench` is not tied to the profile used for running `mem_profile` itself. We can explicitly specify the desired build profile using the `--bench-profile` option (e.g. release-nonlto). By prebuilding the binary and running each query in a separate process, we can ensure accurate memory statistics.
 
 Currently, `mem_profile` only supports `mimalloc` as the memory allocator, since it relies on `mimalloc`'s API to collect memory statistics.
 
 Because it runs the compiled binary directly from the target directory, make sure your working directory is the top-level datafusion/ directory, where the target/ is also located. 
 
+The benchmark subcommand (e.g., `tpch`) and all following arguments are passed directly to `dfbench`. Be sure to specify `--bench-profile` before the benchmark subcommand. 
+
 Example: 
 ```shell
-datafusion$ cargo run --profile release-nonlto --bin mem_profile -- tpch --path benchmarks/data/tpch_sf1 --partitions 4 --format parquet
+datafusion$ cargo run --profile release-nonlto --bin mem_profile -- --bench-profile release-nonlto tpch --path benchmarks/data/tpch_sf1 --partitions 4 --format parquet
 ```
 Example Output:
 ```

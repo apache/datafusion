@@ -20,6 +20,7 @@ use datafusion::error::Result;
 use std::{
     env,
     io::{BufRead, BufReader},
+    path::Path,
     process::{Command, Stdio},
 };
 use structopt::StructOpt;
@@ -31,7 +32,18 @@ use datafusion_benchmarks::{
 };
 
 #[derive(Debug, StructOpt)]
-#[structopt(about = "benchmark command")]
+#[structopt(name = "Memory Profiling Utility")]
+struct MemProfileOpt {
+    /// Cargo profile to use in dfbench (e.g. release, release-nonlto)
+    #[structopt(long, default_value = "release")]
+    bench_profile: String,
+
+    #[structopt(subcommand)]
+    command: Options,
+}
+
+#[derive(Debug, StructOpt)]
+#[structopt(about = "Benchmark command")]
 enum Options {
     Clickbench(clickbench::RunOpt),
     H2o(h2o::RunOpt),
@@ -43,9 +55,9 @@ enum Options {
 #[tokio::main]
 pub async fn main() -> Result<()> {
     // 1. Parse args and check which benchmarks should be run
-    let profile = env::var("PROFILE").unwrap_or_else(|_| "release".to_string());
-    let args = env::args().skip(1);
-    let query_range = match Options::from_args() {
+    let mem_profile_opt = MemProfileOpt::from_args();
+    let profile = mem_profile_opt.bench_profile;
+    let query_range = match mem_profile_opt.command {
         Options::Clickbench(opt) => {
             let entries = std::fs::read_dir(&opt.queries_path)?
                 .filter_map(Result::ok)
@@ -102,7 +114,18 @@ pub async fn main() -> Result<()> {
     println!("Benchmark binary built successfully.");
 
     // 3. Create a new process per each benchmark query and print summary
-    let mut dfbench_args: Vec<String> = args.collect();
+    // Find position of subcommand to collect args for dfbench
+    let args: Vec<_> = env::args().collect();
+    let subcommands = ["tpch", "clickbench", "h2o", "imdb", "sort-tpch"];
+    let sub_pos = args
+        .iter()
+        .position(|s| subcommands.iter().any(|&cmd| s == cmd))
+        .expect("No benchmark subcommand found");
+
+    // Args starting from subcommand become dfbench args
+    let mut dfbench_args: Vec<String> =
+        args[sub_pos..].iter().map(|s| s.to_string()).collect();
+
     run_benchmark_as_child_process(&profile, query_range, &mut dfbench_args)?;
 
     Ok(())
@@ -118,7 +141,15 @@ fn run_benchmark_as_child_process(
         query_strings.push(i.to_string());
     }
 
-    let command = format!("target/{profile}/dfbench");
+    let target_dir =
+        env::var("CARGO_TARGET_DIR").unwrap_or_else(|_| "target".to_string());
+    let command = format!("{target_dir}/{profile}/dfbench");
+    // Check whether benchmark binary exists
+    if !Path::new(&command).exists() {
+        panic!(
+            "Benchmark binary not found: `{command}`\nRun this command from the top-level `datafusion/` directory so `target/{profile}/dfbench` can be found.",
+        );
+    }
     args.insert(0, command);
     let mut results = vec![];
 
@@ -233,5 +264,97 @@ fn print_summary_table(results: &[QueryResult]) {
             "{:<8} {:>10.2} {:>12} {:>12} {:>12}",
             r.query, r.duration_ms, r.peak_rss, r.peak_commit, r.page_faults
         );
+    }
+}
+
+#[cfg(test)]
+// Only run with "ci" mode when we have the data
+#[cfg(feature = "ci")]
+mod tests {
+    use datafusion::common::exec_err;
+    use datafusion::error::Result;
+    use std::path::{Path, PathBuf};
+    use std::process::Command;
+
+    fn get_tpch_data_path() -> Result<String> {
+        let path =
+            std::env::var("TPCH_DATA").unwrap_or_else(|_| "benchmarks/data".to_string());
+        if !Path::new(&path).exists() {
+            return exec_err!(
+                "Benchmark data not found (set TPCH_DATA env var to override): {}",
+                path
+            );
+        }
+        Ok(path)
+    }
+
+    // Try to find target/ dir upward
+    fn find_target_dir(start: &Path) -> Option<PathBuf> {
+        let mut dir = start;
+
+        while let Some(current) = Some(dir) {
+            if current.join("target").is_dir() {
+                return Some(current.join("target"));
+            }
+
+            dir = match current.parent() {
+                Some(parent) => parent,
+                None => break,
+            };
+        }
+
+        None
+    }
+
+    #[test]
+    // This test checks whether `mem_profile` runs successfully and produces expected output
+    // using TPC-H query 6 (which runs quickly).
+    fn mem_profile_e2e_tpch_q6() -> Result<()> {
+        let profile = "ci";
+        let tpch_data = get_tpch_data_path()?;
+
+        // The current working directory may not be the top-level datafusion/ directory,
+        // so we manually walkdir upward, locate the target directory
+        // and set it explicitly via CARGO_TARGET_DIR for the mem_profile command.
+        let target_dir = find_target_dir(&std::env::current_dir()?);
+        let output = Command::new("cargo")
+            .env("CARGO_TARGET_DIR", target_dir.unwrap())
+            .args([
+                "run",
+                "--profile",
+                profile,
+                "--bin",
+                "mem_profile",
+                "--",
+                "--bench-profile",
+                profile,
+                "tpch",
+                "--query",
+                "6",
+                "--path",
+                &tpch_data,
+                "--format",
+                "tbl",
+            ])
+            .output()
+            .expect("Failed to run mem_profile");
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+
+        if !output.status.success() {
+            panic!(
+                "mem_profile failed\nstdout:\n{stdout}\nstderr:\n{stderr}---------------------",
+            );
+        }
+
+        assert!(
+            stdout.contains("Peak RSS")
+                && stdout.contains("Query")
+                && stdout.contains("Time"),
+            "Unexpected output:\n{stdout}",
+        );
+
+        Ok(())
     }
 }
