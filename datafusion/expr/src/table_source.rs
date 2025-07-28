@@ -32,7 +32,7 @@ use std::{any::Any, borrow::Cow};
 /// the filter") are returned. Rows that evaluate to `false` or `NULL` are
 /// omitted.
 ///
-/// [`TableProvider::scan`]: https://docs.rs/datafusion/latest/datafusion/datasource/provider/trait.TableProvider.html#tymethod.scan
+/// [`TableProvider::scan`]: https://docs.rs/datafusion/latest/datafusion/datasource/trait.TableProvider.html#tymethod.scan
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TableProviderFilterPushDown {
     /// The filter cannot be used by the provider and will not be pushed down.
@@ -89,7 +89,7 @@ impl std::fmt::Display for TableType {
 /// plan code be dependent on the DataFusion execution engine. Some projects use
 /// DataFusion's logical plans and have their own execution engine.
 ///
-/// [`TableProvider`]: https://docs.rs/datafusion/latest/datafusion/datasource/provider/trait.TableProvider.html
+/// [`TableProvider`]: https://docs.rs/datafusion/latest/datafusion/datasource/trait.TableProvider.html
 /// [`DefaultTableSource`]: https://docs.rs/datafusion/latest/datafusion/datasource/default_table_source/struct.DefaultTableSource.html
 pub trait TableSource: Sync + Send {
     fn as_any(&self) -> &dyn Any;

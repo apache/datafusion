@@ -17,14 +17,12 @@
 
 use std::any::Any;
 use std::fmt::{Debug, Formatter};
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::mem::size_of_val;
 use std::sync::Arc;
 
-use arrow::{
-    array::ArrayRef,
-    datatypes::{DataType, Field},
-};
-
+use arrow::datatypes::FieldRef;
+use arrow::{array::ArrayRef, datatypes::DataType};
 use datafusion_common::ScalarValue;
 use datafusion_common::{not_impl_err, plan_err, Result};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
@@ -174,7 +172,7 @@ impl AggregateUDFImpl for ApproxPercentileContWithWeight {
     #[allow(rustdoc::private_intra_doc_links)]
     /// See [`TDigest::to_scalar_state()`] for a description of the serialized
     /// state.
-    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
+    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         self.approx_percentile_cont.state_fields(args)
     }
 
@@ -188,6 +186,30 @@ impl AggregateUDFImpl for ApproxPercentileContWithWeight {
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
+    }
+
+    fn equals(&self, other: &dyn AggregateUDFImpl) -> bool {
+        let Some(other) = other.as_any().downcast_ref::<Self>() else {
+            return false;
+        };
+        let Self {
+            signature,
+            approx_percentile_cont,
+        } = self;
+        signature == &other.signature
+            && approx_percentile_cont.equals(&other.approx_percentile_cont)
+    }
+
+    fn hash_value(&self) -> u64 {
+        let Self {
+            signature,
+            approx_percentile_cont,
+        } = self;
+        let mut hasher = DefaultHasher::new();
+        std::any::type_name::<Self>().hash(&mut hasher);
+        signature.hash(&mut hasher);
+        hasher.write_u64(approx_percentile_cont.hash_value());
+        hasher.finish()
     }
 }
 

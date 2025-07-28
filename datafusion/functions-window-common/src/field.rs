@@ -15,14 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion_common::arrow::datatypes::DataType;
+use datafusion_common::arrow::datatypes::FieldRef;
 
 /// Metadata for defining the result field from evaluating a
 /// user-defined window function.
 pub struct WindowUDFFieldArgs<'a> {
-    /// The data types corresponding to the arguments to the
+    /// The fields corresponding to the arguments to the
     /// user-defined window function.
-    input_types: &'a [DataType],
+    input_fields: &'a [FieldRef],
     /// The display name of the user-defined window function.
     display_name: &'a str,
 }
@@ -32,22 +32,22 @@ impl<'a> WindowUDFFieldArgs<'a> {
     ///
     /// # Arguments
     ///
-    /// * `input_types` - The data types corresponding to the
+    /// * `input_fields` - The fields corresponding to the
     ///   arguments to the user-defined window function.
     /// * `function_name` - The qualified schema name of the
     ///   user-defined window function expression.
     ///
-    pub fn new(input_types: &'a [DataType], display_name: &'a str) -> Self {
+    pub fn new(input_fields: &'a [FieldRef], display_name: &'a str) -> Self {
         WindowUDFFieldArgs {
-            input_types,
+            input_fields,
             display_name,
         }
     }
 
-    /// Returns the data type of input expressions passed as arguments
+    /// Returns the field of input expressions passed as arguments
     /// to the user-defined window function.
-    pub fn input_types(&self) -> &[DataType] {
-        self.input_types
+    pub fn input_fields(&self) -> &[FieldRef] {
+        self.input_fields
     }
 
     /// Returns the name for the field of the final result of evaluating
@@ -56,9 +56,9 @@ impl<'a> WindowUDFFieldArgs<'a> {
         self.display_name
     }
 
-    /// Returns `Some(DataType)` of input expression at index, otherwise
+    /// Returns `Some(Field)` of input expression at index, otherwise
     /// returns `None` if the index is out of bounds.
-    pub fn get_input_type(&self, index: usize) -> Option<DataType> {
-        self.input_types.get(index).cloned()
+    pub fn get_input_field(&self, index: usize) -> Option<FieldRef> {
+        self.input_fields.get(index).cloned()
     }
 }

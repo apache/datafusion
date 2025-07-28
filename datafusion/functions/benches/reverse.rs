@@ -46,13 +46,13 @@ fn criterion_benchmark(c: &mut Criterion) {
                 b.iter(|| {
                     black_box(reverse.invoke_with_args(ScalarFunctionArgs {
                         args: args_string_ascii.clone(),
-                        arg_fields: vec![&Field::new(
+                        arg_fields: vec![Field::new(
                             "a",
                             args_string_ascii[0].data_type(),
                             true,
-                        )],
+                        ).into()],
                         number_rows: N_ROWS,
-                        return_field: &Field::new("f", DataType::Utf8, true),
+                        return_field: Field::new("f", DataType::Utf8, true).into(),
                     }))
                 })
             },
@@ -69,13 +69,11 @@ fn criterion_benchmark(c: &mut Criterion) {
                 b.iter(|| {
                     black_box(reverse.invoke_with_args(ScalarFunctionArgs {
                         args: args_string_utf8.clone(),
-                        arg_fields: vec![&Field::new(
-                            "a",
-                            args_string_utf8[0].data_type(),
-                            true,
-                        )],
+                        arg_fields: vec![
+                            Field::new("a", args_string_utf8[0].data_type(), true).into(),
+                        ],
                         number_rows: N_ROWS,
-                        return_field: &Field::new("f", DataType::Utf8, true),
+                        return_field: Field::new("f", DataType::Utf8, true).into(),
                     }))
                 })
             },
@@ -95,13 +93,13 @@ fn criterion_benchmark(c: &mut Criterion) {
                 b.iter(|| {
                     black_box(reverse.invoke_with_args(ScalarFunctionArgs {
                         args: args_string_view_ascii.clone(),
-                        arg_fields: vec![&Field::new(
+                        arg_fields: vec![Field::new(
                             "a",
                             args_string_view_ascii[0].data_type(),
                             true,
-                        )],
+                        ).into()],
                         number_rows: N_ROWS,
-                        return_field: &Field::new("f", DataType::Utf8, true),
+                        return_field: Field::new("f", DataType::Utf8, true).into(),
                     }))
                 })
             },
@@ -118,13 +116,13 @@ fn criterion_benchmark(c: &mut Criterion) {
                 b.iter(|| {
                     black_box(reverse.invoke_with_args(ScalarFunctionArgs {
                         args: args_string_view_utf8.clone(),
-                        arg_fields: vec![&Field::new(
+                        arg_fields: vec![Field::new(
                             "a",
                             args_string_view_utf8[0].data_type(),
                             true,
-                        )],
+                        ).into()],
                         number_rows: N_ROWS,
-                        return_field: &Field::new("f", DataType::Utf8, true),
+                        return_field: Field::new("f", DataType::Utf8, true).into(),
                     }))
                 })
             },

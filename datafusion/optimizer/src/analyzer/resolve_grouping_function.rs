@@ -189,19 +189,19 @@ fn grouping_function_on_id(
     // Postgres allows grouping function for group by without grouping sets, the result is then
     // always 0
     if !is_grouping_set {
-        return Ok(Expr::Literal(ScalarValue::from(0i32)));
+        return Ok(Expr::Literal(ScalarValue::from(0i32), None));
     }
 
     let group_by_expr_count = group_by_expr.len();
     let literal = |value: usize| {
         if group_by_expr_count < 8 {
-            Expr::Literal(ScalarValue::from(value as u8))
+            Expr::Literal(ScalarValue::from(value as u8), None)
         } else if group_by_expr_count < 16 {
-            Expr::Literal(ScalarValue::from(value as u16))
+            Expr::Literal(ScalarValue::from(value as u16), None)
         } else if group_by_expr_count < 32 {
-            Expr::Literal(ScalarValue::from(value as u32))
+            Expr::Literal(ScalarValue::from(value as u32), None)
         } else {
-            Expr::Literal(ScalarValue::from(value as u64))
+            Expr::Literal(ScalarValue::from(value as u64), None)
         }
     };
 

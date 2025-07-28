@@ -17,8 +17,8 @@
 
 use std::sync::Arc;
 
-use datafusion_physical_expr::LexRequirement;
-use datafusion_physical_expr_common::sort_expr::LexOrdering;
+use datafusion_common::Result;
+use datafusion_physical_expr::{LexOrdering, LexRequirement};
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::repartition::RepartitionExec;
@@ -40,14 +40,18 @@ pub fn add_sort_above<T: Clone + Default>(
     sort_requirements: LexRequirement,
     fetch: Option<usize>,
 ) -> PlanContext<T> {
-    let mut sort_expr = LexOrdering::from(sort_requirements);
-    sort_expr.retain(|sort_expr| {
-        !node
-            .plan
+    let mut sort_reqs: Vec<_> = sort_requirements.into();
+    sort_reqs.retain(|sort_expr| {
+        node.plan
             .equivalence_properties()
             .is_expr_constant(&sort_expr.expr)
+            .is_none()
     });
-    let mut new_sort = SortExec::new(sort_expr, Arc::clone(&node.plan)).with_fetch(fetch);
+    let sort_exprs = sort_reqs.into_iter().map(Into::into).collect::<Vec<_>>();
+    let Some(ordering) = LexOrdering::new(sort_exprs) else {
+        return node;
+    };
+    let mut new_sort = SortExec::new(ordering, Arc::clone(&node.plan)).with_fetch(fetch);
     if node.plan.output_partitioning().partition_count() > 1 {
         new_sort = new_sort.with_preserve_partitioning(true);
     }
@@ -61,15 +65,15 @@ pub fn add_sort_above_with_check<T: Clone + Default>(
     node: PlanContext<T>,
     sort_requirements: LexRequirement,
     fetch: Option<usize>,
-) -> PlanContext<T> {
+) -> Result<PlanContext<T>> {
     if !node
         .plan
         .equivalence_properties()
-        .ordering_satisfy_requirement(&sort_requirements)
+        .ordering_satisfy_requirement(sort_requirements.clone())?
     {
-        add_sort_above(node, sort_requirements, fetch)
+        Ok(add_sort_above(node, sort_requirements, fetch))
     } else {
-        node
+        Ok(node)
     }
 }
 

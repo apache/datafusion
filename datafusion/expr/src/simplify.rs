@@ -110,6 +110,7 @@ impl SimplifyInfo for SimplifyContext<'_> {
 
 /// Was the expression simplified?
 #[derive(Debug)]
+#[allow(clippy::large_enum_variant)]
 pub enum ExprSimplifyResult {
     /// The function call was simplified to an entirely new Expr
     Simplified(Expr),

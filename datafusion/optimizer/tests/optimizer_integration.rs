@@ -250,7 +250,7 @@ fn between_date32_plus_interval() -> Result<()> {
     format!("{plan}"),
     @r#"
 Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
-  Projection: 
+  Projection:
     Filter: test.col_date32 >= Date32("1998-03-18") AND test.col_date32 <= Date32("1998-06-16")
       TableScan: test projection=[col_date32]
 "#
@@ -268,7 +268,7 @@ fn between_date64_plus_interval() -> Result<()> {
     format!("{plan}"),
     @r#"
         Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
-          Projection: 
+          Projection:
             Filter: test.col_date64 >= Date64("1998-03-18") AND test.col_date64 <= Date64("1998-06-16")
               TableScan: test projection=[col_date64]
         "#
@@ -492,46 +492,10 @@ fn test_sql(sql: &str) -> Result<LogicalPlan> {
         .with_expr_planners(vec![
             Arc::new(AggregateFunctionPlanner),
             Arc::new(WindowFunctionPlanner),
-        ]);
-
-    let sql_to_rel = SqlToRel::new(&context_provider);
-    let plan = sql_to_rel.sql_statement_to_plan(statement.clone())?;
-
-    let config = OptimizerContext::new().with_skip_failing_rules(false);
-    let analyzer = Analyzer::new();
-    let optimizer = Optimizer::new();
-    // analyze and optimize the logical plan
-    let plan = analyzer.execute_and_check(plan, config.options(), |_, _| {})?;
-    optimizer.optimize(plan, &config, observe)
-}
-
-fn observe(_plan: &LogicalPlan, _rule: &dyn OptimizerRule) {}
-
-#[derive(Default)]
-struct MyContextProvider {
-    options: ConfigOptions,
-    udafs: HashMap<String, Arc<AggregateUDF>>,
-    expr_planners: Vec<Arc<dyn ExprPlanner>>,
-}
-
-impl MyContextProvider {
-    fn with_udaf(mut self, udaf: Arc<AggregateUDF>) -> Self {
-        // TODO: change to to_string() if all the function name is converted to lowercase
-        self.udafs.insert(udaf.name().to_lowercase(), udaf);
-        self
-    }
-
-    fn with_expr_planners(mut self, expr_planners: Vec<Arc<dyn ExprPlanner>>) -> Self {
-        self.expr_planners = expr_planners;
-        self
-    }
-}
-
-impl ContextProvider for MyContextProvider {
-    fn get_table_source(&self, name: TableReference) -> Result<Arc<dyn TableSource>> {
-        let table_name = name.table();
-        if table_name.starts_with("test") {
-            let schema = Schema::new_with_metadata(
+        ])
+        .with_schema(
+            "test",
+            Schema::new_with_metadata(
                 vec![
                     Field::new("col_int32", DataType::Int32, true),
                     Field::new("col_uint32", DataType::UInt32, true),
@@ -552,11 +516,58 @@ impl ContextProvider for MyContextProvider {
                     ),
                 ],
                 HashMap::new(),
-            );
+            ),
+        );
 
-            Ok(Arc::new(MyTableSource {
+    let sql_to_rel = SqlToRel::new(&context_provider);
+    let plan = sql_to_rel.sql_statement_to_plan(statement.clone())?;
+
+    let config = OptimizerContext::new().with_skip_failing_rules(false);
+    let analyzer = Analyzer::new();
+    let optimizer = Optimizer::new();
+    // analyze and optimize the logical plan
+    let plan = analyzer.execute_and_check(plan, config.options(), |_, _| {})?;
+    optimizer.optimize(plan, &config, observe)
+}
+
+fn observe(_plan: &LogicalPlan, _rule: &dyn OptimizerRule) {}
+
+#[derive(Default)]
+struct MyContextProvider {
+    options: ConfigOptions,
+    tables: HashMap<String, Arc<dyn TableSource>>,
+    udafs: HashMap<String, Arc<AggregateUDF>>,
+    expr_planners: Vec<Arc<dyn ExprPlanner>>,
+}
+
+impl MyContextProvider {
+    fn with_udaf(mut self, udaf: Arc<AggregateUDF>) -> Self {
+        // TODO: change to to_string() if all the function name is converted to lowercase
+        self.udafs.insert(udaf.name().to_lowercase(), udaf);
+        self
+    }
+
+    fn with_expr_planners(mut self, expr_planners: Vec<Arc<dyn ExprPlanner>>) -> Self {
+        self.expr_planners = expr_planners;
+        self
+    }
+
+    fn with_schema(mut self, name: impl Into<String>, schema: Schema) -> Self {
+        self.tables.insert(
+            name.into(),
+            Arc::new(MyTableSource {
                 schema: Arc::new(schema),
-            }))
+            }),
+        );
+        self
+    }
+}
+
+impl ContextProvider for MyContextProvider {
+    fn get_table_source(&self, name: TableReference) -> Result<Arc<dyn TableSource>> {
+        let table_name = name.table();
+        if let Some(table) = self.tables.get(table_name) {
+            Ok(table.clone())
         } else {
             plan_err!("table does not exist")
         }

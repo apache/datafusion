@@ -124,12 +124,13 @@ fn criterion_benchmark(c: &mut Criterion) {
     let lower = string::lower();
     for size in [1024, 4096, 8192] {
         let args = create_args1(size, 32);
-        let arg_fields_owned = args
+        let arg_fields = args
             .iter()
             .enumerate()
-            .map(|(idx, arg)| Field::new(format!("arg_{idx}"), arg.data_type(), true))
+            .map(|(idx, arg)| {
+                Field::new(format!("arg_{idx}"), arg.data_type(), true).into()
+            })
             .collect::<Vec<_>>();
-        let arg_fields = arg_fields_owned.iter().collect::<Vec<_>>();
 
         c.bench_function(&format!("lower_all_values_are_ascii: {size}"), |b| {
             b.iter(|| {
@@ -138,18 +139,19 @@ fn criterion_benchmark(c: &mut Criterion) {
                     args: args_cloned,
                     arg_fields: arg_fields.clone(),
                     number_rows: size,
-                    return_field: &Field::new("f", DataType::Utf8, true),
+                    return_field: Field::new("f", DataType::Utf8, true).into(),
                 }))
             })
         });
 
         let args = create_args2(size);
-        let arg_fields_owned = args
+        let arg_fields = args
             .iter()
             .enumerate()
-            .map(|(idx, arg)| Field::new(format!("arg_{idx}"), arg.data_type(), true))
+            .map(|(idx, arg)| {
+                Field::new(format!("arg_{idx}"), arg.data_type(), true).into()
+            })
             .collect::<Vec<_>>();
-        let arg_fields = arg_fields_owned.iter().collect::<Vec<_>>();
 
         c.bench_function(&format!("lower_the_first_value_is_nonascii: {size}"), |b| {
             b.iter(|| {
@@ -158,18 +160,19 @@ fn criterion_benchmark(c: &mut Criterion) {
                     args: args_cloned,
                     arg_fields: arg_fields.clone(),
                     number_rows: size,
-                    return_field: &Field::new("f", DataType::Utf8, true),
+                    return_field: Field::new("f", DataType::Utf8, true).into(),
                 }))
             })
         });
 
         let args = create_args3(size);
-        let arg_fields_owned = args
+        let arg_fields = args
             .iter()
             .enumerate()
-            .map(|(idx, arg)| Field::new(format!("arg_{idx}"), arg.data_type(), true))
+            .map(|(idx, arg)| {
+                Field::new(format!("arg_{idx}"), arg.data_type(), true).into()
+            })
             .collect::<Vec<_>>();
-        let arg_fields = arg_fields_owned.iter().collect::<Vec<_>>();
 
         c.bench_function(
             &format!("lower_the_middle_value_is_nonascii: {size}"),
@@ -180,7 +183,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         args: args_cloned,
                         arg_fields: arg_fields.clone(),
                         number_rows: size,
-                        return_field: &Field::new("f", DataType::Utf8, true),
+                        return_field: Field::new("f", DataType::Utf8, true).into(),
                     }))
                 })
             },
@@ -197,14 +200,13 @@ fn criterion_benchmark(c: &mut Criterion) {
             for &str_len in &str_lens {
                 for &size in &sizes {
                     let args = create_args4(size, str_len, *null_density, mixed);
-                    let arg_fields_owned = args
+                    let arg_fields = args
                         .iter()
                         .enumerate()
                         .map(|(idx, arg)| {
-                            Field::new(format!("arg_{idx}"), arg.data_type(), true)
+                            Field::new(format!("arg_{idx}"), arg.data_type(), true).into()
                         })
                         .collect::<Vec<_>>();
-                    let arg_fields = arg_fields_owned.iter().collect::<Vec<_>>();
 
                     c.bench_function(
                         &format!("lower_all_values_are_ascii_string_views: size: {size}, str_len: {str_len}, null_density: {null_density}, mixed: {mixed}"),
@@ -214,7 +216,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                                 args: args_cloned,
                                 arg_fields: arg_fields.clone(),
                                 number_rows: size,
-                                return_field: &Field::new("f", DataType::Utf8, true),
+                                return_field: Field::new("f", DataType::Utf8, true).into(),
                             }))
                         }),
                     );
@@ -228,7 +230,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                                 args: args_cloned,
                                 arg_fields: arg_fields.clone(),
                                 number_rows: size,
-                                return_field: &Field::new("f", DataType::Utf8, true),
+                                return_field: Field::new("f", DataType::Utf8, true).into(),
                             }))
                         }),
                     );
@@ -243,7 +245,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                                 args: args_cloned,
                                 arg_fields: arg_fields.clone(),
                                 number_rows: size,
-                                return_field: &Field::new("f", DataType::Utf8, true),
+                                return_field: Field::new("f", DataType::Utf8, true).into(),
                             }))
                         }),
                     );

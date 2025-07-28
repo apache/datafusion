@@ -131,10 +131,11 @@ fn initcap<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
         string_array.value_data().len(),
     );
 
+    let mut container = String::new();
     string_array.iter().for_each(|str| match str {
         Some(s) => {
-            let initcap_str = initcap_string(s);
-            builder.append_value(initcap_str);
+            initcap_string(s, &mut container);
+            builder.append_value(&container);
         }
         None => builder.append_null(),
     });
@@ -147,10 +148,11 @@ fn initcap_utf8view(args: &[ArrayRef]) -> Result<ArrayRef> {
 
     let mut builder = StringViewBuilder::with_capacity(string_view_array.len());
 
+    let mut container = String::new();
     string_view_array.iter().for_each(|str| match str {
         Some(s) => {
-            let initcap_str = initcap_string(s);
-            builder.append_value(initcap_str);
+            initcap_string(s, &mut container);
+            builder.append_value(&container);
         }
         None => builder.append_null(),
     });
@@ -158,31 +160,29 @@ fn initcap_utf8view(args: &[ArrayRef]) -> Result<ArrayRef> {
     Ok(Arc::new(builder.finish()) as ArrayRef)
 }
 
-fn initcap_string(input: &str) -> String {
-    let mut result = String::with_capacity(input.len());
+fn initcap_string(input: &str, container: &mut String) {
+    container.clear();
     let mut prev_is_alphanumeric = false;
 
     if input.is_ascii() {
         for c in input.chars() {
             if prev_is_alphanumeric {
-                result.push(c.to_ascii_lowercase());
+                container.push(c.to_ascii_lowercase());
             } else {
-                result.push(c.to_ascii_uppercase());
+                container.push(c.to_ascii_uppercase());
             };
             prev_is_alphanumeric = c.is_ascii_alphanumeric();
         }
     } else {
         for c in input.chars() {
             if prev_is_alphanumeric {
-                result.extend(c.to_lowercase());
+                container.extend(c.to_lowercase());
             } else {
-                result.extend(c.to_uppercase());
+                container.extend(c.to_uppercase());
             }
             prev_is_alphanumeric = c.is_alphanumeric();
         }
     }
-
-    result
 }
 
 #[cfg(test)]

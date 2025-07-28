@@ -33,8 +33,8 @@ use crate::execution::context::{SessionState, TaskContext};
 use crate::execution::FunctionRegistry;
 use crate::logical_expr::utils::find_window_exprs;
 use crate::logical_expr::{
-    col, Expr, JoinType, LogicalPlan, LogicalPlanBuilder, LogicalPlanBuilderOptions,
-    Partitioning, TableType,
+    col, ident, Expr, JoinType, LogicalPlan, LogicalPlanBuilder,
+    LogicalPlanBuilderOptions, Partitioning, TableType,
 };
 use crate::physical_plan::{
     collect, collect_partitioned, execute_stream, execute_stream_partitioned,
@@ -61,7 +61,7 @@ use datafusion_expr::{
     expr::{Alias, ScalarFunction},
     is_null, lit,
     utils::COUNT_STAR_EXPANSION,
-    SortExpr, TableProviderFilterPushDown, UNNAMED_TABLE,
+    ExplainOption, SortExpr, TableProviderFilterPushDown, UNNAMED_TABLE,
 };
 use datafusion_functions::core::coalesce;
 use datafusion_functions_aggregate::expr_fn::{
@@ -166,9 +166,12 @@ impl Default for DataFrameWriteOptions {
 ///
 /// # Example
 /// ```
+/// # use std::sync::Arc;
 /// # use datafusion::prelude::*;
 /// # use datafusion::error::Result;
 /// # use datafusion::functions_aggregate::expr_fn::min;
+/// # use datafusion::arrow::array::{Int32Array, RecordBatch, StringArray};
+/// # use datafusion::arrow::datatypes::{DataType, Field, Schema};
 /// # #[tokio::main]
 /// # async fn main() -> Result<()> {
 /// let ctx = SessionContext::new();
@@ -181,6 +184,28 @@ impl Default for DataFrameWriteOptions {
 ///            .limit(0, Some(100))?;
 /// // Perform the actual computation
 /// let results = df.collect();
+///
+/// // Create a new dataframe with in-memory data
+/// let schema = Schema::new(vec![
+///     Field::new("id", DataType::Int32, true),
+///     Field::new("name", DataType::Utf8, true),
+/// ]);
+/// let batch = RecordBatch::try_new(
+///     Arc::new(schema),
+///     vec![
+///         Arc::new(Int32Array::from(vec![1, 2, 3])),
+///         Arc::new(StringArray::from(vec!["foo", "bar", "baz"])),
+///     ],
+/// )?;
+/// let df = ctx.read_batch(batch)?;
+/// df.show().await?;
+///
+/// // Create a new dataframe with in-memory data using macro
+/// let df = dataframe!(
+///     "id" => [1, 2, 3],
+///     "name" => ["foo", "bar", "baz"]
+///  )?;
+/// df.show().await?;
 /// # Ok(())
 /// # }
 /// ```
@@ -350,15 +375,12 @@ impl DataFrame {
         let expr_list: Vec<SelectExpr> =
             expr_list.into_iter().map(|e| e.into()).collect::<Vec<_>>();
 
-        let expressions = expr_list
-            .iter()
-            .filter_map(|e| match e {
-                SelectExpr::Expression(expr) => Some(expr.clone()),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
+        let expressions = expr_list.iter().filter_map(|e| match e {
+            SelectExpr::Expression(expr) => Some(expr),
+            _ => None,
+        });
 
-        let window_func_exprs = find_window_exprs(&expressions);
+        let window_func_exprs = find_window_exprs(expressions);
         let plan = if window_func_exprs.is_empty() {
             self.plan
         } else {
@@ -934,7 +956,7 @@ impl DataFrame {
                 vec![],
                 original_schema_fields
                     .clone()
-                    .map(|f| count(col(f.name())).alias(f.name()))
+                    .map(|f| count(ident(f.name())).alias(f.name()))
                     .collect::<Vec<_>>(),
             ),
             // null_count aggregation
@@ -943,7 +965,7 @@ impl DataFrame {
                 original_schema_fields
                     .clone()
                     .map(|f| {
-                        sum(case(is_null(col(f.name())))
+                        sum(case(is_null(ident(f.name())))
                             .when(lit(true), lit(1))
                             .otherwise(lit(0))
                             .unwrap())
@@ -957,7 +979,7 @@ impl DataFrame {
                 original_schema_fields
                     .clone()
                     .filter(|f| f.data_type().is_numeric())
-                    .map(|f| avg(col(f.name())).alias(f.name()))
+                    .map(|f| avg(ident(f.name())).alias(f.name()))
                     .collect::<Vec<_>>(),
             ),
             // std aggregation
@@ -966,7 +988,7 @@ impl DataFrame {
                 original_schema_fields
                     .clone()
                     .filter(|f| f.data_type().is_numeric())
-                    .map(|f| stddev(col(f.name())).alias(f.name()))
+                    .map(|f| stddev(ident(f.name())).alias(f.name()))
                     .collect::<Vec<_>>(),
             ),
             // min aggregation
@@ -977,7 +999,7 @@ impl DataFrame {
                     .filter(|f| {
                         !matches!(f.data_type(), DataType::Binary | DataType::Boolean)
                     })
-                    .map(|f| min(col(f.name())).alias(f.name()))
+                    .map(|f| min(ident(f.name())).alias(f.name()))
                     .collect::<Vec<_>>(),
             ),
             // max aggregation
@@ -988,7 +1010,7 @@ impl DataFrame {
                     .filter(|f| {
                         !matches!(f.data_type(), DataType::Binary | DataType::Boolean)
                     })
-                    .map(|f| max(col(f.name())).alias(f.name()))
+                    .map(|f| max(ident(f.name())).alias(f.name()))
                     .collect::<Vec<_>>(),
             ),
             // median aggregation
@@ -997,7 +1019,7 @@ impl DataFrame {
                 original_schema_fields
                     .clone()
                     .filter(|f| f.data_type().is_numeric())
-                    .map(|f| median(col(f.name())).alias(f.name()))
+                    .map(|f| median(ident(f.name())).alias(f.name()))
                     .collect::<Vec<_>>(),
             ),
         ];
@@ -1312,7 +1334,10 @@ impl DataFrame {
     /// ```
     pub async fn count(self) -> Result<usize> {
         let rows = self
-            .aggregate(vec![], vec![count(Expr::Literal(COUNT_STAR_EXPANSION))])?
+            .aggregate(
+                vec![],
+                vec![count(Expr::Literal(COUNT_STAR_EXPANSION, None))],
+            )?
             .collect()
             .await?;
         let len = *rows
@@ -1577,6 +1602,8 @@ impl DataFrame {
     /// Return a DataFrame with the explanation of its plan so far.
     ///
     /// if `analyze` is specified, runs the plan and reports metrics
+    /// if `verbose` is true, prints out additional details.
+    /// The default format is Indent format.
     ///
     /// ```
     /// # use datafusion::prelude::*;
@@ -1590,11 +1617,38 @@ impl DataFrame {
     /// # }
     /// ```
     pub fn explain(self, verbose: bool, analyze: bool) -> Result<DataFrame> {
+        // Set the default format to Indent to keep the previous behavior
+        let opts = ExplainOption::default()
+            .with_verbose(verbose)
+            .with_analyze(analyze);
+        self.explain_with_options(opts)
+    }
+
+    /// Return a DataFrame with the explanation of its plan so far.
+    ///
+    /// `opt` is used to specify the options for the explain operation.
+    /// Details of the options can be found in [`ExplainOption`].
+    /// ```
+    /// # use datafusion::prelude::*;
+    /// # use datafusion::error::Result;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// use datafusion_expr::{Explain, ExplainOption};
+    /// let ctx = SessionContext::new();
+    /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
+    /// let batches = df.limit(0, Some(100))?.explain_with_options(ExplainOption::default().with_verbose(false).with_analyze(false))?.collect().await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn explain_with_options(
+        self,
+        explain_option: ExplainOption,
+    ) -> Result<DataFrame> {
         if matches!(self.plan, LogicalPlan::Explain(_)) {
             return plan_err!("Nested EXPLAINs are not supported");
         }
         let plan = LogicalPlanBuilder::from(self.plan)
-            .explain(verbose, analyze)?
+            .explain_option_format(explain_option)?
             .build()?;
         Ok(DataFrame {
             session_state: self.session_state,
@@ -1656,6 +1710,40 @@ impl DataFrame {
         })
     }
 
+    /// Calculate the distinct intersection of two [`DataFrame`]s.  The two [`DataFrame`]s must have exactly the same schema
+    ///
+    /// ```
+    /// # use datafusion::prelude::*;
+    /// # use datafusion::error::Result;
+    /// # use datafusion_common::assert_batches_sorted_eq;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// let ctx = SessionContext::new();
+    /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
+    /// let d2 = ctx.read_csv("tests/data/example_long.csv", CsvReadOptions::new()).await?;
+    /// let df = df.intersect_distinct(d2)?;
+    /// let expected = vec![
+    ///     "+---+---+---+",
+    ///     "| a | b | c |",
+    ///     "+---+---+---+",
+    ///     "| 1 | 2 | 3 |",
+    ///     "+---+---+---+"
+    /// ];
+    /// # assert_batches_sorted_eq!(expected, &df.collect().await?);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn intersect_distinct(self, dataframe: DataFrame) -> Result<DataFrame> {
+        let left_plan = self.plan;
+        let right_plan = dataframe.plan;
+        let plan = LogicalPlanBuilder::intersect(left_plan, right_plan, false)?;
+        Ok(DataFrame {
+            session_state: self.session_state,
+            plan,
+            projection_requires_validation: true,
+        })
+    }
+
     /// Calculate the exception of two [`DataFrame`]s.  The two [`DataFrame`]s must have exactly the same schema
     ///
     /// ```
@@ -1685,6 +1773,42 @@ impl DataFrame {
         let left_plan = self.plan;
         let right_plan = dataframe.plan;
         let plan = LogicalPlanBuilder::except(left_plan, right_plan, true)?;
+        Ok(DataFrame {
+            session_state: self.session_state,
+            plan,
+            projection_requires_validation: true,
+        })
+    }
+
+    /// Calculate the distinct exception of two [`DataFrame`]s.  The two [`DataFrame`]s must have exactly the same schema
+    ///
+    /// ```
+    /// # use datafusion::prelude::*;
+    /// # use datafusion::error::Result;
+    /// # use datafusion_common::assert_batches_sorted_eq;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// let ctx = SessionContext::new();
+    /// let df = ctx.read_csv("tests/data/example_long.csv", CsvReadOptions::new()).await?;
+    /// let d2 = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
+    /// let result = df.except_distinct(d2)?;
+    /// // those columns are not in example.csv, but in example_long.csv
+    /// let expected = vec![
+    ///     "+---+---+---+",
+    ///     "| a | b | c |",
+    ///     "+---+---+---+",
+    ///     "| 4 | 5 | 6 |",
+    ///     "| 7 | 8 | 9 |",
+    ///     "+---+---+---+"
+    /// ];
+    /// # assert_batches_sorted_eq!(expected, &result.collect().await?);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn except_distinct(self, dataframe: DataFrame) -> Result<DataFrame> {
+        let left_plan = self.plan;
+        let right_plan = dataframe.plan;
+        let plan = LogicalPlanBuilder::except(left_plan, right_plan, false)?;
         Ok(DataFrame {
             session_state: self.session_state,
             plan,
@@ -1895,7 +2019,7 @@ impl DataFrame {
     /// # }
     /// ```
     pub fn with_column(self, name: &str, expr: Expr) -> Result<DataFrame> {
-        let window_func_exprs = find_window_exprs(std::slice::from_ref(&expr));
+        let window_func_exprs = find_window_exprs([&expr]);
 
         let (window_fn_str, plan) = if window_func_exprs.is_empty() {
             (None, self.plan)
@@ -1982,10 +2106,11 @@ impl DataFrame {
             match self.plan.schema().qualified_field_from_column(&old_column) {
                 Ok(qualifier_and_field) => qualifier_and_field,
                 // no-op if field not found
-                Err(DataFusionError::SchemaError(
-                    SchemaError::FieldNotFound { .. },
-                    _,
-                )) => return Ok(self),
+                Err(DataFusionError::SchemaError(e, _))
+                    if matches!(*e, SchemaError::FieldNotFound { .. }) =>
+                {
+                    return Ok(self);
+                }
                 Err(err) => return Err(err),
             };
         let projection = self
@@ -2199,6 +2324,94 @@ impl DataFrame {
             })
             .collect()
     }
+
+    /// Helper for creating DataFrame.
+    /// # Example
+    /// ```
+    /// use std::sync::Arc;
+    /// use arrow::array::{ArrayRef, Int32Array, StringArray};
+    /// use datafusion::prelude::DataFrame;
+    /// let id: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
+    /// let name: ArrayRef = Arc::new(StringArray::from(vec!["foo", "bar", "baz"]));
+    /// let df = DataFrame::from_columns(vec![("id", id), ("name", name)]).unwrap();
+    /// // +----+------+,
+    /// // | id | name |,
+    /// // +----+------+,
+    /// // | 1  | foo  |,
+    /// // | 2  | bar  |,
+    /// // | 3  | baz  |,
+    /// // +----+------+,
+    /// ```
+    pub fn from_columns(columns: Vec<(&str, ArrayRef)>) -> Result<Self> {
+        let fields = columns
+            .iter()
+            .map(|(name, array)| Field::new(*name, array.data_type().clone(), true))
+            .collect::<Vec<_>>();
+
+        let arrays = columns
+            .into_iter()
+            .map(|(_, array)| array)
+            .collect::<Vec<_>>();
+
+        let schema = Arc::new(Schema::new(fields));
+        let batch = RecordBatch::try_new(schema, arrays)?;
+        let ctx = SessionContext::new();
+        let df = ctx.read_batch(batch)?;
+        Ok(df)
+    }
+}
+
+/// Macro for creating DataFrame.
+/// # Example
+/// ```
+/// use datafusion::prelude::dataframe;
+/// # use datafusion::error::Result;
+/// # #[tokio::main]
+/// # async fn main() -> Result<()> {
+/// let df = dataframe!(
+///    "id" => [1, 2, 3],
+///    "name" => ["foo", "bar", "baz"]
+///  )?;
+/// df.show().await?;
+/// // +----+------+,
+/// // | id | name |,
+/// // +----+------+,
+/// // | 1  | foo  |,
+/// // | 2  | bar  |,
+/// // | 3  | baz  |,
+/// // +----+------+,
+/// let df_empty = dataframe!()?; // empty DataFrame
+/// assert_eq!(df_empty.schema().fields().len(), 0);
+/// assert_eq!(df_empty.count().await?, 0);
+/// # Ok(())
+/// # }
+/// ```
+#[macro_export]
+macro_rules! dataframe {
+    () => {{
+        use std::sync::Arc;
+
+        use datafusion::prelude::SessionContext;
+        use datafusion::arrow::array::RecordBatch;
+        use datafusion::arrow::datatypes::Schema;
+
+        let ctx = SessionContext::new();
+        let batch = RecordBatch::new_empty(Arc::new(Schema::empty()));
+        ctx.read_batch(batch)
+    }};
+
+    ($($name:expr => $data:expr),+ $(,)?) => {{
+        use datafusion::prelude::DataFrame;
+        use datafusion::common::test_util::IntoArrayRef;
+
+        let columns = vec![
+            $(
+                ($name, $data.into_array_ref()),
+            )+
+        ];
+
+        DataFrame::from_columns(columns)
+    }};
 }
 
 #[derive(Debug)]

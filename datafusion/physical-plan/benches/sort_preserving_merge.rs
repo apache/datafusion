@@ -115,18 +115,13 @@ fn get_bench_data() -> Vec<BenchData> {
     let mut push_bench_data = |bench_name: &str, partitions: Vec<Vec<RecordBatch>>| {
         let schema = partitions[0][0].schema();
         // Define sort order (col1 ASC, col2 ASC, col3 ASC)
-        let sort_order = LexOrdering::new(
-            schema
-                .fields()
-                .iter()
-                .map(|field| {
-                    PhysicalSortExpr::new(
-                        col(field.name(), &schema).unwrap(),
-                        SortOptions::default(),
-                    )
-                })
-                .collect(),
-        );
+        let sort_order = LexOrdering::new(schema.fields().iter().map(|field| {
+            PhysicalSortExpr::new(
+                col(field.name(), &schema).unwrap(),
+                SortOptions::default(),
+            )
+        }))
+        .unwrap();
         ret.push(BenchData {
             bench_name: bench_name.to_string(),
             partitions,
@@ -173,7 +168,7 @@ fn bench_merge_sorted_preserving(c: &mut Criterion) {
             sort_order,
         } = data;
         c.bench_function(
-            &format!("bench_merge_sorted_preserving/{}", bench_name),
+            &format!("bench_merge_sorted_preserving/{bench_name}"),
             |b| {
                 b.iter_batched(
                     || {

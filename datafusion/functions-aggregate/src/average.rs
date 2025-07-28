@@ -26,7 +26,7 @@ use arrow::compute::sum;
 use arrow::datatypes::{
     i256, ArrowNativeType, DataType, Decimal128Type, Decimal256Type, DecimalType,
     DurationMicrosecondType, DurationMillisecondType, DurationNanosecondType,
-    DurationSecondType, Field, Float64Type, TimeUnit, UInt64Type,
+    DurationSecondType, Field, FieldRef, Float64Type, TimeUnit, UInt64Type,
 };
 use datafusion_common::{
     exec_err, not_impl_err, utils::take_function_args, Result, ScalarValue,
@@ -121,7 +121,7 @@ impl AggregateUDFImpl for Avg {
 
         let data_type = acc_args.exprs[0].data_type(acc_args.schema)?;
         // instantiate specialized accumulator based for the type
-        match (&data_type, acc_args.return_type) {
+        match (&data_type, acc_args.return_field.data_type()) {
             (Float64, Float64) => Ok(Box::<AvgAccumulator>::default()),
             (
                 Decimal128(sum_precision, sum_scale),
@@ -159,12 +159,12 @@ impl AggregateUDFImpl for Avg {
             _ => exec_err!(
                 "AvgAccumulator for ({} --> {})",
                 &data_type,
-                acc_args.return_type
+                acc_args.return_field.data_type()
             ),
         }
     }
 
-    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
+    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         Ok(vec![
             Field::new(
                 format_state_name(args.name, "count"),
@@ -173,16 +173,19 @@ impl AggregateUDFImpl for Avg {
             ),
             Field::new(
                 format_state_name(args.name, "sum"),
-                args.input_types[0].clone(),
+                args.input_fields[0].data_type().clone(),
                 true,
             ),
-        ])
+        ]
+        .into_iter()
+        .map(Arc::new)
+        .collect())
     }
 
     fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
         matches!(
-            args.return_type,
-            DataType::Float64 | DataType::Decimal128(_, _)
+            args.return_field.data_type(),
+            DataType::Float64 | DataType::Decimal128(_, _) | DataType::Duration(_)
         )
     }
 
@@ -194,11 +197,11 @@ impl AggregateUDFImpl for Avg {
 
         let data_type = args.exprs[0].data_type(args.schema)?;
         // instantiate specialized accumulator based for the type
-        match (&data_type, args.return_type) {
+        match (&data_type, args.return_field.data_type()) {
             (Float64, Float64) => {
                 Ok(Box::new(AvgGroupsAccumulator::<Float64Type, _>::new(
                     &data_type,
-                    args.return_type,
+                    args.return_field.data_type(),
                     |sum: f64, count: u64| Ok(sum / count as f64),
                 )))
             }
@@ -217,7 +220,7 @@ impl AggregateUDFImpl for Avg {
 
                 Ok(Box::new(AvgGroupsAccumulator::<Decimal128Type, _>::new(
                     &data_type,
-                    args.return_type,
+                    args.return_field.data_type(),
                     avg_fn,
                 )))
             }
@@ -238,15 +241,54 @@ impl AggregateUDFImpl for Avg {
 
                 Ok(Box::new(AvgGroupsAccumulator::<Decimal256Type, _>::new(
                     &data_type,
-                    args.return_type,
+                    args.return_field.data_type(),
                     avg_fn,
                 )))
+            }
+
+            (Duration(time_unit), Duration(_result_unit)) => {
+                let avg_fn = move |sum: i64, count: u64| Ok(sum / count as i64);
+
+                match time_unit {
+                    TimeUnit::Second => Ok(Box::new(AvgGroupsAccumulator::<
+                        DurationSecondType,
+                        _,
+                    >::new(
+                        &data_type,
+                        args.return_type(),
+                        avg_fn,
+                    ))),
+                    TimeUnit::Millisecond => Ok(Box::new(AvgGroupsAccumulator::<
+                        DurationMillisecondType,
+                        _,
+                    >::new(
+                        &data_type,
+                        args.return_type(),
+                        avg_fn,
+                    ))),
+                    TimeUnit::Microsecond => Ok(Box::new(AvgGroupsAccumulator::<
+                        DurationMicrosecondType,
+                        _,
+                    >::new(
+                        &data_type,
+                        args.return_type(),
+                        avg_fn,
+                    ))),
+                    TimeUnit::Nanosecond => Ok(Box::new(AvgGroupsAccumulator::<
+                        DurationNanosecondType,
+                        _,
+                    >::new(
+                        &data_type,
+                        args.return_type(),
+                        avg_fn,
+                    ))),
+                }
             }
 
             _ => not_impl_err!(
                 "AvgGroupsAccumulator for ({} --> {})",
                 &data_type,
-                args.return_type
+                args.return_field.data_type()
             ),
         }
     }

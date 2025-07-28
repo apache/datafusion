@@ -177,14 +177,14 @@ mod tests {
     ) -> Result<ColumnarValue, DataFusionError> {
         let arg_fields = args
             .iter()
-            .map(|arg| Field::new("a", arg.data_type(), true))
+            .map(|arg| Field::new("a", arg.data_type(), true).into())
             .collect::<Vec<_>>();
 
         let args = datafusion_expr::ScalarFunctionArgs {
             args,
-            arg_fields: arg_fields.iter().collect(),
+            arg_fields,
             number_rows,
-            return_field: &Field::new("f", DataType::Date32, true),
+            return_field: Field::new("f", DataType::Date32, true).into(),
         };
         ToDateFunc::new().invoke_with_args(args)
     }

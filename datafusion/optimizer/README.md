@@ -17,6 +17,15 @@
   under the License.
 -->
 
-Please see [Query Optimizer] in the Library User Guide
+[DataFusion][df] is an extensible query execution framework, written in Rust, that uses Apache Arrow as its in-memory format.
 
+This crate contains the DataFusion logical optimizer.
+Please see [Query Optimizer] in the Library User Guide for more information.
+
+Most projects should use the [`datafusion`] crate directly, which re-exports
+this module. If you are already using the [`datafusion`] crate, there is no
+reason to use this crate directly in your project as well.
+
+[df]: https://crates.io/crates/datafusion
+[`datafusion`]: https://crates.io/crates/datafusion
 [query optimizer]: https://datafusion.apache.org/library-user-guide/query-optimizer.html

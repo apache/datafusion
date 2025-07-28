@@ -19,12 +19,15 @@
 
 use crate::utils::make_scalar_function;
 use arrow::array::{
-    Array, ArrayRef, Capacities, GenericListArray, MutableArrayData, OffsetSizeTrait,
+    Array, ArrayRef, Capacities, FixedSizeListArray, GenericListArray, MutableArrayData,
+    OffsetSizeTrait,
 };
 use arrow::buffer::OffsetBuffer;
-use arrow::datatypes::DataType::{LargeList, List, Null};
+use arrow::datatypes::DataType::{FixedSizeList, LargeList, List, Null};
 use arrow::datatypes::{DataType, FieldRef};
-use datafusion_common::cast::{as_large_list_array, as_list_array};
+use datafusion_common::cast::{
+    as_fixed_size_list_array, as_large_list_array, as_list_array,
+};
 use datafusion_common::{exec_err, utils::take_function_args, Result};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
@@ -125,6 +128,10 @@ pub fn array_reverse_inner(arg: &[ArrayRef]) -> Result<ArrayRef> {
             let array = as_large_list_array(input_array)?;
             general_array_reverse::<i64>(array, field)
         }
+        FixedSizeList(field, _) => {
+            let array = as_fixed_size_list_array(input_array)?;
+            fixed_size_array_reverse(array, field)
+        }
         Null => Ok(Arc::clone(input_array)),
         array_type => exec_err!("array_reverse does not support type '{array_type:?}'."),
     }
@@ -171,6 +178,43 @@ fn general_array_reverse<O: OffsetSizeTrait + TryFrom<i64>>(
     Ok(Arc::new(GenericListArray::<O>::try_new(
         Arc::clone(field),
         OffsetBuffer::<O>::new(offsets.into()),
+        arrow::array::make_array(data),
+        Some(nulls.into()),
+    )?))
+}
+
+fn fixed_size_array_reverse(
+    array: &FixedSizeListArray,
+    field: &FieldRef,
+) -> Result<ArrayRef> {
+    let values = array.values();
+    let original_data = values.to_data();
+    let capacity = Capacities::Array(original_data.len());
+    let mut nulls = vec![];
+    let mut mutable =
+        MutableArrayData::with_capacities(vec![&original_data], false, capacity);
+    let value_length = array.value_length() as usize;
+
+    for row_index in 0..array.len() {
+        // skip the null value
+        if array.is_null(row_index) {
+            nulls.push(false);
+            mutable.extend(0, 0, 1);
+            continue;
+        } else {
+            nulls.push(true);
+        }
+        let start = row_index * value_length;
+        let end = start + value_length;
+        for idx in (start..end).rev() {
+            mutable.extend(0, idx, idx + 1);
+        }
+    }
+
+    let data = mutable.freeze();
+    Ok(Arc::new(FixedSizeListArray::try_new(
+        Arc::clone(field),
+        array.value_length(),
         arrow::array::make_array(data),
         Some(nulls.into()),
     )?))

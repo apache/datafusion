@@ -34,7 +34,7 @@ use crate::error::Result;
 use crate::execution::context::{SessionConfig, SessionState};
 
 use arrow::datatypes::{DataType, Schema, SchemaRef};
-use datafusion_common::config::TableOptions;
+use datafusion_common::config::{ConfigFileDecryptionProperties, TableOptions};
 use datafusion_common::{
     DEFAULT_ARROW_EXTENSION, DEFAULT_AVRO_EXTENSION, DEFAULT_CSV_EXTENSION,
     DEFAULT_JSON_EXTENSION, DEFAULT_PARQUET_EXTENSION,
@@ -252,6 +252,8 @@ pub struct ParquetReadOptions<'a> {
     pub schema: Option<&'a Schema>,
     /// Indicates how the file is sorted
     pub file_sort_order: Vec<Vec<SortExpr>>,
+    /// Properties for decryption of Parquet files that use modular encryption
+    pub file_decryption_properties: Option<ConfigFileDecryptionProperties>,
 }
 
 impl Default for ParquetReadOptions<'_> {
@@ -263,6 +265,7 @@ impl Default for ParquetReadOptions<'_> {
             skip_metadata: None,
             schema: None,
             file_sort_order: vec![],
+            file_decryption_properties: None,
         }
     }
 }
@@ -311,6 +314,15 @@ impl<'a> ParquetReadOptions<'a> {
     /// Configure if file has known sort order
     pub fn file_sort_order(mut self, file_sort_order: Vec<Vec<SortExpr>>) -> Self {
         self.file_sort_order = file_sort_order;
+        self
+    }
+
+    /// Configure file decryption properties for reading encrypted Parquet files
+    pub fn file_decryption_properties(
+        mut self,
+        file_decryption_properties: ConfigFileDecryptionProperties,
+    ) -> Self {
+        self.file_decryption_properties = Some(file_decryption_properties);
         self
     }
 }
@@ -550,7 +562,7 @@ impl ReadOptions<'_> for CsvReadOptions<'_> {
 
         ListingOptions::new(Arc::new(file_format))
             .with_file_extension(self.file_extension)
-            .with_target_partitions(config.target_partitions())
+            .with_session_config_options(config)
             .with_table_partition_cols(self.table_partition_cols.clone())
             .with_file_sort_order(self.file_sort_order.clone())
     }
@@ -574,7 +586,11 @@ impl ReadOptions<'_> for ParquetReadOptions<'_> {
         config: &SessionConfig,
         table_options: TableOptions,
     ) -> ListingOptions {
-        let mut file_format = ParquetFormat::new().with_options(table_options.parquet);
+        let mut options = table_options.parquet;
+        if let Some(file_decryption_properties) = &self.file_decryption_properties {
+            options.crypto.file_decryption = Some(file_decryption_properties.clone());
+        }
+        let mut file_format = ParquetFormat::new().with_options(options);
 
         if let Some(parquet_pruning) = self.parquet_pruning {
             file_format = file_format.with_enable_pruning(parquet_pruning)
@@ -585,9 +601,9 @@ impl ReadOptions<'_> for ParquetReadOptions<'_> {
 
         ListingOptions::new(Arc::new(file_format))
             .with_file_extension(self.file_extension)
-            .with_target_partitions(config.target_partitions())
             .with_table_partition_cols(self.table_partition_cols.clone())
             .with_file_sort_order(self.file_sort_order.clone())
+            .with_session_config_options(config)
     }
 
     async fn get_resolved_schema(
@@ -615,7 +631,7 @@ impl ReadOptions<'_> for NdJsonReadOptions<'_> {
 
         ListingOptions::new(Arc::new(file_format))
             .with_file_extension(self.file_extension)
-            .with_target_partitions(config.target_partitions())
+            .with_session_config_options(config)
             .with_table_partition_cols(self.table_partition_cols.clone())
             .with_file_sort_order(self.file_sort_order.clone())
     }
@@ -643,7 +659,7 @@ impl ReadOptions<'_> for AvroReadOptions<'_> {
 
         ListingOptions::new(Arc::new(file_format))
             .with_file_extension(self.file_extension)
-            .with_target_partitions(config.target_partitions())
+            .with_session_config_options(config)
             .with_table_partition_cols(self.table_partition_cols.clone())
     }
 
@@ -669,7 +685,7 @@ impl ReadOptions<'_> for ArrowReadOptions<'_> {
 
         ListingOptions::new(Arc::new(file_format))
             .with_file_extension(self.file_extension)
-            .with_target_partitions(config.target_partitions())
+            .with_session_config_options(config)
             .with_table_partition_cols(self.table_partition_cols.clone())
     }
 

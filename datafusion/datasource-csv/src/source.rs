@@ -17,6 +17,7 @@
 
 //! Execution plan for reading CSV files
 
+use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
 use std::any::Any;
 use std::fmt;
 use std::io::{Read, Seek, SeekFrom};
@@ -28,7 +29,8 @@ use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_meta::FileMeta;
 use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
 use datafusion_datasource::{
-    calculate_range, FileRange, ListingTableUrl, RangeCalculation,
+    as_file_source, calculate_range, FileRange, ListingTableUrl, PartitionedFile,
+    RangeCalculation,
 };
 
 use arrow::csv;
@@ -91,6 +93,7 @@ pub struct CsvSource {
     comment: Option<u8>,
     metrics: ExecutionPlanMetricsSet,
     projected_statistics: Option<Statistics>,
+    schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
 }
 
 impl CsvSource {
@@ -212,6 +215,12 @@ impl CsvOpener {
     }
 }
 
+impl From<CsvSource> for Arc<dyn FileSource> {
+    fn from(source: CsvSource) -> Self {
+        as_file_source(source)
+    }
+}
+
 impl FileSource for CsvSource {
     fn create_file_opener(
         &self,
@@ -274,6 +283,20 @@ impl FileSource for CsvSource {
             DisplayFormatType::TreeRender => Ok(()),
         }
     }
+
+    fn with_schema_adapter_factory(
+        &self,
+        schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
+    ) -> Result<Arc<dyn FileSource>> {
+        Ok(Arc::new(Self {
+            schema_adapter_factory: Some(schema_adapter_factory),
+            ..self.clone()
+        }))
+    }
+
+    fn schema_adapter_factory(&self) -> Option<Arc<dyn SchemaAdapterFactory>> {
+        self.schema_adapter_factory.clone()
+    }
 }
 
 impl FileOpener for CsvOpener {
@@ -300,7 +323,11 @@ impl FileOpener for CsvOpener {
     ///  A,1,2,3,4,5,6,7,8,9\n
     ///  A},1,2,3,4,5,6,7,8,9\n
     ///  The lines read would be: [1, 2]
-    fn open(&self, file_meta: FileMeta) -> Result<FileOpenFuture> {
+    fn open(
+        &self,
+        file_meta: FileMeta,
+        _file: PartitionedFile,
+    ) -> Result<FileOpenFuture> {
         // `self.config.has_header` controls whether to skip reading the 1st line header
         // If the .csv file is read in parallel and this `CsvOpener` is only reading some middle
         // partition, then don't skip first line

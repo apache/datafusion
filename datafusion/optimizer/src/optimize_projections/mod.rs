@@ -29,9 +29,9 @@ use datafusion_common::{
     HashMap, JoinType, Result,
 };
 use datafusion_expr::expr::Alias;
-use datafusion_expr::Unnest;
 use datafusion_expr::{
-    logical_plan::LogicalPlan, Aggregate, Distinct, Expr, Projection, TableScan, Window,
+    logical_plan::LogicalPlan, Aggregate, Distinct, Expr, Projection, TableScan, Unnest,
+    Window,
 };
 
 use crate::optimize_projections::required_indices::RequiredIndices;
@@ -376,11 +376,22 @@ fn optimize_projections(
             );
         }
         LogicalPlan::Unnest(Unnest {
-            dependency_indices, ..
+            input,
+            dependency_indices,
+            ..
         }) => {
-            vec![RequiredIndices::new_from_indices(
-                dependency_indices.clone(),
-            )]
+            // at least provide the indices for the exec-columns as a starting point
+            let required_indices =
+                RequiredIndices::new().with_plan_exprs(&plan, input.schema())?;
+
+            // Add additional required indices from the parent
+            let mut additional_necessary_child_indices = Vec::new();
+            indices.indices().iter().for_each(|idx| {
+                if let Some(index) = dependency_indices.get(*idx) {
+                    additional_necessary_child_indices.push(*index);
+                }
+            });
+            vec![required_indices.append(&additional_necessary_child_indices)]
         }
     };
 
@@ -533,7 +544,7 @@ fn merge_consecutive_projections(proj: Projection) -> Result<Transformed<Project
 
 // Check whether `expr` is trivial; i.e. it doesn't imply any computation.
 fn is_expr_trivial(expr: &Expr) -> bool {
-    matches!(expr, Expr::Column(_) | Expr::Literal(_))
+    matches!(expr, Expr::Column(_) | Expr::Literal(_, _))
 }
 
 /// Rewrites a projection expression using the projection before it (i.e. its input)
@@ -583,8 +594,18 @@ fn is_expr_trivial(expr: &Expr) -> bool {
 fn rewrite_expr(expr: Expr, input: &Projection) -> Result<Transformed<Expr>> {
     expr.transform_up(|expr| {
         match expr {
-            //  remove any intermediate aliases
-            Expr::Alias(alias) => Ok(Transformed::yes(*alias.expr)),
+            //  remove any intermediate aliases if they do not carry metadata
+            Expr::Alias(alias) => {
+                match alias
+                    .metadata
+                    .as_ref()
+                    .map(|h| h.is_empty())
+                    .unwrap_or(true)
+                {
+                    true => Ok(Transformed::yes(*alias.expr)),
+                    false => Ok(Transformed::no(Expr::Alias(alias))),
+                }
+            }
             Expr::Column(col) => {
                 // Find index of column:
                 let idx = input.schema.index_of_column(&col)?;
@@ -662,10 +683,10 @@ fn outer_columns_helper_multi<'a, 'b>(
 /// Depending on the join type, it divides the requirement indices into those
 /// that apply to the left child and those that apply to the right child.
 ///
-/// - For `INNER`, `LEFT`, `RIGHT` and `FULL` joins, the requirements are split
-///   between left and right children. The right child indices are adjusted to
-///   point to valid positions within the right child by subtracting the length
-///   of the left child.
+/// - For `INNER`, `LEFT`, `RIGHT`, `FULL`, `LEFTMARK`, and `RIGHTMARK` joins,
+///   the requirements are split between left and right children. The right
+///   child indices are adjusted to point to valid positions within the right
+///   child by subtracting the length of the left child.
 ///
 /// - For `LEFT ANTI`, `LEFT SEMI`, `RIGHT SEMI` and `RIGHT ANTI` joins, all
 ///   requirements are re-routed to either the left child or the right child
@@ -694,7 +715,8 @@ fn split_join_requirements(
         | JoinType::Left
         | JoinType::Right
         | JoinType::Full
-        | JoinType::LeftMark => {
+        | JoinType::LeftMark
+        | JoinType::RightMark => {
             // Decrease right side indices by `left_len` so that they point to valid
             // positions within the right child:
             indices.split_off(left_len)
@@ -1124,7 +1146,7 @@ mod tests {
             plan,
             @r"
         Aggregate: groupBy=[[]], aggr=[[count(Int32(1))]]
-          Projection: 
+          Projection:
             Aggregate: groupBy=[[]], aggr=[[count(Int32(1))]]
               TableScan: ?table? projection=[]
         "
@@ -1816,7 +1838,7 @@ mod tests {
         let table2_scan = scan_empty(Some("test2"), &schema, None)?.build()?;
 
         let plan = LogicalPlanBuilder::from(table_scan)
-            .join_using(table2_scan, JoinType::Left, vec!["a"])?
+            .join_using(table2_scan, JoinType::Left, vec!["a".into()])?
             .project(vec![col("a"), col("b")])?
             .build()?;
 
@@ -2144,7 +2166,7 @@ mod tests {
     fn test_window() -> Result<()> {
         let table_scan = test_table_scan()?;
 
-        let max1 = Expr::WindowFunction(expr::WindowFunction::new(
+        let max1 = Expr::from(expr::WindowFunction::new(
             WindowFunctionDefinition::AggregateUDF(max_udaf()),
             vec![col("test.a")],
         ))
@@ -2152,7 +2174,7 @@ mod tests {
         .build()
         .unwrap();
 
-        let max2 = Expr::WindowFunction(expr::WindowFunction::new(
+        let max2 = Expr::from(expr::WindowFunction::new(
             WindowFunctionDefinition::AggregateUDF(max_udaf()),
             vec![col("test.b")],
         ));

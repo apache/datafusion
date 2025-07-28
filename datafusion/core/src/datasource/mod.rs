@@ -52,27 +52,26 @@ pub use datafusion_physical_expr::create_ordering;
 mod tests {
 
     use crate::prelude::SessionContext;
-
-    use std::fs;
-    use std::sync::Arc;
-
-    use arrow::array::{Int32Array, StringArray};
-    use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-    use arrow::record_batch::RecordBatch;
-    use datafusion_common::test_util::batches_to_sort_string;
-    use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
-    use datafusion_datasource::schema_adapter::{
-        DefaultSchemaAdapterFactory, SchemaAdapter, SchemaAdapterFactory, SchemaMapper,
+    use ::object_store::{path::Path, ObjectMeta};
+    use arrow::{
+        array::{Int32Array, StringArray},
+        datatypes::{DataType, Field, Schema, SchemaRef},
+        record_batch::RecordBatch,
     };
-    use datafusion_datasource::PartitionedFile;
+    use datafusion_common::{record_batch, test_util::batches_to_sort_string};
+    use datafusion_datasource::{
+        file::FileSource,
+        file_scan_config::FileScanConfigBuilder,
+        schema_adapter::{
+            DefaultSchemaAdapterFactory, SchemaAdapter, SchemaAdapterFactory,
+            SchemaMapper,
+        },
+        source::DataSourceExec,
+        PartitionedFile,
+    };
     use datafusion_datasource_parquet::source::ParquetSource;
-
-    use datafusion_common::record_batch;
-
-    use ::object_store::path::Path;
-    use ::object_store::ObjectMeta;
-    use datafusion_datasource::source::DataSourceExec;
     use datafusion_physical_plan::collect;
+    use std::{fs, sync::Arc};
     use tempfile::TempDir;
 
     #[tokio::test]
@@ -124,10 +123,9 @@ mod tests {
         let f2 = Field::new("extra_column", DataType::Utf8, true);
 
         let schema = Arc::new(Schema::new(vec![f1.clone(), f2.clone()]));
-        let source = Arc::new(
-            ParquetSource::default()
-                .with_schema_adapter_factory(Arc::new(TestSchemaAdapterFactory {})),
-        );
+        let source = ParquetSource::default()
+            .with_schema_adapter_factory(Arc::new(TestSchemaAdapterFactory {}))
+            .unwrap();
         let base_conf = FileScanConfigBuilder::new(
             ObjectStoreUrl::local_filesystem(),
             schema,

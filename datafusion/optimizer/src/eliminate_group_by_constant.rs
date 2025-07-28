@@ -101,7 +101,7 @@ fn is_constant_expression(expr: &Expr) -> bool {
         Expr::BinaryExpr(e) => {
             is_constant_expression(&e.left) && is_constant_expression(&e.right)
         }
-        Expr::Literal(_) => true,
+        Expr::Literal(_, _) => true,
         Expr::ScalarFunction(e) => {
             matches!(
                 e.func.signature().volatility,

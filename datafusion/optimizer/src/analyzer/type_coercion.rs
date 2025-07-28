@@ -41,7 +41,7 @@ use datafusion_expr::expr_schema::cast_subquery;
 use datafusion_expr::logical_plan::Subquery;
 use datafusion_expr::type_coercion::binary::{comparison_coercion, like_coercion};
 use datafusion_expr::type_coercion::functions::{
-    data_types_with_aggregate_udf, data_types_with_scalar_udf,
+    data_types_with_scalar_udf, fields_with_aggregate_udf,
 };
 use datafusion_expr::type_coercion::other::{
     get_coerce_type_for_case_expression, get_coerce_type_for_list,
@@ -539,17 +539,19 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                     ),
                 )))
             }
-            Expr::WindowFunction(WindowFunction {
-                fun,
-                params:
-                    expr::WindowFunctionParams {
-                        args,
-                        partition_by,
-                        order_by,
-                        window_frame,
-                        null_treatment,
-                    },
-            }) => {
+            Expr::WindowFunction(window_fun) => {
+                let WindowFunction {
+                    fun,
+                    params:
+                        expr::WindowFunctionParams {
+                            args,
+                            partition_by,
+                            order_by,
+                            window_frame,
+                            null_treatment,
+                            distinct,
+                        },
+                } = *window_fun;
                 let window_frame =
                     coerce_window_frame(window_frame, self.schema, &order_by)?;
 
@@ -564,21 +566,33 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                     _ => args,
                 };
 
-                Ok(Transformed::yes(
-                    Expr::WindowFunction(WindowFunction::new(fun, args))
-                        .partition_by(partition_by)
-                        .order_by(order_by)
-                        .window_frame(window_frame)
-                        .null_treatment(null_treatment)
-                        .build()?,
-                ))
+                if distinct {
+                    Ok(Transformed::yes(
+                        Expr::from(WindowFunction::new(fun, args))
+                            .partition_by(partition_by)
+                            .order_by(order_by)
+                            .window_frame(window_frame)
+                            .null_treatment(null_treatment)
+                            .distinct()
+                            .build()?,
+                    ))
+                } else {
+                    Ok(Transformed::yes(
+                        Expr::from(WindowFunction::new(fun, args))
+                            .partition_by(partition_by)
+                            .order_by(order_by)
+                            .window_frame(window_frame)
+                            .null_treatment(null_treatment)
+                            .build()?,
+                    ))
+                }
             }
             // TODO: remove the next line after `Expr::Wildcard` is removed
             #[expect(deprecated)]
             Expr::Alias(_)
             | Expr::Column(_)
             | Expr::ScalarVariable(_, _)
-            | Expr::Literal(_)
+            | Expr::Literal(_, _)
             | Expr::SimilarTo(_)
             | Expr::IsNotNull(_)
             | Expr::IsNull(_)
@@ -719,6 +733,8 @@ fn extract_window_frame_target_type(col_type: &DataType) -> Result<DataType> {
     if col_type.is_numeric()
         || is_utf8_or_utf8view_or_large_utf8(col_type)
         || matches!(col_type, DataType::List(_))
+        || matches!(col_type, DataType::LargeList(_))
+        || matches!(col_type, DataType::FixedSizeList(_, _))
         || matches!(col_type, DataType::Null)
         || matches!(col_type, DataType::Boolean)
     {
@@ -809,12 +825,15 @@ fn coerce_arguments_for_signature_with_aggregate_udf(
         return Ok(expressions);
     }
 
-    let current_types = expressions
+    let current_fields = expressions
         .iter()
-        .map(|e| e.get_type(schema))
+        .map(|e| e.to_field(schema).map(|(_, f)| f))
         .collect::<Result<Vec<_>>>()?;
 
-    let new_types = data_types_with_aggregate_udf(&current_types, func)?;
+    let new_types = fields_with_aggregate_udf(&current_fields, func)?
+        .into_iter()
+        .map(|f| f.data_type().clone())
+        .collect::<Vec<_>>();
 
     expressions
         .into_iter()
@@ -1591,7 +1610,7 @@ mod test {
             vec![lit(10i64)],
             false,
             None,
-            None,
+            vec![],
             None,
         ));
         let plan = LogicalPlan::Projection(Projection::try_new(vec![udaf], empty)?);
@@ -1617,8 +1636,8 @@ mod test {
             return_type,
             accumulator,
             vec![
-                Field::new("count", DataType::UInt64, true),
-                Field::new("avg", DataType::Float64, true),
+                Field::new("count", DataType::UInt64, true).into(),
+                Field::new("avg", DataType::Float64, true).into(),
             ],
         ));
         let udaf = Expr::AggregateFunction(expr::AggregateFunction::new_udf(
@@ -1626,7 +1645,7 @@ mod test {
             vec![lit("10")],
             false,
             None,
-            None,
+            vec![],
             None,
         ));
 
@@ -1645,7 +1664,7 @@ mod test {
             vec![lit(12f64)],
             false,
             None,
-            None,
+            vec![],
             None,
         ));
         let plan = LogicalPlan::Projection(Projection::try_new(vec![agg_expr], empty)?);
@@ -1664,7 +1683,7 @@ mod test {
             vec![cast(col("a"), DataType::Float64)],
             false,
             None,
-            None,
+            vec![],
             None,
         ));
         let plan = LogicalPlan::Projection(Projection::try_new(vec![agg_expr], empty)?);
@@ -1686,7 +1705,7 @@ mod test {
             vec![lit("1")],
             false,
             None,
-            None,
+            vec![],
             None,
         ));
         let err = Projection::try_new(vec![agg_expr], empty)
@@ -1721,7 +1740,7 @@ mod test {
         let empty = empty_with_type(DataType::Int64);
         let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty)?);
         assert_analyzed_plan_eq!(
-            plan, 
+            plan,
             @r"
         Projection: a IN ([CAST(Int32(1) AS Int64), CAST(Int8(4) AS Int64), Int64(8)])
           EmptyRelation
@@ -1738,7 +1757,7 @@ mod test {
         }));
         let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty)?);
         assert_analyzed_plan_eq!(
-            plan, 
+            plan,
             @r"
         Projection: CAST(a AS Decimal128(24, 4)) IN ([CAST(Int32(1) AS Decimal128(24, 4)), CAST(Int8(4) AS Decimal128(24, 4)), CAST(Int64(8) AS Decimal128(24, 4))])
           EmptyRelation

@@ -45,6 +45,8 @@ pub struct NdJsonFormat {
     #[prost(message, optional, tag = "1")]
     pub options: ::core::option::Option<JsonOptions>,
 }
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+pub struct ArrowFormat {}
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PrimaryKeyConstraint {
     #[prost(uint64, repeated, tag = "1")]
@@ -106,8 +108,6 @@ pub struct Field {
         ::prost::alloc::string::String,
         ::prost::alloc::string::String,
     >,
-    #[prost(bool, tag = "6")]
-    pub dict_ordered: bool,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Timestamp {
@@ -906,6 +906,7 @@ pub enum JoinType {
     Rightsemi = 6,
     Rightanti = 7,
     Leftmark = 8,
+    Rightmark = 9,
 }
 impl JoinType {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -923,6 +924,7 @@ impl JoinType {
             Self::Rightsemi => "RIGHTSEMI",
             Self::Rightanti => "RIGHTANTI",
             Self::Leftmark => "LEFTMARK",
+            Self::Rightmark => "RIGHTMARK",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -937,6 +939,7 @@ impl JoinType {
             "RIGHTSEMI" => Some(Self::Rightsemi),
             "RIGHTANTI" => Some(Self::Rightanti),
             "LEFTMARK" => Some(Self::Leftmark),
+            "RIGHTMARK" => Some(Self::Rightmark),
             _ => None,
         }
     }
@@ -963,6 +966,32 @@ impl JoinConstraint {
         match value {
             "ON" => Some(Self::On),
             "USING" => Some(Self::Using),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum NullEquality {
+    NullEqualsNothing = 0,
+    NullEqualsNull = 1,
+}
+impl NullEquality {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::NullEqualsNothing => "NULL_EQUALS_NOTHING",
+            Self::NullEqualsNull => "NULL_EQUALS_NULL",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "NULL_EQUALS_NOTHING" => Some(Self::NullEqualsNothing),
+            "NULL_EQUALS_NULL" => Some(Self::NullEqualsNull),
             _ => None,
         }
     }

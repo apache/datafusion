@@ -48,6 +48,7 @@ pub mod test_util;
 
 pub mod url;
 pub mod write;
+pub use self::file::as_file_source;
 pub use self::url::ListingTableUrl;
 use crate::file_groups::FileGroup;
 use chrono::TimeZone;
@@ -101,9 +102,9 @@ pub struct PartitionedFile {
     /// You may use [`wrap_partition_value_in_dict`] to wrap them if you have used [`wrap_partition_type_in_dict`] to wrap the column type.
     ///
     ///
-    /// [`wrap_partition_type_in_dict`]: https://github.com/apache/datafusion/blob/main/datafusion/core/src/datasource/physical_plan/file_scan_config.rs#L55
-    /// [`wrap_partition_value_in_dict`]: https://github.com/apache/datafusion/blob/main/datafusion/core/src/datasource/physical_plan/file_scan_config.rs#L62
-    /// [`table_partition_cols`]: https://github.com/apache/datafusion/blob/main/datafusion/core/src/datasource/file_format/options.rs#L190
+    /// [`wrap_partition_type_in_dict`]: crate::file_scan_config::wrap_partition_type_in_dict
+    /// [`wrap_partition_value_in_dict`]: crate::file_scan_config::wrap_partition_value_in_dict
+    /// [`table_partition_cols`]: https://github.com/apache/datafusion/blob/main/datafusion/core/src/datasource/file_format/options.rs#L87
     pub partition_values: Vec<ScalarValue>,
     /// An optional file range for a more fine-grained parallel execution
     pub range: Option<FileRange>,
@@ -196,6 +197,23 @@ impl PartitionedFile {
     pub fn with_statistics(mut self, statistics: Arc<Statistics>) -> Self {
         self.statistics = Some(statistics);
         self
+    }
+
+    /// Check if this file has any statistics.
+    /// This returns `true` if the file has any Exact or Inexact statistics
+    /// and `false` if all statistics are `Precision::Absent`.
+    pub fn has_statistics(&self) -> bool {
+        if let Some(stats) = &self.statistics {
+            stats.column_statistics.iter().any(|col_stats| {
+                col_stats.null_count != Precision::Absent
+                    || col_stats.max_value != Precision::Absent
+                    || col_stats.min_value != Precision::Absent
+                    || col_stats.sum_value != Precision::Absent
+                    || col_stats.distinct_count != Precision::Absent
+            })
+        } else {
+            false
+        }
     }
 }
 

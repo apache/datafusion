@@ -37,7 +37,7 @@ use datafusion::physical_plan::joins::{
     HashJoinExec, NestedLoopJoinExec, PartitionMode, SortMergeJoinExec,
 };
 use datafusion::prelude::{SessionConfig, SessionContext};
-use datafusion_common::ScalarValue;
+use datafusion_common::{NullEquality, ScalarValue};
 use datafusion_physical_expr::expressions::Literal;
 use datafusion_physical_expr::PhysicalExprRef;
 
@@ -305,6 +305,31 @@ async fn test_left_mark_join_1k_filtered() {
     .await
 }
 
+// todo: add JoinTestType::HjSmj after Right mark SortMergeJoin support
+#[tokio::test]
+async fn test_right_mark_join_1k() {
+    JoinFuzzTestCase::new(
+        make_staggered_batches(1000),
+        make_staggered_batches(1000),
+        JoinType::RightMark,
+        None,
+    )
+    .run_test(&[NljHj], false)
+    .await
+}
+
+#[tokio::test]
+async fn test_right_mark_join_1k_filtered() {
+    JoinFuzzTestCase::new(
+        make_staggered_batches(1000),
+        make_staggered_batches(1000),
+        JoinType::RightMark,
+        Some(Box::new(col_lt_col_filter)),
+    )
+    .run_test(&[NljHj], false)
+    .await
+}
+
 type JoinFilterBuilder = Box<dyn Fn(Arc<Schema>, Arc<Schema>) -> JoinFilter>;
 
 struct JoinFuzzTestCase {
@@ -479,7 +504,7 @@ impl JoinFuzzTestCase {
                 self.join_filter(),
                 self.join_type,
                 vec![SortOptions::default(); self.on_columns().len()],
-                false,
+                NullEquality::NullEqualsNothing,
             )
             .unwrap(),
         )
@@ -496,7 +521,7 @@ impl JoinFuzzTestCase {
                 &self.join_type,
                 None,
                 PartitionMode::Partitioned,
-                false,
+                NullEquality::NullEqualsNothing,
             )
             .unwrap(),
         )
@@ -746,11 +771,9 @@ impl JoinFuzzTestCase {
                         path.to_str().unwrap(),
                         datafusion::prelude::ParquetReadOptions::default(),
                     )
-                    .await
-                    .unwrap()
+                    .await?
                     .collect()
-                    .await
-                    .unwrap();
+                    .await?;
 
                 batches.append(&mut batch);
             }
@@ -763,13 +786,13 @@ impl JoinFuzzTestCase {
 /// two sorted int32 columns 'a', 'b' ranged from 0..99 as join columns
 /// two random int32 columns 'x', 'y' as other columns
 fn make_staggered_batches(len: usize) -> Vec<RecordBatch> {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let mut input12: Vec<(i32, i32)> = vec![(0, 0); len];
     let mut input3: Vec<i32> = vec![0; len];
     let mut input4: Vec<i32> = vec![0; len];
     input12
         .iter_mut()
-        .for_each(|v| *v = (rng.gen_range(0..100), rng.gen_range(0..100)));
+        .for_each(|v| *v = (rng.random_range(0..100), rng.random_range(0..100)));
     rng.fill(&mut input3[..]);
     rng.fill(&mut input4[..]);
     input12.sort_unstable();

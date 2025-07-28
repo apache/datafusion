@@ -28,7 +28,7 @@ pub mod test {
             let expected: datafusion_common::Result<Option<$EXPECTED_TYPE>> = $EXPECTED;
             let func = $FUNC;
 
-            let arg_fields_owned: Vec<arrow::datatypes::Field> = $ARGS
+            let arg_fields: Vec<arrow::datatypes::FieldRef> = $ARGS
                 .iter()
                 .enumerate()
                 .map(|(idx, arg)| {
@@ -38,11 +38,9 @@ pub mod test {
                     datafusion_expr::ColumnarValue::Array(a) => a.null_count() > 0,
                 };
 
-                arrow::datatypes::Field::new(format!("arg_{idx}"), arg.data_type(), nullable)
+                std::sync::Arc::new(arrow::datatypes::Field::new(format!("arg_{idx}"), arg.data_type(), nullable))
             })
                 .collect::<Vec<_>>();
-
-            let arg_fields: Vec<&arrow::datatypes::Field> = arg_fields_owned.iter().collect();
 
             let cardinality = $ARGS
                 .iter()
@@ -60,7 +58,7 @@ pub mod test {
 
 
             let return_field = func.return_field_from_args(datafusion_expr::ReturnFieldArgs {
-                arg_fields: &arg_fields_owned,
+                arg_fields: &arg_fields,
                 scalar_arguments: &scalar_arguments_refs
             });
 
@@ -72,7 +70,7 @@ pub mod test {
                     let result = func.invoke_with_args(datafusion_expr::ScalarFunctionArgs{
                         args: $ARGS,
                         number_rows: cardinality,
-                        return_field: &return_field,
+                        return_field,
                         arg_fields: arg_fields.clone(),
                     });
                     assert_eq!(result.is_ok(), true, "function returned an error: {}", result.unwrap_err());
@@ -101,7 +99,7 @@ pub mod test {
                         match func.invoke_with_args(datafusion_expr::ScalarFunctionArgs{
                             args: $ARGS,
                             number_rows: cardinality,
-                            return_field: &return_field,
+                            return_field,
                             arg_fields,
                         }) {
                             Ok(_) => assert!(false, "expected error"),

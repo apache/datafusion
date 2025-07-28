@@ -98,6 +98,7 @@ message ListingTableScanNode {
     datafusion_common.ParquetFormat parquet = 11;
     datafusion_common.AvroFormat avro = 12;
     datafusion_common.NdJsonFormat json = 15;
+    datafusion_common.ArrowFormat arrow = 16;
   }
   repeated SortExprNodeCollection file_sort_order = 13;
 }
@@ -243,7 +244,7 @@ message JoinNode {
   datafusion_common.JoinConstraint join_constraint = 4;
   repeated LogicalExprNode left_join_key = 5;
   repeated LogicalExprNode right_join_key = 6;
-  bool null_equals_null = 7;
+  datafusion_common.NullEquality null_equality = 7;
   LogicalExprNode filter = 8;
 }
 
@@ -726,6 +727,7 @@ message PhysicalPlanNode {
     ParquetSinkExecNode parquet_sink = 29;
     UnnestExecNode unnest = 30;
     JsonScanExecNode json_scan = 31;
+    CooperativeExecNode cooperative = 32;
   }
 }
 
@@ -858,6 +860,7 @@ message PhysicalScalarUdfNode {
   optional bytes fun_definition = 3;
   datafusion_common.ArrowType return_type = 4;
   bool nullable = 5;
+  string return_field_name = 6;
 }
 
 message PhysicalAggregateExprNode {
@@ -869,6 +872,7 @@ message PhysicalAggregateExprNode {
   bool distinct = 3;
   bool ignore_nulls = 6;
   optional bytes fun_definition = 7;
+  string human_display = 8;
 }
 
 message PhysicalWindowExprNode {
@@ -1033,6 +1037,10 @@ message AvroScanExecNode {
   FileScanExecConf base_conf = 1;
 }
 
+message CooperativeExecNode {
+  PhysicalPlanNode input = 1;
+}
+
 enum PartitionMode {
   COLLECT_LEFT = 0;
   PARTITIONED = 1;
@@ -1045,7 +1053,7 @@ message HashJoinExecNode {
   repeated JoinOn on = 3;
   datafusion_common.JoinType join_type = 4;
   PartitionMode partition_mode = 6;
-  bool null_equals_null = 7;
+  datafusion_common.NullEquality null_equality = 7;
   JoinFilter filter = 8;
   repeated uint32 projection = 9;
 }
@@ -1061,7 +1069,7 @@ message SymmetricHashJoinExecNode {
   repeated JoinOn on = 3;
   datafusion_common.JoinType join_type = 4;
   StreamPartitionMode partition_mode = 6;
-  bool null_equals_null = 7;
+  datafusion_common.NullEquality null_equality = 7;
   JoinFilter filter = 8;
   repeated PhysicalSortExprNode left_sort_exprs = 9;
   repeated PhysicalSortExprNode right_sort_exprs = 10;
