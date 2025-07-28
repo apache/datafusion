@@ -242,7 +242,7 @@ mod tests {
     #[test]
     fn empty_partition_statistics_explicit_zero() -> Result<()> {
         let schema: Arc<Schema> = Arc::new(Schema::empty());
-        let exec1: EmptyExec = EmptyExec::new(schema.clone());
+        let exec1: EmptyExec = EmptyExec::new(Arc::clone(&schema));
         // default partition = 1
 
         // global stats
@@ -261,7 +261,7 @@ mod tests {
         assert!(exec1.partition_statistics(Some(1)).is_err());
 
         // Now with 2 partitions
-        let exec2: EmptyExec = EmptyExec::new(schema.clone()).with_partitions(2);
+        let exec2: EmptyExec = EmptyExec::new(Arc::clone(&schema)).with_partitions(2);
 
         // valid partitions 0 and 1
         for part in 0..2 {
