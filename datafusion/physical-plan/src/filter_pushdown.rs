@@ -40,8 +40,9 @@ use std::sync::Arc;
 use datafusion_common::Result;
 use datafusion_physical_expr::utils::{collect_columns, reassign_predicate_columns};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+use itertools::Itertools;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FilterPushdownPhase {
     /// Pushdown that happens before most other optimizations.
     /// This pushdown allows static filters that do not reference any [`ExecutionPlan`]s to be pushed down.
@@ -411,6 +412,25 @@ impl FilterDescription {
         }
 
         Ok(desc)
+    }
+
+    /// Mark all parent filters as unsupported for all children.
+    pub fn all_unsupported(
+        parent_filters: &[Arc<dyn PhysicalExpr>],
+        children: &[&Arc<dyn crate::ExecutionPlan>],
+    ) -> Self {
+        let mut desc = Self::new();
+        let child_filters = parent_filters
+            .iter()
+            .map(|f| PushedDownPredicate::unsupported(Arc::clone(f)))
+            .collect_vec();
+        for _ in 0..children.len() {
+            desc = desc.with_child(ChildFilterDescription {
+                parent_filters: child_filters.clone(),
+                self_filters: vec![],
+            });
+        }
+        desc
     }
 
     pub fn parent_filters(&self) -> Vec<Vec<PushedDownPredicate>> {

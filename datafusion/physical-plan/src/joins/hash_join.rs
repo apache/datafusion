@@ -34,6 +34,7 @@ use super::{
 };
 use super::{JoinOn, JoinOnRef};
 use crate::execution_plan::{boundedness_from_children, EmissionType};
+use crate::filter_pushdown::{ChildPushdownResult, FilterDescription, FilterPushdownPhase, FilterPushdownPropagation};
 use crate::joins::join_hash_map::{JoinHashMapU32, JoinHashMapU64};
 use crate::projection::{
     try_embed_projection, try_pushdown_through_join, EmbeddedProjection, JoinData,
@@ -68,6 +69,7 @@ use arrow::datatypes::{Schema, SchemaRef};
 use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
 use arrow::util::bit_util;
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::utils::memory::estimate_memory_size;
 use datafusion_common::{
     internal_datafusion_err, internal_err, plan_err, project_schema, JoinSide, JoinType,
@@ -79,7 +81,7 @@ use datafusion_expr::Operator;
 use datafusion_physical_expr::equivalence::{
     join_equivalence_properties, ProjectionMapping,
 };
-use datafusion_physical_expr::PhysicalExprRef;
+use datafusion_physical_expr::{PhysicalExpr, PhysicalExprRef};
 use datafusion_physical_expr_common::datum::compare_op_for_nested;
 
 use ahash::RandomState;
@@ -942,6 +944,32 @@ impl ExecutionPlan for HashJoinExec {
             )?)))
         } else {
             try_embed_projection(projection, self)
+        }
+    }
+
+    fn gather_filters_for_pushdown(
+        &self,
+        phase: FilterPushdownPhase,
+        parent_filters: Vec<Arc<dyn PhysicalExpr>>,
+        _config: &ConfigOptions,
+    ) -> Result<FilterDescription> {
+        if phase == FilterPushdownPhase::Pre && self.join_type == JoinType::Inner {
+            FilterDescription::from_children(parent_filters, &self.children())
+        } else {
+            Ok(FilterDescription::all_unsupported(&parent_filters, &self.children()))
+        }
+    }
+
+    fn handle_child_pushdown_result(
+        &self,
+        phase: FilterPushdownPhase,
+        child_pushdown_result: ChildPushdownResult,
+        _config: &ConfigOptions,
+    ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
+        if phase == FilterPushdownPhase::Pre && self.join_type == JoinType::Inner {
+            Ok(FilterPushdownPropagation::if_any(child_pushdown_result))
+        } else {
+            Ok(FilterPushdownPropagation::if_any(child_pushdown_result))
         }
     }
 }
