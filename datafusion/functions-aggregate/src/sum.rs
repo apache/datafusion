@@ -23,8 +23,8 @@ use std::any::Any;
 use std::collections::HashSet;
 use std::mem::{size_of, size_of_val};
 
-use arrow::array::ArrowNativeTypeOp;
 use arrow::array::Array;
+use arrow::array::ArrowNativeTypeOp;
 use arrow::array::{ArrowNumericType, AsArray};
 use arrow::datatypes::ArrowPrimitiveType;
 use arrow::datatypes::{ArrowNativeType, FieldRef};
