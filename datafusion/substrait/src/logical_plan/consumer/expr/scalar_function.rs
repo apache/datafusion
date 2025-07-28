@@ -411,7 +411,7 @@ mod tests {
                 })),
             })),
         };
-        let arguments = vec![arg; 2];
+        let arguments = vec![arg];
         let func = ScalarFunction {
             function_reference: 0,
             arguments,
