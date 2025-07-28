@@ -508,7 +508,7 @@ fn push_down_filters(
 
         // Add the filtered parent predicates to all_predicates
         for filter in parent_filters_for_child.items() {
-            all_predicates.push(filter.predicate.clone());
+            all_predicates.push(Arc::clone(&filter.predicate));
         }
 
         let num_parent_filters = all_predicates.len() - num_self_filters;
@@ -572,7 +572,7 @@ fn push_down_filters(
         // Update parent_filter_pushdown_supports with the mapped results
         // mapped_parent_results already has the results at their original indices
         for (idx, support) in parent_filter_pushdown_supports.iter_mut().enumerate() {
-            support[child_idx] = mapped_parent_results[idx].clone();
+            support[child_idx] = mapped_parent_results[idx];
         }
     }
 
