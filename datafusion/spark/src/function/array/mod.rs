@@ -15,13 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-pub mod array;
+pub mod spark_array;
 
 use datafusion_expr::ScalarUDF;
 use datafusion_functions::make_udf_function;
 use std::sync::Arc;
 
-make_udf_function!(array::SparkArray, array);
+make_udf_function!(spark_array::SparkArray, array);
 
 pub mod expr_fn {
     use datafusion_functions::export_functions;
