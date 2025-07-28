@@ -131,7 +131,7 @@ impl ExecutionPlan for TestMemoryExec {
     }
 
     fn as_any(&self) -> &dyn Any {
-        unimplemented!()
+        self
     }
 
     fn properties(&self) -> &PlanProperties {

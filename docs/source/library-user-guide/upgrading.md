@@ -19,10 +19,12 @@
 
 # Upgrade Guides
 
-## DataFusion `49.0.0`
+## DataFusion `50.0.0`
 
-**Note:** DataFusion `49.0.0` has not been released yet. The information provided in this section pertains to features and changes that have already been merged to the main branch and are awaiting release in this version.
-You can see the current [status of the `49.0.0 `release here](https://github.com/apache/datafusion/issues/16235)
+**Note:** DataFusion `50.0.0` has not been released yet. The information provided in this section pertains to features and changes that have already been merged to the main branch and are awaiting release in this version.
+You can see the current [status of the `50.0.0 `release here](https://github.com/apache/datafusion/issues/16799)
+
+## DataFusion `49.0.0`
 
 ### `MSRV` updated to 1.85.1
 
@@ -194,6 +196,35 @@ Opting into the new APIs will set you up for future changes since we plan to exp
 See [#16800] for details.
 
 [#16800]: https://github.com/apache/datafusion/issues/16800
+
+### `TableParquetOptions` Updated
+
+The `TableParquetOptions` struct has a new `crypto` field to specify encryption
+options for Parquet files. The `ParquetEncryptionOptions` implements `Default`
+so you can upgrade your existing code like this:
+
+```rust
+# /* comment to avoid running
+TableParquetOptions {
+  global,
+  column_specific_options,
+  key_value_metadata,
+}
+# */
+```
+
+To this:
+
+```rust
+# /* comment to avoid running
+TableParquetOptions {
+  global,
+  column_specific_options,
+  key_value_metadata,
+  crypto: Default::default(), // New crypto field
+}
+# */
+```
 
 ## DataFusion `48.0.1`
 

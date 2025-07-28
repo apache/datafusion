@@ -26,6 +26,7 @@ use datafusion::common::Result;
 use datafusion::datasource::listing::{ListingTable, ListingTableConfig};
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_common::DataFusionError;
 use datafusion_common::{ColumnStatistics, ScalarValue};
 use datafusion_datasource::schema_adapter::{
     DefaultSchemaAdapterFactory, SchemaAdapter, SchemaAdapterFactory, SchemaMapper,
@@ -187,7 +188,7 @@ impl PhysicalExprAdapter for CustomPhysicalExprAdapter {
                             .logical_file_schema
                             .field_with_name(field_name)
                             .map_err(|_| {
-                                datafusion_common::DataFusionError::Plan(format!(
+                                DataFusionError::Plan(format!(
                                     "Field '{field_name}' not found in logical file schema",
                                 ))
                             })?;

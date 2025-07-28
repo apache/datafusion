@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 use crate::aggregate::AggregateFunctionExpr;
 use crate::window::standard::add_new_ordering_expr_with_partition_by;
-use crate::window::window_expr::AggregateWindowExpr;
+use crate::window::window_expr::{AggregateWindowExpr, WindowFn};
 use crate::window::{
     PartitionBatches, PartitionWindowAggStates, SlidingAggregateWindowExpr, WindowExpr,
 };
@@ -210,6 +210,10 @@ impl WindowExpr for PlainAggregateWindowExpr {
 
     fn uses_bounded_memory(&self) -> bool {
         !self.window_frame.end_bound.is_unbounded()
+    }
+
+    fn create_window_fn(&self) -> Result<WindowFn> {
+        Ok(WindowFn::Aggregate(self.get_accumulator()?))
     }
 }
 

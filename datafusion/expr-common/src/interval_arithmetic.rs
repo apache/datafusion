@@ -3698,6 +3698,76 @@ mod tests {
                 Interval::make(Some(-500.0_f64), Some(1000.0_f64))?,
                 Interval::make(Some(-500.0_f64), Some(500.0_f64))?,
             ),
+            (
+                Interval::make(Some(0_i64), Some(0_i64))?,
+                Interval::make(Some(-0_i64), Some(0_i64))?,
+                true,
+                Interval::make(Some(0_i64), Some(0_i64))?,
+                Interval::make(Some(-0_i64), Some(0_i64))?,
+            ),
+            (
+                Interval::make(Some(-0_i64), Some(0_i64))?,
+                Interval::make(Some(-0_i64), Some(-0_i64))?,
+                true,
+                Interval::make(Some(-0_i64), Some(0_i64))?,
+                Interval::make(Some(-0_i64), Some(-0_i64))?,
+            ),
+            (
+                Interval::make(Some(0.0_f64), Some(0.0_f64))?,
+                Interval::make(Some(-0.0_f64), Some(0.0_f64))?,
+                true,
+                Interval::make(Some(0.0_f64), Some(0.0_f64))?,
+                Interval::make(Some(-0.0_f64), Some(0.0_f64))?,
+            ),
+            (
+                Interval::make(Some(0.0_f64), Some(0.0_f64))?,
+                Interval::make(Some(-0.0_f64), Some(0.0_f64))?,
+                false,
+                Interval::make(Some(0.0_f64), Some(0.0_f64))?,
+                Interval::make(Some(-0.0_f64), Some(-0.0_f64))?,
+            ),
+            (
+                Interval::make(Some(-0.0_f64), Some(0.0_f64))?,
+                Interval::make(Some(-0.0_f64), Some(-0.0_f64))?,
+                true,
+                Interval::make(Some(-0.0_f64), Some(0.0_f64))?,
+                Interval::make(Some(-0.0_f64), Some(-0.0_f64))?,
+            ),
+            (
+                Interval::make(Some(-0.0_f64), Some(0.0_f64))?,
+                Interval::make(Some(-0.0_f64), Some(-0.0_f64))?,
+                false,
+                Interval::make(Some(0.0_f64), Some(0.0_f64))?,
+                Interval::make(Some(-0.0_f64), Some(-0.0_f64))?,
+            ),
+            (
+                Interval::make(Some(0_i64), None)?,
+                Interval::make(Some(-0_i64), None)?,
+                true,
+                Interval::make(Some(0_i64), None)?,
+                Interval::make(Some(-0_i64), None)?,
+            ),
+            (
+                Interval::make(Some(0_i64), None)?,
+                Interval::make(Some(-0_i64), None)?,
+                false,
+                Interval::make(Some(1_i64), None)?,
+                Interval::make(Some(-0_i64), None)?,
+            ),
+            (
+                Interval::make(Some(0.0_f64), None)?,
+                Interval::make(Some(-0.0_f64), None)?,
+                true,
+                Interval::make(Some(0.0_f64), None)?,
+                Interval::make(Some(-0.0_f64), None)?,
+            ),
+            (
+                Interval::make(Some(0.0_f64), None)?,
+                Interval::make(Some(-0.0_f64), None)?,
+                false,
+                Interval::make(Some(0.0_f64), None)?,
+                Interval::make(Some(-0.0_f64), None)?,
+            ),
         ];
         for (first, second, includes_endpoints, left_modified, right_modified) in cases {
             assert_eq!(
@@ -3715,6 +3785,16 @@ mod tests {
             (
                 Interval::make(Some(-1000.0_f32), Some(1000.0_f32))?,
                 Interval::make(Some(1500.0_f32), Some(2000.0_f32))?,
+                false,
+            ),
+            (
+                Interval::make(Some(0_i64), Some(0_i64))?,
+                Interval::make(Some(-0_i64), Some(0_i64))?,
+                false,
+            ),
+            (
+                Interval::make(Some(-0_i64), Some(0_i64))?,
+                Interval::make(Some(-0_i64), Some(-0_i64))?,
                 false,
             ),
         ];

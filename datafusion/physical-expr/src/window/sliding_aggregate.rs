@@ -22,7 +22,7 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use crate::aggregate::AggregateFunctionExpr;
-use crate::window::window_expr::AggregateWindowExpr;
+use crate::window::window_expr::{AggregateWindowExpr, WindowFn};
 use crate::window::{
     PartitionBatches, PartitionWindowAggStates, PlainAggregateWindowExpr, WindowExpr,
 };
@@ -174,6 +174,10 @@ impl WindowExpr for SlidingAggregateWindowExpr {
             order_by: new_order_by,
             window_frame: Arc::clone(&self.window_frame),
         }))
+    }
+
+    fn create_window_fn(&self) -> Result<WindowFn> {
+        Ok(WindowFn::Aggregate(self.get_accumulator()?))
     }
 }
 

@@ -45,6 +45,9 @@ mod optimizer;
 /// Run all tests that are found in the `physical_optimizer` directory
 mod physical_optimizer;
 
+/// Run all tests that are found in the `schema_adapter` directory
+mod schema_adapter;
+
 /// Run all tests that are found in the `serde` directory
 mod serde;
 

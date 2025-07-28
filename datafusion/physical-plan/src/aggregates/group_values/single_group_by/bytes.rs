@@ -15,11 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::mem::size_of;
+
 use crate::aggregates::group_values::GroupValues;
+
 use arrow::array::{Array, ArrayRef, OffsetSizeTrait, RecordBatch};
+use datafusion_common::Result;
 use datafusion_expr::EmitTo;
 use datafusion_physical_expr_common::binary_map::{ArrowBytesMap, OutputType};
-use std::mem::size_of;
 
 /// A [`GroupValues`] storing single column of Utf8/LargeUtf8/Binary/LargeBinary values
 ///
@@ -42,11 +45,7 @@ impl<O: OffsetSizeTrait> GroupValuesByes<O> {
 }
 
 impl<O: OffsetSizeTrait> GroupValues for GroupValuesByes<O> {
-    fn intern(
-        &mut self,
-        cols: &[ArrayRef],
-        groups: &mut Vec<usize>,
-    ) -> datafusion_common::Result<()> {
+    fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()> {
         assert_eq!(cols.len(), 1);
 
         // look up / add entries in the table
@@ -85,7 +84,7 @@ impl<O: OffsetSizeTrait> GroupValues for GroupValuesByes<O> {
         self.num_groups
     }
 
-    fn emit(&mut self, emit_to: EmitTo) -> datafusion_common::Result<Vec<ArrayRef>> {
+    fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
         // Reset the map to default, and convert it into a single array
         let map_contents = self.map.take().into_state();
 
