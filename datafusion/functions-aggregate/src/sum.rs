@@ -20,11 +20,11 @@
 use ahash::RandomState;
 use datafusion_expr::utils::AggregateOrderSensitivity;
 use std::any::Any;
-use std::collections::{HashSet, VecDeque};
+use std::collections::HashSet;
 use std::mem::{size_of, size_of_val};
 
-use arrow::array::{Array, PrimitiveArray};
 use arrow::array::ArrowNativeTypeOp;
+use arrow::array::Array;
 use arrow::array::{ArrowNumericType, AsArray};
 use arrow::datatypes::ArrowPrimitiveType;
 use arrow::datatypes::{ArrowNativeType, FieldRef};
@@ -33,7 +33,9 @@ use arrow::datatypes::{
     DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION,
 };
 use arrow::{array::ArrayRef, datatypes::Field};
-use datafusion_common::{exec_err, not_impl_err, utils::take_function_args, HashMap, Result, ScalarValue};
+use datafusion_common::{
+    exec_err, not_impl_err, utils::take_function_args, HashMap, Result, ScalarValue,
+};
 use datafusion_expr::function::AccumulatorArgs;
 use datafusion_expr::function::StateFieldsArgs;
 use datafusion_expr::utils::format_state_name;
@@ -244,18 +246,18 @@ impl AggregateUDFImpl for Sum {
         if args.is_distinct {
             // distinct path: use our sliding‐window distinct‐sum
             macro_rules! helper_distinct {
-            ($t:ty, $dt:expr) => {
-                Ok(Box::new(SlidingDistinctSumAccumulator::try_new(&$dt)?))
-            };
-        }
+                ($t:ty, $dt:expr) => {
+                    Ok(Box::new(SlidingDistinctSumAccumulator::try_new(&$dt)?))
+                };
+            }
             downcast_sum!(args, helper_distinct)
         } else {
             // non‐distinct path: existing sliding sum
             macro_rules! helper {
-            ($t:ty, $dt:expr) => {
-                Ok(Box::new(SlidingSumAccumulator::<$t>::new($dt.clone())))
-            };
-        }
+                ($t:ty, $dt:expr) => {
+                    Ok(Box::new(SlidingSumAccumulator::<$t>::new($dt.clone())))
+                };
+            }
             downcast_sum!(args, helper)
         }
     }
@@ -486,8 +488,6 @@ impl<T: ArrowPrimitiveType> Accumulator for DistinctSumAccumulator<T> {
         size_of_val(self) + self.values.capacity() * size_of::<T::Native>()
     }
 }
-
-
 
 /// A sliding‐window accumulator for `SUM(DISTINCT)` over Int64 columns.
 /// Maintains a running sum so that `evaluate()` is O(1).
