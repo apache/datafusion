@@ -154,10 +154,7 @@ mod tests {
         Array, Int16Array, Int32Array, Int64Array, Int8Array, UInt16Array, UInt32Array,
         UInt64Array, UInt8Array,
     };
-    use arrow::datatypes::{
-        Int16Type, Int32Type, Int64Type, Int8Type, UInt16Type, UInt32Type, UInt64Type,
-        UInt8Type,
-    };
+    use arrow::datatypes::Int32Type;
 
     #[test]
     fn test_bit_count_basic() {
