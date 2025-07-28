@@ -31,8 +31,8 @@ use std::any::Any;
 /// # Example
 /// ```
 /// # use std::sync::Arc;
-/// # use datafusion_execution::memory_pool::{ExplainMemory, GreedyMemoryPool, MemoryConsumer};
-/// let pool = Arc::new(GreedyMemoryPool::new(1024));
+/// # use datafusion_execution::memory_pool::{ExplainMemory, GreedyMemoryPool, MemoryConsumer, MemoryPool};
+/// let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(1024));
 /// let mut reservation = MemoryConsumer::new("example").register(&pool);
 /// reservation.try_grow(256).unwrap();
 /// println!("{}", reservation.explain_memory().unwrap());
