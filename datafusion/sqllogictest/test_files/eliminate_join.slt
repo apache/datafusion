@@ -15,16 +15,29 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# Tests for Eliminate Self Join optimizers
+########################################################################
+# Tests for Self-Join Elimination Optimizations
+#
+# This file tests two distinct self-join optimizations:
+# 1. EliminateUniqueKeyedSelfJoin - Eliminates self-joins on unique constraints
+# 2. EliminateSelfJoinAggregation - Converts self-joins with aggregations to window functions
+########################################################################
 
 statement ok
 set datafusion.explain.logical_plan_only = true;
 
+########################################################################
+# PART 1: Tests for EliminateUniqueKeyedSelfJoin
+#
+# This optimization eliminates self-joins when joining on unique keys
+# Example: SELECT a.id FROM employees a JOIN employees b ON a.id = b.id
+# Can be simplified to: SELECT id FROM employees
+########################################################################
+
 ####
-# Data Setup for unique keyed self join tests
+# Setup: Create table with primary key and unique constraints
 ####
 
-# Create table with primary key constraint on id column
 statement ok
 CREATE TABLE employees (
     id INT PRIMARY KEY,
@@ -35,20 +48,21 @@ CREATE TABLE employees (
     external_id INT UNIQUE
 );
 
-# Create table for aggregate self join tests
+# Insert test data for verification
+# Note: Bob appears twice with different IDs to test non-unique name scenarios
 statement ok
-CREATE TABLE purchases (
-    id INT,
-    user_id INT,
-    purchase_date DATE,
-    billed_date DATE,
-    amount DECIMAL(10,2)
-);
+INSERT INTO employees VALUES
+(2, 'Bob', 'Engineering', 70000, '2020-02-01', 102),
+(1, 'Alice', 'HR', 50000, '2020-01-01', 101),
+(3, 'Charlie', 'HR', 55000, '2020-03-01', 103),
+(5, 'Alice', 'Sales', 60000, '2020-05-01', 105),
+(4, 'Bob', 'Engineering', 80000, '2020-04-01', 104);
 
 ####
+# Positive Cases - Self-Joins That Should Be Eliminated
+####
+
 # Basic self join on primary key should be eliminated
-####
-
 query TT
 EXPLAIN SELECT a.id FROM employees a JOIN employees b USING (id);
 ----
@@ -56,6 +70,16 @@ logical_plan
 01)SubqueryAlias: a
 02)--TableScan: employees projection=[id]
 
+query I rowsort
+SELECT a.id FROM employees a JOIN employees b USING (id);
+----
+1
+2
+3
+4
+5
+
+# Self join with ON clause should be eliminated
 query TT
 EXPLAIN SELECT a.id FROM employees a JOIN employees b ON a.id = b.id;
 ----
@@ -63,10 +87,7 @@ logical_plan
 01)SubqueryAlias: a
 02)--TableScan: employees projection=[id]
 
-####
 # Self join with filter on one side should be eliminated
-####
-
 query TT
 EXPLAIN SELECT a.id FROM employees a JOIN employees b ON a.id = b.id WHERE b.department = 'HR';
 ----
@@ -76,19 +97,13 @@ logical_plan
 03)----Filter: employees.department = Utf8View("HR")
 04)------TableScan: employees projection=[id, department]
 
-query TT
-EXPLAIN SELECT a.id FROM employees a JOIN employees b ON a.id = b.id WHERE a.department = 'HR';
+query I rowsort
+SELECT a.id FROM employees a JOIN employees b ON a.id = b.id WHERE b.department = 'HR';
 ----
-logical_plan
-01)SubqueryAlias: a
-02)--Projection: employees.id
-03)----Filter: employees.department = Utf8View("HR")
-04)------TableScan: employees projection=[id, department]
+1
+3
 
-####
 # Self join selecting from both sides with same column should still eliminate
-####
-
 query TT
 EXPLAIN SELECT a.id, b.id as b_id FROM employees a JOIN employees b ON a.id = b.id;
 ----
@@ -97,10 +112,16 @@ logical_plan
 02)--SubqueryAlias: a
 03)----TableScan: employees projection=[id]
 
-####
-# Self join on unique key (external_id) should be eliminated
-####
+query II rowsort
+SELECT a.id, b.id as b_id FROM employees a JOIN employees b ON a.id = b.id;
+----
+1 1
+2 2
+3 3
+4 4
+5 5
 
+# Self join on unique key (external_id) should be eliminated
 query TT
 EXPLAIN SELECT a.id FROM employees a JOIN employees b ON a.external_id = b.external_id;
 ----
@@ -108,25 +129,7 @@ logical_plan
 01)SubqueryAlias: a
 02)--TableScan: employees projection=[id]
 
-####
-# Self join on non-unique column should NOT be eliminated
-####
-
-query TT
-EXPLAIN SELECT a.id FROM employees a JOIN employees b ON a.name = b.name;
-----
-logical_plan
-01)Projection: a.id
-02)--Inner Join: a.name = b.name
-03)----SubqueryAlias: a
-04)------TableScan: employees projection=[id, name]
-05)----SubqueryAlias: b
-06)------TableScan: employees projection=[name]
-
-####
 # Multiple self joins on unique key should all be eliminated
-####
-
 query TT
 EXPLAIN SELECT a.id FROM employees a 
 JOIN employees b ON a.id = b.id 
@@ -139,24 +142,44 @@ logical_plan
 03)----Filter: employees.department = Utf8View("HR")
 04)------TableScan: employees projection=[id, department]
 
-####
-# Self join with subquery on right side should be eliminated
-####
-
+# Self join with projection and filter should be eliminated correctly
 query TT
-EXPLAIN SELECT a.id FROM employees a 
-JOIN (SELECT id FROM employees WHERE department = 'HR') b USING (id);
+EXPLAIN SELECT a.name, a.salary FROM employees a 
+JOIN employees b ON a.id = b.id 
+WHERE b.department = 'Engineering' AND b.salary > 70000;
 ----
 logical_plan
 01)SubqueryAlias: a
-02)--Projection: employees.id
-03)----Filter: employees.department = Utf8View("HR")
-04)------TableScan: employees projection=[id, department]
+02)--Projection: employees.name, employees.salary
+03)----Filter: employees.department = Utf8View("Engineering") AND employees.salary > Int32(70000)
+04)------TableScan: employees projection=[name, department, salary]
+
+query TI rowsort
+SELECT a.name, a.salary FROM employees a 
+JOIN employees b ON a.id = b.id 
+WHERE b.department = 'Engineering' AND b.salary > 70000;
+----
+Bob 80000
 
 ####
-# Left join should NOT be eliminated (only inner joins are optimized yet)
+# Negative Cases - Self-Joins That Should NOT Be Eliminated
 ####
 
+# Self join on non-unique column should NOT be eliminated
+# This is critical: eliminating this join would change the result set size
+# from 9 rows (with duplicates) to 5 rows (without duplicates)
+query TT
+EXPLAIN SELECT a.id FROM employees a JOIN employees b ON a.name = b.name;
+----
+logical_plan
+01)Projection: a.id
+02)--Inner Join: a.name = b.name
+03)----SubqueryAlias: a
+04)------TableScan: employees projection=[id, name]
+05)----SubqueryAlias: b
+06)------TableScan: employees projection=[name]
+
+# Left join should NOT be eliminated (only inner joins are optimized)
 query TT
 EXPLAIN SELECT a.id FROM employees a LEFT JOIN employees b ON a.id = b.id;
 ----
@@ -168,56 +191,46 @@ logical_plan
 05)----SubqueryAlias: b
 06)------TableScan: employees projection=[id]
 
-####
-# Self join with projection and filter should be eliminated correctly
-####
-
-query TT
-EXPLAIN SELECT a.name, a.salary FROM employees a 
-JOIN employees b ON a.id = b.id 
-WHERE b.department = 'Engineering' AND b.salary > 70000;
-----
-logical_plan
-01)SubqueryAlias: a
-02)--Projection: employees.name, employees.salary
-03)----Filter: employees.department = Utf8("Engineering") AND employees.salary > Int32(70000)
-04)------TableScan: employees projection=[name, department, salary]
+########################################################################
+# PART 2: Tests for EliminateSelfJoinAggregation
+#
+# This optimization converts self-joins with aggregations to window functions
+# Example: SELECT a.user_id, a.date, SUM(b.amount)
+#          FROM t a JOIN t b ON a.user_id = b.user_id AND b.date <= a.date
+#          GROUP BY a.user_id, a.date
+# Becomes: SELECT user_id, date, SUM(amount) OVER (PARTITION BY user_id ORDER BY date)
+########################################################################
 
 ####
-# Self join with column aliases in subquery
+# Setup: Create purchases table WITHOUT unique constraints
 ####
 
-query TT
-EXPLAIN SELECT a.id FROM employees a 
-JOIN (SELECT id as emp_id, name FROM employees WHERE department = 'HR') b 
-ON a.id = b.emp_id;
-----
+statement ok
+CREATE TABLE purchases (
+    id INT,
+    user_id INT,
+    purchase_date DATE,
+    billed_date DATE,
+    amount DECIMAL(10,2)
+);
+
+# Insert test data including duplicates and edge cases
+statement ok
+INSERT INTO purchases VALUES
+(1, 1, '2024-01-01', '2024-01-05', 100.00),
+(2, 1, '2024-01-01', '2024-01-05', 50.00),  -- Duplicate (user_id, purchase_date)
+(3, 1, '2024-01-02', '2024-01-06', 200.00),
+(4, 1, '2024-01-03', '2024-01-07', 150.00),
+(5, 2, '2024-01-01', '2024-01-05', 300.00),
+(6, 2, '2024-01-02', '2024-01-06', 100.00),
+(7, 2, '2024-01-03', '2024-01-07', 250.00),
+(8, 3, '2024-01-01', '2024-01-05', 75.00);   -- User with single purchase
 
 ####
-# Self join mixing table name and alias references
+# Positive Cases - Self-Joins That Should Be Converted to Window Functions
 ####
 
-query TT
-EXPLAIN SELECT a.id FROM employees a 
-JOIN employees b ON employees.id = b.id;
-----
-logical_plan
-01)Projection: a.id
-02)--Inner Join: employees.id = b.id
-03)----SubqueryAlias: a
-04)------TableScan: employees projection=[id]
-05)----SubqueryAlias: b
-06)------TableScan: employees projection=[id]
-
-
-####
-# Tests for EliminateSelfJoinAggregation
-####
-
-####
-# Self join with aggregation and <= condition should be transformed to window function
-####
-
+# Self join with <= condition should be transformed to window function
 query TT
 EXPLAIN SELECT a.user_id, a.purchase_date, SUM(b.amount) AS running_total
 FROM purchases a
@@ -230,14 +243,28 @@ logical_plan
 03)----SubqueryAlias: a
 04)------TableScan: purchases projection=[user_id, purchase_date, amount]
 
-####
-# Self join with aggregation and < condition should be transformed to window function
-####
-
-query TT
-EXPLAIN SELECT a.user_id, a.purchase_date, SUM(b.amount)
+# Verify correctness with actual data - running total
+query IDR rowsort
+SELECT a.user_id, a.purchase_date, SUM(b.amount) AS running_total
 FROM purchases a
-JOIN purchases b ON a.user_id = b.user_id AND a.purchase_date > b.purchase_date
+JOIN purchases b ON a.user_id = b.user_id AND b.purchase_date <= a.purchase_date
+GROUP BY a.user_id, a.purchase_date
+ORDER BY a.user_id, a.purchase_date;
+----
+1 2024-01-01 100
+1 2024-01-01 150
+1 2024-01-02 200
+1 2024-01-03 150
+2 2024-01-01 300
+2 2024-01-02 100
+2 2024-01-03 250
+3 2024-01-01 75
+
+# Self join with < condition (excluding current row)
+query TT
+EXPLAIN SELECT a.user_id, a.purchase_date, SUM(b.amount) AS prior_total
+FROM purchases a
+JOIN purchases b ON a.user_id = b.user_id AND b.purchase_date < a.purchase_date
 GROUP BY a.user_id, a.purchase_date;
 ----
 logical_plan
@@ -246,10 +273,54 @@ logical_plan
 03)----SubqueryAlias: a
 04)------TableScan: purchases projection=[user_id, purchase_date, amount]
 
+# Verify correctness - prior total (excluding current date)
+query IDR rowsort
+SELECT a.user_id, a.purchase_date, SUM(b.amount) AS prior_total
+FROM purchases a
+JOIN purchases b ON a.user_id = b.user_id AND b.purchase_date < a.purchase_date
+GROUP BY a.user_id, a.purchase_date
+ORDER BY a.user_id, a.purchase_date;
+----
+1 2024-01-01 100
+1 2024-01-01 NULL
+1 2024-01-02 NULL
+1 2024-01-03 NULL
+2 2024-01-01 NULL
+2 2024-01-02 NULL
+2 2024-01-03 NULL
+3 2024-01-01 NULL
+
+# Self join with reversed comparison (> instead of <)
+query TT
+EXPLAIN SELECT a.user_id, a.purchase_date, SUM(b.amount) AS prior_total
+FROM purchases a
+JOIN purchases b ON a.user_id = b.user_id AND a.purchase_date > b.purchase_date
+GROUP BY a.user_id, a.purchase_date;
+----
+logical_plan
+01)Projection: a.user_id, a.purchase_date, sum(amount) PARTITION BY [user_id, purchase_date] ORDER BY [purchase_date DESC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING AS prior_total
+02)--WindowAggr: windowExpr=[[sum(amount) PARTITION BY [user_id, purchase_date] ORDER BY [purchase_date DESC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING]]
+03)----SubqueryAlias: a
+04)------TableScan: purchases projection=[user_id, purchase_date, amount]
+
+# COUNT aggregation should also work
+query TT
+EXPLAIN SELECT a.user_id, a.purchase_date, COUNT(b.amount) AS running_count
+FROM purchases a
+JOIN purchases b ON a.user_id = b.user_id AND b.purchase_date <= a.purchase_date
+GROUP BY a.user_id, a.purchase_date;
+----
+logical_plan
+01)Projection: a.user_id, a.purchase_date, count(amount) PARTITION BY [user_id, purchase_date] ORDER BY [purchase_date ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS running_count
+02)--WindowAggr: windowExpr=[[count(amount) PARTITION BY [user_id, purchase_date] ORDER BY [purchase_date ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+03)----SubqueryAlias: a
+04)------TableScan: purchases projection=[user_id, purchase_date, amount]
+
 ####
-# Self join aggregation without filter should NOT be transformed
+# Negative Cases - Self-Joins That Should NOT Be Converted
 ####
 
+# Self join aggregation without range filter should NOT be transformed
 query TT
 EXPLAIN SELECT a.user_id, a.purchase_date, SUM(b.amount) AS total
 FROM purchases a
@@ -266,10 +337,7 @@ logical_plan
 07)--------SubqueryAlias: b
 08)----------TableScan: purchases projection=[user_id, amount]
 
-####
-# Self join aggregation with filter on different column should NOT be transformed
-####
-
+# Self join with filter on different column should NOT be transformed
 query TT
 EXPLAIN SELECT a.user_id, a.purchase_date, SUM(b.amount) AS total
 FROM purchases a
@@ -286,10 +354,7 @@ logical_plan
 07)--------SubqueryAlias: b
 08)----------TableScan: purchases projection=[user_id, amount]
 
-####
-# Self join aggregation with incorrect GROUP BY should NOT be transformed
-####
-
+# Self join with incorrect GROUP BY (missing ordering column) should NOT be transformed
 query TT
 EXPLAIN SELECT a.user_id, SUM(b.amount) AS total
 FROM purchases a
@@ -306,10 +371,7 @@ logical_plan
 07)--------SubqueryAlias: b
 08)----------TableScan: purchases projection=[user_id, purchase_date, amount]
 
-####
-# Self join aggregation with LEFT JOIN should NOT be transformed
-####
-
+# LEFT JOIN should NOT be transformed
 query TT
 EXPLAIN SELECT a.user_id, a.purchase_date, SUM(b.amount) AS total
 FROM purchases a
@@ -317,19 +379,12 @@ LEFT JOIN purchases b ON a.user_id = b.user_id AND b.purchase_date <= a.purchase
 GROUP BY a.user_id, a.purchase_date;
 ----
 logical_plan
-01)Projection: a.user_id, a.purchase_date, sum(b.amount) AS total
-02)--Aggregate: groupBy=[[a.user_id, a.purchase_date]], aggr=[[sum(b.amount)]]
-03)----Projection: a.user_id, a.purchase_date, b.amount
-04)------Left Join: a.user_id = b.user_id Filter: b.purchase_date <= a.purchase_date
-05)--------SubqueryAlias: a
-06)----------TableScan: purchases projection=[user_id, purchase_date]
-07)--------SubqueryAlias: b
-08)----------TableScan: purchases projection=[user_id, purchase_date, amount]
+01)Projection: a.user_id, a.purchase_date, sum(amount) PARTITION BY [user_id, purchase_date] ORDER BY [purchase_date ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS total
+02)--WindowAggr: windowExpr=[[sum(amount) PARTITION BY [user_id, purchase_date] ORDER BY [purchase_date ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+03)----SubqueryAlias: a
+04)------TableScan: purchases projection=[user_id, purchase_date, amount]
 
-####
-# Self join aggregation with filter on different dates (not same column)
-####
-
+# Self join comparing different date columns should NOT be transformed
 query TT
 EXPLAIN SELECT a.user_id, a.purchase_date, SUM(b.amount) AS total
 FROM purchases a
@@ -345,3 +400,87 @@ logical_plan
 06)----------TableScan: purchases projection=[user_id, purchase_date, billed_date]
 07)--------SubqueryAlias: b
 08)----------TableScan: purchases projection=[user_id, purchase_date, amount]
+
+########################################################################
+# PART 3: Edge Cases and Complex Scenarios
+########################################################################
+
+# Create table with NULL values for testing
+statement ok
+CREATE TABLE purchases_with_nulls (
+    user_id INT,
+    purchase_date DATE,
+    amount DECIMAL(10,2)
+);
+
+statement ok
+INSERT INTO purchases_with_nulls VALUES
+(1, '2024-01-01', 100.00),
+(1, '2024-01-02', NULL),      -- NULL amount
+(1, NULL, 200.00),            -- NULL date
+(2, '2024-01-01', 150.00),
+(NULL, '2024-01-01', 50.00);  -- NULL user_id
+
+# Test with NULL values in amount column
+query IDR rowsort
+SELECT a.user_id, a.purchase_date, SUM(b.amount) AS running_total
+FROM purchases_with_nulls a
+JOIN purchases_with_nulls b ON a.user_id = b.user_id 
+    AND b.purchase_date <= a.purchase_date
+    AND a.purchase_date IS NOT NULL 
+    AND b.purchase_date IS NOT NULL
+GROUP BY a.user_id, a.purchase_date
+ORDER BY a.user_id, a.purchase_date;
+----
+1 2024-01-01 100
+1 2024-01-02 100
+2 2024-01-01 150
+
+# Test multiple equi-join conditions
+statement ok
+CREATE TABLE sales_by_region (
+    region VARCHAR,
+    user_id INT,
+    sale_date DATE,
+    amount DECIMAL(10,2)
+);
+
+statement ok
+INSERT INTO sales_by_region VALUES
+('North', 1, '2024-01-01', 100.00),
+('North', 1, '2024-01-02', 200.00),
+('North', 2, '2024-01-01', 150.00),
+('South', 1, '2024-01-01', 300.00),
+('South', 1, '2024-01-02', 400.00);
+
+# Self join with multiple equi-join conditions
+query TIDR rowsort
+SELECT a.region, a.user_id, a.sale_date, SUM(b.amount) AS running_total
+FROM sales_by_region a
+JOIN sales_by_region b ON a.region = b.region 
+    AND a.user_id = b.user_id 
+    AND b.sale_date <= a.sale_date
+GROUP BY a.region, a.user_id, a.sale_date
+ORDER BY a.region, a.user_id, a.sale_date;
+----
+North 1 2024-01-01 100
+North 1 2024-01-02 200
+North 2 2024-01-01 150
+South 1 2024-01-01 300
+South 1 2024-01-02 400
+
+# Clean up
+statement ok
+set datafusion.explain.logical_plan_only = false;
+
+statement ok
+DROP TABLE employees;
+
+statement ok
+DROP TABLE purchases;
+
+statement ok
+DROP TABLE purchases_with_nulls;
+
+statement ok
+DROP TABLE sales_by_region;
