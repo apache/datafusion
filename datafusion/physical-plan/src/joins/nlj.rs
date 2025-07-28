@@ -21,7 +21,7 @@
 //! please refer to the documentation provided in the `poll_next()` method.
 
 use arrow::buffer::MutableBuffer;
-use arrow::compute::BatchCoalescer;
+use arrow::compute::{filter_record_batch, BatchCoalescer};
 use futures::{ready, StreamExt};
 use log::debug;
 use std::sync::Arc;
@@ -29,20 +29,21 @@ use std::task::Poll;
 
 use crate::joins::nested_loop_join::JoinLeftData;
 use crate::joins::utils::{
-    apply_join_filter_to_indices, build_batch_from_indices, need_produce_result_in_final,
-    BuildProbeJoinMetrics, ColumnIndex, JoinFilter, OnceFut,
+    build_batch_from_indices, need_produce_result_in_final, BuildProbeJoinMetrics,
+    ColumnIndex, JoinFilter, OnceFut,
 };
 use crate::metrics::Count;
 use crate::{RecordBatchStream, SendableRecordBatchStream};
 
 use arrow::array::{
-    BooleanArray, BooleanBufferBuilder, UInt32Array, UInt32Builder, UInt64Array,
-    UInt64Builder,
+    Array, BooleanArray, BooleanBufferBuilder, RecordBatchOptions, UInt32Builder,
+    UInt64Array, UInt64Builder,
 };
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{
-    internal_datafusion_err, unwrap_or_internal_err, DataFusionError, JoinSide, Result,
+    cast::as_boolean_array, internal_datafusion_err, unwrap_or_internal_err,
+    DataFusionError, JoinSide, Result, ScalarValue,
 };
 use datafusion_expr::JoinType;
 
@@ -523,39 +524,32 @@ impl NLJStream {
             return Ok(None);
         }
 
-        // Create indices for cross-join: current left row with all right rows
-        let left_indices = UInt64Array::from(vec![l_index as u64; right_row_count]);
-        let right_indices = UInt32Array::from_iter_values(0..right_row_count as u32);
+        let right_batch_bitmap = if let Some(filter) = &self.join_filter {
+            apply_join_filter_to_single_left_row(
+                left_data.batch(),
+                l_index,
+                right_batch,
+                filter,
+                JoinSide::Left,
+            )?
+        } else {
+            BooleanArray::from(vec![true; right_row_count])
+        };
 
-        // Apply join filter if present
-        let (joined_left_indices, joined_right_indices) =
-            if let Some(ref filter) = self.join_filter {
-                apply_join_filter_to_indices(
-                    left_data.batch(),
-                    right_batch,
-                    left_indices,
-                    right_indices,
-                    filter,
-                    JoinSide::Left,
-                    None,
-                )?
-            } else {
-                (left_indices, right_indices)
-            };
+        let joined_len = right_batch_bitmap.true_count();
 
         // Update left row match bitmap for outer join support
-        if need_produce_result_in_final(self.join_type) && !joined_left_indices.is_empty()
-        {
+        if need_produce_result_in_final(self.join_type) && (joined_len > 0) {
             let mut bitmap = left_data.bitmap().lock();
             bitmap.set_bit(l_index, true);
         }
 
-        // TODO(now-perf): better vectorize it
+        // TODO(now-perf): don't init it when fetching right batch
         if let Some(bitmap) = self.current_right_batch_matched.as_mut() {
-            for i in joined_right_indices.iter() {
-                // After the initial join, indices must all be Some
-                bitmap.set_bit(i.unwrap() as usize, true);
-                // println!("Setting bit {i:?} to true");
+            for (i, opt_bool) in right_batch_bitmap.iter().enumerate() {
+                if opt_bool.is_some() && opt_bool.unwrap() {
+                    bitmap.set_bit(i, true);
+                }
             }
         }
 
@@ -573,17 +567,17 @@ impl NLJStream {
             return Ok(None);
         }
 
-        if joined_left_indices.is_empty() {
+        if joined_len == 0 {
             Ok(None)
         } else {
-            let join_batch = build_batch_from_indices(
+            // Use the optimized approach similar to build_intermediate_batch_for_single_left_row
+            let join_batch = build_batch_for_single_left_row(
                 &self.output_schema,
                 left_data.batch(),
+                l_index,
                 right_batch,
-                &joined_left_indices,
-                &joined_right_indices,
+                Some(right_batch_bitmap),
                 &self.column_indices,
-                JoinSide::Left,
             )?;
             Ok(Some(join_batch))
         }
@@ -808,4 +802,94 @@ impl NLJStream {
 
         Ok(result_batch)
     }
+}
+
+/// Apply the join filter between:
+/// l_index th row in left_batch, with right batch
+fn apply_join_filter_to_single_left_row(
+    left_batch: &RecordBatch,
+    l_index: usize,
+    right_batch: &RecordBatch,
+    filter: &JoinFilter,
+    _build_side: JoinSide,
+) -> Result<BooleanArray> {
+    debug_assert!(left_batch.num_rows() != 0 && right_batch.num_rows() != 0);
+
+    let intermediate_batch = if filter.schema.fields().is_empty() {
+        // If filter is constant (e.g. literal `true`), empty batch can be used
+        // in the later filter step.
+        let options = RecordBatchOptions::new()
+            .with_match_field_names(true)
+            .with_row_count(Some(right_batch.num_rows()));
+
+        RecordBatch::try_new_with_options(
+            Arc::new((*filter.schema).clone()),
+            vec![],
+            &options,
+        )?
+    } else {
+        build_batch_for_single_left_row(
+            &filter.schema,
+            left_batch,
+            l_index,
+            right_batch,
+            None,
+            &filter.column_indices,
+        )?
+    };
+
+    let filter_result = filter
+        .expression()
+        .evaluate(&intermediate_batch)?
+        .into_array(intermediate_batch.num_rows())?;
+
+    Ok(as_boolean_array(&filter_result)?.clone())
+}
+
+fn build_batch_for_single_left_row(
+    output_schema: &Schema,
+    left_batch: &RecordBatch,
+    l_index: usize,
+    right_batch: &RecordBatch,
+    right_batch_filter: Option<BooleanArray>,
+    col_indices: &[ColumnIndex],
+) -> Result<RecordBatch> {
+    let right_row_count = right_batch.num_rows();
+    if right_row_count == 0 {
+        return Ok(RecordBatch::new_empty(Arc::new(output_schema.clone())));
+    }
+
+    let filtered_right_batch = if let Some(filter) = right_batch_filter {
+        &filter_record_batch(right_batch, &filter)?
+    } else {
+        right_batch
+    };
+
+    if filtered_right_batch.num_rows() == 0 {
+        return Ok(RecordBatch::new_empty(Arc::new(output_schema.clone())));
+    }
+
+    // Build columns directly without index indirection
+    let mut columns: Vec<Arc<dyn Array>> =
+        Vec::with_capacity(output_schema.fields().len());
+
+    for column_index in col_indices {
+        let array = if column_index.side == JoinSide::Left {
+            // Broadcast the single left row to match the filtered right batch length
+            let original_left_array = left_batch.column(column_index.index);
+            let scalar_value =
+                ScalarValue::try_from_array(original_left_array.as_ref(), l_index)?;
+            scalar_value.to_array_of_size(filtered_right_batch.num_rows())?
+        } else {
+            // Take the filtered right column using compute::take
+            Arc::clone(filtered_right_batch.column(column_index.index))
+        };
+
+        columns.push(array);
+    }
+
+    Ok(RecordBatch::try_new(
+        Arc::new(output_schema.clone()),
+        columns,
+    )?)
 }
