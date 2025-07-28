@@ -989,6 +989,7 @@ async fn test_soft_hard_requirements_with_multiple_soft_requirements_and_output_
         bounded_window2,
         Some(OrderingRequirements::new(requirement)),
         Distribution::SinglePartition,
+        None,
     ));
 
     let expected_input = [
