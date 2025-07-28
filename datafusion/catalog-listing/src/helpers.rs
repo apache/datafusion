@@ -50,11 +50,11 @@ use object_store::{ObjectMeta, ObjectStore};
 /// - the table provider can filter the table partition values with this expression
 /// - the expression can be marked as `TableProviderFilterPushDown::Exact` once this filtering
 ///   was performed
-pub fn expr_applicable_for_cols(col_names: &[&str], expr: &Expr) -> bool {
+pub fn expr_applicable_for_cols<T: AsRef<str>>(col_names: &[T], expr: &Expr) -> bool {
     let mut is_applicable = true;
     expr.apply(|expr| match expr {
         Expr::Column(Column { ref name, .. }) => {
-            is_applicable &= col_names.contains(&name.as_str());
+            is_applicable &= col_names.iter().any(|col| col.as_ref() == name.as_str());
             if is_applicable {
                 Ok(TreeNodeRecursion::Jump)
             } else {
