@@ -488,6 +488,7 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(all(feature = "lz4", feature = "zstd"))]
     fn build_compressible_batch() -> RecordBatch {
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Utf8, false),
@@ -504,6 +505,7 @@ mod tests {
         RecordBatch::try_new(schema, vec![a, b, c]).unwrap()
     }
 
+    #[cfg(all(feature = "lz4", feature = "zstd"))]
     async fn validate(
         spill_manager: &SpillManager,
         spill_file: RefCountedTempFile,
