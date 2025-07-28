@@ -122,8 +122,7 @@ fn spark_bit_get_inner<T: ArrowPrimitiveType>(
     let result: PrimitiveArray<Int8Type> = try_binary(value, pos, |value, pos| {
         if pos < 0 || pos >= bit_length {
             return Err(arrow::error::ArrowError::ComputeError(format!(
-                "bit_get: position {} is out of bounds. Expected pos < {} and pos >= 0",
-                pos, bit_length
+                "bit_get: position {pos} is out of bounds. Expected pos < {bit_length} and pos >= 0"
             )));
         }
         Ok(((value.to_i64().unwrap() >> pos) & 1) as i8)
