@@ -639,6 +639,13 @@ consider the following table:
 ```sql
 SELECT regr_avgx(total_sales, day) AS avg_day --considering day(x) independent variable
 FROM daily_sales; --output = (1+2+3+5)/4 = 2.75
++----------+
+| avg_day  |
++----------+
+|   2.75   |
++----------+
+1 row(s) fetched.
+Elapsed 0.001 seconds.
 ```
 
 ### `regr_avgy`
@@ -679,7 +686,7 @@ FROM daily_temperature;
 | 33.25           |
 +-----------------+
 1 row(s) fetched.
-Elapsed 0.000 seconds.
+Elapsed 0.001 seconds.
 ```
 
 ### `regr_count`
@@ -757,13 +764,15 @@ consider the following table:
 ```
 
 ```sql
-SELECT regr_intercept(productivity_score, week) AS intercept 
+SELECT regr_intercept(productivity_score, week) AS intercept
 FROM weekly_performance;
 +----------+
-|intercept|
+|intercept |
 +----------+
 |  55      |
 +----------+
+1 row(s) fetched.
+Elapsed 0.001 seconds.
 ```
 
 ### `regr_r2`
@@ -784,7 +793,7 @@ regr_r2(expression_y, expression_x)
 consider the following table:
 
 ```sql
->create table weekly_performances(int day, int user_signups) as values (1,60), (2,65), (3, 70), (4,75), (5,80);
+>create table weekly_performances(day int ,user_signups int) as values (1,60), (2,65), (3, 70), (4,75), (5,80);
 > select * from weekly_performances;
 +------+---------------------+
 | week | productivity_score  |
@@ -799,7 +808,14 @@ consider the following table:
 
 ```sql
 SELECT regr_r2(productivity_score, week) AS r_squared
-FROM weekly_performance; -- Output - 1.0 as data is perfect linear
+FROM weekly_performance;
++---------+
+|r_squared|
++---------+
+| 1.0     |
++---------+
+1 row(s) fetched.
+Elapsed 0.001 seconds.
 ```
 
 ### `regr_slope`
@@ -818,7 +834,7 @@ regr_slope(expression_y, expression_x)
 ### Example
 
 ```sql
->create table weekly_performances(int day, int user_signups) as values (1,60), (2,65), (3, 70), (4,75), (5,80);
+>create table weekly_performances(day int,user_signups int) as values (1,60), (2,65), (3, 70), (4,75), (5,80);
 > select * from weekly_performances;
 +------+---------------------+
 | week | productivity_score  |
@@ -835,6 +851,13 @@ regr_slope(expression_y, expression_x)
 --in simpler words slope = Δx/Δy
 SELECT regr_slope(productivity_score, week) AS slope
 FROM weekly_performance;
++--------+
+| slope  |
++--------+
+| 5.0    |
++--------+
+1 row(s) fetched.
+Elapsed 0.001 seconds.
 ```
 
 **Remember**: the slops tells _how much y changes when x increases by 1._
@@ -873,6 +896,13 @@ consider the following table `study_hours`:
 ```sql
 SELECT regr_sxx(test_score, hours) AS sxx
 FROM study_hours; --Output - 40
++-------+
+| sxx   |
++-------+
+| 40    |
++-------+
+1 row(s) fetched.
+Elapsed 0.001 seconds.
 ```
 
 ### `regr_sxy`
@@ -905,6 +935,13 @@ regr_sxy(expression_y, expression_x)
 ```sql
 SELECT regr_sxy(productivity_score, week) AS sum_product_deviations
 FROM employee_productivity;
++------------------------+
+| sum_product_deviations |
++------------------------+
+|       10.0             |
++------------------------+
+1 row(s) fetched.
+Elapsed 0.001 seconds.
 ```
 
 ### `regr_syy`
@@ -937,6 +974,13 @@ regr_syy(expression_y, expression_x)
 ```sql
 SELECT regr_syy(productivity_score, week) AS sum_squares_y
 FROM employee_productivity;
++---------------+
+| sum_squares_y |
++---------------+
+|    50.0       |
++---------------+
+1 row(s) fetched.
+Elapsed 0.001 seconds.
 ```
 
 ### `stddev`
