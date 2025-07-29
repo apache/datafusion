@@ -830,6 +830,80 @@ async fn test_fn_regexp_replace() -> Result<()> {
 }
 
 #[tokio::test]
+#[cfg(feature = "unicode_expressions")]
+async fn test_fn_regexp_extract() -> Result<()> {
+    let expr = regexp_extract(col("a"), lit("[a-z]"), lit(0u32));
+
+    let batches = get_batches(expr).await?;
+
+    assert_snapshot!(
+        batches_to_string(&batches),
+        @r#"
+    +------------------------------------------------+
+    | regexp_extract(test.a,Utf8("[a-z]"),UInt32(0)) |
+    +------------------------------------------------+
+    | a                                              |
+    | a                                              |
+    | d                                              |
+    | b                                              |
+    +------------------------------------------------+
+    "#);
+
+    let expr = regexp_extract(col("a"), lit("[a-z]"), lit(9u32));
+
+    let batches = get_batches(expr).await?;
+
+    assert_snapshot!(
+        batches_to_string(&batches),
+        @r#"
+    +------------------------------------------------+
+    | regexp_extract(test.a,Utf8("[a-z]"),UInt32(9)) |
+    +------------------------------------------------+
+    |                                                |
+    |                                                |
+    |                                                |
+    |                                                |
+    +------------------------------------------------+
+    "#);
+
+    let expr = regexp_extract(col("a"), lit("([a-z]+)([A-Z0-9]+)"), lit(2u32));
+
+    let batches = get_batches(expr).await?;
+
+    assert_snapshot!(
+        batches_to_string(&batches),
+        @r#"
+    +--------------------------------------------------------------+
+    | regexp_extract(test.a,Utf8("([a-z]+)([A-Z0-9]+)"),UInt32(2)) |
+    +--------------------------------------------------------------+
+    | DEF                                                          |
+    | 123                                                          |
+    |                                                              |
+    | D                                                            |
+    +--------------------------------------------------------------+
+    "#);
+
+    let expr = regexp_extract(lit("hello"), lit("[a-z]"), lit(0u32));
+
+    let batches = get_batches(expr).await?;
+
+    assert_snapshot!(
+        batches_to_string(&batches),
+        @r#"
+    +-------------------------------------------------------+
+    | regexp_extract(Utf8("hello"),Utf8("[a-z]"),UInt32(0)) |
+    +-------------------------------------------------------+
+    | h                                                     |
+    | h                                                     |
+    | h                                                     |
+    | h                                                     |
+    +-------------------------------------------------------+
+    "#);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_fn_replace() -> Result<()> {
     let expr = replace(col("a"), lit("abc"), lit("x"));
 
