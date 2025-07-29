@@ -743,7 +743,7 @@ regr_intercept(expression_y, expression_x)
 consider the following table:
 
 ```sql
->create table weekly_performances(int day, int user_signups) as values (1,60), (2,65), (3, 70), (4,75), (5,80);
+>create table weekly_performances(week int, productivity_score int) as values (1,60), (2,65), (3, 70), (4,75), (5,80);
 > select * from weekly_performances;
 +------+---------------------+
 | week | productivity_score  |
@@ -757,9 +757,13 @@ consider the following table:
 ```
 
 ```sql
-SELECT regr_intercept(productivity_score, week) AS intercept -- week(x),productivity_score(y)
-FROM weekly_performance; --k = 5
--- y = kx+b ->60 = 5*1+b -->b = 55
+SELECT regr_intercept(productivity_score, week) AS intercept 
+FROM weekly_performance;
++----------+
+|interecept|
++----------+
+|  55      |
++----------+
 ```
 
 ### `regr_r2`
