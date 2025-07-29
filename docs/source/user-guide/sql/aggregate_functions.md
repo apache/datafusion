@@ -672,7 +672,14 @@ regr_avgy(expression_y, expression_x)
 
 ```sql
 SELECT regr_avgy(temperature, day) AS avg_temperature --temperature as Dependent Variable(Y)
-FROM daily_temperature; --output = 33.25
+FROM daily_temperature;
++-----------------+
+| avg_temperature |
++-----------------+
+| 33.25           |
++-----------------+
+1 row(s) fetched.
+Elapsed 0.000 seconds.
 ```
 
 ### `regr_count`
