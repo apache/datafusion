@@ -80,7 +80,7 @@ pub use pool::*;
 ///
 /// Scenario 1:
 /// For `Filter` operator, `RecordBatch`es will stream through it, so it
-/// don't have to keep track of memory usage through [`MemoryPool`].
+/// doesn't have to keep track of memory usage through [`MemoryPool`].
 ///
 /// Scenario 2:
 /// For `CrossJoin` operator, if the input size gets larger, the intermediate
