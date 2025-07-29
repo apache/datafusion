@@ -23,8 +23,9 @@
 //! This optimizer transforms self-join queries with aggregations into more efficient
 //! window function queries when the GROUP BY columns form a unique key.
 //!
-//! # Example Transformation
+//! # Example Transformations
 //!
+//! ## Basic Example
 //! ```sql
 //! -- Original query (self-join with aggregation)
 //! SELECT a.order_id, SUM(b.amount) AS running_total
@@ -39,6 +40,29 @@
 //!          ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
 //!        ) AS running_total
 //! FROM orders;
+//! ```
+//!
+//! ## Multiple Aggregates Example
+//! ```sql
+//! -- Original query with multiple aggregates
+//! SELECT a.user_id, a.purchase_date,
+//!        SUM(b.amount) AS running_total,
+//!        COUNT(b.amount) AS running_count,
+//!        MAX(b.amount) AS max_so_far
+//! FROM purchases a
+//! JOIN purchases b ON a.user_id = b.user_id
+//!                  AND b.purchase_date <= a.purchase_date
+//! GROUP BY a.user_id, a.purchase_date;
+//!
+//! -- Optimized query
+//! SELECT user_id, purchase_date,
+//!        SUM(amount) OVER (PARTITION BY user_id ORDER BY purchase_date
+//!                         ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS running_total,
+//!        COUNT(amount) OVER (PARTITION BY user_id ORDER BY purchase_date
+//!                           ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS running_count,
+//!        MAX(amount) OVER (PARTITION BY user_id ORDER BY purchase_date
+//!                         ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS max_so_far
+//! FROM purchases;
 //! ```
 //!
 //! # Requirements
@@ -119,8 +143,8 @@ impl EliminateSelfJoinAggregation {
     ///
     /// Looks for this pattern in the logical plan:
     /// ```text
-    /// Projection
-    ///   └── Aggregate (with single aggregate function)
+    /// [Optional] Projection
+    ///   └── Aggregate (with one or more aggregate functions)
     ///       └── Join (inner join with filter)
     ///           ├── TableScan or SubqueryAlias(TableScan)
     ///           └── TableScan or SubqueryAlias(TableScan)
@@ -129,23 +153,14 @@ impl EliminateSelfJoinAggregation {
         plan: LogicalPlan,
         renamed: &mut Option<RenamedAlias>,
     ) -> Result<Transformed<LogicalPlan>> {
-        // Only process Projection nodes
-        let LogicalPlan::Projection(projection) = &plan else {
-            // TODO: We can eliminate this condition as Projection might not always
-            //       emerge in some cases where this optimization is still possible
-            return Ok(Transformed::no(plan));
-        };
-
-        // Check if the input is an Aggregate with single aggregate expression
-        let aggregate = match projection.input.as_ref() {
-            LogicalPlan::Aggregate(aggregate)
-            // TODO: We can generalize this restriction
-            if aggregate.aggr_expr.len() == 1 => {
-                aggregate
-            }
-            _ => {
-                return Ok(Transformed::no(plan))
+        // Handle two cases: Projection -> Aggregate or just Aggregate
+        let (aggregate, projection) = match &plan {
+            LogicalPlan::Projection(projection) => match projection.input.as_ref() {
+                LogicalPlan::Aggregate(aggregate) => (aggregate, Some(projection)),
+                _ => return Ok(Transformed::no(plan)),
             },
+            LogicalPlan::Aggregate(aggregate) => (aggregate, None),
+            _ => return Ok(Transformed::no(plan)),
         };
 
         // Try to optimize the aggregate into a window function
@@ -157,71 +172,92 @@ impl EliminateSelfJoinAggregation {
             return Ok(Transformed::no(plan));
         };
 
-        // Update column references in the projection to use window function output
-        let aggr_expr_name = aggregate.aggr_expr[0].name_for_alias()?;
-        let window_expr_name = window.window_expr[0].name_for_alias()?;
+        // Update column references based on whether we have a projection
+        if let Some(projection) = projection {
+            // Map aggregate column references to window column references
+            let mut projection_expr = Vec::with_capacity(projection.expr.len());
 
-        // Map aggregate column references to window column references
-        let projection_expr = projection
-            .expr
-            .iter()
-            .cloned()
-            .map(|expr| match &expr {
-                // Direct column reference: sum(b.amount) -> window_expr_output
-                Expr::Column(Column {
-                    relation: None,
-                    name,
-                    spans,
-                }) if name.as_str() == aggr_expr_name.as_str() => {
-                    let alias = Alias {
-                        expr: Box::new(Expr::Column(Column {
+            for expr in projection.expr.iter() {
+                // Check each aggregate expression
+                let mut matched = false;
+                for (aggr_idx, aggr_expr) in aggregate.aggr_expr.iter().enumerate() {
+                    let aggr_expr_name = aggr_expr.name_for_alias()?;
+                    let window_expr_name =
+                        window.window_expr[aggr_idx].name_for_alias()?;
+
+                    let mapped_expr = match &expr {
+                        // Direct column reference: sum(b.amount) -> window_expr_output
+                        Expr::Column(Column {
                             relation: None,
-                            name: window_expr_name.clone(),
-                            spans: spans.to_owned(),
-                        })),
-                        relation: None,
-                        name: name.to_owned(),
-                        metadata: None,
-                    };
-                    Expr::Alias(alias)
-                }
-                // Aliased column: sum(b.amount) AS total -> window_expr_output AS total
-                Expr::Alias(alias) => match alias.expr.as_ref() {
-                    Expr::Column(Column {
-                        relation: None,
-                        name,
-                        spans,
-                    }) if name.as_str() == aggr_expr_name.as_str() => {
-                        let alias = Alias {
-                            expr: Box::new(Expr::Column(Column {
+                            name,
+                            spans,
+                        }) if name.as_str() == aggr_expr_name.as_str() => {
+                            matched = true;
+                            let alias = Alias {
+                                expr: Box::new(Expr::Column(Column {
+                                    relation: None,
+                                    name: window_expr_name.clone(),
+                                    spans: spans.to_owned(),
+                                })),
                                 relation: None,
-                                name: window_expr_name.clone(),
-                                spans: spans.to_owned(),
-                            })),
-                            relation: None,
-                            name: alias.name.to_owned(),
-                            metadata: None,
-                        };
-                        Expr::Alias(alias)
-                    }
-                    _ => expr,
-                },
-                _ => expr,
-            })
-            .map(|expr| {
-                // Apply any table alias renaming (e.g., b -> a)
-                if let Some(renamed_alias) = &renamed_alias {
-                    renamed_alias.rewrite_expression(expr).unwrap().data
-                } else {
-                    expr
-                }
-            })
-            .collect::<Vec<_>>();
-        *renamed = renamed_alias;
+                                name: name.to_owned(),
+                                metadata: None,
+                            };
+                            Expr::Alias(alias)
+                        }
+                        // Aliased column: sum(b.amount) AS total -> window_expr_output AS total
+                        Expr::Alias(alias) => match alias.expr.as_ref() {
+                            Expr::Column(Column {
+                                relation: None,
+                                name,
+                                spans,
+                            }) if name.as_str() == aggr_expr_name.as_str() => {
+                                matched = true;
+                                let alias = Alias {
+                                    expr: Box::new(Expr::Column(Column {
+                                        relation: None,
+                                        name: window_expr_name.clone(),
+                                        spans: spans.to_owned(),
+                                    })),
+                                    relation: None,
+                                    name: alias.name.to_owned(),
+                                    metadata: None,
+                                };
+                                Expr::Alias(alias)
+                            }
+                            _ => expr.clone(),
+                        },
+                        _ => expr.clone(),
+                    };
 
-        let window = LogicalPlan::Window(window).into();
-        let projection = Projection::try_new(projection_expr, window)?;
-        Ok(Transformed::yes(LogicalPlan::Projection(projection)))
+                    if matched {
+                        projection_expr.push(mapped_expr);
+                        break;
+                    }
+                }
+
+                if !matched {
+                    projection_expr.push(expr.clone());
+                }
+            }
+
+            // Apply any table alias renaming (e.g., b -> a)
+            if let Some(renamed_alias) = &renamed_alias {
+                projection_expr = projection_expr
+                    .into_iter()
+                    .map(|expr| renamed_alias.rewrite_expression(expr).unwrap().data)
+                    .collect();
+            }
+            *renamed = renamed_alias;
+
+            let window = LogicalPlan::Window(window).into();
+            let projection = Projection::try_new(projection_expr, window)?;
+            Ok(Transformed::yes(LogicalPlan::Projection(projection)))
+        } else {
+            // No projection - return the window directly
+            *renamed = renamed_alias;
+            Ok(Transformed::yes(LogicalPlan::Window(window)))
+        }
     }
 }
 
@@ -514,6 +550,7 @@ fn try_replace_with_window(
     // Step 5: Extract column names from GROUP BY
     // Example: GROUP BY a.user_id, a.purchase_date -> ["user_id", "purchase_date"]
     let mut group_by_names = IndexSet::with_capacity(group_expr.len());
+    let mut group_by_side = None; // Track which side of the join GROUP BY columns come from
     for expr in group_expr {
         match expr {
             Expr::Column(Column { relation, name, .. }) => {
@@ -524,14 +561,43 @@ fn try_replace_with_window(
                         || relation.as_ref() == left.alias
                         || relation.as_ref() == right.alias
                 );
-                // Verify the column exists in at least one of the schemas
-                let exists_in_left =
-                    left_schema.field_with_unqualified_name(name).is_ok();
-                let exists_in_right =
-                    right_schema.field_with_unqualified_name(name).is_ok();
-                if !exists_in_left && !exists_in_right {
+
+                // Determine which side this column belongs to
+                let column_side = if relation.is_none() {
+                    // Unqualified column - ambiguous in self-join
+                    return None;
+                } else if relation.as_ref() == left.alias {
+                    // Column from left side
+                    true
+                } else if relation.as_ref() == right.alias {
+                    // Column from right side
+                    false
+                } else {
+                    // Unknown qualifier
+                    return None;
+                };
+
+                // All GROUP BY columns must come from the same side
+                match group_by_side {
+                    None => group_by_side = Some(column_side),
+                    Some(side) if side != column_side => {
+                        // GROUP BY columns come from different sides - cannot optimize
+                        return None;
+                    }
+                    _ => {} // Same side, continue
+                }
+
+                // Verify the column exists in the appropriate schema
+                let column_exists = if column_side {
+                    left_schema.field_with_unqualified_name(name).is_ok()
+                } else {
+                    right_schema.field_with_unqualified_name(name).is_ok()
+                };
+
+                if !column_exists {
                     return None;
                 }
+
                 group_by_names.insert(name.as_str());
             }
             // If `GROUP BY ...` expression isn't a column reference conservatively
@@ -540,6 +606,11 @@ fn try_replace_with_window(
                 return None;
             }
         }
+    }
+
+    // GROUP BY must be from the left side of the join for this optimization
+    if group_by_side != Some(true) {
+        return None;
     }
 
     // Step 6: Extract column names from JOIN ON
@@ -748,7 +819,9 @@ mod tests {
         col, logical_plan::builder::LogicalTableSource, JoinType, LogicalPlan,
         LogicalPlanBuilder,
     };
+    use datafusion_functions_aggregate::average::avg;
     use datafusion_functions_aggregate::count::count;
+    use datafusion_functions_aggregate::min_max::{max, min};
     use datafusion_functions_aggregate::sum::sum;
 
     fn create_table_scan(alias: Option<&str>, unqiue: bool) -> LogicalPlan {
@@ -1106,8 +1179,8 @@ mod tests {
     }
 
     #[test]
-    fn test_no_elimination_with_multiple_aggregates() -> Result<()> {
-        // Create self join with multiple aggregate expressions
+    fn test_elimination_with_multiple_aggregates() -> Result<()> {
+        // Test that optimization works with multiple aggregate expressions
         let left = create_table_scan(Some("a"), true);
         let right = create_table_scan(Some("b"), true);
 
@@ -1131,22 +1204,30 @@ mod tests {
                 col("a.user_id"),
                 col("a.purchase_date"),
                 col(sum(col("b.amount")).name_for_alias()?),
+                col(count(col("b.amount")).name_for_alias()?),
             ])?
             .build()?;
 
         let optimized = optimize_plan(join_plan)?;
 
-        // Current implementation only supports single aggregate
+        // Verify the join was eliminated and replaced with window function
         match &optimized {
             LogicalPlan::Projection(proj) => {
-                let mut has_join = false;
-                proj.input.apply(|node| {
-                    if matches!(node, LogicalPlan::Join(_)) {
-                        has_join = true;
+                match proj.input.as_ref() {
+                    LogicalPlan::Window(window) => {
+                        // Verify we have 2 window expressions (sum and count)
+                        assert_eq!(
+                            window.window_expr.len(),
+                            2,
+                            "Expected 2 window expressions, got {}",
+                            window.window_expr.len()
+                        );
                     }
-                    Ok(datafusion_common::tree_node::TreeNodeRecursion::Continue)
-                })?;
-                assert!(has_join, "Expected join to remain with multiple aggregates");
+                    _ => panic!(
+                        "Expected Window after optimization, got: {:?}",
+                        proj.input
+                    ),
+                }
             }
             _ => panic!("Expected Projection at top level, got: {optimized:?}"),
         }
@@ -1294,6 +1375,190 @@ mod tests {
                 assert!(
                     has_join,
                     "Expected join to remain without unique constraint on GROUP BY columns"
+                );
+            }
+            _ => panic!("Expected Projection at top level, got: {optimized:?}"),
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_eliminate_self_join_aggregation_without_projection() -> Result<()> {
+        // Test optimization when Aggregate is the top-level node (no Projection)
+        let left = create_table_scan(Some("a"), true);
+        let right = create_table_scan(Some("b"), true);
+
+        let join_filter = col("b.purchase_date").lt_eq(col("a.purchase_date"));
+
+        let join_plan = LogicalPlanBuilder::from(left)
+            .join(
+                right,
+                JoinType::Inner,
+                (vec!["a.user_id"], vec!["b.user_id"]),
+                Some(join_filter),
+            )?
+            .aggregate(
+                vec![col("a.user_id"), col("a.purchase_date")],
+                vec![sum(col("b.amount"))],
+            )?
+            .build()?;
+
+        let optimized = optimize_plan(join_plan)?;
+
+        // Verify the join was eliminated and replaced with window function
+        match &optimized {
+            LogicalPlan::Window(_) => {
+                // Success - join was replaced with window function
+            }
+            _ => panic!("Expected Window at top level, got: {optimized:?}"),
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_eliminate_self_join_with_multiple_aggregates() -> Result<()> {
+        // Test optimization with multiple aggregate functions
+        let left = create_table_scan(Some("a"), true);
+        let right = create_table_scan(Some("b"), true);
+
+        let join_filter = col("b.purchase_date").lt_eq(col("a.purchase_date"));
+
+        let join_plan = LogicalPlanBuilder::from(left)
+            .join(
+                right,
+                JoinType::Inner,
+                (vec!["a.user_id"], vec!["b.user_id"]),
+                Some(join_filter),
+            )?
+            .aggregate(
+                vec![col("a.user_id"), col("a.purchase_date")],
+                vec![
+                    sum(col("b.amount")),
+                    count(col("b.amount")),
+                    max(col("b.amount")),
+                    min(col("b.amount")),
+                ],
+            )?
+            .project(vec![
+                col("a.user_id"),
+                col("a.purchase_date"),
+                col(sum(col("b.amount")).name_for_alias()?).alias("total"),
+                col(count(col("b.amount")).name_for_alias()?).alias("count"),
+                col(max(col("b.amount")).name_for_alias()?).alias("max_amount"),
+                col(min(col("b.amount")).name_for_alias()?).alias("min_amount"),
+            ])?
+            .build()?;
+
+        let optimized = optimize_plan(join_plan)?;
+
+        // Verify the join was eliminated and replaced with window function
+        match &optimized {
+            LogicalPlan::Projection(proj) => {
+                match proj.input.as_ref() {
+                    LogicalPlan::Window(window) => {
+                        // Verify we have 4 window expressions
+                        assert_eq!(
+                            window.window_expr.len(),
+                            4,
+                            "Expected 4 window expressions, got {}",
+                            window.window_expr.len()
+                        );
+                    }
+                    _ => panic!(
+                        "Expected Window after optimization, got: {:?}",
+                        proj.input
+                    ),
+                }
+            }
+            _ => panic!("Expected Projection at top level, got: {optimized:?}"),
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_eliminate_self_join_with_multiple_aggregates_no_projection() -> Result<()> {
+        // Test optimization with multiple aggregate functions and no projection
+        let left = create_table_scan(Some("a"), true);
+        let right = create_table_scan(Some("b"), true);
+
+        let join_filter = col("b.purchase_date").lt_eq(col("a.purchase_date"));
+
+        let join_plan = LogicalPlanBuilder::from(left)
+            .join(
+                right,
+                JoinType::Inner,
+                (vec!["a.user_id"], vec!["b.user_id"]),
+                Some(join_filter),
+            )?
+            .aggregate(
+                vec![col("a.user_id"), col("a.purchase_date")],
+                vec![sum(col("b.amount")), avg(col("b.amount"))],
+            )?
+            .build()?;
+
+        let optimized = optimize_plan(join_plan)?;
+
+        // Verify the join was eliminated and replaced with window function
+        match &optimized {
+            LogicalPlan::Window(window) => {
+                // Verify we have 2 window expressions
+                assert_eq!(
+                    window.window_expr.len(),
+                    2,
+                    "Expected 2 window expressions, got {}",
+                    window.window_expr.len()
+                );
+            }
+            _ => panic!("Expected Window at top level, got: {optimized:?}"),
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_no_elimination_with_group_by_from_different_sides() -> Result<()> {
+        // Test that optimization is NOT applied when GROUP BY columns come from different sides
+        let left = create_table_scan(Some("a"), true);
+        let right = create_table_scan(Some("b"), true);
+
+        let join_filter = col("a.purchase_date").lt_eq(col("b.purchase_date"));
+
+        let join_plan = LogicalPlanBuilder::from(left)
+            .join(
+                right,
+                JoinType::Inner,
+                (vec!["a.user_id"], vec!["b.user_id"]),
+                Some(join_filter),
+            )?
+            .aggregate(
+                vec![col("a.user_id"), col("b.purchase_date")], // GROUP BY from different sides
+                vec![sum(col("b.amount"))],
+            )?
+            .project(vec![
+                col("a.user_id"),
+                col("b.purchase_date"),
+                col(sum(col("b.amount")).name_for_alias()?),
+            ])?
+            .build()?;
+
+        let optimized = optimize_plan(join_plan)?;
+
+        // Verify the join was NOT eliminated
+        match &optimized {
+            LogicalPlan::Projection(proj) => {
+                let mut has_join = false;
+                proj.input.apply(|node| {
+                    if matches!(node, LogicalPlan::Join(_)) {
+                        has_join = true;
+                    }
+                    Ok(datafusion_common::tree_node::TreeNodeRecursion::Continue)
+                })?;
+                assert!(
+                    has_join,
+                    "Expected join to remain when GROUP BY columns come from different sides"
                 );
             }
             _ => panic!("Expected Projection at top level, got: {optimized:?}"),

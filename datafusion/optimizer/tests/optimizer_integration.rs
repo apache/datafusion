@@ -808,10 +808,13 @@ fn eliminate_aggregate_self_join_less_than_different_table() {
     assert_snapshot!(
         plan,
         @r"
-    Projection: a.user_id, a.purchase_date AS purchase_date, sum(amount) PARTITION BY [user_id, purchase_date] ORDER BY [purchase_date ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS sum(b.amount)
-      WindowAggr: windowExpr=[[sum(amount) PARTITION BY [user_id, purchase_date] ORDER BY [purchase_date ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
-        SubqueryAlias: a
-          TableScan: purchases projection=[user_id, purchase_date, amount]
+    Aggregate: groupBy=[[a.user_id, b.purchase_date]], aggr=[[sum(b.amount)]]
+      Projection: a.user_id, b.purchase_date, b.amount
+        Inner Join: a.user_id = b.user_id Filter: a.purchase_date <= b.purchase_date
+          SubqueryAlias: a
+            TableScan: purchases projection=[user_id, purchase_date]
+          SubqueryAlias: b
+            TableScan: purchases projection=[user_id, purchase_date, amount]
     "
     );
 }

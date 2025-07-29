@@ -42,6 +42,62 @@ impl EliminateUniqueKeyedSelfJoin {
     pub fn new() -> Self {
         Self {}
     }
+
+    /// Collect joins that should not be eliminated because they are under
+    /// projections that reference columns from both sides
+    fn collect_protected_joins(
+        plan: &LogicalPlan,
+        protected_joins: &mut std::collections::HashSet<String>,
+    ) {
+        plan.apply(|node| {
+            if let LogicalPlan::Projection(projection) = node {
+                if let LogicalPlan::Join(join) = projection.input.as_ref() {
+                    if join.join_type == JoinType::Inner
+                        && projection_references_both_sides(&projection.expr, join)
+                    {
+                        // Create a unique identifier for this join based on its structure
+                        let join_id = Self::create_join_identifier(join);
+                        protected_joins.insert(join_id);
+                    }
+                }
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })
+        .ok();
+    }
+
+    /// Check if a join is protected (should not be eliminated)
+    fn is_join_protected(
+        join: &Join,
+        protected_joins: &std::collections::HashSet<String>,
+    ) -> bool {
+        let join_id = Self::create_join_identifier(join);
+        protected_joins.contains(&join_id)
+    }
+
+    /// Create a unique identifier for a join based on its structure
+    fn create_join_identifier(join: &Join) -> String {
+        let on_str = join
+            .on
+            .iter()
+            .map(|(l, r)| format!("{l:?}={r:?}"))
+            .collect::<Vec<_>>()
+            .join(",");
+
+        let filter_str = join
+            .filter
+            .as_ref()
+            .map(|f| format!("{f:?}"))
+            .unwrap_or_default();
+
+        format!(
+            "{}|{}|{}|{}",
+            join.left.display_indent(),
+            join.right.display_indent(),
+            on_str,
+            filter_str
+        )
+    }
 }
 
 impl OptimizerRule for EliminateUniqueKeyedSelfJoin {
@@ -62,6 +118,11 @@ impl OptimizerRule for EliminateUniqueKeyedSelfJoin {
         plan: LogicalPlan,
         _: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
+        // First, collect information about which joins should not be eliminated
+        // because they are under projections that reference both sides
+        let mut protected_joins = std::collections::HashSet::new();
+        Self::collect_protected_joins(&plan, &mut protected_joins);
+
         let mut renamed = None;
         let Transformed {
             data: plan,
@@ -69,39 +130,77 @@ impl OptimizerRule for EliminateUniqueKeyedSelfJoin {
             ..
         } = plan
             .transform_up(|plan| {
-                let projection = match &plan {
-                    LogicalPlan::Projection(projection) => projection,
-                    _ => return Ok(Transformed::no(plan)),
-                };
-                let join = match projection.input.as_ref() {
-                    LogicalPlan::Join(join) if join.join_type == JoinType::Inner => join,
-                    _ => return Ok(Transformed::no(plan)),
-                };
-                // If we reach here, it means we can eliminate the self join
-                if let Some(OptimizationResult {
-                    plan,
-                    renamed_alias,
-                }) = try_eliminate_unique_keyed_self_join(join)
-                {
-                    let projection_expr = projection
-                        .expr
-                        .iter()
-                        .cloned()
-                        .map(|expr| {
-                            if let Some(renamed_alias) = &renamed_alias {
-                                renamed_alias.rewrite_expression(expr).unwrap().data
-                            } else {
-                                expr
-                            }
-                        })
-                        .collect::<Vec<_>>();
-                    renamed = renamed_alias;
+                match &plan {
+                    LogicalPlan::Projection(projection) => {
+                        // Handle Projection -> Join pattern
+                        match projection.input.as_ref() {
+                            LogicalPlan::Join(join)
+                                if join.join_type == JoinType::Inner =>
+                            {
+                                // Check if projection references columns from both sides of the join
+                                // If it does, we cannot eliminate the join
+                                if projection_references_both_sides(
+                                    &projection.expr,
+                                    join,
+                                ) {
+                                    return Ok(Transformed::no(plan));
+                                }
 
-                    let plan = Projection::try_new(projection_expr, plan.into()).unwrap();
-                    let plan = LogicalPlan::Projection(plan);
-                    Ok(Transformed::yes(plan))
-                } else {
-                    Ok(Transformed::no(plan))
+                                if let Some(OptimizationResult {
+                                    plan: optimized,
+                                    renamed_alias,
+                                }) = try_eliminate_unique_keyed_self_join(join)
+                                {
+                                    let projection_expr = projection
+                                        .expr
+                                        .iter()
+                                        .cloned()
+                                        .map(|expr| {
+                                            if let Some(renamed_alias) = &renamed_alias {
+                                                renamed_alias
+                                                    .rewrite_expression(expr)
+                                                    .unwrap()
+                                                    .data
+                                            } else {
+                                                expr
+                                            }
+                                        })
+                                        .collect::<Vec<_>>();
+                                    renamed = renamed_alias;
+
+                                    let plan = Projection::try_new(
+                                        projection_expr,
+                                        optimized.into(),
+                                    )
+                                    .unwrap();
+                                    let plan = LogicalPlan::Projection(plan);
+                                    Ok(Transformed::yes(plan))
+                                } else {
+                                    Ok(Transformed::no(plan))
+                                }
+                            }
+                            _ => Ok(Transformed::no(plan)),
+                        }
+                    }
+                    LogicalPlan::Join(join) if join.join_type == JoinType::Inner => {
+                        // Handle bare Join (no projection directly above)
+                        // Check if this join is protected
+                        if Self::is_join_protected(join, &protected_joins) {
+                            return Ok(Transformed::no(plan));
+                        }
+
+                        if let Some(OptimizationResult {
+                            plan: optimized,
+                            renamed_alias,
+                        }) = try_eliminate_unique_keyed_self_join(join)
+                        {
+                            renamed = renamed_alias;
+                            Ok(Transformed::yes(optimized))
+                        } else {
+                            Ok(Transformed::no(plan))
+                        }
+                    }
+                    _ => Ok(Transformed::no(plan)),
                 }
             })
             .unwrap();
@@ -274,21 +373,146 @@ fn try_resolve_to_table_scan_alias(branch: &LogicalPlan) -> Option<Resolution> {
     })
 }
 
-fn try_eliminate_unique_keyed_self_join(join: &Join) -> Option<OptimizationResult> {
-    let left_schema = join.left.schema().as_ref();
-    let right_schema = join.right.schema().as_ref();
+/// Extract the top-level alias from a logical plan branch
+fn extract_top_alias(plan: &LogicalPlan) -> Option<TableReference> {
+    match plan {
+        LogicalPlan::SubqueryAlias(SubqueryAlias { alias, .. }) => Some(alias.clone()),
+        LogicalPlan::TableScan(scan) => Some(scan.table_name.clone()),
+        _ => None,
+    }
+}
 
-    // Ensure LHS and RHS have the same schema
-    if left_schema.inner() != right_schema.inner()
-        || left_schema.functional_dependencies() != right_schema.functional_dependencies()
-    {
+/// Check if projection references columns from both sides of the join
+/// Returns true if columns from both left and right sides are referenced
+/// Special handling: If only join columns are selected from both sides and at least one is aliased,
+/// we can still optimize
+fn projection_references_both_sides(exprs: &[Expr], join: &Join) -> bool {
+    // Extract top-level aliases from join sides
+    let left_alias = extract_top_alias(&join.left);
+    let right_alias = extract_top_alias(&join.right);
+
+    // If we can't determine aliases, be conservative and don't optimize
+    let (left_alias, right_alias) = match (left_alias, right_alias) {
+        (Some(l), Some(r)) => (l, r),
+        _ => return false,
+    };
+
+    // Extract join column names
+    let mut join_columns = std::collections::HashSet::new();
+    for (left_expr, right_expr) in &join.on {
+        if let (Expr::Column(left_col), Expr::Column(right_col)) = (left_expr, right_expr)
+        {
+            // Join columns should have the same name in a self-join
+            if left_col.name == right_col.name {
+                join_columns.insert(left_col.name.clone());
+            }
+        }
+    }
+
+    let mut left_cols = Vec::new();
+    let mut right_cols = Vec::new();
+    let mut has_aliased_join_col = false;
+
+    for expr in exprs {
+        match expr {
+            // Check for aliased expressions
+            Expr::Alias(alias) => {
+                if let Expr::Column(col) = alias.expr.as_ref() {
+                    if let Some(relation) = &col.relation {
+                        if relation == &left_alias {
+                            left_cols.push((col.name.clone(), true)); // true = aliased
+                            if join_columns.contains(&col.name) {
+                                has_aliased_join_col = true;
+                            }
+                        } else if relation == &right_alias {
+                            right_cols.push((col.name.clone(), true)); // true = aliased
+                            if join_columns.contains(&col.name) {
+                                has_aliased_join_col = true;
+                            }
+                        }
+                    }
+                }
+            }
+            // Check for non-aliased columns
+            Expr::Column(col) => {
+                if let Some(relation) = &col.relation {
+                    if relation == &left_alias {
+                        left_cols.push((col.name.clone(), false)); // false = not aliased
+                    } else if relation == &right_alias {
+                        right_cols.push((col.name.clone(), false)); // false = not aliased
+                    }
+                }
+            }
+            _ => {
+                // For other expressions, check recursively
+                expr.apply(|e| {
+                    if let Expr::Column(col) = e {
+                        if let Some(relation) = &col.relation {
+                            if relation == &left_alias {
+                                left_cols.push((col.name.clone(), false));
+                            } else if relation == &right_alias {
+                                right_cols.push((col.name.clone(), false));
+                            }
+                        }
+                    }
+                    Ok(TreeNodeRecursion::Continue)
+                })
+                .ok();
+            }
+        }
+    }
+
+    // If no columns from both sides, we can optimize
+    if left_cols.is_empty() || right_cols.is_empty() {
+        return false;
+    }
+
+    // Check if we're only selecting join columns from both sides
+    let left_col_names: std::collections::HashSet<_> =
+        left_cols.iter().map(|(name, _)| name.clone()).collect();
+    let right_col_names: std::collections::HashSet<_> =
+        right_cols.iter().map(|(name, _)| name.clone()).collect();
+
+    // Find columns that are selected from both sides
+    let both_sides_cols: std::collections::HashSet<_> = left_col_names
+        .intersection(&right_col_names)
+        .cloned()
+        .collect();
+
+    // If all columns selected from both sides are join columns
+    let all_are_join_cols = both_sides_cols.iter().all(|col| join_columns.contains(col));
+
+    if all_are_join_cols && !both_sides_cols.is_empty() {
+        // Special case: if we're selecting the same join columns from both sides
+        // and at least one is aliased, we can optimize
+        if has_aliased_join_col {
+            return false; // Allow optimization
+        }
+        // If none are aliased (e.g., SELECT a.id, b.id), don't optimize
+        return true;
+    }
+
+    // Default case: if selecting from both sides, don't optimize
+    true
+}
+
+fn try_eliminate_unique_keyed_self_join(join: &Join) -> Option<OptimizationResult> {
+    // Cannot eliminate joins with additional filter conditions
+    // These filters change the semantics of the join beyond simple equality
+    if join.filter.is_some() {
         return None;
     }
 
+    let left_schema = join.left.schema().as_ref();
+    let right_schema = join.right.schema().as_ref();
+
+    // No need for strict schema equality - we only need join columns to match
+    // This allows optimization even when one side has been projected to fewer columns
+
     let left_unique = unique_indexes(left_schema);
-    let right_unique = unique_indexes(right_schema);
-    // If either of the sides doesn't have a unique constraint then elimination is impossible
-    if left_unique.is_empty() || right_unique.is_empty() {
+
+    // For the left side, we need unique constraints
+    if left_unique.is_empty() {
         return None;
     }
 
@@ -301,8 +525,24 @@ fn try_eliminate_unique_keyed_self_join(join: &Join) -> Option<OptimizationResul
         alias: right_alias,
     } = try_resolve_to_table_scan_alias(&join.right)?;
 
+    // Verify both sides reference the same base table
     if !is_table_scan_same(&left_scan, &right_scan) {
         return None;
+    }
+
+    // Verify join columns exist in both schemas and resolve their indexes
+    // This also handles the case where right side might have fewer columns due to projection
+    for on in &join.on {
+        let (left_col, right_col) = match on {
+            (Expr::Column(left_col), Expr::Column(right_col)) => (left_col, right_col),
+            _ => return None,
+        };
+
+        // Verify the columns exist in their respective schemas
+        left_schema
+            .index_of_column_by_name(left_col.relation.as_ref(), left_col.name())?;
+        right_schema
+            .index_of_column_by_name(right_col.relation.as_ref(), right_col.name())?;
     }
 
     let column_index = try_resolve_join_on_columns_to_indexes(
@@ -312,6 +552,8 @@ fn try_eliminate_unique_keyed_self_join(join: &Join) -> Option<OptimizationResul
         left_alias.as_ref(),
         right_alias.as_ref(),
     )?;
+
+    // Check if the join columns form a unique constraint
     let forms_unique_constraint = left_unique
         .iter()
         .any(|unique_constraint| column_index.is_superset(unique_constraint));
@@ -330,19 +572,26 @@ mod tests {
 
     use crate::OptimizerContext;
     use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_common::TableReference;
+    use datafusion_common::{Constraint, Constraints, TableReference};
     use datafusion_expr::{
         col, logical_plan::builder::LogicalTableSource, Expr, JoinType, LogicalPlan,
         LogicalPlanBuilder,
     };
 
     fn create_table_scan(alias: Option<&str>) -> LogicalPlan {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("name", DataType::Utf8, false),
+            Field::new("department", DataType::Utf8, false),
+        ]));
+
+        // Add unique constraint on 'id' column (index 0)
+        let constraints = Constraints::new_unverified(vec![
+            Constraint::PrimaryKey(vec![0]), // id is primary key
+        ]);
+
         let table_source =
-            Arc::new(LogicalTableSource::new(Arc::new(Schema::new(vec![
-                Field::new("id", DataType::Int32, false),
-                Field::new("name", DataType::Utf8, false),
-                Field::new("department", DataType::Utf8, false),
-            ]))));
+            Arc::new(LogicalTableSource::new(schema).with_constraints(constraints));
 
         let mut builder = LogicalPlanBuilder::scan_with_filters(
             TableReference::bare("employees"),
