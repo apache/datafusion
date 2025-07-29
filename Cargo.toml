@@ -175,7 +175,7 @@ sqlparser = { version = "0.55.0", default-features = false, features = ["std", "
 tempfile = "3"
 testcontainers = { version = "0.24", features = ["default"] }
 testcontainers-modules = { version = "0.12" }
-tokio = { version = "1.46", features = ["macros", "rt", "sync"] }
+tokio = { version = "1.47", features = ["macros", "rt", "sync"] }
 url = "2.5.4"
 
 [profile.release]

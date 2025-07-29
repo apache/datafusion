@@ -265,6 +265,7 @@ pub fn bounded_window_exec_with_partition(
         Arc::new(WindowFrame::new(Some(false))),
         schema.as_ref(),
         false,
+        false,
     )
     .unwrap();
 

@@ -41,6 +41,7 @@ impl ExprPlanner for WindowFunctionPlanner {
             order_by,
             window_frame,
             null_treatment,
+            distinct,
         } = raw_expr;
 
         let origin_expr = Expr::from(WindowFunction {
@@ -51,6 +52,7 @@ impl ExprPlanner for WindowFunctionPlanner {
                 order_by,
                 window_frame,
                 null_treatment,
+                distinct,
             },
         });
 
@@ -68,6 +70,7 @@ impl ExprPlanner for WindowFunctionPlanner {
                     order_by,
                     window_frame,
                     null_treatment,
+                    distinct,
                 },
         } = *window_fun;
         let raw_expr = RawWindowExpr {
@@ -77,6 +80,7 @@ impl ExprPlanner for WindowFunctionPlanner {
             order_by,
             window_frame,
             null_treatment,
+            distinct,
         };
 
         // TODO: remove the next line after `Expr::Wildcard` is removed
@@ -93,18 +97,23 @@ impl ExprPlanner for WindowFunctionPlanner {
                 order_by,
                 window_frame,
                 null_treatment,
+                distinct,
             } = raw_expr;
 
-            let new_expr = Expr::from(WindowFunction::new(
+            let mut new_expr_before_build = Expr::from(WindowFunction::new(
                 func_def,
                 vec![Expr::Literal(COUNT_STAR_EXPANSION, None)],
             ))
             .partition_by(partition_by)
             .order_by(order_by)
             .window_frame(window_frame)
-            .null_treatment(null_treatment)
-            .build()?;
+            .null_treatment(null_treatment);
 
+            if distinct {
+                new_expr_before_build = new_expr_before_build.distinct();
+            }
+
+            let new_expr = new_expr_before_build.build()?;
             let new_expr = saved_name.restore(new_expr);
 
             return Ok(PlannerResult::Planned(new_expr));

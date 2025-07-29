@@ -103,21 +103,38 @@ pub fn create_window_expr(
     window_frame: Arc<WindowFrame>,
     input_schema: &Schema,
     ignore_nulls: bool,
+    distinct: bool,
 ) -> Result<Arc<dyn WindowExpr>> {
     Ok(match fun {
         WindowFunctionDefinition::AggregateUDF(fun) => {
-            let aggregate = AggregateExprBuilder::new(Arc::clone(fun), args.to_vec())
-                .schema(Arc::new(input_schema.clone()))
-                .alias(name)
-                .with_ignore_nulls(ignore_nulls)
-                .build()
-                .map(Arc::new)?;
-            window_expr_from_aggregate_expr(
-                partition_by,
-                order_by,
-                window_frame,
-                aggregate,
-            )
+            if distinct {
+                let aggregate = AggregateExprBuilder::new(Arc::clone(fun), args.to_vec())
+                    .schema(Arc::new(input_schema.clone()))
+                    .alias(name)
+                    .with_ignore_nulls(ignore_nulls)
+                    .distinct()
+                    .build()
+                    .map(Arc::new)?;
+                window_expr_from_aggregate_expr(
+                    partition_by,
+                    order_by,
+                    window_frame,
+                    aggregate,
+                )
+            } else {
+                let aggregate = AggregateExprBuilder::new(Arc::clone(fun), args.to_vec())
+                    .schema(Arc::new(input_schema.clone()))
+                    .alias(name)
+                    .with_ignore_nulls(ignore_nulls)
+                    .build()
+                    .map(Arc::new)?;
+                window_expr_from_aggregate_expr(
+                    partition_by,
+                    order_by,
+                    window_frame,
+                    aggregate,
+                )
+            }
         }
         WindowFunctionDefinition::WindowUDF(fun) => Arc::new(StandardWindowExpr::new(
             create_udwf_window_expr(fun, args, input_schema, name, ignore_nulls)?,
@@ -804,6 +821,7 @@ mod tests {
                 &[],
                 Arc::new(WindowFrame::new(None)),
                 schema.as_ref(),
+                false,
                 false,
             )?],
             blocking_exec,
