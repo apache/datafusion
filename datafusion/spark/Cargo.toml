@@ -37,6 +37,7 @@ name = "datafusion_spark"
 
 [dependencies]
 arrow = { workspace = true }
+chrono = { workspace = true }
 datafusion-catalog = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-execution = { workspace = true }
@@ -44,3 +45,11 @@ datafusion-expr = { workspace = true }
 datafusion-functions = { workspace = true, features = ["crypto_expressions"] }
 datafusion-macros = { workspace = true }
 log = { workspace = true }
+
+[dev-dependencies]
+criterion = { workspace = true }
+rand = { workspace = true }
+
+[[bench]]
+harness = false
+name = "char"

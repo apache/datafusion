@@ -21,7 +21,7 @@ use crate::async_udf::AsyncScalarUDF;
 use crate::expr::schema_name_from_exprs_comma_separated_without_space;
 use crate::simplify::{ExprSimplifyResult, SimplifyInfo};
 use crate::sort_properties::{ExprProperties, SortProperties};
-use crate::{ColumnarValue, Documentation, Expr, Signature};
+use crate::{udf_equals_hash, ColumnarValue, Documentation, Expr, Signature};
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::{not_impl_err, ExprSchema, Result, ScalarValue};
 use datafusion_expr_common::interval_arithmetic::Interval;
@@ -697,26 +697,35 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     /// Return true if this scalar UDF is equal to the other.
     ///
     /// Allows customizing the equality of scalar UDFs.
+    /// *Must* be implemented explicitly if the UDF type has internal state.
     /// Must be consistent with [`Self::hash_value`] and follow the same rules as [`Eq`]:
     ///
     /// - reflexive: `a.equals(a)`;
     /// - symmetric: `a.equals(b)` implies `b.equals(a)`;
     /// - transitive: `a.equals(b)` and `b.equals(c)` implies `a.equals(c)`.
     ///
-    /// By default, compares [`Self::name`] and [`Self::signature`].
+    /// By default, compares type, [`Self::name`], [`Self::aliases`] and [`Self::signature`].
     fn equals(&self, other: &dyn ScalarUDFImpl) -> bool {
-        self.name() == other.name() && self.signature() == other.signature()
+        self.as_any().type_id() == other.as_any().type_id()
+            && self.name() == other.name()
+            && self.aliases() == other.aliases()
+            && self.signature() == other.signature()
     }
 
     /// Returns a hash value for this scalar UDF.
     ///
-    /// Allows customizing the hash code of scalar UDFs. Similarly to [`Hash`] and [`Eq`],
-    /// if [`Self::equals`] returns true for two UDFs, their `hash_value`s must be the same.
+    /// Allows customizing the hash code of scalar UDFs.
+    /// *Must* be implemented explicitly whenever [`Self::equals`] is implemented.
     ///
-    /// By default, hashes [`Self::name`] and [`Self::signature`].
+    /// Similarly to [`Hash`] and [`Eq`], if [`Self::equals`] returns true for two UDFs,
+    /// their `hash_value`s must be the same.
+    ///
+    /// By default, it is consistent with default implementation of [`Self::equals`].
     fn hash_value(&self) -> u64 {
         let hasher = &mut DefaultHasher::new();
+        self.as_any().type_id().hash(hasher);
         self.name().hash(hasher);
+        self.aliases().hash(hasher);
         self.signature().hash(hasher);
         hasher.finish()
     }
@@ -736,6 +745,21 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
 struct AliasedScalarUDFImpl {
     inner: Arc<dyn ScalarUDFImpl>,
     aliases: Vec<String>,
+}
+
+impl PartialEq for AliasedScalarUDFImpl {
+    fn eq(&self, other: &Self) -> bool {
+        let Self { inner, aliases } = self;
+        inner.equals(other.inner.as_ref()) && aliases == &other.aliases
+    }
+}
+
+impl Hash for AliasedScalarUDFImpl {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        let Self { inner, aliases } = self;
+        inner.hash_value().hash(state);
+        aliases.hash(state);
+    }
 }
 
 impl AliasedScalarUDFImpl {
@@ -822,20 +846,7 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
         self.inner.coerce_types(arg_types)
     }
 
-    fn equals(&self, other: &dyn ScalarUDFImpl) -> bool {
-        if let Some(other) = other.as_any().downcast_ref::<AliasedScalarUDFImpl>() {
-            self.inner.equals(other.inner.as_ref()) && self.aliases == other.aliases
-        } else {
-            false
-        }
-    }
-
-    fn hash_value(&self) -> u64 {
-        let hasher = &mut DefaultHasher::new();
-        self.inner.hash_value().hash(hasher);
-        self.aliases.hash(hasher);
-        hasher.finish()
-    }
+    udf_equals_hash!(ScalarUDFImpl);
 
     fn documentation(&self) -> Option<&Documentation> {
         self.inner.documentation()

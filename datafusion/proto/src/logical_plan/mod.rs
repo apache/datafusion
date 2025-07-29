@@ -35,6 +35,7 @@ use crate::{
 use crate::protobuf::{proto_error, ToProtoError};
 use arrow::datatypes::{DataType, Schema, SchemaBuilder, SchemaRef};
 use datafusion::datasource::cte_worktable::CteWorkTable;
+use datafusion::datasource::file_format::arrow::ArrowFormat;
 #[cfg(feature = "avro")]
 use datafusion::datasource::file_format::avro::AvroFormat;
 #[cfg(feature = "parquet")]
@@ -71,8 +72,7 @@ use datafusion_expr::{
     Statement, WindowUDF,
 };
 use datafusion_expr::{
-    AggregateUDF, ColumnUnnestList, DmlStatement, FetchType, RecursiveQuery, SkipType,
-    TableSource, Unnest,
+    AggregateUDF, DmlStatement, FetchType, RecursiveQuery, SkipType, TableSource, Unnest,
 };
 
 use self::to_proto::{serialize_expr, serialize_exprs};
@@ -440,12 +440,15 @@ impl AsLogicalPlan for LogicalPlanNode {
                         }
                         #[cfg_attr(not(feature = "avro"), allow(unused_variables))]
                         FileFormatType::Avro(..) => {
-                            #[cfg(feature = "avro")] 
+                            #[cfg(feature = "avro")]
                             {
                                 Arc::new(AvroFormat)
                             }
                             #[cfg(not(feature = "avro"))]
                             panic!("Unable to process avro file since `avro` feature is not enabled");
+                        }
+                        FileFormatType::Arrow(..) => {
+                            Arc::new(ArrowFormat)
                         }
                     };
 
@@ -905,51 +908,24 @@ impl AsLogicalPlan for LogicalPlanNode {
                     extension_codec.try_decode_file_format(&copy.file_type, ctx)?,
                 );
 
-                Ok(LogicalPlan::Copy(dml::CopyTo {
-                    input: Arc::new(input),
-                    output_url: copy.output_url.clone(),
-                    partition_by: copy.partition_by.clone(),
+                Ok(LogicalPlan::Copy(dml::CopyTo::new(
+                    Arc::new(input),
+                    copy.output_url.clone(),
+                    copy.partition_by.clone(),
                     file_type,
-                    options: Default::default(),
-                }))
+                    Default::default(),
+                )))
             }
             LogicalPlanType::Unnest(unnest) => {
                 let input: LogicalPlan =
                     into_logical_plan!(unnest.input, ctx, extension_codec)?;
-                Ok(LogicalPlan::Unnest(Unnest {
-                    input: Arc::new(input),
-                    exec_columns: unnest.exec_columns.iter().map(|c| c.into()).collect(),
-                    list_type_columns: unnest
-                        .list_type_columns
-                        .iter()
-                        .map(|c| {
-                            let recursion_item = c.recursion.as_ref().unwrap();
-                            (
-                                c.input_index as _,
-                                ColumnUnnestList {
-                                    output_column: recursion_item
-                                        .output_column
-                                        .as_ref()
-                                        .unwrap()
-                                        .into(),
-                                    depth: recursion_item.depth as _,
-                                },
-                            )
-                        })
-                        .collect(),
-                    struct_type_columns: unnest
-                        .struct_type_columns
-                        .iter()
-                        .map(|c| *c as usize)
-                        .collect(),
-                    dependency_indices: unnest
-                        .dependency_indices
-                        .iter()
-                        .map(|c| *c as usize)
-                        .collect(),
-                    schema: Arc::new(convert_required!(unnest.schema)?),
-                    options: into_required!(unnest.options)?,
-                }))
+
+                LogicalPlanBuilder::from(input)
+                    .unnest_columns_with_options(
+                        unnest.exec_columns.iter().map(|c| c.into()).collect(),
+                        into_required!(unnest.options)?,
+                    )?
+                    .build()
             }
             LogicalPlanType::RecursiveQuery(recursive_query_node) => {
                 let static_term = recursive_query_node
@@ -1085,13 +1061,18 @@ impl AsLogicalPlan for LogicalPlanNode {
                                 Some(FileFormatType::Avro(protobuf::AvroFormat {}))
                         }
 
+                        if any.is::<ArrowFormat>() {
+                            maybe_some_type =
+                                Some(FileFormatType::Arrow(protobuf::ArrowFormat {}))
+                        }
+
                         if let Some(file_format_type) = maybe_some_type {
                             file_format_type
                         } else {
                             return Err(proto_error(format!(
-                            "Error converting file format, {:?} is invalid as a datafusion format.",
-                            listing_table.options().format
-                        )));
+                                "Error deserializing unknown file format: {:?}",
+                                listing_table.options().format
+                            )));
                         }
                     };
 

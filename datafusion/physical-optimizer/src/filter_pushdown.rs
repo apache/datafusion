@@ -15,6 +15,22 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Filter Pushdown Optimization Process
+//!
+//! The filter pushdown mechanism involves four key steps:
+//! 1. **Optimizer Asks Parent for a Filter Pushdown Plan**: The optimizer calls [`ExecutionPlan::gather_filters_for_pushdown`]
+//!    on the parent node, passing in parent predicates and phase. The parent node creates a [`FilterDescription`]
+//!    by inspecting its logic and children's schemas, determining which filters can be pushed to each child.
+//! 2. **Optimizer Executes Pushdown**: The optimizer recursively calls `push_down_filters` in this module on each child,
+//!    passing the appropriate filters (`Vec<Arc<dyn PhysicalExpr>>`) for that child.
+//! 3. **Optimizer Gathers Results**: The optimizer collects [`FilterPushdownPropagation`] results from children,
+//!    containing information about which filters were successfully pushed down vs. unsupported.
+//! 4. **Parent Responds**: The optimizer calls [`ExecutionPlan::handle_child_pushdown_result`] on the parent,
+//!    passing a [`ChildPushdownResult`] containing the aggregated pushdown outcomes. The parent decides
+//!    how to handle filters that couldn't be pushed down (e.g., keep them as FilterExec nodes).
+//!
+//! [`FilterDescription`]: datafusion_physical_plan::filter_pushdown::FilterDescription
+
 use std::sync::Arc;
 
 use crate::PhysicalOptimizerRule;
@@ -22,12 +38,12 @@ use crate::PhysicalOptimizerRule;
 use datafusion_common::{config::ConfigOptions, Result};
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_plan::filter_pushdown::{
-    ChildPushdownResult, FilterPushdownPhase, FilterPushdownPropagation,
-    PredicateSupport, PredicateSupports,
+    ChildFilterPushdownResult, ChildPushdownResult, FilterPushdownPhase,
+    FilterPushdownPropagation, PushedDown,
 };
 use datafusion_physical_plan::{with_new_children_if_necessary, ExecutionPlan};
 
-use itertools::izip;
+use itertools::{izip, Itertools};
 
 /// Attempts to recursively push given filters from the top of the tree into leafs.
 ///
@@ -419,24 +435,14 @@ impl PhysicalOptimizerRule for FilterPushdown {
     }
 }
 
-/// Support state of each predicate for the children of the node.
-/// These predicates are coming from the parent node.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ParentPredicateStates {
-    NoChildren,
-    Unsupported,
-    Supported,
-}
-
 fn push_down_filters(
     node: Arc<dyn ExecutionPlan>,
     parent_predicates: Vec<Arc<dyn PhysicalExpr>>,
     config: &ConfigOptions,
     phase: FilterPushdownPhase,
 ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
-    // If the node has any child, these will be rewritten as supported or unsupported
-    let mut parent_predicates_pushdown_states =
-        vec![ParentPredicateStates::NoChildren; parent_predicates.len()];
+    let mut parent_filter_pushdown_supports: Vec<Vec<PushedDown>> =
+        vec![vec![]; parent_predicates.len()];
     let mut self_filters_pushdown_supports = vec![];
     let mut new_children = Vec::with_capacity(node.children().len());
 
@@ -444,44 +450,65 @@ fn push_down_filters(
     let filter_description =
         node.gather_filters_for_pushdown(phase, parent_predicates.clone(), config)?;
 
-    for (child, parent_filters, self_filters) in izip!(
+    let filter_description_parent_filters = filter_description.parent_filters();
+    let filter_description_self_filters = filter_description.self_filters();
+    if filter_description_parent_filters.len() != children.len() {
+        return Err(datafusion_common::DataFusionError::Internal(
+            format!(
+                "Filter pushdown expected FilterDescription to have parent filters for {expected_num_children}, but got {actual_num_children} for node {node_name}",
+                expected_num_children = children.len(),
+                actual_num_children = filter_description_parent_filters.len(),
+                node_name = node.name(),
+            ),
+        ));
+    }
+    if filter_description_self_filters.len() != children.len() {
+        return Err(datafusion_common::DataFusionError::Internal(
+            format!(
+                "Filter pushdown expected FilterDescription to have self filters for {expected_num_children}, but got {actual_num_children} for node {node_name}",
+                expected_num_children = children.len(),
+                actual_num_children = filter_description_self_filters.len(),
+                node_name = node.name(),
+            ),
+        ));
+    }
+
+    for (child_idx, (child, parent_filters, self_filters)) in izip!(
         children,
         filter_description.parent_filters(),
         filter_description.self_filters()
-    ) {
+    )
+    .enumerate()
+    {
         // Here, `parent_filters` are the predicates which are provided by the parent node of
         // the current node, and tried to be pushed down over the child which the loop points
         // currently. `self_filters` are the predicates which are provided by the current node,
         // and tried to be pushed down over the child similarly.
 
         let num_self_filters = self_filters.len();
-        let mut parent_supported_predicate_indices = vec![];
-        let mut all_predicates = self_filters;
+        let mut all_predicates = self_filters.clone();
+
+        // Track which parent filters are supported for this child
+        let mut parent_filter_indices = vec![];
 
         // Iterate over each predicate coming from the parent
-        for (idx, filter) in parent_filters.into_iter().enumerate() {
+        for (parent_filter_idx, filter) in parent_filters.into_iter().enumerate() {
             // Check if we can push this filter down to our child.
             // These supports are defined in `gather_filters_for_pushdown()`
-            match filter {
-                PredicateSupport::Supported(predicate) => {
+            match filter.discriminant {
+                PushedDown::Yes => {
                     // Queue this filter up for pushdown to this child
-                    all_predicates.push(predicate);
-                    parent_supported_predicate_indices.push(idx);
-                    // Mark this filter as supported by our children if no child has marked it as unsupported
-                    if parent_predicates_pushdown_states[idx]
-                        != ParentPredicateStates::Unsupported
-                    {
-                        parent_predicates_pushdown_states[idx] =
-                            ParentPredicateStates::Supported;
-                    }
+                    all_predicates.push(filter.predicate);
+                    parent_filter_indices.push(parent_filter_idx);
                 }
-                PredicateSupport::Unsupported(_) => {
-                    // Mark as unsupported by our children
-                    parent_predicates_pushdown_states[idx] =
-                        ParentPredicateStates::Unsupported;
+                PushedDown::No => {
+                    // This filter won't be pushed down to this child
+                    // Will be marked as unsupported later in the initialization loop
                 }
             }
         }
+
+        let num_parent_filters = all_predicates.len() - num_self_filters;
 
         // Any filters that could not be pushed down to a child are marked as not-supported to our parents
         let result = push_down_filters(Arc::clone(child), all_predicates, config, phase)?;
@@ -497,64 +524,68 @@ fn push_down_filters(
         // Our child doesn't know the difference between filters that were passed down
         // from our parents and filters that the current node injected. We need to de-entangle
         // this since we do need to distinguish between them.
-        let mut all_filters = result.filters.into_inner();
-        let parent_predicates = all_filters.split_off(num_self_filters);
-        let self_predicates = all_filters;
-        self_filters_pushdown_supports.push(PredicateSupports::new(self_predicates));
+        let mut all_filters = result.filters.into_iter().collect_vec();
+        if all_filters.len() != num_self_filters + num_parent_filters {
+            return Err(datafusion_common::DataFusionError::Internal(
+                format!(
+                    "Filter pushdown did not return the expected number of filters: expected {num_self_filters} self filters and {num_parent_filters} parent filters, but got {num_filters_from_child}. Likely culprit is {child}",
+                    num_self_filters = num_self_filters,
+                    num_parent_filters = num_parent_filters,
+                    num_filters_from_child = all_filters.len(),
+                    child = child.name(),
+                ),
+            ));
+        }
+        let parent_filters = all_filters
+            .split_off(num_self_filters)
+            .into_iter()
+            .collect_vec();
+        self_filters_pushdown_supports.push(
+            all_filters
+                .into_iter()
+                .zip(self_filters)
+                .map(|(s, f)| s.wrap_expression(f))
+                .collect(),
+        );
 
-        for (idx, result) in parent_supported_predicate_indices
-            .iter()
-            .zip(parent_predicates)
+        // Start by marking all parent filters as unsupported for this child
+        for parent_filter_pushdown_support in parent_filter_pushdown_supports.iter_mut() {
+            parent_filter_pushdown_support.push(PushedDown::No);
+            assert_eq!(
+                parent_filter_pushdown_support.len(),
+                child_idx + 1,
+                "Parent filter pushdown supports should have the same length as the number of children"
+            );
+        }
+        // Map results from pushed-down filters back to original parent filter indices
+        for (result_idx, parent_filter_support) in parent_filters.into_iter().enumerate()
         {
-            let current_node_state = match result {
-                PredicateSupport::Supported(_) => ParentPredicateStates::Supported,
-                PredicateSupport::Unsupported(_) => ParentPredicateStates::Unsupported,
-            };
-            match (current_node_state, parent_predicates_pushdown_states[*idx]) {
-                (r, ParentPredicateStates::NoChildren) => {
-                    // If we have no result, use the current state from this child
-                    parent_predicates_pushdown_states[*idx] = r;
-                }
-                (ParentPredicateStates::Supported, ParentPredicateStates::Supported) => {
-                    // If the current child and all previous children are supported,
-                    // the filter continues to support it
-                    parent_predicates_pushdown_states[*idx] =
-                        ParentPredicateStates::Supported;
-                }
-                _ => {
-                    // Either the current child or a previous child marked this filter as unsupported
-                    parent_predicates_pushdown_states[*idx] =
-                        ParentPredicateStates::Unsupported;
-                }
-            }
+            let original_parent_idx = parent_filter_indices[result_idx];
+            parent_filter_pushdown_supports[original_parent_idx][child_idx] =
+                parent_filter_support;
         }
     }
+
     // Re-create this node with new children
     let updated_node = with_new_children_if_necessary(Arc::clone(&node), new_children)?;
-    // Remap the result onto the parent filters as they were given to us.
-    // Any filters that were not pushed down to any children are marked as unsupported.
-    let parent_pushdown_result = PredicateSupports::new(
-        parent_predicates_pushdown_states
-            .into_iter()
-            .zip(parent_predicates)
-            .map(|(state, filter)| match state {
-                ParentPredicateStates::NoChildren => {
-                    PredicateSupport::Unsupported(filter)
-                }
-                ParentPredicateStates::Unsupported => {
-                    PredicateSupport::Unsupported(filter)
-                }
-                ParentPredicateStates::Supported => PredicateSupport::Supported(filter),
-            })
-            .collect(),
-    );
+
     // TODO: by calling `handle_child_pushdown_result` we are assuming that the
     // `ExecutionPlan` implementation will not change the plan itself.
     // Should we have a separate method for dynamic pushdown that does not allow modifying the plan?
     let mut res = updated_node.handle_child_pushdown_result(
         phase,
         ChildPushdownResult {
-            parent_filters: parent_pushdown_result,
+            parent_filters: parent_predicates
+                .into_iter()
+                .enumerate()
+                .map(
+                    |(parent_filter_idx, parent_filter)| ChildFilterPushdownResult {
+                        filter: parent_filter,
+                        child_results: parent_filter_pushdown_supports[parent_filter_idx]
+                            .clone(),
+                    },
+                )
+                .collect(),
             self_filters: self_filters_pushdown_supports,
         },
         config,

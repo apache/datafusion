@@ -37,9 +37,9 @@ backtrace = ["datafusion/backtrace"]
 [dependencies]
 arrow = { workspace = true }
 async-trait = { workspace = true }
-aws-config = "1.8.1"
-aws-credential-types = "1.2.0"
-clap = { version = "4.5.40", features = ["derive", "cargo"] }
+aws-config = "1.8.3"
+aws-credential-types = "1.2.4"
+clap = { version = "4.5.41", features = ["derive", "cargo"] }
 datafusion = { workspace = true, features = [
     "avro",
     "crypto_expressions",
@@ -72,3 +72,5 @@ insta = { workspace = true }
 insta-cmd = "0.6.0"
 predicates = "3.0"
 rstest = { workspace = true }
+testcontainers = { workspace = true }
+testcontainers-modules = { workspace = true, features = ["minio"] }

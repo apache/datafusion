@@ -443,6 +443,21 @@ macro_rules! typed_min_max_string {
     }};
 }
 
+// min/max of two scalar string values with a prefix argument.
+macro_rules! typed_min_max_string_arg {
+    ($VALUE:expr, $DELTA:expr, $SCALAR:ident, $OP:ident, $ARG:expr) => {{
+        ScalarValue::$SCALAR(
+            $ARG,
+            match ($VALUE, $DELTA) {
+                (None, None) => None,
+                (Some(a), None) => Some(a.clone()),
+                (None, Some(b)) => Some(b.clone()),
+                (Some(a), Some(b)) => Some((a).$OP(b).clone()),
+            },
+        )
+    }};
+}
+
 macro_rules! choose_min_max {
     (min) => {
         std::cmp::Ordering::Greater
@@ -545,6 +560,16 @@ macro_rules! min_max {
             }
             (ScalarValue::LargeBinary(lhs), ScalarValue::LargeBinary(rhs)) => {
                 typed_min_max_string!(lhs, rhs, LargeBinary, $OP)
+            }
+            (ScalarValue::FixedSizeBinary(lsize, lhs), ScalarValue::FixedSizeBinary(rsize, rhs)) => {
+                if lsize == rsize {
+                    typed_min_max_string_arg!(lhs, rhs, FixedSizeBinary, $OP, *lsize)
+                }
+                else {
+                    return internal_err!(
+                        "MIN/MAX is not expected to receive FixedSizeBinary of incompatible sizes {:?}",
+                        (lsize, rsize))
+                }
             }
             (ScalarValue::BinaryView(lhs), ScalarValue::BinaryView(rhs)) => {
                 typed_min_max_string!(lhs, rhs, BinaryView, $OP)

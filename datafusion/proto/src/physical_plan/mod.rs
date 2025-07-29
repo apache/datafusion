@@ -39,7 +39,7 @@ use crate::protobuf::{
 use crate::{convert_required, into_required};
 
 use datafusion::arrow::compute::SortOptions;
-use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::arrow::datatypes::{Schema, SchemaRef};
 use datafusion::datasource::file_format::csv::CsvSink;
 use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
 use datafusion::datasource::file_format::json::JsonSink;
@@ -611,24 +611,6 @@ impl protobuf::PhysicalPlanNode {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let input: Arc<dyn ExecutionPlan> =
             into_physical_plan(&filter.input, registry, runtime, extension_codec)?;
-        let predicate = filter
-            .expr
-            .as_ref()
-            .map(|expr| {
-                parse_physical_expr(
-                    expr,
-                    registry,
-                    input.schema().as_ref(),
-                    extension_codec,
-                )
-            })
-            .transpose()?
-            .ok_or_else(|| {
-                DataFusionError::Internal(
-                    "filter (FilterExecNode) in PhysicalPlanNode is missing.".to_owned(),
-                )
-            })?;
-        let filter_selectivity = filter.default_filter_selectivity.try_into();
         let projection = if !filter.projection.is_empty() {
             Some(
                 filter
@@ -640,6 +622,37 @@ impl protobuf::PhysicalPlanNode {
         } else {
             None
         };
+
+        // Use the projected schema if projection is present, otherwise use the full schema
+        let predicate_schema = if let Some(ref proj_indices) = projection {
+            // Create projected schema for parsing the predicate
+            let projected_fields: Vec<_> = proj_indices
+                .iter()
+                .map(|&i| input.schema().field(i).clone())
+                .collect();
+            Arc::new(Schema::new(projected_fields))
+        } else {
+            input.schema()
+        };
+
+        let predicate = filter
+            .expr
+            .as_ref()
+            .map(|expr| {
+                parse_physical_expr(
+                    expr,
+                    registry,
+                    predicate_schema.as_ref(),
+                    extension_codec,
+                )
+            })
+            .transpose()?
+            .ok_or_else(|| {
+                DataFusionError::Internal(
+                    "filter (FilterExecNode) in PhysicalPlanNode is missing.".to_owned(),
+                )
+            })?;
+        let filter_selectivity = filter.default_filter_selectivity.try_into();
         let filter =
             FilterExec::try_new(predicate, input)?.with_projection(projection)?;
         match filter_selectivity {
@@ -727,11 +740,31 @@ impl protobuf::PhysicalPlanNode {
         {
             let schema =
                 parse_protobuf_file_scan_schema(scan.base_conf.as_ref().unwrap())?;
+
+            // Check if there's a projection and use projected schema for predicate parsing
+            let base_conf = scan.base_conf.as_ref().unwrap();
+            let predicate_schema = if !base_conf.projection.is_empty() {
+                // Create projected schema for parsing the predicate
+                let projected_fields: Vec<_> = base_conf
+                    .projection
+                    .iter()
+                    .map(|&i| schema.field(i as usize).clone())
+                    .collect();
+                Arc::new(Schema::new(projected_fields))
+            } else {
+                schema
+            };
+
             let predicate = scan
                 .predicate
                 .as_ref()
                 .map(|expr| {
-                    parse_physical_expr(expr, registry, schema.as_ref(), extension_codec)
+                    parse_physical_expr(
+                        expr,
+                        registry,
+                        predicate_schema.as_ref(),
+                        extension_codec,
+                    )
                 })
                 .transpose()?;
             let mut options = TableParquetOptions::default();
@@ -745,7 +778,7 @@ impl protobuf::PhysicalPlanNode {
                 source = source.with_predicate(predicate);
             }
             let base_config = parse_protobuf_file_scan_config(
-                scan.base_conf.as_ref().unwrap(),
+                base_conf,
                 registry,
                 extension_codec,
                 Arc::new(source),
@@ -1075,6 +1108,7 @@ impl protobuf::PhysicalPlanNode {
                                     AggregateExprBuilder::new(agg_udf, input_phy_expr)
                                         .schema(Arc::clone(&physical_schema))
                                         .alias(name)
+                                        .human_display(agg_node.human_display.clone())
                                         .with_ignore_nulls(agg_node.ignore_nulls)
                                         .with_distinct(agg_node.distinct)
                                         .order_by(order_bys)

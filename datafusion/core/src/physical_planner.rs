@@ -505,6 +505,7 @@ impl DefaultPhysicalPlanner {
                 file_type,
                 partition_by,
                 options: source_option_tuples,
+                output_schema: _,
             }) => {
                 let original_url = output_url.clone();
                 let input_exec = children.one()?;
@@ -555,8 +556,15 @@ impl DefaultPhysicalPlanner {
                     file_extension,
                 };
 
+                let ordering = input_exec.properties().output_ordering().cloned();
+
                 sink_format
-                    .create_writer_physical_plan(input_exec, session_state, config, None)
+                    .create_writer_physical_plan(
+                        input_exec,
+                        session_state,
+                        config,
+                        ordering.map(Into::into),
+                    )
                     .await?
             }
             LogicalPlan::Dml(DmlStatement {
@@ -1350,6 +1358,9 @@ impl DefaultPhysicalPlanner {
                     physical_name(expr),
                 ))?])),
             }
+        } else if group_expr.is_empty() {
+            // No GROUP BY clause - create empty PhysicalGroupBy
+            Ok(PhysicalGroupBy::new(vec![], vec![], vec![]))
         } else {
             Ok(PhysicalGroupBy::new_single(
                 group_expr
@@ -1638,6 +1649,7 @@ pub fn create_window_expr_with_name(
                         order_by,
                         window_frame,
                         null_treatment,
+                        distinct,
                     },
             } = window_fun.as_ref();
             let physical_args =
@@ -1666,6 +1678,7 @@ pub fn create_window_expr_with_name(
                 window_frame,
                 physical_schema,
                 ignore_nulls,
+                *distinct,
             )
         }
         other => plan_err!("Invalid window expression '{other:?}'"),
@@ -1848,6 +1861,7 @@ impl DefaultPhysicalPlanner {
                 stringified_plans.push(StringifiedPlan::new(
                     FinalPhysicalPlan,
                     displayable(optimized_plan.as_ref())
+                        .set_tree_maximum_render_width(config.tree_maximum_render_width)
                         .tree_render()
                         .to_string(),
                 ));

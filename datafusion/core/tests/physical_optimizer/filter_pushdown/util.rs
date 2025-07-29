@@ -29,13 +29,13 @@ use datafusion_datasource::{
 use datafusion_physical_expr::conjunction;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
-use datafusion_physical_plan::filter_pushdown::FilterPushdownPhase;
+use datafusion_physical_plan::filter_pushdown::{FilterPushdownPhase, PushedDown};
 use datafusion_physical_plan::{
     displayable,
     filter::FilterExec,
     filter_pushdown::{
-        ChildPushdownResult, FilterDescription, FilterPushdownPropagation,
-        PredicateSupport, PredicateSupports,
+        ChildFilterDescription, ChildPushdownResult, FilterDescription,
+        FilterPushdownPropagation,
     },
     metrics::ExecutionPlanMetricsSet,
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
@@ -227,12 +227,14 @@ impl FileSource for TestSource {
                 predicate: Some(conjunction(filters.clone())),
                 ..self.clone()
             });
-            Ok(FilterPushdownPropagation {
-                filters: PredicateSupports::all_supported(filters),
-                updated_node: Some(new_node),
-            })
+            Ok(FilterPushdownPropagation::with_parent_pushdown_result(
+                vec![PushedDown::Yes; filters.len()],
+            )
+            .with_updated_node(new_node))
         } else {
-            Ok(FilterPushdownPropagation::unsupported(filters))
+            Ok(FilterPushdownPropagation::with_parent_pushdown_result(
+                vec![PushedDown::No; filters.len()],
+            ))
         }
     }
 
@@ -515,9 +517,12 @@ impl ExecutionPlan for TestNode {
         parent_filters: Vec<Arc<dyn PhysicalExpr>>,
         _config: &ConfigOptions,
     ) -> Result<FilterDescription> {
-        Ok(FilterDescription::new_with_child_count(1)
-            .all_parent_filters_supported(parent_filters)
-            .with_self_filter(Arc::clone(&self.predicate)))
+        // Since TestNode marks all parent filters as supported and adds its own filter,
+        // we use from_child to create a description with all parent filters supported
+        let child = &self.input;
+        let child_desc = ChildFilterDescription::from_child(&parent_filters, child)?
+            .with_self_filter(Arc::clone(&self.predicate));
+        Ok(FilterDescription::new().with_child(child_desc))
     }
 
     fn handle_child_pushdown_result(
@@ -534,28 +539,31 @@ impl ExecutionPlan for TestNode {
             let self_pushdown_result = child_pushdown_result.self_filters[0].clone();
             // And pushed down 1 filter
             assert_eq!(self_pushdown_result.len(), 1);
-            let self_pushdown_result = self_pushdown_result.into_inner();
+            let self_pushdown_result: Vec<_> = self_pushdown_result.into_iter().collect();
 
-            match &self_pushdown_result[0] {
-                PredicateSupport::Unsupported(filter) => {
+            let first_pushdown_result = self_pushdown_result[0].clone();
+
+            match &first_pushdown_result.discriminant {
+                PushedDown::No => {
                     // We have a filter to push down
-                    let new_child =
-                        FilterExec::try_new(Arc::clone(filter), Arc::clone(&self.input))?;
+                    let new_child = FilterExec::try_new(
+                        Arc::clone(&first_pushdown_result.predicate),
+                        Arc::clone(&self.input),
+                    )?;
                     let new_self =
                         TestNode::new(false, Arc::new(new_child), self.predicate.clone());
                     let mut res =
-                        FilterPushdownPropagation::transparent(child_pushdown_result);
+                        FilterPushdownPropagation::if_all(child_pushdown_result);
                     res.updated_node = Some(Arc::new(new_self) as Arc<dyn ExecutionPlan>);
                     Ok(res)
                 }
-                PredicateSupport::Supported(_) => {
-                    let res =
-                        FilterPushdownPropagation::transparent(child_pushdown_result);
+                PushedDown::Yes => {
+                    let res = FilterPushdownPropagation::if_all(child_pushdown_result);
                     Ok(res)
                 }
             }
         } else {
-            let res = FilterPushdownPropagation::transparent(child_pushdown_result);
+            let res = FilterPushdownPropagation::if_all(child_pushdown_result);
             Ok(res)
         }
     }

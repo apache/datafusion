@@ -158,7 +158,7 @@ mod tests {
     use object_store::ObjectMeta;
     use object_store::{
         path::Path, GetOptions, GetResult, ListResult, MultipartUpload, ObjectStore,
-        PutMultipartOpts, PutOptions, PutPayload, PutResult,
+        PutMultipartOptions, PutOptions, PutPayload, PutResult,
     };
     use parquet::arrow::arrow_reader::ArrowReaderOptions;
     use parquet::arrow::ParquetRecordBatchStreamBuilder;
@@ -311,7 +311,7 @@ mod tests {
         async fn put_multipart_opts(
             &self,
             _location: &Path,
-            _opts: PutMultipartOpts,
+            _opts: PutMultipartOptions,
         ) -> object_store::Result<Box<dyn MultipartUpload>> {
             Err(object_store::Error::NotImplemented)
         }
@@ -1263,57 +1263,30 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_parquet_write_empty_file() -> Result<()> {
-        // Case 1. write to a single file
-        // Expect: an empty file created
+    async fn test_write_empty_recordbatch_creates_file() -> Result<()> {
+        let empty_record_batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)])),
+            vec![Arc::new(Int32Array::from(Vec::<i32>::new()))],
+        )
+        .expect("Failed to create empty RecordBatch");
+
         let tmp_dir = tempfile::TempDir::new().unwrap();
-        let path = format!("{}/empty.parquet", tmp_dir.path().to_string_lossy());
+        let path = format!("{}/empty2.parquet", tmp_dir.path().to_string_lossy());
 
         let ctx = SessionContext::new();
-
-        let df = ctx.sql("SELECT 1 limit 0").await?;
-
-        let cfg1 =
-            crate::dataframe::DataFrameWriteOptions::new().with_single_file_output(true);
-        let cfg2 = TableParquetOptions::default();
-
-        df.write_parquet(&path, cfg1, Some(cfg2)).await?;
+        let df = ctx.read_batch(empty_record_batch.clone())?;
+        df.write_parquet(&path, crate::dataframe::DataFrameWriteOptions::new(), None)
+            .await?;
         assert!(std::path::Path::new(&path).exists());
 
-        // Case 2. write to a directory without partition columns
-        // Expect: under the directory, an empty file is created
-        let tmp_dir = tempfile::TempDir::new().unwrap();
-        let path = format!("{}", tmp_dir.path().to_string_lossy());
-
-        let cfg1 =
-            crate::dataframe::DataFrameWriteOptions::new().with_single_file_output(true);
-        let cfg2 = TableParquetOptions::default();
-
-        let df = ctx.sql("SELECT 1 limit 0").await?;
-
-        df.write_parquet(&path, cfg1, Some(cfg2)).await?;
-        assert!(std::path::Path::new(&path).exists());
-
-        let files = std::fs::read_dir(&path).unwrap();
-        assert!(files.count() == 1);
-
-        // Case 3. write to a directory with partition columns
-        // Expect: No file is created
-        let tmp_dir = tempfile::TempDir::new().unwrap();
-        let path = format!("{}", tmp_dir.path().to_string_lossy());
-
-        let df = ctx.sql("SELECT 1 as col1, 2 as col2 limit 0").await?;
-
-        let cfg1 = crate::dataframe::DataFrameWriteOptions::new()
-            .with_single_file_output(true)
-            .with_partition_by(vec!["col1".to_string()]);
-        let cfg2 = TableParquetOptions::default();
-
-        df.write_parquet(&path, cfg1, Some(cfg2)).await?;
-
-        assert!(std::path::Path::new(&path).exists());
-        let files = std::fs::read_dir(&path).unwrap();
-        assert!(files.count() == 0);
+        let stream = ctx
+            .read_parquet(&path, ParquetReadOptions::new())
+            .await?
+            .execute_stream()
+            .await?;
+        assert_eq!(stream.schema(), empty_record_batch.schema());
+        let results = stream.collect::<Vec<_>>().await;
+        assert_eq!(results.len(), 0);
         Ok(())
     }
 

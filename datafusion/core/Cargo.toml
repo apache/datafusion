@@ -47,6 +47,7 @@ compression = [
     "bzip2",
     "flate2",
     "zstd",
+    "arrow-ipc/zstd",
     "datafusion-datasource/compression",
 ]
 crypto_expressions = ["datafusion-functions/crypto_expressions"]
@@ -61,6 +62,7 @@ default = [
     "unicode_expressions",
     "compression",
     "parquet",
+    "parquet_encryption",
     "recursive_protection",
 ]
 encoding_expressions = ["datafusion-functions/encoding_expressions"]
@@ -68,6 +70,13 @@ encoding_expressions = ["datafusion-functions/encoding_expressions"]
 force_hash_collisions = ["datafusion-physical-plan/force_hash_collisions", "datafusion-common/force_hash_collisions"]
 math_expressions = ["datafusion-functions/math_expressions"]
 parquet = ["datafusion-common/parquet", "dep:parquet", "datafusion-datasource-parquet"]
+parquet_encryption = [
+    "dep:parquet",
+    "parquet/encryption",
+    "datafusion-common/parquet_encryption",
+    "datafusion-datasource-parquet/parquet_encryption",
+    "dep:hex",
+]
 pyarrow = ["datafusion-common/pyarrow", "parquet"]
 regex_expressions = [
     "datafusion-functions/regex_expressions",
@@ -127,6 +136,7 @@ datafusion-session = { workspace = true }
 datafusion-sql = { workspace = true }
 flate2 = { version = "1.1.2", optional = true }
 futures = { workspace = true }
+hex = { workspace = true, optional = true }
 itertools = { workspace = true }
 log = { workspace = true }
 object_store = { workspace = true }
@@ -162,7 +172,7 @@ rand_distr = "0.5"
 regex = { workspace = true }
 rstest = { workspace = true }
 serde_json = { workspace = true }
-sysinfo = "0.35.2"
+sysinfo = "0.36.1"
 test-utils = { path = "../../test-utils" }
 tokio = { workspace = true, features = ["rt-multi-thread", "parking_lot", "fs"] }
 

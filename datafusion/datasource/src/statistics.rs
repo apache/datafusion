@@ -230,14 +230,7 @@ impl MinMaxStatistics {
                 .zip(sort_columns.iter().copied())
                 .map(|(sort_expr, column)| {
                     let schema = values.schema();
-
                     let idx = schema.index_of(column.name())?;
-                    let field = schema.field(idx);
-
-                    // check that sort columns are non-nullable
-                    if field.is_nullable() {
-                        return plan_err!("cannot sort by nullable column");
-                    }
 
                     Ok(SortColumn {
                         values: Arc::clone(values.column(idx)),

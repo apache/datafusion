@@ -95,27 +95,35 @@ external_aggr:          External aggregation benchmark on TPC-H dataset (SF=1)
 
 # ClickBench Benchmarks
 clickbench_1:           ClickBench queries against a single parquet file
-clickbench_partitioned: ClickBench queries against a partitioned (100 files) parquet
+clickbench_partitioned: ClickBench queries against partitioned (100 files) parquet
+clickbench_pushdown:    ClickBench queries against partitioned (100 files) parquet w/ filter_pushdown enabled
 clickbench_extended:    ClickBench \"inspired\" queries against a single parquet (DataFusion specific)
 
 # H2O.ai Benchmarks (Group By, Join, Window)
-h2o_small:              h2oai benchmark with small dataset (1e7 rows) for groupby,  default file format is csv
-h2o_medium:             h2oai benchmark with medium dataset (1e8 rows) for groupby, default file format is csv
-h2o_big:                h2oai benchmark with large dataset (1e9 rows) for groupby,  default file format is csv
-h2o_small_join:         h2oai benchmark with small dataset (1e7 rows) for join,  default file format is csv
-h2o_medium_join:        h2oai benchmark with medium dataset (1e8 rows) for join, default file format is csv
-h2o_big_join:           h2oai benchmark with large dataset (1e9 rows) for join,  default file format is csv
-h2o_small_window:       Extended h2oai benchmark with small dataset (1e7 rows) for window,  default file format is csv
-h2o_medium_window:      Extended h2oai benchmark with medium dataset (1e8 rows) for window, default file format is csv
-h2o_big_window:         Extended h2oai benchmark with large dataset (1e9 rows) for window,  default file format is csv
+h2o_small:                      h2oai benchmark with small dataset (1e7 rows) for groupby,  default file format is csv
+h2o_medium:                     h2oai benchmark with medium dataset (1e8 rows) for groupby, default file format is csv
+h2o_big:                        h2oai benchmark with large dataset (1e9 rows) for groupby,  default file format is csv
+h2o_small_join:                 h2oai benchmark with small dataset (1e7 rows) for join,  default file format is csv
+h2o_medium_join:                h2oai benchmark with medium dataset (1e8 rows) for join, default file format is csv
+h2o_big_join:                   h2oai benchmark with large dataset (1e9 rows) for join,  default file format is csv
+h2o_small_window:               Extended h2oai benchmark with small dataset (1e7 rows) for window,  default file format is csv
+h2o_medium_window:              Extended h2oai benchmark with medium dataset (1e8 rows) for window, default file format is csv
+h2o_big_window:                 Extended h2oai benchmark with large dataset (1e9 rows) for window,  default file format is csv
+h2o_small_parquet:              h2oai benchmark with small dataset (1e7 rows) for groupby,  file format is parquet
+h2o_medium_parquet:             h2oai benchmark with medium dataset (1e8 rows) for groupby, file format is parquet
+h2o_big_parquet:                h2oai benchmark with large dataset (1e9 rows) for groupby,  file format is parquet
+h2o_small_join_parquet:         h2oai benchmark with small dataset (1e7 rows) for join,  file format is parquet
+h2o_medium_join_parquet:        h2oai benchmark with medium dataset (1e8 rows) for join, file format is parquet
+h2o_big_join_parquet:           h2oai benchmark with large dataset (1e9 rows) for join,  file format is parquet
+h2o_small_window_parquet:       Extended h2oai benchmark with small dataset (1e7 rows) for window,  file format is parquet
+h2o_medium_window_parquet:      Extended h2oai benchmark with medium dataset (1e8 rows) for window, file format is parquet
+h2o_big_window_parquet:         Extended h2oai benchmark with large dataset (1e9 rows) for window,  file format is parquet
 
 # Join Order Benchmark (IMDB)
 imdb:                   Join Order Benchmark (JOB) using the IMDB dataset converted to parquet
 
 # Micro-Benchmarks (specific operators and features)
 cancellation:           How long cancelling a query takes
-parquet:                Benchmark of parquet reader's filtering speed
-sort:                   Benchmark of sorting speed
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Supported Configuration (Environment Variables)
@@ -209,6 +217,9 @@ main() {
                 clickbench_partitioned)
                     data_clickbench_partitioned
                     ;;
+                clickbench_pushdown)
+                    data_clickbench_partitioned # same data as clickbench_partitioned
+                    ;;
                 clickbench_extended)
                     data_clickbench_1
                     ;;
@@ -242,6 +253,34 @@ main() {
                     ;;
                 h2o_big_window)
                     data_h2o_join "BIG" "CSV"
+                    ;;
+                h2o_small_parquet)
+                    data_h2o "SMALL" "PARQUET"
+                    ;;
+                h2o_medium_parquet)
+                    data_h2o "MEDIUM" "PARQUET"
+                    ;;
+                h2o_big_parquet)
+                    data_h2o "BIG" "PARQUET"
+                    ;;
+                h2o_small_join_parquet)
+                    data_h2o_join "SMALL" "PARQUET"
+                    ;;
+                h2o_medium_join_parquet)
+                    data_h2o_join "MEDIUM" "PARQUET"
+                    ;;
+                h2o_big_join_parquet)
+                    data_h2o_join "BIG" "PARQUET"
+                    ;;
+                # h2o window benchmark uses the same data as the h2o join
+                h2o_small_window_parquet)
+                    data_h2o_join "SMALL" "PARQUET"
+                    ;;
+                h2o_medium_window_parquet)
+                    data_h2o_join "MEDIUM" "PARQUET"
+                    ;;
+                h2o_big_window_parquet)
+                    data_h2o_join "BIG" "PARQUET"
                     ;;
                 external_aggr)
                     # same data as for tpch
@@ -303,10 +342,9 @@ main() {
                     run_tpch "10" "csv"
                     run_tpch_mem "10"
                     run_cancellation
-                    run_parquet
-                    run_sort
                     run_clickbench_1
                     run_clickbench_partitioned
+                    run_clickbench_pushdown
                     run_clickbench_extended
                     run_h2o "SMALL" "PARQUET" "groupby"
                     run_h2o "MEDIUM" "PARQUET" "groupby"
@@ -338,17 +376,14 @@ main() {
                 cancellation)
                     run_cancellation
                     ;;
-                parquet)
-                    run_parquet
-                    ;;
-                sort)
-                    run_sort
-                    ;;
                 clickbench_1)
                     run_clickbench_1
                     ;;
                 clickbench_partitioned)
                     run_clickbench_partitioned
+                    ;;
+                clickbench_pushdown)
+                    run_clickbench_pushdown
                     ;;
                 clickbench_extended)
                     run_clickbench_extended
@@ -382,6 +417,34 @@ main() {
                     ;;
                 h2o_big_window) 
                     run_h2o_window "BIG" "CSV" "window"
+                    ;;
+                h2o_small_parquet)
+                    run_h2o "SMALL" "PARQUET"
+                    ;;
+                h2o_medium_parquet)
+                    run_h2o "MEDIUM" "PARQUET"
+                    ;;
+                h2o_big_parquet)
+                    run_h2o "BIG" "PARQUET"
+                    ;;
+                h2o_small_join_parquet)
+                    run_h2o_join "SMALL" "PARQUET"
+                    ;;
+                h2o_medium_join_parquet)
+                    run_h2o_join "MEDIUM" "PARQUET"
+                    ;;
+                h2o_big_join_parquet)
+                    run_h2o_join "BIG" "PARQUET"
+                    ;;
+                # h2o window benchmark uses the same data as the h2o join
+                h2o_small_window_parquet)
+                    run_h2o_window "SMALL" "PARQUET"
+                    ;;
+                h2o_medium_window_parquet)
+                    run_h2o_window "MEDIUM" "PARQUET"
+                    ;;
+                h2o_big_window_parquet)
+                    run_h2o_window "BIG" "PARQUET"
                     ;;
                 external_aggr)
                     run_external_aggr
@@ -528,22 +591,6 @@ run_cancellation() {
     debug_run $CARGO_COMMAND --bin dfbench -- cancellation --iterations 5 --path "${DATA_DIR}/cancellation" -o "${RESULTS_FILE}"
 }
 
-# Runs the parquet filter benchmark
-run_parquet() {
-    RESULTS_FILE="${RESULTS_DIR}/parquet.json"
-    echo "RESULTS_FILE: ${RESULTS_FILE}"
-    echo "Running parquet filter benchmark..."
-    debug_run $CARGO_COMMAND --bin parquet -- filter --path "${DATA_DIR}" --scale-factor 1.0 --iterations 5 -o "${RESULTS_FILE}"
-}
-
-# Runs the sort benchmark
-run_sort() {
-    RESULTS_FILE="${RESULTS_DIR}/sort.json"
-    echo "RESULTS_FILE: ${RESULTS_FILE}"
-    echo "Running sort benchmark..."
-    debug_run $CARGO_COMMAND --bin parquet -- sort --path "${DATA_DIR}" --scale-factor 1.0 --iterations 5 -o "${RESULTS_FILE}"
-}
-
 
 # Downloads the single file hits.parquet ClickBench datasets from
 # https://github.com/ClickHouse/ClickBench/tree/main#data-loading
@@ -598,13 +645,23 @@ run_clickbench_1() {
     debug_run $CARGO_COMMAND --bin dfbench -- clickbench  --iterations 5 --path "${DATA_DIR}/hits.parquet"  --queries-path "${SCRIPT_DIR}/queries/clickbench/queries" -o "${RESULTS_FILE}" ${QUERY_ARG}
 }
 
- # Runs the clickbench benchmark with the partitioned parquet files
+ # Runs the clickbench benchmark with the partitioned parquet dataset (100 files)
 run_clickbench_partitioned() {
     RESULTS_FILE="${RESULTS_DIR}/clickbench_partitioned.json"
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running clickbench (partitioned, 100 files) benchmark..."
     debug_run $CARGO_COMMAND --bin dfbench -- clickbench  --iterations 5 --path "${DATA_DIR}/hits_partitioned" --queries-path "${SCRIPT_DIR}/queries/clickbench/queries" -o "${RESULTS_FILE}" ${QUERY_ARG}
 }
+
+
+ # Runs the clickbench benchmark with the partitioned parquet files and filter_pushdown enabled
+run_clickbench_pushdown() {
+    RESULTS_FILE="${RESULTS_DIR}/clickbench_pushdown.json"
+    echo "RESULTS_FILE: ${RESULTS_FILE}"
+    echo "Running clickbench (partitioned, 100 files) benchmark with pushdown_filters=true, reorder_filters=true..."
+    debug_run $CARGO_COMMAND --bin dfbench -- clickbench --pushdown --iterations 5 --path "${DATA_DIR}/hits_partitioned" --queries-path "${SCRIPT_DIR}/queries/clickbench/queries" -o "${RESULTS_FILE}" ${QUERY_ARG}
+}
+
 
 # Runs the clickbench "extended" benchmark with a single large parquet file
 run_clickbench_extended() {

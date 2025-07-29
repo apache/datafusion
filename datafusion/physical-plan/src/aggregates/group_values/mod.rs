@@ -28,7 +28,7 @@ use datafusion_common::Result;
 
 use datafusion_expr::EmitTo;
 
-pub(crate) mod multi_group_by;
+pub mod multi_group_by;
 
 mod row;
 mod single_group_by;
@@ -84,7 +84,7 @@ mod null_builder;
 /// Each distinct group in a hash aggregation is identified by a unique group id
 /// (usize) which is assigned by instances of this trait. Group ids are
 /// continuous without gaps, starting from 0.
-pub(crate) trait GroupValues: Send {
+pub trait GroupValues: Send {
     /// Calculates the group id for each input row of `cols`, assigning new
     /// group ids as necessary.
     ///
@@ -121,13 +121,15 @@ pub(crate) trait GroupValues: Send {
 ///     will be chosen.
 ///   
 ///   - If group by multiple columns, and all column types have the specific
-///     [`GroupColumn`] implementations, [`GroupValuesColumn`] will be chosen.
+///     `GroupColumn` implementations, `GroupValuesColumn` will be chosen.
 ///
-///   - Otherwise, the general implementation [`GroupValuesRows`] will be chosen.
+///   - Otherwise, the general implementation `GroupValuesRows` will be chosen.
 ///
-/// [`GroupColumn`]:  crate::aggregates::group_values::multi_group_by::GroupColumn
+/// `GroupColumn`:  crate::aggregates::group_values::multi_group_by::GroupColumn
+/// `GroupValuesColumn`: crate::aggregates::group_values::multi_group_by::GroupValuesColumn
+/// `GroupValuesRows`: crate::aggregates::group_values::row::GroupValuesRows
 ///
-pub(crate) fn new_group_values(
+pub fn new_group_values(
     schema: SchemaRef,
     group_ordering: &GroupOrdering,
 ) -> Result<Box<dyn GroupValues>> {
