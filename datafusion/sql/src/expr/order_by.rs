@@ -66,9 +66,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let make_sort_expr =
             |expr: Expr, asc: Option<bool>, nulls_first: Option<bool>| {
                 let asc = asc.unwrap_or(true);
-                // When asc is true, by default nulls last to be consistent with postgres
-                // postgres rule: https://www.postgresql.org/docs/current/queries-order.html
-                let nulls_first = nulls_first.unwrap_or(!asc);
+                let nulls_first = nulls_first
+                    .unwrap_or_else(|| self.options.default_null_ordering.eval(asc));
                 Sort::new(expr, asc, nulls_first)
             };
 
@@ -112,12 +111,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     self.sql_expr_to_logical_expr(e, order_by_schema, planner_context)?
                 }
             };
-            let asc = asc.unwrap_or(true);
-            expr_vec.push(make_sort_expr(
-                expr,
-                asc,
-                nulls_first.unwrap_or(self.options.default_null_ordering.eval(asc)),
-            ))
+            sort_expr_vec.push(make_sort_expr(expr, asc, nulls_first));
         }
 
         Ok(sort_expr_vec)

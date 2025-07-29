@@ -3361,7 +3361,7 @@ fn parse_decimals_parser_options() -> ParserOptions {
         map_string_types_to_utf8view: true,
         enable_options_value_normalization: false,
         collect_spans: false,
-        default_null_ordering: NullOrdering::AscReverse,
+        default_null_ordering: NullOrdering::NullsMax,
     }
 }
 
@@ -3373,7 +3373,7 @@ fn ident_normalization_parser_options_no_ident_normalization() -> ParserOptions 
         map_string_types_to_utf8view: true,
         enable_options_value_normalization: false,
         collect_spans: false,
-        default_null_ordering: NullOrdering::AscReverse,
+        default_null_ordering: NullOrdering::NullsMax,
     }
 }
 
@@ -3385,7 +3385,7 @@ fn ident_normalization_parser_options_ident_normalization() -> ParserOptions {
         map_string_types_to_utf8view: true,
         enable_options_value_normalization: false,
         collect_spans: false,
-        default_null_ordering: NullOrdering::AscReverse,
+        default_null_ordering: NullOrdering::NullsMax,
     }
 }
 

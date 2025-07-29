@@ -78,9 +78,9 @@ impl ParserOptions {
             map_string_types_to_utf8view: true,
             enable_options_value_normalization: false,
             collect_spans: false,
-            // By default, `asc_reverse` is used to follow Postgres's behavior.
+            // By default, `nulls_max` is used to follow Postgres's behavior.
             // postgres rule: https://www.postgresql.org/docs/current/queries-order.html
-            default_null_ordering: NullOrdering::AscReverse,
+            default_null_ordering: NullOrdering::NullsMax,
         }
     }
 
@@ -167,10 +167,10 @@ impl From<&SqlParserOptions> for ParserOptions {
 /// Represents the null ordering for sorting expressions.
 #[derive(Debug, Clone, Copy)]
 pub enum NullOrdering {
-    /// Ascending order with nulls appearing last.
-    AscReverse,
-    /// Descending order with nulls appearing last.
-    DescReverse,
+    /// Nulls appear last in ascending order.
+    NullsMax,
+    /// Nulls appear first in descending order.
+    NullsMin,
     /// Nulls appear first.
     NullsFirst,
     /// Nulls appear last.
@@ -185,8 +185,8 @@ impl NullOrdering {
     /// * `false` if nulls should appear last.
     pub fn eval(&self, asc: bool) -> bool {
         match self {
-            Self::AscReverse => !asc,
-            Self::DescReverse => asc,
+            Self::NullsMax => !asc,
+            Self::NullsMin => asc,
             Self::NullsFirst => true,
             Self::NullsLast => false,
         }
@@ -198,8 +198,8 @@ impl FromStr for NullOrdering {
 
     fn from_str(s: &str) -> Result<Self> {
         match s {
-            "asc_reverse" => Ok(Self::AscReverse),
-            "desc_reverse" => Ok(Self::DescReverse),
+            "nulls_max" => Ok(Self::NullsMax),
+            "nulls_min" => Ok(Self::NullsMin),
             "nulls_first" => Ok(Self::NullsFirst),
             "nulls_last" => Ok(Self::NullsLast),
             _ => plan_err!("Unknown null ordering: {s}"),
@@ -209,7 +209,7 @@ impl FromStr for NullOrdering {
 
 impl From<&str> for NullOrdering {
     fn from(s: &str) -> Self {
-        Self::from_str(s).unwrap_or(Self::AscReverse)
+        Self::from_str(s).unwrap_or(Self::NullsMax)
     }
 }
 
