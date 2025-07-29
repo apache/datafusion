@@ -34,9 +34,9 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use crate::filter::batch_filter;
-use datafusion_execution::memory_pool::{
-    human_readable_size, ExplainMemory, MemoryConsumer, MemoryReservation,
-};
+#[cfg(feature = "memory_explain")]
+use datafusion_execution::memory_pool::{human_readable_size, ExplainMemory};
+use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use futures::stream::{Stream, StreamExt};
 
 use super::AggregateExec;
@@ -190,6 +190,7 @@ impl RecordBatchStream for AggregateStream {
     }
 }
 
+#[cfg(feature = "memory_explain")]
 impl ExplainMemory for AggregateStreamInner {
     fn explain_memory(&self) -> Result<String> {
         fn part(label: &str, size: usize) -> String {

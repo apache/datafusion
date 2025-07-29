@@ -37,6 +37,9 @@ workspace = true
 [lib]
 name = "datafusion_execution"
 
+[features]
+memory_explain = []
+
 [dependencies]
 arrow = { workspace = true }
 dashmap = { workspace = true }

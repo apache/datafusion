@@ -42,9 +42,9 @@ use arrow::datatypes::SchemaRef;
 use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_execution::disk_manager::RefCountedTempFile;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
-use datafusion_execution::memory_pool::{
-    human_readable_size, ExplainMemory, MemoryConsumer, MemoryReservation,
-};
+#[cfg(feature = "memory_explain")]
+use datafusion_execution::memory_pool::{human_readable_size, ExplainMemory};
+use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
 use datafusion_expr::{EmitTo, GroupsAccumulator};
 use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
@@ -1180,6 +1180,7 @@ impl GroupedHashAggregateStream {
     }
 }
 
+#[cfg(feature = "memory_explain")]
 impl ExplainMemory for GroupedHashAggregateStream {
     fn explain_memory(&self) -> Result<String> {
         fn part(label: &str, size: usize) -> String {

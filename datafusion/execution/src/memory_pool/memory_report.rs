@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#[cfg(feature = "memory_explain")]
 use super::{human_readable_size, MemoryReservation};
 use crate::memory_pool::pool::{
     FairSpillPool, GreedyMemoryPool, TrackConsumersPool, UnboundedMemoryPool,
@@ -45,6 +46,7 @@ pub trait ExplainMemory {
     fn memory_size(&self) -> usize;
 }
 
+#[cfg(feature = "memory_explain")]
 impl ExplainMemory for MemoryReservation {
     fn explain_memory(&self) -> Result<String> {
         Ok(format!(
@@ -80,7 +82,7 @@ pub fn report_top_consumers(
         .or_else(|| try_report::<UnboundedMemoryPool>(pool, top))
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "memory_explain"))]
 mod tests {
     use super::*;
     use crate::memory_pool::MemoryConsumer;
