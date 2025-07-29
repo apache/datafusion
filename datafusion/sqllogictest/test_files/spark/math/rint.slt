@@ -35,6 +35,52 @@ SELECT rint(-12.3456);
 -12
 
 query R
+SELECT rint(arrow_cast(-12.3456, 'Float32'));
+----
+-12
+
+## Test int
+query R
+SELECT rint(arrow_cast(12, 'UInt8'));
+----
+12
+
+query R
+SELECT rint(arrow_cast(-12, 'Int8'));
+----
+-12
+
+query R
+SELECT rint(arrow_cast(12, 'UInt16'));
+----
+12
+
+query R
+SELECT rint(arrow_cast(-12, 'Int16'));
+----
+-12
+
+query R
+SELECT rint(arrow_cast(12, 'UInt32'));
+----
+12
+
+query R
+SELECT rint(arrow_cast(-12, 'Int32'));
+----
+-12
+
+query R
+SELECT rint(arrow_cast(12, 'UInt64'));
+----
+12
+
+query R
+SELECT rint(arrow_cast(-12, 'Int64'));
+----
+-12
+
+query R
 SELECT rint(2.5);
 ----
 2

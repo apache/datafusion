@@ -19,11 +19,15 @@ use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, AsArray};
-use arrow::datatypes::DataType::{Float32, Float64};
-use arrow::datatypes::{DataType, Float32Type, Float64Type};
+use arrow::datatypes::DataType::{
+    Float32, Float64, Int16, Int32, Int64, Int8, UInt16, UInt32, UInt64, UInt8,
+};
+use arrow::datatypes::{
+    DataType, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type,
+    UInt16Type, UInt32Type, UInt64Type, UInt8Type,
+};
 use datafusion_common::{exec_err, Result};
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
-use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
@@ -43,10 +47,7 @@ impl Default for SparkRint {
 impl SparkRint {
     pub fn new() -> Self {
         Self {
-            signature: Signature::one_of(
-                vec![Exact(vec![Float64]), Exact(vec![Float32])],
-                Volatility::Immutable,
-            ),
+            signature: Signature::numeric(1, Volatility::Immutable),
         }
     }
 }
@@ -64,11 +65,8 @@ impl ScalarUDFImpl for SparkRint {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        match arg_types[0] {
-            Float32 => Ok(Float32),
-            _ => Ok(Float64),
-        }
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(Float64)
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -89,6 +87,46 @@ pub fn spark_rint(args: &[ArrayRef]) -> Result<ArrayRef> {
 
     let array = args[0].as_ref();
     match args[0].data_type() {
+        Int8 => Ok(Arc::new(
+            array
+                .as_primitive::<Int8Type>()
+                .unary::<_, Float64Type>(|value: i8| value as f64),
+        )),
+        Int16 => Ok(Arc::new(
+            array
+                .as_primitive::<Int16Type>()
+                .unary::<_, Float64Type>(|value: i16| value as f64),
+        )),
+        Int32 => Ok(Arc::new(
+            array
+                .as_primitive::<Int32Type>()
+                .unary::<_, Float64Type>(|value: i32| value as f64),
+        )),
+        Int64 => Ok(Arc::new(
+            array
+                .as_primitive::<Int64Type>()
+                .unary::<_, Float64Type>(|value: i64| value as f64),
+        )),
+        UInt8 => Ok(Arc::new(
+            array
+                .as_primitive::<UInt8Type>()
+                .unary::<_, Float64Type>(|value: u8| value as f64),
+        )),
+        UInt16 => Ok(Arc::new(
+            array
+                .as_primitive::<UInt16Type>()
+                .unary::<_, Float64Type>(|value: u16| value as f64),
+        )),
+        UInt32 => Ok(Arc::new(
+            array
+                .as_primitive::<UInt32Type>()
+                .unary::<_, Float64Type>(|value: u32| value as f64),
+        )),
+        UInt64 => Ok(Arc::new(
+            array
+                .as_primitive::<UInt64Type>()
+                .unary::<_, Float64Type>(|value: u64| value as f64),
+        )),
         Float64 => {
             let array = array
                 .as_primitive::<Float64Type>()
@@ -98,7 +136,7 @@ pub fn spark_rint(args: &[ArrayRef]) -> Result<ArrayRef> {
         Float32 => {
             let array = array
                 .as_primitive::<Float32Type>()
-                .unary::<_, Float32Type>(|value: f32| value.round_ties_even());
+                .unary::<_, Float64Type>(|value: f32| value.round_ties_even() as f64);
             Ok(Arc::new(array))
         }
         _ => {
