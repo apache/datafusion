@@ -193,41 +193,85 @@ logical_plan
 
 ########################################################################
 # PART 2: Tests for EliminateSelfJoinAggregation
-#
+# 
 # This optimization converts self-joins with aggregations to window functions
-# Example: SELECT a.user_id, a.date, SUM(b.amount)
+# Example: SELECT a.user_id, a.date, SUM(b.amount) 
 #          FROM t a JOIN t b ON a.user_id = b.user_id AND b.date <= a.date
 #          GROUP BY a.user_id, a.date
 # Becomes: SELECT user_id, date, SUM(amount) OVER (PARTITION BY user_id ORDER BY date)
+#
+# IMPORTANT: This transformation requires unique constraints on grouping keys.
+#
+# Key requirement: UNIQUE(group_by_columns) must exist for safe transformation
 ########################################################################
 
 ####
-# Setup: Create purchases table WITHOUT unique constraints
+# Setup: First demonstrate why unique constraints are necessary
+####
+
+# Create purchases table WITHOUT unique constraints to show the problem
+statement ok
+CREATE TABLE purchases_no_unique (
+    id INT,
+    user_id INT,
+    purchase_date DATE,
+    amount DECIMAL(10,2)
+);
+
+# Insert test data with duplicates
+statement ok
+INSERT INTO purchases_no_unique VALUES
+(1, 1, '2024-01-01', 100.00),
+(2, 1, '2024-01-01', 50.00),  -- Duplicate (user_id, purchase_date)
+(3, 1, '2024-01-02', 200.00),
+(4, 2, '2024-01-01', 300.00);
+
+# Show the problem: self-join with duplicates produces different results
+# For user_id=1, date='2024-01-01': 
+# - Row 1 joins with rows 1,2 → sum = 150
+# - Row 2 joins with rows 1,2 → sum = 150
+# - Total after GROUP BY = 300 (not 150!)
+query IDR rowsort
+SELECT a.user_id, a.purchase_date, SUM(b.amount) AS running_total
+FROM purchases_no_unique a
+JOIN purchases_no_unique b ON a.user_id = b.user_id AND b.purchase_date <= a.purchase_date
+GROUP BY a.user_id, a.purchase_date
+ORDER BY a.user_id, a.purchase_date;
+----
+1 2024-01-01 300
+1 2024-01-02 900
+2 2024-01-01 300
+
+# This is why the optimization should NOT be applied without unique constraints!
+
+####
+# Setup: Create purchases table WITH unique constraints for correct optimization
 ####
 
 statement ok
 CREATE TABLE purchases (
-    id INT,
+    id INT PRIMARY KEY,
     user_id INT,
     purchase_date DATE,
     billed_date DATE,
-    amount DECIMAL(10,2)
+    amount DECIMAL(10,2),
+    UNIQUE (user_id, purchase_date)  -- Required for safe transformation
 );
 
-# Insert test data including duplicates and edge cases
+# Insert test data (no duplicates on (user_id, purchase_date))
 statement ok
 INSERT INTO purchases VALUES
 (1, 1, '2024-01-01', '2024-01-05', 100.00),
-(2, 1, '2024-01-01', '2024-01-05', 50.00),  -- Duplicate (user_id, purchase_date)
-(3, 1, '2024-01-02', '2024-01-06', 200.00),
-(4, 1, '2024-01-03', '2024-01-07', 150.00),
-(5, 2, '2024-01-01', '2024-01-05', 300.00),
-(6, 2, '2024-01-02', '2024-01-06', 100.00),
-(7, 2, '2024-01-03', '2024-01-07', 250.00),
-(8, 3, '2024-01-01', '2024-01-05', 75.00);   -- User with single purchase
+(2, 1, '2024-01-02', '2024-01-06', 200.00),
+(3, 1, '2024-01-03', '2024-01-07', 150.00),
+(4, 2, '2024-01-01', '2024-01-05', 300.00),
+(5, 2, '2024-01-02', '2024-01-06', 100.00),
+(6, 2, '2024-01-03', '2024-01-07', 250.00),
+(7, 3, '2024-01-01', '2024-01-05', 75.00);
 
 ####
 # Positive Cases - Self-Joins That Should Be Converted to Window Functions
+# (Only safe with unique constraint on grouping keys)
 ####
 
 # Self join with <= condition should be transformed to window function
@@ -243,7 +287,7 @@ logical_plan
 03)----SubqueryAlias: a
 04)------TableScan: purchases projection=[user_id, purchase_date, amount]
 
-# Verify correctness with actual data - running total
+# Verify correctness with unique constraint
 query IDR rowsort
 SELECT a.user_id, a.purchase_date, SUM(b.amount) AS running_total
 FROM purchases a
@@ -252,12 +296,11 @@ GROUP BY a.user_id, a.purchase_date
 ORDER BY a.user_id, a.purchase_date;
 ----
 1 2024-01-01 100
-1 2024-01-01 150
-1 2024-01-02 200
-1 2024-01-03 150
+1 2024-01-02 300
+1 2024-01-03 450
 2 2024-01-01 300
-2 2024-01-02 100
-2 2024-01-03 250
+2 2024-01-02 400
+2 2024-01-03 650
 3 2024-01-01 75
 
 # Self join with < condition (excluding current row)
@@ -281,24 +324,33 @@ JOIN purchases b ON a.user_id = b.user_id AND b.purchase_date < a.purchase_date
 GROUP BY a.user_id, a.purchase_date
 ORDER BY a.user_id, a.purchase_date;
 ----
-1 2024-01-01 100
-1 2024-01-01 NULL
-1 2024-01-02 NULL
-1 2024-01-03 NULL
-2 2024-01-01 NULL
-2 2024-01-02 NULL
-2 2024-01-03 NULL
-3 2024-01-01 NULL
+1 2024-01-02 100
+1 2024-01-03 300
+2 2024-01-02 300
+2 2024-01-03 400
 
-# Self join with reversed comparison (> instead of <)
+# Self join with >= condition 
 query TT
-EXPLAIN SELECT a.user_id, a.purchase_date, SUM(b.amount) AS prior_total
+EXPLAIN SELECT a.user_id, a.purchase_date, SUM(b.amount) AS future_total
 FROM purchases a
-JOIN purchases b ON a.user_id = b.user_id AND a.purchase_date > b.purchase_date
+JOIN purchases b ON a.user_id = b.user_id AND b.purchase_date >= a.purchase_date
 GROUP BY a.user_id, a.purchase_date;
 ----
 logical_plan
-01)Projection: a.user_id, a.purchase_date, sum(amount) PARTITION BY [user_id, purchase_date] ORDER BY [purchase_date DESC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING AS prior_total
+01)Projection: a.user_id, a.purchase_date, sum(amount) PARTITION BY [user_id, purchase_date] ORDER BY [purchase_date DESC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS future_total
+02)--WindowAggr: windowExpr=[[sum(amount) PARTITION BY [user_id, purchase_date] ORDER BY [purchase_date DESC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+03)----SubqueryAlias: a
+04)------TableScan: purchases projection=[user_id, purchase_date, amount]
+
+# Self join with > condition
+query TT
+EXPLAIN SELECT a.user_id, a.purchase_date, SUM(b.amount) AS future_total_excl
+FROM purchases a
+JOIN purchases b ON a.user_id = b.user_id AND b.purchase_date > a.purchase_date
+GROUP BY a.user_id, a.purchase_date;
+----
+logical_plan
+01)Projection: a.user_id, a.purchase_date, sum(amount) PARTITION BY [user_id, purchase_date] ORDER BY [purchase_date DESC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING AS future_total_excl
 02)--WindowAggr: windowExpr=[[sum(amount) PARTITION BY [user_id, purchase_date] ORDER BY [purchase_date DESC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING]]
 03)----SubqueryAlias: a
 04)------TableScan: purchases projection=[user_id, purchase_date, amount]
@@ -315,6 +367,38 @@ logical_plan
 02)--WindowAggr: windowExpr=[[count(amount) PARTITION BY [user_id, purchase_date] ORDER BY [purchase_date ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
 03)----SubqueryAlias: a
 04)------TableScan: purchases projection=[user_id, purchase_date, amount]
+
+# Multiple equi-join conditions with unique constraint
+statement ok
+CREATE TABLE sales_by_region (
+    region VARCHAR,
+    user_id INT,
+    sale_date DATE,
+    amount DECIMAL(10,2),
+    PRIMARY KEY (region, user_id, sale_date)  -- Ensures uniqueness
+);
+
+statement ok
+INSERT INTO sales_by_region VALUES
+('North', 1, '2024-01-01', 100.00),
+('North', 1, '2024-01-02', 200.00),
+('North', 2, '2024-01-01', 150.00),
+('South', 1, '2024-01-01', 300.00),
+('South', 1, '2024-01-02', 400.00);
+
+query TT
+EXPLAIN SELECT a.region, a.user_id, a.sale_date, SUM(b.amount) AS running_total
+FROM sales_by_region a
+JOIN sales_by_region b ON a.region = b.region 
+    AND a.user_id = b.user_id 
+    AND b.sale_date <= a.sale_date
+GROUP BY a.region, a.user_id, a.sale_date;
+----
+logical_plan
+01)Projection: a.region, a.user_id, a.sale_date, sum(amount) PARTITION BY [region, user_id, sale_date] ORDER BY [sale_date ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS running_total
+02)--WindowAggr: windowExpr=[[sum(amount) PARTITION BY [region, user_id, sale_date] ORDER BY [sale_date ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+03)----SubqueryAlias: a
+04)------TableScan: sales_by_region projection=[region, user_id, sale_date, amount]
 
 ####
 # Negative Cases - Self-Joins That Should NOT Be Converted
@@ -371,7 +455,7 @@ logical_plan
 07)--------SubqueryAlias: b
 08)----------TableScan: purchases projection=[user_id, purchase_date, amount]
 
-# LEFT JOIN should NOT be transformed
+# LEFT JOIN should NOT be transformed (different semantics)
 query TT
 EXPLAIN SELECT a.user_id, a.purchase_date, SUM(b.amount) AS total
 FROM purchases a
@@ -379,10 +463,14 @@ LEFT JOIN purchases b ON a.user_id = b.user_id AND b.purchase_date <= a.purchase
 GROUP BY a.user_id, a.purchase_date;
 ----
 logical_plan
-01)Projection: a.user_id, a.purchase_date, sum(amount) PARTITION BY [user_id, purchase_date] ORDER BY [purchase_date ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS total
-02)--WindowAggr: windowExpr=[[sum(amount) PARTITION BY [user_id, purchase_date] ORDER BY [purchase_date ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
-03)----SubqueryAlias: a
-04)------TableScan: purchases projection=[user_id, purchase_date, amount]
+01)Projection: a.user_id, a.purchase_date, sum(b.amount) AS total
+02)--Aggregate: groupBy=[[a.user_id, a.purchase_date]], aggr=[[sum(b.amount)]]
+03)----Projection: a.user_id, a.purchase_date, b.amount
+04)------Left Join: a.user_id = b.user_id Filter: b.purchase_date <= a.purchase_date
+05)--------SubqueryAlias: a
+06)----------TableScan: purchases projection=[user_id, purchase_date]
+07)--------SubqueryAlias: b
+08)----------TableScan: purchases projection=[user_id, purchase_date, amount]
 
 # Self join comparing different date columns should NOT be transformed
 query TT
@@ -400,6 +488,29 @@ logical_plan
 06)----------TableScan: purchases projection=[user_id, purchase_date, billed_date]
 07)--------SubqueryAlias: b
 08)----------TableScan: purchases projection=[user_id, purchase_date, amount]
+
+# Self join on table WITHOUT unique constraint should NOT be transformed
+query TT
+EXPLAIN SELECT a.user_id, a.purchase_date, SUM(b.amount) AS running_total
+FROM purchases_no_unique a
+JOIN purchases_no_unique b ON a.user_id = b.user_id AND b.purchase_date <= a.purchase_date
+GROUP BY a.user_id, a.purchase_date;
+----
+logical_plan
+01)Projection: a.user_id, a.purchase_date, sum(b.amount) AS running_total
+02)--Aggregate: groupBy=[[a.user_id, a.purchase_date]], aggr=[[sum(b.amount)]]
+03)----Projection: a.user_id, a.purchase_date, b.amount
+04)------Inner Join: a.user_id = b.user_id Filter: b.purchase_date <= a.purchase_date
+05)--------SubqueryAlias: a
+06)----------TableScan: purchases_no_unique projection=[user_id, purchase_date]
+07)--------SubqueryAlias: b
+08)----------TableScan: purchases_no_unique projection=[user_id, purchase_date, amount]
+
+####
+# Tests with Unique Constraint on Grouping Keys
+####
+
+# Already covered above - purchases table has UNIQUE (user_id, purchase_date)
 
 ########################################################################
 # PART 3: Edge Cases and Complex Scenarios
@@ -436,24 +547,7 @@ ORDER BY a.user_id, a.purchase_date;
 1 2024-01-02 100
 2 2024-01-01 150
 
-# Test multiple equi-join conditions
-statement ok
-CREATE TABLE sales_by_region (
-    region VARCHAR,
-    user_id INT,
-    sale_date DATE,
-    amount DECIMAL(10,2)
-);
-
-statement ok
-INSERT INTO sales_by_region VALUES
-('North', 1, '2024-01-01', 100.00),
-('North', 1, '2024-01-02', 200.00),
-('North', 2, '2024-01-01', 150.00),
-('South', 1, '2024-01-01', 300.00),
-('South', 1, '2024-01-02', 400.00);
-
-# Self join with multiple equi-join conditions
+# Test multiple equi-join conditions with existing sales_by_region table
 query TIDR rowsort
 SELECT a.region, a.user_id, a.sale_date, SUM(b.amount) AS running_total
 FROM sales_by_region a
@@ -464,10 +558,10 @@ GROUP BY a.region, a.user_id, a.sale_date
 ORDER BY a.region, a.user_id, a.sale_date;
 ----
 North 1 2024-01-01 100
-North 1 2024-01-02 200
+North 1 2024-01-02 300
 North 2 2024-01-01 150
 South 1 2024-01-01 300
-South 1 2024-01-02 400
+South 1 2024-01-02 700
 
 # Clean up
 statement ok
@@ -475,6 +569,9 @@ set datafusion.explain.logical_plan_only = false;
 
 statement ok
 DROP TABLE employees;
+
+statement ok
+DROP TABLE purchases_no_unique;
 
 statement ok
 DROP TABLE purchases;
