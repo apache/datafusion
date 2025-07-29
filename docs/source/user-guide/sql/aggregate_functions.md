@@ -708,8 +708,14 @@ consider the following table:
 
 ```sql
 SELECT regr_count(user_signups, day) AS valid_pairs
-FROM daily_metrics; -- output = 3 pairs i.e (1,100),(2,120),(4,110)
-
+FROM daily_metrics;
++-------------+
+| valid_pairs |
++-------------+
+| 3           |
++-------------+
+1 row(s) fetched.
+Elapsed 0.001 seconds.
 ```
 
 ### `regr_intercept`
