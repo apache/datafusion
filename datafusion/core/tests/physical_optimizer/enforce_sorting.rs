@@ -989,6 +989,7 @@ async fn test_soft_hard_requirements_with_multiple_soft_requirements_and_output_
         bounded_window2,
         Some(OrderingRequirements::new(requirement)),
         Distribution::SinglePartition,
+        None,
     ));
 
     let expected_input = [
@@ -3683,6 +3684,7 @@ async fn test_window_partial_constant_and_set_monotonicity() -> Result<()> {
             &[],
             case.window_frame,
             input_schema.as_ref(),
+            false,
             false,
         )?;
         let window_exec = if window_expr.uses_bounded_memory() {
