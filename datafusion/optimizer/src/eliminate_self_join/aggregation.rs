@@ -21,26 +21,30 @@
 //! # Overview
 //!
 //! This optimizer transforms self-join queries with aggregations into more efficient
-//! window function queries.
+//! window function queries when the GROUP BY columns form a unique key.
 //!
 //! # Example Transformation
 //!
 //! ```sql
 //! -- Original query (self-join with aggregation)
-//! SELECT a.user_id, a.purchase_date, SUM(b.amount) AS running_total
-//! FROM purchases a
-//! JOIN purchases b ON a.user_id = b.user_id
-//!                  AND b.purchase_date <= a.purchase_date
-//! GROUP BY a.user_id, a.purchase_date;
+//! SELECT a.order_id, SUM(b.amount) AS running_total
+//! FROM orders a
+//! JOIN orders b ON b.order_id <= a.order_id
+//! GROUP BY a.order_id;
 //!
 //! -- Optimized query (window function)
-//! SELECT user_id, purchase_date,
+//! SELECT order_id,
 //!        SUM(amount) OVER (
-//!          PARTITION BY user_id, purchase_date
+//!          ORDER BY order_id
 //!          ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
 //!        ) AS running_total
-//! FROM purchases;
+//! FROM orders;
 //! ```
+//!
+//! # Requirements
+//!
+//! The optimization requires that GROUP BY columns form a unique constraint
+//! (e.g., PRIMARY KEY or UNIQUE) to ensure correctness.
 
 use std::sync::Arc;
 
@@ -48,7 +52,7 @@ use super::{is_table_scan_same, merge_table_scans, unique_indexes, RenamedAlias}
 use crate::{ApplyOrder, OptimizerConfig, OptimizerRule};
 
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeContainer};
-use datafusion_common::{Column, DFSchema, Result, ScalarValue, TableReference};
+use datafusion_common::{Column, Result, ScalarValue, TableReference, ToDFSchema};
 use datafusion_expr::expr::{
     AggregateFunction, Alias, Sort, WindowFunction, WindowFunctionParams,
 };
@@ -341,29 +345,34 @@ struct OptimizationResult {
 ///    - Come from different sides of the join (e.g., a.date <= b.date)
 ///    - Refer to the same underlying column in the table
 /// 4. **Validate GROUP BY**: Ensure GROUP BY matches JOIN ON columns + filter column
-/// 5. **Check Uniqueness**: Ensure JOIN ON doesn't form a unique constraint (would be different optimization)
+/// 5. **Check Uniqueness**: Verify GROUP BY columns form a unique constraint
 /// 6. **Transform to Window**: Convert aggregate to window function with appropriate framing
 ///
 /// # Example Transformation
 ///
 /// Input:
 /// ```text
-/// Aggregate: groupBy=[[a.user_id, a.purchase_date]], aggr=[[sum(b.amount)]]
-///   Join: a.user_id = b.user_id, Filter: b.purchase_date <= a.purchase_date
+/// Aggregate: groupBy=[[a.order_id]], aggr=[[sum(b.amount)]]
+///   Join: Filter: b.order_id <= a.order_id
 ///     SubqueryAlias: a
-///       TableScan: purchases
+///       TableScan: orders
 ///     SubqueryAlias: b
-///       TableScan: purchases
+///       TableScan: orders
 /// ```
 ///
 /// Output:
 /// ```text
-/// Window: sum(amount) PARTITION BY [user_id, purchase_date]
-///         ORDER BY [purchase_date ASC]
+/// Window: sum(amount) ORDER BY [order_id ASC]
 ///         ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
 ///   SubqueryAlias: a
-///     TableScan: purchases
+///     TableScan: orders
 /// ```
+///
+/// # Correctness
+///
+/// This optimization is only safe when GROUP BY columns are unique. Without
+/// uniqueness, the self-join can produce duplicate rows that would be incorrectly
+/// aggregated by the window function.
 fn try_replace_with_window(
     Aggregate {
         input,
@@ -562,7 +571,43 @@ fn try_replace_with_window(
         return None;
     }
 
-    // Step 8: Transform filter operator to window frame specification
+    // Step 8: Check if GROUP BY columns form a unique constraint
+    // This is critical for correctness - we can only apply this optimization
+    // if the GROUP BY columns are guaranteed to be unique
+
+    // Since GROUP BY uses left-side columns, get the left schema
+    let left_base_schema = left.table_scan.source.schema();
+
+    // Convert GROUP BY column names to indices in the left schema
+    let mut group_by_indices = Vec::with_capacity(group_by_names.len());
+    for col_name in &group_by_names {
+        if let Some((_, field)) = left_base_schema.column_with_name(col_name) {
+            if let Ok(idx) = left_base_schema.index_of(field.name()) {
+                group_by_indices.push(idx);
+            } else {
+                return None;
+            }
+        } else {
+            return None;
+        }
+    }
+    let group_by_indices_set: IndexSet<usize> = group_by_indices.into_iter().collect();
+
+    // Get unique constraints from the schema
+    let unique_constraints = unique_indexes(&left_base_schema.to_dfschema().unwrap());
+
+    // Check if GROUP BY columns form a subset of any unique constraint
+    let has_unique_constraint = unique_constraints.iter().any(|unique_idx| {
+        // GROUP BY columns must be a subset of a unique constraint
+        group_by_indices_set.is_subset(unique_idx)
+    });
+
+    if !has_unique_constraint {
+        // Cannot apply optimization without unique constraint on GROUP BY columns
+        return None;
+    }
+
+    // Step 9: Transform filter operator to window frame specification
     let OrderBound {
         sort_order,
         start_bound,
@@ -585,7 +630,7 @@ fn try_replace_with_window(
         })
         .collect::<Vec<_>>();
 
-    // Step 9: Convert aggregate functions to window functions
+    // Step 10: Convert aggregate functions to window functions
     let mut window_expr = Vec::with_capacity(aggr_expr.len());
     for aggr_expr in aggr_expr {
         let AggregateFunction { func, params } = match aggr_expr {
@@ -632,7 +677,7 @@ fn try_replace_with_window(
         })));
     }
 
-    // Step 10: Create the optimized plan with window function
+    // Step 11: Create the optimized plan with window function
     let table_scan = merge_table_scans(left.table_scan, right.table_scan);
     let mut plan = LogicalPlan::TableScan(table_scan);
 
@@ -669,7 +714,7 @@ mod tests {
     use crate::OptimizerContext;
 
     use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_common::{Result, TableReference};
+    use datafusion_common::{Constraint, Constraints, Result, TableReference};
     use datafusion_expr::{
         col, logical_plan::builder::LogicalTableSource, JoinType, LogicalPlan,
         LogicalPlanBuilder,
@@ -700,11 +745,90 @@ mod tests {
         builder.build().unwrap()
     }
 
+    fn create_table_scan_with_unique_constraint(alias: Option<&str>) -> LogicalPlan {
+        let schema = Schema::new(vec![
+            Field::new("order_id", DataType::Int32, false),
+            Field::new("customer_id", DataType::Int32, false),
+            Field::new("order_date", DataType::Date32, false),
+            Field::new("amount", DataType::Float64, false),
+        ]);
+
+        // Create constraints - order_id is PRIMARY KEY (index 0)
+        let constraints = Constraints::new(vec![
+            Constraint::PrimaryKey(vec![0]), // order_id is unique
+        ]);
+
+        let table_source = Arc::new(
+            LogicalTableSource::new(Arc::new(schema)).with_constraints(constraints),
+        );
+
+        let mut builder = LogicalPlanBuilder::scan_with_filters(
+            TableReference::bare("orders"),
+            table_source,
+            None,
+            vec![],
+        )
+        .unwrap();
+
+        if let Some(alias) = alias {
+            builder = builder.alias(alias).unwrap();
+        }
+
+        builder.build().unwrap()
+    }
+
     fn optimize_plan(plan: LogicalPlan) -> Result<LogicalPlan> {
         let optimizer = EliminateSelfJoinAggregation::new();
         let config = OptimizerContext::default();
         let result = optimizer.rewrite(plan, &config)?;
         Ok(result.data)
+    }
+
+    #[test]
+    fn test_eliminate_self_join_aggregation_with_unique_constraint() -> Result<()> {
+        // Create self join with unique constraint on GROUP BY column
+        let left = create_table_scan_with_unique_constraint(Some("a"));
+        let right = create_table_scan_with_unique_constraint(Some("b"));
+
+        // Build join with filter: b.order_id <= a.order_id
+        let join_filter = col("b.order_id").lt_eq(col("a.order_id"));
+
+        let join_plan = LogicalPlanBuilder::from(left)
+            .join(
+                right,
+                JoinType::Inner,
+                (vec![], vec![]), // No equi-join conditions
+                Some(join_filter),
+            )?
+            .aggregate(
+                vec![col("a.order_id")], // GROUP BY on unique column
+                vec![sum(col("b.amount"))],
+            )?
+            .project(vec![
+                col("a.order_id"),
+                col(sum(col("b.amount")).name_for_alias()?),
+            ])?
+            .build()?;
+
+        let optimized = optimize_plan(join_plan)?;
+
+        // Verify the join was eliminated and replaced with window function
+        match &optimized {
+            LogicalPlan::Projection(proj) => {
+                match proj.input.as_ref() {
+                    LogicalPlan::Window(_) => {
+                        // Success - join was replaced with window function
+                    }
+                    _ => panic!(
+                        "Expected Window after optimization, got: {:?}",
+                        proj.input
+                    ),
+                }
+            }
+            _ => panic!("Expected Projection at top level, got: {optimized:?}"),
+        }
+
+        Ok(())
     }
 
     #[test]
@@ -1078,6 +1202,57 @@ mod tests {
                     Ok(datafusion_common::tree_node::TreeNodeRecursion::Continue)
                 })?;
                 assert!(has_join, "Expected join to remain for non-inner join");
+            }
+            _ => panic!("Expected Projection at top level, got: {optimized:?}"),
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_no_elimination_without_unique_constraint() -> Result<()> {
+        // Create table without unique constraints on GROUP BY columns
+        // Note: The default create_table_scan doesn't add unique constraints
+        let left = create_table_scan(Some("a"));
+        let right = create_table_scan(Some("b"));
+
+        let join_filter = col("b.purchase_date").lt_eq(col("a.purchase_date"));
+
+        let join_plan = LogicalPlanBuilder::from(left)
+            .join(
+                right,
+                JoinType::Inner,
+                (vec!["a.user_id"], vec!["b.user_id"]),
+                Some(join_filter),
+            )?
+            .aggregate(
+                vec![col("a.user_id"), col("a.purchase_date")],
+                vec![sum(col("b.amount"))],
+            )?
+            .project(vec![
+                col("a.user_id"),
+                col("a.purchase_date"),
+                col(sum(col("b.amount")).name_for_alias()?),
+            ])?
+            .build()?;
+
+        let optimized = optimize_plan(join_plan)?;
+
+        // Verify the join was NOT eliminated because GROUP BY columns
+        // (user_id, purchase_date) don't form a unique constraint
+        match &optimized {
+            LogicalPlan::Projection(proj) => {
+                let mut has_join = false;
+                proj.input.apply(|node| {
+                    if matches!(node, LogicalPlan::Join(_)) {
+                        has_join = true;
+                    }
+                    Ok(datafusion_common::tree_node::TreeNodeRecursion::Continue)
+                })?;
+                assert!(
+                    has_join,
+                    "Expected join to remain without unique constraint on GROUP BY columns"
+                );
             }
             _ => panic!("Expected Projection at top level, got: {optimized:?}"),
         }
