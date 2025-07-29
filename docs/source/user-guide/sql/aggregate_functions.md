@@ -693,7 +693,7 @@ regr_count(expression_y, expression_x)
 consider the following table:
 
 ```sql
-> create table daily_metrics(int day, int user_signups) as values (1,100), (2,120), (3, NULL), (4,110), (5,NULL);
+> create table daily_metrics(day int, user_signups int) as values (1,100), (2,120), (3, NULL), (4,110), (5,NULL);
 > select * from daily_metrics;
 +-----+---------------+
 | day | user_signups  |
