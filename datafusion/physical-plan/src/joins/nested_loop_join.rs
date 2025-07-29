@@ -310,31 +310,9 @@ impl NestedLoopJoinExec {
         ))
     }
 
-    /// Returns a vector indicating whether the left and right inputs maintain their order.
-    /// The first element corresponds to the left input, and the second to the right.
-    ///
-    /// The left (build-side) input's order may change, but the right (probe-side) input's
-    /// order is maintained for INNER, RIGHT, RIGHT ANTI, and RIGHT SEMI joins.
-    ///
-    /// Maintaining the right input's order helps optimize the nodes down the pipeline
-    /// (See [`ExecutionPlan::maintains_input_order`]).
-    ///
-    /// This is a separate method because it is also called when computing properties, before
-    /// a [`NestedLoopJoinExec`] is created. It also takes [`JoinType`] as an argument, as
-    /// opposed to `Self`, for the same reason.
+    /// This join implementation does not preserve the input order of either side.
     fn maintains_input_order(_join_type: JoinType) -> Vec<bool> {
-        // TODO(now): update this proerty
         vec![false, false]
-        // vec![
-        //     false,
-        //     matches!(
-        //         join_type,
-        //         JoinType::Inner
-        //             | JoinType::Right
-        //             | JoinType::RightAnti
-        //             | JoinType::RightSemi
-        //     ),
-        // ]
     }
 
     pub fn contains_projection(&self) -> bool {
@@ -1213,7 +1191,6 @@ pub(crate) mod tests {
         common, expressions::Column, repartition::RepartitionExec, test::build_table_i32,
     };
 
-    use arrow::array::Int32Array;
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field};
     use datafusion_common::test_util::batches_to_sort_string;
@@ -1762,168 +1739,6 @@ pub(crate) mod tests {
                 err.to_string(),
                 "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:\n  NestedLoopJoinLoad[0]"
             );
-        }
-
-        Ok(())
-    }
-
-    fn prepare_mod_join_filter() -> JoinFilter {
-        let column_indices = vec![
-            ColumnIndex {
-                index: 1,
-                side: JoinSide::Left,
-            },
-            ColumnIndex {
-                index: 1,
-                side: JoinSide::Right,
-            },
-        ];
-        let intermediate_schema = Schema::new(vec![
-            Field::new("x", DataType::Int32, true),
-            Field::new("x", DataType::Int32, true),
-        ]);
-
-        // left.b1 % 3
-        let left_mod = Arc::new(BinaryExpr::new(
-            Arc::new(Column::new("x", 0)),
-            Operator::Modulo,
-            Arc::new(Literal::new(ScalarValue::Int32(Some(3)))),
-        )) as Arc<dyn PhysicalExpr>;
-        // left.b1 % 3 != 0
-        let left_filter = Arc::new(BinaryExpr::new(
-            left_mod,
-            Operator::NotEq,
-            Arc::new(Literal::new(ScalarValue::Int32(Some(0)))),
-        )) as Arc<dyn PhysicalExpr>;
-
-        // right.b2 % 5
-        let right_mod = Arc::new(BinaryExpr::new(
-            Arc::new(Column::new("x", 1)),
-            Operator::Modulo,
-            Arc::new(Literal::new(ScalarValue::Int32(Some(5)))),
-        )) as Arc<dyn PhysicalExpr>;
-        // right.b2 % 5 != 0
-        let right_filter = Arc::new(BinaryExpr::new(
-            right_mod,
-            Operator::NotEq,
-            Arc::new(Literal::new(ScalarValue::Int32(Some(0)))),
-        )) as Arc<dyn PhysicalExpr>;
-        // filter = left.b1 % 3 != 0 and right.b2 % 5 != 0
-        let filter_expression =
-            Arc::new(BinaryExpr::new(left_filter, Operator::And, right_filter))
-                as Arc<dyn PhysicalExpr>;
-
-        JoinFilter::new(
-            filter_expression,
-            column_indices,
-            Arc::new(intermediate_schema),
-        )
-    }
-
-    fn generate_columns(num_columns: usize, num_rows: usize) -> Vec<Vec<i32>> {
-        let column = (1..=num_rows).map(|x| x as i32).collect();
-        vec![column; num_columns]
-    }
-
-    #[ignore = "TODO(now): update the property and fix this test"]
-    #[rstest]
-    #[tokio::test]
-    async fn join_maintains_right_order(
-        #[values(
-            JoinType::Inner,
-            JoinType::Right,
-            JoinType::RightAnti,
-            JoinType::RightSemi
-        )]
-        join_type: JoinType,
-        #[values(1, 100, 1000)] left_batch_size: usize,
-        #[values(1, 100, 1000)] right_batch_size: usize,
-        #[values(1001, 10000)] batch_size: usize,
-    ) -> Result<()> {
-        let left_columns = generate_columns(3, 1000);
-        let left = build_table(
-            ("a1", &left_columns[0]),
-            ("b1", &left_columns[1]),
-            ("c1", &left_columns[2]),
-            Some(left_batch_size),
-            Vec::new(),
-        );
-
-        let right_columns = generate_columns(3, 1000);
-        let right = build_table(
-            ("a2", &right_columns[0]),
-            ("b2", &right_columns[1]),
-            ("c2", &right_columns[2]),
-            Some(right_batch_size),
-            vec!["a2", "b2", "c2"],
-        );
-
-        let filter = prepare_mod_join_filter();
-
-        let nested_loop_join = Arc::new(NestedLoopJoinExec::try_new(
-            left,
-            Arc::clone(&right),
-            Some(filter),
-            &join_type,
-            None,
-        )?) as Arc<dyn ExecutionPlan>;
-        assert_eq!(nested_loop_join.maintains_input_order(), vec![false, true]);
-
-        let right_column_indices = match join_type {
-            JoinType::Inner | JoinType::Right => vec![3, 4, 5],
-            JoinType::RightAnti | JoinType::RightSemi => vec![0, 1, 2],
-            _ => unreachable!(),
-        };
-
-        let right_ordering = right.output_ordering().unwrap();
-        let join_ordering = nested_loop_join.output_ordering().unwrap();
-        for (right, join) in right_ordering.iter().zip(join_ordering.iter()) {
-            let right_column = right.expr.as_any().downcast_ref::<Column>().unwrap();
-            let join_column = join.expr.as_any().downcast_ref::<Column>().unwrap();
-            assert_eq!(join_column.name(), join_column.name());
-            assert_eq!(
-                right_column_indices[right_column.index()],
-                join_column.index()
-            );
-            assert_eq!(right.options, join.options);
-        }
-
-        let task_ctx = new_task_ctx(batch_size);
-        let batches = nested_loop_join
-            .execute(0, task_ctx)?
-            .try_collect::<Vec<_>>()
-            .await?;
-
-        // Make sure that the order of the right side is maintained
-        let mut prev_values = [i32::MIN, i32::MIN, i32::MIN];
-
-        for (batch_index, batch) in batches.iter().enumerate() {
-            let columns: Vec<_> = right_column_indices
-                .iter()
-                .map(|&i| {
-                    batch
-                        .column(i)
-                        .as_any()
-                        .downcast_ref::<Int32Array>()
-                        .unwrap()
-                })
-                .collect();
-
-            for row in 0..batch.num_rows() {
-                let current_values = [
-                    columns[0].value(row),
-                    columns[1].value(row),
-                    columns[2].value(row),
-                ];
-                assert!(
-                    current_values
-                        .into_iter()
-                        .zip(prev_values)
-                        .all(|(current, prev)| current >= prev),
-                    "batch_index: {batch_index} row: {row} current: {current_values:?}, prev: {prev_values:?}"
-                );
-                prev_values = current_values;
-            }
         }
 
         Ok(())

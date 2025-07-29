@@ -20,10 +20,11 @@
 //! For detailed information regarding the operator's state machine and execution flow,
 //! please refer to the documentation provided in the `poll_next()` method.
 
-use arrow::buffer::MutableBuffer;
+use arrow::buffer::BooleanBuffer;
 use arrow::compute::{filter_record_batch, BatchCoalescer};
 use futures::{ready, StreamExt};
 use log::debug;
+use std::ops::BitOr;
 use std::sync::Arc;
 use std::task::Poll;
 
@@ -36,8 +37,7 @@ use crate::metrics::Count;
 use crate::{RecordBatchStream, SendableRecordBatchStream};
 
 use arrow::array::{
-    Array, BooleanArray, BooleanBufferBuilder, RecordBatchOptions, UInt32Builder,
-    UInt64Array, UInt64Builder,
+    Array, BooleanArray, RecordBatchOptions, UInt32Builder, UInt64Array, UInt64Builder,
 };
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
@@ -100,7 +100,7 @@ pub(crate) struct NLJStream {
     /// Output buffer holds the join result to output. It will emit eagerly when
     /// the threshold is reached.
     output_buffer: Box<BatchCoalescer>,
-    /// See comments in `NLJState::Done` for its purpose
+    /// See comments in [`NLJState::Done`] for its purpose
     handled_empty_output: bool,
 
     // Buffer(left) side
@@ -108,9 +108,9 @@ pub(crate) struct NLJStream {
     /// The current buffered left data to join
     buffered_left_data: Option<Arc<JoinLeftData>>,
     /// Index into the left buffered batch. Used in `ProbeRight` state
-    l_index: usize,
+    l_probe_idx: usize,
     /// Index into the left buffered batch. Used in `EmitLeftUnmatched` state
-    emit_cursor: u64,
+    l_emit_idx: u64,
     /// Should we go back to `BufferingLeft` state again after `EmitLeftUnmatched`
     /// state is over.
     left_exhausted: bool,
@@ -125,7 +125,7 @@ pub(crate) struct NLJStream {
     current_right_batch: Option<RecordBatch>,
     // For right join, keep track of matched rows in `current_right_batch`
     // Constructed when fetching each new incoming right batch in `FetchingRight` state.
-    current_right_batch_matched: Option<BooleanBufferBuilder>,
+    current_right_batch_matched: Option<BooleanArray>,
 }
 
 impl Stream for NLJStream {
@@ -249,15 +249,13 @@ impl Stream for NLJStream {
 
                             // Prepare right bitmap
                             if self.should_track_unmatched_right {
-                                let new_size = right_batch_size;
-                                let zeroed_buf = MutableBuffer::from_len_zeroed(new_size);
+                                let zeroed_buf =
+                                    BooleanBuffer::new_unset(right_batch_size);
                                 self.current_right_batch_matched =
-                                    Some(BooleanBufferBuilder::new_from_buffer(
-                                        zeroed_buf, new_size,
-                                    ));
+                                    Some(BooleanArray::new(zeroed_buf, None));
                             }
 
-                            self.l_index = 0;
+                            self.l_probe_idx = 0;
                             self.state = NLJState::ProbeRight;
                             continue;
                         }
@@ -305,11 +303,9 @@ impl Stream for NLJStream {
                         // (cur_right_batch x buffered_left_batches)
                         Ok(false) => {
                             // Left exhausted, transition to FetchingRight
-                            // TODO(polish): use a flag for clarity
-                            self.l_index = 0;
-                            if self.current_right_batch_matched.is_some() {
-                                // Don't reset current_right_batch, it'll be
-                                // cleared inside `EmitRightUnmatched` state
+                            self.l_probe_idx = 0;
+                            if self.should_track_unmatched_right {
+                                debug_assert!(self.current_right_batch_matched.is_some());
                                 self.state = NLJState::EmitRightUnmatched;
                             } else {
                                 self.current_right_batch = None;
@@ -458,8 +454,8 @@ impl NLJStream {
             current_right_batch: None,
             current_right_batch_matched: None,
             state: NLJState::BufferingLeft,
-            l_index: 0,
-            emit_cursor: 0,
+            l_probe_idx: 0,
+            l_emit_idx: 0,
             left_exhausted: false,
             left_buffered_in_one_pass: true,
             handled_empty_output: false,
@@ -485,7 +481,7 @@ impl NLJStream {
             .clone();
 
         // stop probing, the caller will go to the next state
-        if self.l_index >= left_data.batch().num_rows() {
+        if self.l_probe_idx >= left_data.batch().num_rows() {
             return Ok(false);
         }
 
@@ -494,7 +490,7 @@ impl NLJStream {
         // and push the result into output_buffer
         // ========
 
-        let l_idx = self.l_index;
+        let l_idx = self.l_probe_idx;
         let join_batch =
             self.process_single_left_row_join(&left_data, &right_batch, l_idx)?;
 
@@ -505,7 +501,7 @@ impl NLJStream {
         // ==== Prepare for the next iteration ====
 
         // Advance left cursor
-        self.l_index += 1;
+        self.l_probe_idx += 1;
 
         // Return true to continue probing
         Ok(true)
@@ -524,7 +520,7 @@ impl NLJStream {
             return Ok(None);
         }
 
-        let right_batch_bitmap = if let Some(filter) = &self.join_filter {
+        let cur_right_bitmap = if let Some(filter) = &self.join_filter {
             apply_join_filter_to_single_left_row(
                 left_data.batch(),
                 l_index,
@@ -536,7 +532,7 @@ impl NLJStream {
             BooleanArray::from(vec![true; right_row_count])
         };
 
-        let joined_len = right_batch_bitmap.true_count();
+        let joined_len = cur_right_bitmap.true_count();
 
         // Update left row match bitmap for outer join support
         if need_produce_result_in_final(self.join_type) && (joined_len > 0) {
@@ -544,13 +540,21 @@ impl NLJStream {
             bitmap.set_bit(l_index, true);
         }
 
-        // TODO(now-perf): don't init it when fetching right batch
-        if let Some(bitmap) = self.current_right_batch_matched.as_mut() {
-            for (i, opt_bool) in right_batch_bitmap.iter().enumerate() {
-                if opt_bool.is_some() && opt_bool.unwrap() {
-                    bitmap.set_bit(i, true);
-                }
-            }
+        // For special joins like RightJoin, update the bitmap for matched rows
+        // in the current right batch
+        if self.should_track_unmatched_right {
+            debug_assert!(self.current_right_batch_matched.is_some());
+            // after bit-wise or, it will be put back
+            let right_bitmap = std::mem::take(&mut self.current_right_batch_matched)
+                .ok_or_else(|| {
+                    internal_datafusion_err!("right batch's bitmap should be present")
+                })?;
+            let (buf, nulls) = right_bitmap.into_parts();
+            debug_assert!(nulls.is_none());
+            let updated_right_bitmap = buf.bitor(cur_right_bitmap.values());
+
+            self.current_right_batch_matched =
+                Some(BooleanArray::new(updated_right_bitmap, None));
         }
 
         // For the following join types: here we only have to set the left/right
@@ -576,7 +580,7 @@ impl NLJStream {
                 left_data.batch(),
                 l_index,
                 right_batch,
-                Some(right_batch_bitmap),
+                Some(cur_right_bitmap),
                 &self.column_indices,
             )?;
             Ok(Some(join_batch))
@@ -599,12 +603,12 @@ impl NLJStream {
         }
 
         // Early return if another thread is already processing unmatched rows
-        if self.emit_cursor == 0 && !left_data.report_probe_completed() {
+        if self.l_emit_idx == 0 && !left_data.report_probe_completed() {
             return Ok(false);
         }
 
         // Stop processing unmatched rows, the caller will go to the next state
-        if self.emit_cursor >= left_batch.num_rows() as u64 {
+        if self.l_emit_idx >= left_batch.num_rows() as u64 {
             return Ok(false);
         }
 
@@ -612,16 +616,18 @@ impl NLJStream {
         // Process unmatched rows and push the result into output_buffer
         // Each time, the number to process is up to batch size
         // ========
-        let start_idx = self.emit_cursor as usize;
+        let start_idx = self.l_emit_idx as usize;
         let end_idx =
             std::cmp::min(start_idx + self.cfg_batch_size, left_batch.num_rows());
 
-        if let Some(batch) = self.process_unmatched_rows(left_data, start_idx, end_idx)? {
+        if let Some(batch) =
+            self.process_left_unmatched_range(left_data, start_idx, end_idx)?
+        {
             self.output_buffer.push_batch(batch)?;
         }
 
         // ==== Prepare for the next iteration ====
-        self.emit_cursor = end_idx as u64;
+        self.l_emit_idx = end_idx as u64;
 
         // Return true to continue processing unmatched rows
         Ok(true)
@@ -639,7 +645,7 @@ impl NLJStream {
     /// The caller is responsible for ensuring that `start_idx` and `end_idx` are
     /// within valid bounds of the left batch. This function does not perform
     /// bounds checking.
-    fn process_unmatched_rows(
+    fn process_left_unmatched_range(
         &self,
         left_data: &JoinLeftData,
         start_idx: usize,
@@ -692,16 +698,12 @@ impl NLJStream {
 
     /// Process unmatched rows from the current right batch and reset the bitmap.
     /// Returns a RecordBatch containing the unmatched right rows (None if empty).
-    ///
-    /// Side-effect: it will reset the right bitmap to all false
     fn process_right_unmatched(&mut self) -> Result<Option<RecordBatch>> {
         // ==== Take current right batch and its bitmap ====
-        let bitmap: BooleanArray = self
-            .current_right_batch_matched
-            .take()
-            .unwrap()
-            .finish()
-            .into();
+        let right_batch_bitmap: BooleanArray =
+            std::mem::take(&mut self.current_right_batch_matched).ok_or_else(|| {
+                internal_datafusion_err!("right bitmap should be available")
+            })?;
 
         let right_batch = self.current_right_batch.take();
         let cur_right_batch = unwrap_or_internal_err!(right_batch);
@@ -717,7 +719,7 @@ impl NLJStream {
             // faster
             let mut left_indices_builder = UInt32Builder::new();
             for i in 0..right_row_count {
-                if bitmap.value(i) {
+                if right_batch_bitmap.value(i) {
                     left_indices_builder.append_value(i as u32);
                 } else {
                     left_indices_builder.append_null();
@@ -757,7 +759,7 @@ impl NLJStream {
         // iterate through the bitmap
         let mut right_indices_builder = UInt32Builder::new();
         for i in 0..cur_right_batch.num_rows() {
-            let i_joined = bitmap.value(i);
+            let i_joined = right_batch_bitmap.value(i);
             // TODO(polish): make those flips more understandable
             let should_output = match self.join_type {
                 JoinType::Right => !i_joined,
