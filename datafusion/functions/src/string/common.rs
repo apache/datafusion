@@ -22,11 +22,13 @@ use std::sync::Arc;
 
 use crate::strings::make_and_append_view;
 use arrow::array::{
-    new_null_array, Array, ArrayRef, GenericStringArray, GenericStringBuilder,
-    NullBufferBuilder, OffsetSizeTrait, StringBuilder, StringViewArray,
+    as_run_array, new_null_array, Array, ArrayRef, GenericStringArray,
+    GenericStringBuilder, NullBufferBuilder, OffsetSizeTrait, PrimitiveArray, RunArray,
+    StringBuilder, StringViewArray,
 };
 use arrow::buffer::{Buffer, ScalarBuffer};
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, RunEndIndexType};
+use arrow::datatypes::{Int16Type, Int32Type, Int64Type};
 use datafusion_common::cast::{as_generic_string_array, as_string_view_array};
 use datafusion_common::Result;
 use datafusion_common::{exec_err, ScalarValue};
@@ -342,6 +344,25 @@ where
 
                 Ok(ColumnarValue::Array(Arc::new(string_builder.finish())))
             }
+            DataType::RunEndEncoded(run_index, value_index) => {
+                if value_index.data_type() == &DataType::Utf8 {
+                    case_conversion_run_array::<i32, _>(
+                        array,
+                        op,
+                        name,
+                        &run_index.data_type(),
+                    )
+                } else if value_index.data_type() == &DataType::LargeUtf8 {
+                    case_conversion_run_array::<i64, _>(
+                        array,
+                        op,
+                        name,
+                        &run_index.data_type(),
+                    )
+                } else {
+                    exec_err!("Unsupported data type")
+                }
+            }
             other => exec_err!("Unsupported data type {other:?} for function {name}"),
         },
         ColumnarValue::Scalar(scalar) => match scalar {
@@ -422,4 +443,42 @@ where
     Ok(Arc::new(unsafe {
         GenericStringArray::<O>::new_unchecked(offsets, values, nulls)
     }))
+}
+fn case_conversion_run_array<'a, O, F>(
+    array: &'a ArrayRef,
+    op: F,
+    name: &str,
+    index_type: &DataType,
+) -> Result<ColumnarValue>
+where
+    O: OffsetSizeTrait,
+    F: Fn(&'a str) -> String,
+{
+    match index_type {
+        DataType::Int16 => process_run_array::<Int16Type, O, _>(array, &op),
+        DataType::Int32 => process_run_array::<Int32Type, O, _>(array, &op),
+        DataType::Int64 => process_run_array::<Int64Type, O, _>(array, &op),
+        _ => exec_err!("Unsupported data type {index_type:?} for function {name}"),
+    }
+}
+
+fn process_run_array<'a, T, O, F>(array: &'a ArrayRef, op: &F) -> Result<ColumnarValue>
+where
+    T: RunEndIndexType,
+    O: OffsetSizeTrait,
+    F: Fn(&'a str) -> String,
+{
+    let run_array = as_run_array::<T>(array);
+    let origin_values = run_array.values();
+
+    let converted_values = case_conversion_array::<O, _>(origin_values, op)?;
+
+    // Convert RunEndBuffer<T> into PrimitiveArray<T> and wrap in ArrayRef
+    let run_ends: PrimitiveArray<T> =
+        PrimitiveArray::new(run_array.run_ends().inner().clone(), None);
+
+    // Construct new RunArray
+    let new_run_array = RunArray::<T>::try_new(&run_ends, &converted_values)?;
+
+    Ok(ColumnarValue::Array(Arc::new(new_run_array)))
 }
