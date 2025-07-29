@@ -28,8 +28,7 @@ use datafusion_common::{
     DFSchema, Result, TableReference,
 };
 use datafusion_expr::{
-    Expr, Join, JoinType, LogicalPlan, LogicalPlanBuilder, Projection, SubqueryAlias,
-    TableScan,
+    Expr, Join, JoinType, LogicalPlan, LogicalPlanBuilder, SubqueryAlias, TableScan,
 };
 
 use indexmap::IndexSet;
@@ -41,62 +40,6 @@ impl EliminateUniqueKeyedSelfJoin {
     #[allow(missing_docs)]
     pub fn new() -> Self {
         Self {}
-    }
-
-    /// Collect joins that should not be eliminated because they are under
-    /// projections that reference columns from both sides
-    fn collect_protected_joins(
-        plan: &LogicalPlan,
-        protected_joins: &mut std::collections::HashSet<String>,
-    ) {
-        plan.apply(|node| {
-            if let LogicalPlan::Projection(projection) = node {
-                if let LogicalPlan::Join(join) = projection.input.as_ref() {
-                    if join.join_type == JoinType::Inner
-                        && projection_references_both_sides(&projection.expr, join)
-                    {
-                        // Create a unique identifier for this join based on its structure
-                        let join_id = Self::create_join_identifier(join);
-                        protected_joins.insert(join_id);
-                    }
-                }
-            }
-            Ok(TreeNodeRecursion::Continue)
-        })
-        .ok();
-    }
-
-    /// Check if a join is protected (should not be eliminated)
-    fn is_join_protected(
-        join: &Join,
-        protected_joins: &std::collections::HashSet<String>,
-    ) -> bool {
-        let join_id = Self::create_join_identifier(join);
-        protected_joins.contains(&join_id)
-    }
-
-    /// Create a unique identifier for a join based on its structure
-    fn create_join_identifier(join: &Join) -> String {
-        let on_str = join
-            .on
-            .iter()
-            .map(|(l, r)| format!("{l:?}={r:?}"))
-            .collect::<Vec<_>>()
-            .join(",");
-
-        let filter_str = join
-            .filter
-            .as_ref()
-            .map(|f| format!("{f:?}"))
-            .unwrap_or_default();
-
-        format!(
-            "{}|{}|{}|{}",
-            join.left.display_indent(),
-            join.right.display_indent(),
-            on_str,
-            filter_str
-        )
     }
 }
 
@@ -118,94 +61,73 @@ impl OptimizerRule for EliminateUniqueKeyedSelfJoin {
         plan: LogicalPlan,
         _: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
-        // First, collect information about which joins should not be eliminated
-        // because they are under projections that reference both sides
-        let mut protected_joins = std::collections::HashSet::new();
-        Self::collect_protected_joins(&plan, &mut protected_joins);
-
         let mut renamed = None;
+
+        // Use transform_up (bottom-up) to process children before parents
         let Transformed {
             data: plan,
             transformed,
             ..
-        } = plan
-            .transform_up(|plan| {
-                match &plan {
-                    LogicalPlan::Projection(projection) => {
-                        // Handle Projection -> Join pattern
-                        match projection.input.as_ref() {
-                            LogicalPlan::Join(join)
-                                if join.join_type == JoinType::Inner =>
-                            {
-                                // Check if projection references columns from both sides of the join
-                                // If it does, we cannot eliminate the join
-                                if projection_references_both_sides(
-                                    &projection.expr,
-                                    join,
-                                ) {
-                                    return Ok(Transformed::no(plan));
-                                }
-
-                                if let Some(OptimizationResult {
-                                    plan: optimized,
-                                    renamed_alias,
-                                }) = try_eliminate_unique_keyed_self_join(join)
-                                {
-                                    let projection_expr = projection
-                                        .expr
-                                        .iter()
-                                        .cloned()
-                                        .map(|expr| {
-                                            if let Some(renamed_alias) = &renamed_alias {
-                                                renamed_alias
-                                                    .rewrite_expression(expr)
-                                                    .unwrap()
-                                                    .data
-                                            } else {
-                                                expr
-                                            }
-                                        })
-                                        .collect::<Vec<_>>();
-                                    renamed = renamed_alias;
-
-                                    let plan = Projection::try_new(
-                                        projection_expr,
-                                        optimized.into(),
-                                    )
-                                    .unwrap();
-                                    let plan = LogicalPlan::Projection(plan);
-                                    Ok(Transformed::yes(plan))
-                                } else {
-                                    Ok(Transformed::no(plan))
-                                }
-                            }
-                            _ => Ok(Transformed::no(plan)),
-                        }
-                    }
-                    LogicalPlan::Join(join) if join.join_type == JoinType::Inner => {
-                        // Handle bare Join (no projection directly above)
-                        // Check if this join is protected
-                        if Self::is_join_protected(join, &protected_joins) {
+        } = plan.transform_up(|plan| {
+            match &plan {
+                // Only handle Projection -> Join pattern
+                LogicalPlan::Projection(projection) => {
+                    if let LogicalPlan::Join(join) = projection.input.as_ref() {
+                        if join.join_type != JoinType::Inner {
                             return Ok(Transformed::no(plan));
                         }
 
+                        // Check if projection references columns from both sides
+                        if projection_references_both_sides(&projection.expr, join) {
+                            return Ok(Transformed::no(plan));
+                        }
+
+                        // Try to eliminate the join
                         if let Some(OptimizationResult {
                             plan: optimized,
                             renamed_alias,
                         }) = try_eliminate_unique_keyed_self_join(join)
                         {
+                            // Rewrite projection expressions with any necessary renaming
+                            let projection_expr = projection
+                                .expr
+                                .iter()
+                                .cloned()
+                                .map(|expr| {
+                                    if let Some(renamed_alias) = &renamed_alias {
+                                        renamed_alias
+                                            .rewrite_expression(expr)
+                                            .unwrap()
+                                            .data
+                                    } else {
+                                        expr
+                                    }
+                                })
+                                .collect::<Vec<_>>();
+
                             renamed = renamed_alias;
-                            Ok(Transformed::yes(optimized))
+
+                            let plan = LogicalPlan::Projection(
+                                datafusion_expr::Projection::try_new(
+                                    projection_expr,
+                                    optimized.into(),
+                                )?,
+                            );
+                            Ok(Transformed::yes(plan))
                         } else {
                             Ok(Transformed::no(plan))
                         }
+                    } else {
+                        Ok(Transformed::no(plan))
                     }
-                    _ => Ok(Transformed::no(plan)),
                 }
-            })
-            .unwrap();
+                // Do not handle bare Joins - we need projection context to safely eliminate
+                _ => Ok(Transformed::no(plan)),
+            }
+        })?;
 
         if transformed {
+            // Apply any remaining renaming at the top level if needed
             if let Some(renamed) = renamed {
                 let plan = renamed.rewrite_logical_plan(plan)?;
                 Ok(Transformed::yes(plan))

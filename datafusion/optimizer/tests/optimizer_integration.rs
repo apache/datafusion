@@ -585,10 +585,8 @@ fn eliminate_unique_keyed_self_join_on_subquery_duplicate_qualified_field() {
     assert_snapshot!(
     format!("{plan}"),
     @r#"
-    Inner Join: a.id = b.id
+    Projection: a.id, a.id AS id
       SubqueryAlias: a
-        TableScan: employees projection=[id]
-      SubqueryAlias: b
         Projection: employees.id
           Filter: employees.department = Utf8("HR")
             TableScan: employees projection=[id, department]
