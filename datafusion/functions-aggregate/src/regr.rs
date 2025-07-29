@@ -144,6 +144,30 @@ static DOCUMENTATION: LazyLock<HashMap<RegrType, Documentation>> = LazyLock::new
                     Given input column Y and X: regr_slope(Y, X) returns the slope (k in Y = k*X + b) using minimal RSS fitting.",
 
                 "regr_slope(expression_y, expression_x)")
+                .with_sql_example(
+                    r#"```sql
+create table weekly_performance(day int,user_signups int) as values (1,60), (2,65), (3, 70), (4,75), (5,80);
+
+select * from weekly_performance;
++------+---------------------+
+| week | productivity_score  |
+| ---- | ------------------- |
+| 1    | 60                  |
+| 2    | 65                  |
+| 3    | 70                  |
+| 4    | 75                  |
+| 5    | 80                  |
++------+---------------------+
+
+SELECT regr_slope(user_signups, day) AS slope FROM weekly_performance;\
++--------+
+| slope  |
++--------+
+| 5.0    |
++--------+
+```
+"#
+                )
                 .with_standard_argument("expression_y", Some("Dependent variable"))
                 .with_standard_argument("expression_x", Some("Independent variable"))
                 .build()
