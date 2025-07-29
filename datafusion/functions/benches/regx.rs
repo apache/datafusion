@@ -175,6 +175,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         let data = cast(&data(&mut rng), &DataType::Utf8View).unwrap();
         let regex = cast(&regex(&mut rng), &DataType::Utf8View).unwrap();
         let start = Arc::new(start(&mut rng)) as ArrayRef;
+        let n = Arc::new(n(&mut rng)) as ArrayRef;
         let flags = cast(&flags(&mut rng), &DataType::Utf8View).unwrap();
 
         b.iter(|| {
@@ -183,6 +184,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                     Arc::clone(&data),
                     Arc::clone(&regex),
                     Arc::clone(&start),
+                    Arc::clone(&n),
                     Arc::clone(&flags),
                 ])
                 .expect("regexp_instr should work on utf8view"),

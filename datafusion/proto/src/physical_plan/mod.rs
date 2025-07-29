@@ -1108,6 +1108,7 @@ impl protobuf::PhysicalPlanNode {
                                     AggregateExprBuilder::new(agg_udf, input_phy_expr)
                                         .schema(Arc::clone(&physical_schema))
                                         .alias(name)
+                                        .human_display(agg_node.human_display.clone())
                                         .with_ignore_nulls(agg_node.ignore_nulls)
                                         .with_distinct(agg_node.distinct)
                                         .order_by(order_bys)

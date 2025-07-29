@@ -589,6 +589,7 @@ impl AggregateUDFImpl for ForeignAggregateUDF {
 pub enum FFI_AggregateOrderSensitivity {
     Insensitive,
     HardRequirement,
+    SoftRequirement,
     Beneficial,
 }
 
@@ -597,6 +598,7 @@ impl From<FFI_AggregateOrderSensitivity> for AggregateOrderSensitivity {
         match value {
             FFI_AggregateOrderSensitivity::Insensitive => Self::Insensitive,
             FFI_AggregateOrderSensitivity::HardRequirement => Self::HardRequirement,
+            FFI_AggregateOrderSensitivity::SoftRequirement => Self::SoftRequirement,
             FFI_AggregateOrderSensitivity::Beneficial => Self::Beneficial,
         }
     }
@@ -607,6 +609,7 @@ impl From<AggregateOrderSensitivity> for FFI_AggregateOrderSensitivity {
         match value {
             AggregateOrderSensitivity::Insensitive => Self::Insensitive,
             AggregateOrderSensitivity::HardRequirement => Self::HardRequirement,
+            AggregateOrderSensitivity::SoftRequirement => Self::SoftRequirement,
             AggregateOrderSensitivity::Beneficial => Self::Beneficial,
         }
     }
@@ -748,6 +751,7 @@ mod tests {
     fn test_round_trip_all_order_sensitivities() {
         test_round_trip_order_sensitivity(AggregateOrderSensitivity::Insensitive);
         test_round_trip_order_sensitivity(AggregateOrderSensitivity::HardRequirement);
+        test_round_trip_order_sensitivity(AggregateOrderSensitivity::SoftRequirement);
         test_round_trip_order_sensitivity(AggregateOrderSensitivity::Beneficial);
     }
 }

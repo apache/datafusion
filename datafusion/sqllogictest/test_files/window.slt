@@ -5650,3 +5650,82 @@ WINDOW
 3 7
 4 11
 5 16
+
+
+# window with distinct operation
+statement ok
+CREATE TABLE table_test_distinct_count (
+    k VARCHAR,
+    v Int,
+    time TIMESTAMP WITH TIME ZONE
+);
+
+statement ok
+INSERT INTO table_test_distinct_count (k, v, time) VALUES
+    ('a', 1, '1970-01-01T00:01:00.00Z'),
+    ('a', 1, '1970-01-01T00:02:00.00Z'),
+    ('a', 1, '1970-01-01T00:03:00.00Z'),
+    ('a', 2, '1970-01-01T00:03:00.00Z'),
+    ('a', 1, '1970-01-01T00:04:00.00Z'),
+    ('b', 3, '1970-01-01T00:01:00.00Z'),
+    ('b', 3, '1970-01-01T00:02:00.00Z'),
+    ('b', 4, '1970-01-01T00:03:00.00Z'),
+    ('b', 4, '1970-01-01T00:03:00.00Z');
+
+query TPII
+SELECT
+    k,
+    time,
+    COUNT(v) OVER (
+        PARTITION BY k
+        ORDER BY time
+        RANGE BETWEEN INTERVAL '2 minutes' PRECEDING AND CURRENT ROW
+    ) AS normal_count,
+    COUNT(DISTINCT v) OVER (
+        PARTITION BY k
+        ORDER BY time
+        RANGE BETWEEN INTERVAL '2 minutes' PRECEDING AND CURRENT ROW
+    ) AS distinct_count
+FROM table_test_distinct_count
+ORDER BY k, time;
+----
+a 1970-01-01T00:01:00Z 1 1
+a 1970-01-01T00:02:00Z 2 1
+a 1970-01-01T00:03:00Z 4 2
+a 1970-01-01T00:03:00Z 4 2
+a 1970-01-01T00:04:00Z 4 2
+b 1970-01-01T00:01:00Z 1 1
+b 1970-01-01T00:02:00Z 2 1
+b 1970-01-01T00:03:00Z 4 2
+b 1970-01-01T00:03:00Z 4 2
+
+
+query TT
+EXPLAIN SELECT
+    k,
+    time,
+    COUNT(v) OVER (
+        PARTITION BY k
+        ORDER BY time
+        RANGE BETWEEN INTERVAL '2 minutes' PRECEDING AND CURRENT ROW
+    ) AS normal_count,
+    COUNT(DISTINCT v) OVER (
+        PARTITION BY k
+        ORDER BY time
+        RANGE BETWEEN INTERVAL '2 minutes' PRECEDING AND CURRENT ROW
+    ) AS distinct_count
+FROM table_test_distinct_count
+ODER BY k, time;
+----
+logical_plan
+01)Projection: oder.k, oder.time, count(oder.v) PARTITION BY [oder.k] ORDER BY [oder.time ASC NULLS LAST] RANGE BETWEEN 2 minutes PRECEDING AND CURRENT ROW AS normal_count, count(DISTINCT oder.v) PARTITION BY [oder.k] ORDER BY [oder.time ASC NULLS LAST] RANGE BETWEEN 2 minutes PRECEDING AND CURRENT ROW AS distinct_count
+02)--WindowAggr: windowExpr=[[count(oder.v) PARTITION BY [oder.k] ORDER BY [oder.time ASC NULLS LAST] RANGE BETWEEN IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 120000000000 } PRECEDING AND CURRENT ROW AS count(oder.v) PARTITION BY [oder.k] ORDER BY [oder.time ASC NULLS LAST] RANGE BETWEEN 2 minutes PRECEDING AND CURRENT ROW, count(DISTINCT oder.v) PARTITION BY [oder.k] ORDER BY [oder.time ASC NULLS LAST] RANGE BETWEEN IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 120000000000 } PRECEDING AND CURRENT ROW AS count(DISTINCT oder.v) PARTITION BY [oder.k] ORDER BY [oder.time ASC NULLS LAST] RANGE BETWEEN 2 minutes PRECEDING AND CURRENT ROW]]
+03)----SubqueryAlias: oder
+04)------TableScan: table_test_distinct_count projection=[k, v, time]
+physical_plan
+01)ProjectionExec: expr=[k@0 as k, time@2 as time, count(oder.v) PARTITION BY [oder.k] ORDER BY [oder.time ASC NULLS LAST] RANGE BETWEEN 2 minutes PRECEDING AND CURRENT ROW@3 as normal_count, count(DISTINCT oder.v) PARTITION BY [oder.k] ORDER BY [oder.time ASC NULLS LAST] RANGE BETWEEN 2 minutes PRECEDING AND CURRENT ROW@4 as distinct_count]
+02)--BoundedWindowAggExec: wdw=[count(oder.v) PARTITION BY [oder.k] ORDER BY [oder.time ASC NULLS LAST] RANGE BETWEEN 2 minutes PRECEDING AND CURRENT ROW: Field { name: "count(oder.v) PARTITION BY [oder.k] ORDER BY [oder.time ASC NULLS LAST] RANGE BETWEEN 2 minutes PRECEDING AND CURRENT ROW", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: RANGE BETWEEN IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 120000000000 } PRECEDING AND CURRENT ROW, count(DISTINCT oder.v) PARTITION BY [oder.k] ORDER BY [oder.time ASC NULLS LAST] RANGE BETWEEN 2 minutes PRECEDING AND CURRENT ROW: Field { name: "count(DISTINCT oder.v) PARTITION BY [oder.k] ORDER BY [oder.time ASC NULLS LAST] RANGE BETWEEN 2 minutes PRECEDING AND CURRENT ROW", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: RANGE BETWEEN IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 120000000000 } PRECEDING AND CURRENT ROW], mode=[Sorted]
+03)----SortExec: expr=[k@0 ASC NULLS LAST, time@2 ASC NULLS LAST], preserve_partitioning=[true]
+04)------CoalesceBatchesExec: target_batch_size=1
+05)--------RepartitionExec: partitioning=Hash([k@0], 2), input_partitions=2
+06)----------DataSourceExec: partitions=2, partition_sizes=[5, 4]
