@@ -21,7 +21,61 @@
 # For more information, please see:
 #   https://github.com/apache/datafusion/issues/15914
 
-## Original Query: SELECT next_day('2015-01-14', 'TU');
-## PySpark 3.5.5 Result: {'next_day(2015-01-14, TU)': datetime.date(2015, 1, 20), 'typeof(next_day(2015-01-14, TU))': 'date', 'typeof(2015-01-14)': 'string', 'typeof(TU)': 'string'}
-#query
-#SELECT next_day('2015-01-14'::string, 'TU'::string);
+query D
+SELECT next_day('2015-01-14'::DATE, 'TU'::string);
+----
+2015-01-20
+
+query D
+SELECT next_day('2015-07-27'::DATE, 'Sun'::string);
+----
+2015-08-02
+
+query D
+SELECT next_day('2015-07-27'::DATE, 'Sat'::string);
+----
+2015-08-01
+
+query error Failed to coerce arguments to satisfy a call to 'next_day' function
+SELECT next_day('2015-07-27'::DATE);
+
+query error Failed to coerce arguments to satisfy a call to 'next_day' function
+SELECT next_day('Sun'::string);
+
+query error 'next_day' does not support zero arguments
+SELECT next_day();
+
+query error Failed to coerce arguments to satisfy a call to 'next_day' function
+SELECT next_day(1::int, 'Sun'::string);
+
+query error Failed to coerce arguments to satisfy a call to 'next_day' function
+SELECT next_day('2015-07-27'::DATE, 'Sat'::string, 'Sun'::string);
+
+query error Failed to coerce arguments to satisfy a call to 'next_day' function
+SELECT next_day('invalid_date'::string, 'Mon'::string);
+
+query D
+SELECT next_day('2000-01-01'::DATE, 2.0::float);
+----
+NULL
+
+query D
+SELECT next_day('2020-01-01'::DATE, 'invalid_day'::string);
+----
+NULL
+
+query error Cast error: Cannot cast string '2015-13-32' to value of Date32 type
+SELECT next_day('2015-13-32'::DATE, 'Sun'::string);
+
+query D
+SELECT next_day(a, b)
+FROM VALUES
+    ('2000-01-01'::DATE, 'Mon'::string),
+    (NULL::DATE, NULL::string),
+    (NULL::DATE, 'Mon'::string),
+    ('2015-01-14'::DATE, NULL::string) as t(a, b);
+----
+2000-01-03
+NULL
+NULL
+NULL
