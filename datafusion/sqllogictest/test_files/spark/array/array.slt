@@ -22,34 +22,51 @@ SELECT array(1, 2, 3);
 
 
 query ?
-select array('a', 'b');
+SELECT array('a', 'b');
 ----
 [a, b]
 
-# Test array display with quoting
+
 query ?
-select array['hello', '', null, 'nULl', 'nULlx', 'aa"bb', 'mm\nn', 'uu,vv', 'yy zz'];
+SELECT array();
+----
+[]
+
+query ??
+SELECT array(), array(array());
+----
+[] [[]]
+
+
+query ?
+SELECT array(null);
+----
+[NULL]
+
+
+query ?
+SELECT array(1, NULL, 3);
+----
+[1, NULL, 3]
+
+
+query ?
+SELECT array['hello', '', null, 'nULl', 'nULlx', 'aa"bb', 'mm\nn', 'uu,vv', 'yy zz'];
 ----
 [hello, , NULL, nULl, nULlx, aa"bb, mm\nn, uu,vv, yy zz]
 
 query ?
-select array(array(1,2),array(3,4));
+SELECT array(array(1,2),array(3,4));
 ----
 [[1, 2], [3, 4]]
 
 
 query ?
-select array(array(1,2));
+SELECT array(array(1), array(2,3,4));
+----
+[[1], [2, 3, 4]]
+
+query ?
+SELECT array(array(1,2));
 ----
 [[1, 2]]
-
-
-query ?
-select array[1::Int]
-----
-[1]
-
-query ?
-select array[1::Int8];
-----
-[1]

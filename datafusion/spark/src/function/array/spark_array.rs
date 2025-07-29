@@ -257,9 +257,17 @@ fn array_array<O: OffsetSizeTrait>(
     let data = mutable.freeze();
 
     Ok(Arc::new(GenericListArray::<O>::try_new(
-        Arc::new(Field::new_list_field(data_type, true)),
+        Arc::new(with_list_field_name("item", data_type, true)),
         OffsetBuffer::new(offsets.into()),
         make_array(data),
         None,
     )?))
+}
+
+fn with_list_field_name(
+    name: impl Into<String>,
+    data_type: DataType,
+    nullable: bool,
+) -> Field {
+    Field::new(name, data_type, nullable)
 }
