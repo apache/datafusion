@@ -52,7 +52,10 @@ use super::{is_table_scan_same, merge_table_scans, unique_indexes, RenamedAlias}
 use crate::{ApplyOrder, OptimizerConfig, OptimizerRule};
 
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeContainer};
-use datafusion_common::{Column, Result, ScalarValue, TableReference, ToDFSchema};
+use datafusion_common::{
+    Column, FunctionalDependencies, JoinType, Result, ScalarValue, TableReference,
+    ToDFSchema,
+};
 use datafusion_expr::expr::{
     AggregateFunction, Alias, Sort, WindowFunction, WindowFunctionParams,
 };
@@ -90,7 +93,8 @@ impl OptimizerRule for EliminateSelfJoinAggregation {
             data: plan,
             transformed,
             ..
-        } = plan.transform_up(|plan| Self::eliminate_inner(plan, &mut renamed))?;
+        } =
+            plan.transform_up(|plan| Self::eliminate_inner(plan.clone(), &mut renamed))?;
 
         if transformed {
             if let Some(renamed) = renamed {
@@ -139,7 +143,9 @@ impl EliminateSelfJoinAggregation {
             if aggregate.aggr_expr.len() == 1 => {
                 aggregate
             }
-            _ => return Ok(Transformed::no(plan)),
+            _ => {
+                return Ok(Transformed::no(plan))
+            },
         };
 
         // Try to optimize the aggregate into a window function
@@ -392,6 +398,12 @@ fn try_replace_with_window(
         return None;
     };
 
+    // Step 1.5: Verify it's an inner join
+    // This optimization only applies to INNER joins
+    if join.join_type != JoinType::Inner {
+        return None;
+    }
+
     // Step 2: Extract table information from both sides of the join
     let left = try_narrow_join_to_table_scan_alias(join.left.as_ref())?;
     let right = try_narrow_join_to_table_scan_alias(join.right.as_ref())?;
@@ -524,7 +536,9 @@ fn try_replace_with_window(
             }
             // If `GROUP BY ...` expression isn't a column reference conservatively
             // assume it isn't self-join
-            _ => return None,
+            _ => {
+                return None;
+            }
         }
     }
 
@@ -555,7 +569,9 @@ fn try_replace_with_window(
                 }
                 on_names.insert(left_name.as_str());
             }
-            _ => return None,
+            _ => {
+                return None;
+            }
         }
     }
 
@@ -593,7 +609,21 @@ fn try_replace_with_window(
     let group_by_indices_set: IndexSet<usize> = group_by_indices.into_iter().collect();
 
     // Get unique constraints from the schema
-    let unique_constraints = unique_indexes(&left_base_schema.to_dfschema().unwrap());
+
+    let fd = left.table_scan.source.constraints().map(|c| {
+        FunctionalDependencies::new_from_constraints(
+            Some(c),
+            left.table_scan.source.schema().fields.len(),
+        )
+    });
+
+    let mut dfs = left_base_schema.to_dfschema().unwrap();
+
+    if let Some(fd) = fd {
+        dfs = dfs.with_functional_dependencies(fd).unwrap();
+    }
+
+    let unique_constraints = unique_indexes(&dfs);
 
     // Check if GROUP BY columns form a subset of any unique constraint
     let has_unique_constraint = unique_constraints.iter().any(|unique_idx| {
@@ -721,13 +751,25 @@ mod tests {
     use datafusion_functions_aggregate::count::count;
     use datafusion_functions_aggregate::sum::sum;
 
-    fn create_table_scan(alias: Option<&str>) -> LogicalPlan {
+    fn create_table_scan(alias: Option<&str>, unqiue: bool) -> LogicalPlan {
         let schema = Schema::new(vec![
             Field::new("user_id", DataType::Int32, false),
             Field::new("purchase_date", DataType::Date32, false),
             Field::new("amount", DataType::Float64, false),
         ]);
-        let table_source = Arc::new(LogicalTableSource::new(Arc::new(schema)));
+
+        // Create constraints - (user_id, purchase_date) is unique
+        let constraints = Constraints::new_unverified(vec![
+            Constraint::Unique(vec![0, 1]), // (user_id, purchase_date) is unique
+        ]);
+
+        let table_source = if unqiue {
+            Arc::new(
+                LogicalTableSource::new(Arc::new(schema)).with_constraints(constraints),
+            )
+        } else {
+            Arc::new(LogicalTableSource::new(Arc::new(schema)))
+        };
 
         let mut builder = LogicalPlanBuilder::scan_with_filters(
             TableReference::bare("purchases"),
@@ -833,8 +875,8 @@ mod tests {
     #[test]
     fn test_eliminate_self_join_aggregation_less_than_equal() -> Result<()> {
         // Create self join with <= condition
-        let left = create_table_scan(Some("a"));
-        let right = create_table_scan(Some("b"));
+        let left = create_table_scan(Some("a"), true);
+        let right = create_table_scan(Some("b"), true);
 
         // Build join with filter: b.purchase_date <= a.purchase_date
         let join_filter = col("b.purchase_date").lt_eq(col("a.purchase_date"));
@@ -881,8 +923,8 @@ mod tests {
     #[test]
     fn test_eliminate_self_join_aggregation_less_than() -> Result<()> {
         // Create self join with < condition
-        let left = create_table_scan(Some("a"));
-        let right = create_table_scan(Some("b"));
+        let left = create_table_scan(Some("a"), true);
+        let right = create_table_scan(Some("b"), true);
 
         // Build join with filter: b.purchase_date < a.purchase_date
         let join_filter = col("b.purchase_date").lt(col("a.purchase_date"));
@@ -929,8 +971,8 @@ mod tests {
     #[test]
     fn test_eliminate_self_join_aggregation_greater_than_equal() -> Result<()> {
         // Create self join with >= condition
-        let left = create_table_scan(Some("a"));
-        let right = create_table_scan(Some("b"));
+        let left = create_table_scan(Some("a"), true);
+        let right = create_table_scan(Some("b"), true);
 
         // Build join with filter: b.purchase_date >= a.purchase_date
         let join_filter = col("b.purchase_date").gt_eq(col("a.purchase_date"));
@@ -977,8 +1019,8 @@ mod tests {
     #[test]
     fn test_no_elimination_without_filter() -> Result<()> {
         // Create self join without filter
-        let left = create_table_scan(Some("a"));
-        let right = create_table_scan(Some("b"));
+        let left = create_table_scan(Some("a"), true);
+        let right = create_table_scan(Some("b"), true);
 
         let join_plan = LogicalPlanBuilder::from(left)
             .join(
@@ -1021,8 +1063,8 @@ mod tests {
     #[test]
     fn test_no_elimination_with_wrong_group_by() -> Result<()> {
         // Create self join with filter but wrong GROUP BY columns
-        let left = create_table_scan(Some("a"));
-        let right = create_table_scan(Some("b"));
+        let left = create_table_scan(Some("a"), true);
+        let right = create_table_scan(Some("b"), true);
 
         let join_filter = col("b.purchase_date").lt_eq(col("a.purchase_date"));
 
@@ -1066,8 +1108,8 @@ mod tests {
     #[test]
     fn test_no_elimination_with_multiple_aggregates() -> Result<()> {
         // Create self join with multiple aggregate expressions
-        let left = create_table_scan(Some("a"));
-        let right = create_table_scan(Some("b"));
+        let left = create_table_scan(Some("a"), true);
+        let right = create_table_scan(Some("b"), true);
 
         let join_filter = col("b.purchase_date").lt_eq(col("a.purchase_date"));
 
@@ -1115,8 +1157,8 @@ mod tests {
     #[test]
     fn test_no_elimination_with_different_filter_columns() -> Result<()> {
         // Create self join with filter on different columns
-        let left = create_table_scan(Some("a"));
-        let right = create_table_scan(Some("b"));
+        let left = create_table_scan(Some("a"), true);
+        let right = create_table_scan(Some("b"), true);
 
         // Filter uses different columns than join
         let join_filter = col("b.amount").lt(col("a.amount"));
@@ -1165,8 +1207,8 @@ mod tests {
     #[test]
     fn test_no_elimination_with_wrong_join_type() -> Result<()> {
         // Create left join (not inner join)
-        let left = create_table_scan(Some("a"));
-        let right = create_table_scan(Some("b"));
+        let left = create_table_scan(Some("a"), true);
+        let right = create_table_scan(Some("b"), true);
 
         let join_filter = col("b.purchase_date").lt_eq(col("a.purchase_date"));
 
@@ -1194,11 +1236,12 @@ mod tests {
         match &optimized {
             LogicalPlan::Projection(proj) => {
                 let mut has_join = false;
-                proj.input.apply(|node| {
+                let plan = proj.input.as_ref().clone();
+                plan.transform(|node| {
                     if matches!(node, LogicalPlan::Join(_)) {
                         has_join = true;
                     }
-                    Ok(datafusion_common::tree_node::TreeNodeRecursion::Continue)
+                    Ok(Transformed::no(node))
                 })?;
                 assert!(has_join, "Expected join to remain for non-inner join");
             }
@@ -1212,8 +1255,8 @@ mod tests {
     fn test_no_elimination_without_unique_constraint() -> Result<()> {
         // Create table without unique constraints on GROUP BY columns
         // Note: The default create_table_scan doesn't add unique constraints
-        let left = create_table_scan(Some("a"));
-        let right = create_table_scan(Some("b"));
+        let left = create_table_scan(Some("a"), false);
+        let right = create_table_scan(Some("b"), false);
 
         let join_filter = col("b.purchase_date").lt_eq(col("a.purchase_date"));
 
