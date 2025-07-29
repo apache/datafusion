@@ -56,9 +56,5 @@ async fn main() -> Result<()> {
         println!("Query failed: {e}");
     }
 
-    // Print the top memory consumers recorded by the pool
-    if let Some(report) = report_top_consumers(tracked_pool.as_ref(), 5) {
-        println!("\nTop consumers:\n{report}");
-    }
     Ok(())
 }
