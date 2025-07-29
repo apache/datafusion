@@ -760,7 +760,7 @@ consider the following table:
 SELECT regr_intercept(productivity_score, week) AS intercept 
 FROM weekly_performance;
 +----------+
-|interecept|
+|intercept|
 +----------+
 |  55      |
 +----------+
