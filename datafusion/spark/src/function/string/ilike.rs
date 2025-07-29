@@ -18,7 +18,7 @@
 use arrow::array::ArrayRef;
 use arrow::compute::ilike;
 use arrow::datatypes::DataType;
-use datafusion_common::{plan_err, Result};
+use datafusion_common::{exec_err, Result};
 use datafusion_expr::ColumnarValue;
 use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use datafusion_functions::utils::make_scalar_function;
@@ -71,7 +71,7 @@ impl ScalarUDFImpl for SparkILike {
 /// Returns true if str matches pattern (case insensitive).
 pub fn spark_ilike(args: &[ArrayRef]) -> Result<ArrayRef> {
     if args.len() != 2 {
-        return plan_err!("ilike function requires exactly 2 arguments");
+        return exec_err!("ilike function requires exactly 2 arguments");
     }
 
     let result = ilike(&args[0], &args[1])?;

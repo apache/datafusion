@@ -18,7 +18,7 @@
 use arrow::array::ArrayRef;
 use arrow::compute::like;
 use arrow::datatypes::DataType;
-use datafusion_common::{plan_err, Result};
+use datafusion_common::{exec_err, Result};
 use datafusion_expr::ColumnarValue;
 use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use datafusion_functions::utils::make_scalar_function;
@@ -71,7 +71,7 @@ impl ScalarUDFImpl for SparkLike {
 /// Returns true if str matches pattern (case sensitive).
 pub fn spark_like(args: &[ArrayRef]) -> Result<ArrayRef> {
     if args.len() != 2 {
-        return plan_err!("like function requires exactly 2 arguments");
+        return exec_err!("like function requires exactly 2 arguments");
     }
 
     let result = like(&args[0], &args[1])?;
