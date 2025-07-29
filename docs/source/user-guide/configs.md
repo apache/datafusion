@@ -158,6 +158,8 @@ SET datafusion.runtime.memory_limit = '2G';
 
 The following runtime configuration settings are available:
 
-| key                             | default | description                                                                                                                                 |
-| ------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| datafusion.runtime.memory_limit | NULL    | Maximum memory limit for query execution. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes). Example: '2G' for 2 gigabytes. |
+| key                                        | default | description                                                                                                                                 |
+| ------------------------------------------ | ------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| datafusion.runtime.max_temp_directory_size | 100G    | Maximum temporary file directory size. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes). Example: '2G' for 2 gigabytes.    |
+| datafusion.runtime.memory_limit            | NULL    | Maximum memory limit for query execution. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes). Example: '2G' for 2 gigabytes. |
+| datafusion.runtime.temp_directory          | NULL    | The path to the temporary file directory.                                                                                                   |
