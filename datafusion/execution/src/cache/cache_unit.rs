@@ -17,6 +17,7 @@
 
 use std::sync::Arc;
 
+use crate::cache::cache_manager::FileMetadata;
 use crate::cache::CacheAccessor;
 
 use datafusion_common::Statistics;
@@ -157,9 +158,79 @@ impl CacheAccessor<Path, Arc<Vec<ObjectMeta>>> for DefaultListFilesCache {
     }
 }
 
+/// Collected file embedded metadata cache.
+/// The metadata for some file is invalided when the file size or last modification time have been
+/// changed.
+#[derive(Default)]
+pub struct DefaultFilesMetadataCache {
+    metadata: DashMap<Path, (ObjectMeta, Arc<FileMetadata>)>,
+}
+
+impl CacheAccessor<Path, Arc<FileMetadata>> for DefaultFilesMetadataCache {
+    type Extra = ObjectMeta;
+
+    fn get(&self, _k: &Path) -> Option<Arc<FileMetadata>> {
+        panic!("get in DefaultFilesMetadataCache is not supported, please use get_with_extra")
+    }
+
+    fn get_with_extra(&self, k: &Path, e: &Self::Extra) -> Option<Arc<FileMetadata>> {
+        self.metadata
+            .get(k)
+            .map(|s| {
+                let (extra, metadata) = s.value();
+                if extra.size != e.size || extra.last_modified != e.last_modified {
+                    None
+                } else {
+                    Some(Arc::clone(metadata))
+                }
+            })
+            .unwrap_or(None)
+    }
+
+    fn put(&self, _key: &Path, _value: Arc<FileMetadata>) -> Option<Arc<FileMetadata>> {
+        panic!("put in DefaultFilesMetadataCache is not supported, please use put_with_extra")
+    }
+
+    fn put_with_extra(
+        &self,
+        key: &Path,
+        value: Arc<FileMetadata>,
+        e: &Self::Extra,
+    ) -> Option<Arc<FileMetadata>> {
+        self.metadata
+            .insert(key.clone(), (e.clone(), value))
+            .map(|x| x.1)
+    }
+
+    fn remove(&mut self, k: &Path) -> Option<Arc<FileMetadata>> {
+        self.metadata.remove(k).map(|x| x.1 .1)
+    }
+
+    fn contains_key(&self, k: &Path) -> bool {
+        self.metadata.contains_key(k)
+    }
+
+    fn len(&self) -> usize {
+        self.metadata.len()
+    }
+
+    fn clear(&self) {
+        self.metadata.clear()
+    }
+
+    fn name(&self) -> String {
+        "DefaultFilesMetadataCache".to_string()
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use crate::cache::cache_unit::{DefaultFileStatisticsCache, DefaultListFilesCache};
+    use std::sync::Arc;
+
+    use crate::cache::cache_manager::FileMetadata;
+    use crate::cache::cache_unit::{
+        DefaultFileStatisticsCache, DefaultFilesMetadataCache, DefaultListFilesCache,
+    };
     use crate::cache::CacheAccessor;
     use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
     use chrono::DateTime;
@@ -231,5 +302,53 @@ mod tests {
             cache.get(&meta.location).unwrap().first().unwrap().clone(),
             meta.clone()
         );
+    }
+
+    #[test]
+    fn test_file_metadata_cache() {
+        let object_meta = ObjectMeta {
+            location: Path::from("test"),
+            last_modified: DateTime::parse_from_rfc3339("2025-07-29T12:12:12+00:00")
+                .unwrap()
+                .into(),
+            size: 1024,
+            e_tag: None,
+            version: None,
+        };
+        let metadata: Arc<FileMetadata> = Arc::new("retrieved_metadata".to_owned());
+
+        let cache = DefaultFilesMetadataCache::default();
+        assert!(cache
+            .get_with_extra(&object_meta.location, &object_meta)
+            .is_none());
+
+        cache.put_with_extra(&object_meta.location, metadata, &object_meta);
+        assert!(cache
+            .get_with_extra(&object_meta.location, &object_meta)
+            .is_some());
+
+        // file size changed
+        let mut object_meta2 = object_meta.clone();
+        object_meta2.size = 2048;
+        assert!(cache
+            .get_with_extra(&object_meta2.location, &object_meta2)
+            .is_none());
+
+        // file last_modified changed
+        let mut object_meta2 = object_meta.clone();
+        object_meta2.last_modified =
+            DateTime::parse_from_rfc3339("2025-07-29T13:13:13+00:00")
+                .unwrap()
+                .into();
+        assert!(cache
+            .get_with_extra(&object_meta2.location, &object_meta2)
+            .is_none());
+
+        // different file
+        let mut object_meta2 = object_meta;
+        object_meta2.location = Path::from("test2");
+        assert!(cache
+            .get_with_extra(&object_meta2.location, &object_meta2)
+            .is_none());
     }
 }

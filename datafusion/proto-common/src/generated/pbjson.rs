@@ -5066,6 +5066,9 @@ impl serde::Serialize for ParquetOptions {
         if self.skip_arrow_metadata {
             len += 1;
         }
+        if self.cache_metadata {
+            len += 1;
+        }
         if self.dictionary_page_size_limit != 0 {
             len += 1;
         }
@@ -5167,6 +5170,9 @@ impl serde::Serialize for ParquetOptions {
         }
         if self.skip_arrow_metadata {
             struct_ser.serialize_field("skipArrowMetadata", &self.skip_arrow_metadata)?;
+        }
+        if self.cache_metadata {
+            struct_ser.serialize_field("cacheMetadata", &self.cache_metadata)?;
         }
         if self.dictionary_page_size_limit != 0 {
             #[allow(clippy::needless_borrow)]
@@ -5314,6 +5320,8 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             "binaryAsString",
             "skip_arrow_metadata",
             "skipArrowMetadata",
+            "cache_metadata",
+            "cacheMetadata",
             "dictionary_page_size_limit",
             "dictionaryPageSizeLimit",
             "data_page_row_count_limit",
@@ -5362,6 +5370,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             SchemaForceViewTypes,
             BinaryAsString,
             SkipArrowMetadata,
+            CacheMetadata,
             DictionaryPageSizeLimit,
             DataPageRowCountLimit,
             MaxRowGroupSize,
@@ -5414,6 +5423,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                             "schemaForceViewTypes" | "schema_force_view_types" => Ok(GeneratedField::SchemaForceViewTypes),
                             "binaryAsString" | "binary_as_string" => Ok(GeneratedField::BinaryAsString),
                             "skipArrowMetadata" | "skip_arrow_metadata" => Ok(GeneratedField::SkipArrowMetadata),
+                            "cacheMetadata" | "cache_metadata" => Ok(GeneratedField::CacheMetadata),
                             "dictionaryPageSizeLimit" | "dictionary_page_size_limit" => Ok(GeneratedField::DictionaryPageSizeLimit),
                             "dataPageRowCountLimit" | "data_page_row_count_limit" => Ok(GeneratedField::DataPageRowCountLimit),
                             "maxRowGroupSize" | "max_row_group_size" => Ok(GeneratedField::MaxRowGroupSize),
@@ -5464,6 +5474,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                 let mut schema_force_view_types__ = None;
                 let mut binary_as_string__ = None;
                 let mut skip_arrow_metadata__ = None;
+                let mut cache_metadata__ = None;
                 let mut dictionary_page_size_limit__ = None;
                 let mut data_page_row_count_limit__ = None;
                 let mut max_row_group_size__ = None;
@@ -5585,6 +5596,12 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                             }
                             skip_arrow_metadata__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::CacheMetadata => {
+                            if cache_metadata__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("cacheMetadata"));
+                            }
+                            cache_metadata__ = Some(map_.next_value()?);
+                        }
                         GeneratedField::DictionaryPageSizeLimit => {
                             if dictionary_page_size_limit__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("dictionaryPageSizeLimit"));
@@ -5700,6 +5717,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                     schema_force_view_types: schema_force_view_types__.unwrap_or_default(),
                     binary_as_string: binary_as_string__.unwrap_or_default(),
                     skip_arrow_metadata: skip_arrow_metadata__.unwrap_or_default(),
+                    cache_metadata: cache_metadata__.unwrap_or_default(),
                     dictionary_page_size_limit: dictionary_page_size_limit__.unwrap_or_default(),
                     data_page_row_count_limit: data_page_row_count_limit__.unwrap_or_default(),
                     max_row_group_size: max_row_group_size__.unwrap_or_default(),

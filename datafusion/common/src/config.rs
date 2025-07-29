@@ -549,6 +549,12 @@ config_namespace! {
         /// (reading) Use any available bloom filters when reading parquet files
         pub bloom_filter_on_read: bool, default = true
 
+        /// (reading) Whether or not to enable the caching of embedded metadata of Parquet files
+        /// (footer and page metadata). Enabling it can offer substantial performance improvements
+        /// for repeated queries over large files. By default, the cache is automatically
+        /// invalidated when the underlying file is modified.
+        pub cache_metadata: bool, default = false
+
         // The following options affect writing to parquet files
         // and map to parquet::file::properties::WriterProperties
 
