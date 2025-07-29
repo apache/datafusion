@@ -284,9 +284,9 @@ config_namespace! {
         /// - `nulls_first`: Nulls always be first in any order.
         /// - `nulls_last`: Nulls always be last in any order.
         ///
-        /// By default, `null_max` is used to follow Postgres's behavior.
+        /// By default, `nulls_max` is used to follow Postgres's behavior.
         /// postgres rule: <https://www.postgresql.org/docs/current/queries-order.html>
-        pub default_null_ordering: String, default = "asc_reverse".to_string()
+        pub default_null_ordering: String, default = "nulls_max".to_string()
     }
 }
 
