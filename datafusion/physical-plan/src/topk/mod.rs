@@ -36,7 +36,9 @@ use datafusion_common::{
     internal_datafusion_err, internal_err, HashMap, Result, ScalarValue,
 };
 use datafusion_execution::{
-    memory_pool::{MemoryConsumer, MemoryReservation},
+    memory_pool::{
+        human_readable_size, ExplainMemory, MemoryConsumer, MemoryReservation,
+    },
     runtime_env::RuntimeEnv,
 };
 use datafusion_physical_expr::{
@@ -533,6 +535,26 @@ impl TopK {
             + self.row_converter.size()
             + self.scratch_rows.size()
             + self.heap.size()
+    }
+}
+
+impl ExplainMemory for TopK {
+    fn explain_memory(&self) -> Result<String> {
+        fn part(label: &str, size: usize) -> String {
+            format!("{}: {}", label, human_readable_size(size))
+        }
+
+        Ok(vec![
+            part("row_converter", self.row_converter.size()),
+            part("scratch_rows", self.scratch_rows.size()),
+            part("heap", self.heap.size()),
+            format!("reservation: {}", self.reservation.explain_memory()?),
+        ]
+        .join(", "))
+    }
+
+    fn memory_size(&self) -> usize {
+        self.size() + self.reservation.size()
     }
 }
 

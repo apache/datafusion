@@ -34,7 +34,9 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use crate::filter::batch_filter;
-use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
+use datafusion_execution::memory_pool::{
+    human_readable_size, ExplainMemory, MemoryConsumer, MemoryReservation,
+};
 use futures::stream::{Stream, StreamExt};
 
 use super::AggregateExec;
@@ -185,6 +187,29 @@ impl Stream for AggregateStream {
 impl RecordBatchStream for AggregateStream {
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
+    }
+}
+
+impl ExplainMemory for AggregateStreamInner {
+    fn explain_memory(&self) -> Result<String> {
+        fn part(label: &str, size: usize) -> String {
+            format!("{}: {}", label, human_readable_size(size))
+        }
+
+        let mut parts = Vec::new();
+        for (i, acc) in self.accumulators.iter().enumerate() {
+            parts.push(part(&format!("acc[{i}]"), acc.size()));
+        }
+        parts.push(format!(
+            "reservation: {}",
+            self.reservation.explain_memory()?
+        ));
+        Ok(parts.join(", "))
+    }
+
+    fn memory_size(&self) -> usize {
+        let size: usize = self.accumulators.iter().map(|a| a.size()).sum();
+        size + self.reservation.size()
     }
 }
 

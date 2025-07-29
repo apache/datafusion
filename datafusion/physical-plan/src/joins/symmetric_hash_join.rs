@@ -70,7 +70,9 @@ use datafusion_common::utils::bisect;
 use datafusion_common::{
     internal_err, plan_err, HashSet, JoinSide, JoinType, NullEquality, Result,
 };
-use datafusion_execution::memory_pool::MemoryConsumer;
+use datafusion_execution::memory_pool::{
+    human_readable_size, ExplainMemory, MemoryConsumer,
+};
 use datafusion_execution::TaskContext;
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
@@ -701,6 +703,25 @@ impl<T: BatchTransformer + Unpin + Send> Stream for SymmetricHashJoinStream<T> {
         cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
         self.poll_next_impl(cx)
+    }
+}
+
+impl<T: BatchTransformer + Unpin + Send> ExplainMemory for SymmetricHashJoinStream<T> {
+    fn explain_memory(&self) -> Result<String> {
+        fn part(label: &str, size: usize) -> String {
+            format!("{}: {}", label, human_readable_size(size))
+        }
+
+        Ok(vec![
+            part("left", self.left.size()),
+            part("right", self.right.size()),
+            format!("reservation: {}", self.reservation.lock().explain_memory()?),
+        ]
+        .join(", "))
+    }
+
+    fn memory_size(&self) -> usize {
+        self.size() + self.reservation.lock().size()
     }
 }
 
