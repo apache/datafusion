@@ -23,7 +23,7 @@ use arrow_schema::{DataType, Field, Schema};
 use datafusion::datasource::memory::MemTable;
 use datafusion::error::Result;
 use datafusion::execution::memory_pool::{
-    report_top_consumers, GreedyMemoryPool, MemoryPool, TrackConsumersPool,
+    GreedyMemoryPool, MemoryPool, TrackConsumersPool,
 };
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::prelude::*;
