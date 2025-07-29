@@ -1074,9 +1074,17 @@ Environment variables are read during <code class="docutils literal notranslate"
 </tr>
 </thead>
 <tbody>
-<tr class="row-even"><td><p>datafusion.runtime.memory_limit</p></td>
+<tr class="row-even"><td><p>datafusion.runtime.max_temp_directory_size</p></td>
+<td><p>100G</p></td>
+<td><p>Maximum temporary file directory size. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes). Example: ‘2G’ for 2 gigabytes.</p></td>
+</tr>
+<tr class="row-odd"><td><p>datafusion.runtime.memory_limit</p></td>
 <td><p>NULL</p></td>
 <td><p>Maximum memory limit for query execution. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes). Example: ‘2G’ for 2 gigabytes.</p></td>
+</tr>
+<tr class="row-even"><td><p>datafusion.runtime.temp_directory</p></td>
+<td><p>NULL</p></td>
+<td><p>The path to the temporary file directory.</p></td>
 </tr>
 </tbody>
 </table>
