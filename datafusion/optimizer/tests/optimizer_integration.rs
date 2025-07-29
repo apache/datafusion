@@ -968,7 +968,10 @@ fn test_sql(sql: &str) -> Result<LogicalPlan> {
                 ],
                 HashMap::new(),
             ),
-            Constraints::new_unverified(vec![Constraint::PrimaryKey(vec![0])]),
+            Constraints::new_unverified(vec![
+                Constraint::PrimaryKey(vec![0]),
+                Constraint::Unique(vec![1, 2]), // (user_id, purchase_date) is unique
+            ]),
         );
 
     let sql_to_rel = SqlToRel::new(&context_provider);

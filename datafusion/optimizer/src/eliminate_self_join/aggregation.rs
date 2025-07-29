@@ -378,7 +378,6 @@ fn try_replace_with_window(
         input,
         group_expr,
         aggr_expr,
-        schema,
         ..
     }: &Aggregate,
 ) -> Option<OptimizationResult> {
@@ -395,7 +394,7 @@ fn try_replace_with_window(
 
     // Step 2: Extract table information from both sides of the join
     let left = try_narrow_join_to_table_scan_alias(join.left.as_ref())?;
-    let right = try_narrow_join_to_table_scan_alias(&join.right.as_ref())?;
+    let right = try_narrow_join_to_table_scan_alias(join.right.as_ref())?;
 
     // Step 3: Verify it's a self-join (same table on both sides)
     if !is_table_scan_same(left.table_scan, right.table_scan) {
@@ -754,7 +753,7 @@ mod tests {
         ]);
 
         // Create constraints - order_id is PRIMARY KEY (index 0)
-        let constraints = Constraints::new(vec![
+        let constraints = Constraints::new_unverified(vec![
             Constraint::PrimaryKey(vec![0]), // order_id is unique
         ]);
 
@@ -797,7 +796,7 @@ mod tests {
             .join(
                 right,
                 JoinType::Inner,
-                (vec![], vec![]), // No equi-join conditions
+                (Vec::<Column>::new(), Vec::<Column>::new()), // No equi-join conditions
                 Some(join_filter),
             )?
             .aggregate(
