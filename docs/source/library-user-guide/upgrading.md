@@ -19,9 +19,324 @@
 
 # Upgrade Guides
 
+## DataFusion `50.0.0`
+
+**Note:** DataFusion `50.0.0` has not been released yet. The information provided in this section pertains to features and changes that have already been merged to the main branch and are awaiting release in this version.
+You can see the current [status of the `50.0.0 `release here](https://github.com/apache/datafusion/issues/16799)
+
+## DataFusion `49.0.0`
+
+### `MSRV` updated to 1.85.1
+
+The Minimum Supported Rust Version (MSRV) has been updated to [`1.85.1`]. See
+[#16728] for details.
+
+[`1.85.1`]: https://releases.rs/docs/1.85.1/
+[#16728]: https://github.com/apache/datafusion/pull/16728
+
+### `DataFusionError` variants are now `Box`ed
+
+To reduce the size of `DataFusionError`, several variants that were previously stored inline are now `Box`ed. This reduces the size of `Result<T, DataFusionError>` and thus stack usage and async state machine size. Please see [#16652] for more details.
+
+The following variants of `DataFusionError` are now boxed:
+
+- `ArrowError`
+- `SQL`
+- `SchemaError`
+
+This is a breaking change. Code that constructs or matches on these variants will need to be updated.
+
+For example, to create a `SchemaError`, instead of:
+
+```rust
+# /* comment to avoid running
+use datafusion_common::{DataFusionError, SchemaError};
+DataFusionError::SchemaError(
+  SchemaError::DuplicateUnqualifiedField { name: "foo".to_string() },
+  Box::new(None)
+)
+# */
+```
+
+You now need to `Box` the inner error:
+
+```rust
+# /* comment to avoid running
+use datafusion_common::{DataFusionError, SchemaError};
+DataFusionError::SchemaError(
+  Box::new(SchemaError::DuplicateUnqualifiedField { name: "foo".to_string() }),
+  Box::new(None)
+)
+# */
+```
+
+[#16652]: https://github.com/apache/datafusion/issues/16652
+
+### Metadata on Arrow Types is now represented by `FieldMetadata`
+
+Metadata from the Arrow `Field` is now stored using the `FieldMetadata`
+structure. In prior versions it was stored as both a `HashMap<String, String>`
+and a `BTreeMap<String, String>`. `FieldMetadata` is a easier to work with and
+is more efficient.
+
+To create `FieldMetadata` from a `Field`:
+
+```rust
+# /* comment to avoid running
+ let metadata = FieldMetadata::from(&field);
+# */
+```
+
+To add metadata to a `Field`, use the `add_to_field` method:
+
+```rust
+# /* comment to avoid running
+let updated_field = metadata.add_to_field(field);
+# */
+```
+
+See [#16317] for details.
+
+[#16317]: https://github.com/apache/datafusion/pull/16317
+
+### New `datafusion.execution.spill_compression` configuration option
+
+DataFusion 49.0.0 adds support for compressing spill files when data is written to disk during spilling query execution. A new configuration option `datafusion.execution.spill_compression` controls the compression codec used.
+
+**Configuration:**
+
+- **Key**: `datafusion.execution.spill_compression`
+- **Default**: `uncompressed`
+- **Valid values**: `uncompressed`, `lz4_frame`, `zstd`
+
+**Usage:**
+
+```rust
+# /* comment to avoid running
+use datafusion::prelude::*;
+use datafusion_common::config::SpillCompression;
+
+let config = SessionConfig::default()
+    .with_spill_compression(SpillCompression::Zstd);
+let ctx = SessionContext::new_with_config(config);
+# */
+```
+
+Or via SQL:
+
+```sql
+SET datafusion.execution.spill_compression = 'zstd';
+```
+
+For more details about this configuration option, including performance trade-offs between different compression codecs, see the [Configuration Settings](../user-guide/configs.md) documentation.
+
+### Deprecated `map_varchar_to_utf8view` configuration option
+
+See [issue #16290](https://github.com/apache/datafusion/pull/16290) for more information
+The old configuration
+
+```text
+datafusion.sql_parser.map_varchar_to_utf8view
+```
+
+is now **deprecated** in favor of the unified option below.\
+If you previously used this to control only `VARCHAR`→`Utf8View` mapping, please migrate to `map_string_types_to_utf8view`.
+
+---
+
+### New `map_string_types_to_utf8view` configuration option
+
+To unify **all** SQL string types (`CHAR`, `VARCHAR`, `TEXT`, `STRING`) to Arrow’s zero‑copy `Utf8View`, DataFusion 49.0.0 introduces:
+
+- **Key**: `datafusion.sql_parser.map_string_types_to_utf8view`
+- **Default**: `true`
+
+**Description:**
+
+- When **true** (default), **all** SQL string types are mapped to `Utf8View`, avoiding full‑copy UTF‑8 allocations and improving performance.
+- When **false**, DataFusion falls back to the legacy `Utf8` mapping for **all** string types.
+
+#### Examples
+
+```rust
+# /* comment to avoid running
+// Disable Utf8View mapping for all SQL string types
+let opts = datafusion::sql::planner::ParserOptions::new()
+    .with_map_string_types_to_utf8view(false);
+
+// Verify the setting is applied
+assert!(!opts.map_string_types_to_utf8view);
+# */
+```
+
+---
+
+```sql
+-- Disable Utf8View mapping globally
+SET datafusion.sql_parser.map_string_types_to_utf8view = false;
+
+-- Now VARCHAR, CHAR, TEXT, STRING all use Utf8 rather than Utf8View
+CREATE TABLE my_table (a VARCHAR, b TEXT, c STRING);
+DESCRIBE my_table;
+```
+
+### Deprecating `SchemaAdapterFactory` and `SchemaAdapter`
+
+We are moving away from converting data (using `SchemaAdapter`) to converting the expressions themselves (which is more efficient and flexible).
+
+See [issue #16800](https://github.com/apache/datafusion/issues/16800) for more information
+The first place this change has taken place is in predicate pushdown for Parquet.
+By default if you do not use a custom `SchemaAdapterFactory` we will use expression conversion instead.
+If you do set a custom `SchemaAdapterFactory` we will continue to use it but emit a warning about that code path being deprecated.
+
+To resolve this you need to implement a custom `PhysicalExprAdapterFactory` and use that instead of a `SchemaAdapterFactory`.
+See the [default values](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/default_column_values.rs) for an example of how to do this.
+Opting into the new APIs will set you up for future changes since we plan to expand use of `PhysicalExprAdapterFactory` to other areas of DataFusion.
+
+See [#16800] for details.
+
+[#16800]: https://github.com/apache/datafusion/issues/16800
+
+### `TableParquetOptions` Updated
+
+The `TableParquetOptions` struct has a new `crypto` field to specify encryption
+options for Parquet files. The `ParquetEncryptionOptions` implements `Default`
+so you can upgrade your existing code like this:
+
+```rust
+# /* comment to avoid running
+TableParquetOptions {
+  global,
+  column_specific_options,
+  key_value_metadata,
+}
+# */
+```
+
+To this:
+
+```rust
+# /* comment to avoid running
+TableParquetOptions {
+  global,
+  column_specific_options,
+  key_value_metadata,
+  crypto: Default::default(), // New crypto field
+}
+# */
+```
+
+## DataFusion `48.0.1`
+
+### `datafusion.execution.collect_statistics` now defaults to `true`
+
+The default value of the `datafusion.execution.collect_statistics` configuration
+setting is now true. This change impacts users that use that value directly and relied
+on its default value being `false`.
+
+This change also restores the default behavior of `ListingTable` to its previous. If you use it directly
+you can maintain the current behavior by overriding the default value in your code.
+
+```rust
+# /* comment to avoid running
+ListingOptions::new(Arc::new(ParquetFormat::default()))
+    .with_collect_stat(false)
+    // other options
+# */
+```
+
 ## DataFusion `48.0.0`
 
-### The `VARCHAR` SQL type is now represented as `Utf8View` in Arrow.
+### `Expr::Literal` has optional metadata
+
+The [`Expr::Literal`] variant now includes optional metadata, which allows for
+carrying through Arrow field metadata to support extension types and other uses.
+
+This means code such as
+
+```rust
+# /* comment to avoid running
+match expr {
+...
+  Expr::Literal(scalar) => ...
+...
+}
+#  */
+```
+
+Should be updated to:
+
+```rust
+# /* comment to avoid running
+match expr {
+...
+  Expr::Literal(scalar, _metadata) => ...
+...
+}
+#  */
+```
+
+Likewise constructing `Expr::Literal` requires metadata as well. The [`lit`] function
+has not changed and returns an `Expr::Literal` with no metadata.
+
+[`expr::literal`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/enum.Expr.html#variant.Literal
+[`lit`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/fn.lit.html
+
+### `Expr::WindowFunction` is now `Box`ed
+
+`Expr::WindowFunction` is now a `Box<WindowFunction>` instead of a `WindowFunction` directly.
+This change was made to reduce the size of `Expr` and improve performance when
+planning queries (see [details on #16207]).
+
+This is a breaking change, so you will need to update your code if you match
+on `Expr::WindowFunction` directly. For example, if you have code like this:
+
+```rust
+# /* comment to avoid running
+match expr {
+  Expr::WindowFunction(WindowFunction {
+    params:
+      WindowFunctionParams {
+       partition_by,
+       order_by,
+      ..
+    }
+  }) => {
+    // Use partition_by and order_by as needed
+  }
+  _ => {
+    // other expr
+  }
+}
+# */
+```
+
+You will need to change it to:
+
+```rust
+# /* comment to avoid running
+match expr {
+  Expr::WindowFunction(window_fun) => {
+    let WindowFunction {
+      fun,
+      params: WindowFunctionParams {
+        args,
+        partition_by,
+        ..
+        },
+    } = window_fun.as_ref();
+    // Use partition_by and order_by as needed
+  }
+  _ => {
+    // other expr
+  }
+}
+#  */
+```
+
+[details on #16207]: https://github.com/apache/datafusion/pull/16207#issuecomment-2922659103
+
+### The `VARCHAR` SQL type is now represented as `Utf8View` in Arrow
 
 The mapping of the SQL `VARCHAR` type has been changed from `Utf8` to `Utf8View`
 which improves performance for many string operations. You can read more about
@@ -146,6 +461,14 @@ working but no one knows due to lack of test coverage).
 
 [api deprecation guidelines]: https://datafusion.apache.org/contributor-guide/api-health.html#deprecation-guidelines
 
+### `PartitionedFile` added as an argument to the `FileOpener` trait
+
+This is necessary to properly fix filter pushdown for filters that combine partition
+columns and file columns (e.g. `day = username['dob']`).
+
+If you implemented a custom `FileOpener` you will need to add the `PartitionedFile` argument
+but are not required to use it in any way.
+
 ## DataFusion `47.0.0`
 
 This section calls out some of the major changes in the `47.0.0` release of DataFusion.
@@ -165,7 +488,6 @@ Additionally `ObjectStore::list` and `ObjectStore::list_with_offset` have been c
 
 [#6619]: https://github.com/apache/arrow-rs/pull/6619
 [#7371]: https://github.com/apache/arrow-rs/pull/7371
-[#7328]: https://github.com/apache/arrow-rs/pull/6961
 
 This requires converting from `usize` to `u64` occasionally as well as changes to `ObjectStore` implementations such as
 

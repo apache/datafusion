@@ -17,6 +17,12 @@
 
 //! TopK: Combination of Sort / LIMIT
 
+use arrow::{
+    array::{Array, AsArray},
+    compute::{interleave_record_batch, prep_null_mask_filter, FilterBuilder},
+    row::{RowConverter, Rows, SortField},
+};
+use datafusion_expr::{ColumnarValue, Operator};
 use std::mem::size_of;
 use std::{cmp::Ordering, collections::BinaryHeap, sync::Arc};
 
@@ -25,13 +31,17 @@ use crate::spill::get_record_batch_memory_size;
 use crate::{stream::RecordBatchStreamAdapter, SendableRecordBatchStream};
 
 use arrow::array::{ArrayRef, RecordBatch};
-use arrow::compute::interleave_record_batch;
 use arrow::datatypes::SchemaRef;
-use arrow::row::{RowConverter, Rows, SortField};
-use datafusion_common::{internal_datafusion_err, HashMap, Result};
+use datafusion_common::{
+    internal_datafusion_err, internal_err, HashMap, Result, ScalarValue,
+};
 use datafusion_execution::{
     memory_pool::{MemoryConsumer, MemoryReservation},
     runtime_env::RuntimeEnv,
+};
+use datafusion_physical_expr::{
+    expressions::{is_not_null, is_null, lit, BinaryExpr, DynamicFilterPhysicalExpr},
+    PhysicalExpr,
 };
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 
@@ -110,6 +120,8 @@ pub struct TopK {
     common_sort_prefix_converter: Option<RowConverter>,
     /// Common sort prefix between the input and the sort expressions to allow early exit optimization
     common_sort_prefix: Arc<[PhysicalSortExpr]>,
+    /// Filter matching the state of the `TopK` heap used for dynamic filter pushdown
+    filter: Option<Arc<DynamicFilterPhysicalExpr>>,
     /// If true, indicates that all rows of subsequent batches are guaranteed
     /// to be greater (by byte order, after row conversion) than the top K,
     /// which means the top K won't change and the computation can be finished early.
@@ -148,6 +160,7 @@ impl TopK {
         batch_size: usize,
         runtime: Arc<RuntimeEnv>,
         metrics: &ExecutionPlanMetricsSet,
+        filter: Option<Arc<DynamicFilterPhysicalExpr>>,
     ) -> Result<Self> {
         let reservation = MemoryConsumer::new(format!("TopK[{partition_id}]"))
             .register(&runtime.memory_pool);
@@ -179,6 +192,7 @@ impl TopK {
             common_sort_prefix_converter: prefix_row_converter,
             common_sort_prefix: Arc::from(common_sort_prefix),
             finished: false,
+            filter,
         })
     }
 
@@ -189,7 +203,7 @@ impl TopK {
         let baseline = self.metrics.baseline.clone();
         let _timer = baseline.elapsed_compute().timer();
 
-        let sort_keys: Vec<ArrayRef> = self
+        let mut sort_keys: Vec<ArrayRef> = self
             .expr
             .iter()
             .map(|expr| {
@@ -198,39 +212,202 @@ impl TopK {
             })
             .collect::<Result<Vec<_>>>()?;
 
+        let mut selected_rows = None;
+
+        if let Some(filter) = self.filter.as_ref() {
+            // If a filter is provided, update it with the new rows
+            let filter = filter.current()?;
+            let filtered = filter.evaluate(&batch)?;
+            let num_rows = batch.num_rows();
+            let array = filtered.into_array(num_rows)?;
+            let mut filter = array.as_boolean().clone();
+            let true_count = filter.true_count();
+            if true_count == 0 {
+                // nothing to filter, so no need to update
+                return Ok(());
+            }
+            // only update the keys / rows if the filter does not match all rows
+            if true_count < num_rows {
+                // Indices in `set_indices` should be correct if filter contains nulls
+                // So we prepare the filter here. Note this is also done in the `FilterBuilder`
+                // so there is no overhead to do this here.
+                if filter.nulls().is_some() {
+                    filter = prep_null_mask_filter(&filter);
+                }
+
+                let filter_predicate = FilterBuilder::new(&filter);
+                let filter_predicate = if sort_keys.len() > 1 {
+                    // Optimize filter when it has multiple sort keys
+                    filter_predicate.optimize().build()
+                } else {
+                    filter_predicate.build()
+                };
+                selected_rows = Some(filter);
+                sort_keys = sort_keys
+                    .iter()
+                    .map(|key| filter_predicate.filter(key).map_err(|x| x.into()))
+                    .collect::<Result<Vec<_>>>()?;
+            }
+        };
         // reuse existing `Rows` to avoid reallocations
         let rows = &mut self.scratch_rows;
         rows.clear();
         self.row_converter.append(rows, &sort_keys)?;
 
-        // TODO make this algorithmically better?:
-        // Idea: filter out rows >= self.heap.max() early (before passing to `RowConverter`)
-        //       this avoids some work and also might be better vectorizable.
         let mut batch_entry = self.heap.register_batch(batch.clone());
-        for (index, row) in rows.iter().enumerate() {
+
+        let replacements = match selected_rows {
+            Some(filter) => {
+                self.find_new_topk_items(filter.values().set_indices(), &mut batch_entry)
+            }
+            None => self.find_new_topk_items(0..sort_keys[0].len(), &mut batch_entry),
+        };
+
+        if replacements > 0 {
+            self.metrics.row_replacements.add(replacements);
+
+            self.heap.insert_batch_entry(batch_entry);
+
+            // conserve memory
+            self.heap.maybe_compact()?;
+
+            // update memory reservation
+            self.reservation.try_resize(self.size())?;
+
+            // flag the topK as finished if we know that all
+            // subsequent batches are guaranteed to be greater (by byte order, after row conversion) than the top K,
+            // which means the top K won't change and the computation can be finished early.
+            self.attempt_early_completion(&batch)?;
+
+            // update the filter representation of our TopK heap
+            self.update_filter()?;
+        }
+
+        Ok(())
+    }
+
+    fn find_new_topk_items(
+        &mut self,
+        items: impl Iterator<Item = usize>,
+        batch_entry: &mut RecordBatchEntry,
+    ) -> usize {
+        let mut replacements = 0;
+        let rows = &mut self.scratch_rows;
+        for (index, row) in items.zip(rows.iter()) {
             match self.heap.max() {
                 // heap has k items, and the new row is greater than the
                 // current max in the heap ==> it is not a new topk
                 Some(max_row) if row.as_ref() >= max_row.row() => {}
                 // don't yet have k items or new item is lower than the currently k low values
                 None | Some(_) => {
-                    self.heap.add(&mut batch_entry, row, index);
-                    self.metrics.row_replacements.add(1);
+                    self.heap.add(batch_entry, row, index);
+                    replacements += 1;
                 }
             }
         }
-        self.heap.insert_batch_entry(batch_entry);
+        replacements
+    }
 
-        // conserve memory
-        self.heap.maybe_compact()?;
+    /// Update the filter representation of our TopK heap.
+    /// For example, given the sort expression `ORDER BY a DESC, b ASC LIMIT 3`,
+    /// and the current heap values `[(1, 5), (1, 4), (2, 3)]`,
+    /// the filter will be updated to:
+    ///
+    /// ```sql
+    /// (a > 1 OR (a = 1 AND b < 5)) AND
+    /// (a > 1 OR (a = 1 AND b < 4)) AND
+    /// (a > 2 OR (a = 2 AND b < 3))
+    /// ```
+    fn update_filter(&mut self) -> Result<()> {
+        let Some(filter) = &self.filter else {
+            return Ok(());
+        };
+        let Some(thresholds) = self.heap.get_threshold_values(&self.expr)? else {
+            return Ok(());
+        };
 
-        // update memory reservation
-        self.reservation.try_resize(self.size())?;
+        // Create filter expressions for each threshold
+        let mut filters: Vec<Arc<dyn PhysicalExpr>> =
+            Vec::with_capacity(thresholds.len());
 
-        // flag the topK as finished if we know that all
-        // subsequent batches are guaranteed to be greater (by byte order, after row conversion) than the top K,
-        // which means the top K won't change and the computation can be finished early.
-        self.attempt_early_completion(&batch)?;
+        let mut prev_sort_expr: Option<Arc<dyn PhysicalExpr>> = None;
+        for (sort_expr, value) in self.expr.iter().zip(thresholds.iter()) {
+            // Create the appropriate operator based on sort order
+            let op = if sort_expr.options.descending {
+                // For descending sort, we want col > threshold (exclude smaller values)
+                Operator::Gt
+            } else {
+                // For ascending sort, we want col < threshold (exclude larger values)
+                Operator::Lt
+            };
+
+            let value_null = value.is_null();
+
+            let comparison = Arc::new(BinaryExpr::new(
+                Arc::clone(&sort_expr.expr),
+                op,
+                lit(value.clone()),
+            ));
+
+            let comparison_with_null = match (sort_expr.options.nulls_first, value_null) {
+                // For nulls first, transform to (threshold.value is not null) and (threshold.expr is null or comparison)
+                (true, true) => lit(false),
+                (true, false) => Arc::new(BinaryExpr::new(
+                    is_null(Arc::clone(&sort_expr.expr))?,
+                    Operator::Or,
+                    comparison,
+                )),
+                // For nulls last, transform to (threshold.value is null and threshold.expr is not null)
+                // or (threshold.value is not null and comparison)
+                (false, true) => is_not_null(Arc::clone(&sort_expr.expr))?,
+                (false, false) => comparison,
+            };
+
+            let mut eq_expr = Arc::new(BinaryExpr::new(
+                Arc::clone(&sort_expr.expr),
+                Operator::Eq,
+                lit(value.clone()),
+            ));
+
+            if value_null {
+                eq_expr = Arc::new(BinaryExpr::new(
+                    is_null(Arc::clone(&sort_expr.expr))?,
+                    Operator::Or,
+                    eq_expr,
+                ));
+            }
+
+            // For a query like order by a, b, the filter for column `b` is only applied if
+            // the condition a = threshold.value (considering null equality) is met.
+            // Therefore, we add equality predicates for all preceding fields to the filter logic of the current field,
+            // and include the current field's equality predicate in `prev_sort_expr` for use with subsequent fields.
+            match prev_sort_expr.take() {
+                None => {
+                    prev_sort_expr = Some(eq_expr);
+                    filters.push(comparison_with_null);
+                }
+                Some(p) => {
+                    filters.push(Arc::new(BinaryExpr::new(
+                        Arc::clone(&p),
+                        Operator::And,
+                        comparison_with_null,
+                    )));
+
+                    prev_sort_expr =
+                        Some(Arc::new(BinaryExpr::new(p, Operator::And, eq_expr)));
+                }
+            }
+        }
+
+        let dynamic_predicate = filters
+            .into_iter()
+            .reduce(|a, b| Arc::new(BinaryExpr::new(a, Operator::Or, b)));
+
+        if let Some(predicate) = dynamic_predicate {
+            if !predicate.eq(&lit(true)) {
+                filter.update(predicate)?;
+            }
+        }
 
         Ok(())
     }
@@ -324,6 +501,7 @@ impl TopK {
             common_sort_prefix_converter: _,
             common_sort_prefix: _,
             finished: _,
+            filter: _,
         } = self;
         let _timer = metrics.baseline.elapsed_compute().timer(); // time updated on drop
 
@@ -565,6 +743,47 @@ impl TopKHeap {
             + (self.inner.capacity() * size_of::<TopKRow>())
             + self.store.size()
             + self.owned_bytes
+    }
+
+    fn get_threshold_values(
+        &self,
+        sort_exprs: &[PhysicalSortExpr],
+    ) -> Result<Option<Vec<ScalarValue>>> {
+        // If the heap doesn't have k elements yet, we can't create thresholds
+        let max_row = match self.max() {
+            Some(row) => row,
+            None => return Ok(None),
+        };
+
+        // Get the batch that contains the max row
+        let batch_entry = match self.store.get(max_row.batch_id) {
+            Some(entry) => entry,
+            None => return internal_err!("Invalid batch ID in TopKRow"),
+        };
+
+        // Extract threshold values for each sort expression
+        let mut scalar_values = Vec::with_capacity(sort_exprs.len());
+        for sort_expr in sort_exprs {
+            // Extract the value for this column from the max row
+            let expr = Arc::clone(&sort_expr.expr);
+            let value = expr.evaluate(&batch_entry.batch.slice(max_row.index, 1))?;
+
+            // Convert to scalar value - should be a single value since we're evaluating on a single row batch
+            let scalar = match value {
+                ColumnarValue::Scalar(scalar) => scalar,
+                ColumnarValue::Array(array) if array.len() == 1 => {
+                    // Extract the first (and only) value from the array
+                    ScalarValue::try_from_array(&array, 0)?
+                }
+                array => {
+                    return internal_err!("Expected a scalar value, got {:?}", array)
+                }
+            };
+
+            scalar_values.push(scalar);
+        }
+
+        Ok(Some(scalar_values))
     }
 }
 
@@ -834,6 +1053,7 @@ mod tests {
             2,
             runtime,
             &metrics,
+            None,
         )?;
 
         // Create the first batch with two columns:

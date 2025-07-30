@@ -15,10 +15,10 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# Currently, the avro not support Utf8View type, so we disable the map_varchar_to_utf8view
+# Currently, the avro not support Utf8View type, so we disable the map_string_types_to_utf8view
 # After https://github.com/apache/arrow-rs/issues/7262 released, we can remove this setting
 statement ok
-set datafusion.sql_parser.map_varchar_to_utf8view = false;
+set datafusion.sql_parser.map_string_types_to_utf8view = false;
 
 statement ok
 CREATE EXTERNAL TABLE alltypes_plain (

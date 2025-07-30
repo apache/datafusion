@@ -53,7 +53,7 @@ type BoolDefaultTrue = bool;
 /// [2].
 ///
 /// [1]: http://www.tpc.org/tpch/
-/// [2]: https://github.com/databricks/tpch-dbgen.git,
+/// [2]: https://github.com/databricks/tpch-dbgen.git
 /// [2.17.1]: https://www.tpc.org/tpc_documents_current_versions/pdf/tpc-h_v2.17.1.pdf
 #[derive(Debug, StructOpt, Clone)]
 #[structopt(verbatim_doc_comment)]
@@ -147,10 +147,11 @@ impl RunOpt {
         let mut millis = vec![];
         // run benchmark
         let mut query_results = vec![];
+
+        let sql = &get_query_sql(query_id)?;
+
         for i in 0..self.iterations() {
             let start = Instant::now();
-
-            let sql = &get_query_sql(query_id)?;
 
             // query 15 is special, with 3 statements. the second statement is the one from which we
             // want to capture the results
@@ -273,7 +274,7 @@ impl RunOpt {
                     (Arc::new(format), path, ".tbl")
                 }
                 "csv" => {
-                    let path = format!("{path}/{table}");
+                    let path = format!("{path}/csv/{table}");
                     let format = CsvFormat::default()
                         .with_delimiter(b',')
                         .with_has_header(true);

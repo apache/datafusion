@@ -699,6 +699,11 @@ SELECT to_hex(2147483647)
 7fffffff
 
 query T
+SELECT to_hex(CAST(2147483647 as BIGINT UNSIGNED))
+----
+7fffffff
+
+query T
 SELECT to_hex(9223372036854775807)
 ----
 7fffffffffffffff

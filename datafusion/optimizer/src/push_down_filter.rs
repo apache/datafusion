@@ -20,6 +20,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use arrow::datatypes::DataType;
 use indexmap::IndexSet;
 use itertools::Itertools;
 
@@ -40,6 +41,7 @@ use datafusion_expr::{
 };
 
 use crate::optimizer::ApplyOrder;
+use crate::simplify_expressions::simplify_predicates;
 use crate::utils::{has_all_column_refs, is_restrict_null_predicate};
 use crate::{OptimizerConfig, OptimizerRule};
 
@@ -168,7 +170,7 @@ pub(crate) fn lr_is_preserved(join_type: JoinType) -> (bool, bool) {
         JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark => (true, false),
         // No columns from the left side of the join can be referenced in output
         // predicates for semi/anti joins, so whether we specify t/f doesn't matter.
-        JoinType::RightSemi | JoinType::RightAnti => (false, true),
+        JoinType::RightSemi | JoinType::RightAnti | JoinType::RightMark => (false, true),
     }
 }
 
@@ -191,6 +193,7 @@ pub(crate) fn on_lr_is_preserved(join_type: JoinType) -> (bool, bool) {
         JoinType::LeftAnti => (false, true),
         JoinType::RightAnti => (true, false),
         JoinType::LeftMark => (false, true),
+        JoinType::RightMark => (true, false),
     }
 }
 
@@ -691,7 +694,7 @@ fn infer_join_predicates_from_on_filters(
                 inferred_predicates,
             )
         }
-        JoinType::Right | JoinType::RightSemi => {
+        JoinType::Right | JoinType::RightSemi | JoinType::RightMark => {
             infer_join_predicates_impl::<false, true>(
                 join_col_keys,
                 on_filters,
@@ -778,6 +781,18 @@ impl OptimizerRule for PushDownFilter {
             return Ok(Transformed::no(plan));
         };
 
+        let predicate = split_conjunction_owned(filter.predicate.clone());
+        let old_predicate_len = predicate.len();
+        let new_predicates = simplify_predicates(predicate)?;
+        if old_predicate_len != new_predicates.len() {
+            let Some(new_predicate) = conjunction(new_predicates) else {
+                // new_predicates is empty - remove the filter entirely
+                // Return the child plan without the filter
+                return Ok(Transformed::yes(Arc::unwrap_or_clone(filter.input)));
+            };
+            filter.predicate = new_predicate;
+        }
+
         match Arc::unwrap_or_clone(filter.input) {
             LogicalPlan::Filter(child_filter) => {
                 let parents_predicates = split_conjunction_owned(filter.predicate);
@@ -861,14 +876,37 @@ impl OptimizerRule for PushDownFilter {
                 let predicates = split_conjunction_owned(filter.predicate.clone());
                 let mut non_unnest_predicates = vec![];
                 let mut unnest_predicates = vec![];
+                let mut unnest_struct_columns = vec![];
+
+                for idx in &unnest.struct_type_columns {
+                    let (sub_qualifier, field) =
+                        unnest.input.schema().qualified_field(*idx);
+                    let field_name = field.name().clone();
+
+                    if let DataType::Struct(children) = field.data_type() {
+                        for child in children {
+                            let child_name = child.name().clone();
+                            unnest_struct_columns.push(Column::new(
+                                sub_qualifier.cloned(),
+                                format!("{field_name}.{child_name}"),
+                            ));
+                        }
+                    }
+                }
+
                 for predicate in predicates {
                     // collect all the Expr::Column in predicate recursively
                     let mut accum: HashSet<Column> = HashSet::new();
                     expr_to_columns(&predicate, &mut accum)?;
 
-                    if unnest.list_type_columns.iter().any(|(_, unnest_list)| {
-                        accum.contains(&unnest_list.output_column)
-                    }) {
+                    let contains_list_columns =
+                        unnest.list_type_columns.iter().any(|(_, unnest_list)| {
+                            accum.contains(&unnest_list.output_column)
+                        });
+                    let contains_struct_columns =
+                        unnest_struct_columns.iter().any(|c| accum.contains(c));
+
+                    if contains_list_columns || contains_struct_columns {
                         unnest_predicates.push(predicate);
                     } else {
                         non_unnest_predicates.push(predicate);

@@ -29,7 +29,8 @@ use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_meta::FileMeta;
 use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
 use datafusion_datasource::{
-    as_file_source, calculate_range, FileRange, ListingTableUrl, RangeCalculation,
+    as_file_source, calculate_range, FileRange, ListingTableUrl, PartitionedFile,
+    RangeCalculation,
 };
 
 use arrow::csv;
@@ -322,7 +323,11 @@ impl FileOpener for CsvOpener {
     ///  A,1,2,3,4,5,6,7,8,9\n
     ///  A},1,2,3,4,5,6,7,8,9\n
     ///  The lines read would be: [1, 2]
-    fn open(&self, file_meta: FileMeta) -> Result<FileOpenFuture> {
+    fn open(
+        &self,
+        file_meta: FileMeta,
+        _file: PartitionedFile,
+    ) -> Result<FileOpenFuture> {
         // `self.config.has_header` controls whether to skip reading the 1st line header
         // If the .csv file is read in parallel and this `CsvOpener` is only reading some middle
         // partition, then don't skip first line

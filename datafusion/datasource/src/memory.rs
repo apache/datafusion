@@ -45,6 +45,8 @@ use datafusion_physical_plan::{
 };
 
 use async_trait::async_trait;
+use datafusion_physical_plan::coop::cooperative;
+use datafusion_physical_plan::execution_plan::SchedulingType;
 use futures::StreamExt;
 use itertools::Itertools;
 use tokio::sync::RwLock;
@@ -77,14 +79,14 @@ impl DataSource for MemorySourceConfig {
         partition: usize,
         _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        Ok(Box::pin(
+        Ok(Box::pin(cooperative(
             MemoryStream::try_new(
                 self.partitions[partition].clone(),
                 Arc::clone(&self.projected_schema),
                 self.projection.clone(),
             )?
             .with_fetch(self.fetch),
-        ))
+        )))
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -186,6 +188,10 @@ impl DataSource for MemorySourceConfig {
             Arc::clone(&self.projected_schema),
             self.sort_information.clone(),
         )
+    }
+
+    fn scheduling_type(&self) -> SchedulingType {
+        SchedulingType::Cooperative
     }
 
     fn statistics(&self) -> Result<Statistics> {

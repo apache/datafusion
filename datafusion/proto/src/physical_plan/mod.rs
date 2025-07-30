@@ -39,7 +39,7 @@ use crate::protobuf::{
 use crate::{convert_required, into_required};
 
 use datafusion::arrow::compute::SortOptions;
-use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::arrow::datatypes::{Schema, SchemaRef};
 use datafusion::datasource::file_format::csv::CsvSink;
 use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
 use datafusion::datasource::file_format::json::JsonSink;
@@ -64,6 +64,7 @@ use datafusion::physical_plan::aggregates::{AggregateExec, PhysicalGroupBy};
 use datafusion::physical_plan::analyze::AnalyzeExec;
 use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
+use datafusion::physical_plan::coop::CooperativeExec;
 use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::explain::ExplainExec;
 use datafusion::physical_plan::expressions::PhysicalSortExpr;
@@ -309,7 +310,6 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                 runtime,
                 extension_codec,
             ),
-
             #[cfg_attr(not(feature = "parquet"), allow(unused_variables))]
             PhysicalPlanType::ParquetSink(sink) => self
                 .try_into_parquet_sink_physical_plan(
@@ -324,6 +324,13 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                 runtime,
                 extension_codec,
             ),
+            PhysicalPlanType::Cooperative(cooperative) => self
+                .try_into_cooperative_physical_plan(
+                    cooperative,
+                    registry,
+                    runtime,
+                    extension_codec,
+                ),
         }
     }
 
@@ -513,6 +520,13 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
             );
         }
 
+        if let Some(exec) = plan.downcast_ref::<CooperativeExec>() {
+            return protobuf::PhysicalPlanNode::try_from_cooperative_exec(
+                exec,
+                extension_codec,
+            );
+        }
+
         let mut buf: Vec<u8> = vec![];
         match extension_codec.try_encode(Arc::clone(&plan_clone), &mut buf) {
             Ok(_) => {
@@ -597,24 +611,6 @@ impl protobuf::PhysicalPlanNode {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let input: Arc<dyn ExecutionPlan> =
             into_physical_plan(&filter.input, registry, runtime, extension_codec)?;
-        let predicate = filter
-            .expr
-            .as_ref()
-            .map(|expr| {
-                parse_physical_expr(
-                    expr,
-                    registry,
-                    input.schema().as_ref(),
-                    extension_codec,
-                )
-            })
-            .transpose()?
-            .ok_or_else(|| {
-                DataFusionError::Internal(
-                    "filter (FilterExecNode) in PhysicalPlanNode is missing.".to_owned(),
-                )
-            })?;
-        let filter_selectivity = filter.default_filter_selectivity.try_into();
         let projection = if !filter.projection.is_empty() {
             Some(
                 filter
@@ -626,6 +622,37 @@ impl protobuf::PhysicalPlanNode {
         } else {
             None
         };
+
+        // Use the projected schema if projection is present, otherwise use the full schema
+        let predicate_schema = if let Some(ref proj_indices) = projection {
+            // Create projected schema for parsing the predicate
+            let projected_fields: Vec<_> = proj_indices
+                .iter()
+                .map(|&i| input.schema().field(i).clone())
+                .collect();
+            Arc::new(Schema::new(projected_fields))
+        } else {
+            input.schema()
+        };
+
+        let predicate = filter
+            .expr
+            .as_ref()
+            .map(|expr| {
+                parse_physical_expr(
+                    expr,
+                    registry,
+                    predicate_schema.as_ref(),
+                    extension_codec,
+                )
+            })
+            .transpose()?
+            .ok_or_else(|| {
+                DataFusionError::Internal(
+                    "filter (FilterExecNode) in PhysicalPlanNode is missing.".to_owned(),
+                )
+            })?;
+        let filter_selectivity = filter.default_filter_selectivity.try_into();
         let filter =
             FilterExec::try_new(predicate, input)?.with_projection(projection)?;
         match filter_selectivity {
@@ -713,11 +740,31 @@ impl protobuf::PhysicalPlanNode {
         {
             let schema =
                 parse_protobuf_file_scan_schema(scan.base_conf.as_ref().unwrap())?;
+
+            // Check if there's a projection and use projected schema for predicate parsing
+            let base_conf = scan.base_conf.as_ref().unwrap();
+            let predicate_schema = if !base_conf.projection.is_empty() {
+                // Create projected schema for parsing the predicate
+                let projected_fields: Vec<_> = base_conf
+                    .projection
+                    .iter()
+                    .map(|&i| schema.field(i as usize).clone())
+                    .collect();
+                Arc::new(Schema::new(projected_fields))
+            } else {
+                schema
+            };
+
             let predicate = scan
                 .predicate
                 .as_ref()
                 .map(|expr| {
-                    parse_physical_expr(expr, registry, schema.as_ref(), extension_codec)
+                    parse_physical_expr(
+                        expr,
+                        registry,
+                        predicate_schema.as_ref(),
+                        extension_codec,
+                    )
                 })
                 .transpose()?;
             let mut options = TableParquetOptions::default();
@@ -731,7 +778,7 @@ impl protobuf::PhysicalPlanNode {
                 source = source.with_predicate(predicate);
             }
             let base_config = parse_protobuf_file_scan_config(
-                scan.base_conf.as_ref().unwrap(),
+                base_conf,
                 registry,
                 extension_codec,
                 Arc::new(source),
@@ -1061,6 +1108,7 @@ impl protobuf::PhysicalPlanNode {
                                     AggregateExprBuilder::new(agg_udf, input_phy_expr)
                                         .schema(Arc::clone(&physical_schema))
                                         .alias(name)
+                                        .human_display(agg_node.human_display.clone())
                                         .with_ignore_nulls(agg_node.ignore_nulls)
                                         .with_distinct(agg_node.distinct)
                                         .order_by(order_bys)
@@ -1138,6 +1186,13 @@ impl protobuf::PhysicalPlanNode {
                     hashjoin.join_type
                 ))
             })?;
+        let null_equality = protobuf::NullEquality::try_from(hashjoin.null_equality)
+            .map_err(|_| {
+                proto_error(format!(
+                    "Received a HashJoinNode message with unknown NullEquality {}",
+                    hashjoin.null_equality
+                ))
+            })?;
         let filter = hashjoin
             .filter
             .as_ref()
@@ -1206,7 +1261,7 @@ impl protobuf::PhysicalPlanNode {
             &join_type.into(),
             projection,
             partition_mode,
-            hashjoin.null_equals_null,
+            null_equality.into(),
         )?))
     }
 
@@ -1247,6 +1302,13 @@ impl protobuf::PhysicalPlanNode {
                 proto_error(format!(
                     "Received a SymmetricHashJoin message with unknown JoinType {}",
                     sym_join.join_type
+                ))
+            })?;
+        let null_equality = protobuf::NullEquality::try_from(sym_join.null_equality)
+            .map_err(|_| {
+                proto_error(format!(
+                    "Received a SymmetricHashJoin message with unknown NullEquality {}",
+                    sym_join.null_equality
                 ))
             })?;
         let filter = sym_join
@@ -1325,7 +1387,7 @@ impl protobuf::PhysicalPlanNode {
             on,
             filter,
             &join_type.into(),
-            sym_join.null_equals_null,
+            null_equality.into(),
             left_sort_exprs,
             right_sort_exprs,
             partition_mode,
@@ -1766,6 +1828,18 @@ impl protobuf::PhysicalPlanNode {
         )))
     }
 
+    fn try_into_cooperative_physical_plan(
+        &self,
+        field_stream: &protobuf::CooperativeExecNode,
+        registry: &dyn FunctionRegistry,
+        runtime: &RuntimeEnv,
+        extension_codec: &dyn PhysicalExtensionCodec,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let input =
+            into_physical_plan(&field_stream.input, registry, runtime, extension_codec)?;
+        Ok(Arc::new(CooperativeExec::new(input)))
+    }
+
     fn try_from_explain_exec(
         exec: &ExplainExec,
         _extension_codec: &dyn PhysicalExtensionCodec,
@@ -1921,6 +1995,7 @@ impl protobuf::PhysicalPlanNode {
             })
             .collect::<Result<_>>()?;
         let join_type: protobuf::JoinType = exec.join_type().to_owned().into();
+        let null_equality: protobuf::NullEquality = exec.null_equality().into();
         let filter = exec
             .filter()
             .as_ref()
@@ -1961,7 +2036,7 @@ impl protobuf::PhysicalPlanNode {
                     on,
                     join_type: join_type.into(),
                     partition_mode: partition_mode.into(),
-                    null_equals_null: exec.null_equals_null(),
+                    null_equality: null_equality.into(),
                     filter,
                     projection: exec.projection.as_ref().map_or_else(Vec::new, |v| {
                         v.iter().map(|x| *x as u32).collect::<Vec<u32>>()
@@ -1996,6 +2071,7 @@ impl protobuf::PhysicalPlanNode {
             })
             .collect::<Result<_>>()?;
         let join_type: protobuf::JoinType = exec.join_type().to_owned().into();
+        let null_equality: protobuf::NullEquality = exec.null_equality().into();
         let filter = exec
             .filter()
             .as_ref()
@@ -2079,7 +2155,7 @@ impl protobuf::PhysicalPlanNode {
                     on,
                     join_type: join_type.into(),
                     partition_mode: partition_mode.into(),
-                    null_equals_null: exec.null_equals_null(),
+                    null_equality: null_equality.into(),
                     left_sort_exprs,
                     right_sort_exprs,
                     filter,
@@ -2741,6 +2817,24 @@ impl protobuf::PhysicalPlanNode {
                         .map(|c| *c as _)
                         .collect(),
                     options: Some(exec.options().into()),
+                },
+            ))),
+        })
+    }
+
+    fn try_from_cooperative_exec(
+        exec: &CooperativeExec,
+        extension_codec: &dyn PhysicalExtensionCodec,
+    ) -> Result<Self> {
+        let input = protobuf::PhysicalPlanNode::try_from_physical_plan(
+            exec.input().to_owned(),
+            extension_codec,
+        )?;
+
+        Ok(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(PhysicalPlanType::Cooperative(Box::new(
+                protobuf::CooperativeExecNode {
+                    input: Some(Box::new(input)),
                 },
             ))),
         })

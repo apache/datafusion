@@ -22,6 +22,7 @@ use object_store::{path::Path, ObjectMeta};
 use crate::FileRange;
 
 /// A single file or part of a file that should be read, along with its schema, statistics
+#[derive(Debug, Clone)]
 pub struct FileMeta {
     /// Path for the file (e.g. URL, filesystem path, etc)
     pub object_meta: ObjectMeta,

@@ -295,7 +295,7 @@ pub fn adjust_input_keys_ordering(
         join_type,
         projection,
         mode,
-        null_equals_null,
+        null_equality,
         ..
     }) = plan.as_any().downcast_ref::<HashJoinExec>()
     {
@@ -314,7 +314,7 @@ pub fn adjust_input_keys_ordering(
                         // TODO: although projection is not used in the join here, because projection pushdown is after enforce_distribution. Maybe we need to handle it later. Same as filter.
                         projection.clone(),
                         PartitionMode::Partitioned,
-                        *null_equals_null,
+                        *null_equality,
                     )
                     .map(|e| Arc::new(e) as _)
                 };
@@ -334,7 +334,7 @@ pub fn adjust_input_keys_ordering(
                         left.schema().fields().len(),
                     )
                     .unwrap_or_default(),
-                    JoinType::RightSemi | JoinType::RightAnti => {
+                    JoinType::RightSemi | JoinType::RightAnti | JoinType::RightMark => {
                         requirements.data.clone()
                     }
                     JoinType::Left
@@ -364,7 +364,7 @@ pub fn adjust_input_keys_ordering(
         filter,
         join_type,
         sort_options,
-        null_equals_null,
+        null_equality,
         ..
     }) = plan.as_any().downcast_ref::<SortMergeJoinExec>()
     {
@@ -379,7 +379,7 @@ pub fn adjust_input_keys_ordering(
                 filter.clone(),
                 *join_type,
                 new_conditions.1,
-                *null_equals_null,
+                *null_equality,
             )
             .map(|e| Arc::new(e) as _)
         };
@@ -616,7 +616,7 @@ pub fn reorder_join_keys_to_inputs(
         join_type,
         projection,
         mode,
-        null_equals_null,
+        null_equality,
         ..
     }) = plan_any.downcast_ref::<HashJoinExec>()
     {
@@ -642,7 +642,7 @@ pub fn reorder_join_keys_to_inputs(
                     join_type,
                     projection.clone(),
                     PartitionMode::Partitioned,
-                    *null_equals_null,
+                    *null_equality,
                 )?));
             }
         }
@@ -653,7 +653,7 @@ pub fn reorder_join_keys_to_inputs(
         filter,
         join_type,
         sort_options,
-        null_equals_null,
+        null_equality,
         ..
     }) = plan_any.downcast_ref::<SortMergeJoinExec>()
     {
@@ -681,7 +681,7 @@ pub fn reorder_join_keys_to_inputs(
                     filter.clone(),
                     *join_type,
                     new_sort_options,
-                    *null_equals_null,
+                    *null_equality,
                 )
                 .map(|smj| Arc::new(smj) as _);
             }
@@ -925,19 +925,20 @@ fn add_hash_on_top(
     Ok(input)
 }
 
-/// Adds a [`SortPreservingMergeExec`] operator on top of input executor
-/// to satisfy single distribution requirement.
+/// Adds a [`SortPreservingMergeExec`] or a [`CoalescePartitionsExec`] operator
+/// on top of the given plan node to satisfy a single partition requirement
+/// while preserving ordering constraints.
 ///
-/// # Arguments
+/// # Parameters
 ///
 /// * `input`: Current node.
 ///
 /// # Returns
 ///
-/// Updated node with an execution plan, where desired single
-/// distribution is satisfied by adding [`SortPreservingMergeExec`].
-fn add_spm_on_top(input: DistributionContext) -> DistributionContext {
-    // Add SortPreservingMerge only when partition count is larger than 1.
+/// Updated node with an execution plan, where the desired single distribution
+/// requirement is satisfied.
+fn add_merge_on_top(input: DistributionContext) -> DistributionContext {
+    // Apply only when the partition count is larger than one.
     if input.plan.output_partitioning().partition_count() > 1 {
         // When there is an existing ordering, we preserve ordering
         // when decreasing partitions. This will be un-done in the future
@@ -945,12 +946,13 @@ fn add_spm_on_top(input: DistributionContext) -> DistributionContext {
         // - Preserving ordering is not helpful in terms of satisfying ordering requirements
         // - Usage of order preserving variants is not desirable
         // (determined by flag `config.optimizer.prefer_existing_sort`)
-        let new_plan = if let Some(ordering) = input.plan.output_ordering() {
+        let new_plan = if let Some(req) = input.plan.output_ordering() {
             Arc::new(SortPreservingMergeExec::new(
-                ordering.clone(),
+                req.clone(),
                 Arc::clone(&input.plan),
             )) as _
         } else {
+            // If there is no input order, we can simply coalesce partitions:
             Arc::new(CoalescePartitionsExec::new(Arc::clone(&input.plan))) as _
         };
 
@@ -1259,7 +1261,7 @@ pub fn ensure_distribution(
             // Satisfy the distribution requirement if it is unmet.
             match &requirement {
                 Distribution::SinglePartition => {
-                    child = add_spm_on_top(child);
+                    child = add_merge_on_top(child);
                 }
                 Distribution::HashPartitioned(exprs) => {
                     if add_roundrobin {
