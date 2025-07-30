@@ -37,6 +37,7 @@ use crate::function::functions_nested_utils::make_scalar_function;
 pub struct SparkArray {
     signature: Signature,
     aliases: Vec<String>,
+    name: String,
 }
 
 impl Default for SparkArray {
@@ -46,6 +47,8 @@ impl Default for SparkArray {
 }
 
 impl SparkArray {
+    pub const ARRAY_FIELD_DEFAULT_NAME: &'static str = "element";
+
     pub fn new() -> Self {
         Self {
             signature: Signature::one_of(
@@ -53,7 +56,19 @@ impl SparkArray {
                 Volatility::Immutable,
             ),
             aliases: vec![String::from("spark_make_array")],
+            name: Self::ARRAY_FIELD_DEFAULT_NAME.to_string(),
         }
+    }
+
+    pub fn with_list_field_name(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            ..Self::new()
+        }
+    }
+
+    pub fn name(&self) -> &String {
+        &self.name
     }
 }
 
@@ -257,17 +272,9 @@ fn array_array<O: OffsetSizeTrait>(
     let data = mutable.freeze();
 
     Ok(Arc::new(GenericListArray::<O>::try_new(
-        Arc::new(with_list_field_name("item", data_type, true)),
+        Arc::new(Field::new_list_field(data_type, true)),
         OffsetBuffer::new(offsets.into()),
         make_array(data),
         None,
     )?))
-}
-
-fn with_list_field_name(
-    name: impl Into<String>,
-    data_type: DataType,
-    nullable: bool,
-) -> Field {
-    Field::new(name, data_type, nullable)
 }
