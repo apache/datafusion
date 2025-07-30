@@ -710,6 +710,7 @@ fn try_replace_with_window(
                     end_bound.clone(),
                 ),
                 null_treatment: None,
+                distinct: false,
             },
         }));
 
