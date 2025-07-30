@@ -29,7 +29,7 @@ async fn main() -> Result<()> {
     let mut reservation = MemoryConsumer::new("manual").register(&pool);
     reservation.try_grow(15 * MB)?;
     #[cfg(feature = "explain_memory")]
-    println!("{}", reservation.explain_memory()?);
+    println!("Manual reservation: {}", reservation.explain_memory()?);
 
     // Query 1: GroupedHashAggregateStream - hash-based aggregation with grouping
     println!("\n=== Query 1: GroupedHashAggregateStream (with grouping) ===");
@@ -37,8 +37,13 @@ async fn main() -> Result<()> {
         .sql("select v % 1000 as group_key, count(*) as cnt, sum(v) as sum_v, avg(v) as avg_v from generate_series(1,500000) as t(v) group by v % 1000 order by group_key")
         .await?;
 
-    if let Err(e) = df.collect().await {
-        println!("Query failed: {e}");
+    // Execute the query and show memory consumption
+    let result = df.collect().await;
+    match result {
+        Ok(_) => {
+            println!("Query 1 executed successfully");
+        }
+        Err(e) => println!("Query failed: {e}"),
     }
 
     // Query 2: AggregateStreamInner - simple aggregation without grouping
@@ -47,13 +52,44 @@ async fn main() -> Result<()> {
         .sql("select count(*) as cnt, sum(v) as sum_v, avg(v) as avg_v from generate_series(1,500000) as t(v)")
         .await?;
 
-    if let Err(e) = df2.collect().await {
-        println!("Query failed: {e}");
+    // Execute the query and show memory consumption
+    let result2 = df2.collect().await;
+    match result2 {
+        Ok(_) => {
+            println!("Query 2 executed successfully");
+        }
+        Err(e) => println!("Query failed: {e}"),
     }
 
     // Print the top memory consumers recorded by the pool
     if let Some(report) = report_top_consumers(tracked_pool.as_ref(), 5) {
         println!("\nTop consumers:\n{report}");
     }
+
+    // Create a custom memory consumer to demonstrate ExplainMemory
+    #[cfg(feature = "explain_memory")]
+    {
+        println!("\n=== Demonstrating ExplainMemory for Aggregate Streams ===");
+
+        // Create a mock reservation to show the structure
+        let mut mock_reservation =
+            MemoryConsumer::new("GroupedHashAggregateStream").register(&pool);
+        mock_reservation.try_grow(1024 * 1024).unwrap_or(());
+
+        if let Ok(explanation) = mock_reservation.explain_memory() {
+            println!("GroupedHashAggregateStream memory breakdown:");
+            println!("{explanation}");
+        }
+
+        let mut mock_reservation2 =
+            MemoryConsumer::new("AggregateStreamInner").register(&pool);
+        mock_reservation2.try_grow(512 * 1024).unwrap_or(());
+
+        if let Ok(explanation) = mock_reservation2.explain_memory() {
+            println!("AggregateStreamInner memory breakdown:");
+            println!("{explanation}");
+        }
+    }
+
     Ok(())
 }
