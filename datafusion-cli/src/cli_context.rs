@@ -47,6 +47,14 @@ pub trait CliSessionContext {
     /// Register table options extension from scheme.
     fn register_table_options_extension_from_scheme(&self, scheme: &str);
 
+    /// Enable memory profiling for next query
+    fn enable_memory_profiling(&self);
+
+    /// Get memory report from last profiled query
+    fn get_last_query_memory_report(
+        &self,
+    ) -> Option<std::collections::HashMap<String, usize>>;
+
     /// Execute a logical plan and return a DataFrame.
     async fn execute_logical_plan(
         &self,
@@ -87,6 +95,16 @@ impl CliSessionContext for SessionContext {
             // For unsupported schemes, do nothing:
             _ => {}
         }
+    }
+
+    fn enable_memory_profiling(&self) {
+        self.enable_memory_profiling();
+    }
+
+    fn get_last_query_memory_report(
+        &self,
+    ) -> Option<std::collections::HashMap<String, usize>> {
+        Some(self.get_last_query_memory_report())
     }
 
     async fn execute_logical_plan(
