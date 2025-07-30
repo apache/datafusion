@@ -749,16 +749,30 @@ impl DefaultPhysicalPlanner {
                     Arc::clone(&physical_input_schema),
                 )?);
 
-                let can_repartition = !groups.is_empty()
-                    && session_state.config().target_partitions() > 1
-                    && session_state.config().repartition_aggregations();
-
                 // Some aggregators may be modified during initialization for
                 // optimization purposes. For example, a FIRST_VALUE may turn
                 // into a LAST_VALUE with the reverse ordering requirement.
                 // To reflect such changes to subsequent stages, use the updated
                 // `AggregateFunctionExpr`/`PhysicalSortExpr` objects.
                 let updated_aggregates = initial_aggr.aggr_expr().to_vec();
+                let final_grouping_set = initial_aggr.group_expr().as_final();
+
+                // For aggregations with grouping sets,
+                // the group by expressions differ between the partial and final stages,
+                // requiring a shuffle.
+                let has_grouping_id = final_grouping_set
+                    .expr()
+                    .iter()
+                    .any(|(_, name)| name == Aggregate::INTERNAL_GROUPING_ID);
+
+                let partition_num = (Arc::clone(&initial_aggr) as Arc<dyn ExecutionPlan>)
+                    .output_partitioning()
+                    .partition_count();
+
+                let can_repartition = !groups.is_empty()
+                    && (session_state.config().target_partitions() > 1
+                        || (has_grouping_id && partition_num > 1))
+                    && session_state.config().repartition_aggregations();
 
                 let next_partition_mode = if can_repartition {
                     // construct a second aggregation with 'AggregateMode::FinalPartitioned'
@@ -768,8 +782,6 @@ impl DefaultPhysicalPlanner {
                     // first aggregation and the expressions corresponding to the respective aggregate
                     AggregateMode::Final
                 };
-
-                let final_grouping_set = initial_aggr.group_expr().as_final();
 
                 Arc::new(AggregateExec::try_new(
                     next_partition_mode,

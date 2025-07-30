@@ -7210,3 +7210,38 @@ FROM (VALUES ('a'), ('d'), ('c'), ('a')) t(a_varchar);
 query error Error during planning: ORDER BY and WITHIN GROUP clauses cannot be used together in the same aggregate function
 SELECT array_agg(a_varchar order by a_varchar) WITHIN GROUP (ORDER BY a_varchar)
 FROM (VALUES ('a'), ('d'), ('c'), ('a')) t(a_varchar);
+
+statement ok
+SET datafusion.execution.target_partitions = 1;
+
+query TT
+EXPLAIN select * from (select 'id' as id union all select 'id' as id order by id) group by grouping sets ((id), ());
+----
+logical_plan
+01)Projection: id
+02)--Aggregate: groupBy=[[GROUPING SETS ((id), ())]], aggr=[[]]
+03)----Union
+04)------Projection: Utf8("id") AS id
+05)--------EmptyRelation
+06)------Projection: Utf8("id") AS id
+07)--------EmptyRelation
+physical_plan
+01)ProjectionExec: expr=[id@0 as id]
+02)--AggregateExec: mode=FinalPartitioned, gby=[id@0 as id, __grouping_id@1 as __grouping_id], aggr=[], ordering_mode=PartiallySorted([0])
+03)----CoalesceBatchesExec: target_batch_size=8192
+04)------RepartitionExec: partitioning=Hash([id@0, __grouping_id@1], 1), input_partitions=2
+05)--------AggregateExec: mode=Partial, gby=[(id@0 as id), (NULL as id)], aggr=[]
+06)----------UnionExec
+07)------------ProjectionExec: expr=[id]
+08)--------------PlaceholderRowExec
+09)------------ProjectionExec: expr=[id]
+10)--------------PlaceholderRowExec
+
+query T rowsort
+select * from (select 'id' as id union all select 'id' as id order by id) group by grouping sets ((id), ());
+----
+NULL
+id
+
+statement ok
+set datafusion.execution.target_partitions = 2;
