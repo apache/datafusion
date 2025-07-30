@@ -352,6 +352,7 @@ fn optimize_projections(
         }
         LogicalPlan::RecursiveQuery(_) => {
             if plan_contains_subquery_alias(&plan) {
+                // https://github.com/apache/datafusion/pull/16696#discussion_r2241482599
                 return Ok(Transformed::no(plan));
             }
 
