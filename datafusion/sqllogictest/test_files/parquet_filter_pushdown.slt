@@ -405,6 +405,21 @@ physical_plan
 02)--SortExec: expr=[b@0 ASC NULLS LAST], preserve_partitioning=[true]
 03)----DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_table/1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_table/2.parquet]]}, projection=[b], file_type=parquet, predicate=a@0 = bar, pruning_predicate=a_null_count@2 != row_count@3 AND a_min@0 <= bar AND bar <= a_max@1, required_guarantees=[a in (bar)]
 
+
+# should not push down volatile predicates such as RANDOM
+# expect that the random predicate is evaluated after the scan
+query TT
+EXPLAIN select a from t_pushdown where b > random();
+----
+logical_plan
+01)Projection: t_pushdown.a
+02)--Filter: CAST(t_pushdown.b AS Float64) > random()
+03)----TableScan: t_pushdown projection=[a, b]
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=8192
+02)--FilterExec: CAST(b@1 AS Float64) > random(), projection=[a@0]
+03)----DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_table/1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_table/2.parquet]]}, projection=[a, b], file_type=parquet
+
 ## cleanup
 statement ok
 DROP TABLE t;
