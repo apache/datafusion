@@ -20,11 +20,12 @@ use datafusion::prelude::{CsvReadOptions, SessionContext};
 use datafusion_common::test_util::datafusion_test_data;
 
 #[tokio::test]
-async fn recursive_cte_alias_instability() -> Result<()> {
-    // plan_contains_subquery_alias in datafusion/optimizer/src/optimize_projections/mod.rs
-    // enables this to pass by skipping optimize_projection for the recursive CTE
-    // that has subquery_alias in the projection like in the sql below
-    // the sql is similar to the one in datafusion/sqllogictest/test_files/cte.slt
+async fn recursive_cte_ambiguous_alias() -> Result<()> {
+    // This test relies on `plan_contains_subquery_alias` (defined in optimizer/src/optimize_projections/mod.rs)
+    // to detect ambiguous subquery aliases in recursive CTEs.
+    // If the number of subquery aliases exceeds a threshold, the optimizer will skip projection pushdown.
+    // See: `plan_contains_subquery_alias` for logic that influences this behavior.
+    // the sql below is similar to a test in datafusion/sqllogictest/test_files/cte.slt
     let ctx = SessionContext::new();
     let testdata = datafusion_test_data();
     let csv_path = format!("{testdata}/recursive_cte/prices.csv");

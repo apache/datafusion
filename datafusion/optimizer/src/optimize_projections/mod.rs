@@ -841,7 +841,7 @@ pub fn is_projection_unnecessary(
 }
 
 fn plan_contains_subquery_alias(plan: &LogicalPlan) -> bool {
-    // ambiguity of aliases can arise if there are
+    // in recursive ctes, ambiguity of aliases can arise if there are
     // 2 or more subquery aliases in the plan
     const THRESHOLD: usize = 2;
     count_subquery_aliases(plan, 0, THRESHOLD) >= THRESHOLD
