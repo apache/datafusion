@@ -26,6 +26,11 @@ use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::interval_arithmetic::{Interval, NullableInterval};
 use datafusion_expr::{expr::InList, lit, Between, BinaryExpr, Expr};
 
+use datafusion_common::ScalarValue;
+use datafusion_expr_common::operator::Operator;
+
+use arrow::datatypes::IntervalDayTime;
+
 /// Rewrite expressions to incorporate guarantees.
 ///
 /// Guarantees are a mapping from an expression (which currently is always a
@@ -108,6 +113,38 @@ impl TreeNodeRewriter for GuaranteeRewriter<'_> {
             }
 
             Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
+                if *op == Operator::Plus || *op == Operator::Minus {
+                    if let Expr::Literal(ScalarValue::Date32(_), _) = &**left {
+                        let interval_right = match &**right {
+                            Expr::Literal(ScalarValue::Int32(Some(i)), meta) => {
+                                Expr::Literal(
+                                    ScalarValue::IntervalDayTime(Some(IntervalDayTime {
+                                        days: *i,
+                                        milliseconds: 0,
+                                    })),
+                                    meta.clone(),
+                                )
+                            }
+                            Expr::Literal(ScalarValue::Int64(Some(i)), meta) => {
+                                Expr::Literal(
+                                    ScalarValue::IntervalDayTime(Some(IntervalDayTime {
+                                        days: *i as i32,
+                                        milliseconds: 0,
+                                    })),
+                                    meta.clone(),
+                                )
+                            }
+                            _ => *right.clone(),
+                        };
+
+                        return Ok(Transformed::yes(Expr::BinaryExpr(BinaryExpr {
+                            left: left.clone(),
+                            right: Box::new(interval_right),
+                            op: *op,
+                        })));
+                    }
+                }
+
                 // The left or right side of expression might either have a guarantee
                 // or be a literal. Either way, we can resolve them to a NullableInterval.
                 let left_interval = self

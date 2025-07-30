@@ -91,46 +91,46 @@ impl ExprPlanner for NestedFunctionPlanner {
                     return Ok(PlannerResult::Planned(array_has_all(right, left)));
                 }
             }
-        } else if matches!(op, BinaryOperator::Plus | BinaryOperator::Minus)
-            && matches!(left.get_type(schema)?, DataType::Date32)
-            && matches!(right.get_type(schema)?, DataType::Int32 | DataType::Int64)
-        {
-            use arrow::datatypes::IntervalDayTime;
-            use datafusion_common::ScalarValue;
-            use datafusion_expr::BinaryExpr;
-            use datafusion_expr::Operator;
-            use sqlparser::ast::BinaryOperator;
-
-            let op: Operator = match op {
-                BinaryOperator::Plus => Operator::Plus,
-                BinaryOperator::Minus => Operator::Minus,
-                _ => unreachable!(),
-            };
-
-            let new_right: Expr = match right {
-                Expr::Literal(ScalarValue::Int32(Some(i)), meta) => Expr::Literal(
-                    ScalarValue::IntervalDayTime(Some(IntervalDayTime {
-                        days: i,
-                        milliseconds: 0,
-                    })),
-                    meta,
-                ),
-                Expr::Literal(ScalarValue::Int64(Some(i)), meta) => Expr::Literal(
-                    ScalarValue::IntervalDayTime(Some(IntervalDayTime {
-                        days: i as i32,
-                        milliseconds: 0,
-                    })),
-                    meta,
-                ),
-                _ => unreachable!(),
-            };
-
-            let planned = Expr::BinaryExpr(BinaryExpr {
-                left: Box::new(left.clone()),
-                right: Box::new(new_right),
-                op,
-            });
-            return Ok(PlannerResult::Planned(planned));
+            // } else if matches!(op, BinaryOperator::Plus | BinaryOperator::Minus)
+            //     && matches!(left.get_type(schema)?, DataType::Date32)
+            //     && matches!(right.get_type(schema)?, DataType::Int32 | DataType::Int64)
+            // {
+            //     use arrow::datatypes::IntervalDayTime;
+            //     use datafusion_common::ScalarValue;
+            //     use datafusion_expr::BinaryExpr;
+            //     use datafusion_expr::Operator;
+            //     use sqlparser::ast::BinaryOperator;
+            //
+            //     let op: Operator = match op {
+            //         BinaryOperator::Plus => Operator::Plus,
+            //         BinaryOperator::Minus => Operator::Minus,
+            //         _ => unreachable!(),
+            //     };
+            //
+            //     let new_right: Expr = match right {
+            //         Expr::Literal(ScalarValue::Int32(Some(i)), meta) => Expr::Literal(
+            //             ScalarValue::IntervalDayTime(Some(IntervalDayTime {
+            //                 days: i,
+            //                 milliseconds: 0,
+            //             })),
+            //             meta,
+            //         ),
+            //         Expr::Literal(ScalarValue::Int64(Some(i)), meta) => Expr::Literal(
+            //             ScalarValue::IntervalDayTime(Some(IntervalDayTime {
+            //                 days: i as i32,
+            //                 milliseconds: 0,
+            //             })),
+            //             meta,
+            //         ),
+            //         _ => unreachable!(),
+            //     };
+            //
+            //     let planned = Expr::BinaryExpr(BinaryExpr {
+            //         left: Box::new(left.clone()),
+            //         right: Box::new(new_right),
+            //         op,
+            //     });
+            //     return Ok(PlannerResult::Planned(planned));
         }
 
         Ok(PlannerResult::Original(RawBinaryExpr { op, left, right }))
