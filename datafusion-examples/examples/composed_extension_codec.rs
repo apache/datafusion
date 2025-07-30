@@ -43,6 +43,7 @@ use datafusion::physical_plan::{DisplayAs, ExecutionPlan};
 use datafusion::prelude::SessionContext;
 use datafusion_proto::physical_plan::{AsExecutionPlan, PhysicalExtensionCodec};
 use datafusion_proto::protobuf;
+use prost::Message;
 
 #[tokio::main]
 async fn main() {
@@ -54,12 +55,12 @@ async fn main() {
     });
     let ctx = SessionContext::new();
 
-    let composed_codec = ComposedPhysicalExtensionCodec {
-        codecs: vec![
-            Arc::new(ParentPhysicalExtensionCodec {}),
-            Arc::new(ChildPhysicalExtensionCodec {}),
-        ],
-    };
+    // Position in this list is important as it will be used for decoding.
+    // If new codec is added it should go to last position.
+    let composed_codec = ComposedPhysicalExtensionCodec::new(vec![
+        Arc::new(ParentPhysicalExtensionCodec {}),
+        Arc::new(ChildPhysicalExtensionCodec {}),
+    ]);
 
     // serialize execution plan to proto
     let proto: protobuf::PhysicalPlanNode =
@@ -233,6 +234,17 @@ impl PhysicalExtensionCodec for ChildPhysicalExtensionCodec {
     }
 }
 
+/// BlobFormatProto captures data encoded by blob format codecs
+#[derive(Clone, PartialEq, prost::Message)]
+struct BlobFormatProto {
+    /// encoder id used to encode blob
+    /// (to be used for decoding)
+    #[prost(uint32, tag = 1)]
+    pub encoder_position: u32,
+    #[prost(bytes, tag = 2)]
+    pub blob: Vec<u8>,
+}
+
 /// A PhysicalExtensionCodec that tries one of multiple inner codecs
 /// until one works
 #[derive(Debug)]
@@ -241,14 +253,50 @@ struct ComposedPhysicalExtensionCodec {
 }
 
 impl ComposedPhysicalExtensionCodec {
-    fn try_any<T>(
+    pub fn new(codecs: Vec<Arc<dyn PhysicalExtensionCodec>>) -> Self {
+        Self { codecs }
+    }
+
+    fn decode_protobuf(
         &self,
-        mut f: impl FnMut(&dyn PhysicalExtensionCodec) -> Result<T>,
-    ) -> Result<T> {
+        buf: &[u8],
+    ) -> Result<(Arc<dyn PhysicalExtensionCodec>, Vec<u8>)> {
+        let proto = BlobFormatProto::decode(buf)
+            .map_err(|e| DataFusionError::Internal(e.to_string()))?;
+
+        let codec = self.codecs.get(proto.encoder_position as usize).ok_or(
+            DataFusionError::Internal(
+                "Can't find required codec in codec list".to_owned(),
+            ),
+        )?;
+
+        Ok((codec.clone(), proto.blob))
+    }
+
+    fn encode_protobuf(
+        &self,
+        buf: &mut Vec<u8>,
+        encoder_position: u32,
+        blob: Vec<u8>,
+    ) -> Result<()> {
+        let proto = BlobFormatProto {
+            encoder_position,
+            blob,
+        };
+        proto
+            .encode(buf)
+            .map_err(|e| DataFusionError::Internal(e.to_string()))
+    }
+
+    fn try_any(
+        &self,
+        mut f: impl FnMut(&dyn PhysicalExtensionCodec, &mut Vec<u8>) -> Result<()>,
+    ) -> Result<(u32, Vec<u8>)> {
+        let mut blob = vec![];
         let mut last_err = None;
-        for codec in &self.codecs {
-            match f(codec.as_ref()) {
-                Ok(node) => return Ok(node),
+        for (position, codec) in self.codecs.iter().enumerate() {
+            match f(codec.as_ref(), &mut blob) {
+                Ok(_) => return Ok((position as u32, blob)),
                 Err(err) => last_err = Some(err),
             }
         }
@@ -266,26 +314,35 @@ impl PhysicalExtensionCodec for ComposedPhysicalExtensionCodec {
         inputs: &[Arc<dyn ExecutionPlan>],
         registry: &dyn FunctionRegistry,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        self.try_any(|codec| codec.try_decode(buf, inputs, registry))
+        let (codec, blob) = self.decode_protobuf(buf)?;
+        codec.try_decode(&blob, inputs, registry)
     }
 
     fn try_encode(&self, node: Arc<dyn ExecutionPlan>, buf: &mut Vec<u8>) -> Result<()> {
-        self.try_any(|codec| codec.try_encode(node.clone(), buf))
+        let (encoder_position, blob) =
+            self.try_any(|codec, blob| codec.try_encode(node.clone(), blob))?;
+        self.encode_protobuf(buf, encoder_position, blob)
     }
 
     fn try_decode_udf(&self, name: &str, buf: &[u8]) -> Result<Arc<ScalarUDF>> {
-        self.try_any(|codec| codec.try_decode_udf(name, buf))
+        let (codec, blob) = self.decode_protobuf(buf)?;
+        codec.try_decode_udf(name, &blob)
     }
 
     fn try_encode_udf(&self, node: &ScalarUDF, buf: &mut Vec<u8>) -> Result<()> {
-        self.try_any(|codec| codec.try_encode_udf(node, buf))
+        let (encoder_position, blob) =
+            self.try_any(|codec, blob| codec.try_encode_udf(node, blob))?;
+        self.encode_protobuf(buf, encoder_position, blob)
     }
 
     fn try_decode_udaf(&self, name: &str, buf: &[u8]) -> Result<Arc<AggregateUDF>> {
-        self.try_any(|codec| codec.try_decode_udaf(name, buf))
+        let (codec, blob) = self.decode_protobuf(buf)?;
+        codec.try_decode_udaf(name, &blob)
     }
 
     fn try_encode_udaf(&self, node: &AggregateUDF, buf: &mut Vec<u8>) -> Result<()> {
-        self.try_any(|codec| codec.try_encode_udaf(node, buf))
+        let (encoder_position, blob) =
+            self.try_any(|codec, blob| codec.try_encode_udaf(node, blob))?;
+        self.encode_protobuf(buf, encoder_position, blob)
     }
 }

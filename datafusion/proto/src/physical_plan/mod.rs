@@ -2946,7 +2946,7 @@ fn into_physical_plan(
     registry: &dyn FunctionRegistry,
     runtime: &RuntimeEnv,
     extension_codec: &dyn PhysicalExtensionCodec,
-) -> Result<Arc<dyn ExecutionPlan>, DataFusionError> {
+) -> Result<Arc<dyn ExecutionPlan>> {
     if let Some(field) = node {
         field.try_into_physical_plan(registry, runtime, extension_codec)
     } else {
