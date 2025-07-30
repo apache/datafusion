@@ -21,7 +21,7 @@ use datafusion::common::{
     not_impl_err, plan_err, substrait_err, DFSchema, DataFusionError, ScalarValue,
 };
 use datafusion::execution::FunctionRegistry;
-use datafusion::logical_expr::{expr, BinaryExpr, Expr, Like, Operator};
+use datafusion::logical_expr::{expr, Between, BinaryExpr, Expr, Like, Operator};
 use std::vec::Drain;
 use substrait::proto::expression::ScalarFunction;
 use substrait::proto::function_argument::ArgType;
@@ -164,7 +164,8 @@ impl BuiltinExprBuilder {
         match name {
             "not" | "like" | "ilike" | "is_null" | "is_not_null" | "is_true"
             | "is_false" | "is_not_true" | "is_not_false" | "is_unknown"
-            | "is_not_unknown" | "negative" | "negate" => Some(Self {
+            | "is_not_unknown" | "negative" | "negate" | "and_not" | "xor"
+            | "between" => Some(Self {
                 expr_name: name.to_string(),
             }),
             _ => None,
@@ -185,10 +186,101 @@ impl BuiltinExprBuilder {
             | "is_not_unknown" => {
                 Self::build_unary_expr(consumer, &self.expr_name, f, input_schema).await
             }
+            "and_not" | "xor" => {
+                Self::build_binary_expr(consumer, &self.expr_name, f, input_schema).await
+            }
+            "between" => {
+                Self::build_between_expr(consumer, &self.expr_name, f, input_schema).await
+            }
             _ => {
                 not_impl_err!("Unsupported builtin expression: {}", self.expr_name)
             }
         }
+    }
+
+    async fn build_binary_expr(
+        consumer: &impl SubstraitConsumer,
+        fn_name: &str,
+        f: &ScalarFunction,
+        input_schema: &DFSchema,
+    ) -> Result<Expr> {
+        if f.arguments.len() != 2 {
+            return substrait_err!("Expect two arguments for `{fn_name}` expr");
+        }
+        let Some(ArgType::Value(a_substrait)) = &f.arguments[0].arg_type else {
+            return substrait_err!("Invalid argument type for `{fn_name}` expr");
+        };
+        let a = consumer
+            .consume_expression(a_substrait, input_schema)
+            .await?;
+        let Some(ArgType::Value(b_substrait)) = &f.arguments[1].arg_type else {
+            return substrait_err!("Invalid argument type for `{fn_name}` expr");
+        };
+        let b = consumer
+            .consume_expression(b_substrait, input_schema)
+            .await?;
+        match fn_name {
+            "and_not" => Ok(Self::build_and_not_expr(a, b)),
+            "xor" => Ok(Self::build_xor_expr(a, b)),
+            _ => not_impl_err!("Unsupported builtin expression: {}", fn_name),
+        }
+    }
+
+    fn build_and_not_expr(a: Expr, b: Expr) -> Expr {
+        Expr::BinaryExpr(BinaryExpr {
+            left: Box::new(a),
+            op: Operator::And,
+            right: Box::new(Expr::Not(Box::new(b))),
+        })
+    }
+
+    fn build_xor_expr(a: Expr, b: Expr) -> Expr {
+        let or_expr = Expr::BinaryExpr(BinaryExpr {
+            left: Box::new(a.clone()),
+            op: Operator::Or,
+            right: Box::new(b.clone()),
+        });
+        let and_expr = Expr::BinaryExpr(BinaryExpr {
+            left: Box::new(a),
+            op: Operator::And,
+            right: Box::new(b),
+        });
+        Self::build_and_not_expr(or_expr, and_expr)
+    }
+
+    async fn build_between_expr(
+        consumer: &impl SubstraitConsumer,
+        fn_name: &str,
+        f: &ScalarFunction,
+        input_schema: &DFSchema,
+    ) -> Result<Expr> {
+        if f.arguments.len() != 3 {
+            return substrait_err!("Expect three arguments for `{fn_name}` expr");
+        }
+        let Some(ArgType::Value(expression_substrait)) = &f.arguments[0].arg_type else {
+            return substrait_err!("Invalid argument type for `{fn_name}` expr");
+        };
+        let expression = consumer
+            .consume_expression(expression_substrait, input_schema)
+            .await?;
+        let Some(ArgType::Value(low_substrait)) = &f.arguments[1].arg_type else {
+            return substrait_err!("Invalid argument type for `{fn_name}` expr");
+        };
+        let low = consumer
+            .consume_expression(low_substrait, input_schema)
+            .await?;
+        let Some(ArgType::Value(high_substrait)) = &f.arguments[2].arg_type else {
+            return substrait_err!("Invalid argument type for `{fn_name}` expr");
+        };
+        let high = consumer
+            .consume_expression(high_substrait, input_schema)
+            .await?;
+        Ok(Expr::Between(Between {
+            expr: Box::new(expression),
+            negated: false,
+            low: Box::new(low),
+            high: Box::new(high),
+        }))
     }
 
     async fn build_unary_expr(
