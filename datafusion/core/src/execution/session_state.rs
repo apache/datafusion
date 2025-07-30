@@ -1007,6 +1007,8 @@ impl SessionStateBuilder {
             table_factories: Some(existing.table_factories),
             runtime_env: Some(existing.runtime_env),
             function_factory: existing.function_factory,
+            memory_profiling: None,
+            memory_tracker: None,
 
             // fields to support convenience functions
             analyzer_rules: None,

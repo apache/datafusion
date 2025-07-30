@@ -71,7 +71,7 @@ use datafusion_common::{
     DFSchema, ParamValues, ScalarValue, SchemaReference, TableReference,
 };
 pub use datafusion_execution::config::SessionConfig;
-use datafusion_execution::memory_tracker::LightweightMemoryTracker;
+// use datafusion_execution::memory_tracker::LightweightMemoryTracker;
 use datafusion_execution::registry::SerializerRegistry;
 pub use datafusion_execution::TaskContext;
 pub use datafusion_expr::execution_props::ExecutionProps;
