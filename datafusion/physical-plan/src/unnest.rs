@@ -43,16 +43,19 @@ use arrow::record_batch::RecordBatch;
 use arrow_ord::cmp::lt;
 use async_trait::async_trait;
 use datafusion_common::{
-    exec_datafusion_err, exec_err, internal_err, HashMap, HashSet, Result, UnnestOptions,
+    exec_datafusion_err, exec_err, internal_err, Constraints, HashMap, HashSet, Result,
+    UnnestOptions,
 };
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::EquivalenceProperties;
+use datafusion_physical_expr::equivalence::ProjectionMapping;
+use datafusion_physical_expr::expressions::Column;
+use datafusion_physical_expr::PhysicalExpr;
 use futures::{Stream, StreamExt};
 use log::trace;
 
 /// Unnest the given columns (either with type struct or list)
-/// For list unnesting, each rows is vertically transformed into multiple rows
-/// For struct unnesting, each columns is horizontally transformed into multiple columns,
+/// For list unnesting, each row is vertically transformed into multiple rows
+/// For struct unnesting, each column is horizontally transformed into multiple columns,
 /// Thus the original RecordBatch with dimension (n x m) may have new dimension (n' x m')
 ///
 /// See [`UnnestOptions`] for more details and an example.
@@ -83,7 +86,12 @@ impl UnnestExec {
         schema: SchemaRef,
         options: UnnestOptions,
     ) -> Self {
-        let cache = Self::compute_properties(&input, Arc::clone(&schema));
+        let cache = Self::compute_properties(
+            &input,
+            &list_column_indices,
+            &struct_column_indices,
+            Arc::clone(&schema),
+        );
 
         UnnestExec {
             input,
@@ -99,11 +107,64 @@ impl UnnestExec {
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn compute_properties(
         input: &Arc<dyn ExecutionPlan>,
+        list_column_indices: &[ListUnnest],
+        struct_column_indices: &[usize],
         schema: SchemaRef,
     ) -> PlanProperties {
+        let list_column_indices: Vec<usize> = list_column_indices
+            .iter()
+            .map(|list_unnest| list_unnest.index_in_input_schema)
+            .collect();
+        let non_unnested_indices: Vec<usize> = input
+            .schema()
+            .fields()
+            .iter()
+            .enumerate()
+            .filter(|(idx, _)| {
+                !list_column_indices.contains(idx) && !struct_column_indices.contains(idx)
+            })
+            .map(|(idx, _)| idx)
+            .collect();
+
+        // Manually build projection mapping from non-unnested input columns to their positions in the output
+        let input_schema = input.schema();
+        let projection_mapping: ProjectionMapping = non_unnested_indices
+            .iter()
+            .map(|&input_idx| {
+                // Find what index the input column has in the output schema
+                let input_field = input_schema.field(input_idx);
+                let output_idx = schema
+                    .fields()
+                    .iter()
+                    .position(|output_field| output_field.name() == input_field.name())
+                    .expect("Non-unnested column must exist in output schema");
+
+                let input_col = Arc::new(Column::new(input_field.name(), input_idx))
+                    as Arc<dyn PhysicalExpr>;
+                let target_col = Arc::new(Column::new(input_field.name(), output_idx))
+                    as Arc<dyn PhysicalExpr>;
+                // Use From<Vec<(Arc<dyn PhysicalExpr>, usize)>> for ProjectionTargets
+                let targets = vec![(target_col, output_idx)].into();
+                (input_col, targets)
+            })
+            .collect(); // Use FromIterator to collect the projection mapping
+
+        // Create the unnest's equivalence properties by copying the input plan's equivalence properties
+        // for the unaffected columns. Except for the constraints, which are removed entirely because
+        // the unnest operation invalidates any global uniqueness or primary-key constraints.
+        let input_eq_properties = input.equivalence_properties();
+        let eq_properties = input_eq_properties
+            .project(&projection_mapping, Arc::clone(&schema))
+            .with_constraints(Constraints::default());
+
+        // Output partitioning must use the projection mapping
+        let output_partitioning = input
+            .output_partitioning()
+            .project(&projection_mapping, &eq_properties);
+
         PlanProperties::new(
-            EquivalenceProperties::new(schema),
-            input.output_partitioning().to_owned(),
+            eq_properties,
+            output_partitioning,
             input.pipeline_behavior(),
             input.boundedness(),
         )
