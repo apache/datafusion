@@ -25,9 +25,10 @@ use crate::tree_node::{
     TreeNodeVisitor,
 };
 use crate::Result;
+use ahash::RandomState;
 use indexmap::IndexMap;
 use std::collections::HashMap;
-use std::hash::{BuildHasher, Hash, Hasher, RandomState};
+use std::hash::{BuildHasher, Hash, Hasher};
 use std::marker::PhantomData;
 use std::sync::Arc;
 
