@@ -2290,7 +2290,7 @@ impl NormalizeEq for Expr {
                     params:
                         WindowFunctionParams {
                             args: self_args,
-                            distinct: _,
+                            distinct: self_distinct,
                             window_frame: self_window_frame,
                             partition_by: self_partition_by,
                             order_by: self_order_by,
@@ -2302,7 +2302,7 @@ impl NormalizeEq for Expr {
                     params:
                         WindowFunctionParams {
                             args: other_args,
-                            distinct: _,
+                            distinct: other_distinct,
                             window_frame: other_window_frame,
                             partition_by: other_partition_by,
                             order_by: other_order_by,
@@ -2311,6 +2311,7 @@ impl NormalizeEq for Expr {
                 } = other.as_ref();
 
                 self_fun.name() == other_fun.name()
+                    && self_distinct == other_distinct
                     && self_window_frame == other_window_frame
                     && self_null_treatment == other_null_treatment
                     && self_args.len() == other_args.len()
