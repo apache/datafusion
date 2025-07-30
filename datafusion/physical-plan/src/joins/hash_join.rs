@@ -952,28 +952,22 @@ impl ExecutionPlan for HashJoinExec {
 
     fn gather_filters_for_pushdown(
         &self,
-        phase: FilterPushdownPhase,
+        _phase: FilterPushdownPhase,
         parent_filters: Vec<Arc<dyn PhysicalExpr>>,
         _config: &ConfigOptions,
     ) -> Result<FilterDescription> {
+        // Other types of joins can support *some* filters, but restrictions are complex and error prone.
+        // For now we don't support them.
+        // See the logical optimizer rules for more details: datafusion/optimizer/src/push_down_filter.rs
+        // See https://github.com/apache/datafusion/issues/16973 for tracking.
         if self.join_type != JoinType::Inner {
-            // Other types of joins can support *some* filters, but restrictions are complex and error prone.
-            // For now we don't support them.
-            // See the logical optimizer rules for more details: datafusion/optimizer/src/push_down_filter.rs
             return Ok(FilterDescription::all_unsupported(
                 &parent_filters,
                 &self.children(),
             ));
         }
-        if phase == FilterPushdownPhase::Pre {
-            FilterDescription::from_children(parent_filters, &self.children())
-        } else {
-            // TODO: push down our self filters to children
-            Ok(FilterDescription::all_unsupported(
-                &parent_filters,
-                &self.children(),
-            ))
-        }
+        FilterDescription::from_children(parent_filters, &self.children())
+        // TODO: push down our self filters to children in the post optimization phase
     }
 
     fn handle_child_pushdown_result(
