@@ -30,9 +30,9 @@ use std::any::Any;
 /// that need to describe their memory usage.
 ///
 /// # Example
-/// ```
-/// # use std::sync::Arc;
-/// # use datafusion_execution::memory_pool::{ExplainMemory, GreedyMemoryPool, MemoryConsumer, MemoryPool};
+/// ```/// # use std::sync::Arc;
+/// # use datafusion_execution::memory_pool::{GreedyMemoryPool, MemoryConsumer, MemoryPool};
+/// # use datafusion_execution::memory_pool::memory_report::ExplainMemory;
 /// let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(1024));
 /// let mut reservation = MemoryConsumer::new("example").register(&pool);
 /// reservation.try_grow(256).unwrap();
