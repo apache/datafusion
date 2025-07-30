@@ -52,8 +52,7 @@ use arrow::compute::{concat_batches, lexsort_to_indices, take_arrays};
 use arrow::datatypes::SchemaRef;
 use datafusion_common::config::SpillCompression;
 use datafusion_common::{internal_datafusion_err, internal_err, DataFusionError, Result};
-#[cfg(feature = "explain_memory")]
-use datafusion_execution::memory_pool::{human_readable_size, ExplainMemory};
+
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_execution::TaskContext;
@@ -807,42 +806,6 @@ impl Debug for ExternalSorter {
             .field("spilled_rows", &self.spilled_rows())
             .field("spill_count", &self.spill_count())
             .finish()
-    }
-}
-
-#[cfg(feature = "explain_memory")]
-impl ExplainMemory for ExternalSorter {
-    fn explain_memory(&self) -> Result<String> {
-        fn part(label: &str, size: usize) -> String {
-            format!("{}: {}", label, human_readable_size(size))
-        }
-
-        let batches_size: usize = self
-            .in_mem_batches
-            .iter()
-            .map(get_record_batch_memory_size)
-            .sum();
-
-        Ok(vec![
-            part("in_mem_batches", batches_size),
-            part("spilled_bytes", self.spilled_bytes()),
-            format!("reservation: {}", self.reservation.explain_memory()?),
-            format!(
-                "merge_reservation: {}",
-                self.merge_reservation.explain_memory()?
-            ),
-        ]
-        .join(", "))
-    }
-
-    fn memory_size(&self) -> usize {
-        let batches_size: usize = self
-            .in_mem_batches
-            .iter()
-            .map(get_record_batch_memory_size)
-            .sum();
-
-        batches_size + self.reservation.size() + self.merge_reservation.size()
     }
 }
 

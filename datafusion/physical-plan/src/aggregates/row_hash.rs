@@ -41,8 +41,7 @@ use arrow::array::*;
 use arrow::datatypes::SchemaRef;
 use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
-#[cfg(feature = "explain_memory")]
-use datafusion_execution::memory_pool::{human_readable_size, ExplainMemory};
+
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
 use datafusion_expr::{EmitTo, GroupsAccumulator};
@@ -1183,38 +1182,5 @@ impl GroupedHashAggregateStream {
         let states_batch = RecordBatch::try_new(self.schema(), output)?;
 
         Ok(states_batch)
-    }
-}
-
-#[cfg(feature = "explain_memory")]
-impl ExplainMemory for GroupedHashAggregateStream {
-    fn explain_memory(&self) -> Result<String> {
-        fn part(label: &str, size: usize) -> String {
-            format!("{}: {}", label, human_readable_size(size))
-        }
-
-        let mut parts = vec![
-            part("groups", self.group_values.size()),
-            part("ordering", self.group_ordering.size()),
-            part("indices", self.current_group_indices.allocated_size()),
-        ];
-        for (i, acc) in self.accumulators.iter().enumerate() {
-            parts.push(part(&format!("acc[{i}]"), acc.size()));
-        }
-        parts.push(format!(
-            "reservation: {}",
-            self.reservation.explain_memory()?
-        ));
-        Ok(parts.join(", "))
-    }
-
-    fn memory_size(&self) -> usize {
-        let mut size = self.group_values.size()
-            + self.group_ordering.size()
-            + self.current_group_indices.allocated_size();
-        for acc in &self.accumulators {
-            size += acc.size();
-        }
-        size + self.reservation.size()
     }
 }

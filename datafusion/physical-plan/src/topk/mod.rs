@@ -40,8 +40,6 @@ use datafusion_execution::{
     runtime_env::RuntimeEnv,
 };
 
-#[cfg(feature = "explain_memory")]
-use datafusion_execution::memory_pool::{human_readable_size, ExplainMemory};
 use datafusion_physical_expr::{
     expressions::{is_not_null, is_null, lit, BinaryExpr, DynamicFilterPhysicalExpr},
     PhysicalExpr,
@@ -539,26 +537,6 @@ impl TopK {
     }
 }
 
-#[cfg(feature = "explain_memory")]
-impl ExplainMemory for TopK {
-    fn explain_memory(&self) -> Result<String> {
-        fn part(label: &str, size: usize) -> String {
-            format!("{}: {}", label, human_readable_size(size))
-        }
-
-        Ok(vec![
-            part("row_converter", self.row_converter.size()),
-            part("scratch_rows", self.scratch_rows.size()),
-            part("heap", self.heap.size()),
-            format!("reservation: {}", self.reservation.explain_memory()?),
-        ]
-        .join(", "))
-    }
-
-    fn memory_size(&self) -> usize {
-        self.size() + self.reservation.size()
-    }
-}
 
 struct TopKMetrics {
     /// metrics

@@ -22,7 +22,6 @@ use datafusion_common::{internal_err, Result};
 use std::hash::{Hash, Hasher};
 use std::{cmp::Ordering, fmt, sync::atomic, sync::Arc};
 
-mod memory_report;
 mod pool;
 pub mod proxy {
     pub use datafusion_common::utils::proxy::{
@@ -30,7 +29,6 @@ pub mod proxy {
     };
 }
 
-pub use memory_report::*;
 pub use pool::*;
 
 /// Tracks and potentially limits memory use across operators during execution.

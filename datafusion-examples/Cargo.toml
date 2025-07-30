@@ -56,8 +56,6 @@ path = "examples/external_dependency/query-aws-s3.rs"
 name = "custom_file_casts"
 path = "examples/custom_file_casts.rs"
 
-[features]
-explain_memory = ["datafusion/explain_memory"]
 
 [dev-dependencies]
 arrow = { workspace = true }

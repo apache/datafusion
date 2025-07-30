@@ -1,4 +1,4 @@
-// Licensed to the Apache Software Foundation (ASF) under one
+// Licensed to the Apche Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
 // regarding copyright ownership.  The ASF licenses this file
@@ -34,8 +34,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use crate::filter::batch_filter;
-#[cfg(feature = "explain_memory")]
-use datafusion_execution::memory_pool::{human_readable_size, ExplainMemory};
+
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use futures::stream::{Stream, StreamExt};
 
@@ -187,30 +186,6 @@ impl Stream for AggregateStream {
 impl RecordBatchStream for AggregateStream {
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
-    }
-}
-
-#[cfg(feature = "explain_memory")]
-impl ExplainMemory for AggregateStreamInner {
-    fn explain_memory(&self) -> Result<String> {
-        fn part(label: &str, size: usize) -> String {
-            format!("{}: {}", label, human_readable_size(size))
-        }
-
-        let mut parts = Vec::new();
-        for (i, acc) in self.accumulators.iter().enumerate() {
-            parts.push(part(&format!("acc[{i}]"), acc.size()));
-        }
-        parts.push(format!(
-            "reservation: {}",
-            self.reservation.explain_memory()?
-        ));
-        Ok(parts.join(", "))
-    }
-
-    fn memory_size(&self) -> usize {
-        let size: usize = self.accumulators.iter().map(|a| a.size()).sum();
-        size + self.reservation.size()
     }
 }
 
