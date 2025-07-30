@@ -553,7 +553,7 @@ config_namespace! {
         /// (footer and page metadata). Enabling it can offer substantial performance improvements
         /// for repeated queries over large files. By default, the cache is automatically
         /// invalidated when the underlying file is modified.
-        pub cache_metadata: bool, default = false
+        pub cache_metadata: bool, default = true
 
         // The following options affect writing to parquet files
         // and map to parquet::file::properties::WriterProperties
