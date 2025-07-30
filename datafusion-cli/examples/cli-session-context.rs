@@ -79,13 +79,13 @@ impl CliSessionContext for MyUnionerContext {
     }
 
     fn enable_memory_profiling(&self) {
-        self.ctx.enable_memory_profiling()
+        self.ctx.enable_memory_profiling();
     }
 
     fn get_last_query_memory_report(
         &self,
     ) -> Option<std::collections::HashMap<String, usize>> {
-        self.ctx.get_last_query_memory_report()
+        Some(self.ctx.get_last_query_memory_report())
     }
 }
 
