@@ -61,7 +61,7 @@ async fn main() -> Result<()> {
     reservation.try_grow(15 * MB)?;
     // A query that sorts a large dataset and will exceed the memory limit
     let df = ctx
-        .sql("select * from generate_series(1,500000) as t(v) order by v")
+        .sql("select v % 1000 as group_key, count(*) as cnt, sum(v) as sum_v from generate_series(1,500000) as t(v) group by v % 1000 order by group_key")
         .await?;
 
     match df.collect().await {
