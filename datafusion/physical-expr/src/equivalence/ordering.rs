@@ -74,6 +74,11 @@ impl OrderingEquivalenceClass {
         result
     }
 
+    /// Returns the orderings in this ordering equivalence class.
+    pub fn orderings(&self) -> &[LexOrdering] {
+        &self.orderings
+    }
+
     /// Extend this ordering equivalence class with the given orderings.
     pub fn extend(&mut self, orderings: impl IntoIterator<Item = LexOrdering>) {
         self.orderings.extend(orderings);

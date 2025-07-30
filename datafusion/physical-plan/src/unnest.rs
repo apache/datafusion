@@ -51,8 +51,8 @@ use futures::{Stream, StreamExt};
 use log::trace;
 
 /// Unnest the given columns (either with type struct or list)
-/// For list unnesting, each rows is vertically transformed into multiple rows
-/// For struct unnesting, each columns is horizontally transformed into multiple columns,
+/// For list unnesting, each row is vertically transformed into multiple rows
+/// For struct unnesting, each column is horizontally transformed into multiple columns,
 /// Thus the original RecordBatch with dimension (n x m) may have new dimension (n' x m')
 ///
 /// See [`UnnestOptions`] for more details and an example.
@@ -101,8 +101,22 @@ impl UnnestExec {
         input: &Arc<dyn ExecutionPlan>,
         schema: SchemaRef,
     ) -> PlanProperties {
+        // Extract equivalence properties from input plan
+        let input_eq_properties = input.equivalence_properties();
+        let orderings = input_eq_properties.oeq_class().orderings().to_vec();
+        let eq_group = input_eq_properties.eq_group();
+        let constraints = input_eq_properties.constraints();
+
+        // Create new equivalence properties for the unnest plan based on the input plan
+        let mut eq_properties =
+            EquivalenceProperties::new_with_orderings(schema, orderings)
+                .with_constraints(constraints.to_owned());
+        eq_properties
+            .add_equivalence_group(eq_group.to_owned())
+            .unwrap(); // We can unwrap this because we know this is a valid equivalence group
+
         PlanProperties::new(
-            EquivalenceProperties::new(schema),
+            eq_properties,
             input.output_partitioning().to_owned(),
             input.pipeline_behavior(),
             input.boundedness(),
