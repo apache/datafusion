@@ -448,41 +448,11 @@ fn try_replace_with_window(
     let left_schema = left.table_scan.projected_schema.as_ref();
     let right_schema = right.table_scan.projected_schema.as_ref();
 
-    // Helper closure to resolve which side a column belongs to and get its unqualified name
-    // Returns (unqualified_column_name, is_from_left_side)
-    let resolve_column_side = |col: &Column| -> Option<(String, bool)> {
-        if let Some(relation) = col.relation.as_ref() {
-            // Column has a qualifier - determine which side it belongs to
-            if left.alias.is_some() && Some(relation) == left.alias {
-                // Matches left alias (e.g., a.column)
-                Some((col.name().to_string(), true)) // true = left side
-            } else if right.alias.is_some() && Some(relation) == right.alias {
-                // Matches right alias (e.g., b.column)
-                Some((col.name().to_string(), false)) // false = right side
-            } else if relation == &left.table_scan.table_name {
-                // Matches table name - could be either side in a self-join
-                // If left has no alias, it belongs to left; if right has no alias, it belongs to right
-                if left.alias.is_none() {
-                    Some((col.name().to_string(), true))
-                } else if right.alias.is_none() {
-                    Some((col.name().to_string(), false))
-                } else {
-                    // Both sides have aliases but column uses table name - ambiguous
-                    None
-                }
-            } else {
-                // Unknown qualifier
-                None
-            }
-        } else {
-            // No qualifier - ambiguous in self-join context
-            None
-        }
-    };
-
     // Resolve both filter columns
-    let (left_col_name, left_is_left_side) = resolve_column_side(left_filter_col)?;
-    let (right_col_name, right_is_left_side) = resolve_column_side(right_filter_col)?;
+    let (left_col_name, left_is_left_side) =
+        resolve_column_side(left_filter_col, &left, &right)?;
+    let (right_col_name, right_is_left_side) =
+        resolve_column_side(right_filter_col, &left, &right)?;
 
     // Step 4.3: Verify the filter compares columns from different sides
     // For a valid self-join filter like "b.date <= a.date", one column should be from
@@ -756,7 +726,7 @@ fn try_replace_with_window(
     }
 
     // Step 11: Create the optimized plan with window function
-    let table_scan = merge_table_scans(left.table_scan, right.table_scan);
+    let table_scan = merge_table_scans(left.table_scan, right.table_scan).ok()?;
     let mut plan = LogicalPlan::TableScan(table_scan);
 
     // Re-add eliminated aliases if any
@@ -782,6 +752,42 @@ fn try_replace_with_window(
         window,
         renamed_alias,
     })
+}
+
+/// Helper function to resolve which side a column belongs to and get its unqualified name
+/// Returns (unqualified_column_name, is_from_left_side)
+fn resolve_column_side(
+    col: &Column,
+    left: &SelfJoinBranch,
+    right: &SelfJoinBranch,
+) -> Option<(String, bool)> {
+    if let Some(relation) = col.relation.as_ref() {
+        // Column has a qualifier - determine which side it belongs to
+        if left.alias.is_some() && Some(relation) == left.alias {
+            // Matches left alias (e.g., a.column)
+            Some((col.name().to_string(), true)) // true = left side
+        } else if right.alias.is_some() && Some(relation) == right.alias {
+            // Matches right alias (e.g., b.column)
+            Some((col.name().to_string(), false)) // false = right side
+        } else if relation == &left.table_scan.table_name {
+            // Matches table name - could be either side in a self-join
+            // If left has no alias, it belongs to left; if right has no alias, it belongs to right
+            if left.alias.is_none() {
+                Some((col.name().to_string(), true))
+            } else if right.alias.is_none() {
+                Some((col.name().to_string(), false))
+            } else {
+                // Both sides have aliases but column uses table name - ambiguous
+                None
+            }
+        } else {
+            // Unknown qualifier
+            None
+        }
+    } else {
+        // No qualifier - ambiguous in self-join context
+        None
+    }
 }
 
 #[cfg(test)]

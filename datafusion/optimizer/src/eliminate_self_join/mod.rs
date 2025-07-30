@@ -39,7 +39,7 @@ pub use aggregation::EliminateSelfJoinAggregation;
 pub use unique_keyed::EliminateUniqueKeyedSelfJoin;
 
 /// Merges two table scans into a single scan that covers all columns and filters from both.
-fn merge_table_scans(left_scan: &TableScan, right_scan: &TableScan) -> TableScan {
+fn merge_table_scans(left_scan: &TableScan, right_scan: &TableScan) -> Result<TableScan> {
     let filters = left_scan
         .filters
         .iter()
@@ -75,7 +75,6 @@ fn merge_table_scans(left_scan: &TableScan, right_scan: &TableScan) -> TableScan
         filters,
         fetch,
     )
-    .unwrap()
 }
 
 /// Checks if two table scans reference the same underlying table.
@@ -166,7 +165,7 @@ impl RenamedAlias {
                 ..
             } = plan.map_expressions(|expr| self.rewrite_expression(expr))?;
             if transformed {
-                Ok(Transformed::yes(plan.recompute_schema().unwrap()))
+                plan.recompute_schema().map(Transformed::yes)
             } else {
                 Ok(Transformed::no(plan))
             }

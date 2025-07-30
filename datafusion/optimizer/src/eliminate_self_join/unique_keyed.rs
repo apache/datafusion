@@ -213,7 +213,7 @@ fn optimize_with_side(
 ) -> Option<OptimizationResult> {
     match (left, right) {
         (LogicalPlan::TableScan(left_scan), LogicalPlan::TableScan(right_scan)) => {
-            let table_scan = merge_table_scans(left_scan, right_scan);
+            let table_scan = merge_table_scans(left_scan, right_scan).ok()?;
             let plan = LogicalPlan::TableScan(table_scan).recompute_schema().ok()?;
             Some(OptimizationResult {
                 plan,
@@ -271,7 +271,7 @@ fn optimize_with_side(
                 .clone()
                 .transform_up(|plan| match &plan {
                     LogicalPlan::TableScan(right_scan) => {
-                        let merged = merge_table_scans(left_scan, right_scan);
+                        let merged = merge_table_scans(left_scan, right_scan)?;
                         Ok(Transformed::yes(LogicalPlan::TableScan(merged)))
                     }
                     _ => Ok(Transformed::no(plan)),
