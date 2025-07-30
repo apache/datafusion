@@ -46,6 +46,7 @@ pub enum Command {
     SearchFunctions(String),
     QuietMode(Option<bool>),
     OutputFormat(Option<String>),
+    Memory(Option<String>),
 }
 
 pub enum OutputFormat {
@@ -110,6 +111,25 @@ impl Command {
                 }
                 Ok(())
             }
+            Self::Memory(subcmd) => {
+                match subcmd.as_deref() {
+                    Some("enable") => {
+                        ctx.enable_memory_profiling();
+                        println!("Memory profiling enabled for next query");
+                    }
+                    Some("show") => {
+                        if let Some(report) = ctx.get_last_query_memory_report() {
+                            for (op, bytes) in report {
+                                println!("{op}: {bytes}");
+                            }
+                        } else {
+                            println!("No memory usage recorded");
+                        }
+                    }
+                    _ => println!("Usage: MEMORY [enable|show]"),
+                }
+                Ok(())
+            }
             Self::Quit => exec_err!("Unexpected quit, this should be handled outside"),
             Self::ListFunctions => display_all_functions(),
             Self::SearchFunctions(function) => {
@@ -142,11 +162,12 @@ impl Command {
             Self::OutputFormat(_) => {
                 ("\\pset [NAME [VALUE]]", "set table output option\n(format)")
             }
+            Self::Memory(_) => ("MEMORY [enable|show]", "memory profiling commands"),
         }
     }
 }
 
-const ALL_COMMANDS: [Command; 9] = [
+const ALL_COMMANDS: [Command; 10] = [
     Command::ListTables,
     Command::DescribeTableStmt(String::new()),
     Command::Quit,
@@ -156,6 +177,7 @@ const ALL_COMMANDS: [Command; 9] = [
     Command::SearchFunctions(String::new()),
     Command::QuietMode(None),
     Command::OutputFormat(None),
+    Command::Memory(None),
 ];
 
 fn all_commands_info() -> RecordBatch {
@@ -206,6 +228,7 @@ impl FromStr for Command {
                 Self::OutputFormat(Some(subcommand.to_string()))
             }
             ("pset", None) => Self::OutputFormat(None),
+            ("memory", sub) => Self::Memory(sub.map(|s| s.to_string())),
             _ => return Err(()),
         })
     }
