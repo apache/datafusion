@@ -2,7 +2,7 @@ use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use datafusion::error::Result;
-#[cfg(feature = "memory_explain")]
+#[cfg(feature = "explain_memory")]
 use datafusion::execution::memory_pool::ExplainMemory;
 use datafusion::execution::memory_pool::{
     report_top_consumers, GreedyMemoryPool, MemoryConsumer, MemoryPool,
@@ -28,7 +28,7 @@ async fn main() -> Result<()> {
     // Manually allocate memory and print how much was reserved
     let mut reservation = MemoryConsumer::new("manual").register(&pool);
     reservation.try_grow(15 * MB)?;
-    #[cfg(feature = "memory_explain")]
+    #[cfg(feature = "explain_memory")]
     println!("{}", reservation.explain_memory()?);
 
     let df = ctx

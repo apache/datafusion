@@ -38,7 +38,7 @@ workspace = true
 name = "datafusion_execution"
 
 [features]
-memory_explain = []
+explain_memory = []
 
 [dependencies]
 arrow = { workspace = true }

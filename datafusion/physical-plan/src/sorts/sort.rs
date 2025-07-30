@@ -53,7 +53,7 @@ use arrow::datatypes::SchemaRef;
 use datafusion_common::config::SpillCompression;
 use datafusion_common::{internal_datafusion_err, internal_err, DataFusionError, Result};
 use datafusion_execution::disk_manager::RefCountedTempFile;
-#[cfg(feature = "memory_explain")]
+#[cfg(feature = "explain_memory")]
 use datafusion_execution::memory_pool::{human_readable_size, ExplainMemory};
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::runtime_env::RuntimeEnv;
@@ -811,7 +811,7 @@ impl Debug for ExternalSorter {
     }
 }
 
-#[cfg(feature = "memory_explain")]
+#[cfg(feature = "explain_memory")]
 impl ExplainMemory for ExternalSorter {
     fn explain_memory(&self) -> Result<String> {
         fn part(label: &str, size: usize) -> String {

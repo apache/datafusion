@@ -35,7 +35,7 @@ use arrow::datatypes::SchemaRef;
 use datafusion_common::{
     internal_datafusion_err, internal_err, HashMap, Result, ScalarValue,
 };
-#[cfg(feature = "memory_explain")]
+#[cfg(feature = "explain_memory")]
 use datafusion_execution::memory_pool::{human_readable_size, ExplainMemory};
 use datafusion_execution::{
     memory_pool::{
@@ -540,7 +540,7 @@ impl TopK {
     }
 }
 
-#[cfg(feature = "memory_explain")]
+#[cfg(feature = "explain_memory")]
 impl ExplainMemory for TopK {
     fn explain_memory(&self) -> Result<String> {
         fn part(label: &str, size: usize) -> String {
