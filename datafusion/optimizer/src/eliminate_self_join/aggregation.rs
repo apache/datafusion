@@ -143,7 +143,7 @@ impl EliminateSelfJoinAggregation {
         let Some(OptimizationResult {
             window,
             renamed_alias,
-        }) = try_replace_with_window(aggregate)
+        }) = try_replace_with_window(aggregate)?
         else {
             return Ok(Transformed::no(plan));
         };
@@ -395,7 +395,7 @@ fn try_replace_with_window(
         aggr_expr,
         ..
     }: &Aggregate,
-) -> Option<OptimizationResult> {
+) -> Result<Option<OptimizationResult>> {
     // Step 1.1: Check if input is a join with a filter
     let LogicalPlan::Join(
         join @ Join {
@@ -404,30 +404,37 @@ fn try_replace_with_window(
         },
     ) = input.as_ref()
     else {
-        return None;
+        return Ok(None);
     };
 
     // Step 1.2: Verify it's an inner join
     // This optimization only applies to INNER joins
     if join.join_type != JoinType::Inner {
-        return None;
+        return Ok(None);
     }
 
     // Step 2: Extract table information from both sides of the join
-    let left = try_narrow_join_to_table_scan_alias(join.left.as_ref())?;
-    let right = try_narrow_join_to_table_scan_alias(join.right.as_ref())?;
+    let Some(left) = try_narrow_join_to_table_scan_alias(join.left.as_ref()) else {
+        return Ok(None);
+    };
+    let Some(right) = try_narrow_join_to_table_scan_alias(join.right.as_ref()) else {
+        return Ok(None);
+    };
 
     // Step 3: Verify it's a self-join (same table on both sides)
     if !is_table_scan_same(left.table_scan, right.table_scan) {
-        return None;
+        return Ok(None);
     }
 
     // Step 4.1: Analyze the filter to extract comparison
     // Example: b.purchase_date <= a.purchase_date
     // Note: left_filter_col/right_filter_col refer to left/right sides of the comparison operator,
     // NOT the left/right sides of the join
-    let (left_filter_col, op, right_filter_col) =
-        try_narrow_filter_to_column_comparison(join_filter)?;
+    let Some((left_filter_col, op, right_filter_col)) =
+        try_narrow_filter_to_column_comparison(join_filter)
+    else {
+        return Ok(None);
+    };
 
     // Step 4.2: Determine which side of the join each filter column belongs to
     // We need to handle 4 cases for each column:
@@ -449,40 +456,28 @@ fn try_replace_with_window(
     let right_schema = right.table_scan.projected_schema.as_ref();
 
     // Resolve both filter columns
-    let (left_col_name, left_is_left_side) =
-        resolve_column_side(left_filter_col, &left, &right)?;
-    let (right_col_name, right_is_left_side) =
-        resolve_column_side(right_filter_col, &left, &right)?;
+    let Some((left_col_name, left_is_left_side)) =
+        resolve_column_side(left_filter_col, &left, &right)
+    else {
+        return Ok(None);
+    };
+    let Some((right_col_name, right_is_left_side)) =
+        resolve_column_side(right_filter_col, &left, &right)
+    else {
+        return Ok(None);
+    };
 
     // Step 4.3: Verify the filter compares columns from different sides
     // For a valid self-join filter like "b.date <= a.date", one column should be from
     // the left side and one from the right side
     if left_is_left_side == right_is_left_side {
         // Both columns are from the same side - invalid filter for this optimization
-        return None;
-    }
-
-    // Step 4.4: Verify both columns exist in their respective schemas and refer to the same base column
-    // Verify the columns exist in their respective schemas
-    if left_is_left_side {
-        // left_filter_col is from the left side of the join
-        left_schema.index_of_column_by_name(None, left_col_name.as_str())?;
-    } else {
-        // left_filter_col is from the right side of the join
-        right_schema.index_of_column_by_name(None, left_col_name.as_str())?;
-    }
-
-    if right_is_left_side {
-        // right_filter_col is from the left side of the join
-        left_schema.index_of_column_by_name(None, right_col_name.as_str())?;
-    } else {
-        // right_filter_col is from the right side of the join
-        right_schema.index_of_column_by_name(None, right_col_name.as_str())?;
+        return Ok(None);
     }
 
     // Verify both columns have the same name (they should refer to the same base column)
     if left_col_name != right_col_name {
-        return None;
+        return Ok(None);
     }
 
     // At this point, we've verified:
@@ -508,7 +503,7 @@ fn try_replace_with_window(
                 // Determine which side this column belongs to
                 let column_side = if relation.is_none() {
                     // Unqualified column - ambiguous in self-join
-                    return None;
+                    return Ok(None);
                 } else if relation.as_ref() == left.alias {
                     // Column from left side
                     true
@@ -517,7 +512,7 @@ fn try_replace_with_window(
                     false
                 } else {
                     // Unknown qualifier
-                    return None;
+                    return Ok(None);
                 };
 
                 // All GROUP BY columns must come from the same side
@@ -525,7 +520,7 @@ fn try_replace_with_window(
                     None => group_by_side = Some(column_side),
                     Some(side) if side != column_side => {
                         // GROUP BY columns come from different sides - cannot optimize
-                        return None;
+                        return Ok(None);
                     }
                     _ => {} // Same side, continue
                 }
@@ -538,7 +533,7 @@ fn try_replace_with_window(
                 };
 
                 if !column_exists {
-                    return None;
+                    return Ok(None);
                 }
 
                 group_by_names.insert(name.as_str());
@@ -546,14 +541,14 @@ fn try_replace_with_window(
             // If `GROUP BY ...` expression isn't a column reference conservatively
             // assume it isn't self-join
             _ => {
-                return None;
+                return Ok(None);
             }
         }
     }
 
     // GROUP BY must be from the left side of the join for this optimization
     if group_by_side != Some(true) {
-        return None;
+        return Ok(None);
     }
 
     // Step 6: Extract column names from JOIN ON
@@ -571,7 +566,7 @@ fn try_replace_with_window(
             ) => {
                 // In a self-join, the join columns should have the same name
                 if left_name != right_name {
-                    return None;
+                    return Ok(None);
                 }
                 // Verify the column exists in both schemas
                 if left_schema.field_with_unqualified_name(left_name).is_err()
@@ -579,12 +574,12 @@ fn try_replace_with_window(
                         .field_with_unqualified_name(right_name)
                         .is_err()
                 {
-                    return None;
+                    return Ok(None);
                 }
                 on_names.insert(left_name.as_str());
             }
             _ => {
-                return None;
+                return Ok(None);
             }
         }
     }
@@ -598,7 +593,7 @@ fn try_replace_with_window(
         .cloned()
         .collect::<IndexSet<_>>();
     if !on_and_filter.is_subset(&group_by_names) {
-        return None;
+        return Ok(None);
     }
 
     // Step 8: Check if GROUP BY columns form a unique constraint
@@ -615,10 +610,10 @@ fn try_replace_with_window(
             if let Ok(idx) = left_base_schema.index_of(field.name()) {
                 group_by_indices.push(idx);
             } else {
-                return None;
+                return Ok(None);
             }
         } else {
-            return None;
+            return Ok(None);
         }
     }
     let group_by_indices_set: IndexSet<usize> = group_by_indices.into_iter().collect();
@@ -631,9 +626,9 @@ fn try_replace_with_window(
         )
     });
 
-    let mut dfs = left_base_schema.to_dfschema().ok()?;
+    let mut dfs = left_base_schema.to_dfschema()?;
     if let Some(fd) = fd_opt {
-        dfs = dfs.with_functional_dependencies(fd).ok()?;
+        dfs = dfs.with_functional_dependencies(fd)?;
     }
     let unique_constraints = unique_indexes(&dfs);
 
@@ -646,7 +641,7 @@ fn try_replace_with_window(
 
     if !has_unique_constraint {
         // Cannot apply optimization without GROUP BY columns containing a unique constraint
-        return None;
+        return Ok(None);
     }
 
     // Step 9: Transform filter operator to window frame specification
@@ -686,24 +681,21 @@ fn try_replace_with_window(
             || !params.order_by.is_empty()
             || params.null_treatment.is_some()
         {
-            return None;
+            return Ok(None);
         }
 
         // Remove qualifiers from aggregate arguments
         // Example: sum(b.amount) -> sum(amount)
-        let Transformed { data: args, .. } = params
-            .args
-            .clone()
-            .map_elements(|expr| match expr {
+        let Transformed { data: args, .. } =
+            params.args.clone().map_elements(|expr| match expr {
                 Expr::Column(Column { name, .. }) => Ok(Transformed::yes(Expr::Column(
                     Column::new_unqualified(name),
                 ))),
                 _ => Ok(Transformed::no(expr)),
-            })
-            .ok()?;
+            })?;
 
         // Get the original aggregate expression's name for aliasing
-        let aggr_expr_name = aggr_expr.name_for_alias().ok()?;
+        let aggr_expr_name = aggr_expr.name_for_alias()?;
 
         // Create window function with appropriate partitioning and ordering
         let window_func = Expr::WindowFunction(Box::new(WindowFunction {
@@ -726,12 +718,12 @@ fn try_replace_with_window(
     }
 
     // Step 11: Create the optimized plan with window function
-    let table_scan = merge_table_scans(left.table_scan, right.table_scan).ok()?;
+    let table_scan = merge_table_scans(left.table_scan, right.table_scan)?;
     let mut plan = LogicalPlan::TableScan(table_scan);
 
     // Re-add eliminated aliases if any
     let renamed_alias = if let Some(left) = left.alias {
-        let alias = SubqueryAlias::try_new(plan.into(), left.table()).ok()?;
+        let alias = SubqueryAlias::try_new(plan.into(), left.table())?;
         plan = LogicalPlan::SubqueryAlias(alias);
         // If right side had different alias, track the renaming
         right.alias.map(|right| RenamedAlias {
@@ -739,19 +731,19 @@ fn try_replace_with_window(
             to: left.clone(),
         })
     } else if let Some(table_reference) = right.alias {
-        let alias = SubqueryAlias::try_new(plan.into(), table_reference.table()).ok()?;
+        let alias = SubqueryAlias::try_new(plan.into(), table_reference.table())?;
         plan = LogicalPlan::SubqueryAlias(alias);
         None
     } else {
         None
     };
 
-    let window = Window::try_new(window_expr, Arc::new(plan)).ok()?;
+    let window = Window::try_new(window_expr, Arc::new(plan))?;
 
-    Some(OptimizationResult {
+    Ok(Some(OptimizationResult {
         window,
         renamed_alias,
-    })
+    }))
 }
 
 /// Helper function to resolve which side a column belongs to and get its unqualified name

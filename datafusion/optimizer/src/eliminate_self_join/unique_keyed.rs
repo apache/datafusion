@@ -121,7 +121,7 @@ impl OptimizerRule for EliminateUniqueKeyedSelfJoin {
                     }) = try_eliminate_unique_keyed_self_join_with_side(
                         join,
                         referenced_side,
-                    ) {
+                    )? {
                         // Special case: Don't return the side directly if it would change the schema
                         // We need to keep the projection to maintain the correct output columns
 
@@ -210,15 +210,15 @@ fn optimize_with_side(
     left: &LogicalPlan,
     right: &LogicalPlan,
     referenced_side: ReferencedSide,
-) -> Option<OptimizationResult> {
+) -> Result<Option<OptimizationResult>> {
     match (left, right) {
         (LogicalPlan::TableScan(left_scan), LogicalPlan::TableScan(right_scan)) => {
-            let table_scan = merge_table_scans(left_scan, right_scan).ok()?;
-            let plan = LogicalPlan::TableScan(table_scan).recompute_schema().ok()?;
-            Some(OptimizationResult {
+            let table_scan = merge_table_scans(left_scan, right_scan)?;
+            let plan = LogicalPlan::TableScan(table_scan).recompute_schema()?;
+            Ok(Some(OptimizationResult {
                 plan,
                 renamed_alias: None,
-            })
+            }))
         }
         (
             LogicalPlan::SubqueryAlias(SubqueryAlias {
@@ -232,10 +232,13 @@ fn optimize_with_side(
                 ..
             }),
         ) => {
-            let OptimizationResult {
+            let Some(OptimizationResult {
                 plan,
                 renamed_alias: _,
-            } = optimize_with_side(left_input, right_input, referenced_side)?;
+            }) = optimize_with_side(left_input, right_input, referenced_side)?
+            else {
+                return Ok(None);
+            };
 
             // Choose which alias to use based on which side is referenced
             let (chosen_alias, renamed_alias) = match referenced_side {
@@ -255,39 +258,28 @@ fn optimize_with_side(
                 ),
             };
 
-            let plan = LogicalPlanBuilder::new(plan)
-                .alias(chosen_alias)
-                .ok()?
-                .build()
-                .ok()?;
-            let plan = plan.recompute_schema().ok()?;
-            Some(OptimizationResult {
+            let plan = LogicalPlanBuilder::new(plan).alias(chosen_alias)?.build()?;
+            let plan = plan.recompute_schema()?;
+            Ok(Some(OptimizationResult {
                 plan,
                 renamed_alias,
-            })
+            }))
         }
         (LogicalPlan::TableScan(left_scan), _) => {
-            let transformed = right
-                .clone()
-                .transform_up(|plan| match &plan {
-                    LogicalPlan::TableScan(right_scan) => {
-                        let merged = merge_table_scans(left_scan, right_scan)?;
-                        Ok(Transformed::yes(LogicalPlan::TableScan(merged)))
-                    }
-                    _ => Ok(Transformed::no(plan)),
-                })
-                .ok()?;
-            assert!(
-                transformed.transformed,
-                "Called `transform_up` and no merged `TableScan`"
-            );
+            let transformed = right.clone().transform_up(|plan| match &plan {
+                LogicalPlan::TableScan(right_scan) => {
+                    let merged = merge_table_scans(left_scan, right_scan)?;
+                    Ok(Transformed::yes(LogicalPlan::TableScan(merged)))
+                }
+                _ => Ok(Transformed::no(plan)),
+            })?;
             if transformed.transformed {
-                Some(OptimizationResult {
+                Ok(Some(OptimizationResult {
                     plan: transformed.data,
                     renamed_alias: None,
-                })
+                }))
             } else {
-                None
+                Ok(None)
             }
         }
         (_, LogicalPlan::TableScan(_)) => {
@@ -299,7 +291,7 @@ fn optimize_with_side(
             };
             optimize_with_side(right, left, swapped_side)
         }
-        _ => None,
+        _ => Ok(None),
     }
 }
 
@@ -355,20 +347,17 @@ struct Resolution {
 fn try_resolve_to_table_scan_alias(branch: &LogicalPlan) -> Option<Resolution> {
     let mut maybe_alias = None;
     let mut table_scan = None;
-    branch
-        .apply_with_subqueries(|plan| match plan {
-            LogicalPlan::SubqueryAlias(SubqueryAlias { alias, .. }) => {
-                maybe_alias = Some(alias.clone());
-                Ok(TreeNodeRecursion::Continue)
-            }
-            LogicalPlan::TableScan(source) => {
-                table_scan = Some(source.clone());
-                Ok(TreeNodeRecursion::Continue)
-            }
-            _ => Ok(TreeNodeRecursion::Continue),
-        })
-        // safe to unwrap
-        .unwrap();
+    let _ = branch.apply_with_subqueries(|plan| match plan {
+        LogicalPlan::SubqueryAlias(SubqueryAlias { alias, .. }) => {
+            maybe_alias = Some(alias.clone());
+            Ok(TreeNodeRecursion::Continue)
+        }
+        LogicalPlan::TableScan(source) => {
+            table_scan = Some(source.clone());
+            Ok(TreeNodeRecursion::Continue)
+        }
+        _ => Ok(TreeNodeRecursion::Continue),
+    });
 
     let table_scan = table_scan?;
     Some(Resolution {
@@ -569,18 +558,20 @@ fn projection_references_both_sides(exprs: &[Expr], join: &Join) -> bool {
 }
 
 #[allow(dead_code)]
-fn try_eliminate_unique_keyed_self_join(join: &Join) -> Option<OptimizationResult> {
+fn try_eliminate_unique_keyed_self_join(
+    join: &Join,
+) -> Result<Option<OptimizationResult>> {
     try_eliminate_unique_keyed_self_join_with_side(join, ReferencedSide::Both)
 }
 
 fn try_eliminate_unique_keyed_self_join_with_side(
     join: &Join,
     referenced_side: ReferencedSide,
-) -> Option<OptimizationResult> {
+) -> Result<Option<OptimizationResult>> {
     // Cannot eliminate joins with additional filter conditions
     // These filters change the semantics of the join beyond simple equality
     if join.filter.is_some() {
-        return None;
+        return Ok(None);
     }
 
     let left_schema = join.left.schema().as_ref();
@@ -589,21 +580,27 @@ fn try_eliminate_unique_keyed_self_join_with_side(
     let left_unique = unique_indexes(left_schema);
     // For the left side, we need unique constraints
     if left_unique.is_empty() {
-        return None;
+        return Ok(None);
     }
 
-    let Resolution {
+    let Some(Resolution {
         table_scan: left_scan,
         alias: left_alias,
-    } = try_resolve_to_table_scan_alias(&join.left)?;
-    let Resolution {
+    }) = try_resolve_to_table_scan_alias(&join.left)
+    else {
+        return Ok(None);
+    };
+    let Some(Resolution {
         table_scan: right_scan,
         alias: right_alias,
-    } = try_resolve_to_table_scan_alias(&join.right)?;
+    }) = try_resolve_to_table_scan_alias(&join.right)
+    else {
+        return Ok(None);
+    };
 
     // Verify both sides reference the same base table
     if !is_table_scan_same(&left_scan, &right_scan) {
-        return None;
+        return Ok(None);
     }
 
     // Special case: if projection only references one side and that side has
@@ -612,18 +609,18 @@ fn try_eliminate_unique_keyed_self_join_with_side(
         // For right side, check if it has any operations beyond basic table access
         // This includes filters, projections, etc. that need to be preserved
         if has_non_trivial_operations(&join.right) {
-            return Some(OptimizationResult {
+            return Ok(Some(OptimizationResult {
                 plan: join.right.as_ref().clone(),
                 renamed_alias: None,
-            });
+            }));
         }
     } else if referenced_side == ReferencedSide::Left {
         // For left side, check if it has any operations beyond basic table access
         if has_non_trivial_operations(&join.left) {
-            return Some(OptimizationResult {
+            return Ok(Some(OptimizationResult {
                 plan: join.left.as_ref().clone(),
                 renamed_alias: None,
-            });
+            }));
         }
     }
 
@@ -632,30 +629,40 @@ fn try_eliminate_unique_keyed_self_join_with_side(
     for on in &join.on {
         let (left_col, right_col) = match on {
             (Expr::Column(left_col), Expr::Column(right_col)) => (left_col, right_col),
-            _ => return None,
+            _ => return Ok(None),
         };
 
         // Verify the columns exist in their respective schemas
-        left_schema
-            .index_of_column_by_name(left_col.relation.as_ref(), left_col.name())?;
-        right_schema
-            .index_of_column_by_name(right_col.relation.as_ref(), right_col.name())?;
+        if left_schema
+            .index_of_column_by_name(left_col.relation.as_ref(), left_col.name())
+            .is_none()
+        {
+            return Ok(None);
+        }
+        if right_schema
+            .index_of_column_by_name(right_col.relation.as_ref(), right_col.name())
+            .is_none()
+        {
+            return Ok(None);
+        }
     }
 
-    let column_index = try_resolve_join_on_columns_to_indexes(
+    let Some(column_index) = try_resolve_join_on_columns_to_indexes(
         join,
         left_schema,
         &left_scan.table_name,
         left_alias.as_ref(),
         right_alias.as_ref(),
-    )?;
+    ) else {
+        return Ok(None);
+    };
 
     // Check if the join columns form a unique constraint
     let forms_unique_constraint = left_unique
         .iter()
         .any(|unique_constraint| column_index.is_superset(unique_constraint));
     if !forms_unique_constraint {
-        return None;
+        return Ok(None);
     }
 
     optimize_with_side(&join.left, &join.right, referenced_side)
