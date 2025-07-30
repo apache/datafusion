@@ -554,14 +554,25 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
             order_by,
             window_frame,
             null_treatment,
+            distinct,
         } = params;
 
         let mut schema_name = String::new();
-        schema_name.write_fmt(format_args!(
-            "{}({})",
-            self.name(),
-            schema_name_from_exprs(args)?
-        ))?;
+
+        // Inject DISTINCT into the schema name when requested
+        if *distinct {
+            schema_name.write_fmt(format_args!(
+                "{}(DISTINCT {})",
+                self.name(),
+                schema_name_from_exprs(args)?
+            ))?;
+        } else {
+            schema_name.write_fmt(format_args!(
+                "{}({})",
+                self.name(),
+                schema_name_from_exprs(args)?
+            ))?;
+        }
 
         if let Some(null_treatment) = null_treatment {
             schema_name.write_fmt(format_args!(" {null_treatment}"))?;
@@ -579,7 +590,7 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
                 " ORDER BY [{}]",
                 schema_name_from_sorts(order_by)?
             ))?;
-        };
+        }
 
         schema_name.write_fmt(format_args!(" {window_frame}"))?;
 
@@ -648,15 +659,24 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
             order_by,
             window_frame,
             null_treatment,
+            distinct,
         } = params;
 
         let mut display_name = String::new();
 
-        display_name.write_fmt(format_args!(
-            "{}({})",
-            self.name(),
-            expr_vec_fmt!(args)
-        ))?;
+        if *distinct {
+            display_name.write_fmt(format_args!(
+                "{}(DISTINCT {})",
+                self.name(),
+                expr_vec_fmt!(args)
+            ))?;
+        } else {
+            display_name.write_fmt(format_args!(
+                "{}({})",
+                self.name(),
+                expr_vec_fmt!(args)
+            ))?;
+        }
 
         if let Some(null_treatment) = null_treatment {
             display_name.write_fmt(format_args!(" {null_treatment}"))?;

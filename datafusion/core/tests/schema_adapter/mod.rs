@@ -15,14 +15,4 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Sort functionalities
-
-mod builder;
-mod cursor;
-mod merge;
-mod multi_level_merge;
-pub mod partial_sort;
-pub mod sort;
-pub mod sort_preserving_merge;
-mod stream;
-pub mod streaming_merge;
+mod schema_adapter_integration_tests;

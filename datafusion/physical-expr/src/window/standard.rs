@@ -275,6 +275,10 @@ impl WindowExpr for StandardWindowExpr {
             false
         }
     }
+
+    fn create_window_fn(&self) -> Result<WindowFn> {
+        Ok(WindowFn::Builtin(self.expr.create_evaluator()?))
+    }
 }
 
 /// Adds a new ordering expression into existing ordering equivalence class(es) based on
