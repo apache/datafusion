@@ -15,14 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use ahash::AHasher;
+use datafusion_common::tree_node::TreeNodeRecursion;
+use datafusion_expr::LogicalPlan;
 use std::{
-    collections::hash_map::DefaultHasher,
     hash::{Hash, Hasher},
     num::NonZeroUsize,
 };
-
-use datafusion_common::tree_node::TreeNodeRecursion;
-use datafusion_expr::LogicalPlan;
 
 /// Non-unique identifier of a [`LogicalPlan`].
 ///
@@ -60,7 +59,7 @@ impl LogicalPlanSignature {
     /// the same [`LogicalPlanSignature`]s (due to hash implementation in
     /// [`LogicalPlan`]).
     pub fn new(plan: &LogicalPlan) -> Self {
-        let mut hasher = DefaultHasher::new();
+        let mut hasher = AHasher::default();
         plan.hash(&mut hasher);
 
         Self {

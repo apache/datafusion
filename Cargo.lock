@@ -2222,6 +2222,7 @@ dependencies = [
 name = "datafusion-expr"
 version = "49.0.0"
 dependencies = [
+ "ahash 0.8.12",
  "arrow",
  "async-trait",
  "chrono",
@@ -2257,6 +2258,7 @@ name = "datafusion-ffi"
 version = "49.0.0"
 dependencies = [
  "abi_stable",
+ "ahash 0.8.12",
  "arrow",
  "arrow-schema",
  "async-ffi",
@@ -2376,6 +2378,7 @@ dependencies = [
 name = "datafusion-functions-window"
 version = "49.0.0"
 dependencies = [
+ "ahash 0.8.12",
  "arrow",
  "datafusion-common",
  "datafusion-doc",
@@ -2409,6 +2412,7 @@ dependencies = [
 name = "datafusion-optimizer"
 version = "49.0.0"
 dependencies = [
+ "ahash 0.8.12",
  "arrow",
  "async-trait",
  "chrono",

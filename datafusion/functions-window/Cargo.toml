@@ -38,6 +38,7 @@ workspace = true
 name = "datafusion_functions_window"
 
 [dependencies]
+ahash = { workspace = true }
 arrow = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-doc = { workspace = true }

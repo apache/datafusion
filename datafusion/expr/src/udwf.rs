@@ -17,16 +17,16 @@
 
 //! [`WindowUDF`]: User Defined Window Functions
 
+use ahash::AHasher;
 use arrow::compute::SortOptions;
+use arrow::datatypes::{DataType, FieldRef};
 use std::cmp::Ordering;
-use std::hash::{DefaultHasher, Hash, Hasher};
+use std::hash::{Hash, Hasher};
 use std::{
     any::Any,
     fmt::{self, Debug, Display, Formatter},
     sync::Arc,
 };
-
-use arrow::datatypes::{DataType, FieldRef};
 
 use crate::expr::WindowFunction;
 use crate::{
@@ -390,7 +390,7 @@ pub trait WindowUDFImpl: Debug + Send + Sync {
     /// state (and thus possibly changing signature) must override [`Self::equals`] and
     /// [`Self::hash_value`].
     fn hash_value(&self) -> u64 {
-        let hasher = &mut DefaultHasher::new();
+        let hasher = &mut AHasher::default();
         self.as_any().type_id().hash(hasher);
         self.name().hash(hasher);
         self.aliases().hash(hasher);
@@ -542,7 +542,7 @@ impl WindowUDFImpl for AliasedWindowUDFImpl {
     }
 
     fn hash_value(&self) -> u64 {
-        let hasher = &mut DefaultHasher::new();
+        let hasher = &mut AHasher::default();
         self.inner.hash_value().hash(hasher);
         self.aliases.hash(hasher);
         hasher.finish()

@@ -178,7 +178,7 @@ impl ScalarUDFImpl for ScalarFunctionWrapper {
             signature,
             return_type,
         } = self;
-        let mut hasher = DefaultHasher::new();
+        let mut hasher = AHasher::default();
         std::any::type_name::<Self>().hash(&mut hasher);
         name.hash(&mut hasher);
         expr.hash(&mut hasher);

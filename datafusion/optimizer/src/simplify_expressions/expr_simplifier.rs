@@ -4416,7 +4416,7 @@ mod tests {
 
         fn hash_value(&self) -> u64 {
             let Self { simplify } = self;
-            let mut hasher = DefaultHasher::new();
+            let mut hasher = AHasher::default();
             simplify.hash(&mut hasher);
             hasher.finish()
         }
@@ -4501,7 +4501,7 @@ mod tests {
 
         fn hash_value(&self) -> u64 {
             let Self { simplify } = self;
-            let mut hasher = DefaultHasher::new();
+            let mut hasher = AHasher::default();
             std::any::type_name::<Self>().hash(&mut hasher);
             simplify.hash(&mut hasher);
             hasher.finish()

@@ -15,12 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
-use std::fmt::{Debug, Formatter};
-use std::hash::{DefaultHasher, Hash, Hasher};
-use std::mem::size_of_val;
-use std::sync::Arc;
-
+use ahash::AHasher;
 use arrow::datatypes::FieldRef;
 use arrow::{array::ArrayRef, datatypes::DataType};
 use datafusion_common::ScalarValue;
@@ -35,6 +30,11 @@ use datafusion_functions_aggregate_common::tdigest::{
     Centroid, TDigest, DEFAULT_MAX_SIZE,
 };
 use datafusion_macros::user_doc;
+use std::any::Any;
+use std::fmt::{Debug, Formatter};
+use std::hash::{Hash, Hasher};
+use std::mem::size_of_val;
+use std::sync::Arc;
 
 use crate::approx_percentile_cont::{ApproxPercentileAccumulator, ApproxPercentileCont};
 
@@ -205,7 +205,7 @@ impl AggregateUDFImpl for ApproxPercentileContWithWeight {
             signature,
             approx_percentile_cont,
         } = self;
-        let mut hasher = DefaultHasher::new();
+        let mut hasher = AHasher::default();
         std::any::type_name::<Self>().hash(&mut hasher);
         signature.hash(&mut hasher);
         hasher.write_u64(approx_percentile_cont.hash_value());

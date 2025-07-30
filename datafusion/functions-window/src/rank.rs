@@ -19,6 +19,7 @@
 //! which can be evaluated at runtime during query execution.
 
 use crate::define_udwf_and_expr;
+use ahash::AHasher;
 use arrow::datatypes::FieldRef;
 use datafusion_common::arrow::array::ArrayRef;
 use datafusion_common::arrow::array::{Float64Array, UInt64Array};
@@ -36,7 +37,7 @@ use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 use field::WindowUDFFieldArgs;
 use std::any::Any;
 use std::fmt::Debug;
-use std::hash::{DefaultHasher, Hash, Hasher};
+use std::hash::{Hash, Hasher};
 use std::iter;
 use std::ops::Range;
 use std::sync::{Arc, LazyLock};
@@ -264,7 +265,7 @@ impl WindowUDFImpl for Rank {
             signature,
             rank_type,
         } = self;
-        let mut hasher = DefaultHasher::new();
+        let mut hasher = AHasher::default();
         std::any::type_name::<Self>().hash(&mut hasher);
         name.hash(&mut hasher);
         signature.hash(&mut hasher);

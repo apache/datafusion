@@ -17,12 +17,7 @@
 
 //! Defines the FIRST_VALUE/LAST_VALUE aggregations.
 
-use std::any::Any;
-use std::fmt::Debug;
-use std::hash::{DefaultHasher, Hash, Hasher};
-use std::mem::size_of_val;
-use std::sync::Arc;
-
+use ahash::AHasher;
 use arrow::array::{
     Array, ArrayRef, ArrowPrimitiveType, AsArray, BooleanArray, BooleanBufferBuilder,
     PrimitiveArray,
@@ -51,6 +46,11 @@ use datafusion_expr::{
 use datafusion_functions_aggregate_common::utils::get_sort_options;
 use datafusion_macros::user_doc;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
+use std::any::Any;
+use std::fmt::Debug;
+use std::hash::{Hash, Hasher};
+use std::mem::size_of_val;
+use std::sync::Arc;
 
 create_func!(FirstValue, first_value_udaf);
 create_func!(LastValue, last_value_udaf);
@@ -311,7 +311,7 @@ impl AggregateUDFImpl for FirstValue {
             signature,
             is_input_pre_ordered,
         } = self;
-        let mut hasher = DefaultHasher::new();
+        let mut hasher = AHasher::default();
         std::any::type_name::<Self>().hash(&mut hasher);
         signature.hash(&mut hasher);
         is_input_pre_ordered.hash(&mut hasher);
@@ -1255,7 +1255,7 @@ impl AggregateUDFImpl for LastValue {
             signature,
             is_input_pre_ordered,
         } = self;
-        let mut hasher = DefaultHasher::new();
+        let mut hasher = AHasher::default();
         std::any::type_name::<Self>().hash(&mut hasher);
         signature.hash(&mut hasher);
         is_input_pre_ordered.hash(&mut hasher);

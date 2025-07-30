@@ -17,14 +17,14 @@
 
 //! [`AggregateUDF`]: User Defined Aggregate Functions
 
+use ahash::AHasher;
+use arrow::datatypes::{DataType, Field, FieldRef};
 use std::any::Any;
 use std::cmp::Ordering;
 use std::fmt::{self, Debug, Formatter, Write};
-use std::hash::{DefaultHasher, Hash, Hasher};
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::vec;
-
-use arrow::datatypes::{DataType, Field, FieldRef};
 
 use datafusion_common::{exec_err, not_impl_err, Result, ScalarValue, Statistics};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
@@ -947,7 +947,7 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     /// state (and thus possibly changing signature) must override [`Self::equals`] and
     /// [`Self::hash_value`].
     fn hash_value(&self) -> u64 {
-        let hasher = &mut DefaultHasher::new();
+        let hasher = &mut AHasher::default();
         self.as_any().type_id().hash(hasher);
         self.name().hash(hasher);
         self.aliases().hash(hasher);
@@ -1146,7 +1146,7 @@ impl AggregateUDFImpl for AliasedAggregateUDFImpl {
     }
 
     fn hash_value(&self) -> u64 {
-        let hasher = &mut DefaultHasher::new();
+        let hasher = &mut AHasher::default();
         self.inner.hash_value().hash(hasher);
         self.aliases.hash(hasher);
         hasher.finish()

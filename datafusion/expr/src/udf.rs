@@ -22,13 +22,14 @@ use crate::expr::schema_name_from_exprs_comma_separated_without_space;
 use crate::simplify::{ExprSimplifyResult, SimplifyInfo};
 use crate::sort_properties::{ExprProperties, SortProperties};
 use crate::{udf_equals_hash, ColumnarValue, Documentation, Expr, Signature};
+use ahash::AHasher;
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::{not_impl_err, ExprSchema, Result, ScalarValue};
 use datafusion_expr_common::interval_arithmetic::Interval;
 use std::any::Any;
 use std::cmp::Ordering;
 use std::fmt::Debug;
-use std::hash::{DefaultHasher, Hash, Hasher};
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 /// Logical representation of a Scalar User Defined Function.
@@ -725,7 +726,7 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     /// state (and thus possibly changing signature) must override [`Self::equals`] and
     /// [`Self::hash_value`].
     fn hash_value(&self) -> u64 {
-        let hasher = &mut DefaultHasher::new();
+        let hasher = &mut AHasher::default();
         self.as_any().type_id().hash(hasher);
         self.name().hash(hasher);
         self.aliases().hash(hasher);

@@ -20,10 +20,10 @@
 use std::any::Any;
 use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
-use std::hash::{DefaultHasher, Hash, Hasher};
+use std::hash::{Hash, Hasher};
 use std::mem::{size_of, size_of_val};
 
-use ahash::RandomState;
+use ahash::{AHasher, RandomState};
 use arrow::array::{downcast_integer, Array, ArrayRef, AsArray};
 use arrow::datatypes::{
     ArrowNativeType, ArrowNumericType, DataType, Field, FieldRef, Int16Type, Int32Type,
@@ -337,7 +337,7 @@ impl AggregateUDFImpl for BitwiseOperation {
             func_name,
             documentation,
         } = self;
-        let mut hasher = DefaultHasher::new();
+        let mut hasher = AHasher::default();
         std::any::type_name::<Self>().hash(&mut hasher);
         signature.hash(&mut hasher);
         operation.hash(&mut hasher);

@@ -17,17 +17,16 @@
 
 //! Expression utilities
 
-use std::cmp::Ordering;
-use std::collections::{BTreeSet, HashSet};
-use std::hash::Hasher;
-use std::sync::Arc;
-
 use crate::expr::{Alias, Sort, WildcardOptions, WindowFunctionParams};
 use crate::expr_rewriter::strip_outer_reference;
 use crate::{
     and, BinaryExpr, Expr, ExprSchemable, Filter, GroupingSet, LogicalPlan, Operator,
 };
 use datafusion_expr_common::signature::{Signature, TypeSignature};
+use std::cmp::Ordering;
+use std::collections::{BTreeSet, HashSet};
+use std::hash::Hasher;
+use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::tree_node::{
@@ -1330,9 +1329,10 @@ macro_rules! udf_equals_hash {
         }
 
         fn hash_value(&self) -> u64 {
+            use ::ahash::AHasher;
             use ::std::any::type_name;
-            use ::std::hash::{DefaultHasher, Hash, Hasher};
-            let hasher = &mut DefaultHasher::new();
+            use ::std::hash::{Hash, Hasher};
+            let hasher = &mut AHasher::default();
             type_name::<Self>().hash(hasher);
             Hash::hash(self, hasher);
             Hasher::finish(hasher)

@@ -826,7 +826,7 @@ impl AggregateUDFImpl for TestGroupsAccumulator {
     }
 
     fn hash_value(&self) -> u64 {
-        let hasher = &mut DefaultHasher::new();
+        let hasher = &mut AHasher::default();
         self.signature.hash(hasher);
         self.result.hash(hasher);
         hasher.finish()
@@ -978,7 +978,7 @@ impl AggregateUDFImpl for MetadataBasedAggregateUdf {
             signature,
             metadata: _, // unhashable
         } = self;
-        let mut hasher = DefaultHasher::new();
+        let mut hasher = AHasher::default();
         std::any::type_name::<Self>().hash(&mut hasher);
         name.hash(&mut hasher);
         signature.hash(&mut hasher);

@@ -35,6 +35,7 @@ use crate::{
 use crate::{
     AggregateUDFImpl, ColumnarValue, ScalarUDFImpl, WindowFrame, WindowUDF, WindowUDFImpl,
 };
+use ahash::AHasher;
 use arrow::compute::kernels::cast_utils::{
     parse_interval_day_time, parse_interval_month_day_nano, parse_interval_year_month,
 };
@@ -45,7 +46,7 @@ use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 use sqlparser::ast::NullTreatment;
 use std::any::Any;
 use std::fmt::Debug;
-use std::hash::{DefaultHasher, Hash, Hasher};
+use std::hash::{Hash, Hasher};
 use std::ops::Not;
 use std::sync::Arc;
 
@@ -655,7 +656,7 @@ impl AggregateUDFImpl for SimpleAggregateUDF {
             accumulator,
             state_fields,
         } = self;
-        let mut hasher = DefaultHasher::new();
+        let mut hasher = AHasher::default();
         std::any::type_name::<Self>().hash(&mut hasher);
         name.hash(&mut hasher);
         signature.hash(&mut hasher);
@@ -783,7 +784,7 @@ impl WindowUDFImpl for SimpleWindowUDF {
             return_type,
             partition_evaluator_factory,
         } = self;
-        let mut hasher = DefaultHasher::new();
+        let mut hasher = AHasher::default();
         std::any::type_name::<Self>().hash(&mut hasher);
         name.hash(&mut hasher);
         signature.hash(&mut hasher);

@@ -137,7 +137,7 @@ impl AggregateUDFImpl for MyAggregateUDF {
 
     fn hash_value(&self) -> u64 {
         let Self { signature, result } = self;
-        let mut hasher = DefaultHasher::new();
+        let mut hasher = AHasher::default();
         std::any::type_name::<Self>().hash(&mut hasher);
         signature.hash(&mut hasher);
         result.hash(&mut hasher);
@@ -203,7 +203,7 @@ impl WindowUDFImpl for CustomUDWF {
 
     fn hash_value(&self) -> u64 {
         let Self { signature, payload } = self;
-        let mut hasher = DefaultHasher::new();
+        let mut hasher = AHasher::default();
         std::any::type_name::<Self>().hash(&mut hasher);
         signature.hash(&mut hasher);
         payload.hash(&mut hasher);

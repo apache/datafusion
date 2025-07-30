@@ -17,12 +17,7 @@
 
 //! Defines physical expressions that can evaluated at runtime during query execution
 
-use std::any::Any;
-use std::fmt::{Debug, Formatter};
-use std::hash::{DefaultHasher, Hash, Hasher};
-use std::mem::align_of_val;
-use std::sync::Arc;
-
+use ahash::AHasher;
 use arrow::array::Float64Array;
 use arrow::datatypes::FieldRef;
 use arrow::{array::ArrayRef, datatypes::DataType, datatypes::Field};
@@ -36,6 +31,11 @@ use datafusion_expr::{
 };
 use datafusion_functions_aggregate_common::stats::StatsType;
 use datafusion_macros::user_doc;
+use std::any::Any;
+use std::fmt::{Debug, Formatter};
+use std::hash::{Hash, Hasher};
+use std::mem::align_of_val;
+use std::sync::Arc;
 
 use crate::variance::{VarianceAccumulator, VarianceGroupsAccumulator};
 
@@ -165,7 +165,7 @@ impl AggregateUDFImpl for Stddev {
 
     fn hash_value(&self) -> u64 {
         let Self { signature, alias } = self;
-        let mut hasher = DefaultHasher::new();
+        let mut hasher = AHasher::default();
         std::any::type_name::<Self>().hash(&mut hasher);
         signature.hash(&mut hasher);
         alias.hash(&mut hasher);

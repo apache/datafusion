@@ -17,11 +17,11 @@
 
 //! [`StringAgg`] accumulator for the `string_agg` function
 
-use std::any::Any;
-use std::hash::{DefaultHasher, Hash, Hasher};
-use std::mem::size_of_val;
-
 use crate::array_agg::ArrayAgg;
+use ahash::AHasher;
+use std::any::Any;
+use std::hash::{Hash, Hasher};
+use std::mem::size_of_val;
 
 use arrow::array::ArrayRef;
 use arrow::datatypes::{DataType, Field, FieldRef};
@@ -198,7 +198,7 @@ impl AggregateUDFImpl for StringAgg {
             signature,
             array_agg,
         } = self;
-        let mut hasher = DefaultHasher::new();
+        let mut hasher = AHasher::default();
         std::any::type_name::<Self>().hash(&mut hasher);
         signature.hash(&mut hasher);
         hasher.write_u64(array_agg.hash_value());

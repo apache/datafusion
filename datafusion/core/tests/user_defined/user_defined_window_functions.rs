@@ -590,7 +590,7 @@ impl OddCounter {
                     test_state,
                     aliases,
                 } = self;
-                let mut hasher = DefaultHasher::new();
+                let mut hasher = AHasher::default();
                 signature.hash(&mut hasher);
                 Arc::as_ptr(test_state).hash(&mut hasher);
                 aliases.hash(&mut hasher);
@@ -864,7 +864,7 @@ impl WindowUDFImpl for MetadataBasedWindowUdf {
             signature,
             metadata: _, // unhashable
         } = self;
-        let mut hasher = DefaultHasher::new();
+        let mut hasher = AHasher::default();
         std::any::type_name::<Self>().hash(&mut hasher);
         name.hash(&mut hasher);
         signature.hash(&mut hasher);

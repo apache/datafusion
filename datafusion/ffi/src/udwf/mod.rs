@@ -19,6 +19,7 @@ use abi_stable::{
     std_types::{ROption, RResult, RString, RVec},
     StableAbi,
 };
+use ahash::AHasher;
 use arrow::datatypes::Schema;
 use arrow::{
     compute::SortOptions,
@@ -40,8 +41,9 @@ use partition_evaluator::{FFI_PartitionEvaluator, ForeignPartitionEvaluator};
 use partition_evaluator_args::{
     FFI_PartitionEvaluatorArgs, ForeignPartitionEvaluatorArgs,
 };
-use std::hash::{DefaultHasher, Hash, Hasher};
+use std::hash::{Hash, Hasher};
 use std::{ffi::c_void, sync::Arc};
+
 mod partition_evaluator;
 mod partition_evaluator_args;
 mod range;
@@ -358,7 +360,7 @@ impl WindowUDFImpl for ForeignWindowUDF {
             udf,
             signature,
         } = self;
-        let mut hasher = DefaultHasher::new();
+        let mut hasher = AHasher::default();
         std::any::type_name::<Self>().hash(&mut hasher);
         name.hash(&mut hasher);
         aliases.hash(&mut hasher);

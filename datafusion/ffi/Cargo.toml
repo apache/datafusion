@@ -38,6 +38,7 @@ name = "datafusion_ffi"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+ahash = { workspace = true }
 abi_stable = "0.11.3"
 arrow = { workspace = true, features = ["ffi"] }
 arrow-schema = { workspace = true }

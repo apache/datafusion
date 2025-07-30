@@ -18,6 +18,7 @@
 //! `lead` and `lag` window function implementations
 
 use crate::utils::{get_scalar_value_from_args, get_signed_integer};
+use ahash::AHasher;
 use arrow::datatypes::FieldRef;
 use datafusion_common::arrow::array::ArrayRef;
 use datafusion_common::arrow::datatypes::DataType;
@@ -35,7 +36,7 @@ use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use std::any::Any;
 use std::cmp::min;
 use std::collections::VecDeque;
-use std::hash::{DefaultHasher, Hash, Hasher};
+use std::hash::{Hash, Hasher};
 use std::ops::{Neg, Range};
 use std::sync::{Arc, LazyLock};
 
@@ -310,7 +311,7 @@ impl WindowUDFImpl for WindowShift {
 
     fn hash_value(&self) -> u64 {
         let Self { signature, kind } = self;
-        let mut hasher = DefaultHasher::new();
+        let mut hasher = AHasher::default();
         std::any::type_name::<Self>().hash(&mut hasher);
         signature.hash(&mut hasher);
         kind.hash(&mut hasher);
