@@ -45,16 +45,13 @@ pub async fn from_scalar_function(
     let fn_name = substrait_fun_name(fn_signature);
     let args = from_substrait_func_args(consumer, &f.arguments, input_schema).await?;
 
-    let udf_func = match consumer.get_function_registry().udf(fn_name) {
-        Ok(f) => Ok(f),
-        Err(e) => {
-            if let Some(alt_name) = substrait_to_df_name(fn_name) {
-                consumer.get_function_registry().udf(alt_name).or(Err(e))
-            } else {
-                Err(e)
-            }
+    let udf_func = consumer.get_function_registry().udf(fn_name).or_else(|e| {
+        if let Some(alt_name) = substrait_to_df_name(fn_name) {
+            consumer.get_function_registry().udf(alt_name).or(Err(e))
+        } else {
+            Err(e)
         }
-    };
+    });
 
     // try to first match the requested function into registered udfs, then built-in ops
     // and finally built-in expressions

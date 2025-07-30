@@ -426,12 +426,14 @@ async fn simple_scalar_function_substr() -> Result<()> {
     roundtrip("SELECT SUBSTR(f, 1, 3) FROM data").await
 }
 
-#[tokio::test]
-// Test that DataFusion ISNAN function gets correctly mapped to Substrait "is_nan" in Substrait producer, and checks roundtrip comparison
+// Test that DataFusion functions gets correctly mapped to Substrait names (when the names are diferent)
 // Follows the same structure as existing roundtrip tests, but more explicitly tests for name mappings
-async fn scalar_function_with_diff_substrait_df_names() -> Result<()> {
+async fn test_substrait_to_df_name_mapping(
+    substrait_name: &str,
+    df_name: &str,
+) -> Result<()> {
     let ctx = create_context().await?;
-    let df = ctx.sql("SELECT ISNAN(a) FROM data").await?;
+    let df = ctx.sql(&format!("SELECT {df_name}(a) FROM data")).await?;
     let plan = df.into_optimized_plan()?;
     let proto = to_substrait_plan(&plan, &ctx.state())?;
 
@@ -440,7 +442,7 @@ async fn scalar_function_with_diff_substrait_df_names() -> Result<()> {
         _ => unreachable!("Expected function extension"),
     };
 
-    assert_eq!(function_name, "is_nan");
+    assert_eq!(function_name, substrait_name);
 
     let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
     let plan2 = ctx.state().optimize(&plan2)?;
@@ -452,6 +454,21 @@ async fn scalar_function_with_diff_substrait_df_names() -> Result<()> {
     assert_eq!(plan.schema(), plan2.schema());
 
     Ok(())
+}
+
+#[tokio::test]
+async fn scalar_function_is_nan_mapping() -> Result<()> {
+    test_substrait_to_df_name_mapping("is_nan", "ISNAN").await
+}
+
+#[tokio::test]
+async fn scalar_function_sign_mapping() -> Result<()> {
+    test_substrait_to_df_name_mapping("sign", "SIGNUM").await
+}
+
+#[tokio::test]
+async fn scalar_function_logb_mapping() -> Result<()> {
+    test_substrait_to_df_name_mapping("logb", "LOG").await
 }
 
 #[tokio::test]
