@@ -73,8 +73,12 @@ impl ScalarUDFImpl for SparkRint {
 
     fn output_ordering(&self, input: &[ExprProperties]) -> Result<SortProperties> {
         // round preserves the order of the first argument
-        let value = &input[0];
-        Ok(value.sort_properties)
+        if input.len() == 1 {
+            let value = &input[0];
+            Ok(value.sort_properties)
+        } else {
+            Ok(SortProperties::default())
+        }
     }
 }
 
