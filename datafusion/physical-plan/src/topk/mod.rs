@@ -39,6 +39,9 @@ use datafusion_execution::{
     memory_pool::{MemoryConsumer, MemoryReservation},
     runtime_env::RuntimeEnv,
 };
+
+#[cfg(feature = "explain_memory")]
+use datafusion_execution::memory_pool::{human_readable_size, ExplainMemory};
 use datafusion_physical_expr::{
     expressions::{is_not_null, is_null, lit, BinaryExpr, DynamicFilterPhysicalExpr},
     PhysicalExpr,
