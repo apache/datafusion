@@ -625,12 +625,13 @@ fn try_replace_with_window(
 
     // Step 7: Validate GROUP BY columns
     // GROUP BY must include all JOIN ON columns plus the filter column
+    // Note: Additional functionally dependent columns (like primary keys) may be present
     let on_and_filter = on_names
         .iter()
         .chain(Some(left_col_name.as_str()).iter())
         .cloned()
         .collect::<IndexSet<_>>();
-    if on_and_filter != group_by_names {
+    if !on_and_filter.is_subset(&group_by_names) {
         return None;
     }
 
