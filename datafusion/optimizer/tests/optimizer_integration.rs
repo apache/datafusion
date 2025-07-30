@@ -631,6 +631,10 @@ fn eliminate_aggregate_self_join_less_than_equal() {
     assert_snapshot!(
         plan,
         @r"
+    Projection: a.user_id, a.purchase_date, sum(b.amount) AS running_total
+      WindowAggr: windowExpr=[[sum(amount) PARTITION BY [user_id, purchase_date, id, billed_date, amount] ORDER BY [purchase_date ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS sum(b.amount)]]
+        SubqueryAlias: a
+          TableScan: purchases projection=[id, user_id, purchase_date, billed_date, amount]
     "
     );
 }
@@ -649,6 +653,10 @@ fn eliminate_aggregate_self_join_less_than_equal_no_alias() {
     assert_snapshot!(
         plan,
         @r"
+    Projection: a.user_id, a.purchase_date, sum(b.amount)
+      WindowAggr: windowExpr=[[sum(amount) PARTITION BY [user_id, purchase_date, id, billed_date, amount] ORDER BY [purchase_date ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS sum(b.amount)]]
+        SubqueryAlias: a
+          TableScan: purchases projection=[id, user_id, purchase_date, billed_date, amount]
     "
     );
 }
@@ -685,6 +693,10 @@ fn eliminate_aggregate_self_join_less_than() {
     assert_snapshot!(
         plan,
         @r"
+    Projection: a.user_id, a.purchase_date, sum(b.amount) AS running_total
+      WindowAggr: windowExpr=[[sum(amount) PARTITION BY [user_id, purchase_date, id, billed_date, amount] ORDER BY [purchase_date ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING AS sum(b.amount)]]
+        SubqueryAlias: a
+          TableScan: purchases projection=[id, user_id, purchase_date, billed_date, amount]
     "
     );
 }
@@ -703,6 +715,10 @@ fn eliminate_aggregate_self_join_greater_than_equal() {
     assert_snapshot!(
         plan,
         @r"
+    Projection: a.user_id, a.purchase_date, sum(b.amount) AS running_total
+      WindowAggr: windowExpr=[[sum(amount) PARTITION BY [user_id, purchase_date, id, billed_date, amount] ORDER BY [purchase_date DESC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS sum(b.amount)]]
+        SubqueryAlias: a
+          TableScan: purchases projection=[id, user_id, purchase_date, billed_date, amount]
     "
     );
 }
@@ -721,6 +737,10 @@ fn eliminate_aggregate_self_join_greater_than() {
     assert_snapshot!(
         plan,
         @r"
+    Projection: a.user_id, a.purchase_date, sum(b.amount) AS running_total
+      WindowAggr: windowExpr=[[sum(amount) PARTITION BY [user_id, purchase_date, id, billed_date, amount] ORDER BY [purchase_date DESC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING AS sum(b.amount)]]
+        SubqueryAlias: a
+          TableScan: purchases projection=[id, user_id, purchase_date, billed_date, amount]
     "
     );
 }

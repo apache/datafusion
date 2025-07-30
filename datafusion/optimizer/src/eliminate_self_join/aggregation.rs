@@ -25,7 +25,6 @@
 //!
 //! # Example Transformations
 //!
-//! ## Basic Example
 //! ```sql
 //! -- Original query (self-join with aggregation)
 //! SELECT a.order_id, SUM(b.amount) AS running_total
@@ -150,22 +149,45 @@ impl EliminateSelfJoinAggregation {
         };
 
         // Update column references based on whether we have a projection
-        if let Some(projection) = projection {
-            // Map aggregate column references to window column references
-            let mut projection_expr = Vec::with_capacity(projection.expr.len());
+        let Some(projection) = projection else {
+            *renamed = renamed_alias;
+            return Ok(Transformed::yes(LogicalPlan::Window(window)));
+        };
 
-            for expr in projection.expr.iter() {
-                // Check each aggregate expression
-                let mut matched = false;
-                for (aggr_idx, aggr_expr) in aggregate.aggr_expr.iter().enumerate() {
-                    let aggr_expr_name = aggr_expr.name_for_alias()?;
-                    let window_expr_name =
-                        window.window_expr[aggr_idx].name_for_alias()?;
+        // Map aggregate column references to window column references
+        let mut projection_expr = Vec::with_capacity(projection.expr.len());
 
-                    let mapped_expr = match &expr {
-                        // Direct column reference: sum(b.amount) -> window_expr_output
-                        Expr::Column(Column {
+        for expr in projection.expr.iter() {
+            // Check each aggregate expression
+            let mut matched = false;
+            for (aggr_idx, aggr_expr) in aggregate.aggr_expr.iter().enumerate() {
+                let aggr_expr_name = aggr_expr.name_for_alias()?;
+                let window_expr_name = window.window_expr[aggr_idx].name_for_alias()?;
+
+                let mapped_expr = match &expr {
+                    // Direct column reference: sum(b.amount) -> window_expr_output
+                    Expr::Column(Column {
+                        relation: _,
+                        name,
+                        spans,
+                    }) if name.as_str() == aggr_expr_name.as_str() => {
+                        matched = true;
+                        let alias = Alias {
+                            expr: Box::new(Expr::Column(Column {
+                                relation: None,
+                                name: window_expr_name.clone(),
+                                spans: spans.to_owned(),
+                            })),
                             relation: None,
+                            name: name.to_owned(),
+                            metadata: None,
+                        };
+                        Expr::Alias(alias)
+                    }
+                    // Aliased column: sum(b.amount) AS total -> window_expr_output AS total
+                    Expr::Alias(alias) => match alias.expr.as_ref() {
+                        Expr::Column(Column {
+                            relation: _,
                             name,
                             spans,
                         }) if name.as_str() == aggr_expr_name.as_str() => {
@@ -177,69 +199,43 @@ impl EliminateSelfJoinAggregation {
                                     spans: spans.to_owned(),
                                 })),
                                 relation: None,
-                                name: name.to_owned(),
+                                name: alias.name.to_owned(),
                                 metadata: None,
                             };
                             Expr::Alias(alias)
                         }
-                        // Aliased column: sum(b.amount) AS total -> window_expr_output AS total
-                        Expr::Alias(alias) => match alias.expr.as_ref() {
-                            Expr::Column(Column {
-                                relation: None,
-                                name,
-                                spans,
-                            }) if name.as_str() == aggr_expr_name.as_str() => {
-                                matched = true;
-                                let alias = Alias {
-                                    expr: Box::new(Expr::Column(Column {
-                                        relation: None,
-                                        name: window_expr_name.clone(),
-                                        spans: spans.to_owned(),
-                                    })),
-                                    relation: None,
-                                    name: alias.name.to_owned(),
-                                    metadata: None,
-                                };
-                                Expr::Alias(alias)
-                            }
-                            _ => expr.clone(),
-                        },
                         _ => expr.clone(),
-                    };
+                    },
+                    _ => expr.clone(),
+                };
 
-                    if matched {
-                        projection_expr.push(mapped_expr);
-                        break;
-                    }
-                }
-
-                if !matched {
-                    projection_expr.push(expr.clone());
+                if matched {
+                    projection_expr.push(mapped_expr);
+                    break;
                 }
             }
 
-            // Apply any table alias renaming (e.g., b -> a)
-            if let Some(renamed_alias) = &renamed_alias {
-                projection_expr = projection_expr
-                    .into_iter()
-                    .map(|expr| renamed_alias.rewrite_expression(expr).unwrap().data)
-                    .collect();
+            if !matched {
+                projection_expr.push(expr.clone());
             }
-            *renamed = renamed_alias;
-
-            let window = LogicalPlan::Window(window).into();
-            let projection = Projection::try_new(projection_expr, window)?;
-            Ok(Transformed::yes(LogicalPlan::Projection(projection)))
-        } else {
-            // No projection - return the window directly
-            *renamed = renamed_alias;
-            Ok(Transformed::yes(LogicalPlan::Window(window)))
         }
+
+        // Apply any table alias renaming (e.g., b -> a)
+        if let Some(renamed_alias) = &renamed_alias {
+            projection_expr = projection_expr
+                .into_iter()
+                .map(|expr| renamed_alias.rewrite_expression(expr).map(|res| res.data))
+                .collect::<Result<Vec<_>>>()?;
+        }
+        *renamed = renamed_alias;
+
+        let window = LogicalPlan::Window(window).into();
+        let projection = Projection::try_new(projection_expr, window)?;
+        Ok(Transformed::yes(LogicalPlan::Projection(projection)))
     }
 }
 
-/// Given [`Expr`] try to narrow enum variants to comparison expression between
-/// two columns.
+/// Given [`Expr`] try to narrow enum variants to comparison expression between two columns.
 ///
 /// # Example
 ///
@@ -665,20 +661,21 @@ fn try_replace_with_window(
         )
     });
 
-    let mut dfs = left_base_schema.to_dfschema().unwrap();
+    let mut dfs = left_base_schema.to_dfschema().ok()?;
     if let Some(fd) = fd_opt {
         dfs = dfs.with_functional_dependencies(fd).ok()?;
     }
     let unique_constraints = unique_indexes(&dfs);
 
-    // Check if GROUP BY columns form a subset of any unique constraint
+    // Check if GROUP BY columns contain a unique constraint
+    // If any unique constraint is a subset of the GROUP BY columns, then the GROUP BY is unique
     let has_unique_constraint = unique_constraints.iter().any(|unique_idx| {
-        // GROUP BY columns must be a subset of a unique constraint
-        group_by_indices_set.is_subset(unique_idx)
+        // A unique constraint must be a subset of the GROUP BY columns
+        unique_idx.is_subset(&group_by_indices_set)
     });
 
     if !has_unique_constraint {
-        // Cannot apply optimization without unique constraint on GROUP BY columns
+        // Cannot apply optimization without GROUP BY columns containing a unique constraint
         return None;
     }
 
@@ -735,8 +732,11 @@ fn try_replace_with_window(
             })
             .ok()?;
 
+        // Get the original aggregate expression's name for aliasing
+        let aggr_expr_name = aggr_expr.name_for_alias().ok()?;
+
         // Create window function with appropriate partitioning and ordering
-        window_expr.push(Expr::WindowFunction(Box::new(WindowFunction {
+        let window_func = Expr::WindowFunction(Box::new(WindowFunction {
             fun: WindowFunctionDefinition::AggregateUDF(Arc::clone(func)),
             params: WindowFunctionParams {
                 args,
@@ -749,7 +749,10 @@ fn try_replace_with_window(
                 ),
                 null_treatment: None,
             },
-        })));
+        }));
+
+        // Wrap the window function in an alias to preserve the original aggregate expression's name
+        window_expr.push(window_func.alias(aggr_expr_name));
     }
 
     // Step 11: Create the optimized plan with window function
@@ -758,7 +761,7 @@ fn try_replace_with_window(
 
     // Re-add eliminated aliases if any
     let renamed_alias = if let Some(left) = left.alias {
-        let alias = SubqueryAlias::try_new(plan.into(), left.table()).unwrap();
+        let alias = SubqueryAlias::try_new(plan.into(), left.table()).ok()?;
         plan = LogicalPlan::SubqueryAlias(alias);
         // If right side had different alias, track the renaming
         right.alias.map(|right| RenamedAlias {
@@ -766,14 +769,14 @@ fn try_replace_with_window(
             to: left.clone(),
         })
     } else if let Some(table_reference) = right.alias {
-        let alias = SubqueryAlias::try_new(plan.into(), table_reference.table()).unwrap();
+        let alias = SubqueryAlias::try_new(plan.into(), table_reference.table()).ok()?;
         plan = LogicalPlan::SubqueryAlias(alias);
         None
     } else {
         None
     };
 
-    let window = Window::try_new(window_expr, Arc::new(plan)).unwrap();
+    let window = Window::try_new(window_expr, Arc::new(plan)).ok()?;
 
     Some(OptimizationResult {
         window,
@@ -789,6 +792,7 @@ mod tests {
     use crate::OptimizerContext;
 
     use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::tree_node::TreeNodeRecursion;
     use datafusion_common::{Constraint, Constraints, Result, TableReference};
     use datafusion_expr::{
         col, logical_plan::builder::LogicalTableSource, JoinType, LogicalPlan,
@@ -1098,7 +1102,7 @@ mod tests {
                     if matches!(node, LogicalPlan::Join(_)) {
                         has_join = true;
                     }
-                    Ok(datafusion_common::tree_node::TreeNodeRecursion::Continue)
+                    Ok(TreeNodeRecursion::Continue)
                 })?;
                 assert!(has_join, "Expected join to remain without filter");
             }
@@ -1143,7 +1147,7 @@ mod tests {
                     if matches!(node, LogicalPlan::Join(_)) {
                         has_join = true;
                     }
-                    Ok(datafusion_common::tree_node::TreeNodeRecursion::Continue)
+                    Ok(TreeNodeRecursion::Continue)
                 })?;
                 assert!(has_join, "Expected join to remain with incorrect GROUP BY");
             }
@@ -1247,7 +1251,7 @@ mod tests {
                     if matches!(node, LogicalPlan::Join(_)) {
                         has_join = true;
                     }
-                    Ok(datafusion_common::tree_node::TreeNodeRecursion::Continue)
+                    Ok(TreeNodeRecursion::Continue)
                 })?;
                 assert!(
                     has_join,
@@ -1345,7 +1349,7 @@ mod tests {
                     if matches!(node, LogicalPlan::Join(_)) {
                         has_join = true;
                     }
-                    Ok(datafusion_common::tree_node::TreeNodeRecursion::Continue)
+                    Ok(TreeNodeRecursion::Continue)
                 })?;
                 assert!(
                     has_join,
@@ -1529,12 +1533,94 @@ mod tests {
                     if matches!(node, LogicalPlan::Join(_)) {
                         has_join = true;
                     }
-                    Ok(datafusion_common::tree_node::TreeNodeRecursion::Continue)
+                    Ok(TreeNodeRecursion::Continue)
                 })?;
                 assert!(
                     has_join,
                     "Expected join to remain when GROUP BY columns come from different sides"
                 );
+            }
+            _ => panic!("Expected Projection at top level, got: {optimized:?}"),
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_eliminate_with_group_by_superset_of_unique() -> Result<()> {
+        // Test that optimization IS applied when GROUP BY is a superset of unique columns
+        // This tests the fix for checking unique_idx.is_subset(&group_by_indices_set)
+        let schema = Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("user_id", DataType::Int32, false),
+            Field::new("purchase_date", DataType::Date32, false),
+            Field::new("category", DataType::Utf8, false),
+            Field::new("amount", DataType::Float64, false),
+        ]);
+
+        // Create constraints - (user_id, purchase_date) is unique
+        let constraints = Constraints::new_unverified(vec![
+            Constraint::Unique(vec![1, 2]), // (user_id, purchase_date) is unique
+        ]);
+
+        let table_source = Arc::new(
+            LogicalTableSource::new(Arc::new(schema)).with_constraints(constraints),
+        ) as _;
+
+        let left = LogicalPlanBuilder::scan_with_filters(
+            TableReference::bare("purchases"),
+            Arc::clone(&table_source),
+            None,
+            vec![],
+        )?
+        .alias("a")?
+        .build()?;
+
+        let right = LogicalPlanBuilder::scan_with_filters(
+            TableReference::bare("purchases"),
+            table_source,
+            None,
+            vec![],
+        )?
+        .alias("b")?
+        .build()?;
+
+        let join_filter = col("b.purchase_date").lt_eq(col("a.purchase_date"));
+
+        // GROUP BY includes category in addition to the unique columns (user_id, purchase_date)
+        let join_plan = LogicalPlanBuilder::from(left)
+            .join(
+                right,
+                JoinType::Inner,
+                (vec!["a.user_id"], vec!["b.user_id"]),
+                Some(join_filter),
+            )?
+            .aggregate(
+                vec![col("a.user_id"), col("a.purchase_date"), col("a.category")],
+                vec![sum(col("b.amount"))],
+            )?
+            .project(vec![
+                col("a.user_id"),
+                col("a.purchase_date"),
+                col("a.category"),
+                col(sum(col("b.amount")).name_for_alias()?),
+            ])?
+            .build()?;
+
+        let optimized = optimize_plan(join_plan)?;
+
+        // Verify the join WAS eliminated since GROUP BY contains the unique constraint
+        match &optimized {
+            LogicalPlan::Projection(proj) => {
+                match proj.input.as_ref() {
+                    LogicalPlan::Window(_) => {
+                        // Success - join was replaced with window function
+                    }
+                    _ => panic!(
+                        "Expected Window after optimization, got: {:?}",
+                        proj.input
+                    ),
+                }
             }
             _ => panic!("Expected Projection at top level, got: {optimized:?}"),
         }

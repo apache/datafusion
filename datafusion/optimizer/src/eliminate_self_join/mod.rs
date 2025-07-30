@@ -23,18 +23,19 @@
 
 use std::sync::Arc;
 
+use datafusion_common::tree_node::TransformedResult;
 use datafusion_common::{
     tree_node::{Transformed, TreeNode},
     Column, DFSchema, Dependency, Result, TableReference,
 };
 use datafusion_expr::{expr::Alias, Expr, LogicalPlan, TableScan};
 
+use indexmap::IndexSet;
+
 mod aggregation;
 mod unique_keyed;
 
 pub use aggregation::EliminateSelfJoinAggregation;
-use datafusion_common::tree_node::TransformedResult;
-use indexmap::IndexSet;
 pub use unique_keyed::EliminateUniqueKeyedSelfJoin;
 
 /// Merges two table scans into a single scan that covers all columns and filters from both.

@@ -16,6 +16,37 @@
 // under the License.
 
 //! [`EliminateUniqueKeyedSelfJoin`] eliminates self joins on unique constraint columns
+//!
+//! # Overview
+//!
+//! This optimization rule identifies and eliminates unnecessary self-joins when:
+//! 1. The join is on columns that form a unique constraint (e.g., PRIMARY KEY, UNIQUE)
+//! 2. The join is an INNER join without additional filter conditions
+//! 3. The projection doesn't explicitly require columns from both sides
+//!
+//! Since joining on unique columns means each row from the left side matches at most
+//! one row from the right side (and vice versa), the join can be eliminated by
+//! scanning the table just once.
+//!
+//! # Example
+//!
+//! ```sql
+//! -- Original query with self-join on primary key
+//! SELECT a.id, a.name
+//! FROM employees a
+//! JOIN employees b ON a.id = b.id
+//! WHERE b.department = 'HR';
+//! ```
+//!
+//! Gets optimized to:
+//! ```sql
+//! -- Optimized query without join
+//! SELECT id, name
+//! FROM employees
+//! WHERE department = 'HR';
+//! ```
+
+use std::sync::Arc;
 
 use super::{
     is_table_scan_same, merge_table_scans, unique_indexes, OptimizationResult,
@@ -25,7 +56,7 @@ use crate::{ApplyOrder, OptimizerConfig, OptimizerRule};
 
 use datafusion_common::{
     tree_node::{Transformed, TreeNode, TreeNodeRecursion},
-    DFSchema, Result, TableReference,
+    DFSchema, HashSet, Result, TableReference,
 };
 use datafusion_expr::{
     Expr, Join, JoinType, LogicalPlan, LogicalPlanBuilder, SubqueryAlias, TableScan,
@@ -63,14 +94,12 @@ impl OptimizerRule for EliminateUniqueKeyedSelfJoin {
     ) -> Result<Transformed<LogicalPlan>> {
         let mut renamed = None;
 
-        // Use transform_up (bottom-up) to process children before parents
         let Transformed {
             data: plan,
             transformed,
             ..
         } = plan.transform_up(|plan| {
             match &plan {
-                // Only handle Projection -> Join pattern
                 LogicalPlan::Projection(projection) => {
                     if let LogicalPlan::Join(join) = projection.input.as_ref() {
                         if join.join_type != JoinType::Inner {
@@ -97,20 +126,19 @@ impl OptimizerRule for EliminateUniqueKeyedSelfJoin {
                                     if let Some(renamed_alias) = &renamed_alias {
                                         renamed_alias
                                             .rewrite_expression(expr)
-                                            .unwrap()
-                                            .data
+                                            .map(|res| res.data)
                                     } else {
-                                        expr
+                                        Ok(expr)
                                     }
                                 })
-                                .collect::<Vec<_>>();
+                                .collect::<Result<Vec<_>>>()?;
 
                             renamed = renamed_alias;
 
                             let plan = LogicalPlan::Projection(
                                 datafusion_expr::Projection::try_new(
                                     projection_expr,
-                                    optimized.into(),
+                                    Arc::new(optimized),
                                 )?,
                             );
                             Ok(Transformed::yes(plan))
@@ -121,7 +149,6 @@ impl OptimizerRule for EliminateUniqueKeyedSelfJoin {
                         Ok(Transformed::no(plan))
                     }
                 }
-                // Do not handle bare Joins - we need projection context to safely eliminate
                 _ => Ok(Transformed::no(plan)),
             }
         })?;
@@ -153,9 +180,7 @@ fn optimize(left: &LogicalPlan, right: &LogicalPlan) -> Option<OptimizationResul
     match (left, right) {
         (LogicalPlan::TableScan(left_scan), LogicalPlan::TableScan(right_scan)) => {
             let table_scan = merge_table_scans(left_scan, right_scan);
-            let plan = LogicalPlan::TableScan(table_scan)
-                .recompute_schema()
-                .unwrap();
+            let plan = LogicalPlan::TableScan(table_scan).recompute_schema().ok()?;
             Some(OptimizationResult {
                 plan,
                 renamed_alias: None,
@@ -175,16 +200,15 @@ fn optimize(left: &LogicalPlan, right: &LogicalPlan) -> Option<OptimizationResul
         ) => {
             let OptimizationResult {
                 plan,
-                renamed_alias,
+                renamed_alias: _,
             } = optimize(left_input, right_input)?;
-            assert!(renamed_alias.is_none(), "Assert `renamed_alias` is `None` because nested `SubqueryAlias` shouldn't be possible");
 
             let plan = LogicalPlanBuilder::new(plan)
                 .alias(left_alias.clone())
-                .unwrap()
+                .ok()?
                 .build()
-                .unwrap();
-            let plan = plan.recompute_schema().unwrap();
+                .ok()?;
+            let plan = plan.recompute_schema().ok()?;
             Some(OptimizationResult {
                 plan,
                 renamed_alias: Some(RenamedAlias {
@@ -203,7 +227,7 @@ fn optimize(left: &LogicalPlan, right: &LogicalPlan) -> Option<OptimizationResul
                     }
                     _ => Ok(Transformed::no(plan)),
                 })
-                .unwrap();
+                .ok()?;
             assert!(
                 transformed.transformed,
                 "Called `transform_up` and no merged `TableScan`"
@@ -286,6 +310,7 @@ fn try_resolve_to_table_scan_alias(branch: &LogicalPlan) -> Option<Resolution> {
             }
             _ => Ok(TreeNodeRecursion::Continue),
         })
+        // safe to unwrap
         .unwrap();
 
     let table_scan = table_scan?;
@@ -320,7 +345,7 @@ fn projection_references_both_sides(exprs: &[Expr], join: &Join) -> bool {
     };
 
     // Extract join column names
-    let mut join_columns = std::collections::HashSet::new();
+    let mut join_columns = HashSet::new();
     for (left_expr, right_expr) in &join.on {
         if let (Expr::Column(left_col), Expr::Column(right_col)) = (left_expr, right_expr)
         {
@@ -390,16 +415,20 @@ fn projection_references_both_sides(exprs: &[Expr], join: &Join) -> bool {
     }
 
     // Check if we're only selecting join columns from both sides
-    let left_col_names: std::collections::HashSet<_> =
-        left_cols.iter().map(|(name, _)| name.clone()).collect();
-    let right_col_names: std::collections::HashSet<_> =
-        right_cols.iter().map(|(name, _)| name.clone()).collect();
+    let left_col_names = left_cols
+        .iter()
+        .map(|(name, _)| name.clone())
+        .collect::<HashSet<_>>();
+    let right_col_names = right_cols
+        .iter()
+        .map(|(name, _)| name.clone())
+        .collect::<HashSet<_>>();
 
     // Find columns that are selected from both sides
-    let both_sides_cols: std::collections::HashSet<_> = left_col_names
+    let both_sides_cols = left_col_names
         .intersection(&right_col_names)
         .cloned()
-        .collect();
+        .collect::<HashSet<_>>();
 
     // If all columns selected from both sides are join columns
     let all_are_join_cols = both_sides_cols.iter().all(|col| join_columns.contains(col));
@@ -428,11 +457,7 @@ fn try_eliminate_unique_keyed_self_join(join: &Join) -> Option<OptimizationResul
     let left_schema = join.left.schema().as_ref();
     let right_schema = join.right.schema().as_ref();
 
-    // No need for strict schema equality - we only need join columns to match
-    // This allows optimization even when one side has been projected to fewer columns
-
     let left_unique = unique_indexes(left_schema);
-
     // For the left side, we need unique constraints
     if left_unique.is_empty() {
         return None;
@@ -491,8 +516,8 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-
     use crate::OptimizerContext;
+
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::{Constraint, Constraints, TableReference};
     use datafusion_expr::{
