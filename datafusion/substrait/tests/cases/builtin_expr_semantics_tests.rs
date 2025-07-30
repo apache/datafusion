@@ -36,7 +36,7 @@ mod tests {
         file_path: &str,
         expected_results: Vec<&str>,
     ) -> Result<()> {
-        let path = format!("tests/testdata/test_plans/{}", file_path);
+        let path = format!("tests/testdata/test_plans/{file_path}");
         let proto = serde_json::from_reader::<_, Plan>(BufReader::new(
             File::open(path).expect("file not found"),
         ))
