@@ -5,8 +5,7 @@ use datafusion::error::Result;
 #[cfg(feature = "explain_memory")]
 use datafusion::execution::memory_pool::ExplainMemory;
 use datafusion::execution::memory_pool::{
-    report_top_consumers, GreedyMemoryPool, MemoryConsumer, MemoryPool,
-    TrackConsumersPool,
+    report_top_consumers, GreedyMemoryPool, MemoryPool, TrackConsumersPool,
 };
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::prelude::*;
@@ -27,7 +26,7 @@ async fn main() -> Result<()> {
 
     // Create a simple in-memory dataset
     println!("\n=== Creating test data ===");
-    let df = ctx
+    let _df = ctx
         .sql(
             "select v % 50 as group_key, v as value from generate_series(1,5000) as t(v)",
         )

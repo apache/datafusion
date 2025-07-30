@@ -77,6 +77,16 @@ impl CliSessionContext for MyUnionerContext {
 
         self.ctx.execute_logical_plan(new_plan).await
     }
+
+    fn enable_memory_profiling(&self) {
+        self.ctx.enable_memory_profiling()
+    }
+
+    fn get_last_query_memory_report(
+        &self,
+    ) -> Option<std::collections::HashMap<String, usize>> {
+        self.ctx.get_last_query_memory_report()
+    }
 }
 
 #[tokio::main]
