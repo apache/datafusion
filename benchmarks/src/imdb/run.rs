@@ -51,7 +51,7 @@ type BoolDefaultTrue = bool;
 /// [2] and [3].
 ///
 /// [1]: https://www.vldb.org/pvldb/vol9/p204-leis.pdf
-/// [2]: http://homepages.cwi.nl/~boncz/job/imdb.tgz
+/// [2]: https://event.cwi.nl/da/job/imdb.tgz
 /// [3]: https://db.in.tum.de/~leis/qo/job.tgz
 
 #[derive(Debug, StructOpt, Clone)]

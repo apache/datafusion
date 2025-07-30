@@ -53,7 +53,7 @@ type BoolDefaultTrue = bool;
 /// [2].
 ///
 /// [1]: http://www.tpc.org/tpch/
-/// [2]: https://github.com/databricks/tpch-dbgen.git,
+/// [2]: https://github.com/databricks/tpch-dbgen.git
 /// [2.17.1]: https://www.tpc.org/tpc_documents_current_versions/pdf/tpc-h_v2.17.1.pdf
 #[derive(Debug, StructOpt, Clone)]
 #[structopt(verbatim_doc_comment)]

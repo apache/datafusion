@@ -100,15 +100,24 @@ clickbench_pushdown:    ClickBench queries against partitioned (100 files) parqu
 clickbench_extended:    ClickBench \"inspired\" queries against a single parquet (DataFusion specific)
 
 # H2O.ai Benchmarks (Group By, Join, Window)
-h2o_small:              h2oai benchmark with small dataset (1e7 rows) for groupby,  default file format is csv
-h2o_medium:             h2oai benchmark with medium dataset (1e8 rows) for groupby, default file format is csv
-h2o_big:                h2oai benchmark with large dataset (1e9 rows) for groupby,  default file format is csv
-h2o_small_join:         h2oai benchmark with small dataset (1e7 rows) for join,  default file format is csv
-h2o_medium_join:        h2oai benchmark with medium dataset (1e8 rows) for join, default file format is csv
-h2o_big_join:           h2oai benchmark with large dataset (1e9 rows) for join,  default file format is csv
-h2o_small_window:       Extended h2oai benchmark with small dataset (1e7 rows) for window,  default file format is csv
-h2o_medium_window:      Extended h2oai benchmark with medium dataset (1e8 rows) for window, default file format is csv
-h2o_big_window:         Extended h2oai benchmark with large dataset (1e9 rows) for window,  default file format is csv
+h2o_small:                      h2oai benchmark with small dataset (1e7 rows) for groupby,  default file format is csv
+h2o_medium:                     h2oai benchmark with medium dataset (1e8 rows) for groupby, default file format is csv
+h2o_big:                        h2oai benchmark with large dataset (1e9 rows) for groupby,  default file format is csv
+h2o_small_join:                 h2oai benchmark with small dataset (1e7 rows) for join,  default file format is csv
+h2o_medium_join:                h2oai benchmark with medium dataset (1e8 rows) for join, default file format is csv
+h2o_big_join:                   h2oai benchmark with large dataset (1e9 rows) for join,  default file format is csv
+h2o_small_window:               Extended h2oai benchmark with small dataset (1e7 rows) for window,  default file format is csv
+h2o_medium_window:              Extended h2oai benchmark with medium dataset (1e8 rows) for window, default file format is csv
+h2o_big_window:                 Extended h2oai benchmark with large dataset (1e9 rows) for window,  default file format is csv
+h2o_small_parquet:              h2oai benchmark with small dataset (1e7 rows) for groupby,  file format is parquet
+h2o_medium_parquet:             h2oai benchmark with medium dataset (1e8 rows) for groupby, file format is parquet
+h2o_big_parquet:                h2oai benchmark with large dataset (1e9 rows) for groupby,  file format is parquet
+h2o_small_join_parquet:         h2oai benchmark with small dataset (1e7 rows) for join,  file format is parquet
+h2o_medium_join_parquet:        h2oai benchmark with medium dataset (1e8 rows) for join, file format is parquet
+h2o_big_join_parquet:           h2oai benchmark with large dataset (1e9 rows) for join,  file format is parquet
+h2o_small_window_parquet:       Extended h2oai benchmark with small dataset (1e7 rows) for window,  file format is parquet
+h2o_medium_window_parquet:      Extended h2oai benchmark with medium dataset (1e8 rows) for window, file format is parquet
+h2o_big_window_parquet:         Extended h2oai benchmark with large dataset (1e9 rows) for window,  file format is parquet
 
 # Join Order Benchmark (IMDB)
 imdb:                   Join Order Benchmark (JOB) using the IMDB dataset converted to parquet
@@ -245,6 +254,34 @@ main() {
                 h2o_big_window)
                     data_h2o_join "BIG" "CSV"
                     ;;
+                h2o_small_parquet)
+                    data_h2o "SMALL" "PARQUET"
+                    ;;
+                h2o_medium_parquet)
+                    data_h2o "MEDIUM" "PARQUET"
+                    ;;
+                h2o_big_parquet)
+                    data_h2o "BIG" "PARQUET"
+                    ;;
+                h2o_small_join_parquet)
+                    data_h2o_join "SMALL" "PARQUET"
+                    ;;
+                h2o_medium_join_parquet)
+                    data_h2o_join "MEDIUM" "PARQUET"
+                    ;;
+                h2o_big_join_parquet)
+                    data_h2o_join "BIG" "PARQUET"
+                    ;;
+                # h2o window benchmark uses the same data as the h2o join
+                h2o_small_window_parquet)
+                    data_h2o_join "SMALL" "PARQUET"
+                    ;;
+                h2o_medium_window_parquet)
+                    data_h2o_join "MEDIUM" "PARQUET"
+                    ;;
+                h2o_big_window_parquet)
+                    data_h2o_join "BIG" "PARQUET"
+                    ;;
                 external_aggr)
                     # same data as for tpch
                     data_tpch "1"
@@ -380,6 +417,34 @@ main() {
                     ;;
                 h2o_big_window) 
                     run_h2o_window "BIG" "CSV" "window"
+                    ;;
+                h2o_small_parquet)
+                    run_h2o "SMALL" "PARQUET"
+                    ;;
+                h2o_medium_parquet)
+                    run_h2o "MEDIUM" "PARQUET"
+                    ;;
+                h2o_big_parquet)
+                    run_h2o "BIG" "PARQUET"
+                    ;;
+                h2o_small_join_parquet)
+                    run_h2o_join "SMALL" "PARQUET"
+                    ;;
+                h2o_medium_join_parquet)
+                    run_h2o_join "MEDIUM" "PARQUET"
+                    ;;
+                h2o_big_join_parquet)
+                    run_h2o_join "BIG" "PARQUET"
+                    ;;
+                # h2o window benchmark uses the same data as the h2o join
+                h2o_small_window_parquet)
+                    run_h2o_window "SMALL" "PARQUET"
+                    ;;
+                h2o_medium_window_parquet)
+                    run_h2o_window "MEDIUM" "PARQUET"
+                    ;;
+                h2o_big_window_parquet)
+                    run_h2o_window "BIG" "PARQUET"
                     ;;
                 external_aggr)
                     run_external_aggr
