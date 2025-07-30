@@ -31,7 +31,7 @@ use crate::aggregates::{
 };
 use crate::metrics::{BaselineMetrics, MetricBuilder, RecordOutput};
 use crate::sorts::sort::sort_batch;
-use crate::sorts::streaming_merge::StreamingMergeBuilder;
+use crate::sorts::streaming_merge::{SortedSpillFile, StreamingMergeBuilder};
 use crate::spill::spill_manager::SpillManager;
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{aggregates, metrics, PhysicalExpr};
@@ -40,7 +40,6 @@ use crate::{RecordBatchStream, SendableRecordBatchStream};
 use arrow::array::*;
 use arrow::datatypes::SchemaRef;
 use datafusion_common::{internal_err, DataFusionError, Result};
-use datafusion_execution::disk_manager::RefCountedTempFile;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
@@ -99,7 +98,7 @@ struct SpillState {
     // ========================================================================
     /// If data has previously been spilled, the locations of the
     /// spill files (in Arrow IPC format)
-    spills: Vec<RefCountedTempFile>,
+    spills: Vec<SortedSpillFile>,
 
     /// true when streaming merge is in progress
     is_stream_merging: bool,
@@ -1000,13 +999,21 @@ impl GroupedHashAggregateStream {
         let sorted = sort_batch(&emit, &self.spill_state.spill_expr, None)?;
 
         // Spill sorted state to disk
-        let spillfile = self.spill_state.spill_manager.spill_record_batch_by_size(
-            &sorted,
-            "HashAggSpill",
-            self.batch_size,
-        )?;
+        let spillfile = self
+            .spill_state
+            .spill_manager
+            .spill_record_batch_by_size_and_return_max_batch_memory(
+                &sorted,
+                "HashAggSpill",
+                self.batch_size,
+            )?;
         match spillfile {
-            Some(spillfile) => self.spill_state.spills.push(spillfile),
+            Some((spillfile, max_record_batch_memory)) => {
+                self.spill_state.spills.push(SortedSpillFile {
+                    file: spillfile,
+                    max_record_batch_memory,
+                })
+            }
             None => {
                 return internal_err!(
                     "Calling spill with no intermediate batch to spill"
@@ -1067,14 +1074,13 @@ impl GroupedHashAggregateStream {
                 sort_batch(&batch, &expr, None)
             })),
         )));
-        for spill in self.spill_state.spills.drain(..) {
-            let stream = self.spill_state.spill_manager.read_spill_as_stream(spill)?;
-            streams.push(stream);
-        }
+
         self.spill_state.is_stream_merging = true;
         self.input = StreamingMergeBuilder::new()
             .with_streams(streams)
             .with_schema(schema)
+            .with_spill_manager(self.spill_state.spill_manager.clone())
+            .with_sorted_spill_files(std::mem::take(&mut self.spill_state.spills))
             .with_expressions(&self.spill_state.spill_expr)
             .with_metrics(self.baseline_metrics.clone())
             .with_batch_size(self.batch_size)
