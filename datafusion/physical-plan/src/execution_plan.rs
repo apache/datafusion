@@ -17,8 +17,8 @@
 
 pub use crate::display::{DefaultDisplay, DisplayAs, DisplayFormatType, VerboseDisplay};
 use crate::filter_pushdown::{
-    ChildFilterDescription, ChildPushdownResult, FilterDescription, FilterPushdownPhase,
-    FilterPushdownPropagation, PushedDownPredicate,
+    ChildPushdownResult, FilterDescription, FilterPushdownPhase,
+    FilterPushdownPropagation,
 };
 pub use crate::metrics::Metric;
 pub use crate::ordering::InputOrderMode;
@@ -33,7 +33,6 @@ pub use datafusion_physical_expr::window::WindowExpr;
 pub use datafusion_physical_expr::{
     expressions, Distribution, Partitioning, PhysicalExpr,
 };
-use itertools::Itertools;
 
 use std::any::Any;
 use std::fmt::Debug;
@@ -521,19 +520,10 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
         parent_filters: Vec<Arc<dyn PhysicalExpr>>,
         _config: &ConfigOptions,
     ) -> Result<FilterDescription> {
-        // Default implementation: mark all filters as unsupported for all children
-        let mut desc = FilterDescription::new();
-        let child_filters = parent_filters
-            .iter()
-            .map(|f| PushedDownPredicate::unsupported(Arc::clone(f)))
-            .collect_vec();
-        for _ in 0..self.children().len() {
-            desc = desc.with_child(ChildFilterDescription {
-                parent_filters: child_filters.clone(),
-                self_filters: vec![],
-            });
-        }
-        Ok(desc)
+        Ok(FilterDescription::all_unsupported(
+            &parent_filters,
+            &self.children(),
+        ))
     }
 
     /// Handle the result of a child pushdown.
