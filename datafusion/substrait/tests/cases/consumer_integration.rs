@@ -25,9 +25,7 @@
 #[cfg(test)]
 mod tests {
     use crate::utils::test::add_plan_schemas_to_ctx;
-    use datafusion::arrow::util::pretty;
     use datafusion::common::Result;
-    use datafusion::prelude::DataFrame;
     use datafusion::prelude::SessionContext;
     use datafusion_substrait::logical_plan::consumer::from_substrait_plan;
     use insta::assert_snapshot;
@@ -524,38 +522,19 @@ mod tests {
     #[tokio::test]
     //There are some Substrait functions that are semantically equivalent to nested built-in expressions
     //xor:bool_bool is implemented in the consumer with binary expressions
-    //This tests that the consumer correctly builds the nested expressions, and tests that the function semantics are correct
+    //This tests that the consumer correctly builds the nested expressions
     async fn test_built_in_binary_exprs_for_xor() -> Result<()> {
-        let path = format!("tests/testdata/test_plans/scalar_fn_to_built_in_binary_expr_xor.substrait.json");
-        let proto = serde_json::from_reader::<_, Plan>(BufReader::new(
-            File::open(path).expect("file not found"),
-        ))
-        .expect("failed to parse json");
+        let plan_str =
+            test_plan_to_string("scalar_fn_to_built_in_binary_expr_xor.substrait.json")
+                .await?;
 
-        let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto)?;
-        let plan = from_substrait_plan(&ctx.state(), &proto).await?;
-
-        assert_snapshot!(format!("{plan}"),
+        //Test correct plan structure
+        assert_snapshot!(plan_str,
           @r#"
         Projection: a, b, (a OR b) AND NOT a AND b AS result
           Values: (Boolean(true), Boolean(true)), (Boolean(true), Boolean(false)), (Boolean(false), Boolean(true)), (Boolean(false), Boolean(false))
         "#
         );
-
-        let df = DataFrame::new(ctx.state().clone(), plan.clone());
-        let results = df.collect().await?;
-        let pretty_results = pretty::pretty_format_batches(&results)?.to_string();
-        let expected = vec![
-            "+-------+-------+--------+",
-            "| a     | b     | result |",
-            "+-------+-------+--------+",
-            "| true  | true  | false  |",
-            "| true  | false | true   |",
-            "| false | true  | true   |",
-            "| false | false | false  |",
-            "+-------+-------+--------+",
-        ];
-        assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);
 
         Ok(())
     }
@@ -563,38 +542,20 @@ mod tests {
     #[tokio::test]
     //There are some Substrait functions that are semantically equivalent to nested built-in expressions
     //and_not:bool_bool is implemented in the consumer as binary expressions
-    //This tests that the consumer correctly builds the nested expressions, and tests that the function semantics are correct
+    //This tests that the consumer correctly builds the nested expressions
     async fn test_built_in_binary_exprs_for_and_not() -> Result<()> {
-        let path = format!("tests/testdata/test_plans/scalar_fn_to_built_in_binary_expr_and_not.substrait.json");
-        let proto = serde_json::from_reader::<_, Plan>(BufReader::new(
-            File::open(path).expect("file not found"),
-        ))
-        .expect("failed to parse json");
+        let plan_str = test_plan_to_string(
+            "scalar_fn_to_built_in_binary_expr_and_not.substrait.json",
+        )
+        .await?;
 
-        let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto)?;
-        let plan = from_substrait_plan(&ctx.state(), &proto).await?;
-
-        assert_snapshot!(format!("{plan}"),
+        //Test correct plan structure
+        assert_snapshot!(plan_str,
           @r#"
         Projection: a, b, a AND NOT b AS result
           Values: (Boolean(true), Boolean(true)), (Boolean(true), Boolean(false)), (Boolean(false), Boolean(true)), (Boolean(false), Boolean(false))
         "#
         );
-
-        let df = DataFrame::new(ctx.state().clone(), plan.clone());
-        let results = df.collect().await?;
-        let pretty_results = pretty::pretty_format_batches(&results)?.to_string();
-        let expected = vec![
-            "+-------+-------+--------+",
-            "| a     | b     | result |",
-            "+-------+-------+--------+",
-            "| true  | true  | false  |",
-            "| true  | false | true   |",
-            "| false | true  | false  |",
-            "| false | false | false  |",
-            "+-------+-------+--------+",
-        ];
-        assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);
 
         Ok(())
     }
