@@ -159,7 +159,7 @@ select * from weekly_performance;
 | 5    | 80                  |
 +------+---------------------+
 
-SELECT regr_slope(user_signups, day) AS slope FROM weekly_performance;\
+SELECT regr_slope(user_signups, day) AS slope FROM weekly_performance;
 +--------+
 | slope  |
 +--------+
@@ -181,6 +181,31 @@ SELECT regr_slope(user_signups, day) AS slope FROM weekly_performance;\
                     this function returns b.",
 
                 "regr_intercept(expression_y, expression_x)")
+                .with_sql_example(
+                    r#"```sql
+create table weekly_performances(week int, productivity_score int) as values (1,60), (2,65), (3, 70), (4,75), (5,80);
+select * from weekly_performances;
++------+---------------------+
+| week | productivity_score  |
+| ---- | ------------------- |
+| 1    | 60                  |
+| 2    | 65                  |
+| 3    | 70                  |
+| 4    | 75                  |
+| 5    | 80                  |
++------+---------------------+
+
+SELECT regr_intercept(productivity_score, week) AS intercept
+FROM weekly_performance;
++----------+
+|intercept|
+|intercept |
++----------+
+|  55      |
++----------+
+```
+"#
+                )
                 .with_standard_argument("expression_y", Some("Dependent variable"))
                 .with_standard_argument("expression_x", Some("Independent variable"))
                 .build()
@@ -192,6 +217,30 @@ SELECT regr_slope(user_signups, day) AS slope FROM weekly_performance;\
             DOC_SECTION_STATISTICAL,
             "Counts the number of non-null paired data points.",
             "regr_count(expression_y, expression_x)",
+        )
+        .with_sql_example(
+            r#"```sql
+create table daily_metrics(day int, user_signups int) as values (1,100), (2,120), (3, NULL), (4,110), (5,NULL);
+select * from daily_metrics;
++-----+---------------+
+| day | user_signups  |
+| --- | ------------- |
+| 1   | 100           |
+| 2   | 120           |
+| 3   | NULL          |
+| 4   | 110           |
+| 5   | NULL          |
++-----+---------------+
+
+SELECT regr_count(user_signups, day) AS valid_pairs
+FROM daily_metrics;
++-------------+
+| valid_pairs |
++-------------+
+| 3           |
++-------------+
+```
+"#
         )
         .with_standard_argument("expression_y", Some("Dependent variable"))
         .with_standard_argument("expression_x", Some("Independent variable"))
@@ -205,6 +254,30 @@ SELECT regr_slope(user_signups, day) AS slope FROM weekly_performance;\
                     "Computes the square of the correlation coefficient between the independent and dependent variables.",
 
                 "regr_r2(expression_y, expression_x)")
+                .with_sql_example(
+                    r#"```sql
+create table weekly_performances(day int ,user_signups int) as values (1,60), (2,65), (3, 70), (4,75), (5,80);
+select * from weekly_performances;
++------+---------------------+
+| week | productivity_score  |
+| ---- | ------------------- |
+| 1    | 60                  |
+| 2    | 65                  |
+| 3    | 70                  |
+| 4    | 75                  |
+| 5    | 80                  |
++------+---------------------+
+
+SELECT regr_r2(productivity_score, week) AS r_squared
+FROM weekly_performance;
++---------+
+|r_squared|
++---------+
+| 1.0     |
++---------+
+```
+"#
+                )
                 .with_standard_argument("expression_y", Some("Dependent variable"))
                 .with_standard_argument("expression_x", Some("Independent variable"))
                 .build()
@@ -217,6 +290,31 @@ SELECT regr_slope(user_signups, day) AS slope FROM weekly_performance;\
                     "Computes the average of the independent variable (input) expression_x for the non-null paired data points.",
 
                 "regr_avgx(expression_y, expression_x)")
+                .with_sql_example(
+                    r#"```sql
+> create table daily_sales(day int, temperature int) as values (1,35), (2,36), (3, NULL), (4,37), (5,38);
+> select * from daily_sales;
++-----+-------------+
+| day | total_sales |
+| --- | ----------- |
+| 1   | 100         |
+| 2   | 150         |
+| 3   | 200         |
+| 4   | NULL        |
+| 5   | 250         |
++-----+-------------+
+
+SELECT regr_avgx(total_sales, day) AS avg_day
+FROM daily_sales; --output = (1+2+3+5)/4 = 2.75
++----------+
+| avg_day  |
++----------+
+|   2.75   |
++----------+
+
+```
+"#
+                )
                 .with_standard_argument("expression_y", Some("Dependent variable"))
                 .with_standard_argument("expression_x", Some("Independent variable"))
                 .build()
@@ -229,6 +327,30 @@ SELECT regr_slope(user_signups, day) AS slope FROM weekly_performance;\
                     "Computes the average of the dependent variable (output) expression_y for the non-null paired data points.",
 
                 "regr_avgy(expression_y, expression_x)")
+                .with_sql_example(
+                    r#"```sql
+create table daily_temperature(day int, temperature int) as values (1,30), (2,32), (3, NULL), (4,35), (5,36);
+select * from daily_temperature;
++-----+-------------+
+| day | temperature |
+| --- | ----------- |
+| 1   | 30          |
+| 2   | 32          |
+| 3   | NULL        |
+| 4   | 35          |
+| 5   | 36          |
++-----+-------------+
+
+SELECT regr_avgy(temperature, day) AS avg_temperature --temperature as Dependent Variable(Y)
+FROM daily_temperature;
++-----------------+
+| avg_temperature |
++-----------------+
+| 33.25           |
++-----------------+
+```
+"#
+                )
                 .with_standard_argument("expression_y", Some("Dependent variable"))
                 .with_standard_argument("expression_x", Some("Independent variable"))
                 .build()
@@ -240,6 +362,30 @@ SELECT regr_slope(user_signups, day) AS slope FROM weekly_performance;\
             DOC_SECTION_STATISTICAL,
             "Computes the sum of squares of the independent variable.",
             "regr_sxx(expression_y, expression_x)",
+        )
+        .with_sql_example(
+            r#"```sql
+create table study_hours(int student_id, int hours,int test_score) as values(1,2,55),(2,4,65) , (3,6,75),(4,8,85),(5,10,95);
+select * from study_hours;
++-------------+-----------+-----------------+
+| student_id  | hours (x) | test_score (y)  |
+| ----------- | --------- | --------------- |
+| 1           | 2         | 55              |
+| 2           | 4         | 65              |
+| 3           | 6         | 75              |
+| 4           | 8         | 85              |
+| 5           | 10        | 95              |
++-------------+-----------+-----------------+
+
+SELECT regr_sxx(test_score, hours) AS sxx
+FROM study_hours; --Output - 40
++-------+
+| sxx   |
++-------+
+| 40    |
++-------+
+```
+"#
         )
         .with_standard_argument("expression_y", Some("Dependent variable"))
         .with_standard_argument("expression_x", Some("Independent variable"))
@@ -253,6 +399,28 @@ SELECT regr_slope(user_signups, day) AS slope FROM weekly_performance;\
             "Computes the sum of squares of the dependent variable.",
             "regr_syy(expression_y, expression_x)",
         )
+        .with_sql_example(
+            r#"```sql
+create table employee_productivity(int week,int productivity_score) as values(1,60) , (2,65), (3,70);
+select * from employee_productivity;
++-------+---------------------+
+| week  | Procutivity_score   |
++-------+---------------------+
+|   1   |    65               |
+|   2   |    70               |
+|   3   |    75               |
++-------+---------------------+
+
+SELECT regr_syy(productivity_score, week) AS sum_squares_y
+FROM employee_productivity;
++---------------+
+| sum_squares_y |
++---------------+
+|    50.0       |
++---------------+
+```
+"#
+        )
         .with_standard_argument("expression_y", Some("Dependent variable"))
         .with_standard_argument("expression_x", Some("Independent variable"))
         .build(),
@@ -264,6 +432,28 @@ SELECT regr_slope(user_signups, day) AS slope FROM weekly_performance;\
             DOC_SECTION_STATISTICAL,
             "Computes the sum of products of paired data points.",
             "regr_sxy(expression_y, expression_x)",
+        )
+        .with_sql_example(
+            r#"```sql
+create table employee_productivity(int week,int productivity_score) as values(1,60) , (2,65), (3,70);
+select * from employee_productivity;
++-------+---------------------+
+| week  | Procutivity_score   |
++-------+---------------------+
+|   1   |    65               |
+|   2   |    70               |
+|   3   |    75               |
++-------+---------------------+
+
+SELECT regr_sxy(productivity_score, week) AS sum_product_deviations
+FROM employee_productivity;
++------------------------+
+| sum_product_deviations |
++------------------------+
+|       10.0             |
++------------------------+
+```
+"#
         )
         .with_standard_argument("expression_y", Some("Dependent variable"))
         .with_standard_argument("expression_x", Some("Independent variable"))
