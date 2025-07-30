@@ -288,6 +288,45 @@ pub enum SpillCompression {
     Uncompressed,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MemoryProfilingMode {
+    Disabled,
+    OnDemand,
+    AutoSample,
+}
+
+impl Default for MemoryProfilingMode {
+    fn default() -> Self {
+        MemoryProfilingMode::Disabled
+    }
+}
+
+impl FromStr for MemoryProfilingMode {
+    type Err = DataFusionError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_ascii_lowercase().as_str() {
+            "disabled" | "" => Ok(Self::Disabled),
+            "on_demand" => Ok(Self::OnDemand),
+            "auto_sample" => Ok(Self::AutoSample),
+            other => Err(DataFusionError::Configuration(format!(
+                "Invalid memory profiling mode: {other}"
+            ))),
+        }
+    }
+}
+
+impl ConfigField for MemoryProfilingMode {
+    fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
+        v.some(key, self, description)
+    }
+
+    fn set(&mut self, _: &str, value: &str) -> Result<()> {
+        *self = MemoryProfilingMode::from_str(value)?;
+        Ok(())
+    }
+}
+
 impl FromStr for SpillCompression {
     type Err = DataFusionError;
 
@@ -484,6 +523,9 @@ config_namespace! {
         /// written, it may be necessary to increase this size to avoid errors from
         /// the remote end point.
         pub objectstore_writer_buffer_size: usize, default = 10 * 1024 * 1024
+
+        /// Memory profiling mode
+        pub memory_profiling: MemoryProfilingMode, default = MemoryProfilingMode::Disabled
     }
 }
 
