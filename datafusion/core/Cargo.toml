@@ -66,6 +66,8 @@ default = [
     "recursive_protection",
 ]
 encoding_expressions = ["datafusion-functions/encoding_expressions"]
+# Enables memory usage reporting features
+explain_memory = ["datafusion-execution/explain_memory"]
 # Used for testing ONLY: causes all values to hash to the same value (test for collisions)
 force_hash_collisions = ["datafusion-physical-plan/force_hash_collisions", "datafusion-common/force_hash_collisions"]
 math_expressions = ["datafusion-functions/math_expressions"]

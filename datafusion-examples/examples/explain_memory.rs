@@ -2,12 +2,12 @@ use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use datafusion::error::Result;
-#[cfg(feature = "explain_memory")]
-use datafusion::execution::memory_pool::ExplainMemory;
 use datafusion::execution::memory_pool::{
     report_top_consumers, GreedyMemoryPool, MemoryConsumer, MemoryPool,
     TrackConsumersPool,
 };
+#[cfg(feature = "explain_memory")]
+use datafusion::execution::memory_pool::memory_report::ExplainMemory;
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::prelude::*;
 
