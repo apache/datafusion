@@ -27,7 +27,8 @@ use datafusion_common::cast::{
 };
 use datafusion_common::{exec_datafusion_err, exec_err, plan_err, Result};
 use datafusion_expr::{
-    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
+    Volatility,
 };
 use datafusion_functions::utils::make_scalar_function;
 use url::Url;
@@ -46,7 +47,23 @@ impl Default for ParseUrl {
 impl ParseUrl {
     pub fn new() -> Self {
         Self {
-            signature: Signature::user_defined(Volatility::Immutable),
+            signature: Signature::one_of(
+                vec![
+                    TypeSignature::Uniform(
+                        1,
+                        vec![DataType::Utf8View, DataType::Utf8, DataType::LargeUtf8],
+                    ),
+                    TypeSignature::Uniform(
+                        2,
+                        vec![DataType::Utf8View, DataType::Utf8, DataType::LargeUtf8],
+                    ),
+                    TypeSignature::Uniform(
+                        3,
+                        vec![DataType::Utf8View, DataType::Utf8, DataType::LargeUtf8],
+                    ),
+                ],
+                Volatility::Immutable,
+            ),
         }
     }
     /// Parses a URL and extracts the specified component.
@@ -137,7 +154,7 @@ impl ScalarUDFImpl for ParseUrl {
         }
         // The return type should match the largest size datatype
         match arg_types.len() {
-            2 | 3 if arg_types.iter().all(is_string_type) => {
+            2 | 3 => {
                 if arg_types
                     .iter()
                     .any(|arg| matches!(arg, DataType::LargeUtf8))
@@ -147,27 +164,6 @@ impl ScalarUDFImpl for ParseUrl {
                     Ok(DataType::Utf8)
                 }
             }
-            2 | 3 => plan_err!(
-                "`{}` expects STRING arguments, got {:?}",
-                &self.name(),
-                arg_types
-            ),
-            _ => plan_err!(
-                "`{}` expects 2 or 3 arguments, got {}",
-                &self.name(),
-                arg_types.len()
-            ),
-        }
-    }
-
-    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        match arg_types.len() {
-            2 | 3 if arg_types.iter().all(is_string_type) => Ok(arg_types.to_vec()),
-            2 | 3 => plan_err!(
-                "`{}` expects STRING arguments, got {:?}",
-                &self.name(),
-                arg_types
-            ),
             _ => plan_err!(
                 "`{}` expects 2 or 3 arguments, got {}",
                 &self.name(),
@@ -180,13 +176,6 @@ impl ScalarUDFImpl for ParseUrl {
         let ScalarFunctionArgs { args, .. } = args;
         make_scalar_function(spark_parse_url, vec![])(&args)
     }
-}
-
-fn is_string_type(dt: &DataType) -> bool {
-    matches!(
-        dt,
-        DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8
-    )
 }
 
 /// Core implementation of URL parsing function.
