@@ -31,11 +31,23 @@ async fn main() -> Result<()> {
     #[cfg(feature = "explain_memory")]
     println!("{}", reservation.explain_memory()?);
 
+    // Query 1: GroupedHashAggregateStream - hash-based aggregation with grouping
+    println!("\n=== Query 1: GroupedHashAggregateStream (with grouping) ===");
     let df = ctx
-        .sql("select v % 1000 as group_key, count(*) as cnt, sum(v) as sum_v from generate_series(1,500000) as t(v) group by v % 1000 order by group_key")
+        .sql("select v % 1000 as group_key, count(*) as cnt, sum(v) as sum_v, avg(v) as avg_v from generate_series(1,500000) as t(v) group by v % 1000 order by group_key")
         .await?;
 
     if let Err(e) = df.collect().await {
+        println!("Query failed: {e}");
+    }
+
+    // Query 2: AggregateStreamInner - simple aggregation without grouping
+    println!("\n=== Query 2: AggregateStreamInner (no grouping) ===");
+    let df2 = ctx
+        .sql("select count(*) as cnt, sum(v) as sum_v, avg(v) as avg_v from generate_series(1,500000) as t(v)")
+        .await?;
+
+    if let Err(e) = df2.collect().await {
         println!("Query failed: {e}");
     }
 

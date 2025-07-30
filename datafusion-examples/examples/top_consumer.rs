@@ -59,12 +59,31 @@ async fn main() -> Result<()> {
     // Manually allocate memory and print how much was reserved
     let mut reservation = MemoryConsumer::new("manual").register(&pool);
     reservation.try_grow(15 * MB)?;
-    // A query that sorts a large dataset and will exceed the memory limit
+
+    // Query 1: GroupedHashAggregateStream - hash-based aggregation with grouping
+    println!("\n=== Query 1: GroupedHashAggregateStream (with grouping) ===");
     let df = ctx
-        .sql("select v % 1000 as group_key, count(*) as cnt, sum(v) as sum_v from generate_series(1,500000) as t(v) group by v % 1000 order by group_key")
+        .sql("select v % 1000 as group_key, count(*) as cnt, sum(v) as sum_v, avg(v) as avg_v from generate_series(1,500000) as t(v) group by v % 1000 order by group_key")
         .await?;
 
     match df.collect().await {
+        Ok(batches) => {
+            // Success is unexpected, but print the results if it happens
+            println!("{}", pretty_format_batches(&batches)?);
+        }
+        Err(e) => {
+            // The error message lists the top memory consumers
+            println!("{e}");
+        }
+    }
+
+    // Query 2: AggregateStreamInner - simple aggregation without grouping
+    println!("\n=== Query 2: AggregateStreamInner (no grouping) ===");
+    let df2 = ctx
+        .sql("select count(*) as cnt, sum(v) as sum_v, avg(v) as avg_v from generate_series(1,500000) as t(v)")
+        .await?;
+
+    match df2.collect().await {
         Ok(batches) => {
             // Success is unexpected, but print the results if it happens
             println!("{}", pretty_format_batches(&batches)?);
