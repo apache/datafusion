@@ -169,16 +169,21 @@ impl ExecutionPlan for EmptyExec {
                 );
             }
         }
-        // Build explicit stats: exact zero rows and bytes, with unknown columns
+        // Build explicit stats: exact zero rows and bytes, with explicit known column stats
         let mut stats = Statistics::default()
             .with_num_rows(Precision::Exact(0))
             .with_total_byte_size(Precision::Exact(0));
 
-        // Add unknown column stats for each field in schema
+        // Add explicit column stats for each field in schema
         for _field in self.schema.fields() {
-            stats = stats.add_column_statistics(
-                datafusion_common::stats::ColumnStatistics::new_unknown(),
-            );
+            stats =
+                stats.add_column_statistics(datafusion_common::stats::ColumnStatistics {
+                    null_count: Precision::Exact(0),
+                    distinct_count: Precision::Exact(0),
+                    min_value: Precision::<datafusion_common::ScalarValue>::Absent,
+                    max_value: Precision::<datafusion_common::ScalarValue>::Absent,
+                    sum_value: Precision::<datafusion_common::ScalarValue>::Absent,
+                });
         }
 
         Ok(stats)
@@ -250,12 +255,26 @@ mod tests {
         assert_eq!(stats_all_1.num_rows, Precision::Exact(0));
         assert_eq!(stats_all_1.total_byte_size, Precision::Exact(0));
         assert_eq!(stats_all_1.column_statistics.len(), schema.fields().len());
+        for col_stats in &stats_all_1.column_statistics {
+            assert_eq!(col_stats.null_count, Precision::Exact(0));
+            assert_eq!(col_stats.distinct_count, Precision::Exact(0));
+            assert_eq!(col_stats.min_value, Precision::Absent);
+            assert_eq!(col_stats.max_value, Precision::Absent);
+            assert_eq!(col_stats.sum_value, Precision::Absent);
+        }
 
         // partition 0
         let stats0_1: Statistics = exec1.partition_statistics(Some(0))?;
         assert_eq!(stats0_1.num_rows, Precision::Exact(0));
         assert_eq!(stats0_1.total_byte_size, Precision::Exact(0));
         assert_eq!(stats0_1.column_statistics.len(), schema.fields().len());
+        for col_stats in &stats0_1.column_statistics {
+            assert_eq!(col_stats.null_count, Precision::Exact(0));
+            assert_eq!(col_stats.distinct_count, Precision::Exact(0));
+            assert_eq!(col_stats.min_value, Precision::Absent);
+            assert_eq!(col_stats.max_value, Precision::Absent);
+            assert_eq!(col_stats.sum_value, Precision::Absent);
+        }
 
         // invalid partition for default
         assert!(exec1.partition_statistics(Some(1)).is_err());
@@ -269,6 +288,13 @@ mod tests {
             assert_eq!(stats.num_rows, Precision::Exact(0));
             assert_eq!(stats.total_byte_size, Precision::Exact(0));
             assert_eq!(stats.column_statistics.len(), schema.fields().len());
+            for col_stats in &stats.column_statistics {
+                assert_eq!(col_stats.null_count, Precision::Exact(0));
+                assert_eq!(col_stats.distinct_count, Precision::Exact(0));
+                assert_eq!(col_stats.min_value, Precision::Absent);
+                assert_eq!(col_stats.max_value, Precision::Absent);
+                assert_eq!(col_stats.sum_value, Precision::Absent);
+            }
         }
 
         // invalid partition 2
