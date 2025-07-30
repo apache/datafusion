@@ -990,7 +990,7 @@ async fn roundtrip_expr_api() -> Result<()> {
         bool_and(lit(true)),
         bool_or(lit(true)),
         array_agg(lit(1)),
-        array_agg(lit(1)).distinct().build().unwrap(),
+        array_agg(lit(1)).distinct(true).build().unwrap(),
         map(
             vec![lit(1), lit(2), lit(3)],
             vec![lit(10), lit(20), lit(30)],
@@ -2128,7 +2128,7 @@ fn roundtrip_count() {
 fn roundtrip_count_distinct() {
     let test_expr = count_udaf()
         .call(vec![col("bananas")])
-        .distinct()
+        .distinct(true)
         .build()
         .unwrap();
     let ctx = SessionContext::new();

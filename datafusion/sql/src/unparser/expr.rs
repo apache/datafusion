@@ -2025,7 +2025,7 @@ mod tests {
                         qualifier: None,
                         options: Box::new(WildcardOptions::default()),
                     }])
-                    .distinct()
+                    .distinct(true)
                     .build()
                     .unwrap(),
                 "count(DISTINCT *)",
@@ -2047,6 +2047,7 @@ mod tests {
                     fun: WindowFunctionDefinition::WindowUDF(row_number_udwf()),
                     params: WindowFunctionParams {
                         args: vec![col("col")],
+                        distinct: false,
                         partition_by: vec![],
                         order_by: vec![],
                         window_frame: WindowFrame::new(None),
@@ -2064,6 +2065,7 @@ mod tests {
                             qualifier: None,
                             options: Box::new(WildcardOptions::default()),
                         }],
+                        distinct: false,
                         partition_by: vec![],
                         order_by: vec![Sort::new(col("a"), false, true)],
                         window_frame: WindowFrame::new_bounds(

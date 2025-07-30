@@ -279,8 +279,8 @@ impl AggregateExprBuilder {
         self
     }
 
-    pub fn distinct(mut self) -> Self {
-        self.is_distinct = true;
+    pub fn distinct(mut self, is_distinct: bool) -> Self {
+        self.is_distinct = is_distinct;
         self
     }
 

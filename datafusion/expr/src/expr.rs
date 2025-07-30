@@ -1123,6 +1123,8 @@ pub struct WindowFunction {
 pub struct WindowFunctionParams {
     /// List of expressions to feed to the functions as arguments
     pub args: Vec<Expr>,
+    /// Whether this is a DISTINCT aggregation or not
+    pub distinct: bool,
     /// List of partition by expressions
     pub partition_by: Vec<Expr>,
     /// List of order by expressions
@@ -1141,6 +1143,7 @@ impl WindowFunction {
             fun: fun.into(),
             params: WindowFunctionParams {
                 args,
+                distinct: false,
                 partition_by: Vec::default(),
                 order_by: Vec::default(),
                 window_frame: WindowFrame::new(None),
@@ -2287,6 +2290,7 @@ impl NormalizeEq for Expr {
                     params:
                         WindowFunctionParams {
                             args: self_args,
+                            distinct: _,
                             window_frame: self_window_frame,
                             partition_by: self_partition_by,
                             order_by: self_order_by,
@@ -2298,6 +2302,7 @@ impl NormalizeEq for Expr {
                     params:
                         WindowFunctionParams {
                             args: other_args,
+                            distinct: _,
                             window_frame: other_window_frame,
                             partition_by: other_partition_by,
                             order_by: other_order_by,
@@ -2554,6 +2559,7 @@ impl HashNode for Expr {
                     params:
                         WindowFunctionParams {
                             args: _args,
+                            distinct: _,
                             partition_by: _,
                             order_by: _,
                             window_frame,
@@ -2861,6 +2867,7 @@ impl Display for SchemaDisplay<'_> {
                     _ => {
                         let WindowFunctionParams {
                             args,
+                            distinct: _,
                             partition_by,
                             order_by,
                             window_frame,
@@ -3256,13 +3263,14 @@ impl Display for Expr {
                     WindowFunctionDefinition::WindowUDF(fun) => {
                         let WindowFunctionParams {
                             args,
+                            distinct,
                             partition_by,
                             order_by,
                             window_frame,
                             null_treatment,
                         } = params;
 
-                        fmt_function(f, &fun.to_string(), false, args, true)?;
+                        fmt_function(f, &fun.to_string(), *distinct, args, true)?;
 
                         if let Some(nt) = null_treatment {
                             write!(f, "{nt}")?;

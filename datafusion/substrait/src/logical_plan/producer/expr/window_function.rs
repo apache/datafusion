@@ -38,6 +38,7 @@ pub fn from_window_function(
         params:
             WindowFunctionParams {
                 args,
+                distinct,
                 partition_by,
                 order_by,
                 window_frame,
@@ -73,6 +74,7 @@ pub fn from_window_function(
         order_by,
         bounds,
         bound_type,
+        *distinct,
     ))
 }
 
@@ -83,7 +85,9 @@ fn make_substrait_window_function(
     sorts: Vec<SortField>,
     bounds: (Bound, Bound),
     bounds_type: BoundsType,
+    distinct: bool,
 ) -> Expression {
+    use substrait::proto::aggregate_function::AggregationInvocation;
     #[allow(deprecated)]
     Expression {
         rex_type: Some(RexType::WindowFunction(SubstraitWindowFunction {
@@ -94,7 +98,7 @@ fn make_substrait_window_function(
             options: vec![],
             output_type: None,
             phase: 0,      // default to AGGREGATION_PHASE_UNSPECIFIED
-            invocation: 0, // TODO: fix
+            invocation: if distinct { AggregationInvocation::Distinct } else { AggregationInvocation::All } as i32,
             lower_bound: Some(bounds.0),
             upper_bound: Some(bounds.1),
             args: vec![],

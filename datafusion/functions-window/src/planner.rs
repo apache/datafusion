@@ -37,6 +37,7 @@ impl ExprPlanner for WindowFunctionPlanner {
         let RawWindowExpr {
             func_def,
             args,
+            distinct,
             partition_by,
             order_by,
             window_frame,
@@ -47,6 +48,7 @@ impl ExprPlanner for WindowFunctionPlanner {
             fun: func_def,
             params: WindowFunctionParams {
                 args,
+                distinct,
                 partition_by,
                 order_by,
                 window_frame,
@@ -64,6 +66,7 @@ impl ExprPlanner for WindowFunctionPlanner {
             params:
                 WindowFunctionParams {
                     args,
+                    distinct,
                     partition_by,
                     order_by,
                     window_frame,
@@ -73,6 +76,7 @@ impl ExprPlanner for WindowFunctionPlanner {
         let raw_expr = RawWindowExpr {
             func_def: fun,
             args,
+            distinct,
             partition_by,
             order_by,
             window_frame,
@@ -89,6 +93,7 @@ impl ExprPlanner for WindowFunctionPlanner {
             let RawWindowExpr {
                 func_def,
                 args: _,
+                distinct,
                 partition_by,
                 order_by,
                 window_frame,
@@ -99,6 +104,7 @@ impl ExprPlanner for WindowFunctionPlanner {
                 func_def,
                 vec![Expr::Literal(COUNT_STAR_EXPANSION, None)],
             ))
+            .distinct(distinct)
             .partition_by(partition_by)
             .order_by(order_by)
             .window_frame(window_frame)

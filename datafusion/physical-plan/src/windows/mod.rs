@@ -103,6 +103,7 @@ pub fn create_window_expr(
     window_frame: Arc<WindowFrame>,
     input_schema: &Schema,
     ignore_nulls: bool,
+    distinct: bool,
 ) -> Result<Arc<dyn WindowExpr>> {
     Ok(match fun {
         WindowFunctionDefinition::AggregateUDF(fun) => {
@@ -110,6 +111,7 @@ pub fn create_window_expr(
                 .schema(Arc::new(input_schema.clone()))
                 .alias(name)
                 .with_ignore_nulls(ignore_nulls)
+                .with_distinct(distinct)
                 .build()
                 .map(Arc::new)?;
             window_expr_from_aggregate_expr(
@@ -804,6 +806,7 @@ mod tests {
                 &[],
                 Arc::new(WindowFrame::new(None)),
                 schema.as_ref(),
+                false,
                 false,
             )?],
             blocking_exec,

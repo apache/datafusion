@@ -550,6 +550,7 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     ) -> Result<String> {
         let WindowFunctionParams {
             args,
+            distinct,
             partition_by,
             order_by,
             window_frame,
@@ -558,8 +559,9 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
 
         let mut schema_name = String::new();
         schema_name.write_fmt(format_args!(
-            "{}({})",
+            "{}({}{})",
             self.name(),
+            if *distinct { "DISTINCT " } else { "" },
             schema_name_from_exprs(args)?
         ))?;
 
@@ -644,6 +646,7 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     ) -> Result<String> {
         let WindowFunctionParams {
             args,
+            distinct,
             partition_by,
             order_by,
             window_frame,
@@ -653,8 +656,9 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
         let mut display_name = String::new();
 
         display_name.write_fmt(format_args!(
-            "{}({})",
+            "{}({}{})",
             self.name(),
+            if *distinct { "DISTINCT " } else { "" },
             expr_vec_fmt!(args)
         ))?;
 

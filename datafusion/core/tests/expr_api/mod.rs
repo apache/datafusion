@@ -245,7 +245,7 @@ async fn test_aggregate_ext_distinct() {
     let agg = sum_udaf()
         .call(vec![lit(5)])
         // distinct sum should be 5, not 15
-        .distinct()
+        .distinct(true)
         .build()
         .unwrap()
         .alias("distinct");

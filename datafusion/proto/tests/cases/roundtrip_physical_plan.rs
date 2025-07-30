@@ -1256,7 +1256,7 @@ fn roundtrip_aggregate_udf_extension_codec() -> Result<()> {
     let aggr_expr = AggregateExprBuilder::new(udaf, aggr_args.clone())
         .schema(Arc::clone(&schema))
         .alias("aggregate_udf")
-        .distinct()
+        .distinct(true)
         .ignore_nulls()
         .build()
         .map(Arc::new)?;

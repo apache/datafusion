@@ -238,6 +238,7 @@ impl TreeNode for Expr {
                     params:
                         WindowFunctionParams {
                             args,
+                            distinct,
                             partition_by,
                             order_by,
                             window_frame,
@@ -251,6 +252,7 @@ impl TreeNode for Expr {
                             .order_by(new_order_by)
                             .window_frame(window_frame)
                             .null_treatment(null_treatment)
+                            .distinct(distinct)
                             .build()
                             .unwrap()
                     },

@@ -651,7 +651,7 @@ mod tests {
         // count(DISTINCT a) FILTER (WHERE a > 5)
         let expr = count_udaf()
             .call(vec![col("a")])
-            .distinct()
+            .distinct(true)
             .filter(col("a").gt(lit(5)))
             .build()?;
         let plan = LogicalPlanBuilder::from(table_scan)
@@ -702,7 +702,7 @@ mod tests {
         // count(DISTINCT a ORDER BY a)
         let expr = count_udaf()
             .call(vec![col("a")])
-            .distinct()
+            .distinct(true)
             .order_by(vec![col("a").sort(true, false)])
             .build()?;
         let plan = LogicalPlanBuilder::from(table_scan)
@@ -726,7 +726,7 @@ mod tests {
         // count(DISTINCT a ORDER BY a) FILTER (WHERE a > 5)
         let expr = count_udaf()
             .call(vec![col("a")])
-            .distinct()
+            .distinct(true)
             .filter(col("a").gt(lit(5)))
             .order_by(vec![col("a").sort(true, false)])
             .build()?;

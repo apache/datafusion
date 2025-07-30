@@ -1645,6 +1645,7 @@ pub fn create_window_expr_with_name(
                 params:
                     WindowFunctionParams {
                         args,
+                        distinct,
                         partition_by,
                         order_by,
                         window_frame,
@@ -1677,6 +1678,7 @@ pub fn create_window_expr_with_name(
                 window_frame,
                 physical_schema,
                 ignore_nulls,
+                *distinct,
             )
         }
         other => plan_err!("Invalid window expression '{other:?}'"),

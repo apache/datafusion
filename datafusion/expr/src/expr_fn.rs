@@ -855,7 +855,7 @@ pub trait ExprFunctionExt {
     /// Add `FILTER <filter>`
     fn filter(self, filter: Expr) -> ExprFuncBuilder;
     /// Add `DISTINCT`
-    fn distinct(self) -> ExprFuncBuilder;
+    fn distinct(self, distinct: bool) -> ExprFuncBuilder;
     /// Add `RESPECT NULLS` or `IGNORE NULLS`
     fn null_treatment(
         self,
@@ -941,6 +941,7 @@ impl ExprFuncBuilder {
                     fun,
                     params: WindowFunctionParams {
                         args,
+                        distinct,
                         partition_by: partition_by.unwrap_or_default(),
                         order_by: order_by.unwrap_or_default(),
                         window_frame: window_frame
@@ -969,8 +970,8 @@ impl ExprFunctionExt for ExprFuncBuilder {
     }
 
     /// Add `DISTINCT`
-    fn distinct(mut self) -> ExprFuncBuilder {
-        self.distinct = true;
+    fn distinct(mut self, distinct: bool) -> ExprFuncBuilder {
+        self.distinct = distinct;
         self
     }
 
@@ -1021,12 +1022,17 @@ impl ExprFunctionExt for Expr {
             _ => ExprFuncBuilder::new(None),
         }
     }
-    fn distinct(self) -> ExprFuncBuilder {
+    fn distinct(self, distinct: bool) -> ExprFuncBuilder {
         match self {
             Expr::AggregateFunction(udaf) => {
                 let mut builder =
                     ExprFuncBuilder::new(Some(ExprFuncKind::Aggregate(udaf)));
-                builder.distinct = true;
+                builder.distinct = distinct;
+                builder
+            }
+            Expr::WindowFunction(udwf) => {
+                let mut builder = ExprFuncBuilder::new(Some(ExprFuncKind::Window(*udwf)));
+                builder.distinct = distinct;
                 builder
             }
             _ => ExprFuncBuilder::new(None),

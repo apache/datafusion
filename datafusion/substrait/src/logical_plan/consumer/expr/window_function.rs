@@ -99,10 +99,14 @@ pub async fn from_window_function(
         from_substrait_func_args(consumer, &window.arguments, input_schema).await?
     };
 
+    use substrait::proto::aggregate_function::AggregationInvocation;
+    let distinct = matches!(window.invocation, i if i == AggregationInvocation::Distinct as i32);
+
     Ok(Expr::from(expr::WindowFunction {
         fun,
         params: WindowFunctionParams {
             args,
+            distinct,
             partition_by: from_substrait_rex_vec(
                 consumer,
                 &window.partitions,

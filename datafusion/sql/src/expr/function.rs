@@ -348,6 +348,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 let mut window_expr = RawWindowExpr {
                     func_def: fun,
                     args,
+                    distinct,
                     partition_by,
                     order_by,
                     window_frame,
@@ -364,6 +365,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 let RawWindowExpr {
                     func_def,
                     args,
+                    distinct,
                     partition_by,
                     order_by,
                     window_frame,
@@ -371,6 +373,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 } = window_expr;
 
                 return Expr::from(expr::WindowFunction::new(func_def, args))
+                    .distinct(distinct)
                     .partition_by(partition_by)
                     .order_by(order_by)
                     .window_frame(window_frame)

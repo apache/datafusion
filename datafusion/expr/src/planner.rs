@@ -304,6 +304,7 @@ pub struct RawAggregateExpr {
 pub struct RawWindowExpr {
     pub func_def: WindowFunctionDefinition,
     pub args: Vec<Expr>,
+    pub distinct: bool,
     pub partition_by: Vec<Expr>,
     pub order_by: Vec<SortExpr>,
     pub window_frame: WindowFrame,

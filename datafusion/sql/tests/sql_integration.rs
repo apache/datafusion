@@ -3132,6 +3132,23 @@ Projection: orders.order_id, approx_median(orders.qty) PARTITION BY [orders.orde
 }
 
 #[test]
+fn count_distinct_window_function() {
+    let sql = "SELECT 
+        COUNT(qty) OVER (PARTITION BY order_id) AS normal_count,
+        COUNT(DISTINCT qty) OVER (PARTITION BY order_id) AS distinct_count
+        FROM orders";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+Projection: count(orders.qty) PARTITION BY [orders.order_id] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS normal_count, count(DISTINCT orders.qty) PARTITION BY [orders.order_id] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS distinct_count
+  WindowAggr: windowExpr=[[count(orders.qty) PARTITION BY [orders.order_id] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, count(DISTINCT orders.qty) PARTITION BY [orders.order_id] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+    TableScan: orders
+"#
+    );
+}
+
+#[test]
 fn select_typed_date_string() {
     let sql = "SELECT date '2020-12-10' AS date";
     let plan = logical_plan(sql).unwrap();

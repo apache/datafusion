@@ -545,6 +545,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                     params:
                         expr::WindowFunctionParams {
                             args,
+                            distinct,
                             partition_by,
                             order_by,
                             window_frame,
@@ -567,6 +568,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
 
                 Ok(Transformed::yes(
                     Expr::from(WindowFunction::new(fun, args))
+                        .distinct(distinct)
                         .partition_by(partition_by)
                         .order_by(order_by)
                         .window_frame(window_frame)

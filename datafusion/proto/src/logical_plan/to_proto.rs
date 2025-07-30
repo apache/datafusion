@@ -311,6 +311,7 @@ pub fn serialize_expr(
                 params:
                     expr::WindowFunctionParams {
                         ref args,
+                        distinct: _,  // TODO: support distinct in proto
                         ref partition_by,
                         ref order_by,
                         ref window_frame,
