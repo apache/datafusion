@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use ahash::AHasher;
 use arrow::datatypes::DataType;
 use datafusion::common::tree_node::{Transformed, TreeNode};
 use datafusion::common::{exec_err, internal_err, DataFusionError};
@@ -28,7 +29,7 @@ use datafusion::logical_expr::{
     ColumnarValue, CreateFunction, Expr, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl,
     Signature, Volatility,
 };
-use std::hash::{DefaultHasher, Hash, Hasher};
+use std::hash::{Hash, Hasher};
 use std::result::Result as RResult;
 use std::sync::Arc;
 

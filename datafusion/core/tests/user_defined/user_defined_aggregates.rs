@@ -18,15 +18,7 @@
 //! This module contains end to end demonstrations of creating
 //! user defined aggregate functions
 
-use std::any::Any;
-use std::collections::HashMap;
-use std::hash::{DefaultHasher, Hash, Hasher};
-use std::mem::{size_of, size_of_val};
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc,
-};
-
+use ahash::AHasher;
 use arrow::array::{
     record_batch, types::UInt64Type, Array, AsArray, Int32Array, PrimitiveArray,
     StringArray, StructArray, UInt64Array,
@@ -59,6 +51,14 @@ use datafusion_expr::{
     GroupsAccumulator, LogicalPlanBuilder, SimpleAggregateUDF, WindowFunctionDefinition,
 };
 use datafusion_functions_aggregate::average::AvgAccumulator;
+use std::any::Any;
+use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
+use std::mem::{size_of, size_of_val};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 
 /// Test to show the contents of the setup
 #[tokio::test]

@@ -59,6 +59,7 @@ regex = { workspace = true }
 sqlparser = { workspace = true }
 
 [dev-dependencies]
+ahash = { workspace = true }
 ctor = { workspace = true }
 # please do not move these dependencies to the main dependencies section
 datafusion-functions = { workspace = true, default-features = true }

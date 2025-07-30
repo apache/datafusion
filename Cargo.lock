@@ -1820,6 +1820,7 @@ dependencies = [
 name = "datafusion"
 version = "49.0.0"
 dependencies = [
+ "ahash 0.8.12",
  "arrow",
  "arrow-ipc",
  "arrow-schema",
@@ -2172,6 +2173,7 @@ version = "49.0.0"
 name = "datafusion-examples"
 version = "49.0.0"
 dependencies = [
+ "ahash 0.8.12",
  "arrow",
  "arrow-flight",
  "arrow-schema",
@@ -2534,6 +2536,7 @@ dependencies = [
 name = "datafusion-proto"
 version = "49.0.0"
 dependencies = [
+ "ahash 0.8.12",
  "arrow",
  "chrono",
  "datafusion",
@@ -2628,6 +2631,7 @@ dependencies = [
 name = "datafusion-sql"
 version = "49.0.0"
 dependencies = [
+ "ahash 0.8.12",
  "arrow",
  "bigdecimal",
  "ctor",

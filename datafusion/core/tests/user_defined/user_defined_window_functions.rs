@@ -18,6 +18,7 @@
 //! This module contains end to end tests of creating
 //! user defined window functions
 
+use ahash::AHasher;
 use arrow::array::{
     record_batch, Array, ArrayRef, AsArray, Int64Array, RecordBatch, StringArray,
     UInt64Array,
@@ -40,7 +41,7 @@ use datafusion_physical_expr::{
     PhysicalExpr,
 };
 use std::collections::HashMap;
-use std::hash::{DefaultHasher, Hash, Hasher};
+use std::hash::{Hash, Hasher};
 use std::{
     any::Any,
     ops::Range,

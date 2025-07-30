@@ -57,6 +57,7 @@ name = "custom_file_casts"
 path = "examples/custom_file_casts.rs"
 
 [dev-dependencies]
+ahash = { workspace = true }
 arrow = { workspace = true }
 # arrow_schema is required for record_batch! macro :sad:
 arrow-flight = { workspace = true }
