@@ -316,6 +316,16 @@ impl FromStr for MemoryProfilingMode {
     }
 }
 
+impl Display for MemoryProfilingMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            MemoryProfilingMode::Disabled => write!(f, "disabled"),
+            MemoryProfilingMode::OnDemand => write!(f, "on_demand"),
+            MemoryProfilingMode::AutoSample => write!(f, "auto_sample"),
+        }
+    }
+}
+
 impl ConfigField for MemoryProfilingMode {
     fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
         v.some(key, self, description)
