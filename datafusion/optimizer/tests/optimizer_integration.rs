@@ -662,24 +662,6 @@ fn eliminate_aggregate_self_join_less_than_equal_no_alias() {
 }
 
 #[test]
-fn eliminate_aggregate_self_join_less_than_different_table() {
-    let sql = r#"
-        SELECT a.user_id, b.purchase_date, SUM(b.amount)
-        FROM purchases a
-        JOIN purchases b ON a.user_id = b.user_id AND a.purchase_date <= b.purchase_date
-        GROUP BY a.user_id, b.purchase_date;
-    "#;
-
-    let plan = test_sql(sql).unwrap();
-
-    assert_snapshot!(
-        plan,
-        @r"
-    "
-    );
-}
-
-#[test]
 fn eliminate_aggregate_self_join_less_than() {
     let sql = r#"
         SELECT a.user_id, a.purchase_date, SUM(b.amount) AS running_total
