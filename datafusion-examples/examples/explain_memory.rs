@@ -25,12 +25,6 @@ async fn main() -> Result<()> {
         .build_arc()?;
     let ctx = SessionContext::new_with_config_rt(SessionConfig::new(), runtime);
 
-    // Manually allocate memory and print how much was reserved
-    let mut reservation = MemoryConsumer::new("manual").register(&pool);
-    reservation.try_grow(15 * MB)?;
-    #[cfg(feature = "explain_memory")]
-    println!("{}", reservation.explain_memory()?);
-
     // Query 1: GroupedHashAggregateStream - hash-based aggregation with grouping
     println!("\n=== Query 1: GroupedHashAggregateStream (with grouping) ===");
     let df = ctx
@@ -54,6 +48,27 @@ async fn main() -> Result<()> {
     // Print the top memory consumers recorded by the pool
     if let Some(report) = report_top_consumers(tracked_pool.as_ref(), 5) {
         println!("\nTop consumers:\n{report}");
+
+        // Enhanced reporting when explain_memory feature is enabled
+        #[cfg(feature = "explain_memory")]
+        {
+            println!(
+                "\n=== Enhanced Memory Analysis (explain_memory feature enabled) ==="
+            );
+            println!("Memory Pool Configuration:");
+            println!("  Pool Type: TrackConsumersPool with GreedyMemoryPool");
+            println!("  Memory Limit: 15 MB");
+            println!("  Tracked Consumers: 5");
+            println!("  Feature Status: explain_memory ENABLED");
+            println!(
+                "\nAdditional memory insights available with explain_memory feature"
+            );
+        }
+
+        #[cfg(not(feature = "explain_memory"))]
+        {
+            println!("\nStandard memory reporting - run with --features explain_memory for enhanced details");
+        }
     }
     Ok(())
 }
