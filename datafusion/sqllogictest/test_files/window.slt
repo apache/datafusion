@@ -5671,33 +5671,38 @@ INSERT INTO table_test_distinct_count (k, v, time) VALUES
     ('b', 4, '1970-01-01T00:03:00.00Z'),
     ('b', 4, '1970-01-01T00:03:00.00Z');
 
-query TPII
-SELECT
+# COUNT and COUNT(DISTINCT) expressions with unbounded window frame
+query TT
+EXPLAIN SELECT
     k,
-    time,
+    v,
     COUNT(v) OVER (
         PARTITION BY k
-        ORDER BY time
-        RANGE BETWEEN INTERVAL '2 minutes' PRECEDING AND CURRENT ROW
+        ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
     ) AS normal_count,
     COUNT(DISTINCT v) OVER (
         PARTITION BY k
-        ORDER BY time
-        RANGE BETWEEN INTERVAL '2 minutes' PRECEDING AND CURRENT ROW
+        ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
     ) AS distinct_count
 FROM table_test_distinct_count
-ORDER BY k, time;
+ORDER BY k, v;
 ----
-a 1970-01-01T00:01:00Z 1 1
-a 1970-01-01T00:02:00Z 2 2
-a 1970-01-01T00:03:00Z 4 4
-a 1970-01-01T00:03:00Z 4 4
-a 1970-01-01T00:04:00Z 4 4
-b 1970-01-01T00:01:00Z 1 1
-b 1970-01-01T00:02:00Z 2 2
-b 1970-01-01T00:03:00Z 4 4
-b 1970-01-01T00:03:00Z 4 4
+logical_plan
+01)Sort: table_test_distinct_count.k ASC NULLS LAST, table_test_distinct_count.v ASC NULLS LAST
+02)--Projection: table_test_distinct_count.k, table_test_distinct_count.v, count(table_test_distinct_count.v) PARTITION BY [table_test_distinct_count.k] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS normal_count, count(DISTINCT table_test_distinct_count.v) PARTITION BY [table_test_distinct_count.k] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS distinct_count
+03)----WindowAggr: windowExpr=[[count(table_test_distinct_count.v) PARTITION BY [table_test_distinct_count.k] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, count(DISTINCT table_test_distinct_count.v) PARTITION BY [table_test_distinct_count.k] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+04)------TableScan: table_test_distinct_count projection=[k, v]
+physical_plan
+01)SortPreservingMergeExec: [k@0 ASC NULLS LAST, v@1 ASC NULLS LAST]
+02)--SortExec: expr=[k@0 ASC NULLS LAST, v@1 ASC NULLS LAST], preserve_partitioning=[true]
+03)----ProjectionExec: expr=[k@0 as k, v@1 as v, count(table_test_distinct_count.v) PARTITION BY [table_test_distinct_count.k] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@2 as normal_count, count(DISTINCT table_test_distinct_count.v) PARTITION BY [table_test_distinct_count.k] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@3 as distinct_count]
+04)------WindowAggExec: wdw=[count(table_test_distinct_count.v) PARTITION BY [table_test_distinct_count.k] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "count(table_test_distinct_count.v) PARTITION BY [table_test_distinct_count.k] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }, count(DISTINCT table_test_distinct_count.v) PARTITION BY [table_test_distinct_count.k] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "count(DISTINCT table_test_distinct_count.v) PARTITION BY [table_test_distinct_count.k] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }]
+05)--------SortExec: expr=[k@0 ASC NULLS LAST], preserve_partitioning=[true]
+06)----------CoalesceBatchesExec: target_batch_size=1
+07)------------RepartitionExec: partitioning=Hash([k@0], 2), input_partitions=2
+08)--------------DataSourceExec: partitions=2, partition_sizes=[5, 4]
 
+# COUNT and COUNT(DISTINCT) expressions
 query TT
 EXPLAIN SELECT
     k,
@@ -5705,23 +5710,45 @@ EXPLAIN SELECT
     COUNT(v) OVER (
         PARTITION BY k
         ORDER BY time
-        RANGE BETWEEN INTERVAL '2 minutes' PRECEDING AND CURRENT ROW
+        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
     ) AS normal_count,
     COUNT(DISTINCT v) OVER (
         PARTITION BY k
         ORDER BY time
-        RANGE BETWEEN INTERVAL '2 minutes' PRECEDING AND CURRENT ROW
+        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
     ) AS distinct_count
 FROM table_test_distinct_count
 ORDER BY k, time;
 ----
 logical_plan
-01)Projection: oder.k, oder.time, count(oder.v) PARTITION BY [oder.k] ORDER BY [oder.time ASC NULLS LAST] RANGE BETWEEN 2 minutes PRECEDING AND CURRENT ROW AS normal_count, count(oder.v) PARTITION BY [oder.k] ORDER BY [oder.time ASC NULLS LAST] RANGE BETWEEN 2 minutes PRECEDING AND CURRENT ROW AS distinct_count
-02)--WindowAggr: windowExpr=[[count(oder.v) PARTITION BY [oder.k] ORDER BY [oder.time ASC NULLS LAST] RANGE BETWEEN IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 120000000000 } PRECEDING AND CURRENT ROW AS count(oder.v) PARTITION BY [oder.k] ORDER BY [oder.time ASC NULLS LAST] RANGE BETWEEN 2 minutes PRECEDING AND CURRENT ROW]]
-03)----SubqueryAlias: oder
+01)Sort: table_test_distinct_count.k ASC NULLS LAST, table_test_distinct_count.time ASC NULLS LAST
+02)--Projection: table_test_distinct_count.k, table_test_distinct_count.time, count(table_test_distinct_count.v) PARTITION BY [table_test_distinct_count.k] ORDER BY [table_test_distinct_count.time ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS normal_count, count(DISTINCT table_test_distinct_count.v) PARTITION BY [table_test_distinct_count.k] ORDER BY [table_test_distinct_count.time ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS distinct_count
+03)----WindowAggr: windowExpr=[[count(table_test_distinct_count.v) PARTITION BY [table_test_distinct_count.k] ORDER BY [table_test_distinct_count.time ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, count(DISTINCT table_test_distinct_count.v) PARTITION BY [table_test_distinct_count.k] ORDER BY [table_test_distinct_count.time ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
 04)------TableScan: table_test_distinct_count projection=[k, v, time]
 physical_plan
-01)ProjectionExec: expr=[k@0 as k, time@2 as time, count(oder.v) PARTITION BY [oder.k] ORDER BY [oder.time ASC NULLS LAST] RANGE BETWEEN 2 minutes PRECEDING AND CURRENT ROW@3 as normal_count, count(oder.v) PARTITION BY [oder.k] ORDER BY [oder.time ASC NULLS LAST] RANGE BETWEEN 2 minutes PRECEDING AND CURRENT ROW@3 as distinct_count]
-02)--BoundedWindowAggExec: wdw=[count(oder.v) PARTITION BY [oder.k] ORDER BY [oder.time ASC NULLS LAST] RANGE BETWEEN 2 minutes PRECEDING AND CURRENT ROW: Field { name: "count(oder.v) PARTITION BY [oder.k] ORDER BY [oder.time ASC NULLS LAST] RANGE BETWEEN 2 minutes PRECEDING AND CURRENT ROW", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: RANGE BETWEEN IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 120000000000 } PRECEDING AND CURRENT ROW], mode=[Sorted]
-03)----SortExec: expr=[k@0 ASC NULLS LAST, time@2 ASC NULLS LAST], preserve_partitioning=[false]
-04)------DataSourceExec: partitions=1, partition_sizes=[1]
+01)SortPreservingMergeExec: [k@0 ASC NULLS LAST, time@1 ASC NULLS LAST]
+02)--ProjectionExec: expr=[k@0 as k, time@2 as time, count(table_test_distinct_count.v) PARTITION BY [table_test_distinct_count.k] ORDER BY [table_test_distinct_count.time ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as normal_count, count(DISTINCT table_test_distinct_count.v) PARTITION BY [table_test_distinct_count.k] ORDER BY [table_test_distinct_count.time ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@4 as distinct_count]
+03)----BoundedWindowAggExec: wdw=[count(table_test_distinct_count.v) PARTITION BY [table_test_distinct_count.k] ORDER BY [table_test_distinct_count.time ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { name: "count(table_test_distinct_count.v) PARTITION BY [table_test_distinct_count.k] ORDER BY [table_test_distinct_count.time ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, count(DISTINCT table_test_distinct_count.v) PARTITION BY [table_test_distinct_count.k] ORDER BY [table_test_distinct_count.time ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { name: "count(DISTINCT table_test_distinct_count.v) PARTITION BY [table_test_distinct_count.k] ORDER BY [table_test_distinct_count.time ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+04)------SortExec: expr=[k@0 ASC NULLS LAST, time@2 ASC NULLS LAST], preserve_partitioning=[true]
+05)--------CoalesceBatchesExec: target_batch_size=1
+06)----------RepartitionExec: partitioning=Hash([k@0], 2), input_partitions=2
+07)------------DataSourceExec: partitions=2, partition_sizes=[5, 4]
+
+# COUNT(DISTINCT) with sliding window frame (demonstrates retract_batch limitation)
+# This should fail at physical execution with "retract_batch is not implemented" error
+# query error DataFusion error: This feature is not implemented: Aggregate can not be used as a sliding accumulator because `retract_batch` is not implemented
+#SELECT
+#    k,
+#    time,
+#    COUNT(v) OVER (
+#        PARTITION BY k
+#        ORDER BY time
+#        RANGE BETWEEN INTERVAL '2 minutes' PRECEDING AND CURRENT ROW
+#    ) AS normal_count,
+#    COUNT(DISTINCT v) OVER (
+#        PARTITION BY k
+#        ORDER BY time
+#        RANGE BETWEEN INTERVAL '2 minutes' PRECEDING AND CURRENT ROW
+#    ) AS distinct_count
+#FROM table_test_distinct_count
+#ORDER BY k, time;
