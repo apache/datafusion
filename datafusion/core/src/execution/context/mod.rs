@@ -71,6 +71,7 @@ use datafusion_common::{
     DFSchema, ParamValues, ScalarValue, SchemaReference, TableReference,
 };
 pub use datafusion_execution::config::SessionConfig;
+use datafusion_execution::memory_tracker::LightweightMemoryTracker;
 use datafusion_execution::registry::SerializerRegistry;
 pub use datafusion_execution::TaskContext;
 pub use datafusion_expr::execution_props::ExecutionProps;
@@ -281,6 +282,24 @@ pub struct SessionContext {
     state: Arc<RwLock<SessionState>>,
 }
 
+pub struct MemoryProfilingHandle<'a> {
+    ctx: &'a SessionContext,
+}
+
+impl<'a> MemoryProfilingHandle<'a> {
+    fn new(ctx: &'a SessionContext) -> Self {
+        Self { ctx }
+    }
+}
+
+impl<'a> Drop for MemoryProfilingHandle<'a> {
+    fn drop(&mut self) {
+        let mut state = self.ctx.state.write();
+        state.memory_profiling = false;
+        state.memory_tracker.disable();
+    }
+}
+
 impl Default for SessionContext {
     fn default() -> Self {
         Self::new()
@@ -411,6 +430,26 @@ impl SessionContext {
         // register new state with the factory
         factory.session_store().with_state(ctx.state_weak_ref());
         ctx
+    }
+
+    /// Enable memory profiling for the next query only
+    pub fn enable_memory_profiling(&self) -> MemoryProfilingHandle<'_> {
+        let mut state = self.state.write();
+        state.memory_profiling = true;
+        state.memory_tracker.enable();
+        MemoryProfilingHandle::new(self)
+    }
+
+    /// Check if memory profiling is enabled
+    pub fn is_memory_profiling_enabled(&self) -> bool {
+        self.state.read().memory_profiling
+    }
+
+    /// Get memory metrics collected for the last profiled query
+    pub fn get_last_query_memory_report(
+        &self,
+    ) -> std::collections::HashMap<String, usize> {
+        self.state.read().memory_tracker.metrics()
     }
 
     /// Convert the current `SessionContext` into a [`SessionStateBuilder`]
