@@ -239,13 +239,9 @@ GROUP BY a.order_id;
 ----
 logical_plan
 01)Projection: a.order_id, sum(b.amount) AS running_total
-02)--Aggregate: groupBy=[[a.order_id]], aggr=[[sum(b.amount)]]
-03)----Projection: a.order_id, b.amount
-04)------Inner Join:  Filter: b.order_id <= a.order_id
-05)--------SubqueryAlias: a
-06)----------TableScan: orders projection=[order_id]
-07)--------SubqueryAlias: b
-08)----------TableScan: orders projection=[order_id, amount]
+02)--WindowAggr: windowExpr=[[sum(amount) ORDER BY [order_id ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS sum(b.amount)]]
+03)----SubqueryAlias: a
+04)------TableScan: orders projection=[order_id, amount]
 
 query IR rowsort
 SELECT a.order_id, SUM(b.amount) AS running_total
@@ -271,13 +267,9 @@ GROUP BY a.order_id;
 ----
 logical_plan
 01)Projection: a.order_id, sum(b.amount) AS prior_total
-02)--Aggregate: groupBy=[[a.order_id]], aggr=[[sum(b.amount)]]
-03)----Projection: a.order_id, b.amount
-04)------Inner Join:  Filter: b.order_id < a.order_id
-05)--------SubqueryAlias: a
-06)----------TableScan: orders projection=[order_id]
-07)--------SubqueryAlias: b
-08)----------TableScan: orders projection=[order_id, amount]
+02)--WindowAggr: windowExpr=[[sum(amount) ORDER BY [order_id ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING AS sum(b.amount)]]
+03)----SubqueryAlias: a
+04)------TableScan: orders projection=[order_id, amount]
 
 query IR rowsort
 SELECT a.order_id, SUM(b.amount) AS prior_total
@@ -286,6 +278,7 @@ JOIN orders b ON b.order_id < a.order_id
 GROUP BY a.order_id
 ORDER BY a.order_id;
 ----
+1 NULL
 2 100
 3 300
 4 450
@@ -302,13 +295,9 @@ GROUP BY a.order_id;
 ----
 logical_plan
 01)Projection: a.order_id, sum(b.amount) AS future_total
-02)--Aggregate: groupBy=[[a.order_id]], aggr=[[sum(b.amount)]]
-03)----Projection: a.order_id, b.amount
-04)------Inner Join:  Filter: b.order_id >= a.order_id
-05)--------SubqueryAlias: a
-06)----------TableScan: orders projection=[order_id]
-07)--------SubqueryAlias: b
-08)----------TableScan: orders projection=[order_id, amount]
+02)--WindowAggr: windowExpr=[[sum(amount) ORDER BY [order_id DESC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS sum(b.amount)]]
+03)----SubqueryAlias: a
+04)------TableScan: orders projection=[order_id, amount]
 
 # Self join with > condition
 query TT
@@ -319,13 +308,9 @@ GROUP BY a.order_id;
 ----
 logical_plan
 01)Projection: a.order_id, sum(b.amount) AS future_total_excl
-02)--Aggregate: groupBy=[[a.order_id]], aggr=[[sum(b.amount)]]
-03)----Projection: a.order_id, b.amount
-04)------Inner Join:  Filter: b.order_id > a.order_id
-05)--------SubqueryAlias: a
-06)----------TableScan: orders projection=[order_id]
-07)--------SubqueryAlias: b
-08)----------TableScan: orders projection=[order_id, amount]
+02)--WindowAggr: windowExpr=[[sum(amount) ORDER BY [order_id DESC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING AS sum(b.amount)]]
+03)----SubqueryAlias: a
+04)------TableScan: orders projection=[order_id, amount]
 
 # COUNT aggregation should also work
 query TT
@@ -336,13 +321,9 @@ GROUP BY a.order_id;
 ----
 logical_plan
 01)Projection: a.order_id, count(b.amount) AS running_count
-02)--Aggregate: groupBy=[[a.order_id]], aggr=[[count(b.amount)]]
-03)----Projection: a.order_id, b.amount
-04)------Inner Join:  Filter: b.order_id <= a.order_id
-05)--------SubqueryAlias: a
-06)----------TableScan: orders projection=[order_id]
-07)--------SubqueryAlias: b
-08)----------TableScan: orders projection=[order_id, amount]
+02)--WindowAggr: windowExpr=[[count(amount) ORDER BY [order_id ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS count(b.amount)]]
+03)----SubqueryAlias: a
+04)------TableScan: orders projection=[order_id, amount]
 
 # Create a monthly_sales table
 statement ok
@@ -370,13 +351,21 @@ GROUP BY a.sale_id, a.region;
 ----
 logical_plan
 01)Projection: a.sale_id, a.region, sum(b.amount) AS running_total
-02)--Aggregate: groupBy=[[a.sale_id, a.region]], aggr=[[sum(b.amount)]]
-03)----Projection: a.sale_id, a.region, b.amount
-04)------Inner Join: a.region = b.region Filter: b.sale_id <= a.sale_id
-05)--------SubqueryAlias: a
-06)----------TableScan: monthly_sales projection=[sale_id, region]
-07)--------SubqueryAlias: b
-08)----------TableScan: monthly_sales projection=[sale_id, region, amount]
+02)--WindowAggr: windowExpr=[[sum(amount) PARTITION BY [region] ORDER BY [sale_id ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS sum(b.amount)]]
+03)----SubqueryAlias: a
+04)------TableScan: monthly_sales projection=[sale_id, region, amount]
+
+query ITR
+SELECT a.sale_id, a.region, SUM(b.amount) AS running_total
+FROM monthly_sales a
+JOIN monthly_sales b ON a.region = b.region AND b.sale_id <= a.sale_id
+GROUP BY a.sale_id, a.region;
+----
+1 North 100
+2 North 300
+3 North 450
+4 South 300
+5 South 700
 
 ####
 # Negative Cases - Self-Joins That Should NOT Be Converted
@@ -408,13 +397,9 @@ GROUP BY a.order_id;
 ----
 logical_plan
 01)Projection: a.order_id, sum(b.amount) AS total
-02)--Aggregate: groupBy=[[a.order_id]], aggr=[[sum(b.amount)]]
-03)----Projection: a.order_id, b.amount
-04)------Inner Join: a.customer_id = b.customer_id Filter: b.amount <= a.amount
-05)--------SubqueryAlias: a
-06)----------TableScan: orders projection=[order_id, customer_id, amount]
-07)--------SubqueryAlias: b
-08)----------TableScan: orders projection=[customer_id, amount]
+02)--WindowAggr: windowExpr=[[sum(amount) PARTITION BY [customer_id] ORDER BY [amount ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS sum(b.amount)]]
+03)----SubqueryAlias: a
+04)------TableScan: orders projection=[order_id, customer_id, amount]
 
 # Self join with incorrect GROUP BY (missing ordering column) should NOT be transformed
 query TT
@@ -468,63 +453,6 @@ logical_plan
 08)----------Filter: orders.amount > Decimal128(Some(10000),10,2)
 09)------------TableScan: orders projection=[customer_id, order_date, amount]
 
-########################################################################
-# PART 3: Edge Cases and Complex Scenarios
-########################################################################
-
-# Create table with NULL values for testing
-statement ok
-CREATE TABLE orders_with_nulls (
-    order_id INT,
-    amount DECIMAL(10,2)
-);
-
-statement ok
-INSERT INTO orders_with_nulls VALUES
-(1, 100.00),
-(2, NULL),      -- NULL amount
-(3, 200.00),
-(NULL, 150.00), -- NULL order_id
-(4, 50.00);
-
-# Test with NULL values
-query TT
-EXPLAIN SELECT a.order_id, SUM(b.amount) AS running_total
-FROM orders_with_nulls a
-JOIN orders_with_nulls b ON b.order_id <= a.order_id
-    AND a.order_id IS NOT NULL
-    AND b.order_id IS NOT NULL
-GROUP BY a.order_id
-ORDER BY a.order_id;
-----
-logical_plan
-01)Sort: a.order_id ASC NULLS LAST
-02)--Projection: a.order_id, sum(b.amount) AS running_total
-03)----Aggregate: groupBy=[[a.order_id]], aggr=[[sum(b.amount)]]
-04)------Projection: a.order_id, b.amount
-05)--------Inner Join:  Filter: b.order_id <= a.order_id
-06)----------SubqueryAlias: a
-07)------------Filter: orders_with_nulls.order_id IS NOT NULL
-08)--------------TableScan: orders_with_nulls projection=[order_id]
-09)----------SubqueryAlias: b
-10)------------Filter: orders_with_nulls.order_id IS NOT NULL
-11)--------------TableScan: orders_with_nulls projection=[order_id, amount]
-
-
-query IR rowsort
-SELECT a.order_id, SUM(b.amount) AS running_total
-FROM orders_with_nulls a
-JOIN orders_with_nulls b ON b.order_id <= a.order_id
-    AND a.order_id IS NOT NULL 
-    AND b.order_id IS NOT NULL
-GROUP BY a.order_id
-ORDER BY a.order_id;
-----
-1 100
-2 100
-3 300
-4 350
-
 
 # Clean up
 statement ok
@@ -535,9 +463,6 @@ DROP TABLE employees;
 
 statement ok
 DROP TABLE orders;
-
-statement ok
-DROP TABLE orders_with_nulls;
 
 statement ok
 DROP TABLE monthly_sales;

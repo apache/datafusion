@@ -346,24 +346,40 @@ struct Resolution {
 
 fn try_resolve_to_table_scan_alias(branch: &LogicalPlan) -> Option<Resolution> {
     let mut maybe_alias = None;
-    let mut table_scan = None;
-    let _ = branch.apply_with_subqueries(|plan| match plan {
-        LogicalPlan::SubqueryAlias(SubqueryAlias { alias, .. }) => {
-            maybe_alias = Some(alias.clone());
-            Ok(TreeNodeRecursion::Continue)
-        }
-        LogicalPlan::TableScan(source) => {
-            table_scan = Some(source.clone());
-            Ok(TreeNodeRecursion::Continue)
-        }
-        _ => Ok(TreeNodeRecursion::Continue),
-    });
+    let mut current_plan = branch;
 
-    let table_scan = table_scan?;
-    Some(Resolution {
-        table_scan,
-        alias: maybe_alias,
-    })
+    // Traverse through safe operations that preserve unique constraints
+    loop {
+        match current_plan {
+            LogicalPlan::SubqueryAlias(SubqueryAlias { input, alias, .. }) => {
+                // Track the outermost alias
+                if maybe_alias.is_none() {
+                    maybe_alias = Some(alias.clone());
+                }
+                current_plan = input.as_ref();
+            }
+            LogicalPlan::Projection(projection) => {
+                // Projections are safe - they just select columns
+                // The unique constraint check happens later in the optimization
+                current_plan = projection.input.as_ref();
+            }
+            LogicalPlan::Filter(filter) => {
+                // Filters are safe - they just remove rows, don't affect uniqueness
+                current_plan = filter.input.as_ref();
+            }
+            LogicalPlan::TableScan(table_scan) => {
+                // Found the base table
+                return Some(Resolution {
+                    table_scan: table_scan.clone(),
+                    alias: maybe_alias,
+                });
+            }
+            _ => {
+                // Stop at any other operation that could change the data semantics
+                return None;
+            }
+        }
+    }
 }
 
 /// Extract the top-level alias from a logical plan branch

@@ -657,14 +657,9 @@ fn try_replace_with_window(
     let order_by = vec![Sort::new(sort_col, sort_order.is_asc(), false)];
 
     // Transform GROUP BY columns to PARTITION BY columns (remove qualifiers)
-    let partition_by = group_expr
+    let partition_by = on_names
         .iter()
-        .map(|expr| match expr {
-            Expr::Column(Column { name, .. }) => {
-                Expr::Column(Column::new_unqualified(name))
-            }
-            _ => unreachable!(),
-        })
+        .map(|name| Expr::Column(Column::new_unqualified(name.to_string())))
         .collect::<Vec<_>>();
 
     // Step 10: Convert aggregate functions to window functions
