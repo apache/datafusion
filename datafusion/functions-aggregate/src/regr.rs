@@ -146,18 +146,17 @@ static DOCUMENTATION: LazyLock<HashMap<RegrType, Documentation>> = LazyLock::new
                 "regr_slope(expression_y, expression_x)")
                 .with_sql_example(
                     r#"```sql
-create table weekly_performance(day int,user_signups int) as values (1,60), (2,65), (3, 70), (4,75), (5,80);
-
+create table weekly_performance(day int, user_signups int) as values (1,60), (2,65), (3, 70), (4,75), (5,80);
 select * from weekly_performance;
-+------+---------------------+
-| week | productivity_score  |
-| ---- | ------------------- |
-| 1    | 60                  |
-| 2    | 65                  |
-| 3    | 70                  |
-| 4    | 75                  |
-| 5    | 80                  |
-+------+---------------------+
++-----+--------------+
+| day | user_signups |
++-----+--------------+
+| 1   | 60           |
+| 2   | 65           |
+| 3   | 70           |
+| 4   | 75           |
+| 5   | 80           |
++-----+--------------+
 
 SELECT regr_slope(user_signups, day) AS slope FROM weekly_performance;
 +--------+
@@ -183,8 +182,8 @@ SELECT regr_slope(user_signups, day) AS slope FROM weekly_performance;
                 "regr_intercept(expression_y, expression_x)")
                 .with_sql_example(
                     r#"```sql
-create table weekly_performances(week int, productivity_score int) as values (1,60), (2,65), (3, 70), (4,75), (5,80);
-select * from weekly_performances;
+create table weekly_performance(week int, productivity_score int) as values (1,60), (2,65), (3, 70), (4,75), (5,80);
+select * from weekly_performance;
 +------+---------------------+
 | week | productivity_score  |
 | ---- | ------------------- |
@@ -195,8 +194,7 @@ select * from weekly_performances;
 | 5    | 80                  |
 +------+---------------------+
 
-SELECT regr_intercept(productivity_score, week) AS intercept
-FROM weekly_performance;
+SELECT regr_intercept(productivity_score, week) AS intercept FROM weekly_performance;
 +----------+
 |intercept|
 |intercept |
@@ -232,8 +230,7 @@ select * from daily_metrics;
 | 5   | NULL          |
 +-----+---------------+
 
-SELECT regr_count(user_signups, day) AS valid_pairs
-FROM daily_metrics;
+SELECT regr_count(user_signups, day) AS valid_pairs FROM daily_metrics;
 +-------------+
 | valid_pairs |
 +-------------+
@@ -256,20 +253,19 @@ FROM daily_metrics;
                 "regr_r2(expression_y, expression_x)")
                 .with_sql_example(
                     r#"```sql
-create table weekly_performances(day int ,user_signups int) as values (1,60), (2,65), (3, 70), (4,75), (5,80);
-select * from weekly_performances;
-+------+---------------------+
-| week | productivity_score  |
-| ---- | ------------------- |
-| 1    | 60                  |
-| 2    | 65                  |
-| 3    | 70                  |
-| 4    | 75                  |
-| 5    | 80                  |
-+------+---------------------+
+create table weekly_performance(day int ,user_signups int) as values (1,60), (2,65), (3, 70), (4,75), (5,80);
+select * from weekly_performance;
++-----+--------------+
+| day | user_signups |
++-----+--------------+
+| 1   | 60           |
+| 2   | 65           |
+| 3   | 70           |
+| 4   | 75           |
+| 5   | 80           |
++-----+--------------+
 
-SELECT regr_r2(productivity_score, week) AS r_squared
-FROM weekly_performance;
+SELECT regr_r2(user_signups, day) AS r_squared FROM weekly_performance;
 +---------+
 |r_squared|
 +---------+
@@ -292,8 +288,8 @@ FROM weekly_performance;
                 "regr_avgx(expression_y, expression_x)")
                 .with_sql_example(
                     r#"```sql
-> create table daily_sales(day int, temperature int) as values (1,35), (2,36), (3, NULL), (4,37), (5,38);
-> select * from daily_sales;
+create table daily_sales(day int, total_sales int) as values (1,100), (2,150), (3,200), (4,NULL), (5,250);
+select * from daily_sales;
 +-----+-------------+
 | day | total_sales |
 | --- | ----------- |
@@ -304,14 +300,12 @@ FROM weekly_performance;
 | 5   | 250         |
 +-----+-------------+
 
-SELECT regr_avgx(total_sales, day) AS avg_day
-FROM daily_sales; --output = (1+2+3+5)/4 = 2.75
+SELECT regr_avgx(total_sales, day) AS avg_day FROM daily_sales;
 +----------+
 | avg_day  |
 +----------+
 |   2.75   |
 +----------+
-
 ```
 "#
                 )
@@ -341,8 +335,8 @@ select * from daily_temperature;
 | 5   | 36          |
 +-----+-------------+
 
-SELECT regr_avgy(temperature, day) AS avg_temperature --temperature as Dependent Variable(Y)
-FROM daily_temperature;
+-- temperature as Dependent Variable(Y), day as Independent Variable(X)
+SELECT regr_avgy(temperature, day) AS avg_temperature FROM daily_temperature;
 +-----------------+
 | avg_temperature |
 +-----------------+
@@ -365,25 +359,24 @@ FROM daily_temperature;
         )
         .with_sql_example(
             r#"```sql
-create table study_hours(int student_id, int hours,int test_score) as values(1,2,55),(2,4,65) , (3,6,75),(4,8,85),(5,10,95);
+create table study_hours(student_id int, hours int, test_score int) as values (1,2,55), (2,4,65), (3,6,75), (4,8,85), (5,10,95);
 select * from study_hours;
-+-------------+-----------+-----------------+
-| student_id  | hours (x) | test_score (y)  |
-| ----------- | --------- | --------------- |
-| 1           | 2         | 55              |
-| 2           | 4         | 65              |
-| 3           | 6         | 75              |
-| 4           | 8         | 85              |
-| 5           | 10        | 95              |
-+-------------+-----------+-----------------+
++------------+-------+------------+
+| student_id | hours | test_score |
++------------+-------+------------+
+| 1          | 2     | 55         |
+| 2          | 4     | 65         |
+| 3          | 6     | 75         |
+| 4          | 8     | 85         |
+| 5          | 10    | 95         |
++------------+-------+------------+
 
-SELECT regr_sxx(test_score, hours) AS sxx
-FROM study_hours; --Output - 40
-+-------+
-| sxx   |
-+-------+
-| 40    |
-+-------+
+SELECT regr_sxx(test_score, hours) AS sxx FROM study_hours;
++------+
+| sxx  |
++------+
+| 40.0 |
++------+
 ```
 "#
         )
@@ -401,18 +394,17 @@ FROM study_hours; --Output - 40
         )
         .with_sql_example(
             r#"```sql
-create table employee_productivity(int week,int productivity_score) as values(1,60) , (2,65), (3,70);
+create table employee_productivity(week int, productivity_score int) as values (1,60), (2,65), (3,70);
 select * from employee_productivity;
-+-------+---------------------+
-| week  | Procutivity_score   |
-+-------+---------------------+
-|   1   |    65               |
-|   2   |    70               |
-|   3   |    75               |
-+-------+---------------------+
++------+--------------------+
+| week | productivity_score |
++------+--------------------+
+| 1    | 60                 |
+| 2    | 65                 |
+| 3    | 70                 |
++------+--------------------+
 
-SELECT regr_syy(productivity_score, week) AS sum_squares_y
-FROM employee_productivity;
+SELECT regr_syy(productivity_score, week) AS sum_squares_y FROM employee_productivity;
 +---------------+
 | sum_squares_y |
 +---------------+
@@ -435,18 +427,17 @@ FROM employee_productivity;
         )
         .with_sql_example(
             r#"```sql
-create table employee_productivity(int week,int productivity_score) as values(1,60) , (2,65), (3,70);
+create table employee_productivity(week int, productivity_score int) as values(1,60), (2,65), (3,70);
 select * from employee_productivity;
-+-------+---------------------+
-| week  | Procutivity_score   |
-+-------+---------------------+
-|   1   |    65               |
-|   2   |    70               |
-|   3   |    75               |
-+-------+---------------------+
++------+--------------------+
+| week | productivity_score |
++------+--------------------+
+| 1    | 60                 |
+| 2    | 65                 |
+| 3    | 70                 |
++------+--------------------+
 
-SELECT regr_sxy(productivity_score, week) AS sum_product_deviations
-FROM employee_productivity;
+SELECT regr_sxy(productivity_score, week) AS sum_product_deviations FROM employee_productivity;
 +------------------------+
 | sum_product_deviations |
 +------------------------+
