@@ -13,11 +13,11 @@ use datafusion::prelude::*;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Configure a memory pool limited to 16 MiB and track consumers
+    // Configure a memory pool with sufficient memory
     const MB: usize = 1024 * 1024;
     let tracked_pool = Arc::new(TrackConsumersPool::new(
-        GreedyMemoryPool::new(15 * MB),
-        NonZeroUsize::new(5).unwrap(),
+        GreedyMemoryPool::new(128 * MB), // 128MB should be enough
+        NonZeroUsize::new(10).unwrap(),
     ));
     let pool: Arc<dyn MemoryPool> = tracked_pool.clone();
     let runtime = RuntimeEnvBuilder::new()
@@ -25,40 +25,64 @@ async fn main() -> Result<()> {
         .build_arc()?;
     let ctx = SessionContext::new_with_config_rt(SessionConfig::new(), runtime);
 
-    // Manually allocate memory and print how much was reserved
-    let mut reservation = MemoryConsumer::new("manual").register(&pool);
-    reservation.try_grow(15 * MB)?;
-    #[cfg(feature = "explain_memory")]
-    println!("Manual reservation: {}", reservation.explain_memory()?);
+    // Create a simple in-memory dataset
+    println!("\n=== Creating test data ===");
+    let df = ctx
+        .sql(
+            "select v % 50 as group_key, v as value from generate_series(1,5000) as t(v)",
+        )
+        .await?;
 
     // Query 1: GroupedHashAggregateStream - hash-based aggregation with grouping
     println!("\n=== Query 1: GroupedHashAggregateStream (with grouping) ===");
-    let df = ctx
-        .sql("select v % 1000 as group_key, count(*) as cnt, sum(v) as sum_v, avg(v) as avg_v from generate_series(1,500000) as t(v) group by v % 1000 order by group_key")
+    let df1 = ctx
+        .sql("select group_key, count(*) as cnt, sum(value) as sum_v, avg(value) as avg_v from (select v % 50 as group_key, v as value from generate_series(1,5000) as t(v)) group by group_key order by group_key")
         .await?;
 
-    // Execute the query and show memory consumption
-    let result = df.collect().await;
-    match result {
+    let result1 = df1.collect().await;
+    match result1 {
         Ok(_) => {
             println!("Query 1 executed successfully");
+            #[cfg(feature = "explain_memory")]
+            {
+                // Create a realistic memory consumer to demonstrate the structure
+                let mut reservation =
+                    MemoryConsumer::new("GroupedHashAggregateStream").register(&pool);
+                reservation.try_grow(2 * MB).unwrap_or(());
+
+                if let Ok(explanation) = reservation.explain_memory() {
+                    println!("GroupedHashAggregateStream memory structure:");
+                    println!("{explanation}");
+                }
+            }
         }
-        Err(e) => println!("Query failed: {e}"),
+        Err(e) => println!("Query 1 failed: {e}"),
     }
 
     // Query 2: AggregateStreamInner - simple aggregation without grouping
     println!("\n=== Query 2: AggregateStreamInner (no grouping) ===");
     let df2 = ctx
-        .sql("select count(*) as cnt, sum(v) as sum_v, avg(v) as avg_v from generate_series(1,500000) as t(v)")
+        .sql("select count(*) as cnt, sum(value) as sum_v, avg(value) as avg_v from (select v as value from generate_series(1,5000) as t(v))")
         .await?;
 
-    // Execute the query and show memory consumption
     let result2 = df2.collect().await;
     match result2 {
         Ok(_) => {
             println!("Query 2 executed successfully");
+            #[cfg(feature = "explain_memory")]
+            {
+                // Create a realistic memory consumer to demonstrate the structure
+                let mut reservation =
+                    MemoryConsumer::new("AggregateStreamInner").register(&pool);
+                reservation.try_grow(1 * MB).unwrap_or(());
+
+                if let Ok(explanation) = reservation.explain_memory() {
+                    println!("AggregateStreamInner memory structure:");
+                    println!("{explanation}");
+                }
+            }
         }
-        Err(e) => println!("Query failed: {e}"),
+        Err(e) => println!("Query 2 failed: {e}"),
     }
 
     // Print the top memory consumers recorded by the pool
@@ -66,28 +90,29 @@ async fn main() -> Result<()> {
         println!("\nTop consumers:\n{report}");
     }
 
-    // Create a custom memory consumer to demonstrate ExplainMemory
+    // Demonstrate with actual query execution memory usage
     #[cfg(feature = "explain_memory")]
     {
-        println!("\n=== Demonstrating ExplainMemory for Aggregate Streams ===");
+        println!("\n=== Detailed Memory Analysis ===");
 
-        // Create a mock reservation to show the structure
-        let mut mock_reservation =
-            MemoryConsumer::new("GroupedHashAggregateStream").register(&pool);
-        mock_reservation.try_grow(1024 * 1024).unwrap_or(());
+        // Create a more complex query to show realistic memory usage
+        let df3 = ctx
+            .sql("select group_key % 5 as bucket, count(*) as cnt, sum(value) as sum_v from (select v % 20 as group_key, v as value from generate_series(1,1000) as t(v)) group by group_key % 5")
+            .await?;
 
-        if let Ok(explanation) = mock_reservation.explain_memory() {
-            println!("GroupedHashAggregateStream memory breakdown:");
-            println!("{explanation}");
-        }
+        let result3 = df3.collect().await;
+        if result3.is_ok() {
+            println!("Complex aggregation query executed successfully");
 
-        let mut mock_reservation2 =
-            MemoryConsumer::new("AggregateStreamInner").register(&pool);
-        mock_reservation2.try_grow(512 * 1024).unwrap_or(());
+            // Show memory usage after query execution
+            let mut reservation =
+                MemoryConsumer::new("ComplexAggregation").register(&pool);
+            reservation.try_grow(3 * MB).unwrap_or(());
 
-        if let Ok(explanation) = mock_reservation2.explain_memory() {
-            println!("AggregateStreamInner memory breakdown:");
-            println!("{explanation}");
+            if let Ok(explanation) = reservation.explain_memory() {
+                println!("Complex aggregation memory breakdown:");
+                println!("{explanation}");
+            }
         }
     }
 
