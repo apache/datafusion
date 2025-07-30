@@ -158,6 +158,30 @@ SELECT * FROM (VALUES (1, 'one'), (2, 'two'), (null, 'three')) AS t (num,letter)
 1 one
 NULL three
 
+statement ok
+set datafusion.sql_parser.default_null_ordering = '';
+
+# test asc with an empty `default_null_ordering`. Expected to use the default null ordering which is `nulls_max`
+
+query IT
+SELECT * FROM (VALUES (1, 'one'), (2, 'two'), (null, 'three')) AS t (num,letter) ORDER BY num
+----
+1 one
+2 two
+NULL three
+
+# test desc with an empty `default_null_ordering`. Expected to use the default null ordering which is `nulls_max`
+
+query IT
+SELECT * FROM (VALUES (1, 'one'), (2, 'two'), (null, 'three')) AS t (num,letter) ORDER BY num DESC
+----
+NULL three
+2 two
+1 one
+
+statement error DataFusion error: Error during planning: Unsupported Value NULL
+set datafusion.sql_parser.default_null_ordering = null;
+
 # reset to default null ordering
 statement ok
 set datafusion.sql_parser.default_null_ordering = 'nulls_max';

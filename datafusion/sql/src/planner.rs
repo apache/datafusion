@@ -183,7 +183,7 @@ impl NullOrdering {
     /// # Returns
     /// * `true` if nulls should appear first.
     /// * `false` if nulls should appear last.
-    pub fn eval(&self, asc: bool) -> bool {
+    pub fn nulls_first(&self, asc: bool) -> bool {
         match self {
             Self::NullsMax => !asc,
             Self::NullsMin => asc,
@@ -202,7 +202,7 @@ impl FromStr for NullOrdering {
             "nulls_min" => Ok(Self::NullsMin),
             "nulls_first" => Ok(Self::NullsFirst),
             "nulls_last" => Ok(Self::NullsLast),
-            _ => plan_err!("Unknown null ordering: {s}"),
+            _ => plan_err!("Unknown null ordering: Expected one of 'nulls_first', 'nulls_last', 'nulls_min' or 'nulls_max'. Got {s}"),
         }
     }
 }
