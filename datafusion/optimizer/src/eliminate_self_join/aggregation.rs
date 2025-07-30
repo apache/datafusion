@@ -42,29 +42,6 @@
 //! FROM orders;
 //! ```
 //!
-//! ## Multiple Aggregates Example
-//! ```sql
-//! -- Original query with multiple aggregates
-//! SELECT a.user_id, a.purchase_date,
-//!        SUM(b.amount) AS running_total,
-//!        COUNT(b.amount) AS running_count,
-//!        MAX(b.amount) AS max_so_far
-//! FROM purchases a
-//! JOIN purchases b ON a.user_id = b.user_id
-//!                  AND b.purchase_date <= a.purchase_date
-//! GROUP BY a.user_id, a.purchase_date;
-//!
-//! -- Optimized query
-//! SELECT user_id, purchase_date,
-//!        SUM(amount) OVER (PARTITION BY user_id ORDER BY purchase_date
-//!                         ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS running_total,
-//!        COUNT(amount) OVER (PARTITION BY user_id ORDER BY purchase_date
-//!                           ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS running_count,
-//!        MAX(amount) OVER (PARTITION BY user_id ORDER BY purchase_date
-//!                         ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS max_so_far
-//! FROM purchases;
-//! ```
-//!
 //! # Requirements
 //!
 //! The optimization requires that GROUP BY columns form a unique constraint
@@ -423,7 +400,7 @@ fn try_replace_with_window(
         ..
     }: &Aggregate,
 ) -> Option<OptimizationResult> {
-    // Step 1: Check if input is a join with a filter
+    // Step 1.1: Check if input is a join with a filter
     let LogicalPlan::Join(
         join @ Join {
             filter: Some(ref join_filter),
@@ -434,7 +411,7 @@ fn try_replace_with_window(
         return None;
     };
 
-    // Step 1.5: Verify it's an inner join
+    // Step 1.2: Verify it's an inner join
     // This optimization only applies to INNER joins
     if join.join_type != JoinType::Inner {
         return None;
@@ -449,14 +426,14 @@ fn try_replace_with_window(
         return None;
     }
 
-    // Step 4: Analyze the filter to extract comparison
+    // Step 4.1: Analyze the filter to extract comparison
     // Example: b.purchase_date <= a.purchase_date
     // Note: left_filter_col/right_filter_col refer to left/right sides of the comparison operator,
     // NOT the left/right sides of the join
     let (left_filter_col, op, right_filter_col) =
         try_narrow_filter_to_column_comparison(join_filter)?;
 
-    // Step 4a: Determine which side of the join each filter column belongs to
+    // Step 4.2: Determine which side of the join each filter column belongs to
     // We need to handle 4 cases for each column:
     // 1. Column has alias matching left side (e.g., a.purchase_date where left alias is "a")
     // 2. Column has alias matching right side (e.g., b.purchase_date where right alias is "b")
@@ -511,7 +488,7 @@ fn try_replace_with_window(
     let (left_col_name, left_is_left_side) = resolve_column_side(left_filter_col)?;
     let (right_col_name, right_is_left_side) = resolve_column_side(right_filter_col)?;
 
-    // Step 4b: Verify the filter compares columns from different sides
+    // Step 4.3: Verify the filter compares columns from different sides
     // For a valid self-join filter like "b.date <= a.date", one column should be from
     // the left side and one from the right side
     if left_is_left_side == right_is_left_side {
@@ -519,7 +496,7 @@ fn try_replace_with_window(
         return None;
     }
 
-    // Step 4c: Verify both columns exist in their respective schemas and refer to the same base column
+    // Step 4.4: Verify both columns exist in their respective schemas and refer to the same base column
     // Verify the columns exist in their respective schemas
     if left_is_left_side {
         // left_filter_col is from the left side of the join
@@ -680,8 +657,7 @@ fn try_replace_with_window(
     let group_by_indices_set: IndexSet<usize> = group_by_indices.into_iter().collect();
 
     // Get unique constraints from the schema
-
-    let fd = left.table_scan.source.constraints().map(|c| {
+    let fd_opt = left.table_scan.source.constraints().map(|c| {
         FunctionalDependencies::new_from_constraints(
             Some(c),
             left.table_scan.source.schema().fields.len(),
@@ -689,11 +665,9 @@ fn try_replace_with_window(
     });
 
     let mut dfs = left_base_schema.to_dfschema().unwrap();
-
-    if let Some(fd) = fd {
-        dfs = dfs.with_functional_dependencies(fd).unwrap();
+    if let Some(fd) = fd_opt {
+        dfs = dfs.with_functional_dependencies(fd).ok()?;
     }
-
     let unique_constraints = unique_indexes(&dfs);
 
     // Check if GROUP BY columns form a subset of any unique constraint
@@ -758,7 +732,7 @@ fn try_replace_with_window(
                 ))),
                 _ => Ok(Transformed::no(expr)),
             })
-            .unwrap();
+            .ok()?;
 
         // Create window function with appropriate partitioning and ordering
         window_expr.push(Expr::WindowFunction(Box::new(WindowFunction {
@@ -824,7 +798,7 @@ mod tests {
     use datafusion_functions_aggregate::min_max::{max, min};
     use datafusion_functions_aggregate::sum::sum;
 
-    fn create_table_scan(alias: Option<&str>, unqiue: bool) -> LogicalPlan {
+    fn create_table_scan(alias: Option<&str>, unique: bool) -> LogicalPlan {
         let schema = Schema::new(vec![
             Field::new("user_id", DataType::Int32, false),
             Field::new("purchase_date", DataType::Date32, false),
@@ -836,7 +810,7 @@ mod tests {
             Constraint::Unique(vec![0, 1]), // (user_id, purchase_date) is unique
         ]);
 
-        let table_source = if unqiue {
+        let table_source = if unique {
             Arc::new(
                 LogicalTableSource::new(Arc::new(schema)).with_constraints(constraints),
             )

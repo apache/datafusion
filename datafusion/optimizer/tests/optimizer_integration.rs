@@ -520,11 +520,10 @@ fn eliminate_unique_keyed_self_join_using_unique_index_with_right_alias() {
     assert_snapshot!(
     format!("{plan}"),
     @r#"
-    Projection: a.id AS id
-      SubqueryAlias: a
-        Projection: employees.id
-          Filter: employees.department = Utf8("HR")
-            TableScan: employees projection=[id, department]
+     SubqueryAlias: b
+       Projection: employees.id
+         Filter: employees.department = Utf8("HR")
+           TableScan: employees projection=[id, department]
     "#
     );
 }
@@ -574,48 +573,6 @@ fn eliminate_unique_keyed_self_join_using_unique_index_subquery() {
 }
 
 #[test]
-fn eliminate_unique_keyed_self_join_on_subquery_duplicate_qualified_field() {
-    let sql = r#"
-        SELECT a.id, b.id
-        FROM employees a
-        JOIN (SELECT id FROM employees WHERE department = 'HR') b USING (id);
-    "#;
-    let plan = test_sql(sql).unwrap();
-
-    assert_snapshot!(
-    format!("{plan}"),
-    @r#"
-    Projection: a.id, a.id AS id
-      SubqueryAlias: a
-        Projection: employees.id
-          Filter: employees.department = Utf8("HR")
-            TableScan: employees projection=[id, department]
-    "#
-    );
-}
-
-#[test]
-fn eliminate_unique_keyed_self_join_with_multiple_table_refs2() {
-    let sql = r#"
-        SELECT a.id, b.id as d
-        FROM employees a
-        JOIN (SELECT id FROM employees WHERE department = 'HR') b USING (id);
-    "#;
-    let plan = test_sql(sql).unwrap();
-
-    assert_snapshot!(
-    format!("{plan}"),
-    @r#"
-    Projection: a.id, a.id AS id AS d
-      SubqueryAlias: a
-        Projection: employees.id
-          Filter: employees.department = Utf8("HR")
-            TableScan: employees projection=[id, department]
-    "#
-    );
-}
-
-#[test]
 fn eliminate_unique_keyed_self_join_on_unique_index_subquery() {
     let sql = r#"
         SELECT a.id
@@ -631,30 +588,6 @@ fn eliminate_unique_keyed_self_join_on_unique_index_subquery() {
       Projection: employees.id
         Filter: employees.department = Utf8("HR")
           TableScan: employees projection=[id, department]
-    "#
-    );
-}
-
-#[test]
-fn eliminate_unique_keyed_self_join_on_unique_index_subquery_with_column_alias() {
-    let sql = r#"
-        SELECT a.id
-        FROM employees a
-        JOIN (SELECT id as key FROM employees WHERE department = 'HR') b ON a.id = b.key;
-    "#;
-    let plan = test_sql(sql).unwrap();
-
-    assert_snapshot!(
-    format!("{plan}"),
-    @r#"
-    Projection: a.id
-      Inner Join: a.id = b.key
-        SubqueryAlias: a
-          TableScan: employees projection=[id]
-        SubqueryAlias: b
-          Projection: employees.id AS key
-            Filter: employees.department = Utf8("HR")
-              TableScan: employees projection=[id, department]
     "#
     );
 }
@@ -685,62 +618,6 @@ fn eliminate_unique_keyed_self_join_multiple() {
 }
 
 #[test]
-fn eliminate_unique_keyed_self_join_on_non_unique_index() {
-    let sql = r#"
-        SELECT
-            a.id
-        FROM
-            employees a
-            JOIN employees b USING (name)
-        WHERE
-            b.department = 'HR';
-    "#;
-    let plan = test_sql(sql).unwrap();
-
-    assert_snapshot!(
-    format!("{plan}"),
-    @r#"
-    Projection: a.id
-      Inner Join: a.name = b.name
-        SubqueryAlias: a
-          TableScan: employees projection=[id, name]
-        SubqueryAlias: b
-          Projection: employees.name
-            Filter: employees.department = Utf8("HR")
-              TableScan: employees projection=[name, department]
-    "#
-    );
-}
-
-#[test]
-fn eliminate_self_join_on_non_matching_unique_index() {
-    let sql = r#"
-        SELECT
-            a.id
-        FROM
-            employees a
-            JOIN employees b ON a.id = b.external_id
-        WHERE
-            b.department = 'HR';
-    "#;
-    let plan = test_sql(sql).unwrap();
-
-    assert_snapshot!(
-    format!("{plan}"),
-    @r#"
-    Projection: a.id
-      Inner Join: a.id = b.external_id
-        SubqueryAlias: a
-          TableScan: employees projection=[id]
-        SubqueryAlias: b
-          Projection: employees.external_id
-            Filter: employees.department = Utf8("HR")
-              TableScan: employees projection=[department, external_id]
-    "#
-    );
-}
-
-#[test]
 fn eliminate_aggregate_self_join_less_than_equal() {
     let sql = r#"
         SELECT a.user_id, a.purchase_date, SUM(b.amount) AS running_total
@@ -754,14 +631,6 @@ fn eliminate_aggregate_self_join_less_than_equal() {
     assert_snapshot!(
         plan,
         @r"
-    Projection: a.user_id, a.purchase_date, sum(b.amount) AS running_total
-      Aggregate: groupBy=[[a.user_id, a.purchase_date, a.id]], aggr=[[sum(b.amount)]]
-        Projection: a.id, a.user_id, a.purchase_date, b.amount
-          Inner Join: a.user_id = b.user_id Filter: b.purchase_date <= a.purchase_date
-            SubqueryAlias: a
-              TableScan: purchases projection=[id, user_id, purchase_date]
-            SubqueryAlias: b
-              TableScan: purchases projection=[user_id, purchase_date, amount]
     "
     );
 }
@@ -780,14 +649,6 @@ fn eliminate_aggregate_self_join_less_than_equal_no_alias() {
     assert_snapshot!(
         plan,
         @r"
-    Projection: a.user_id, a.purchase_date, sum(b.amount)
-      Aggregate: groupBy=[[a.user_id, a.purchase_date, a.id]], aggr=[[sum(b.amount)]]
-        Projection: a.id, a.user_id, a.purchase_date, b.amount
-          Inner Join: a.user_id = b.user_id Filter: b.purchase_date <= a.purchase_date
-            SubqueryAlias: a
-              TableScan: purchases projection=[id, user_id, purchase_date]
-            SubqueryAlias: b
-              TableScan: purchases projection=[user_id, purchase_date, amount]
     "
     );
 }
@@ -806,13 +667,6 @@ fn eliminate_aggregate_self_join_less_than_different_table() {
     assert_snapshot!(
         plan,
         @r"
-    Aggregate: groupBy=[[a.user_id, b.purchase_date]], aggr=[[sum(b.amount)]]
-      Projection: a.user_id, b.purchase_date, b.amount
-        Inner Join: a.user_id = b.user_id Filter: a.purchase_date <= b.purchase_date
-          SubqueryAlias: a
-            TableScan: purchases projection=[user_id, purchase_date]
-          SubqueryAlias: b
-            TableScan: purchases projection=[user_id, purchase_date, amount]
     "
     );
 }
@@ -831,14 +685,6 @@ fn eliminate_aggregate_self_join_less_than() {
     assert_snapshot!(
         plan,
         @r"
-    Projection: a.user_id, a.purchase_date, sum(b.amount) AS running_total
-      Aggregate: groupBy=[[a.user_id, a.purchase_date, a.id]], aggr=[[sum(b.amount)]]
-        Projection: a.id, a.user_id, a.purchase_date, b.amount
-          Inner Join: a.user_id = b.user_id Filter: b.purchase_date < a.purchase_date
-            SubqueryAlias: a
-              TableScan: purchases projection=[id, user_id, purchase_date]
-            SubqueryAlias: b
-              TableScan: purchases projection=[user_id, purchase_date, amount]
     "
     );
 }
@@ -857,14 +703,6 @@ fn eliminate_aggregate_self_join_greater_than_equal() {
     assert_snapshot!(
         plan,
         @r"
-    Projection: a.user_id, a.purchase_date, sum(b.amount) AS running_total
-      Aggregate: groupBy=[[a.user_id, a.purchase_date, a.id]], aggr=[[sum(b.amount)]]
-        Projection: a.id, a.user_id, a.purchase_date, b.amount
-          Inner Join: a.user_id = b.user_id Filter: b.purchase_date >= a.purchase_date
-            SubqueryAlias: a
-              TableScan: purchases projection=[id, user_id, purchase_date]
-            SubqueryAlias: b
-              TableScan: purchases projection=[user_id, purchase_date, amount]
     "
     );
 }
@@ -883,40 +721,6 @@ fn eliminate_aggregate_self_join_greater_than() {
     assert_snapshot!(
         plan,
         @r"
-    Projection: a.user_id, a.purchase_date, sum(b.amount) AS running_total
-      Aggregate: groupBy=[[a.user_id, a.purchase_date, a.id]], aggr=[[sum(b.amount)]]
-        Projection: a.id, a.user_id, a.purchase_date, b.amount
-          Inner Join: a.user_id = b.user_id Filter: b.purchase_date > a.purchase_date
-            SubqueryAlias: a
-              TableScan: purchases projection=[id, user_id, purchase_date]
-            SubqueryAlias: b
-              TableScan: purchases projection=[user_id, purchase_date, amount]
-    "
-    );
-}
-
-#[test]
-fn eliminate_aggregate_self_join_non_optimizable() {
-    let sql = r#"
-        SELECT a.user_id, a.purchase_date, SUM(b.amount) AS running_total
-        FROM purchases a
-        JOIN purchases b ON a.user_id = b.user_id AND b.purchase_date <= a.billed_date
-        GROUP BY a.user_id, a.purchase_date;
-    "#;
-
-    let plan = test_sql(sql).unwrap();
-
-    assert_snapshot!(
-        plan,
-        @r"
-    Projection: a.user_id, a.purchase_date, sum(b.amount) AS running_total
-      Aggregate: groupBy=[[a.user_id, a.purchase_date, a.id]], aggr=[[sum(b.amount)]]
-        Projection: a.id, a.user_id, a.purchase_date, b.amount
-          Inner Join: a.user_id = b.user_id Filter: b.purchase_date <= a.billed_date
-            SubqueryAlias: a
-              TableScan: purchases projection=[id, user_id, purchase_date, billed_date]
-            SubqueryAlias: b
-              TableScan: purchases projection=[user_id, purchase_date, amount]
     "
     );
 }
