@@ -430,10 +430,10 @@ async fn simple_scalar_function_substr() -> Result<()> {
 // Follows the same structure as existing roundtrip tests, but more explicitly tests for name mappings
 async fn test_substrait_to_df_name_mapping(
     substrait_name: &str,
-    df_name: &str,
+    sql: &str,
 ) -> Result<()> {
     let ctx = create_context().await?;
-    let df = ctx.sql(&format!("SELECT {df_name}(a) FROM data")).await?;
+    let df = ctx.sql(sql).await?;
     let plan = df.into_optimized_plan()?;
     let proto = to_substrait_plan(&plan, &ctx.state())?;
 
@@ -458,17 +458,17 @@ async fn test_substrait_to_df_name_mapping(
 
 #[tokio::test]
 async fn scalar_function_is_nan_mapping() -> Result<()> {
-    test_substrait_to_df_name_mapping("is_nan", "ISNAN").await
+    test_substrait_to_df_name_mapping("is_nan", "SELECT ISNAN(a) FROM data").await
 }
 
 #[tokio::test]
 async fn scalar_function_sign_mapping() -> Result<()> {
-    test_substrait_to_df_name_mapping("sign", "SIGNUM").await
+    test_substrait_to_df_name_mapping("sign", "SELECT SIGNUM(a) FROM data").await
 }
 
 #[tokio::test]
 async fn scalar_function_logb_mapping() -> Result<()> {
-    test_substrait_to_df_name_mapping("logb", "LOG").await
+    test_substrait_to_df_name_mapping("logb", "SELECT LOG(a, b) FROM data").await
 }
 
 #[tokio::test]
