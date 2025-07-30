@@ -70,4 +70,8 @@ SELECT parse_url('http://userinfo@spark.apache.org/path?query=1#Ref'::string, 'U
 ----
 userinfo
 
+statement error parse_url expects 2 or 3 arguments, but got 1
+SELECT parse_url('http://userinfo@spark.apache.org/path?query=1#Ref'::string);
 
+statement error 'parse_url' does not support zero arguments
+SELECT parse_url();
