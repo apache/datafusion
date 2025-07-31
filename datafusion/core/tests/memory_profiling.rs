@@ -14,7 +14,7 @@ async fn test_memory_profiling_enabled_vs_disabled() {
     let mut config = SessionConfig::new();
     config
         .options_mut()
-        .set("execution.memory_profiling", "on_demand")
+        .set("datafusion.execution.memory_profiling", "on_demand")
         .unwrap();
     let ctx_enabled = SessionContext::new_with_config(config);
 
@@ -29,6 +29,7 @@ async fn test_memory_profiling_enabled_vs_disabled() {
     let enabled_duration = start.elapsed();
 
     // Verify the difference is minimal (less than 100 microseconds)
-    let overhead = enabled_duration - disabled_duration;
+    // Allow for some variance in timing measurements
+    let overhead = enabled_duration.saturating_sub(disabled_duration);
     assert!(overhead < Duration::from_micros(100));
 }
