@@ -76,7 +76,7 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::utils::memory::estimate_memory_size;
 use datafusion_common::{
     internal_datafusion_err, internal_err, plan_err, project_schema, JoinSide, JoinType,
-    NullEquality, Result,
+    NullEquality, Result, ScalarValue,
 };
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
@@ -84,6 +84,7 @@ use datafusion_expr::Operator;
 use datafusion_physical_expr::equivalence::{
     join_equivalence_properties, ProjectionMapping,
 };
+use datafusion_physical_expr::expressions::{lit, BinaryExpr, DynamicFilterPhysicalExpr};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalExprRef};
 use datafusion_physical_expr_common::datum::compare_op_for_nested;
 
@@ -684,7 +685,9 @@ impl DisplayAs for HashJoinExec {
                     .collect::<Vec<String>>()
                     .join(", ");
                 let dynamic_filter_display = match self.dynamic_filter.current() {
-                    Ok(current) if current != lit(true) => format!(", filter=[{current}]"),
+                    Ok(current) if current != lit(true) => {
+                        format!(", filter=[{current}]")
+                    }
                     _ => "".to_string(),
                 };
                 write!(
@@ -979,9 +982,9 @@ impl ExecutionPlan for HashJoinExec {
 
     fn gather_filters_for_pushdown(
         &self,
-        _phase: FilterPushdownPhase,
+        phase: FilterPushdownPhase,
         parent_filters: Vec<Arc<dyn PhysicalExpr>>,
-        _config: &ConfigOptions,
+        config: &ConfigOptions,
     ) -> Result<FilterDescription> {
         // Other types of joins can support *some* filters, but restrictions are complex and error prone.
         // For now we don't support them.
@@ -993,8 +996,33 @@ impl ExecutionPlan for HashJoinExec {
                 &self.children(),
             ));
         }
-        FilterDescription::from_children(parent_filters, &self.children())
-        // TODO: push down our self filters to children in the post optimization phase
+
+        // Get basic filter descriptions for both children
+        let mut left_child = crate::filter_pushdown::ChildFilterDescription::from_child(
+            &parent_filters,
+            self.left(),
+        )?;
+        let mut right_child = crate::filter_pushdown::ChildFilterDescription::from_child(
+            &parent_filters,
+            self.right(),
+        )?;
+
+        // Add dynamic filters in Post phase if enabled
+        if matches!(phase, FilterPushdownPhase::Post)
+            && config.optimizer.enable_dynamic_filter_pushdown
+        {
+            // Add placeholder to left side (build side)
+            left_child = left_child.with_self_filter(lit(true));
+
+            // Add actual dynamic filter to right side (probe side)
+            let dynamic_filter =
+                Arc::clone(&self.dynamic_filter) as Arc<dyn PhysicalExpr>;
+            right_child = right_child.with_self_filter(dynamic_filter);
+        }
+
+        Ok(FilterDescription::new()
+            .with_child(left_child)
+            .with_child(right_child))
     }
 
     fn handle_child_pushdown_result(
@@ -1017,6 +1045,38 @@ impl ExecutionPlan for HashJoinExec {
         }
         Ok(FilterPushdownPropagation::if_any(child_pushdown_result))
     }
+}
+
+/// Compute min/max bounds for each column in the given arrays
+fn compute_bounds(arrays: &[ArrayRef]) -> Result<Vec<(ScalarValue, ScalarValue)>> {
+    arrays
+        .iter()
+        .map(|array| {
+            if array.is_empty() {
+                // Return NULL values for empty arrays
+                return Ok((
+                    ScalarValue::try_from(array.data_type())?,
+                    ScalarValue::try_from(array.data_type())?,
+                ));
+            }
+
+            // Compute min/max using ScalarValue's utilities
+            let mut min_val = ScalarValue::try_from_array(array, 0)?;
+            let mut max_val = min_val.clone();
+
+            for i in 1..array.len() {
+                let val = ScalarValue::try_from_array(array, i)?;
+                if val < min_val {
+                    min_val = val.clone();
+                }
+                if val > max_val {
+                    max_val = val;
+                }
+            }
+
+            Ok((min_val, max_val))
+        })
+        .collect()
 }
 
 /// Reads the left (build) side of the input, buffering it in memory, to build a
