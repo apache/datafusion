@@ -704,7 +704,6 @@ impl<T: BatchTransformer + Unpin + Send> Stream for SymmetricHashJoinStream<T> {
     }
 }
 
-
 /// Determine the pruning length for `buffer`.
 ///
 /// This function evaluates the build side filter expression, converts the
