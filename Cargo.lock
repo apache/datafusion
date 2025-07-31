@@ -247,23 +247,22 @@ checksum = "7c02d123df017efcdfbd739ef81735b36c5ba83ec3c59c80a9d7ecc718f92e50"
 [[package]]
 name = "arrow"
 version = "55.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f3f15b4c6b148206ff3a2b35002e08929c2462467b62b9c02036d9c34f9ef994"
+source = "git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing#b9396ccee27a39c91feccc982f5e976f0c0ff6d8"
 dependencies = [
- "arrow-arith",
- "arrow-array",
- "arrow-buffer",
- "arrow-cast",
+ "arrow-arith 55.2.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing)",
+ "arrow-array 55.2.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing)",
+ "arrow-buffer 55.2.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing)",
+ "arrow-cast 55.2.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing)",
  "arrow-csv",
- "arrow-data",
- "arrow-ipc",
+ "arrow-data 55.2.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing)",
+ "arrow-ipc 55.2.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing)",
  "arrow-json",
- "arrow-ord",
+ "arrow-ord 55.2.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing)",
  "arrow-pyarrow",
- "arrow-row",
- "arrow-schema",
- "arrow-select",
- "arrow-string",
+ "arrow-row 55.2.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing)",
+ "arrow-schema 55.2.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing)",
+ "arrow-select 55.2.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing)",
+ "arrow-string 55.2.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing)",
  "half",
  "rand 0.9.2",
 ]
@@ -271,13 +270,25 @@ dependencies = [
 [[package]]
 name = "arrow-arith"
 version = "55.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "30feb679425110209ae35c3fbf82404a39a4c0436bb3ec36164d8bffed2a4ce4"
+source = "git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing#b9396ccee27a39c91feccc982f5e976f0c0ff6d8"
 dependencies = [
- "arrow-array",
- "arrow-buffer",
- "arrow-data",
- "arrow-schema",
+ "arrow-array 55.2.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing)",
+ "arrow-buffer 55.2.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing)",
+ "arrow-data 55.2.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing)",
+ "arrow-schema 55.2.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing)",
+ "chrono",
+ "num",
+]
+
+[[package]]
+name = "arrow-arith"
+version = "55.2.0"
+source = "git+https://github.com/rok/arrow-rs.git#674dc17b2c423be16d0725a6537b0063ac7b1b58"
+dependencies = [
+ "arrow-array 55.2.0 (git+https://github.com/rok/arrow-rs.git)",
+ "arrow-buffer 55.2.0 (git+https://github.com/rok/arrow-rs.git)",
+ "arrow-data 55.2.0 (git+https://github.com/rok/arrow-rs.git)",
+ "arrow-schema 55.2.0 (git+https://github.com/rok/arrow-rs.git)",
  "chrono",
  "num",
 ]
@@ -285,13 +296,12 @@ dependencies = [
 [[package]]
 name = "arrow-array"
 version = "55.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "70732f04d285d49054a48b72c54f791bb3424abae92d27aafdf776c98af161c8"
+source = "git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing#b9396ccee27a39c91feccc982f5e976f0c0ff6d8"
 dependencies = [
  "ahash 0.8.12",
- "arrow-buffer",
- "arrow-data",
- "arrow-schema",
+ "arrow-buffer 55.2.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing)",
+ "arrow-data 55.2.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing)",
+ "arrow-schema 55.2.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing)",
  "chrono",
  "chrono-tz",
  "half",
@@ -300,10 +310,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "arrow-array"
+version = "55.2.0"
+source = "git+https://github.com/rok/arrow-rs.git#674dc17b2c423be16d0725a6537b0063ac7b1b58"
+dependencies = [
+ "ahash 0.8.12",
+ "arrow-buffer 55.2.0 (git+https://github.com/rok/arrow-rs.git)",
+ "arrow-data 55.2.0 (git+https://github.com/rok/arrow-rs.git)",
+ "arrow-schema 55.2.0 (git+https://github.com/rok/arrow-rs.git)",
+ "chrono",
+ "half",
+ "hashbrown 0.15.3",
+ "num",
+]
+
+[[package]]
 name = "arrow-buffer"
 version = "55.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "169b1d5d6cb390dd92ce582b06b23815c7953e9dfaaea75556e89d890d19993d"
+source = "git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing#b9396ccee27a39c91feccc982f5e976f0c0ff6d8"
+dependencies = [
+ "bytes",
+ "half",
+ "num",
+]
+
+[[package]]
+name = "arrow-buffer"
+version = "55.2.0"
+source = "git+https://github.com/rok/arrow-rs.git#674dc17b2c423be16d0725a6537b0063ac7b1b58"
 dependencies = [
  "bytes",
  "half",
@@ -313,14 +347,13 @@ dependencies = [
 [[package]]
 name = "arrow-cast"
 version = "55.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e4f12eccc3e1c05a766cafb31f6a60a46c2f8efec9b74c6e0648766d30686af8"
+source = "git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing#b9396ccee27a39c91feccc982f5e976f0c0ff6d8"
 dependencies = [
- "arrow-array",
- "arrow-buffer",
- "arrow-data",
- "arrow-schema",
- "arrow-select",
+ "arrow-array 55.2.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing)",
+ "arrow-buffer 55.2.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing)",
+ "arrow-data 55.2.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing)",
+ "arrow-schema 55.2.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing)",
+ "arrow-select 55.2.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing)",
  "atoi",
  "base64 0.22.1",
  "chrono",
@@ -332,14 +365,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "arrow-cast"
+version = "55.2.0"
+source = "git+https://github.com/rok/arrow-rs.git#674dc17b2c423be16d0725a6537b0063ac7b1b58"
+dependencies = [
+ "arrow-array 55.2.0 (git+https://github.com/rok/arrow-rs.git)",
+ "arrow-buffer 55.2.0 (git+https://github.com/rok/arrow-rs.git)",
+ "arrow-data 55.2.0 (git+https://github.com/rok/arrow-rs.git)",
+ "arrow-schema 55.2.0 (git+https://github.com/rok/arrow-rs.git)",
+ "arrow-select 55.2.0 (git+https://github.com/rok/arrow-rs.git)",
+ "atoi",
+ "base64 0.22.1",
+ "chrono",
+ "half",
+ "lexical-core",
+ "num",
+ "ryu",
+]
+
+[[package]]
 name = "arrow-csv"
 version = "55.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "012c9fef3f4a11573b2c74aec53712ff9fdae4a95f4ce452d1bbf088ee00f06b"
+source = "git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing#b9396ccee27a39c91feccc982f5e976f0c0ff6d8"
 dependencies = [
- "arrow-array",
- "arrow-cast",
- "arrow-schema",
+ "arrow-array 55.2.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing)",
+ "arrow-cast 55.2.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing)",
+ "arrow-schema 55.2.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing)",
  "chrono",
  "csv",
  "csv-core",
@@ -349,11 +400,21 @@ dependencies = [
 [[package]]
 name = "arrow-data"
 version = "55.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8de1ce212d803199684b658fc4ba55fb2d7e87b213de5af415308d2fee3619c2"
+source = "git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing#b9396ccee27a39c91feccc982f5e976f0c0ff6d8"
 dependencies = [
- "arrow-buffer",
- "arrow-schema",
+ "arrow-buffer 55.2.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing)",
+ "arrow-schema 55.2.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing)",
+ "half",
+ "num",
+]
+
+[[package]]
+name = "arrow-data"
+version = "55.2.0"
+source = "git+https://github.com/rok/arrow-rs.git#674dc17b2c423be16d0725a6537b0063ac7b1b58"
+dependencies = [
+ "arrow-buffer 55.2.0 (git+https://github.com/rok/arrow-rs.git)",
+ "arrow-schema 55.2.0 (git+https://github.com/rok/arrow-rs.git)",
  "half",
  "num",
 ]
@@ -361,20 +422,19 @@ dependencies = [
 [[package]]
 name = "arrow-flight"
 version = "55.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5cb3e1d2b441e6d1d5988e3f7c4523c9466b18ef77d7c525d92d36d4cad49fbe"
+source = "git+https://github.com/rok/arrow-rs.git#674dc17b2c423be16d0725a6537b0063ac7b1b58"
 dependencies = [
- "arrow-arith",
- "arrow-array",
- "arrow-buffer",
- "arrow-cast",
- "arrow-data",
- "arrow-ipc",
- "arrow-ord",
- "arrow-row",
- "arrow-schema",
- "arrow-select",
- "arrow-string",
+ "arrow-arith 55.2.0 (git+https://github.com/rok/arrow-rs.git)",
+ "arrow-array 55.2.0 (git+https://github.com/rok/arrow-rs.git)",
+ "arrow-buffer 55.2.0 (git+https://github.com/rok/arrow-rs.git)",
+ "arrow-cast 55.2.0 (git+https://github.com/rok/arrow-rs.git)",
+ "arrow-data 55.2.0 (git+https://github.com/rok/arrow-rs.git)",
+ "arrow-ipc 55.2.0 (git+https://github.com/rok/arrow-rs.git)",
+ "arrow-ord 55.2.0 (git+https://github.com/rok/arrow-rs.git)",
+ "arrow-row 55.2.0 (git+https://github.com/rok/arrow-rs.git)",
+ "arrow-schema 55.2.0 (git+https://github.com/rok/arrow-rs.git)",
+ "arrow-select 55.2.0 (git+https://github.com/rok/arrow-rs.git)",
+ "arrow-string 55.2.0 (git+https://github.com/rok/arrow-rs.git)",
  "base64 0.22.1",
  "bytes",
  "futures",
@@ -388,29 +448,39 @@ dependencies = [
 [[package]]
 name = "arrow-ipc"
 version = "55.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d9ea5967e8b2af39aff5d9de2197df16e305f47f404781d3230b2dc672da5d92"
+source = "git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing#b9396ccee27a39c91feccc982f5e976f0c0ff6d8"
 dependencies = [
- "arrow-array",
- "arrow-buffer",
- "arrow-data",
- "arrow-schema",
+ "arrow-array 55.2.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing)",
+ "arrow-buffer 55.2.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing)",
+ "arrow-data 55.2.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing)",
+ "arrow-schema 55.2.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing)",
  "flatbuffers",
  "lz4_flex",
  "zstd",
 ]
 
 [[package]]
+name = "arrow-ipc"
+version = "55.2.0"
+source = "git+https://github.com/rok/arrow-rs.git#674dc17b2c423be16d0725a6537b0063ac7b1b58"
+dependencies = [
+ "arrow-array 55.2.0 (git+https://github.com/rok/arrow-rs.git)",
+ "arrow-buffer 55.2.0 (git+https://github.com/rok/arrow-rs.git)",
+ "arrow-data 55.2.0 (git+https://github.com/rok/arrow-rs.git)",
+ "arrow-schema 55.2.0 (git+https://github.com/rok/arrow-rs.git)",
+ "flatbuffers",
+]
+
+[[package]]
 name = "arrow-json"
 version = "55.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5709d974c4ea5be96d900c01576c7c0b99705f4a3eec343648cb1ca863988a9c"
+source = "git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing#b9396ccee27a39c91feccc982f5e976f0c0ff6d8"
 dependencies = [
- "arrow-array",
- "arrow-buffer",
- "arrow-cast",
- "arrow-data",
- "arrow-schema",
+ "arrow-array 55.2.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing)",
+ "arrow-buffer 55.2.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing)",
+ "arrow-cast 55.2.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing)",
+ "arrow-data 55.2.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing)",
+ "arrow-schema 55.2.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing)",
  "chrono",
  "half",
  "indexmap 2.10.0",
@@ -425,46 +495,66 @@ dependencies = [
 [[package]]
 name = "arrow-ord"
 version = "55.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6506e3a059e3be23023f587f79c82ef0bcf6d293587e3272d20f2d30b969b5a7"
+source = "git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing#b9396ccee27a39c91feccc982f5e976f0c0ff6d8"
 dependencies = [
- "arrow-array",
- "arrow-buffer",
- "arrow-data",
- "arrow-schema",
- "arrow-select",
+ "arrow-array 55.2.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing)",
+ "arrow-buffer 55.2.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing)",
+ "arrow-data 55.2.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing)",
+ "arrow-schema 55.2.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing)",
+ "arrow-select 55.2.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing)",
+]
+
+[[package]]
+name = "arrow-ord"
+version = "55.2.0"
+source = "git+https://github.com/rok/arrow-rs.git#674dc17b2c423be16d0725a6537b0063ac7b1b58"
+dependencies = [
+ "arrow-array 55.2.0 (git+https://github.com/rok/arrow-rs.git)",
+ "arrow-buffer 55.2.0 (git+https://github.com/rok/arrow-rs.git)",
+ "arrow-data 55.2.0 (git+https://github.com/rok/arrow-rs.git)",
+ "arrow-schema 55.2.0 (git+https://github.com/rok/arrow-rs.git)",
+ "arrow-select 55.2.0 (git+https://github.com/rok/arrow-rs.git)",
 ]
 
 [[package]]
 name = "arrow-pyarrow"
 version = "55.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0e55ecf16b9b61d433f6e63c72fc6afcf2597d7db96583de88ebb887d1822268"
+source = "git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing#b9396ccee27a39c91feccc982f5e976f0c0ff6d8"
 dependencies = [
- "arrow-array",
- "arrow-data",
- "arrow-schema",
+ "arrow-array 55.2.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing)",
+ "arrow-data 55.2.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing)",
+ "arrow-schema 55.2.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing)",
  "pyo3",
 ]
 
 [[package]]
 name = "arrow-row"
 version = "55.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "52bf7393166beaf79b4bed9bfdf19e97472af32ce5b6b48169d321518a08cae2"
+source = "git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing#b9396ccee27a39c91feccc982f5e976f0c0ff6d8"
 dependencies = [
- "arrow-array",
- "arrow-buffer",
- "arrow-data",
- "arrow-schema",
+ "arrow-array 55.2.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing)",
+ "arrow-buffer 55.2.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing)",
+ "arrow-data 55.2.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing)",
+ "arrow-schema 55.2.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing)",
+ "half",
+]
+
+[[package]]
+name = "arrow-row"
+version = "55.2.0"
+source = "git+https://github.com/rok/arrow-rs.git#674dc17b2c423be16d0725a6537b0063ac7b1b58"
+dependencies = [
+ "arrow-array 55.2.0 (git+https://github.com/rok/arrow-rs.git)",
+ "arrow-buffer 55.2.0 (git+https://github.com/rok/arrow-rs.git)",
+ "arrow-data 55.2.0 (git+https://github.com/rok/arrow-rs.git)",
+ "arrow-schema 55.2.0 (git+https://github.com/rok/arrow-rs.git)",
  "half",
 ]
 
 [[package]]
 name = "arrow-schema"
 version = "55.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "af7686986a3bf2254c9fb130c623cdcb2f8e1f15763e7c71c310f0834da3d292"
+source = "git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing#b9396ccee27a39c91feccc982f5e976f0c0ff6d8"
 dependencies = [
  "bitflags 2.9.1",
  "serde",
@@ -472,30 +562,62 @@ dependencies = [
 ]
 
 [[package]]
+name = "arrow-schema"
+version = "55.2.0"
+source = "git+https://github.com/rok/arrow-rs.git#674dc17b2c423be16d0725a6537b0063ac7b1b58"
+
+[[package]]
 name = "arrow-select"
 version = "55.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dd2b45757d6a2373faa3352d02ff5b54b098f5e21dccebc45a21806bc34501e5"
+source = "git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing#b9396ccee27a39c91feccc982f5e976f0c0ff6d8"
 dependencies = [
  "ahash 0.8.12",
- "arrow-array",
- "arrow-buffer",
- "arrow-data",
- "arrow-schema",
+ "arrow-array 55.2.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing)",
+ "arrow-buffer 55.2.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing)",
+ "arrow-data 55.2.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing)",
+ "arrow-schema 55.2.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing)",
+ "num",
+]
+
+[[package]]
+name = "arrow-select"
+version = "55.2.0"
+source = "git+https://github.com/rok/arrow-rs.git#674dc17b2c423be16d0725a6537b0063ac7b1b58"
+dependencies = [
+ "ahash 0.8.12",
+ "arrow-array 55.2.0 (git+https://github.com/rok/arrow-rs.git)",
+ "arrow-buffer 55.2.0 (git+https://github.com/rok/arrow-rs.git)",
+ "arrow-data 55.2.0 (git+https://github.com/rok/arrow-rs.git)",
+ "arrow-schema 55.2.0 (git+https://github.com/rok/arrow-rs.git)",
  "num",
 ]
 
 [[package]]
 name = "arrow-string"
 version = "55.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0377d532850babb4d927a06294314b316e23311503ed580ec6ce6a0158f49d40"
+source = "git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing#b9396ccee27a39c91feccc982f5e976f0c0ff6d8"
 dependencies = [
- "arrow-array",
- "arrow-buffer",
- "arrow-data",
- "arrow-schema",
- "arrow-select",
+ "arrow-array 55.2.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing)",
+ "arrow-buffer 55.2.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing)",
+ "arrow-data 55.2.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing)",
+ "arrow-schema 55.2.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing)",
+ "arrow-select 55.2.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing)",
+ "memchr",
+ "num",
+ "regex",
+ "regex-syntax",
+]
+
+[[package]]
+name = "arrow-string"
+version = "55.2.0"
+source = "git+https://github.com/rok/arrow-rs.git#674dc17b2c423be16d0725a6537b0063ac7b1b58"
+dependencies = [
+ "arrow-array 55.2.0 (git+https://github.com/rok/arrow-rs.git)",
+ "arrow-buffer 55.2.0 (git+https://github.com/rok/arrow-rs.git)",
+ "arrow-data 55.2.0 (git+https://github.com/rok/arrow-rs.git)",
+ "arrow-schema 55.2.0 (git+https://github.com/rok/arrow-rs.git)",
+ "arrow-select 55.2.0 (git+https://github.com/rok/arrow-rs.git)",
  "memchr",
  "num",
  "regex",
@@ -1839,8 +1961,8 @@ name = "datafusion"
 version = "49.0.0"
 dependencies = [
  "arrow",
- "arrow-ipc",
- "arrow-schema",
+ "arrow-ipc 55.2.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing)",
+ "arrow-schema 55.2.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing)",
  "async-trait",
  "bytes",
  "bzip2 0.6.0",
@@ -2016,7 +2138,7 @@ dependencies = [
  "ahash 0.8.12",
  "apache-avro",
  "arrow",
- "arrow-ipc",
+ "arrow-ipc 55.2.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing)",
  "base64 0.22.1",
  "chrono",
  "half",
@@ -2194,7 +2316,7 @@ version = "49.0.0"
 dependencies = [
  "arrow",
  "arrow-flight",
- "arrow-schema",
+ "arrow-schema 55.2.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing)",
  "async-trait",
  "bytes",
  "dashmap",
@@ -2278,7 +2400,7 @@ version = "49.0.0"
 dependencies = [
  "abi_stable",
  "arrow",
- "arrow-schema",
+ "arrow-schema 55.2.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing)",
  "async-ffi",
  "async-trait",
  "datafusion",
@@ -2298,7 +2420,7 @@ name = "datafusion-functions"
 version = "49.0.0"
 dependencies = [
  "arrow",
- "arrow-buffer",
+ "arrow-buffer 55.2.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing)",
  "base64 0.22.1",
  "blake2",
  "blake3",
@@ -2361,7 +2483,7 @@ name = "datafusion-functions-nested"
 version = "49.0.0"
 dependencies = [
  "arrow",
- "arrow-ord",
+ "arrow-ord 55.2.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing)",
  "criterion",
  "datafusion-common",
  "datafusion-doc",
@@ -2516,8 +2638,8 @@ version = "49.0.0"
 dependencies = [
  "ahash 0.8.12",
  "arrow",
- "arrow-ord",
- "arrow-schema",
+ "arrow-ord 55.2.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing)",
+ "arrow-schema 55.2.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing)",
  "async-trait",
  "chrono",
  "criterion",
@@ -2587,7 +2709,7 @@ name = "datafusion-pruning"
 version = "49.0.0"
 dependencies = [
  "arrow",
- "arrow-schema",
+ "arrow-schema 55.2.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing)",
  "datafusion-common",
  "datafusion-datasource",
  "datafusion-expr",
@@ -4523,17 +4645,16 @@ dependencies = [
 [[package]]
 name = "parquet"
 version = "55.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b17da4150748086bd43352bc77372efa9b6e3dbd06a04831d2a98c041c225cfa"
+source = "git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing#b9396ccee27a39c91feccc982f5e976f0c0ff6d8"
 dependencies = [
  "ahash 0.8.12",
- "arrow-array",
- "arrow-buffer",
- "arrow-cast",
- "arrow-data",
- "arrow-ipc",
- "arrow-schema",
- "arrow-select",
+ "arrow-array 55.2.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing)",
+ "arrow-buffer 55.2.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing)",
+ "arrow-cast 55.2.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing)",
+ "arrow-data 55.2.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing)",
+ "arrow-ipc 55.2.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing)",
+ "arrow-schema 55.2.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing)",
+ "arrow-select 55.2.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing)",
  "base64 0.22.1",
  "brotli",
  "bytes",
@@ -5021,11 +5142,10 @@ dependencies = [
 
 [[package]]
 name = "pyo3"
-version = "0.24.2"
+version = "0.25.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e5203598f366b11a02b13aa20cab591229ff0a89fd121a308a5df751d5fc9219"
+checksum = "8970a78afe0628a3e3430376fc5fd76b6b45c4d43360ffd6cdd40bdde72b682a"
 dependencies = [
- "cfg-if",
  "indoc",
  "libc",
  "memoffset",
@@ -5039,9 +5159,9 @@ dependencies = [
 
 [[package]]
 name = "pyo3-build-config"
-version = "0.24.2"
+version = "0.25.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "99636d423fa2ca130fa5acde3059308006d46f98caac629418e53f7ebb1e9999"
+checksum = "458eb0c55e7ece017adeba38f2248ff3ac615e53660d7c71a238d7d2a01c7598"
 dependencies = [
  "once_cell",
  "target-lexicon",
@@ -5049,9 +5169,9 @@ dependencies = [
 
 [[package]]
 name = "pyo3-ffi"
-version = "0.24.2"
+version = "0.25.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "78f9cf92ba9c409279bc3305b5409d90db2d2c22392d443a87df3a1adad59e33"
+checksum = "7114fe5457c61b276ab77c5055f206295b812608083644a5c5b2640c3102565c"
 dependencies = [
  "libc",
  "pyo3-build-config",
@@ -5059,9 +5179,9 @@ dependencies = [
 
 [[package]]
 name = "pyo3-macros"
-version = "0.24.2"
+version = "0.25.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0b999cb1a6ce21f9a6b147dcf1be9ffedf02e0043aec74dc390f3007047cecd9"
+checksum = "a8725c0a622b374d6cb051d11a0983786448f7785336139c3c94f5aa6bef7e50"
 dependencies = [
  "proc-macro2",
  "pyo3-macros-backend",
@@ -5071,9 +5191,9 @@ dependencies = [
 
 [[package]]
 name = "pyo3-macros-backend"
-version = "0.24.2"
+version = "0.25.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "822ece1c7e1012745607d5cf0bcb2874769f0f7cb34c4cde03b9358eb9ef911a"
+checksum = "4109984c22491085343c05b0dbc54ddc405c3cf7b4374fc533f5c3313a572ccc"
 dependencies = [
  "heck 0.5.0",
  "proc-macro2",

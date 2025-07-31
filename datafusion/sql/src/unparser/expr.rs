@@ -1719,7 +1719,9 @@ impl Unparser<'_> {
             }
             DataType::Dictionary(_, val) => self.arrow_dtype_to_ast_dtype(val),
             DataType::Decimal128(precision, scale)
-            | DataType::Decimal256(precision, scale) => {
+            | DataType::Decimal256(precision, scale)
+            | DataType::Decimal32(precision, scale)
+            | DataType::Decimal64(precision, scale) => {
                 let mut new_precision = *precision as u64;
                 let mut new_scale = *scale as u64;
                 if *scale < 0 {

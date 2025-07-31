@@ -25,6 +25,8 @@ use crate::{
     DataFusionError, Result, _internal_datafusion_err,
 };
 
+pub const DEFAULT_MAX_STATISTICS_SIZE: usize = 4096;
+
 use arrow::datatypes::Schema;
 // TODO: handle once deprecated
 use crate::encryption::add_crypto_to_writer_properties;
@@ -36,7 +38,7 @@ use parquet::{
         metadata::KeyValue,
         properties::{
             EnabledStatistics, WriterProperties, WriterPropertiesBuilder, WriterVersion,
-            DEFAULT_MAX_STATISTICS_SIZE, DEFAULT_STATISTICS_ENABLED,
+            DEFAULT_STATISTICS_ENABLED,
         },
     },
     schema::types::ColumnPath,
@@ -164,13 +166,13 @@ impl TryFrom<&TableParquetOptions> for WriterPropertiesBuilder {
 
             // max_statistics_size is deprecated, currently it is not being used
             // TODO: remove once deprecated
-            #[allow(deprecated)]
-            if let Some(max_statistics_size) = options.max_statistics_size {
-                builder = {
-                    #[allow(deprecated)]
-                    builder.set_column_max_statistics_size(path, max_statistics_size)
-                }
-            }
+            // #[allow(deprecated)]
+            // if let Some(max_statistics_size) = options.max_statistics_size {
+            //     builder = {
+            //         #[allow(deprecated)]
+            //         builder.set_column_max_statistics_size(path, max_statistics_size)
+            //     }
+            // }
         }
 
         Ok(builder)
@@ -219,7 +221,7 @@ impl ParquetOptions {
             dictionary_enabled,
             dictionary_page_size_limit,
             statistics_enabled,
-            max_statistics_size,
+            max_statistics_size: _max_statistics_size,
             max_row_group_size,
             created_by,
             column_index_truncate_length,
@@ -265,12 +267,12 @@ impl ParquetOptions {
             .set_data_page_row_count_limit(*data_page_row_count_limit)
             .set_bloom_filter_enabled(*bloom_filter_on_write);
 
-        builder = {
-            #[allow(deprecated)]
-            builder.set_max_statistics_size(
-                max_statistics_size.unwrap_or(DEFAULT_MAX_STATISTICS_SIZE),
-            )
-        };
+        // builder = {
+        //     #[allow(deprecated)]
+        //     builder.set_max_statistics_size(
+        //         max_statistics_size.unwrap_or(DEFAULT_MAX_STATISTICS_SIZE),
+        //     )
+        // };
 
         if let Some(bloom_filter_fpp) = bloom_filter_fpp {
             builder = builder.set_bloom_filter_fpp(*bloom_filter_fpp);
@@ -552,7 +554,7 @@ mod tests {
             ),
             bloom_filter_fpp: bloom_filter_default_props.map(|p| p.fpp),
             bloom_filter_ndv: bloom_filter_default_props.map(|p| p.ndv),
-            max_statistics_size: Some(props.max_statistics_size(&col)),
+            max_statistics_size: Some(DEFAULT_MAX_STATISTICS_SIZE),
         }
     }
 
