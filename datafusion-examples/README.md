@@ -86,6 +86,7 @@ cargo run --example dataframe
 - [`sql_dialect.rs`](examples/sql_dialect.rs): Example of implementing a custom SQL dialect on top of `DFParser`
 - [`sql_query.rs`](examples/memtable.rs): Query data using SQL (in memory `RecordBatches`, local Parquet files)
 - [`date_time_function.rs`](examples/date_time_function.rs): Examples of date-time related functions and queries.
+- [`memory_profiling.rs`](examples/memory_profiling.rs): Memory profiling and performance analysis with comprehensive memory usage reporting
 
 ## Distributed
 
