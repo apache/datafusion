@@ -35,7 +35,11 @@ pub type ListFilesCache =
     Arc<dyn CacheAccessor<Path, Arc<Vec<ObjectMeta>>, Extra = ObjectMeta>>;
 
 /// Represents generic file-embedded metadata.
-pub trait FileMetadata: Any + Send + Sync {}
+pub trait FileMetadata: Any + Send + Sync {
+    /// Returns the file metadata as [`Any`] so that it can be downcasted to a specific
+    /// implementation.
+    fn as_any(&self) -> &dyn Any;
+}
 
 /// Cache to store file-embedded metadata.
 pub trait FileMetadataCache:

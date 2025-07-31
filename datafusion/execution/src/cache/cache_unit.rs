@@ -314,7 +314,11 @@ mod tests {
         metadata: String,
     }
 
-    impl FileMetadata for TestFileMetadata {}
+    impl FileMetadata for TestFileMetadata {
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
 
     #[test]
     fn test_file_metadata_cache() {

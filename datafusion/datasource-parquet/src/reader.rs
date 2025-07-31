@@ -29,6 +29,7 @@ use object_store::ObjectStore;
 use parquet::arrow::arrow_reader::ArrowReaderOptions;
 use parquet::arrow::async_reader::{AsyncFileReader, ParquetObjectReader};
 use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
+use std::any::Any;
 use std::fmt::Debug;
 use std::ops::Range;
 use std::sync::Arc;
@@ -254,8 +255,8 @@ impl AsyncFileReader for CachedParquetFileReader {
             if let Some(metadata) =
                 metadata_cache.get_with_extra(&object_meta.location, object_meta)
             {
-                if let Ok(parquet_metadata) =
-                    Arc::downcast::<CachedParquetMetaData>(metadata)
+                if let Some(parquet_metadata) =
+                    metadata.as_any().downcast_ref::<CachedParquetMetaData>()
                 {
                     return Ok(Arc::clone(&parquet_metadata.0));
                 }
@@ -289,4 +290,8 @@ impl AsyncFileReader for CachedParquetFileReader {
 /// Wrapper to implement [`FileMetadata`] for [`ParquetMetaData`].
 struct CachedParquetMetaData(Arc<ParquetMetaData>);
 
-impl FileMetadata for CachedParquetMetaData {}
+impl FileMetadata for CachedParquetMetaData {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
