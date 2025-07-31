@@ -67,8 +67,16 @@ pub struct MemTable {
 }
 
 impl MemTable {
-    /// Create a new in-memory table from the provided schema and record batches
+    /// Create a new in-memory table from the provided schema and record batches.
+    ///
+    /// Requires at least one partition. To construct an empty `MemTable`, pass
+    /// `vec![vec![]]` as the `partitions` argument, this represents one partition with
+    /// no batches.
     pub fn try_new(schema: SchemaRef, partitions: Vec<Vec<RecordBatch>>) -> Result<Self> {
+        if partitions.is_empty() {
+            return plan_err!("No partitions provided, expected at least one partition");
+        }
+
         for batches in partitions.iter().flatten() {
             let batches_schema = batches.schema();
             if !schema.contains(&batches_schema) {

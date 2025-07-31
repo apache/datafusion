@@ -28,6 +28,7 @@ use datafusion::logical_expr::{
     ColumnarValue, CreateFunction, Expr, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl,
     Signature, Volatility,
 };
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::result::Result as RResult;
 use std::sync::Arc;
 
@@ -152,6 +153,38 @@ impl ScalarUDFImpl for ScalarFunctionWrapper {
 
     fn output_ordering(&self, _input: &[ExprProperties]) -> Result<SortProperties> {
         Ok(SortProperties::Unordered)
+    }
+
+    fn equals(&self, other: &dyn ScalarUDFImpl) -> bool {
+        let Some(other) = other.as_any().downcast_ref::<Self>() else {
+            return false;
+        };
+        let Self {
+            name,
+            expr,
+            signature,
+            return_type,
+        } = self;
+        name == &other.name
+            && expr == &other.expr
+            && signature == &other.signature
+            && return_type == &other.return_type
+    }
+
+    fn hash_value(&self) -> u64 {
+        let Self {
+            name,
+            expr,
+            signature,
+            return_type,
+        } = self;
+        let mut hasher = DefaultHasher::new();
+        std::any::type_name::<Self>().hash(&mut hasher);
+        name.hash(&mut hasher);
+        expr.hash(&mut hasher);
+        signature.hash(&mut hasher);
+        return_type.hash(&mut hasher);
+        hasher.finish()
     }
 }
 

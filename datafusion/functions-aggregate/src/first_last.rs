@@ -19,6 +19,7 @@
 
 use std::any::Any;
 use std::fmt::Debug;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::mem::size_of_val;
 use std::sync::Arc;
 
@@ -55,31 +56,23 @@ create_func!(FirstValue, first_value_udaf);
 create_func!(LastValue, last_value_udaf);
 
 /// Returns the first value in a group of values.
-pub fn first_value(expression: Expr, order_by: Option<Vec<SortExpr>>) -> Expr {
-    if let Some(order_by) = order_by {
-        first_value_udaf()
-            .call(vec![expression])
-            .order_by(order_by)
-            .build()
-            // guaranteed to be `Expr::AggregateFunction`
-            .unwrap()
-    } else {
-        first_value_udaf().call(vec![expression])
-    }
+pub fn first_value(expression: Expr, order_by: Vec<SortExpr>) -> Expr {
+    first_value_udaf()
+        .call(vec![expression])
+        .order_by(order_by)
+        .build()
+        // guaranteed to be `Expr::AggregateFunction`
+        .unwrap()
 }
 
 /// Returns the last value in a group of values.
-pub fn last_value(expression: Expr, order_by: Option<Vec<SortExpr>>) -> Expr {
-    if let Some(order_by) = order_by {
-        last_value_udaf()
-            .call(vec![expression])
-            .order_by(order_by)
-            .build()
-            // guaranteed to be `Expr::AggregateFunction`
-            .unwrap()
-    } else {
-        last_value_udaf().call(vec![expression])
-    }
+pub fn last_value(expression: Expr, order_by: Vec<SortExpr>) -> Expr {
+    last_value_udaf()
+        .call(vec![expression])
+        .order_by(order_by)
+        .build()
+        // guaranteed to be `Expr::AggregateFunction`
+        .unwrap()
 }
 
 #[user_doc(
@@ -98,7 +91,7 @@ pub fn last_value(expression: Expr, order_by: Option<Vec<SortExpr>>) -> Expr {
 )]
 pub struct FirstValue {
     signature: Signature,
-    requirement_satisfied: bool,
+    is_input_pre_ordered: bool,
 }
 
 impl Debug for FirstValue {
@@ -121,13 +114,8 @@ impl FirstValue {
     pub fn new() -> Self {
         Self {
             signature: Signature::any(1, Volatility::Immutable),
-            requirement_satisfied: false,
+            is_input_pre_ordered: false,
         }
-    }
-
-    fn with_requirement_satisfied(mut self, requirement_satisfied: bool) -> Self {
-        self.requirement_satisfied = requirement_satisfied;
-        self
     }
 }
 
@@ -160,15 +148,13 @@ impl AggregateUDFImpl for FirstValue {
             .iter()
             .map(|e| e.expr.data_type(acc_args.schema))
             .collect::<Result<Vec<_>>>()?;
-        FirstValueAccumulator::try_new(
+        Ok(Box::new(FirstValueAccumulator::try_new(
             acc_args.return_field.data_type(),
             &ordering_dtypes,
             ordering,
+            self.is_input_pre_ordered,
             acc_args.ignore_nulls,
-        )
-        .map(|acc| {
-            Box::new(acc.with_requirement_satisfied(self.requirement_satisfied)) as _
-        })
+        )?))
     }
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
@@ -290,9 +276,10 @@ impl AggregateUDFImpl for FirstValue {
         self: Arc<Self>,
         beneficial_ordering: bool,
     ) -> Result<Option<Arc<dyn AggregateUDFImpl>>> {
-        Ok(Some(Arc::new(
-            FirstValue::new().with_requirement_satisfied(beneficial_ordering),
-        )))
+        Ok(Some(Arc::new(Self {
+            signature: self.signature.clone(),
+            is_input_pre_ordered: beneficial_ordering,
+        })))
     }
 
     fn order_sensitivity(&self) -> AggregateOrderSensitivity {
@@ -305,6 +292,30 @@ impl AggregateUDFImpl for FirstValue {
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
+    }
+
+    fn equals(&self, other: &dyn AggregateUDFImpl) -> bool {
+        let Some(other) = other.as_any().downcast_ref::<Self>() else {
+            return false;
+        };
+        let Self {
+            signature,
+            is_input_pre_ordered,
+        } = self;
+        signature == &other.signature
+            && is_input_pre_ordered == &other.is_input_pre_ordered
+    }
+
+    fn hash_value(&self) -> u64 {
+        let Self {
+            signature,
+            is_input_pre_ordered,
+        } = self;
+        let mut hasher = DefaultHasher::new();
+        std::any::type_name::<Self>().hash(&mut hasher);
+        signature.hash(&mut hasher);
+        is_input_pre_ordered.hash(&mut hasher);
+        hasher.finish()
     }
 }
 
@@ -850,7 +861,7 @@ pub struct FirstValueAccumulator {
     // Stores the applicable ordering requirement.
     ordering_req: LexOrdering,
     // Stores whether incoming data already satisfies the ordering requirement.
-    requirement_satisfied: bool,
+    is_input_pre_ordered: bool,
     // Ignore null values.
     ignore_nulls: bool,
 }
@@ -861,6 +872,7 @@ impl FirstValueAccumulator {
         data_type: &DataType,
         ordering_dtypes: &[DataType],
         ordering_req: LexOrdering,
+        is_input_pre_ordered: bool,
         ignore_nulls: bool,
     ) -> Result<Self> {
         let orderings = ordering_dtypes
@@ -872,14 +884,9 @@ impl FirstValueAccumulator {
             is_set: false,
             orderings,
             ordering_req,
-            requirement_satisfied: false,
+            is_input_pre_ordered,
             ignore_nulls,
         })
-    }
-
-    pub fn with_requirement_satisfied(mut self, requirement_satisfied: bool) -> Self {
-        self.requirement_satisfied = requirement_satisfied;
-        self
     }
 
     // Updates state with the values in the given row.
@@ -897,7 +904,7 @@ impl FirstValueAccumulator {
         let [value, ordering_values @ ..] = values else {
             return internal_err!("Empty row in FIRST_VALUE");
         };
-        if self.requirement_satisfied {
+        if self.is_input_pre_ordered {
             // Get first entry according to the pre-existing ordering (0th index):
             if self.ignore_nulls {
                 // If ignoring nulls, find the first non-null value.
@@ -948,7 +955,7 @@ impl Accumulator for FirstValueAccumulator {
         if let Some(first_idx) = self.get_first_idx(values)? {
             let row = get_row_at_idx(values, first_idx)?;
             if !self.is_set
-                || (!self.requirement_satisfied
+                || (!self.is_input_pre_ordered
                     && compare_rows(
                         &self.orderings,
                         &row[1..],
@@ -1024,7 +1031,7 @@ impl Accumulator for FirstValueAccumulator {
 )]
 pub struct LastValue {
     signature: Signature,
-    requirement_satisfied: bool,
+    is_input_pre_ordered: bool,
 }
 
 impl Debug for LastValue {
@@ -1047,13 +1054,8 @@ impl LastValue {
     pub fn new() -> Self {
         Self {
             signature: Signature::any(1, Volatility::Immutable),
-            requirement_satisfied: false,
+            is_input_pre_ordered: false,
         }
-    }
-
-    fn with_requirement_satisfied(mut self, requirement_satisfied: bool) -> Self {
-        self.requirement_satisfied = requirement_satisfied;
-        self
     }
 }
 
@@ -1086,15 +1088,13 @@ impl AggregateUDFImpl for LastValue {
             .iter()
             .map(|e| e.expr.data_type(acc_args.schema))
             .collect::<Result<Vec<_>>>()?;
-        LastValueAccumulator::try_new(
+        Ok(Box::new(LastValueAccumulator::try_new(
             acc_args.return_field.data_type(),
             &ordering_dtypes,
             ordering,
+            self.is_input_pre_ordered,
             acc_args.ignore_nulls,
-        )
-        .map(|acc| {
-            Box::new(acc.with_requirement_satisfied(self.requirement_satisfied)) as _
-        })
+        )?))
     }
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
@@ -1113,9 +1113,10 @@ impl AggregateUDFImpl for LastValue {
         self: Arc<Self>,
         beneficial_ordering: bool,
     ) -> Result<Option<Arc<dyn AggregateUDFImpl>>> {
-        Ok(Some(Arc::new(
-            LastValue::new().with_requirement_satisfied(beneficial_ordering),
-        )))
+        Ok(Some(Arc::new(Self {
+            signature: self.signature.clone(),
+            is_input_pre_ordered: beneficial_ordering,
+        })))
     }
 
     fn order_sensitivity(&self) -> AggregateOrderSensitivity {
@@ -1236,6 +1237,30 @@ impl AggregateUDFImpl for LastValue {
             }
         }
     }
+
+    fn equals(&self, other: &dyn AggregateUDFImpl) -> bool {
+        let Some(other) = other.as_any().downcast_ref::<Self>() else {
+            return false;
+        };
+        let Self {
+            signature,
+            is_input_pre_ordered,
+        } = self;
+        signature == &other.signature
+            && is_input_pre_ordered == &other.is_input_pre_ordered
+    }
+
+    fn hash_value(&self) -> u64 {
+        let Self {
+            signature,
+            is_input_pre_ordered,
+        } = self;
+        let mut hasher = DefaultHasher::new();
+        std::any::type_name::<Self>().hash(&mut hasher);
+        signature.hash(&mut hasher);
+        is_input_pre_ordered.hash(&mut hasher);
+        hasher.finish()
+    }
 }
 
 /// This accumulator is used when there is no ordering specified for the
@@ -1330,7 +1355,7 @@ struct LastValueAccumulator {
     // Stores the applicable ordering requirement.
     ordering_req: LexOrdering,
     // Stores whether incoming data already satisfies the ordering requirement.
-    requirement_satisfied: bool,
+    is_input_pre_ordered: bool,
     // Ignore null values.
     ignore_nulls: bool,
 }
@@ -1341,6 +1366,7 @@ impl LastValueAccumulator {
         data_type: &DataType,
         ordering_dtypes: &[DataType],
         ordering_req: LexOrdering,
+        is_input_pre_ordered: bool,
         ignore_nulls: bool,
     ) -> Result<Self> {
         let orderings = ordering_dtypes
@@ -1352,7 +1378,7 @@ impl LastValueAccumulator {
             is_set: false,
             orderings,
             ordering_req,
-            requirement_satisfied: false,
+            is_input_pre_ordered,
             ignore_nulls,
         })
     }
@@ -1372,7 +1398,7 @@ impl LastValueAccumulator {
         let [value, ordering_values @ ..] = values else {
             return internal_err!("Empty row in LAST_VALUE");
         };
-        if self.requirement_satisfied {
+        if self.is_input_pre_ordered {
             // Get last entry according to the order of data:
             if self.ignore_nulls {
                 // If ignoring nulls, find the last non-null value.
@@ -1407,11 +1433,6 @@ impl LastValueAccumulator {
 
         Ok(max_ind)
     }
-
-    fn with_requirement_satisfied(mut self, requirement_satisfied: bool) -> Self {
-        self.requirement_satisfied = requirement_satisfied;
-        self
-    }
 }
 
 impl Accumulator for LastValueAccumulator {
@@ -1428,7 +1449,7 @@ impl Accumulator for LastValueAccumulator {
             let orderings = &row[1..];
             // Update when there is a more recent entry
             if !self.is_set
-                || self.requirement_satisfied
+                || self.is_input_pre_ordered
                 || compare_rows(
                     &self.orderings,
                     orderings,
@@ -1464,7 +1485,7 @@ impl Accumulator for LastValueAccumulator {
             // Either there is no existing value, or there is a newer (latest)
             // version in the new data:
             if !self.is_set
-                || self.requirement_satisfied
+                || self.is_input_pre_ordered
                 || compare_rows(&self.orderings, last_ordering, &sort_options)?.is_lt()
             {
                 // Update with last value in the state. Note that we should exclude the

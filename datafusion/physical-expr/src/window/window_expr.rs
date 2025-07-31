@@ -130,6 +130,12 @@ pub trait WindowExpr: Send + Sync + Debug {
     /// Get the reverse expression of this [WindowExpr].
     fn get_reverse_expr(&self) -> Option<Arc<dyn WindowExpr>>;
 
+    /// Creates a new instance of the window function evaluator.
+    ///
+    /// Returns `WindowFn::Builtin` for built-in window functions (e.g., ROW_NUMBER, RANK)
+    /// or `WindowFn::Aggregate` for aggregate window functions (e.g., SUM, AVG).
+    fn create_window_fn(&self) -> Result<WindowFn>;
+
     /// Returns all expressions used in the [`WindowExpr`].
     /// These expressions are (1) function arguments, (2) partition by expressions, (3) order by expressions.
     fn all_expressions(&self) -> WindowPhysicalExpressions {
@@ -263,6 +269,15 @@ pub trait AggregateWindowExpr: WindowExpr {
 
     /// Calculates the window expression result for the given record batch.
     /// Assumes that `record_batch` belongs to a single partition.
+    ///
+    /// # Arguments
+    /// * `accumulator`: The accumulator to use for the calculation.
+    /// * `record_batch`: batch belonging to the current partition (see [`PartitionBatchState`]).
+    /// * `most_recent_row`: the batch that contains the most recent row, if available (see [`PartitionBatchState`]).
+    /// * `last_range`: The last range of rows that were processed (see [`WindowAggState`]).
+    /// * `window_frame_ctx`: Details about the window frame (see [`WindowFrameContext`]).
+    /// * `idx`: The index of the current row in the record batch.
+    /// * `not_end`: is the current row not the end of the partition (see [`PartitionBatchState`]).
     #[allow(clippy::too_many_arguments)]
     fn get_result_column(
         &self,

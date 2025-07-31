@@ -17,11 +17,12 @@
 
 use crate::ScalarFunctionExpr;
 use arrow::array::{make_array, MutableArrayData, RecordBatch};
-use arrow::datatypes::{DataType, Field, Schema};
+use arrow::datatypes::{DataType, Field, FieldRef, Schema};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::Result;
 use datafusion_common::{internal_err, not_impl_err};
-use datafusion_expr::async_udf::{AsyncScalarFunctionArgs, AsyncScalarUDF};
+use datafusion_expr::async_udf::AsyncScalarUDF;
+use datafusion_expr::ScalarFunctionArgs;
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use std::any::Any;
@@ -36,6 +37,8 @@ pub struct AsyncFuncExpr {
     pub name: String,
     /// The actual function (always `ScalarFunctionExpr`)
     pub func: Arc<dyn PhysicalExpr>,
+    /// The field that this function will return
+    return_field: FieldRef,
 }
 
 impl Display for AsyncFuncExpr {
@@ -59,7 +62,11 @@ impl Hash for AsyncFuncExpr {
 
 impl AsyncFuncExpr {
     /// create a new AsyncFuncExpr
-    pub fn try_new(name: impl Into<String>, func: Arc<dyn PhysicalExpr>) -> Result<Self> {
+    pub fn try_new(
+        name: impl Into<String>,
+        func: Arc<dyn PhysicalExpr>,
+        schema: &Schema,
+    ) -> Result<Self> {
         let Some(_) = func.as_any().downcast_ref::<ScalarFunctionExpr>() else {
             return internal_err!(
                 "unexpected function type, expected ScalarFunctionExpr, got: {:?}",
@@ -67,9 +74,11 @@ impl AsyncFuncExpr {
             );
         };
 
+        let return_field = func.return_field(schema)?;
         Ok(Self {
             name: name.into(),
             func,
+            return_field,
         })
     }
 
@@ -128,6 +137,12 @@ impl AsyncFuncExpr {
             );
         };
 
+        let arg_fields = scalar_function_expr
+            .args()
+            .iter()
+            .map(|e| e.return_field(batch.schema_ref()))
+            .collect::<Result<Vec<_>>>()?;
+
         let mut result_batches = vec![];
         if let Some(ideal_batch_size) = self.ideal_batch_size()? {
             let mut remainder = batch.clone();
@@ -148,10 +163,11 @@ impl AsyncFuncExpr {
                 result_batches.push(
                     async_udf
                         .invoke_async_with_args(
-                            AsyncScalarFunctionArgs {
-                                args: args.to_vec(),
+                            ScalarFunctionArgs {
+                                args,
+                                arg_fields: arg_fields.clone(),
                                 number_rows: current_batch.num_rows(),
-                                schema: current_batch.schema(),
+                                return_field: Arc::clone(&self.return_field),
                             },
                             option,
                         )
@@ -168,10 +184,11 @@ impl AsyncFuncExpr {
             result_batches.push(
                 async_udf
                     .invoke_async_with_args(
-                        AsyncScalarFunctionArgs {
+                        ScalarFunctionArgs {
                             args: args.to_vec(),
+                            arg_fields,
                             number_rows: batch.num_rows(),
-                            schema: batch.schema(),
+                            return_field: Arc::clone(&self.return_field),
                         },
                         option,
                     )
@@ -223,6 +240,7 @@ impl PhysicalExpr for AsyncFuncExpr {
         Ok(Arc::new(AsyncFuncExpr {
             name: self.name.clone(),
             func: new_func,
+            return_field: Arc::clone(&self.return_field),
         }))
     }
 

@@ -49,8 +49,6 @@ The following related subprojects target end users and have separate documentati
 
 - `DataFusion Python <https://datafusion.apache.org/python/>`_ offers a Python interface for SQL and DataFrame
   queries.
-- `DataFusion Ray <https://github.com/apache/datafusion-ray/>`_ provides a distributed version of DataFusion
-  that scales out on `Ray <https://www.ray.io>`_ clusters.
 - `DataFusion Comet <https://datafusion.apache.org/comet/>`_ is an accelerator for Apache Spark based on
   DataFusion.
 
@@ -116,7 +114,6 @@ To get started, see
    user-guide/expressions
    user-guide/sql/index
    user-guide/configs
-   user-guide/runtime_configs
    user-guide/explain-usage
    user-guide/faq
 
@@ -127,6 +124,7 @@ To get started, see
    :caption: Library User Guide
    
    library-user-guide/index
+   library-user-guide/upgrading
    library-user-guide/extensions
    library-user-guide/using-the-sql-api
    library-user-guide/working-with-exprs
@@ -139,7 +137,6 @@ To get started, see
    library-user-guide/extending-operators
    library-user-guide/profiling
    library-user-guide/query-optimizer
-   library-user-guide/upgrading
 
 .. .. _toc.contributor-guide:
 

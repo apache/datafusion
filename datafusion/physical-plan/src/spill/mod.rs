@@ -809,12 +809,13 @@ mod tests {
                 Arc::new(StringArray::from(vec!["d", "e", "f"])),
             ],
         )?;
-
+        // After appending each batch, spilled_rows should increase, while spill_file_count and
+        // spilled_bytes remain the same (spilled_bytes is updated only after finish() is called)
         in_progress_file.append_batch(&batch1)?;
-        verify_metrics(&in_progress_file, 1, 356, 3)?;
+        verify_metrics(&in_progress_file, 1, 0, 3)?;
 
         in_progress_file.append_batch(&batch2)?;
-        verify_metrics(&in_progress_file, 1, 712, 6)?;
+        verify_metrics(&in_progress_file, 1, 0, 6)?;
 
         let completed_file = in_progress_file.finish()?;
         assert!(completed_file.is_some());

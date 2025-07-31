@@ -104,7 +104,7 @@ mod parquet_adapter_tests {
                         batch.columns().to_vec(),
                         &options,
                     )
-                    .map_err(|e| DataFusionError::ArrowError(e, None))
+                    .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))
                 }
 
                 fn map_column_statistics(

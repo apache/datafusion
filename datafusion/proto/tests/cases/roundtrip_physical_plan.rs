@@ -18,6 +18,7 @@
 use std::any::Any;
 use std::fmt::{Display, Formatter};
 use std::ops::Deref;
+
 use std::sync::Arc;
 use std::vec;
 
@@ -140,7 +141,11 @@ fn roundtrip_test_and_return(
     let result_exec_plan: Arc<dyn ExecutionPlan> = proto
         .try_into_physical_plan(ctx, runtime.deref(), codec)
         .expect("from proto");
-    assert_eq!(format!("{exec_plan:?}"), format!("{result_exec_plan:?}"));
+
+    pretty_assertions::assert_eq!(
+        format!("{exec_plan:?}"),
+        format!("{result_exec_plan:?}")
+    );
     Ok(result_exec_plan)
 }
 
@@ -1735,4 +1740,169 @@ async fn roundtrip_physical_plan_node() {
         .unwrap();
 
     let _ = plan.execute(0, ctx.task_ctx()).unwrap();
+}
+
+/// Helper function to create a SessionContext with all TPC-H tables registered as external tables
+async fn tpch_context() -> Result<SessionContext> {
+    use datafusion_common::test_util::datafusion_test_data;
+
+    let ctx = SessionContext::new();
+    let test_data = datafusion_test_data();
+
+    // TPC-H table names
+    let tables = [
+        "part", "supplier", "partsupp", "customer", "orders", "lineitem", "nation",
+        "region",
+    ];
+
+    // Create external tables for all TPC-H tables
+    for table in &tables {
+        let table_sql = format!(
+            "CREATE EXTERNAL TABLE {table} STORED AS PARQUET LOCATION '{test_data}/tpch_{table}_small.parquet'"
+        );
+        ctx.sql(&table_sql).await.map_err(|e| {
+            DataFusionError::External(
+                format!("Failed to create {table} table: {e}").into(),
+            )
+        })?;
+    }
+
+    Ok(ctx)
+}
+
+/// Helper function to get TPC-H query SQL
+fn get_tpch_query_sql(query: usize) -> Result<Vec<String>> {
+    use std::fs;
+
+    if !(1..=22).contains(&query) {
+        return Err(DataFusionError::External(
+            format!("Invalid TPC-H query number: {query}").into(),
+        ));
+    }
+
+    let filename = format!("../../benchmarks/queries/q{query}.sql");
+    let contents = fs::read_to_string(&filename).map_err(|e| {
+        DataFusionError::External(
+            format!("Failed to read query file {filename}: {e}").into(),
+        )
+    })?;
+
+    Ok(contents
+        .split(';')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .collect())
+}
+
+#[tokio::test]
+async fn test_serialize_deserialize_tpch_queries() -> Result<()> {
+    // Create context with TPC-H tables
+    let ctx = tpch_context().await?;
+
+    // repeat to run all 22 queries
+    for query in 1..=22 {
+        // run all statements in the query
+        let sql = get_tpch_query_sql(query)?;
+        for stmt in sql {
+            let logical_plan = ctx.sql(&stmt).await?.into_unoptimized_plan();
+            let optimized_plan = ctx.state().optimize(&logical_plan)?;
+            let physical_plan = ctx.state().create_physical_plan(&optimized_plan).await?;
+
+            // serialize the physical plan
+            let codec = DefaultPhysicalExtensionCodec {};
+            let proto =
+                PhysicalPlanNode::try_from_physical_plan(physical_plan.clone(), &codec)?;
+
+            // deserialize the physical plan
+            let _deserialized_plan =
+                proto.try_into_physical_plan(&ctx, ctx.runtime_env().as_ref(), &codec)?;
+        }
+    }
+
+    Ok(())
+}
+
+// Bugs: https://github.com/apache/datafusion/issues/16772
+#[tokio::test]
+async fn test_round_trip_tpch_queries() -> Result<()> {
+    // Create context with TPC-H tables
+    let ctx = tpch_context().await?;
+
+    // repeat to run all 22 queries
+    for query in 1..=22 {
+        // run all statements in the query
+        let sql = get_tpch_query_sql(query)?;
+        for stmt in sql {
+            roundtrip_test_sql_with_context(&stmt, &ctx).await?;
+        }
+    }
+
+    Ok(())
+}
+
+// Bug 1 of https://github.com/apache/datafusion/issues/16772
+/// Test that AggregateFunctionExpr human_display field is correctly preserved
+/// during serialization/deserialization roundtrip.
+///
+/// Test for issue where the human_display field (used for EXPLAIN output)
+/// was not being serialized to protobuf, causing it to be lost during roundtrip
+/// and resulting in empty or incorrect display strings in query plans.
+#[tokio::test]
+async fn test_round_trip_human_display() -> Result<()> {
+    // Create context with TPC-H tables
+    let ctx = tpch_context().await?;
+
+    let sql = "select r_name, count(1) from region group by r_name";
+    roundtrip_test_sql_with_context(sql, &ctx).await?;
+
+    let sql = "select r_name, count(*) from region group by r_name";
+    roundtrip_test_sql_with_context(sql, &ctx).await?;
+
+    let sql = "select r_name, count(r_name) from region group by r_name";
+    roundtrip_test_sql_with_context(sql, &ctx).await?;
+
+    Ok(())
+}
+
+// Bug 2 of https://github.com/apache/datafusion/issues/16772
+/// Test that PhysicalGroupBy groups field is correctly serialized/deserialized
+/// for simple aggregates (no GROUP BY clause).
+///
+/// Test for issue where simple aggregates like "SELECT SUM(col1 * col2) FROM table"
+/// would incorrectly serialize groups as [[]] instead of [] during roundtrip serialization.
+/// The groups field should be empty ([]) when there are no GROUP BY expressions.
+#[tokio::test]
+async fn test_round_trip_groups_display() -> Result<()> {
+    // Create context with TPC-H tables
+    let ctx = tpch_context().await?;
+
+    let sql = "select sum(l_extendedprice * l_discount) as revenue from lineitem;";
+    roundtrip_test_sql_with_context(sql, &ctx).await?;
+
+    let sql = "select sum(l_extendedprice) as revenue from lineitem;";
+    roundtrip_test_sql_with_context(sql, &ctx).await?;
+
+    Ok(())
+}
+
+// Bug 3 of https://github.com/apache/datafusion/issues/16772
+/// Test that ScalarFunctionExpr return_field name is correctly preserved
+/// during serialization/deserialization roundtrip.
+///
+/// Test for issue where the return_field.name for scalar functions
+/// was not being serialized to protobuf, causing it to be lost during roundtrip
+/// and defaulting to a generic name like "f" instead of the proper function name.
+#[tokio::test]
+async fn test_round_trip_date_part_display() -> Result<()> {
+    // Create context with TPC-H tables
+    let ctx = tpch_context().await?;
+
+    let sql = "select extract(year from l_shipdate) as l_year from lineitem ";
+    roundtrip_test_sql_with_context(sql, &ctx).await?;
+
+    let sql = "select extract(month from l_shipdate) as l_year from lineitem ";
+    roundtrip_test_sql_with_context(sql, &ctx).await?;
+
+    Ok(())
 }

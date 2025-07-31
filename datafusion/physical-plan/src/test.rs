@@ -131,7 +131,7 @@ impl ExecutionPlan for TestMemoryExec {
     }
 
     fn as_any(&self) -> &dyn Any {
-        unimplemented!()
+        self
     }
 
     fn properties(&self) -> &PlanProperties {
@@ -522,3 +522,33 @@ impl PartitionStream for TestPartitionStream {
         ))
     }
 }
+
+#[cfg(test)]
+macro_rules! assert_join_metrics {
+    ($metrics:expr, $expected_rows:expr) => {
+        assert_eq!($metrics.output_rows().unwrap(), $expected_rows);
+
+        let elapsed_compute = $metrics
+            .elapsed_compute()
+            .expect("did not find elapsed_compute metric");
+        let join_time = $metrics
+            .sum_by_name("join_time")
+            .expect("did not find join_time metric")
+            .as_usize();
+        let build_time = $metrics
+            .sum_by_name("build_time")
+            .expect("did not find build_time metric")
+            .as_usize();
+        // ensure join_time and build_time are considered in elapsed_compute
+        assert!(
+            join_time + build_time <= elapsed_compute,
+            "join_time ({}) + build_time ({}) = {} was <= elapsed_compute = {}",
+            join_time,
+            build_time,
+            join_time + build_time,
+            elapsed_compute
+        );
+    };
+}
+#[cfg(test)]
+pub(crate) use assert_join_metrics;

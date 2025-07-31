@@ -294,7 +294,7 @@ pub struct RawAggregateExpr {
     pub args: Vec<Expr>,
     pub distinct: bool,
     pub filter: Option<Box<Expr>>,
-    pub order_by: Option<Vec<SortExpr>>,
+    pub order_by: Vec<SortExpr>,
     pub null_treatment: Option<NullTreatment>,
 }
 
@@ -308,6 +308,7 @@ pub struct RawWindowExpr {
     pub order_by: Vec<SortExpr>,
     pub window_frame: WindowFrame,
     pub null_treatment: Option<NullTreatment>,
+    pub distinct: bool,
 }
 
 /// Result of planning a raw expr with [`ExprPlanner`]
