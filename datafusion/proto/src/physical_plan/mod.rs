@@ -2941,6 +2941,120 @@ impl PhysicalExtensionCodec for DefaultPhysicalExtensionCodec {
     }
 }
 
+/// DataWithEncoderPositionProto captures the position of the encoder
+/// in the codec list that was used to encode the data and actual encoded data
+#[derive(Clone, PartialEq, prost::Message)]
+struct DataWithEncoderPositionProto {
+    /// The position of encoder used to encode data
+    /// (to be used for decoding)
+    #[prost(uint32, tag = 1)]
+    pub encoder_position: u32,
+
+    #[prost(bytes, tag = 2)]
+    pub blob: Vec<u8>,
+}
+
+/// A PhysicalExtensionCodec that tries one of multiple inner codecs
+/// until one works
+#[derive(Debug)]
+pub struct ComposedPhysicalExtensionCodec {
+    codecs: Vec<Arc<dyn PhysicalExtensionCodec>>,
+}
+
+impl ComposedPhysicalExtensionCodec {
+    // Position in this codesc list is important as it will be used for decoding.
+    // If new codec is added it should go to last position.
+    pub fn new(codecs: Vec<Arc<dyn PhysicalExtensionCodec>>) -> Self {
+        Self { codecs }
+    }
+
+    fn decode_protobuf<R>(
+        &self,
+        buf: &[u8],
+        decode: impl FnOnce(&dyn PhysicalExtensionCodec, &[u8]) -> Result<R>,
+    ) -> Result<R> {
+        let proto = DataWithEncoderPositionProto::decode(buf)
+            .map_err(|e| DataFusionError::Internal(e.to_string()))?;
+
+        let codec = self.codecs.get(proto.encoder_position as usize).ok_or(
+            DataFusionError::Internal(
+                "Can't find required codec in codec list".to_owned(),
+            ),
+        )?;
+
+        decode(codec.as_ref(), &proto.blob)
+    }
+
+    fn encode_protobuf(
+        &self,
+        buf: &mut Vec<u8>,
+        mut encode: impl FnMut(&dyn PhysicalExtensionCodec, &mut Vec<u8>) -> Result<()>,
+    ) -> Result<()> {
+        let mut data = vec![];
+        let mut last_err = None;
+        let mut encoder_position = None;
+
+        // find the encoder
+        for (position, codec) in self.codecs.iter().enumerate() {
+            match encode(codec.as_ref(), &mut data) {
+                Ok(_) => {
+                    encoder_position = Some(position as u32);
+                    break;
+                }
+                Err(err) => last_err = Some(err),
+            }
+        }
+
+        let encoder_position = encoder_position.ok_or_else(|| {
+            last_err.unwrap_or_else(|| {
+                DataFusionError::NotImplemented(
+                    "Empty list of composed codecs".to_owned(),
+                )
+            })
+        })?;
+
+        // encode with encoder position
+        let proto = DataWithEncoderPositionProto {
+            encoder_position,
+            blob: data,
+        };
+        proto
+            .encode(buf)
+            .map_err(|e| DataFusionError::Internal(e.to_string()))
+    }
+}
+
+impl PhysicalExtensionCodec for ComposedPhysicalExtensionCodec {
+    fn try_decode(
+        &self,
+        buf: &[u8],
+        inputs: &[Arc<dyn ExecutionPlan>],
+        registry: &dyn FunctionRegistry,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.decode_protobuf(buf, |codec, data| codec.try_decode(data, inputs, registry))
+    }
+
+    fn try_encode(&self, node: Arc<dyn ExecutionPlan>, buf: &mut Vec<u8>) -> Result<()> {
+        self.encode_protobuf(buf, |codec, data| codec.try_encode(Arc::clone(&node), data))
+    }
+
+    fn try_decode_udf(&self, name: &str, buf: &[u8]) -> Result<Arc<ScalarUDF>> {
+        self.decode_protobuf(buf, |codec, data| codec.try_decode_udf(name, data))
+    }
+
+    fn try_encode_udf(&self, node: &ScalarUDF, buf: &mut Vec<u8>) -> Result<()> {
+        self.encode_protobuf(buf, |codec, data| codec.try_encode_udf(node, data))
+    }
+
+    fn try_decode_udaf(&self, name: &str, buf: &[u8]) -> Result<Arc<AggregateUDF>> {
+        self.decode_protobuf(buf, |codec, data| codec.try_decode_udaf(name, data))
+    }
+
+    fn try_encode_udaf(&self, node: &AggregateUDF, buf: &mut Vec<u8>) -> Result<()> {
+        self.encode_protobuf(buf, |codec, data| codec.try_encode_udaf(node, data))
+    }
+}
+
 fn into_physical_plan(
     node: &Option<Box<protobuf::PhysicalPlanNode>>,
     registry: &dyn FunctionRegistry,
