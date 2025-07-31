@@ -1373,7 +1373,18 @@ impl DataFrame {
     pub async fn collect(self) -> Result<Vec<RecordBatch>> {
         let task_ctx = Arc::new(self.task_ctx());
         let plan = self.create_physical_plan().await?;
-        collect(plan, task_ctx).await
+        let batches = collect(plan, task_ctx).await?;
+        if self.session_state.memory_profiling {
+            let bytes: usize = batches
+                .iter()
+                .map(|b| b.get_array_memory_size())
+                .sum();
+            self
+                .session_state
+                .memory_tracker
+                .record_memory("query_output", bytes);
+        }
+        Ok(batches)
     }
 
     /// Execute the `DataFrame` and print the results to the console.
@@ -1504,7 +1515,19 @@ impl DataFrame {
     pub async fn collect_partitioned(self) -> Result<Vec<Vec<RecordBatch>>> {
         let task_ctx = Arc::new(self.task_ctx());
         let plan = self.create_physical_plan().await?;
-        collect_partitioned(plan, task_ctx).await
+        let partitions = collect_partitioned(plan, task_ctx).await?;
+        if self.session_state.memory_profiling {
+            let bytes: usize = partitions
+                .iter()
+                .flat_map(|p| p.iter())
+                .map(|b| b.get_array_memory_size())
+                .sum();
+            self
+                .session_state
+                .memory_tracker
+                .record_memory("query_output", bytes);
+        }
+        Ok(partitions)
     }
 
     /// Executes this DataFrame and returns one stream per partition.
@@ -2225,6 +2248,17 @@ impl DataFrame {
         let schema = plan.schema();
         let task_ctx = Arc::new(self.task_ctx());
         let partitions = collect_partitioned(plan, task_ctx).await?;
+        if self.session_state.memory_profiling {
+            let bytes: usize = partitions
+                .iter()
+                .flat_map(|p| p.iter())
+                .map(|b| b.get_array_memory_size())
+                .sum();
+            self
+                .session_state
+                .memory_tracker
+                .record_memory("query_output", bytes);
+        }
         let mem_table = MemTable::try_new(schema, partitions)?;
         context.read_table(Arc::new(mem_table))
     }
