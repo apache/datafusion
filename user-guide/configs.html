@@ -1019,39 +1019,43 @@ Environment variables are read during <code class="docutils literal notranslate"
 <td><p>50</p></td>
 <td><p>Specifies the recursion depth limit when parsing complex SQL Queries</p></td>
 </tr>
-<tr class="row-odd"><td><p>datafusion.format.safe</p></td>
+<tr class="row-odd"><td><p>datafusion.sql_parser.default_null_ordering</p></td>
+<td><p>nulls_max</p></td>
+<td><p>Specifies the default null ordering for query results. There are 4 options: - <code class="docutils literal notranslate"><span class="pre">nulls_max</span></code>: Nulls appear last in ascending order. - <code class="docutils literal notranslate"><span class="pre">nulls_min</span></code>: Nulls appear first in ascending order. - <code class="docutils literal notranslate"><span class="pre">nulls_first</span></code>: Nulls always be first in any order. - <code class="docutils literal notranslate"><span class="pre">nulls_last</span></code>: Nulls always be last in any order. By default, <code class="docutils literal notranslate"><span class="pre">nulls_max</span></code> is used to follow Postgres’s behavior. postgres rule: <a class="reference external" href="https://www.postgresql.org/docs/current/queries-order.html">https://www.postgresql.org/docs/current/queries-order.html</a></p></td>
+</tr>
+<tr class="row-even"><td><p>datafusion.format.safe</p></td>
 <td><p>true</p></td>
 <td><p>If set to <code class="docutils literal notranslate"><span class="pre">true</span></code> any formatting errors will be written to the output instead of being converted into a [<code class="docutils literal notranslate"><span class="pre">std::fmt::Error</span></code>]</p></td>
 </tr>
-<tr class="row-even"><td><p>datafusion.format.null</p></td>
+<tr class="row-odd"><td><p>datafusion.format.null</p></td>
 <td><p></p></td>
 <td><p>Format string for nulls</p></td>
 </tr>
-<tr class="row-odd"><td><p>datafusion.format.date_format</p></td>
+<tr class="row-even"><td><p>datafusion.format.date_format</p></td>
 <td><p>%Y-%m-%d</p></td>
 <td><p>Date format for date arrays</p></td>
 </tr>
-<tr class="row-even"><td><p>datafusion.format.datetime_format</p></td>
+<tr class="row-odd"><td><p>datafusion.format.datetime_format</p></td>
 <td><p>%Y-%m-%dT%H:%M:%S%.f</p></td>
 <td><p>Format for DateTime arrays</p></td>
 </tr>
-<tr class="row-odd"><td><p>datafusion.format.timestamp_format</p></td>
+<tr class="row-even"><td><p>datafusion.format.timestamp_format</p></td>
 <td><p>%Y-%m-%dT%H:%M:%S%.f</p></td>
 <td><p>Timestamp format for timestamp arrays</p></td>
 </tr>
-<tr class="row-even"><td><p>datafusion.format.timestamp_tz_format</p></td>
+<tr class="row-odd"><td><p>datafusion.format.timestamp_tz_format</p></td>
 <td><p>NULL</p></td>
 <td><p>Timestamp format for timestamp with timezone arrays. When <code class="docutils literal notranslate"><span class="pre">None</span></code>, ISO 8601 format is used.</p></td>
 </tr>
-<tr class="row-odd"><td><p>datafusion.format.time_format</p></td>
+<tr class="row-even"><td><p>datafusion.format.time_format</p></td>
 <td><p>%H:%M:%S%.f</p></td>
 <td><p>Time format for time arrays</p></td>
 </tr>
-<tr class="row-even"><td><p>datafusion.format.duration_format</p></td>
+<tr class="row-odd"><td><p>datafusion.format.duration_format</p></td>
 <td><p>pretty</p></td>
 <td><p>Duration format. Can be either <code class="docutils literal notranslate"><span class="pre">&quot;pretty&quot;</span></code> or <code class="docutils literal notranslate"><span class="pre">&quot;ISO8601&quot;</span></code></p></td>
 </tr>
-<tr class="row-odd"><td><p>datafusion.format.types_info</p></td>
+<tr class="row-even"><td><p>datafusion.format.types_info</p></td>
 <td><p>false</p></td>
 <td><p>Show types in visual representation batches</p></td>
 </tr>
