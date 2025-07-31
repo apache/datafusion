@@ -494,10 +494,13 @@ impl EquivalenceGroup {
     pub fn intersect(&self, other: &Self) -> Self {
         let mut new_classes = Vec::new();
         for cls in self.classes.iter() {
-            let mut group_map    = HashMap::new();
+            let mut group_map = HashMap::new();
             for expr in cls.iter() {
                 if let Some(other_cls_id) = other.map.get(expr) {
-                    group_map.entry(other_cls_id).or_insert_with(Vec::new).push(expr.clone());
+                    group_map
+                        .entry(other_cls_id)
+                        .or_insert_with(Vec::new)
+                        .push(expr.clone());
                 }
             }
             for (_, exprs) in group_map {
