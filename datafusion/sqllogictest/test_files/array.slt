@@ -8065,6 +8065,13 @@ FixedSizeList(Field { name: "item", data_type: Int32, nullable: true, dict_id: 0
 statement error
 create table varying_fixed_size_col_table (a int[3]) as values ([1,2,3]), ([4,5]);
 
+# https://github.com/apache/datafusion/issues/16187
+# should be NULL in case of out of bounds for Null Type
+query ?
+select [named_struct('a', 1, 'b', null)][-2];
+----
+NULL
+
 ### Delete tables
 
 statement ok

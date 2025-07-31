@@ -153,6 +153,54 @@ async fn test_invalid_memory_limit() {
 }
 
 #[tokio::test]
+async fn test_max_temp_directory_size_enforcement() {
+    let ctx = SessionContext::new();
+
+    ctx.sql("SET datafusion.runtime.memory_limit = '1M'")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+
+    ctx.sql("SET datafusion.execution.sort_spill_reservation_bytes = 0")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+
+    ctx.sql("SET datafusion.runtime.max_temp_directory_size = '0K'")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+
+    let query = "select * from generate_series(1,100000) as t1(v1) order by v1;";
+    let result = ctx.sql(query).await.unwrap().collect().await;
+
+    assert!(
+        result.is_err(),
+        "Should fail due to max temp directory size limit"
+    );
+
+    ctx.sql("SET datafusion.runtime.max_temp_directory_size = '1M'")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+
+    let result = ctx.sql(query).await.unwrap().collect().await;
+
+    assert!(
+        result.is_ok(),
+        "Should not fail due to max temp directory size limit"
+    );
+}
+
+#[tokio::test]
 async fn test_unknown_runtime_config() {
     let ctx = SessionContext::new();
 

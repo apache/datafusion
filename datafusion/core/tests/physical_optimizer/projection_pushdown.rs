@@ -712,6 +712,7 @@ fn test_output_req_after_projection() -> Result<()> {
             Arc::new(Column::new("a", 0)),
             Arc::new(Column::new("b", 1)),
         ]),
+        None,
     ));
     let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
         vec![
@@ -729,7 +730,7 @@ fn test_output_req_after_projection() -> Result<()> {
         actual,
         @r"
     ProjectionExec: expr=[c@2 as c, a@0 as new_a, b@1 as b]
-      OutputRequirementExec
+      OutputRequirementExec: order_by=[(b@1, asc), (c@2 + a@0, asc)], dist_by=HashPartitioned[[a@0, b@1]])
         DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false
     "
     );
@@ -745,7 +746,7 @@ fn test_output_req_after_projection() -> Result<()> {
     assert_snapshot!(
         actual,
         @r"
-    OutputRequirementExec
+    OutputRequirementExec: order_by=[(b@2, asc), (c@0 + new_a@1, asc)], dist_by=HashPartitioned[[new_a@1, b@2]])
       ProjectionExec: expr=[c@2 as c, a@0 as new_a, b@1 as b]
         DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false
     "

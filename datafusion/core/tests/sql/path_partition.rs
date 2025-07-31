@@ -50,7 +50,7 @@ use object_store::{
     path::Path, GetOptions, GetResult, GetResultPayload, ListResult, ObjectMeta,
     ObjectStore, PutOptions, PutResult,
 };
-use object_store::{Attributes, MultipartUpload, PutMultipartOpts, PutPayload};
+use object_store::{Attributes, MultipartUpload, PutMultipartOptions, PutPayload};
 use url::Url;
 
 #[tokio::test]
@@ -645,7 +645,7 @@ impl ObjectStore for MirroringObjectStore {
     async fn put_multipart_opts(
         &self,
         _location: &Path,
-        _opts: PutMultipartOpts,
+        _opts: PutMultipartOptions,
     ) -> object_store::Result<Box<dyn MultipartUpload>> {
         unimplemented!()
     }
