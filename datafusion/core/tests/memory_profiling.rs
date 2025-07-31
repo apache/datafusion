@@ -11,14 +11,12 @@ async fn test_memory_profiling_enabled_vs_disabled() {
     let disabled_duration = start.elapsed();
 
     // Test with memory profiling enabled
-    let mut ctx_enabled = SessionContext::new();
-    // Enable memory profiling through configuration
-    ctx_enabled
-        .state_mut()
-        .config_mut()
+    let mut config = SessionConfig::new();
+    config
         .options_mut()
         .set("datafusion.memory_profiling.enabled", "true")
         .unwrap();
+    let ctx_enabled = SessionContext::new_with_config(config);
 
     let start = Instant::now();
     ctx_enabled
