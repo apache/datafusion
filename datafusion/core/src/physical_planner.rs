@@ -765,13 +765,9 @@ impl DefaultPhysicalPlanner {
                     .iter()
                     .any(|(_, name)| name == Aggregate::INTERNAL_GROUPING_ID);
 
-                let partition_num = (Arc::clone(&initial_aggr) as Arc<dyn ExecutionPlan>)
-                    .output_partitioning()
-                    .partition_count();
-
                 let can_repartition = !groups.is_empty()
                     && (session_state.config().target_partitions() > 1
-                        || (has_grouping_id && partition_num > 1))
+                        || has_grouping_id)
                     && session_state.config().repartition_aggregations();
 
                 let next_partition_mode = if can_repartition {
