@@ -87,6 +87,7 @@ use datafusion_physical_expr::equivalence::{
 use datafusion_physical_expr::expressions::{lit, BinaryExpr, DynamicFilterPhysicalExpr};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalExprRef};
 use datafusion_physical_expr_common::datum::compare_op_for_nested;
+use datafusion_functions_aggregate_common::min_max::{max_batch, min_batch};
 
 use ahash::RandomState;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
@@ -1060,19 +1061,9 @@ fn compute_bounds(arrays: &[ArrayRef]) -> Result<Vec<(ScalarValue, ScalarValue)>
                 ));
             }
 
-            // Compute min/max using ScalarValue's utilities
-            let mut min_val = ScalarValue::try_from_array(array, 0)?;
-            let mut max_val = min_val.clone();
-
-            for i in 1..array.len() {
-                let val = ScalarValue::try_from_array(array, i)?;
-                if val < min_val {
-                    min_val = val.clone();
-                }
-                if val > max_val {
-                    max_val = val;
-                }
-            }
+            // Use Arrow kernels for efficient min/max computation
+            let min_val = min_batch(array)?;
+            let max_val = max_batch(array)?;
 
             Ok((min_val, max_val))
         })
