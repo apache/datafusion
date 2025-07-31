@@ -176,7 +176,7 @@ impl ExecutionPlan for AsyncFuncExec {
         // now, for each record batch, evaluate the async expressions and add the columns to the result
         let async_exprs_captured = Arc::new(self.async_exprs.clone());
         let schema_captured = self.schema();
-        let config_options_ref = Arc::new(context.session_config().options().clone());
+        let config_options_ref = Arc::clone(context.session_config().options());
 
         let stream_with_async_functions = input_stream.then(move |batch| {
             // need to clone *again* to capture the async_exprs and schema in the
