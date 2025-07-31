@@ -17,11 +17,10 @@
 
 //! Define the `SpillManager` struct, which is responsible for reading and writing `RecordBatch`es to raw files based on the provided configurations.
 
-use std::sync::Arc;
-
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_execution::runtime_env::RuntimeEnv;
+use std::sync::Arc;
 
 use datafusion_common::{config::SpillCompression, Result};
 use datafusion_execution::disk_manager::RefCountedTempFile;
@@ -57,6 +56,14 @@ impl SpillManager {
             batch_read_buffer_capacity: 2,
             compression: SpillCompression::default(),
         }
+    }
+
+    pub fn with_batch_read_buffer_capacity(
+        mut self,
+        batch_read_buffer_capacity: usize,
+    ) -> Self {
+        self.batch_read_buffer_capacity = batch_read_buffer_capacity;
+        self
     }
 
     pub fn with_compression_type(mut self, spill_compression: SpillCompression) -> Self {
@@ -125,6 +132,69 @@ impl SpillManager {
         self.spill_record_batch_and_finish(&batches, request_description)
     }
 
+    /// Refer to the documentation for [`Self::spill_record_batch_and_finish`]. This method
+    /// additionally spills the `RecordBatch` into smaller batches, divided by `row_limit`.
+    ///
+    /// # Errors
+    /// - Returns an error if spilling would exceed the disk usage limit configured
+    ///   by `max_temp_directory_size` in `DiskManager`
+    pub(crate) fn spill_record_batch_by_size_and_return_max_batch_memory(
+        &self,
+        batch: &RecordBatch,
+        request_description: &str,
+        row_limit: usize,
+    ) -> Result<Option<(RefCountedTempFile, usize)>> {
+        let total_rows = batch.num_rows();
+        let mut batches = Vec::new();
+        let mut offset = 0;
+
+        // It's ok to calculate all slices first, because slicing is zero-copy.
+        while offset < total_rows {
+            let length = std::cmp::min(total_rows - offset, row_limit);
+            let sliced_batch = batch.slice(offset, length);
+            batches.push(sliced_batch);
+            offset += length;
+        }
+
+        let mut in_progress_file = self.create_in_progress_file(request_description)?;
+
+        let mut max_record_batch_size = 0;
+
+        for batch in batches {
+            in_progress_file.append_batch(&batch)?;
+
+            max_record_batch_size = max_record_batch_size.max(batch.get_sliced_size()?);
+        }
+
+        let file = in_progress_file.finish()?;
+
+        Ok(file.map(|f| (f, max_record_batch_size)))
+    }
+
+    /// Spill a stream of `RecordBatch`es to disk and return the spill file and the size of the largest batch in memory
+    pub(crate) async fn spill_record_batch_stream_and_return_max_batch_memory(
+        &self,
+        stream: &mut SendableRecordBatchStream,
+        request_description: &str,
+    ) -> Result<Option<(RefCountedTempFile, usize)>> {
+        use futures::StreamExt;
+
+        let mut in_progress_file = self.create_in_progress_file(request_description)?;
+
+        let mut max_record_batch_size = 0;
+
+        while let Some(batch) = stream.next().await {
+            let batch = batch?;
+            in_progress_file.append_batch(&batch)?;
+
+            max_record_batch_size = max_record_batch_size.max(batch.get_sliced_size()?);
+        }
+
+        let file = in_progress_file.finish()?;
+
+        Ok(file.map(|f| (f, max_record_batch_size)))
+    }
+
     /// Reads a spill file as a stream. The file must be created by the current `SpillManager`.
     /// This method will generate output in FIFO order: the batch appended first
     /// will be read first.
@@ -138,5 +208,21 @@ impl SpillManager {
         )));
 
         Ok(spawn_buffered(stream, self.batch_read_buffer_capacity))
+    }
+}
+
+pub(crate) trait GetSlicedSize {
+    /// Returns the size of the `RecordBatch` when sliced.
+    fn get_sliced_size(&self) -> Result<usize>;
+}
+
+impl GetSlicedSize for RecordBatch {
+    fn get_sliced_size(&self) -> Result<usize> {
+        let mut total = 0;
+        for array in self.columns() {
+            let data = array.to_data();
+            total += data.get_slice_memory_size()?;
+        }
+        Ok(total)
     }
 }
