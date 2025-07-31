@@ -1416,7 +1416,7 @@ fn apply_filter_to_row_join_batch(
 
 /// This function performs the following steps:
 /// 1. Apply filter to probe-side batch
-/// 2. Broadcast the left row (build_side_batch[build_side_index]) to the
+/// 2. Broadcast the left row (build_side_batch\[build_side_index\]) to the
 ///    filtered probe-side batch
 /// 3. Concat them together according to `col_indices`, and return the result
 ///    (None if the result is empty)
