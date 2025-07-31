@@ -17,7 +17,7 @@
 
 use std::sync::Arc;
 
-use crate::cache::cache_manager::FileMetadata;
+use crate::cache::cache_manager::{FileMetadata, FileMetadataCache};
 use crate::cache::CacheAccessor;
 
 use datafusion_common::Statistics;
@@ -163,17 +163,19 @@ impl CacheAccessor<Path, Arc<Vec<ObjectMeta>>> for DefaultListFilesCache {
 /// changed.
 #[derive(Default)]
 pub struct DefaultFilesMetadataCache {
-    metadata: DashMap<Path, (ObjectMeta, Arc<FileMetadata>)>,
+    metadata: DashMap<Path, (ObjectMeta, Arc<dyn FileMetadata>)>,
 }
 
-impl CacheAccessor<Path, Arc<FileMetadata>> for DefaultFilesMetadataCache {
+impl FileMetadataCache for DefaultFilesMetadataCache {}
+
+impl CacheAccessor<Path, Arc<dyn FileMetadata>> for DefaultFilesMetadataCache {
     type Extra = ObjectMeta;
 
-    fn get(&self, _k: &Path) -> Option<Arc<FileMetadata>> {
+    fn get(&self, _k: &Path) -> Option<Arc<dyn FileMetadata>> {
         panic!("get in DefaultFilesMetadataCache is not supported, please use get_with_extra")
     }
 
-    fn get_with_extra(&self, k: &Path, e: &Self::Extra) -> Option<Arc<FileMetadata>> {
+    fn get_with_extra(&self, k: &Path, e: &Self::Extra) -> Option<Arc<dyn FileMetadata>> {
         self.metadata
             .get(k)
             .map(|s| {
@@ -187,22 +189,26 @@ impl CacheAccessor<Path, Arc<FileMetadata>> for DefaultFilesMetadataCache {
             .unwrap_or(None)
     }
 
-    fn put(&self, _key: &Path, _value: Arc<FileMetadata>) -> Option<Arc<FileMetadata>> {
+    fn put(
+        &self,
+        _key: &Path,
+        _value: Arc<dyn FileMetadata>,
+    ) -> Option<Arc<dyn FileMetadata>> {
         panic!("put in DefaultFilesMetadataCache is not supported, please use put_with_extra")
     }
 
     fn put_with_extra(
         &self,
         key: &Path,
-        value: Arc<FileMetadata>,
+        value: Arc<dyn FileMetadata>,
         e: &Self::Extra,
-    ) -> Option<Arc<FileMetadata>> {
+    ) -> Option<Arc<dyn FileMetadata>> {
         self.metadata
             .insert(key.clone(), (e.clone(), value))
             .map(|x| x.1)
     }
 
-    fn remove(&mut self, k: &Path) -> Option<Arc<FileMetadata>> {
+    fn remove(&mut self, k: &Path) -> Option<Arc<dyn FileMetadata>> {
         self.metadata.remove(k).map(|x| x.1 .1)
     }
 
@@ -304,6 +310,12 @@ mod tests {
         );
     }
 
+    pub struct TestFileMetadata {
+        metadata: String,
+    }
+
+    impl FileMetadata for TestFileMetadata {}
+
     #[test]
     fn test_file_metadata_cache() {
         let object_meta = ObjectMeta {
@@ -315,7 +327,10 @@ mod tests {
             e_tag: None,
             version: None,
         };
-        let metadata: Arc<FileMetadata> = Arc::new("retrieved_metadata".to_owned());
+
+        let metadata: Arc<dyn FileMetadata> = Arc::new(TestFileMetadata {
+            metadata: "retrieved_metadata".to_owned(),
+        });
 
         let cache = DefaultFilesMetadataCache::default();
         assert!(cache
@@ -323,9 +338,11 @@ mod tests {
             .is_none());
 
         cache.put_with_extra(&object_meta.location, metadata, &object_meta);
-        assert!(cache
-            .get_with_extra(&object_meta.location, &object_meta)
-            .is_some());
+        let value = cache.get_with_extra(&object_meta.location, &object_meta);
+        assert!(value.is_some());
+        let test_file_metadata = Arc::downcast::<TestFileMetadata>(value.unwrap());
+        assert!(test_file_metadata.is_ok());
+        assert_eq!(test_file_metadata.unwrap().metadata, "retrieved_metadata");
 
         // file size changed
         let mut object_meta2 = object_meta.clone();

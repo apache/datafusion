@@ -161,11 +161,14 @@ impl ParquetFileReaderFactory for DefaultParquetFileReaderFactory {
 #[derive(Debug)]
 pub struct CachedParquetFileReaderFactory {
     store: Arc<dyn ObjectStore>,
-    metadata_cache: FileMetadataCache,
+    metadata_cache: Arc<dyn FileMetadataCache>,
 }
 
 impl CachedParquetFileReaderFactory {
-    pub fn new(store: Arc<dyn ObjectStore>, metadata_cache: FileMetadataCache) -> Self {
+    pub fn new(
+        store: Arc<dyn ObjectStore>,
+        metadata_cache: Arc<dyn FileMetadataCache>,
+    ) -> Self {
         Self {
             store,
             metadata_cache,
@@ -212,7 +215,7 @@ pub(crate) struct CachedParquetFileReader {
     pub file_metrics: ParquetFileMetrics,
     pub inner: ParquetObjectReader,
     file_meta: FileMeta,
-    metadata_cache: FileMetadataCache,
+    metadata_cache: Arc<dyn FileMetadataCache>,
 }
 
 impl AsyncFileReader for CachedParquetFileReader {
@@ -251,8 +254,10 @@ impl AsyncFileReader for CachedParquetFileReader {
             if let Some(metadata) =
                 metadata_cache.get_with_extra(&object_meta.location, object_meta)
             {
-                if let Ok(parquet_metadata) = Arc::downcast::<ParquetMetaData>(metadata) {
-                    return Ok(Arc::clone(&parquet_metadata));
+                if let Ok(parquet_metadata) =
+                    Arc::downcast::<CachedParquetMetaData>(metadata)
+                {
+                    return Ok(Arc::clone(&parquet_metadata.0));
                 }
             }
 
@@ -268,10 +273,11 @@ impl AsyncFileReader for CachedParquetFileReader {
             }
             reader.try_load(&mut self.inner, object_meta.size).await?;
             let metadata = Arc::new(reader.finish()?);
+            let cached_metadata = Arc::new(CachedParquetMetaData(Arc::clone(&metadata)));
 
             metadata_cache.put_with_extra(
                 &object_meta.location,
-                Arc::clone(&metadata) as Arc<FileMetadata>,
+                cached_metadata,
                 object_meta,
             );
             Ok(metadata)
@@ -279,3 +285,8 @@ impl AsyncFileReader for CachedParquetFileReader {
         .boxed()
     }
 }
+
+/// Wrapper to implement [`FileMetadata`] for [`ParquetMetaData`].
+struct CachedParquetMetaData(Arc<ParquetMetaData>);
+
+impl FileMetadata for CachedParquetMetaData {}

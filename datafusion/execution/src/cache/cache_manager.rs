@@ -35,11 +35,13 @@ pub type ListFilesCache =
     Arc<dyn CacheAccessor<Path, Arc<Vec<ObjectMeta>>, Extra = ObjectMeta>>;
 
 /// Represents generic file-embedded metadata.
-pub type FileMetadata = dyn Any + Send + Sync;
+pub trait FileMetadata: Any + Send + Sync {}
 
 /// Cache to store file-embedded metadata.
-pub type FileMetadataCache =
-    Arc<dyn CacheAccessor<Path, Arc<FileMetadata>, Extra = ObjectMeta>>;
+pub trait FileMetadataCache:
+    CacheAccessor<Path, Arc<dyn FileMetadata>, Extra = ObjectMeta>
+{
+}
 
 impl Debug for dyn CacheAccessor<Path, Arc<Statistics>, Extra = ObjectMeta> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -53,7 +55,7 @@ impl Debug for dyn CacheAccessor<Path, Arc<Vec<ObjectMeta>>, Extra = ObjectMeta>
     }
 }
 
-impl Debug for dyn CacheAccessor<Path, Arc<FileMetadata>, Extra = ObjectMeta> {
+impl Debug for dyn FileMetadataCache {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "Cache name: {} with length: {}", self.name(), self.len())
     }
@@ -63,7 +65,7 @@ impl Debug for dyn CacheAccessor<Path, Arc<FileMetadata>, Extra = ObjectMeta> {
 pub struct CacheManager {
     file_statistic_cache: Option<FileStatisticsCache>,
     list_files_cache: Option<ListFilesCache>,
-    file_metadata_cache: Option<FileMetadataCache>,
+    file_metadata_cache: Option<Arc<dyn FileMetadataCache>>,
 }
 
 impl CacheManager {
@@ -96,7 +98,7 @@ impl CacheManager {
     }
 
     /// Get the file embedded metadata cache.
-    pub fn get_file_metadata_cache(&self) -> Option<FileMetadataCache> {
+    pub fn get_file_metadata_cache(&self) -> Option<Arc<dyn FileMetadataCache>> {
         self.file_metadata_cache.clone()
     }
 }
@@ -117,7 +119,7 @@ pub struct CacheManagerConfig {
     /// Cache of file-embedded metadata, used to avoid reading it multiple times when processing a
     /// data file (e.g., Parquet footer and page metadata).
     /// If not provided, the [`CacheManager`] will create a [`DefaultFilesMetadataCache`].
-    pub file_metadata_cache: Option<FileMetadataCache>,
+    pub file_metadata_cache: Option<Arc<dyn FileMetadataCache>>,
 }
 
 impl CacheManagerConfig {
@@ -134,7 +136,10 @@ impl CacheManagerConfig {
         self
     }
 
-    pub fn with_file_metadata_cache(mut self, cache: Option<FileMetadataCache>) -> Self {
+    pub fn with_file_metadata_cache(
+        mut self,
+        cache: Option<Arc<dyn FileMetadataCache>>,
+    ) -> Self {
         self.file_metadata_cache = cache;
         self
     }
