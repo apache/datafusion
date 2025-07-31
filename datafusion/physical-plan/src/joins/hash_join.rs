@@ -834,6 +834,12 @@ impl ExecutionPlan for HashJoinExec {
             );
         }
 
+        let enable_dynamic_filter_pushdown = context
+            .session_config()
+            .options()
+            .optimizer
+            .enable_dynamic_filter_pushdown;
+
         let join_metrics = BuildProbeJoinMetrics::new(partition, &self.metrics);
         let left_fut = match self.mode {
             PartitionMode::CollectLeft => self.left_fut.try_once(|| {
@@ -850,7 +856,8 @@ impl ExecutionPlan for HashJoinExec {
                     reservation,
                     need_produce_result_in_final(self.join_type),
                     self.right().output_partitioning().partition_count(),
-                    Arc::clone(&self.dynamic_filter),
+                    enable_dynamic_filter_pushdown
+                        .then_some(Arc::clone(&self.dynamic_filter)),
                     on_right.clone(),
                 ))
             })?,
@@ -869,7 +876,8 @@ impl ExecutionPlan for HashJoinExec {
                     reservation,
                     need_produce_result_in_final(self.join_type),
                     1,
-                    Arc::clone(&self.dynamic_filter),
+                    enable_dynamic_filter_pushdown
+                        .then_some(Arc::clone(&self.dynamic_filter)),
                     on_right.clone(),
                 ))
             }
@@ -1081,7 +1089,7 @@ async fn collect_left_input(
     reservation: MemoryReservation,
     with_visited_indices_bitmap: bool,
     probe_threads_count: usize,
-    dynamic_filter: Arc<DynamicFilterPhysicalExpr>,
+    dynamic_filter: Option<Arc<DynamicFilterPhysicalExpr>>,
     on_right: Vec<PhysicalExprRef>,
 ) -> Result<JoinLeftData> {
     let schema = left_stream.schema();
@@ -1182,41 +1190,44 @@ async fn collect_left_input(
     );
 
     // Update dynamic filter with min/max bounds if provided
-    if num_rows > 0 {
-        let bounds = compute_bounds(&left_values)?;
+    if let Some(dynamic_filter) = dynamic_filter {
+        if num_rows > 0 {
+            let bounds = compute_bounds(&left_values)?;
 
-        // Create range predicates for each join key
-        let mut predicates = Vec::with_capacity(bounds.len());
-        for ((min_val, max_val), right_expr) in bounds.iter().zip(on_right.iter()) {
-            // Create predicate: col >= min AND col <= max
-            let min_expr = Arc::new(BinaryExpr::new(
-                Arc::clone(right_expr),
-                Operator::GtEq,
-                lit(min_val.clone()),
-            )) as Arc<dyn PhysicalExpr>;
+            // Create range predicates for each join key
+            let mut predicates = Vec::with_capacity(bounds.len());
+            for ((min_val, max_val), right_expr) in bounds.iter().zip(on_right.iter()) {
+                // Create predicate: col >= min AND col <= max
+                let min_expr = Arc::new(BinaryExpr::new(
+                    Arc::clone(right_expr),
+                    Operator::GtEq,
+                    lit(min_val.clone()),
+                )) as Arc<dyn PhysicalExpr>;
 
-            let max_expr = Arc::new(BinaryExpr::new(
-                Arc::clone(right_expr),
-                Operator::LtEq,
-                lit(max_val.clone()),
-            )) as Arc<dyn PhysicalExpr>;
+                let max_expr = Arc::new(BinaryExpr::new(
+                    Arc::clone(right_expr),
+                    Operator::LtEq,
+                    lit(max_val.clone()),
+                )) as Arc<dyn PhysicalExpr>;
 
-            let range_expr = Arc::new(BinaryExpr::new(min_expr, Operator::And, max_expr))
-                as Arc<dyn PhysicalExpr>;
+                let range_expr =
+                    Arc::new(BinaryExpr::new(min_expr, Operator::And, max_expr))
+                        as Arc<dyn PhysicalExpr>;
 
-            predicates.push(range_expr);
+                predicates.push(range_expr);
+            }
+
+            // Combine all predicates with AND
+            let combined_predicate = predicates
+                .into_iter()
+                .reduce(|acc, pred| {
+                    Arc::new(BinaryExpr::new(acc, Operator::And, pred))
+                        as Arc<dyn PhysicalExpr>
+                })
+                .unwrap_or_else(|| lit(true));
+
+            dynamic_filter.update(combined_predicate)?;
         }
-
-        // Combine all predicates with AND
-        let combined_predicate = predicates
-            .into_iter()
-            .reduce(|acc, pred| {
-                Arc::new(BinaryExpr::new(acc, Operator::And, pred))
-                    as Arc<dyn PhysicalExpr>
-            })
-            .unwrap_or_else(|| lit(true));
-
-        dynamic_filter.update(combined_predicate)?;
     }
 
     Ok(data)
