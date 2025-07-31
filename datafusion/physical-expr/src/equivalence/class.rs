@@ -500,7 +500,7 @@ impl EquivalenceGroup {
                     group_map
                         .entry(other_cls_id)
                         .or_insert_with(Vec::new)
-                        .push(expr.clone());
+                        .push(Arc::clone(expr));
                 }
             }
             for (_, exprs) in group_map {
