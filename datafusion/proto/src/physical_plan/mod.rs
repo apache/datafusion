@@ -2941,10 +2941,10 @@ impl PhysicalExtensionCodec for DefaultPhysicalExtensionCodec {
     }
 }
 
-/// DataWithEncoderPositionProto captures the position of the encoder
+/// DataEncoderTuple captures the position of the encoder
 /// in the codec list that was used to encode the data and actual encoded data
 #[derive(Clone, PartialEq, prost::Message)]
-struct DataWithEncoderPositionProto {
+struct DataEncoderTuple {
     /// The position of encoder used to encode data
     /// (to be used for decoding)
     #[prost(uint32, tag = 1)]
@@ -2973,7 +2973,7 @@ impl ComposedPhysicalExtensionCodec {
         buf: &[u8],
         decode: impl FnOnce(&dyn PhysicalExtensionCodec, &[u8]) -> Result<R>,
     ) -> Result<R> {
-        let proto = DataWithEncoderPositionProto::decode(buf)
+        let proto = DataEncoderTuple::decode(buf)
             .map_err(|e| DataFusionError::Internal(e.to_string()))?;
 
         let codec = self.codecs.get(proto.encoder_position as usize).ok_or(
@@ -3014,7 +3014,7 @@ impl ComposedPhysicalExtensionCodec {
         })?;
 
         // encode with encoder position
-        let proto = DataWithEncoderPositionProto {
+        let proto = DataEncoderTuple {
             encoder_position,
             blob: data,
         };
