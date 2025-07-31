@@ -1119,7 +1119,18 @@ impl ExecutionPlan for SortExec {
         let mut new_sort = SortExec::new(self.expr.clone(), Arc::clone(&children[0]))
             .with_fetch(self.fetch)
             .with_preserve_partitioning(self.preserve_partitioning);
-        new_sort.filter = self.filter.clone();
+        // Fully clone the filter to avoid sharing across multiple executions
+        // This fixes issue #16998 where SortExec shares DynamicFilterPhysicalExpr
+        // across multiple query executions, causing recursive queries to fail
+        new_sort.filter = self.filter.as_ref().map(|f| {
+            Arc::new(DynamicFilterPhysicalExpr::new(
+                f.children().into_iter().cloned().collect(),
+                f.current().unwrap_or_else(|_| {
+                    // Fallback to a true literal if we can't get the current expression
+                    lit(true)
+                })
+            ))
+        });
 
         Ok(Arc::new(new_sort))
     }
@@ -2053,6 +2064,70 @@ mod tests {
             | 8  |
             +----+
             "#);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_sort_exec_filter_cloning_issue_16998() -> Result<()> {
+        // Test for issue #16998: SortExec shares DynamicFilterPhysicalExpr across multiple executions
+        // This test ensures that when with_new_children is called multiple times (as happens in
+        // recursive queries), each SortExec instance gets its own copy of the dynamic filter.
+
+        async fn collect_stream(mut stream: SendableRecordBatchStream) -> Result<Vec<RecordBatch>> {
+            let mut batches = Vec::new();
+            while let Some(batch) = stream.next().await {
+                batches.push(batch?);
+            }
+            Ok(batches)
+        }
+
+        let task_ctx = Arc::new(TaskContext::default());
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("v", DataType::Int32, false),
+        ]));
+
+        // Create test data
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from(vec![0, 1, 2]))],
+        )?;
+
+        let input = TestMemoryExec::try_new_exec(&[vec![batch]], Arc::clone(&schema), None)?;
+
+        // Create a SortExec with a fetch limit (which creates a dynamic filter)
+        let sort_exec = Arc::new(SortExec::new(
+            [PhysicalSortExpr {
+                expr: col("v", &schema)?,
+                options: SortOptions::default(),
+            }].into(),
+            input,
+        ).with_fetch(Some(1)));
+
+        // Call with_new_children multiple times to simulate recursive query scenario
+        // This should create independent copies of the dynamic filter
+        let new_children = vec![sort_exec.input().clone()];
+        let sort_exec2 = sort_exec.clone().with_new_children(new_children.clone())?;
+        let sort_exec3 = sort_exec.clone().with_new_children(new_children)?;
+
+        // Execute both to ensure they work independently without shared state issues
+        let stream1 = sort_exec2.execute(0, Arc::clone(&task_ctx))?;
+        let stream2 = sort_exec3.execute(0, Arc::clone(&task_ctx))?;
+
+        // Collect results from both streams - this would fail before the fix
+        // because the shared filter would cause state corruption
+        let result1 = collect_stream(stream1).await?;
+        let result2 = collect_stream(stream2).await?;
+
+        // Both should return exactly 1 row due to the fetch limit
+        assert_eq!(result1.iter().map(|b| b.num_rows()).sum::<usize>(), 1);
+        assert_eq!(result2.iter().map(|b| b.num_rows()).sum::<usize>(), 1);
+
+        // The values should be the same (smallest value due to sort)
+        let val1 = result1[0].column(0).as_any().downcast_ref::<Int32Array>().unwrap().value(0);
+        let val2 = result2[0].column(0).as_any().downcast_ref::<Int32Array>().unwrap().value(0);
+        assert_eq!(val1, 0);
+        assert_eq!(val2, 0);
+
         Ok(())
     }
 }
