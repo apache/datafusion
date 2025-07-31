@@ -16,10 +16,13 @@
 // under the License.
 
 use crate::util::{BenchmarkRun, CommonOpt, QueryResult};
+use datafusion::physical_plan::execute_stream;
 use datafusion::{error::Result, prelude::SessionContext};
 use datafusion_common::instant::Instant;
 use datafusion_common::{exec_datafusion_err, exec_err, DataFusionError};
 use structopt::StructOpt;
+
+use futures::StreamExt;
 
 /// Run the Nested Loop Join (NLJ) benchmark
 ///
@@ -206,11 +209,11 @@ impl RunOpt {
 
         for i in 0..self.common.iterations {
             let start = Instant::now();
-            let df = ctx.sql(sql).await?;
-            let batches = df.collect().await?;
+
+            let row_count = Self::execute_sql_without_result_buffering(sql, ctx).await?;
+
             let elapsed = start.elapsed();
 
-            let row_count = batches.iter().map(|b| b.num_rows()).sum();
             println!(
                     "Query {query_name} iteration {i} returned {row_count} rows in {elapsed:?}"
                 );
@@ -219,5 +222,29 @@ impl RunOpt {
         }
 
         Ok(query_results)
+    }
+
+    /// Executes the SQL query and drops each result batch after evaluation, to
+    /// minimizes memory usage by not buffering results.
+    ///
+    /// Returns the total result row count
+    async fn execute_sql_without_result_buffering(
+        sql: &str,
+        ctx: &SessionContext,
+    ) -> Result<usize> {
+        let mut row_count = 0;
+
+        let df = ctx.sql(sql).await?;
+        let physical_plan = df.create_physical_plan().await?;
+        let mut stream = execute_stream(physical_plan, ctx.task_ctx())?;
+
+        while let Some(batch) = stream.next().await {
+            row_count += batch?.num_rows();
+
+            // Evaluate the result and do nothing, the result will be dropped
+            // to reduce memory pressure
+        }
+
+        Ok(row_count)
     }
 }
