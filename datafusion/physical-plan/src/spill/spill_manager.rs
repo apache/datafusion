@@ -110,34 +110,6 @@ impl SpillManager {
     /// # Errors
     /// - Returns an error if spilling would exceed the disk usage limit configured
     ///   by `max_temp_directory_size` in `DiskManager`
-    pub fn spill_record_batch_by_size(
-        &self,
-        batch: &RecordBatch,
-        request_description: &str,
-        row_limit: usize,
-    ) -> Result<Option<RefCountedTempFile>> {
-        let total_rows = batch.num_rows();
-        let mut batches = Vec::new();
-        let mut offset = 0;
-
-        // It's ok to calculate all slices first, because slicing is zero-copy.
-        while offset < total_rows {
-            let length = std::cmp::min(total_rows - offset, row_limit);
-            let sliced_batch = batch.slice(offset, length);
-            batches.push(sliced_batch);
-            offset += length;
-        }
-
-        // Spill the sliced batches to disk
-        self.spill_record_batch_and_finish(&batches, request_description)
-    }
-
-    /// Refer to the documentation for [`Self::spill_record_batch_and_finish`]. This method
-    /// additionally spills the `RecordBatch` into smaller batches, divided by `row_limit`.
-    ///
-    /// # Errors
-    /// - Returns an error if spilling would exceed the disk usage limit configured
-    ///   by `max_temp_directory_size` in `DiskManager`
     pub(crate) fn spill_record_batch_by_size_and_return_max_batch_memory(
         &self,
         batch: &RecordBatch,
