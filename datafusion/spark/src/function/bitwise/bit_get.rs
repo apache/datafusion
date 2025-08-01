@@ -135,10 +135,6 @@ pub fn spark_bit_get(args: &[ArrayRef]) -> Result<ArrayRef> {
         return exec_err!("`bit_get` expects exactly two arguments");
     }
 
-    // if args[0].data_type().is_null() || args[1].data_type().is_null() {
-    //     return Ok(Arc::new(PrimitiveArray::<Int8Type>::from(vec![None; args[0].len()])));
-    // }
-
     if args[1].data_type() != &Int32 {
         return exec_err!("`bit_get` expects Int32 as the second argument");
     }
