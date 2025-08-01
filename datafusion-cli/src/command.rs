@@ -162,7 +162,10 @@ impl Command {
             Self::OutputFormat(_) => {
                 ("\\pset [NAME [VALUE]]", "set table output option\n(format)")
             }
-            Self::Memory(_) => ("MEMORY [enable|show]", "memory profiling commands"),
+            Self::Memory(_) => (
+                "MEMORY [enable|show]",
+                "enable or display memory profiling report",
+            ),
         }
     }
 }
