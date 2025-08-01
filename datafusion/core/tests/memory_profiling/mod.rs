@@ -63,8 +63,9 @@ async fn test_memory_profiling_report_content() {
             .any(|(name, &bytes)| name.starts_with(prefix) && bytes > 0);
         assert!(
             found,
-            "no non-zero memory entry found for operator {}",
-            prefix
+            "no non-zero memory entry found for operator {}. report keys: {:?}",
+            prefix,
+            report.keys().collect::<Vec<_>>()
         );
     }
 }
