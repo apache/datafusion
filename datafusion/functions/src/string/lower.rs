@@ -195,4 +195,44 @@ mod tests {
 
         to_lower(input, expected)
     }
+
+    mod ree_lower_test {
+        use super::*;
+        use arrow::array::{Int32Array, RunArray, StringArray};
+        use arrow::datatypes::Int32Type;
+        #[test]
+        fn test_lower_on_run_array_all_caps() -> Result<()> {
+            let run_ends = Int32Array::from(vec![3, 6, 9]);
+            let values =
+                StringArray::from(vec![Some("ARROW"), Some("DATA"), Some("XYZ123")]);
+            let run_array = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+
+            let expected_run_ends = Int32Array::from(vec![3, 6, 9]);
+            let expected_values =
+                StringArray::from(vec![Some("arrow"), Some("data"), Some("xyz123")]);
+            let expected_run_array =
+                RunArray::<Int32Type>::try_new(&expected_run_ends, &expected_values)
+                    .unwrap();
+
+            to_lower(Arc::new(run_array), Arc::new(expected_run_array)).unwrap();
+            Ok(())
+        }
+
+        #[test]
+        fn test_lower_on_run_array_with_nulls_and_symbols() -> Result<()> {
+            let run_ends = Int32Array::from(vec![2, 4, 7]);
+            let values = StringArray::from(vec![Some("SNAKE"), None, Some("TeSt!@#")]);
+            let run_array = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+
+            let expected_run_ends = Int32Array::from(vec![2, 4, 7]);
+            let expected_values =
+                StringArray::from(vec![Some("snake"), None, Some("test!@#")]);
+            let expected_run_array =
+                RunArray::<Int32Type>::try_new(&expected_run_ends, &expected_values)
+                    .unwrap();
+
+            to_lower(Arc::new(run_array), Arc::new(expected_run_array)).unwrap();
+            Ok(())
+        }
+    }
 }

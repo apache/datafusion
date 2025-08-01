@@ -103,7 +103,6 @@ mod tests {
 
     fn to_upper(input: ArrayRef, expected: ArrayRef) -> Result<()> {
         let func = UpperFunc::new();
-
         let arg_field = Field::new("a", input.data_type().clone(), true).into();
         let args = ScalarFunctionArgs {
             number_rows: input.len(),
@@ -193,5 +192,64 @@ mod tests {
         ])) as ArrayRef;
 
         to_upper(input, expected)
+    }
+    #[cfg(test)]
+    mod ree_upper_test {
+        use super::*;
+        use arrow::array::{Int32Array, RunArray, StringArray};
+        use arrow::datatypes::Int32Type;
+        #[test]
+        fn test_upper_on_run_array() -> Result<()> {
+            let run_ends = Int32Array::from(vec![4, 6, 9, 11, 15]);
+            let values = StringArray::from(vec![
+                Some("arrow"),
+                None,
+                Some("datafusion"),
+                Some("@_"),
+                Some("0123456789"),
+            ]);
+            let run_array = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+
+            let expected_run_ends = Int32Array::from(vec![4, 6, 9, 11, 15]);
+            let expected_values = StringArray::from(vec![
+                Some("ARROW"),
+                None,
+                Some("DATAFUSION"),
+                Some("@_"),
+                Some("0123456789"),
+            ]);
+            let expected_run_array =
+                RunArray::<Int32Type>::try_new(&expected_run_ends, &expected_values)
+                    .unwrap();
+
+            to_upper(Arc::new(run_array), Arc::new(expected_run_array)).unwrap();
+            Ok(())
+        }
+
+        #[test]
+        fn test_upper_on_run_array_mixed_case() -> Result<()> {
+            let run_ends = Int32Array::from(vec![2, 5, 8, 10]);
+            let values = StringArray::from(vec![
+                Some("Hello"),
+                Some("world"),
+                None,
+                Some("Test123"),
+            ]);
+            let run_array = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+
+            let expected_run_ends = Int32Array::from(vec![2, 5, 8, 10]);
+            let expected_values = StringArray::from(vec![
+                Some("HELLO"),
+                Some("WORLD"),
+                None,
+                Some("TEST123"),
+            ]);
+            let expected_run_array =
+                RunArray::<Int32Type>::try_new(&expected_run_ends, &expected_values)
+                    .unwrap();
+
+            to_upper(Arc::new(run_array), Arc::new(expected_run_array)).unwrap();
+            Ok(())
+        }
     }
 }
