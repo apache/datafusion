@@ -177,15 +177,6 @@ async fn run_with_profiling() -> Result<()> {
     } else {
         println!("No memory profiling information available");
         println!("This is expected for this simple query because:");
-        println!("  1. Memory profiling is still experimental");
-        println!("  2. Not all operators currently report memory usage");
-        println!("  3. The query may not have triggered memory-intensive operations");
-        println!("");
-        println!("Memory profiling works best with queries that:");
-        println!("  - Perform large aggregations or joins");
-        println!("  - Use window functions with large partitions");
-        println!("  - Sort large datasets");
-        println!("  - Perform complex analytical operations");
     }
 
     println!();
@@ -203,35 +194,6 @@ async fn main() -> Result<()> {
 
     // Run with profiling
     run_with_profiling().await?;
-
-    println!("=== Enhanced Memory Profiling Summary ===");
-    println!("Key observations:");
-    println!("🔧 Memory profiling can be enabled/disabled per query using ctx.enable_memory_profiling()");
-    println!("⚡ The feature has minimal impact on query performance");
-    println!("📊 Memory profiling information is accessed via ctx.get_last_query_memory_report()");
-    println!(
-        "🎯 Enhanced analysis provides operator categorization and peak memory tracking"
-    );
-    println!("📈 For complex queries with large memory usage, this feature can help identify bottlenecks");
-    println!("🧪 Memory profiling is currently experimental and may not capture all memory allocations");
-    println!("");
-    println!("📋 Operator Categories Tracked:");
-    println!("  • Scans: Table and file reading operations");
-    println!("  • Joins: Hash joins, nested loop joins, etc.");
-    println!("  • Aggregations: GROUP BY, hash aggregates, etc.");
-    println!("  • Sorts: ORDER BY and sorting operations");
-    println!("  • Windows: Window function operations");
-    println!("  • Filters: WHERE clause filtering");
-    println!("  • Projections: SELECT column operations");
-    println!("  • Unions: UNION and set operations");
-    println!("");
-    println!("🚀 To see enhanced memory profiling in action:");
-    println!("  1. Try this example with more memory-intensive queries");
-    println!("  2. Look for queries with large aggregations, joins, or window functions");
-    println!("  3. Monitor peak memory usage during query execution");
-    println!("  4. Use operator categorization to identify performance bottlenecks");
-    println!("  5. Check the DataFusion documentation for operators that support memory tracking");
-
     Ok(())
 }
 
