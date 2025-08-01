@@ -47,7 +47,9 @@ use datafusion_execution::TaskContext;
 use datafusion_physical_expr::equivalence::ProjectionMapping;
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr_common::physical_expr::{fmt_sql, PhysicalExprRef};
-use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
+use datafusion_physical_expr_common::sort_expr::{
+    LexOrdering, LexRequirement, PhysicalSortExpr,
+};
 
 use futures::stream::{Stream, StreamExt};
 use log::trace;
@@ -1023,6 +1025,25 @@ fn is_expr_trivial(expr: &Arc<dyn PhysicalExpr>) -> bool {
         || expr.as_any().downcast_ref::<Literal>().is_some()
 }
 
+/// [`PhysicalSortExpr`] handler version of update_expr() function.
+pub fn update_sort_expr(
+    sort_exprs: &LexOrdering,
+    projected_exprs: &[(Arc<dyn PhysicalExpr>, String)],
+) -> Result<Option<LexOrdering>> {
+    let mut new_sort_exprs = vec![];
+    for sort_expr in sort_exprs {
+        let Some(updated_expr) = update_expr(&sort_expr.expr, projected_exprs, false)?
+        else {
+            return Ok(None);
+        };
+        new_sort_exprs.push(PhysicalSortExpr {
+            expr: updated_expr,
+            options: sort_expr.options,
+        })
+    }
+    Ok(LexOrdering::new(new_sort_exprs))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1229,5 +1250,46 @@ mod tests {
         };
 
         assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_update_sort_expr() -> Result<()> {
+        // Create projected expressions: a@1 -> a@0, c@2 -> c@1
+        let projected_exprs: Vec<(Arc<dyn PhysicalExpr>, String)> = vec![
+            (Arc::new(Column::new("a", 1)), "a".to_string()),
+            (Arc::new(Column::new("c", 2)), "c".to_string()),
+        ];
+
+        // Create sort expressions on columns that exist in projection
+        let sort_exprs = LexOrdering::new(vec![
+            PhysicalSortExpr {
+                expr: Arc::new(Column::new("a", 1)),
+                options: Default::default(),
+            },
+            PhysicalSortExpr {
+                expr: Arc::new(Column::new("c", 2)),
+                options: Default::default(),
+            },
+        ])
+        .unwrap();
+
+        // Update sort expressions
+        let result = update_sort_expr(&sort_exprs, &projected_exprs)?;
+
+        // Verify the result is Some with updated indices
+        let updated = result.expect("Sort expressions should be updated");
+        assert_eq!(updated.len(), 2);
+
+        // Check first sort expr updated from a@1 to a@0
+        let col0 = updated[0].expr.as_any().downcast_ref::<Column>().unwrap();
+        assert_eq!(col0.name(), "a");
+        assert_eq!(col0.index(), 0);
+
+        // Check second sort expr updated from c@2 to c@1
+        let col1 = updated[1].expr.as_any().downcast_ref::<Column>().unwrap();
+        assert_eq!(col1.name(), "c");
+        assert_eq!(col1.index(), 1);
+
+        Ok(())
     }
 }
