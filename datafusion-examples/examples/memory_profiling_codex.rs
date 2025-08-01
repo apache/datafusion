@@ -149,7 +149,7 @@ async fn main() -> Result<()> {
     // print memory usage collected by the profiler
     println!("\nMemory profile:");
     for (op, bytes) in ctx.get_last_query_memory_report() {
-        println!("{op}: {bytes}");
+        println!("  {}: {:.2} MB", op, bytes as f64 / 1024.0 / 1024.0);
     }
 
     Ok(())
