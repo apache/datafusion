@@ -50,10 +50,18 @@ async fn test_memory_profiling_report_content() {
     let report = ctx.get_last_query_memory_report();
     // Verify that profiling captured some metrics
     assert!(!report.is_empty(), "expected non-empty memory report");
-    // Print a sample entry for inspection
-    println!("Sample memory report entry:");
-    for (name, bytes) in &report {
-        println!("Operator: {} => {} bytes", name, bytes);
-        break;
-    }
+    // Compare the set of operator names to expected
+    let mut actual_keys: Vec<String> = report.keys().cloned().collect();
+    actual_keys.sort();
+    let mut expected_keys = vec![
+        "GenerateSeriesExec".to_string(),
+        "HashAggregateExec".to_string(),
+        "ProjectionExec".to_string(),
+        "SortExec".to_string(),
+    ];
+    expected_keys.sort();
+    assert_eq!(
+        actual_keys, expected_keys,
+        "memory report operator names do not match"
+    );
 }
