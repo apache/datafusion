@@ -98,13 +98,18 @@ impl CliSessionContext for SessionContext {
     }
 
     fn enable_memory_profiling(&self) {
-        self.enable_memory_profiling();
+        SessionContext::enable_memory_profiling(self);
     }
 
     fn get_last_query_memory_report(
         &self,
     ) -> Option<std::collections::HashMap<String, usize>> {
-        Some(self.get_last_query_memory_report())
+        let report = self.get_last_query_memory_report();
+        if report.is_empty() {
+            None
+        } else {
+            Some(report)
+        }
     }
 
     async fn execute_logical_plan(

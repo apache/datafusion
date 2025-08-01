@@ -85,7 +85,12 @@ impl CliSessionContext for MyUnionerContext {
     fn get_last_query_memory_report(
         &self,
     ) -> Option<std::collections::HashMap<String, usize>> {
-        Some(self.ctx.get_last_query_memory_report())
+        let report = self.ctx.get_last_query_memory_report();
+        if report.is_empty() {
+            None
+        } else {
+            Some(report)
+        }
     }
 }
 
