@@ -23,10 +23,7 @@ use std::sync::Arc;
 use datafusion::{
     dataframe::DataFrame,
     error::DataFusionError,
-    execution::{
-        context::{MemoryProfilingHandle, SessionState},
-        TaskContext,
-    },
+    execution::{context::SessionState, TaskContext},
     logical_expr::{LogicalPlan, LogicalPlanBuilder},
     prelude::SessionContext,
 };
@@ -81,8 +78,8 @@ impl CliSessionContext for MyUnionerContext {
         self.ctx.execute_logical_plan(new_plan).await
     }
 
-    fn enable_memory_profiling(&self) -> MemoryProfilingHandle<'_> {
-        self.ctx.enable_memory_profiling()
+    fn enable_memory_profiling(&self) {
+        self.ctx.enable_memory_profiling();
     }
 
     fn get_last_query_memory_report(
@@ -107,7 +104,6 @@ pub async fn main() {
         quiet: false,
         maxrows: datafusion_cli::print_options::MaxRows::Unlimited,
         color: true,
-        memory_profiling: false,
     };
 
     exec_from_repl(&my_ctx, &mut print_options).await.unwrap();

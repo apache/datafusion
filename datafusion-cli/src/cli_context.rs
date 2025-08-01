@@ -20,10 +20,7 @@ use std::sync::Arc;
 use datafusion::{
     dataframe::DataFrame,
     error::DataFusionError,
-    execution::{
-        context::{MemoryProfilingHandle, SessionState},
-        TaskContext,
-    },
+    execution::{context::SessionState, TaskContext},
     logical_expr::LogicalPlan,
     prelude::SessionContext,
 };
@@ -51,7 +48,7 @@ pub trait CliSessionContext {
     fn register_table_options_extension_from_scheme(&self, scheme: &str);
 
     /// Enable memory profiling for next query
-    fn enable_memory_profiling(&self) -> MemoryProfilingHandle<'_>;
+    fn enable_memory_profiling(&self);
 
     /// Get memory report from last profiled query
     fn get_last_query_memory_report(
@@ -100,8 +97,8 @@ impl CliSessionContext for SessionContext {
         }
     }
 
-    fn enable_memory_profiling(&self) -> MemoryProfilingHandle<'_> {
-        SessionContext::enable_memory_profiling(self)
+    fn enable_memory_profiling(&self) {
+        SessionContext::enable_memory_profiling(self);
     }
 
     fn get_last_query_memory_report(
