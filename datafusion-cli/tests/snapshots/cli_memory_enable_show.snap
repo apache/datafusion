@@ -14,12 +14,11 @@ info:
 success: true
 exit_code: 0
 ----- stdout -----
-Memory profiling enabled for next query
 +----------+
 | Int64(1) |
 +----------+
 | 1        |
 +----------+
-DataFusion-Cli: 16
-
+ProjectionExec: 1024
 ----- stderr -----
+
