@@ -210,17 +210,6 @@ impl EnhancedMemoryReport {
                 );
             }
         }
-
-        println!("\n💡 Memory Profiling Status:");
-        if self.raw_report.len() == 1 && self.raw_report.contains_key("query_output") {
-            println!("  ⚠️  Only 'query_output' tracked - this is expected behavior");
-            println!(
-                "  📋 DataFusion currently only instruments query result materialization"
-            );
-            println!("  🔬 Individual operators (scans, joins, aggregations) are not yet tracked");
-            println!("  🚀 Future enhancement: automatic operator-level memory instrumentation");
-            return;
-        }
     }
 }
 
