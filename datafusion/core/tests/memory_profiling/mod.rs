@@ -36,3 +36,24 @@ async fn test_memory_profiling_enabled_vs_disabled() {
         ratio
     );
 }
+
+#[tokio::test]
+async fn test_memory_profiling_report_content() {
+    // Use the same complex query
+    let sql = "SELECT v % 100 AS group_key, COUNT(*) AS cnt, SUM(v) AS sum_v \n  FROM generate_series(1,100000) AS t(v) \n GROUP BY group_key \n ORDER BY group_key";
+    // Create context and enable memory profiling for next query
+    let ctx = SessionContext::new();
+    let _prof_handle = ctx.enable_memory_profiling();
+    // Run the query
+    ctx.sql(sql).await.unwrap().collect().await.unwrap();
+    // Retrieve memory report
+    let report = ctx.get_last_query_memory_report();
+    // Verify that profiling captured some metrics
+    assert!(!report.is_empty(), "expected non-empty memory report");
+    // Print a sample entry for inspection
+    println!("Sample memory report entry:");
+    for (name, bytes) in &report {
+        println!("Operator: {} => {} bytes", name, bytes);
+        break;
+    }
+}
