@@ -1371,9 +1371,21 @@ impl DataFrame {
     /// # }
     /// ```
     pub async fn collect(self) -> Result<Vec<RecordBatch>> {
+        // capture profiling info before `self` is moved
+        let mem_prof = self.session_state.memory_profiling;
+        let tracker = self.session_state.memory_tracker.clone();
+
         let task_ctx = Arc::new(self.task_ctx());
         let plan = self.create_physical_plan().await?;
-        collect(plan, task_ctx).await
+        let batches = collect(plan, task_ctx).await?;
+        if mem_prof {
+            let bytes: usize = batches
+                .iter()
+                .map(|b| b.get_array_memory_size())
+                .sum();
+            tracker.record_memory("query_output", bytes);
+        }
+        Ok(batches)
     }
 
     /// Execute the `DataFrame` and print the results to the console.
@@ -1502,9 +1514,22 @@ impl DataFrame {
     /// # }
     /// ```
     pub async fn collect_partitioned(self) -> Result<Vec<Vec<RecordBatch>>> {
+        // capture profiling info before `self` is moved
+        let mem_prof = self.session_state.memory_profiling;
+        let tracker = self.session_state.memory_tracker.clone();
+
         let task_ctx = Arc::new(self.task_ctx());
         let plan = self.create_physical_plan().await?;
-        collect_partitioned(plan, task_ctx).await
+        let partitions = collect_partitioned(plan, task_ctx).await?;
+        if mem_prof {
+            let bytes: usize = partitions
+                .iter()
+                .flat_map(|p| p.iter())
+                .map(|b| b.get_array_memory_size())
+                .sum();
+            tracker.record_memory("query_output", bytes);
+        }
+        Ok(partitions)
     }
 
     /// Executes this DataFrame and returns one stream per partition.
@@ -2220,11 +2245,24 @@ impl DataFrame {
     /// ```
     pub async fn cache(self) -> Result<DataFrame> {
         let context = SessionContext::new_with_state((*self.session_state).clone());
+
+        // capture profiling info before `self` is moved
+        let mem_prof = self.session_state.memory_profiling;
+        let tracker = self.session_state.memory_tracker.clone();
+
         // The schema is consistent with the output
         let plan = self.clone().create_physical_plan().await?;
         let schema = plan.schema();
         let task_ctx = Arc::new(self.task_ctx());
         let partitions = collect_partitioned(plan, task_ctx).await?;
+        if mem_prof {
+            let bytes: usize = partitions
+                .iter()
+                .flat_map(|p| p.iter())
+                .map(|b| b.get_array_memory_size())
+                .sum();
+            tracker.record_memory("query_output", bytes);
+        }
         let mem_table = MemTable::try_new(schema, partitions)?;
         context.read_table(Arc::new(mem_table))
     }
