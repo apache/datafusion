@@ -15,11 +15,36 @@
 // specific language governing permissions and limitations
 // under the License.
 
+pub mod bit_shift;
+
 use datafusion_expr::ScalarUDF;
+use datafusion_functions::make_udf_function;
 use std::sync::Arc;
 
-pub mod expr_fn {}
+make_udf_function!(bit_shift::SparkShiftLeft, shiftleft);
+make_udf_function!(bit_shift::SparkShiftRight, shiftright);
+make_udf_function!(bit_shift::SparkShiftRightUnsigned, shiftrightunsigned);
+
+pub mod expr_fn {
+    use datafusion_functions::export_functions;
+
+    export_functions!((
+        shiftleft,
+        "Shifts the bits of the first argument left by the number of positions specified by the second argument.",
+        value shift
+    ));
+    export_functions!((
+        shiftright,
+        "Shifts the bits of the first argument right by the number of positions specified by the second argument (arithmetic shift).",
+        value shift
+    ));
+    export_functions!((
+        shiftrightunsigned,
+        "Shifts the bits of the first argument right by the number of positions specified by the second argument (logical shift).",
+        value shift
+    ));
+}
 
 pub fn functions() -> Vec<Arc<ScalarUDF>> {
-    vec![]
+    vec![shiftleft(), shiftright(), shiftrightunsigned()]
 }

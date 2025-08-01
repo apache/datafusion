@@ -23,5 +23,114 @@
 
 ## Original Query: SELECT shiftleft(2, 1);
 ## PySpark 3.5.5 Result: {'shiftleft(2, 1)': 4, 'typeof(shiftleft(2, 1))': 'int', 'typeof(2)': 'int', 'typeof(1)': 'int'}
-#query
-#SELECT shiftleft(2::int, 1::int);
+
+# Basic shiftleft tests
+query I
+SELECT shiftleft(2::int, 1::int);
+----
+4
+
+query I
+SELECT shiftleft(1::int, 2::int);
+----
+4
+
+query I
+SELECT shiftleft(3::int, 3::int);
+----
+24
+
+# Different data types
+query I
+SELECT shiftleft(2::bigint, 1::int);
+----
+4
+
+query I
+SELECT shiftleft(1::bigint, 2::int);
+----
+4
+
+query I
+SELECT shiftleft(2::int, 1::bigint);
+----
+4
+
+# Large shifts (should handle modulo correctly)
+query I
+SELECT shiftleft(1::int, 32::int);
+----
+1
+
+query I
+SELECT shiftleft(2::int, 33::int);
+----
+4
+
+query I
+SELECT shiftleft(3::int, 64::int);
+----
+3
+
+# Negative shifts
+query I
+SELECT shiftleft(4::int, -1::int);
+----
+0
+
+query I
+SELECT shiftleft(8::int, -2::int);
+----
+0
+
+query I
+SELECT shiftleft(16::int, -3::int);
+----
+0
+
+# Zero shifts
+query I
+SELECT shiftleft(5::int, 0::int);
+----
+5
+
+query I
+SELECT shiftleft(0::int, 5::int);
+----
+0
+
+# Edge cases
+query I
+SELECT shiftleft(2147483647::int, 1::int);
+----
+-2
+
+query I
+SELECT shiftleft(-1::int, 1::int);
+----
+-2
+
+# Multiple values in a table
+query I
+SELECT shiftleft(value, shift) FROM (VALUES (1, 1), (2, 2), (3, 3), (4, 4)) AS t(value, shift);
+----
+2
+8
+24
+64
+
+# Null handling
+query I
+SELECT shiftleft(NULL::int, 1::int);
+----
+NULL
+
+query I
+SELECT shiftleft(1::int, NULL::int);
+----
+NULL
+
+query I
+SELECT shiftleft(NULL::int, NULL::int);
+----
+NULL

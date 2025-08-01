@@ -23,5 +23,115 @@
 
 ## Original Query: SELECT shiftright(4, 1);
 ## PySpark 3.5.5 Result: {'shiftright(4, 1)': 2, 'typeof(shiftright(4, 1))': 'int', 'typeof(4)': 'int', 'typeof(1)': 'int'}
-#query
-#SELECT shiftright(4::int, 1::int);
+
+# Basic shiftright tests
+query I
+SELECT shiftright(4::int, 1::int);
+----
+2
+
+query I
+SELECT shiftright(8::int, 2::int);
+----
+2
+
+query I
+SELECT shiftright(16::int, 3::int);
+----
+2
+
+# Different data types
+query I
+SELECT shiftright(4::bigint, 1::int);
+----
+2
+
+query I
+SELECT shiftright(8::bigint, 2::int);
+----
+2
+
+query I
+SELECT shiftright(4::int, 1::bigint);
+----
+2
+
+# Large shifts (should handle modulo correctly)
+query I
+SELECT shiftright(1::int, 32::int);
+----
+1
+
+query I
+SELECT shiftright(2::int, 33::int);
+----
+1
+
+query I
+SELECT shiftright(3::int, 64::int);
+----
+3
+
+# Negative shifts
+query I
+SELECT shiftright(4::int, -1::int);
+----
+0
+
+query I
+SELECT shiftright(8::int, -2::int);
+----
+0
+
+query I
+SELECT shiftright(16::int, -3::int);
+----
+0
+
+# Zero shifts
+query I
+SELECT shiftright(5::int, 0::int);
+----
+5
+
+query I
+SELECT shiftright(0::int, 5::int);
+----
+0
+
+# Edge cases - signed right shift preserves sign
+query I
+SELECT shiftright(-4::int, 1::int);
+----
+-2
+
+query I
+SELECT shiftright(-8::int, 2::int);
+----
+-2
+
+query I
+SELECT shiftright(-16::int, 3::int);
+----
+-2
+
+query I
+SELECT shiftright(2147483647::int, 1::int);
+----
+1073741823
+
+# Null handling
+query I
+SELECT shiftright(NULL::int, 1::int);
+----
+NULL
+
+query I
+SELECT shiftright(1::int, NULL::int);
+----
+NULL
+
+query I
+SELECT shiftright(NULL::int, NULL::int);
+----
+NULL
