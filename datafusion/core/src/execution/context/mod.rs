@@ -432,10 +432,9 @@ pub struct SessionContext {
 /// ctx.enable_memory_profiling();
 ///
 /// // After executing queries, get memory usage report
-/// if let Some(report) = ctx.get_last_query_memory_report() {
-///     for (operator, bytes) in report {
-///         println!("{}: {} bytes", operator, bytes);
-///     }
+/// let report = ctx.get_last_query_memory_report();
+/// for (operator, bytes) in &report {
+///     println!("{}: {} bytes", operator, bytes);
 /// }
 /// ```
 pub struct MemoryProfilingHandle<'a> {
