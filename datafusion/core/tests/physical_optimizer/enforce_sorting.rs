@@ -1487,114 +1487,80 @@ async fn test_sort_merge_join_order_by_right() -> Result<()> {
             check_integrity_and_get_plan_string!(physical_plan, true);
 
         match join_type {
-            JoinType::Inner => {
-                insta::assert_snapshot!(
-                    actual,
-                    @r"
-                SortPreservingMergeExec: [col_a@2 ASC, col_b@3 ASC]
-                  SortMergeJoin: join_type=Inner, on=[(nullable_col@0, col_a@0)]
-                    DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet
-                    DataSourceExec: file_groups={1 group: [[x]]}, projection=[col_a, col_b], file_type=parquet
-                "
-                );
-                insta::assert_snapshot!(
-                    actual_optimized,
-                    @r"
-                SortMergeJoin: join_type=Inner, on=[(nullable_col@0, col_a@0)]
-                  SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[false]
-                    DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet
-                  SortExec: expr=[col_a@0 ASC, col_b@1 ASC], preserve_partitioning=[false]
-                    DataSourceExec: file_groups={1 group: [[x]]}, projection=[col_a, col_b], file_type=parquet
-                "
-                );
-            }
-            JoinType::Left => {
-                insta::assert_snapshot!(
-                    actual,
-                    @r"
-                SortPreservingMergeExec: [col_a@2 ASC, col_b@3 ASC]
-                  SortMergeJoin: join_type=Left, on=[(nullable_col@0, col_a@0)]
-                    DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet
-                    DataSourceExec: file_groups={1 group: [[x]]}, projection=[col_a, col_b], file_type=parquet
-                "
-                );
-                insta::assert_snapshot!(
-                    actual_optimized,
-                    @r"
-                SortExec: expr=[col_a@2 ASC, col_b@3 ASC], preserve_partitioning=[false]
-                  SortMergeJoin: join_type=Left, on=[(nullable_col@0, col_a@0)]
-                    SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[false]
-                      DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet
-                    SortExec: expr=[col_a@0 ASC], preserve_partitioning=[false]
-                      DataSourceExec: file_groups={1 group: [[x]]}, projection=[col_a, col_b], file_type=parquet
-                "
-                );
-            }
-            JoinType::Right => {
-                insta::assert_snapshot!(
-                    actual,
-                    @r"
-                SortPreservingMergeExec: [col_a@2 ASC, col_b@3 ASC]
-                  SortMergeJoin: join_type=Right, on=[(nullable_col@0, col_a@0)]
-                    DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet
-                    DataSourceExec: file_groups={1 group: [[x]]}, projection=[col_a, col_b], file_type=parquet
-                "
-                );
-                insta::assert_snapshot!(
-                    actual_optimized,
-                    @r"
-                SortMergeJoin: join_type=Right, on=[(nullable_col@0, col_a@0)]
-                  SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[false]
-                    DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet
-                  SortExec: expr=[col_a@0 ASC, col_b@1 ASC], preserve_partitioning=[false]
-                    DataSourceExec: file_groups={1 group: [[x]]}, projection=[col_a, col_b], file_type=parquet
-                "
-                );
-            }
-            JoinType::Full => {
-                insta::assert_snapshot!(
-                    actual,
-                    @r"
-                SortPreservingMergeExec: [col_a@2 ASC, col_b@3 ASC]
-                  SortMergeJoin: join_type=Full, on=[(nullable_col@0, col_a@0)]
-                    DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet
-                    DataSourceExec: file_groups={1 group: [[x]]}, projection=[col_a, col_b], file_type=parquet
-                "
-                );
-                insta::assert_snapshot!(
-                    actual_optimized,
-                    @r"
-                SortExec: expr=[col_a@2 ASC, col_b@3 ASC], preserve_partitioning=[false]
-                  SortMergeJoin: join_type=Full, on=[(nullable_col@0, col_a@0)]
-                    SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[false]
-                      DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet
-                    SortExec: expr=[col_a@0 ASC], preserve_partitioning=[false]
-                      DataSourceExec: file_groups={1 group: [[x]]}, projection=[col_a, col_b], file_type=parquet
-                "
-                );
-            }
             JoinType::RightAnti => {
-                insta::assert_snapshot!(
-                    actual,
-                    @r"
-                SortPreservingMergeExec: [col_a@0 ASC, col_b@1 ASC]
-                  SortMergeJoin: join_type=RightAnti, on=[(nullable_col@0, col_a@0)]
-                    DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet
-                    DataSourceExec: file_groups={1 group: [[x]]}, projection=[col_a, col_b], file_type=parquet
-                "
-                );
-                insta::assert_snapshot!(
-                    actual_optimized,
-                    @r"
-                SortMergeJoin: join_type=RightAnti, on=[(nullable_col@0, col_a@0)]
-                  SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[false]
-                    DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet
-                  SortExec: expr=[col_a@0 ASC, col_b@1 ASC], preserve_partitioning=[false]
-                    DataSourceExec: file_groups={1 group: [[x]]}, projection=[col_a, col_b], file_type=parquet
-                "
-                );
+                allow_duplicates! {
+                    with_settings!({
+                        filters => vec![(r"join_type=\w+", "join_type=[type]")]
+                    }, {
+                        assert_snapshot!(
+                            actual,
+                            @r"
+                        SortPreservingMergeExec: [col_a@0 ASC, col_b@1 ASC]
+                          SortMergeJoin: join_type=[type], on=[(nullable_col@0, col_a@0)]
+                            DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet
+                            DataSourceExec: file_groups={1 group: [[x]]}, projection=[col_a, col_b], file_type=parquet
+                        "
+                        );
+                    });
+                }
             }
-            _ => unreachable!(),
+            _ => {
+                allow_duplicates! {
+                    with_settings!({
+                        filters => vec![(r"join_type=\w+", "join_type=[type]")]
+                    }, {
+                        assert_snapshot!(
+                            actual,
+                            @r"
+                        SortPreservingMergeExec: [col_a@2 ASC, col_b@3 ASC]
+                          SortMergeJoin: join_type=[type], on=[(nullable_col@0, col_a@0)]
+                            DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet
+                            DataSourceExec: file_groups={1 group: [[x]]}, projection=[col_a, col_b], file_type=parquet
+                        "
+                        );
+                    });
+                }
+            }
+        }
+
+        match join_type {
+            JoinType::Inner | JoinType::Right | JoinType::RightAnti => {
+                allow_duplicates! {
+                     with_settings!({
+                         filters => vec![(r"join_type=\w+", "join_type=[type]")]
+                     }, {
+                         assert_snapshot!(
+                             actual_optimized,
+                             @r"
+                        SortMergeJoin: join_type=[type], on=[(nullable_col@0, col_a@0)]
+                          SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[false]
+                            DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet
+                          SortExec: expr=[col_a@0 ASC, col_b@1 ASC], preserve_partitioning=[false]
+                            DataSourceExec: file_groups={1 group: [[x]]}, projection=[col_a, col_b], file_type=parquet
+                        "
+                         );
+                     });
+                }
+            }
+            _ => {
+                allow_duplicates! {
+                     with_settings!({
+                         filters => vec![(r"join_type=\w+", "join_type=[type]")]
+                     }, {
+                         assert_snapshot!(
+                             actual_optimized,
+                             @r"
+                        SortExec: expr=[col_a@2 ASC, col_b@3 ASC], preserve_partitioning=[false]
+                          SortMergeJoin: join_type=[type], on=[(nullable_col@0, col_a@0)]
+                            SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[false]
+                              DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet
+                            SortExec: expr=[col_a@0 ASC], preserve_partitioning=[false]
+                              DataSourceExec: file_groups={1 group: [[x]]}, projection=[col_a, col_b], file_type=parquet
+                        "
+                         );
+                     });
+                }
+            }
         }
     }
     Ok(())
