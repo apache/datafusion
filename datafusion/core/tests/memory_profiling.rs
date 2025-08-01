@@ -3,11 +3,12 @@ use std::time::Instant;
 
 #[tokio::test]
 async fn test_memory_profiling_enabled_vs_disabled() {
+    // Define a more complex query generating 100k rows, aggregating and sorting
+    let sql = "SELECT v % 100 AS group_key, COUNT(*) AS cnt, SUM(v) AS sum_v \n  FROM generate_series(1,100000) AS t(v) \n GROUP BY group_key \n ORDER BY group_key";
     let ctx = SessionContext::new();
-
-    // Test with memory profiling disabled (baseline)
+    // Baseline run without memory profiling
     let start = Instant::now();
-    ctx.sql("SELECT 1").await.unwrap().collect().await.unwrap();
+    ctx.sql(sql).await.unwrap().collect().await.unwrap();
     let disabled_duration = start.elapsed();
 
     // Test with memory profiling enabled
@@ -18,14 +19,9 @@ async fn test_memory_profiling_enabled_vs_disabled() {
         .unwrap();
     let ctx_enabled = SessionContext::new_with_config(config);
 
+    // Run the same complex query with profiling enabled
     let start = Instant::now();
-    ctx_enabled
-        .sql("SELECT 1")
-        .await
-        .unwrap()
-        .collect()
-        .await
-        .unwrap();
+    ctx_enabled.sql(sql).await.unwrap().collect().await.unwrap();
     let enabled_duration = start.elapsed();
 
     // Assert that enabled duration remains within 110% of the disabled (baseline) duration
