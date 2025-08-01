@@ -167,13 +167,13 @@ async fn test_dynamic_filter_pushdown_through_hash_join_with_topk() {
     // Create build side with limited values
     let build_batches = vec![record_batch!(
         ("a", Utf8, ["aa", "ab"]),
-        ("b", Utf8, ["ba", "bb"]),
+        ("b", Utf8View, ["ba", "bb"]),
         ("c", Float64, [1.0, 2.0])
     )
     .unwrap()];
     let build_side_schema = Arc::new(Schema::new(vec![
         Field::new("a", DataType::Utf8, false),
-        Field::new("b", DataType::Utf8, false),
+        Field::new("b", DataType::Utf8View, false),
         Field::new("c", DataType::Float64, false),
     ]));
     let build_scan = TestScanBuilder::new(Arc::clone(&build_side_schema))
@@ -184,13 +184,13 @@ async fn test_dynamic_filter_pushdown_through_hash_join_with_topk() {
     // Create probe side with more values
     let probe_batches = vec![record_batch!(
         ("d", Utf8, ["aa", "ab", "ac", "ad"]),
-        ("e", Utf8, ["ba", "bb", "bc", "bd"]),
+        ("e", Utf8View, ["ba", "bb", "bc", "bd"]),
         ("f", Float64, [1.0, 2.0, 3.0, 4.0])
     )
     .unwrap()];
     let probe_side_schema = Arc::new(Schema::new(vec![
         Field::new("d", DataType::Utf8, false),
-        Field::new("e", DataType::Utf8, false),
+        Field::new("e", DataType::Utf8View, false),
         Field::new("f", DataType::Float64, false),
     ]));
     let probe_scan = TestScanBuilder::new(Arc::clone(&probe_side_schema))
@@ -283,13 +283,13 @@ async fn test_static_filter_pushdown_through_hash_join() {
     // Create build side with limited values
     let build_batches = vec![record_batch!(
         ("a", Utf8, ["aa", "ab"]),
-        ("b", Utf8, ["ba", "bb"]),
+        ("b", Utf8View, ["ba", "bb"]),
         ("c", Float64, [1.0, 2.0])
     )
     .unwrap()];
     let build_side_schema = Arc::new(Schema::new(vec![
         Field::new("a", DataType::Utf8, false),
-        Field::new("b", DataType::Utf8, false),
+        Field::new("b", DataType::Utf8View, false),
         Field::new("c", DataType::Float64, false),
     ]));
     let build_scan = TestScanBuilder::new(Arc::clone(&build_side_schema))
@@ -300,13 +300,13 @@ async fn test_static_filter_pushdown_through_hash_join() {
     // Create probe side with more values
     let probe_batches = vec![record_batch!(
         ("d", Utf8, ["aa", "ab", "ac", "ad"]),
-        ("e", Utf8, ["ba", "bb", "bc", "bd"]),
+        ("e", Utf8View, ["ba", "bb", "bc", "bd"]),
         ("f", Float64, [1.0, 2.0, 3.0, 4.0])
     )
     .unwrap()];
     let probe_side_schema = Arc::new(Schema::new(vec![
         Field::new("d", DataType::Utf8, false),
-        Field::new("e", DataType::Utf8, false),
+        Field::new("e", DataType::Utf8View, false),
         Field::new("f", DataType::Float64, false),
     ]));
     let probe_scan = TestScanBuilder::new(Arc::clone(&probe_side_schema))
