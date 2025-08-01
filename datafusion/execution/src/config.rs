@@ -136,13 +136,8 @@ impl SessionConfig {
     /// let config = SessionConfig::new();
     /// assert!(config.options().execution.batch_size > 0);
     /// ```
-    pub fn options(&self) -> &ConfigOptions {
+    pub fn options(&self) -> &Arc<ConfigOptions> {
         &self.options
-    }
-
-    /// Returns the config options as an Arc
-    pub fn options_arc(&self) -> Arc<ConfigOptions> {
-        Arc::clone(&self.options)
     }
 
     /// Return a mutable handle to the configuration options.

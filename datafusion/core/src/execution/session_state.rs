@@ -734,18 +734,13 @@ impl SessionState {
     }
 
     /// return the configuration options
-    pub fn config_options(&self) -> &ConfigOptions {
+    pub fn config_options(&self) -> &Arc<ConfigOptions> {
         self.config.options()
-    }
-
-    /// return the configuration options
-    pub fn config_options_arc(&self) -> Arc<ConfigOptions> {
-        self.config.options_arc()
     }
 
     /// Mark the start of the execution
     pub fn start_execution(&mut self) {
-        let config = self.config.options_arc();
+        let config = Arc::clone(self.config.options());
         self.execution_props.start_execution(config);
     }
 
@@ -1899,7 +1894,7 @@ impl OptimizerConfig for SessionState {
     }
 
     fn options(&self) -> Arc<ConfigOptions> {
-        self.config_options_arc()
+        Arc::clone(self.config.options())
     }
 
     fn function_registry(&self) -> Option<&dyn FunctionRegistry> {
