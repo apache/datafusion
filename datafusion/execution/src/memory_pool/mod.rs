@@ -440,6 +440,10 @@ impl MemoryReservation {
         if self.size > self.peak {
             self.peak = self.size;
         }
+        // record incremental allocation if profiling enabled
+        if let Some(tracker) = &self.tracker {
+            tracker.record_memory(self.consumer().name(), capacity);
+        }
     }
 
     /// Try to increase the size of this reservation by `capacity`
@@ -450,6 +454,10 @@ impl MemoryReservation {
         self.size += capacity;
         if self.size > self.peak {
             self.peak = self.size;
+        }
+        // record incremental allocation if profiling enabled
+        if let Some(tracker) = &self.tracker {
+            tracker.record_memory(self.consumer().name(), capacity);
         }
         Ok(())
     }
