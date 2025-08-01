@@ -12,93 +12,9 @@ use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::catalog::MemTable;
 use datafusion::common::Result;
-use datafusion::execution::context::SessionContext;
-use std::collections::HashMap;
+use datafusion::prelude::*;
 use std::sync::Arc;
 use std::time::Instant;
-
-/// Categorizes operators into logical groups for better analysis
-fn categorize_operator(operator_name: &str) -> &'static str {
-    if operator_name.contains("Scan") || operator_name.contains("scan") {
-        "Scan"
-    } else if operator_name.contains("Join") || operator_name.contains("join") {
-        "Join"
-    } else if operator_name.contains("Aggregate")
-        || operator_name.contains("aggregate")
-        || operator_name.contains("Hash")
-    {
-        "Aggregation"
-    } else if operator_name.contains("Sort") || operator_name.contains("sort") {
-        "Sort"
-    } else if operator_name.contains("Window") || operator_name.contains("window") {
-        "Window"
-    } else if operator_name.contains("Filter") || operator_name.contains("filter") {
-        "Filter"
-    } else if operator_name.contains("Project") || operator_name.contains("project") {
-        "Projection"
-    } else if operator_name.contains("Union") || operator_name.contains("union") {
-        "Union"
-    } else {
-        "Other"
-    }
-}
-
-/// Analyzes memory report and provides detailed breakdown
-fn analyze_memory_report(memory_report: &HashMap<String, usize>) {
-    let total_memory: usize = memory_report.values().sum();
-    let mut category_memory: HashMap<&str, usize> = HashMap::new();
-
-    // Categorize operators
-    for (operator, memory) in memory_report {
-        let category = categorize_operator(operator);
-        *category_memory.entry(category).or_insert(0) += memory;
-    }
-
-    println!("📊 Memory Analysis by Operator Category:");
-    for (category, memory) in &category_memory {
-        let percentage = if total_memory > 0 {
-            (*memory as f64 / total_memory as f64) * 100.0
-        } else {
-            0.0
-        };
-        println!(
-            "  📌 {}: {:.2} MB ({:.1}%)",
-            category,
-            *memory as f64 / 1024.0 / 1024.0,
-            percentage
-        );
-    }
-
-    println!("\n🔍 Top 10 Memory-Intensive Operators:");
-    let mut sorted_operators: Vec<_> = memory_report.iter().collect();
-    sorted_operators.sort_by(|a, b| b.1.cmp(a.1));
-
-    for (i, (operator, memory)) in sorted_operators.iter().take(10).enumerate() {
-        let percentage = if total_memory > 0 {
-            (**memory as f64 / total_memory as f64) * 100.0
-        } else {
-            0.0
-        };
-        println!(
-            "  {}. {}: {:.2} MB ({:.1}%)",
-            i + 1,
-            operator,
-            **memory as f64 / 1024.0 / 1024.0,
-            percentage
-        );
-    }
-
-    let peak_memory_mb = total_memory as f64 / 1024.0 / 1024.0;
-    println!("\n🚀 Peak Memory Usage: {:.2} MB", peak_memory_mb);
-
-    if peak_memory_mb > 100.0 {
-        println!("⚠️  High memory usage detected - consider optimizing query or increasing memory limits");
-    } else if peak_memory_mb > 50.0 {
-        println!("⚡ Moderate memory usage - monitor for production workloads");
-    } else {
-        println!("✅ Memory usage is within acceptable limits");
-    }
-}
 
 /// Creates a large dataset with multiple columns to simulate memory-intensive operations
 fn create_large_dataset(num_rows: usize) -> Result<RecordBatch> {
@@ -255,13 +171,9 @@ async fn run_with_profiling() -> Result<()> {
         println!("🎯 Memory profiling results collected successfully!");
         println!("Number of operators tracked: {}", memory_report.len());
 
-        // Detailed analysis of memory usage
-        analyze_memory_report(&memory_report);
-
-        println!("\n📋 Raw Memory Report (All Operators):");
-        for (operator, bytes) in &memory_report {
-            println!("  {}: {:.2} MB", operator, bytes / 1024 / 1024);
-        }
+        // Use enhanced memory profiling for detailed analysis
+        let enhanced_report = ctx.get_enhanced_memory_report();
+        enhanced_report.print_analysis();
     } else {
         println!("No memory profiling information available");
         println!("This is expected for this simple query because:");

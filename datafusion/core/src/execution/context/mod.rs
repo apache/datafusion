@@ -92,6 +92,139 @@ use object_store::ObjectStore;
 use parking_lot::RwLock;
 use url::Url;
 
+/// Enhanced memory profiling report with categorization and analysis
+#[derive(Debug)]
+pub struct EnhancedMemoryReport {
+    raw_report: std::collections::HashMap<String, usize>,
+    categorized_operators: std::collections::HashMap<String, String>,
+    peak_memory: usize,
+    total_memory: usize,
+}
+
+impl EnhancedMemoryReport {
+    /// Creates an enhanced memory report from the raw memory report
+    pub fn from_raw_report(raw_report: std::collections::HashMap<String, usize>) -> Self {
+        let mut categorized_operators = std::collections::HashMap::new();
+        let total_memory: usize = raw_report.values().sum();
+        let peak_memory = raw_report.values().copied().max().unwrap_or(0);
+
+        for operator in raw_report.keys() {
+            categorized_operators.insert(
+                operator.clone(),
+                Self::categorize_operator(operator).to_string(),
+            );
+        }
+
+        Self {
+            raw_report,
+            categorized_operators,
+            peak_memory,
+            total_memory,
+        }
+    }
+
+    /// Categorizes memory operators for better understanding
+    fn categorize_operator(op_name: &str) -> &'static str {
+        match op_name.to_lowercase().as_str() {
+            name if name.contains("scan") || name.contains("reader") => "Data Input",
+            name if name.contains("aggregate") || name.contains("group") => "Aggregation",
+            name if name.contains("join") || name.contains("hash") => "Join Operation",
+            name if name.contains("sort") || name.contains("order") => "Sorting",
+            name if name.contains("filter") || name.contains("where") => "Filtering",
+            name if name.contains("project") || name.contains("select") => "Projection",
+            name if name.contains("union") || name.contains("concat") => "Set Operation",
+            name if name.contains("window") || name.contains("rank") => "Window Function",
+            name if name.contains("limit") || name.contains("top") => "Limit/TopK",
+            name if name.contains("spill") || name.contains("buffer") => {
+                "Memory Management"
+            }
+            _ => "Other",
+        }
+    }
+
+    /// Prints detailed analysis of memory usage patterns with educational information
+    pub fn print_analysis(&self) {
+        if self.raw_report.is_empty() {
+            println!("No memory tracking data available");
+            return;
+        }
+
+        println!("\n📊 Enhanced Memory Analysis:");
+
+        // Sort operators by memory usage
+        let mut operators: Vec<_> = self.raw_report.iter().collect();
+        operators.sort_by(|a, b| b.1.cmp(a.1));
+
+        println!("🔍 Top Memory Consumers:");
+        for (i, (operator, bytes)) in operators.iter().take(10).enumerate() {
+            let percentage = if self.total_memory > 0 {
+                (**bytes as f64 / self.total_memory as f64) * 100.0
+            } else {
+                0.0
+            };
+
+            let category = self
+                .categorized_operators
+                .get(*operator)
+                .map(|s| s.as_str())
+                .unwrap_or("Unknown");
+            println!(
+                "  {}. {}: {:.2} MB ({:.1}%) [{}]",
+                i + 1,
+                operator,
+                **bytes as f64 / 1024.0 / 1024.0,
+                percentage,
+                category
+            );
+        }
+
+        println!("\n📈 Memory Summary:");
+        println!(
+            "  Peak memory usage: {:.2} MB",
+            self.peak_memory as f64 / 1024.0 / 1024.0
+        );
+        println!(
+            "  Total tracked memory: {:.2} MB",
+            self.total_memory as f64 / 1024.0 / 1024.0
+        );
+
+        // Category breakdown
+        let mut category_memory: std::collections::HashMap<&str, usize> =
+            std::collections::HashMap::new();
+        for (operator, bytes) in &self.raw_report {
+            let category = Self::categorize_operator(operator);
+            *category_memory.entry(category).or_insert(0) += bytes;
+        }
+
+        if category_memory.len() > 1 {
+            println!("\n🎯 Memory by Category:");
+            for (category, memory) in &category_memory {
+                let percentage = if self.total_memory > 0 {
+                    (*memory as f64 / self.total_memory as f64) * 100.0
+                } else {
+                    0.0
+                };
+                println!(
+                    "  {}: {:.2} MB ({:.1}%)",
+                    category,
+                    *memory as f64 / 1024.0 / 1024.0,
+                    percentage
+                );
+            }
+        }
+
+        println!("\n💡 Memory Profiling Status:");
+        if self.raw_report.len() == 1 && self.raw_report.contains_key("query_output") {
+            println!("  ⚠️  Only 'query_output' tracked - this is expected behavior");
+            println!(
+                "  📋 DataFusion currently only instruments query result materialization"
+            );
+            println!("  🔬 Individual operators (scans, joins, aggregations) are not yet tracked");
+            println!("  🚀 Future enhancement: automatic operator-level memory instrumentation");
+        }
+    }
+}
+
 mod csv;
 mod json;
 #[cfg(feature = "parquet")]
@@ -474,6 +607,12 @@ impl SessionContext {
         &self,
     ) -> std::collections::HashMap<String, usize> {
         self.state.read().memory_tracker.metrics()
+    }
+
+    /// Get enhanced memory report with categorization and detailed analysis
+    pub fn get_enhanced_memory_report(&self) -> EnhancedMemoryReport {
+        let raw_report = self.get_last_query_memory_report();
+        EnhancedMemoryReport::from_raw_report(raw_report)
     }
 
     /// Convert the current `SessionContext` into a [`SessionStateBuilder`]
