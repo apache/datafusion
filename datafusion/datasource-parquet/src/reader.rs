@@ -252,9 +252,7 @@ impl AsyncFileReader for CachedParquetFileReader {
             let object_meta = &file_meta.object_meta;
 
             // lookup if the metadata is already cached
-            if let Some(metadata) =
-                metadata_cache.get_with_extra(&object_meta.location, object_meta)
-            {
+            if let Some(metadata) = metadata_cache.get(object_meta) {
                 if let Some(parquet_metadata) =
                     metadata.as_any().downcast_ref::<CachedParquetMetaData>()
                 {
@@ -276,11 +274,7 @@ impl AsyncFileReader for CachedParquetFileReader {
             let metadata = Arc::new(reader.finish()?);
             let cached_metadata = Arc::new(CachedParquetMetaData(Arc::clone(&metadata)));
 
-            metadata_cache.put_with_extra(
-                &object_meta.location,
-                cached_metadata,
-                object_meta,
-            );
+            metadata_cache.put(object_meta, cached_metadata);
             Ok(metadata)
         }
         .boxed()

@@ -161,6 +161,8 @@ impl CacheAccessor<Path, Arc<Vec<ObjectMeta>>> for DefaultListFilesCache {
 /// Collected file embedded metadata cache.
 /// The metadata for some file is invalided when the file size or last modification time have been
 /// changed.
+/// Users should use the `get` and `put` methods. The `get_with_extra` and `put_with_extra` methods
+/// simply call `get` and `put`, respectively.
 #[derive(Default)]
 pub struct DefaultFilesMetadataCache {
     metadata: DashMap<Path, (ObjectMeta, Arc<dyn FileMetadata>)>,
@@ -168,19 +170,15 @@ pub struct DefaultFilesMetadataCache {
 
 impl FileMetadataCache for DefaultFilesMetadataCache {}
 
-impl CacheAccessor<Path, Arc<dyn FileMetadata>> for DefaultFilesMetadataCache {
+impl CacheAccessor<ObjectMeta, Arc<dyn FileMetadata>> for DefaultFilesMetadataCache {
     type Extra = ObjectMeta;
 
-    fn get(&self, _k: &Path) -> Option<Arc<dyn FileMetadata>> {
-        panic!("get in DefaultFilesMetadataCache is not supported, please use get_with_extra")
-    }
-
-    fn get_with_extra(&self, k: &Path, e: &Self::Extra) -> Option<Arc<dyn FileMetadata>> {
+    fn get(&self, k: &ObjectMeta) -> Option<Arc<dyn FileMetadata>> {
         self.metadata
-            .get(k)
+            .get(&k.location)
             .map(|s| {
                 let (extra, metadata) = s.value();
-                if extra.size != e.size || extra.last_modified != e.last_modified {
+                if extra.size != k.size || extra.last_modified != k.last_modified {
                     None
                 } else {
                     Some(Arc::clone(metadata))
@@ -189,31 +187,45 @@ impl CacheAccessor<Path, Arc<dyn FileMetadata>> for DefaultFilesMetadataCache {
             .unwrap_or(None)
     }
 
+    fn get_with_extra(
+        &self,
+        k: &ObjectMeta,
+        _e: &Self::Extra,
+    ) -> Option<Arc<dyn FileMetadata>> {
+        self.get(k)
+    }
+
     fn put(
         &self,
-        _key: &Path,
-        _value: Arc<dyn FileMetadata>,
+        key: &ObjectMeta,
+        value: Arc<dyn FileMetadata>,
     ) -> Option<Arc<dyn FileMetadata>> {
-        panic!("put in DefaultFilesMetadataCache is not supported, please use put_with_extra")
+        self.metadata
+            .insert(key.location.clone(), (key.clone(), value))
+            .map(|x| x.1)
     }
 
     fn put_with_extra(
         &self,
-        key: &Path,
+        key: &ObjectMeta,
         value: Arc<dyn FileMetadata>,
-        e: &Self::Extra,
+        _e: &Self::Extra,
     ) -> Option<Arc<dyn FileMetadata>> {
+        self.put(key, value)
+    }
+
+    fn remove(&mut self, k: &ObjectMeta) -> Option<Arc<dyn FileMetadata>> {
+        self.metadata.remove(&k.location).map(|x| x.1 .1)
+    }
+
+    fn contains_key(&self, k: &ObjectMeta) -> bool {
         self.metadata
-            .insert(key.clone(), (e.clone(), value))
-            .map(|x| x.1)
-    }
-
-    fn remove(&mut self, k: &Path) -> Option<Arc<dyn FileMetadata>> {
-        self.metadata.remove(k).map(|x| x.1 .1)
-    }
-
-    fn contains_key(&self, k: &Path) -> bool {
-        self.metadata.contains_key(k)
+            .get(&k.location)
+            .map(|s| {
+                let (extra, _) = s.value();
+                extra.size == k.size && extra.last_modified == k.last_modified
+            })
+            .unwrap_or(false)
     }
 
     fn len(&self) -> usize {
@@ -221,7 +233,7 @@ impl CacheAccessor<Path, Arc<dyn FileMetadata>> for DefaultFilesMetadataCache {
     }
 
     fn clear(&self) {
-        self.metadata.clear()
+        self.metadata.clear();
     }
 
     fn name(&self) -> String {
@@ -336,13 +348,15 @@ mod tests {
             metadata: "retrieved_metadata".to_owned(),
         });
 
-        let cache = DefaultFilesMetadataCache::default();
-        assert!(cache
-            .get_with_extra(&object_meta.location, &object_meta)
-            .is_none());
+        let mut cache = DefaultFilesMetadataCache::default();
+        assert!(cache.get(&object_meta).is_none());
 
-        cache.put_with_extra(&object_meta.location, metadata, &object_meta);
-        let value = cache.get_with_extra(&object_meta.location, &object_meta);
+        // put
+        cache.put(&object_meta, metadata);
+
+        // get and contains of a valid entry
+        assert!(cache.contains_key(&object_meta));
+        let value = cache.get(&object_meta);
         assert!(value.is_some());
         let test_file_metadata = Arc::downcast::<TestFileMetadata>(value.unwrap());
         assert!(test_file_metadata.is_ok());
@@ -351,9 +365,8 @@ mod tests {
         // file size changed
         let mut object_meta2 = object_meta.clone();
         object_meta2.size = 2048;
-        assert!(cache
-            .get_with_extra(&object_meta2.location, &object_meta2)
-            .is_none());
+        assert!(cache.get(&object_meta2).is_none());
+        assert!(!cache.contains_key(&object_meta2));
 
         // file last_modified changed
         let mut object_meta2 = object_meta.clone();
@@ -361,15 +374,18 @@ mod tests {
             DateTime::parse_from_rfc3339("2025-07-29T13:13:13+00:00")
                 .unwrap()
                 .into();
-        assert!(cache
-            .get_with_extra(&object_meta2.location, &object_meta2)
-            .is_none());
+        assert!(cache.get(&object_meta2).is_none());
+        assert!(!cache.contains_key(&object_meta2));
 
         // different file
-        let mut object_meta2 = object_meta;
+        let mut object_meta2 = object_meta.clone();
         object_meta2.location = Path::from("test2");
-        assert!(cache
-            .get_with_extra(&object_meta2.location, &object_meta2)
-            .is_none());
+        assert!(cache.get(&object_meta2).is_none());
+        assert!(!cache.contains_key(&object_meta2));
+
+        // remove
+        cache.remove(&object_meta);
+        assert!(cache.get(&object_meta).is_none());
+        assert!(!cache.contains_key(&object_meta));
     }
 }

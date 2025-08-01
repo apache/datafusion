@@ -43,7 +43,7 @@ pub trait FileMetadata: Any + Send + Sync {
 
 /// Cache to store file-embedded metadata.
 pub trait FileMetadataCache:
-    CacheAccessor<Path, Arc<dyn FileMetadata>, Extra = ObjectMeta>
+    CacheAccessor<ObjectMeta, Arc<dyn FileMetadata>, Extra = ObjectMeta>
 {
 }
 
