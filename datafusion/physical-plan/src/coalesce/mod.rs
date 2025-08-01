@@ -228,6 +228,12 @@ fn gc_string_view_batch(batch: &RecordBatch) -> RecordBatch {
             let Some(s) = c.as_string_view_opt() else {
                 return Arc::clone(c);
             };
+
+            // Fast path: if the data buffers are empty, we can return the original array
+            if s.data_buffers().is_empty() {
+                return Arc::clone(c);
+            }
+
             let ideal_buffer_size: usize = s
                 .views()
                 .iter()
@@ -240,6 +246,9 @@ fn gc_string_view_batch(batch: &RecordBatch) -> RecordBatch {
                     }
                 })
                 .sum();
+
+            // We don't use get_buffer_memory_size here, because gc is for the contents of the
+            // data buffers, not views and nulls.
             let actual_buffer_size =
                 s.data_buffers().iter().map(|b| b.capacity()).sum::<usize>();
 
