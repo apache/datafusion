@@ -44,7 +44,6 @@ parquet = ["datafusion/parquet", "datafusion-common/parquet"]
 avro = ["datafusion/avro", "datafusion-common/avro"]
 
 [dependencies]
-ahash = { workspace = true }
 arrow = { workspace = true }
 chrono = { workspace = true }
 datafusion = { workspace = true, default-features = true }

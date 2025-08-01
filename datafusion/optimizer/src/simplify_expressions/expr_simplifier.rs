@@ -2168,7 +2168,6 @@ mod tests {
     use super::*;
     use crate::simplify_expressions::SimplifyContext;
     use crate::test::test_table_scan_with_name;
-    use ahash::AHasher;
     use arrow::datatypes::FieldRef;
     use datafusion_common::{assert_contains, DFSchemaRef, ToDFSchema};
     use datafusion_expr::{
@@ -2182,7 +2181,7 @@ mod tests {
     };
     use datafusion_functions_window_common::field::WindowUDFFieldArgs;
     use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
-    use std::hash::{Hash, Hasher};
+    use std::hash::{DefaultHasher, Hash, Hasher};
     use std::{
         collections::HashMap,
         ops::{BitAnd, BitOr, BitXor},

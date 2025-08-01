@@ -103,7 +103,6 @@ unicode_expressions = [
 extended_tests = []
 
 [dependencies]
-ahash = { workspace = true }
 arrow = { workspace = true }
 arrow-ipc = { workspace = true }
 arrow-schema = { workspace = true, features = ["canonical_extension_types"] }
