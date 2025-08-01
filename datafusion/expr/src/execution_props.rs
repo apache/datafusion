@@ -36,7 +36,7 @@ pub struct ExecutionProps {
     pub query_execution_start_time: DateTime<Utc>,
     /// Alias generator used by subquery optimizer rules
     pub alias_generator: Arc<AliasGenerator>,
-    /// Snapshot of config options
+    /// Snapshot of config options when the query started
     pub config_options: Option<Arc<ConfigOptions>>,
     /// Providers for scalar variables
     pub var_providers: Option<HashMap<VarType, Arc<dyn VarProvider + Send + Sync>>>,
