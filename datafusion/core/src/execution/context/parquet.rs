@@ -113,6 +113,7 @@ mod tests {
     };
     use datafusion_execution::config::SessionConfig;
 
+    use datafusion_expr::Partitioning;
     use tempfile::{tempdir, TempDir};
 
     #[tokio::test]
@@ -213,6 +214,85 @@ mod tests {
         let total_rows: usize = results.iter().map(|rb| rb.num_rows()).sum();
         // alltypes_plain.parquet = 8 rows, alltypes_plain.snappy.parquet = 2 rows, alltypes_dictionary.parquet = 2 rows
         assert_eq!(total_rows, 10);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn write_multiple_file_parquet_no_extensions() -> Result<()> {
+        let ctx = SessionContext::new();
+        let df = ctx.read_batch(RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("purchase_id", DataType::Int32, false),
+                Field::new("price", DataType::Float32, false),
+                Field::new("quantity", DataType::Int32, false),
+            ])),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5])),
+                Arc::new(Float32Array::from(vec![1.12, 3.40, 2.33, 9.10, 6.66])),
+                Arc::new(Int32Array::from(vec![1, 3, 2, 4, 3])),
+            ],
+        )?)?;
+
+        // Repartition to have the desired.
+        let partitioned_df = df.repartition(Partitioning::RoundRobinBatch(2))?;
+        let tmp_dir = tempdir()?;
+        let path = tmp_dir
+            .path()
+            .join("no_ext_parquet")
+            .to_str()
+            .unwrap()
+            .to_string();
+
+        let options = DataFrameWriteOptions::new();
+
+        partitioned_df.write_parquet(&path, options, None).await?;
+
+        let test_path = std::path::Path::new(&path);
+        assert_eq!(
+            test_path.is_dir(),
+            true,
+            "No extension and default DataFrameWriteOptons should have yielded a dir."
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn write_single_file_parquet_no_extensions() -> Result<()> {
+        let ctx = SessionContext::new();
+        let df = ctx.read_batch(RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("purchase_id", DataType::Int32, false),
+                Field::new("price", DataType::Float32, false),
+                Field::new("quantity", DataType::Int32, false),
+            ])),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5])),
+                Arc::new(Float32Array::from(vec![1.12, 3.40, 2.33, 9.10, 6.66])),
+                Arc::new(Int32Array::from(vec![1, 3, 2, 4, 3])),
+            ],
+        )?)?;
+        // Repartition to have
+        let partitioned_df = df.repartition(Partitioning::RoundRobinBatch(2))?;
+        let tmp_dir = tempdir()?;
+        let path = tmp_dir
+            .path()
+            .join("no_ext_parquet")
+            .to_str()
+            .unwrap()
+            .to_string();
+
+        let options = DataFrameWriteOptions::new().with_single_file_output(true);
+
+        partitioned_df.write_parquet(&path, options, None).await?;
+
+        let test_path = std::path::Path::new(&path);
+        assert_eq!(
+            test_path.is_file(),
+            true,
+            "No extension and DataFrameWriteOptons::with_single_file_output(true) should have yielded a single file."
+        );
+
         Ok(())
     }
 
