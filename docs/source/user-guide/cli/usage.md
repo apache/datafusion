@@ -122,11 +122,12 @@ Available commands inside DataFusion CLI are:
  > \h function
  ```
   
- - Memory
- 
- ```bash
- > \MEMORY enable
- ```
+- Memory
+
+```bash
+> \MEMORY enable
+```
+
 
  ```bash
  > \MEMORY show
@@ -135,6 +136,10 @@ Available commands inside DataFusion CLI are:
 ProjectionExec: 1024
 FilterExec: 2048
 HashJoinExec: 5120
+```
+
+```bash
+> \MEMORY disable
 ```
 
 ## Supported SQL

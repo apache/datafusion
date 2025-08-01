@@ -114,8 +114,12 @@ impl Command {
             Self::Memory(subcmd) => {
                 match subcmd.as_deref() {
                     Some("enable") => {
-                        ctx.enable_memory_profiling();
+                        print_options.memory_profiling = true;
                         println!("Memory profiling enabled for next query");
+                    }
+                    Some("disable" | "off") => {
+                        print_options.memory_profiling = false;
+                        println!("Memory profiling disabled");
                     }
                     Some("show") => {
                         if let Some(report) = ctx.get_last_query_memory_report() {
@@ -126,7 +130,7 @@ impl Command {
                             println!("No memory usage recorded");
                         }
                     }
-                    _ => println!("Usage: MEMORY [enable|show]"),
+                    _ => println!("Usage: MEMORY [enable|disable|show]"),
                 }
                 Ok(())
             }
@@ -163,8 +167,8 @@ impl Command {
                 ("\\pset [NAME [VALUE]]", "set table output option\n(format)")
             }
             Self::Memory(_) => (
-                "MEMORY [enable|show]",
-                "enable or display memory profiling report",
+                "MEMORY [enable|disable|show]",
+                "toggle memory profiling or display the report",
             ),
         }
     }

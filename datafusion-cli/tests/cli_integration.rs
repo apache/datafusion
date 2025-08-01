@@ -241,6 +241,26 @@ fn test_cli_top_memory_consumers<'a>(
     assert_cmd_snapshot!(cmd);
 }
 
+#[test]
+fn cli_memory_enable_show() {
+    let mut settings = make_settings();
+    settings.set_snapshot_suffix("memory_enable_show");
+    let _bound = settings.bind_to_scope();
+
+    let mut cmd = cli();
+    cmd.args([
+        "--command",
+        "\\memory enable",
+        "--command",
+        "select 1",
+        "--command",
+        "\\memory show",
+        "-q",
+    ]);
+
+    assert_cmd_snapshot!(cmd);
+}
+
 #[tokio::test]
 async fn test_cli() {
     if env::var("TEST_STORAGE_INTEGRATION").is_err() {

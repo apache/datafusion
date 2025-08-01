@@ -73,6 +73,7 @@ pub struct PrintOptions {
     pub quiet: bool,
     pub maxrows: MaxRows,
     pub color: bool,
+    pub memory_profiling: bool,
 }
 
 // Returns the query execution details formatted

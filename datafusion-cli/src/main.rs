@@ -224,6 +224,7 @@ async fn main_inner() -> Result<()> {
         quiet: args.quiet,
         maxrows: args.maxrows,
         color: args.color,
+        memory_profiling: false,
     };
 
     let commands = args.command;
@@ -245,7 +246,7 @@ async fn main_inner() -> Result<()> {
 
     if commands.is_empty() && files.is_empty() {
         if !rc.is_empty() {
-            exec::exec_from_files(&ctx, rc, &print_options).await?;
+            exec::exec_from_files(&ctx, rc, &mut print_options).await?;
         }
         // TODO maybe we can have thiserror for cli but for now let's keep it simple
         return exec::exec_from_repl(&ctx, &mut print_options)
@@ -254,11 +255,11 @@ async fn main_inner() -> Result<()> {
     }
 
     if !files.is_empty() {
-        exec::exec_from_files(&ctx, files, &print_options).await?;
+        exec::exec_from_files(&ctx, files, &mut print_options).await?;
     }
 
     if !commands.is_empty() {
-        exec::exec_from_commands(&ctx, commands, &print_options).await?;
+        exec::exec_from_commands(&ctx, commands, &mut print_options).await?;
     }
 
     Ok(())
