@@ -54,10 +54,54 @@ async fn test_memory_profiling_report_content() {
     let mut actual_keys: Vec<String> = report.keys().cloned().collect();
     actual_keys.sort();
     let mut expected_keys = vec![
-        "GenerateSeriesExec".to_string(),
-        "HashAggregateExec".to_string(),
-        "ProjectionExec".to_string(),
-        "SortExec".to_string(),
+        // ExternalSorterMerge
+        "ExternalSorterMerge[0]".to_string(),
+        "ExternalSorterMerge[1]".to_string(),
+        "ExternalSorterMerge[2]".to_string(),
+        "ExternalSorterMerge[3]".to_string(),
+        "ExternalSorterMerge[4]".to_string(),
+        "ExternalSorterMerge[5]".to_string(),
+        "ExternalSorterMerge[6]".to_string(),
+        "ExternalSorterMerge[7]".to_string(),
+        "ExternalSorterMerge[8]".to_string(),
+        "ExternalSorterMerge[9]".to_string(),
+        // ExternalSorter
+        "ExternalSorter[0]".to_string(),
+        "ExternalSorter[1]".to_string(),
+        "ExternalSorter[2]".to_string(),
+        "ExternalSorter[3]".to_string(),
+        "ExternalSorter[4]".to_string(),
+        "ExternalSorter[5]".to_string(),
+        "ExternalSorter[6]".to_string(),
+        "ExternalSorter[7]".to_string(),
+        "ExternalSorter[8]".to_string(),
+        "ExternalSorter[9]".to_string(),
+        // GroupedHashAggregateStream
+        "GroupedHashAggregateStream[0] (count(1), sum(t.v))".to_string(),
+        "GroupedHashAggregateStream[1] (count(1), sum(t.v))".to_string(),
+        "GroupedHashAggregateStream[2] (count(1), sum(t.v))".to_string(),
+        "GroupedHashAggregateStream[3] (count(1), sum(t.v))".to_string(),
+        "GroupedHashAggregateStream[4] (count(1), sum(t.v))".to_string(),
+        "GroupedHashAggregateStream[5] (count(1), sum(t.v))".to_string(),
+        "GroupedHashAggregateStream[6] (count(1), sum(t.v))".to_string(),
+        "GroupedHashAggregateStream[7] (count(1), sum(t.v))".to_string(),
+        "GroupedHashAggregateStream[8] (count(1), sum(t.v))".to_string(),
+        "GroupedHashAggregateStream[9] (count(1), sum(t.v))".to_string(),
+        // RepartitionExec
+        "RepartitionExec[0]".to_string(),
+        "RepartitionExec[1]".to_string(),
+        "RepartitionExec[2]".to_string(),
+        "RepartitionExec[3]".to_string(),
+        "RepartitionExec[4]".to_string(),
+        "RepartitionExec[5]".to_string(),
+        "RepartitionExec[6]".to_string(),
+        "RepartitionExec[7]".to_string(),
+        "RepartitionExec[8]".to_string(),
+        "RepartitionExec[9]".to_string(),
+        // SortPreservingMergeExec
+        "SortPreservingMergeExec[0]".to_string(),
+        // Final output
+        "query_output".to_string(),
     ];
     expected_keys.sort();
     assert_eq!(
