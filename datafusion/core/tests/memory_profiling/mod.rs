@@ -39,7 +39,7 @@ async fn test_memory_profiling_enabled_vs_disabled() {
 
 #[tokio::test]
 async fn test_memory_profiling_report_content() {
-    // Use a complex query which contains multiple operators - GenerateSeries, HashAggregate, Projection, Sort
+    // Use a complex query which contains multiple operators - ExternalSorterMerge, GroupedHashAggregateStream, RepartitionExec, SortPreservingMergeExec
     let sql = "SELECT v % 100 AS group_key, COUNT(*) AS cnt, SUM(v) AS sum_v \n  FROM generate_series(1,100000) AS t(v) \n GROUP BY group_key \n ORDER BY group_key";
     // Create context and enable memory profiling for next query
     let ctx = SessionContext::new();
