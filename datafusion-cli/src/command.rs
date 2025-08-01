@@ -114,7 +114,7 @@ impl Command {
             Self::Memory(subcmd) => {
                 match subcmd.as_deref() {
                     Some("enable") => {
-                        print_options.memory_profiling = true;
+                        ctx.enable_memory_profiling();
                         println!("Memory profiling enabled for next query");
                     }
                     Some("show") => {

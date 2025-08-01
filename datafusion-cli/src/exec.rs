@@ -54,7 +54,7 @@ use tokio::signal;
 pub async fn exec_from_commands(
     ctx: &dyn CliSessionContext,
     commands: Vec<String>,
-    print_options: &mut PrintOptions,
+    print_options: &PrintOptions,
 ) -> Result<()> {
     for sql in commands {
         exec_and_print(ctx, print_options, sql).await?;
@@ -67,7 +67,7 @@ pub async fn exec_from_commands(
 pub async fn exec_from_lines(
     ctx: &dyn CliSessionContext,
     reader: &mut BufReader<File>,
-    print_options: &mut PrintOptions,
+    print_options: &PrintOptions,
 ) -> Result<()> {
     let mut query = "".to_owned();
 
@@ -110,7 +110,7 @@ pub async fn exec_from_lines(
 pub async fn exec_from_files(
     ctx: &dyn CliSessionContext,
     files: Vec<String>,
-    print_options: &mut PrintOptions,
+    print_options: &PrintOptions,
 ) -> Result<()> {
     let files = files
         .into_iter()
@@ -211,7 +211,7 @@ pub async fn exec_from_repl(
 
 pub(super) async fn exec_and_print(
     ctx: &dyn CliSessionContext,
-    print_options: &mut PrintOptions,
+    print_options: &PrintOptions,
     sql: String,
 ) -> Result<()> {
     let task_ctx = ctx.task_ctx();
@@ -227,18 +227,9 @@ pub(super) async fn exec_and_print(
 
     let statements = DFParser::parse_sql_with_dialect(&sql, dialect.as_ref())?;
     for statement in statements {
-        let _mem_handle = if print_options.memory_profiling {
-            Some(ctx.enable_memory_profiling())
-        } else {
-            None
-        };
         StatementExecutor::new(statement)
             .execute(ctx, print_options)
             .await?;
-        // disable after each statement
-        if _mem_handle.is_some() {
-            print_options.memory_profiling = false;
-        }
     }
 
     Ok(())

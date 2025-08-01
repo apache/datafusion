@@ -30,13 +30,3 @@ DataFusion CLI (`datafusion-cli`) is a small command line utility that runs SQL 
 ## Where can I find more information?
 
 See the [`datafusion-cli` documentation](https://datafusion.apache.org/user-guide/cli/index.html) for further information.
-
-## Memory Profiling
-
-Enable memory tracking for the next query and display the report afterwards:
-
-```text
-\memory enable
-SELECT * FROM large_table;
-\memory show
-```
