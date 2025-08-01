@@ -68,3 +68,20 @@ async fn test_memory_profiling_report_content() {
         );
     }
 }
+
+#[tokio::test]
+async fn test_memory_profiling_report_empty_when_not_enabled() {
+    // Use the same complex query
+    let sql = "SELECT v % 100 AS group_key, COUNT(*) AS cnt, SUM(v) AS sum_v \n  FROM generate_series(1,100000) AS t(v) \n GROUP BY group_key \n ORDER BY group_key";
+    // Create context without enabling memory profiling
+    let ctx = SessionContext::new();
+    // Run the query
+    ctx.sql(sql).await.unwrap().collect().await.unwrap();
+    // Retrieve memory report
+    let report = ctx.get_last_query_memory_report();
+    // Expect no metrics when profiling not enabled
+    assert!(
+        report.is_empty(),
+        "expected empty memory report when profiling not enabled"
+    );
+}
