@@ -26,7 +26,7 @@ use arrow::{array::ArrayRef, datatypes::DataType};
 use datafusion_common::ScalarValue;
 use datafusion_common::{not_impl_err, plan_err, Result};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
-use datafusion_expr::type_coercion::aggregates::NUMERICS;
+use datafusion_expr::type_coercion::aggregates::{INTEGERS, NUMERICS};
 use datafusion_expr::Volatility::Immutable;
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Documentation, Signature, TypeSignature,
@@ -41,7 +41,7 @@ use crate::approx_percentile_cont::{ApproxPercentileAccumulator, ApproxPercentil
 make_udaf_expr_and_func!(
     ApproxPercentileContWithWeight,
     approx_percentile_cont_with_weight,
-    expression weight percentile,
+    expression weight percentile centroids,
     "Computes the approximate percentile continuous with weight of a set of numbers",
     approx_percentile_cont_with_weight_udaf
 );
@@ -50,14 +50,14 @@ make_udaf_expr_and_func!(
 #[user_doc(
     doc_section(label = "Approximate Functions"),
     description = "Returns the weighted approximate percentile of input values using the t-digest algorithm.",
-    syntax_example = "approx_percentile_cont_with_weight(weight, percentile) WITHIN GROUP (ORDER BY expression)",
+    syntax_example = "approx_percentile_cont_with_weight(weight, percentile, centroids) WITHIN GROUP (ORDER BY expression)",
     sql_example = r#"```sql
-> SELECT approx_percentile_cont_with_weight(weight_column, 0.90) WITHIN GROUP (ORDER BY column_name) FROM table_name;
-+---------------------------------------------------------------------------------------------+
-| approx_percentile_cont_with_weight(weight_column, 0.90) WITHIN GROUP (ORDER BY column_name) |
-+---------------------------------------------------------------------------------------------+
-| 78.5                                                                                        |
-+---------------------------------------------------------------------------------------------+
+> SELECT approx_percentile_cont_with_weight(weight_column, 0.90, 100) WITHIN GROUP (ORDER BY column_name) FROM table_name;
++--------------------------------------------------------------------------------------------------+
+| approx_percentile_cont_with_weight(weight_column, 0.90, 100) WITHIN GROUP (ORDER BY column_name) |
++--------------------------------------------------------------------------------------------------+
+| 78.5                                                                                             |
++--------------------------------------------------------------------------------------------------+
 ```"#,
     standard_argument(name = "expression", prefix = "The"),
     argument(
@@ -67,6 +67,10 @@ make_udaf_expr_and_func!(
     argument(
         name = "percentile",
         description = "Percentile to compute. Must be a float value between 0 and 1 (inclusive)."
+    ),
+    argument(
+        name = "centroids",
+        description = "Number of centroids to use in the t-digest algorithm. _Default is 100_. A higher number results in more accurate approximation but requires more memory."
     )
 )]
 pub struct ApproxPercentileContWithWeight {
@@ -91,21 +95,26 @@ impl Default for ApproxPercentileContWithWeight {
 impl ApproxPercentileContWithWeight {
     /// Create a new [`ApproxPercentileContWithWeight`] aggregate function.
     pub fn new() -> Self {
+        let mut variants = Vec::with_capacity(NUMERICS.len() * (INTEGERS.len() + 1));
+        // Accept any numeric value paired with weight and float64 percentile
+        for num in NUMERICS {
+            variants.push(TypeSignature::Exact(vec![
+                num.clone(),
+                num.clone(),
+                DataType::Float64,
+            ]));
+            // Additionally accept an integer number of centroids for T-Digest
+            for int in INTEGERS {
+                variants.push(TypeSignature::Exact(vec![
+                    num.clone(),
+                    num.clone(),
+                    DataType::Float64,
+                    int.clone(),
+                ]));
+            }
+        }
         Self {
-            signature: Signature::one_of(
-                // Accept any numeric value paired with a float64 percentile
-                NUMERICS
-                    .iter()
-                    .map(|t| {
-                        TypeSignature::Exact(vec![
-                            t.clone(),
-                            t.clone(),
-                            DataType::Float64,
-                        ])
-                    })
-                    .collect(),
-                Immutable,
-            ),
+            signature: Signature::one_of(variants, Immutable),
             approx_percentile_cont: ApproxPercentileCont::new(),
         }
     }
@@ -138,6 +147,11 @@ impl AggregateUDFImpl for ApproxPercentileContWithWeight {
         if arg_types[2] != DataType::Float64 {
             return plan_err!("approx_percentile_cont_with_weight requires float64 percentile input types");
         }
+        if arg_types.len() == 4 && !arg_types[3].is_integer() {
+            return plan_err!(
+                "approx_percentile_cont_with_weight requires integer centroids input types"
+            );
+        }
         Ok(arg_types[0].clone())
     }
 
@@ -148,17 +162,25 @@ impl AggregateUDFImpl for ApproxPercentileContWithWeight {
             );
         }
 
-        if acc_args.exprs.len() != 3 {
+        if acc_args.exprs.len() != 3 && acc_args.exprs.len() != 4 {
             return plan_err!(
-                "approx_percentile_cont_with_weight requires three arguments: value, weight, percentile"
+                "approx_percentile_cont_with_weight requires three or four arguments: value, weight, percentile[, centroids]"
             );
         }
 
         let sub_args = AccumulatorArgs {
-            exprs: &[
-                Arc::clone(&acc_args.exprs[0]),
-                Arc::clone(&acc_args.exprs[2]),
-            ],
+            exprs: if acc_args.exprs.len() == 4 {
+                &[
+                    Arc::clone(&acc_args.exprs[0]), // value
+                    Arc::clone(&acc_args.exprs[2]), // percentile
+                    Arc::clone(&acc_args.exprs[3]), // centroids
+                ]
+            } else {
+                &[
+                    Arc::clone(&acc_args.exprs[0]), // value
+                    Arc::clone(&acc_args.exprs[2]), // percentile
+                ]
+            },
             ..acc_args
         };
         let approx_percentile_cont_accumulator =
