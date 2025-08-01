@@ -19,7 +19,6 @@
 
 use crate::utils::{get_scalar_value_from_args, get_signed_integer};
 
-use ahash::AHasher;
 use arrow::datatypes::FieldRef;
 use datafusion_common::arrow::array::ArrayRef;
 use datafusion_common::arrow::datatypes::{DataType, Field};
@@ -36,7 +35,7 @@ use field::WindowUDFFieldArgs;
 use std::any::Any;
 use std::cmp::Ordering;
 use std::fmt::Debug;
-use std::hash::{Hash, Hasher};
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::ops::Range;
 use std::sync::LazyLock;
 
@@ -348,7 +347,7 @@ impl WindowUDFImpl for NthValue {
 
     fn hash_value(&self) -> u64 {
         let Self { signature, kind } = self;
-        let mut hasher = AHasher::default();
+        let mut hasher = DefaultHasher::new();
         std::any::type_name::<Self>().hash(&mut hasher);
         signature.hash(&mut hasher);
         kind.hash(&mut hasher);

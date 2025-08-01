@@ -17,16 +17,16 @@
 
 //! [`WindowUDF`]: User Defined Window Functions
 
-use ahash::AHasher;
 use arrow::compute::SortOptions;
-use arrow::datatypes::{DataType, FieldRef};
 use std::cmp::Ordering;
-use std::hash::{Hash, Hasher};
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::{
     any::Any,
     fmt::{self, Debug, Display, Formatter},
     sync::Arc,
 };
+
+use arrow::datatypes::{DataType, FieldRef};
 
 use crate::expr::WindowFunction;
 use crate::{
@@ -389,7 +389,7 @@ pub trait WindowUDFImpl: Debug + Send + Sync {
     /// name, signature, and aliases are implied by the UDF type. Recall that UDFs with state
     /// (and thus possibly changing fields) must override [`Self::equals`] and [`Self::hash_value`].
     fn hash_value(&self) -> u64 {
-        let hasher = &mut AHasher::default();
+        let hasher = &mut DefaultHasher::new();
         self.as_any().type_id().hash(hasher);
         hasher.finish()
     }
@@ -539,7 +539,7 @@ impl WindowUDFImpl for AliasedWindowUDFImpl {
     }
 
     fn hash_value(&self) -> u64 {
-        let hasher = &mut AHasher::default();
+        let hasher = &mut DefaultHasher::new();
         self.inner.hash_value().hash(hasher);
         self.aliases.hash(hasher);
         hasher.finish()

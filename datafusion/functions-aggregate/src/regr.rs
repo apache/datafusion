@@ -17,7 +17,6 @@
 
 //! Defines physical expressions that can evaluated at runtime during query execution
 
-use ahash::AHasher;
 use arrow::array::Float64Array;
 use arrow::datatypes::FieldRef;
 use arrow::{
@@ -39,7 +38,7 @@ use datafusion_expr::{
 };
 use std::any::Any;
 use std::fmt::Debug;
-use std::hash::{Hash, Hasher};
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::mem::size_of_val;
 use std::sync::{Arc, LazyLock};
 
@@ -343,7 +342,7 @@ impl AggregateUDFImpl for Regr {
             regr_type,
             func_name,
         } = self;
-        let mut hasher = AHasher::default();
+        let mut hasher = DefaultHasher::new();
         std::any::type_name::<Self>().hash(&mut hasher);
         signature.hash(&mut hasher);
         regr_type.hash(&mut hasher);

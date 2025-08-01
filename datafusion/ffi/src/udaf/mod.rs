@@ -15,20 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::util::{rvec_wrapped_to_vec_fieldref, vec_fieldref_to_rvec_wrapped};
-use crate::{
-    arrow_wrappers::WrappedSchema,
-    df_result, rresult, rresult_return,
-    util::{rvec_wrapped_to_vec_datatype, vec_datatype_to_rvec_wrapped},
-    volatility::FFI_Volatility,
-};
 use abi_stable::{
     std_types::{ROption, RResult, RStr, RString, RVec},
     StableAbi,
 };
 use accumulator::{FFI_Accumulator, ForeignAccumulator};
 use accumulator_args::{FFI_AccumulatorArgs, ForeignAccumulatorArgs};
-use ahash::AHasher;
 use arrow::datatypes::{DataType, Field};
 use arrow::ffi::FFI_ArrowSchema;
 use arrow_schema::FieldRef;
@@ -47,9 +39,17 @@ use datafusion::{
 };
 use datafusion_proto_common::from_proto::parse_proto_fields_to_fields;
 use groups_accumulator::{FFI_GroupsAccumulator, ForeignGroupsAccumulator};
-use prost::{DecodeError, Message};
-use std::hash::{Hash, Hasher};
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::{ffi::c_void, sync::Arc};
+
+use crate::util::{rvec_wrapped_to_vec_fieldref, vec_fieldref_to_rvec_wrapped};
+use crate::{
+    arrow_wrappers::WrappedSchema,
+    df_result, rresult, rresult_return,
+    util::{rvec_wrapped_to_vec_datatype, vec_datatype_to_rvec_wrapped},
+    volatility::FFI_Volatility,
+};
+use prost::{DecodeError, Message};
 
 mod accumulator;
 mod accumulator_args;
@@ -574,7 +574,7 @@ impl AggregateUDFImpl for ForeignAggregateUDF {
             aliases,
             udaf,
         } = self;
-        let mut hasher = AHasher::default();
+        let mut hasher = DefaultHasher::new();
         std::any::type_name::<Self>().hash(&mut hasher);
         signature.hash(&mut hasher);
         aliases.hash(&mut hasher);
