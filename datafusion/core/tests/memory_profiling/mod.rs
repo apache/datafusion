@@ -52,10 +52,12 @@ async fn test_memory_profiling_report_content() {
     assert!(!report.is_empty(), "expected non-empty memory report");
     // For each key operator prefix, ensure there's at least one non-zero entry
     let expected_prefixes = vec![
-        "GenerateSeriesExec",
-        "HashAggregateExec",
-        "ProjectionExec",
-        "SortExec",
+        "ExternalSorterMerge",
+        "ExternalSorter",
+        "GroupedHashAggregateStream",
+        "RepartitionExec",
+        "SortPreservingMergeExec",
+        "query_output",
     ];
     for prefix in expected_prefixes {
         let found = report
