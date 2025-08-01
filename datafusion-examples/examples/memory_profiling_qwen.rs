@@ -13,8 +13,85 @@ use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::catalog::MemTable;
 use datafusion::common::Result;
 use datafusion::execution::context::SessionContext;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
+
+/// Categorizes operators into logical groups for better analysis
+fn categorize_operator(operator_name: &str) -> &'static str {
+    if operator_name.contains("Scan") || operator_name.contains("scan") {
+        "Scan"
+    } else if operator_name.contains("Join") || operator_name.contains("join") {
+        "Join"
+    } else if operator_name.contains("Aggregate") || operator_name.contains("aggregate") || operator_name.contains("Hash") {
+        "Aggregation"
+    } else if operator_name.contains("Sort") || operator_name.contains("sort") {
+        "Sort"
+    } else if operator_name.contains("Window") || operator_name.contains("window") {
+        "Window"
+    } else if operator_name.contains("Filter") || operator_name.contains("filter") {
+        "Filter"
+    } else if operator_name.contains("Project") || operator_name.contains("project") {
+        "Projection"
+    } else if operator_name.contains("Union") || operator_name.contains("union") {
+        "Union"
+    } else {
+        "Other"
+    }
+}
+
+/// Analyzes memory report and provides detailed breakdown
+fn analyze_memory_report(memory_report: &HashMap<String, usize>) {
+    let total_memory: usize = memory_report.values().sum();
+    let mut category_memory: HashMap<&str, usize> = HashMap::new();
+    
+    // Categorize operators
+    for (operator, memory) in memory_report {
+        let category = categorize_operator(operator);
+        *category_memory.entry(category).or_insert(0) += memory;
+    }
+    
+    println!("📊 Memory Analysis by Operator Category:");
+    for (category, memory) in &category_memory {
+        let percentage = if total_memory > 0 {
+            (*memory as f64 / total_memory as f64) * 100.0
+        } else {
+            0.0
+        };
+        println!("  📌 {}: {:.2} MB ({:.1}%)", 
+                 category, 
+                 *memory as f64 / 1024.0 / 1024.0,
+                 percentage);
+    }
+    
+    println!("\n🔍 Top 10 Memory-Intensive Operators:");
+    let mut sorted_operators: Vec<_> = memory_report.iter().collect();
+    sorted_operators.sort_by(|a, b| b.1.cmp(a.1));
+    
+    for (i, (operator, memory)) in sorted_operators.iter().take(10).enumerate() {
+        let percentage = if total_memory > 0 {
+            (**memory as f64 / total_memory as f64) * 100.0
+        } else {
+            0.0
+        };
+        println!("  {}. {}: {:.2} MB ({:.1}%)", 
+                 i + 1, 
+                 operator, 
+                 **memory as f64 / 1024.0 / 1024.0,
+                 percentage);
+    }
+    
+    let peak_memory_mb = total_memory as f64 / 1024.0 / 1024.0;
+    println!("\n🚀 Peak Memory Usage: {:.2} MB", peak_memory_mb);
+    
+    if peak_memory_mb > 100.0 {
+        println!("⚠️  High memory usage detected - consider optimizing query or increasing memory limits");
+    } else if peak_memory_mb > 50.0 {
+        println!("⚡ Moderate memory usage - monitor for production workloads");
+    } else {
+        println!("✅ Memory usage is within acceptable limits");
+    }
+}
 
 /// Creates a large dataset with multiple columns to simulate memory-intensive operations
 fn create_large_dataset(num_rows: usize) -> Result<RecordBatch> {
@@ -168,9 +245,15 @@ async fn run_with_profiling() -> Result<()> {
     // Get memory profiling information
     let memory_report = ctx.get_last_query_memory_report();
     if !memory_report.is_empty() {
-        println!("Memory profiling results:");
-        for (operator, bytes) in memory_report {
-            println!("  {}: {:.2} MB", operator, bytes as f64 / 1024.0 / 1024.0);
+        println!("🎯 Memory profiling results collected successfully!");
+        println!("Number of operators tracked: {}", memory_report.len());
+        
+        // Detailed analysis of memory usage
+        analyze_memory_report(&memory_report);
+        
+        println!("\n📋 Raw Memory Report (All Operators):");
+        for (operator, bytes) in &memory_report {
+            println!("  {}: {:.2} MB", operator, bytes / 1024 / 1024);
         }
     } else {
         println!("No memory profiling information available");
@@ -202,18 +285,31 @@ async fn main() -> Result<()> {
     // Run with profiling
     run_with_profiling().await?;
 
-    println!("=== Comparison Summary ===");
+    println!("=== Enhanced Memory Profiling Summary ===");
     println!("Key observations:");
-    println!("- Memory profiling can be enabled/disabled per query using ctx.enable_memory_profiling()");
-    println!("- The feature has minimal impact on query performance");
-    println!("- Memory profiling information is accessed via ctx.get_last_query_memory_report()");
-    println!("- For complex queries with large memory usage, this feature can help identify bottlenecks");
-    println!("- Memory profiling is currently experimental and may not capture all memory allocations");
+    println!("🔧 Memory profiling can be enabled/disabled per query using ctx.enable_memory_profiling()");
+    println!("⚡ The feature has minimal impact on query performance");
+    println!("📊 Memory profiling information is accessed via ctx.get_last_query_memory_report()");
+    println!("🎯 Enhanced analysis provides operator categorization and peak memory tracking");
+    println!("📈 For complex queries with large memory usage, this feature can help identify bottlenecks");
+    println!("🧪 Memory profiling is currently experimental and may not capture all memory allocations");
     println!("");
-    println!("To see memory profiling in action:");
+    println!("📋 Operator Categories Tracked:");
+    println!("  • Scans: Table and file reading operations");
+    println!("  • Joins: Hash joins, nested loop joins, etc.");
+    println!("  • Aggregations: GROUP BY, hash aggregates, etc.");
+    println!("  • Sorts: ORDER BY and sorting operations");
+    println!("  • Windows: Window function operations");
+    println!("  • Filters: WHERE clause filtering");
+    println!("  • Projections: SELECT column operations");
+    println!("  • Unions: UNION and set operations");
+    println!("");
+    println!("🚀 To see enhanced memory profiling in action:");
     println!("  1. Try this example with more memory-intensive queries");
     println!("  2. Look for queries with large aggregations, joins, or window functions");
-    println!("  3. Check the DataFusion documentation for operators that support memory tracking");
+    println!("  3. Monitor peak memory usage during query execution");
+    println!("  4. Use operator categorization to identify performance bottlenecks");
+    println!("  5. Check the DataFusion documentation for operators that support memory tracking");
 
     Ok(())
 }

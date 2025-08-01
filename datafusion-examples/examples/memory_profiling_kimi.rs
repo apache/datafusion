@@ -150,9 +150,7 @@ async fn run_with_profiling() -> Result<()> {
     println!("=== Running WITH memory profiling ===");
 
     let ctx = SessionContext::new();
-
-    // Enable memory profiling
-    let _handle = ctx.enable_memory_profiling();
+    let _profile = ctx.enable_memory_profiling();
 
     let start = Instant::now();
     run_memory_intensive_query(&ctx).await?;
@@ -164,26 +162,82 @@ async fn run_with_profiling() -> Result<()> {
         ctx.is_memory_profiling_enabled()
     );
 
-    // Get memory profiling information
+    // Analyze memory usage in detail
     let memory_report = ctx.get_last_query_memory_report();
-    if !memory_report.is_empty() {
-        println!("Memory profiling results:");
-        let mut total_memory = 0;
-        for (operator, bytes) in &memory_report {
-            println!("  {}: {:.2} MB", operator, *bytes as f64 / 1024.0 / 1024.0);
-            total_memory += *bytes;
-        }
-        println!(
-            "  Total memory usage: {:.2} MB",
-            total_memory as f64 / 1024.0 / 1024.0
-        );
-    } else {
-        println!("No memory profiling information available");
-    }
-
-    println!();
+    analyze_memory_report(&memory_report);
 
     Ok(())
+}
+
+/// Provides detailed analysis of memory usage patterns
+fn analyze_memory_report(memory_report: &std::collections::HashMap<String, usize>) {
+    if memory_report.is_empty() {
+        println!("No memory tracking data available");
+        return;
+    }
+    
+    let mut operators: Vec<_> = memory_report.iter().collect();
+    operators.sort_by(|a, b| b.1.cmp(a.1));
+    
+    let peak_memory = operators.iter().map(|(_, bytes)| **bytes).max().unwrap_or(0);
+    let total_memory: usize = operators.iter().map(|(_, bytes)| **bytes).sum();
+    
+    println!("
+📊 Memory Analysis:");
+    println!("  Peak operator memory: {:.2} MB", peak_memory as f64 / 1024.0 / 1024.0);
+    println!("  Total tracked memory: {:.2} MB", total_memory as f64 / 1024.0 / 1024.0);
+    
+    // Categorize memory usage by operation type
+    let mut categories = std::collections::HashMap::new();
+    for (op, bytes) in &operators {
+        let category = categorize_operator(op);
+        *categories.entry(category).or_insert(0) += *bytes;
+    }
+    
+    println!("
+📋 Memory by Category:");
+    let mut category_list: Vec<_> = categories.iter().collect();
+    category_list.sort_by(|a, b| b.1.cmp(a.1));
+    
+    for (category, bytes) in category_list {
+        let percentage = (*bytes as f64 / total_memory as f64) * 100.0;
+        println!("  {}: {:.2} MB ({:.1}%)", category, *bytes as f64 / 1024.0 / 1024.0, percentage);
+    }
+    
+    println!("
+🔍 Detailed Operator Breakdown:");
+    for (i, (op, bytes)) in operators.iter().enumerate().take(10) {
+        let percentage = (**bytes as f64 / total_memory as f64) * 100.0;
+        let category = categorize_operator(op);
+        println!("  {}. {}: {:.2} MB ({:.1}%) [{}]", 
+            i + 1,
+            op, 
+            **bytes as f64 / 1024.0 / 1024.0,
+            percentage,
+            category
+        );
+    }
+    
+    if operators.len() > 10 {
+        println!("  ... and {} more operators", operators.len() - 10);
+    }
+}
+
+/// Categorizes memory operators for better understanding
+fn categorize_operator(op_name: &str) -> &'static str {
+    match op_name.to_lowercase().as_str() {
+        name if name.contains("scan") || name.contains("reader") => "Data Input",
+        name if name.contains("aggregate") || name.contains("group") => "Aggregation",
+        name if name.contains("join") || name.contains("hash") => "Join Operation", 
+        name if name.contains("sort") || name.contains("order") => "Sorting",
+        name if name.contains("filter") || name.contains("where") => "Filtering",
+        name if name.contains("project") || name.contains("select") => "Projection",
+        name if name.contains("union") || name.contains("concat") => "Set Operation",
+        name if name.contains("window") || name.contains("rank") => "Window Function",
+        name if name.contains("limit") || name.contains("top") => "Limit/TopK",
+        name if name.contains("spill") || name.contains("buffer") => "Memory Management",
+        _ => "Other"
+    }
 }
 
 #[tokio::main]
