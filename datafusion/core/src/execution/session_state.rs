@@ -739,9 +739,9 @@ impl SessionState {
     }
 
     /// Mark the start of the execution
-    pub fn start_execution(&mut self) {
+    pub fn mark_start_execution(&mut self) {
         let config = Arc::clone(self.config.options());
-        self.execution_props.start_execution(config);
+        self.execution_props.mark_start_execution(config);
     }
 
     /// Return the table options

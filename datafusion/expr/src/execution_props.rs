@@ -72,7 +72,7 @@ impl ExecutionProps {
 
     /// Marks the execution of query started timestamp.
     /// This also instantiates a new alias generator.
-    pub fn start_execution(&mut self, config_options: Arc<ConfigOptions>) -> &Self {
+    pub fn mark_start_execution(&mut self, config_options: Arc<ConfigOptions>) -> &Self {
         self.query_execution_start_time = Utc::now();
         self.alias_generator = Arc::new(AliasGenerator::new());
         self.config_options = Some(config_options);
