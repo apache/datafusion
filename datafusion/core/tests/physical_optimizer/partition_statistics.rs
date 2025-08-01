@@ -51,7 +51,7 @@ mod test {
     use datafusion_physical_plan::sorts::sort::SortExec;
     use datafusion_physical_plan::union::UnionExec;
     use datafusion_physical_plan::{
-        displayable, execute_stream_partitioned, get_plan_string, ExecutionPlan,
+        execute_stream_partitioned, get_plan_string, ExecutionPlan,
         ExecutionPlanProperties,
     };
 
@@ -546,16 +546,11 @@ mod test {
                 Arc::clone(&scan),
                 scan_schema.clone(),
             )?) as _;
-        let formatted = displayable(aggregate_exec_partial.as_ref())
-            .indent(true)
-            .to_string();
-        let actual = formatted.trim();
+
+        let plan_string = get_plan_string(&aggregate_exec_partial).remove(0);
         assert_snapshot!(
-            actual,
-            @r"
-        AggregateExec: mode=Partial, gby=[id@0 as id, 1 + id@0 as expr], aggr=[COUNT(c)]
-          DataSourceExec: file_groups={2 groups: [[home/ian_lai/projects/datafusion/datafusion/core/tests/data/test_statistics_per_partition/date=2025-03-01/j5fUeSDQo22oPyPU.parquet, home/ian_lai/projects/datafusion/datafusion/core/tests/data/test_statistics_per_partition/date=2025-03-02/j5fUeSDQo22oPyPU.parquet], [home/ian_lai/projects/datafusion/datafusion/core/tests/data/test_statistics_per_partition/date=2025-03-03/j5fUeSDQo22oPyPU.parquet, home/ian_lai/projects/datafusion/datafusion/core/tests/data/test_statistics_per_partition/date=2025-03-04/j5fUeSDQo22oPyPU.parquet]]}, projection=[id, date], file_type=parquet
-        "
+            plan_string,
+            @"AggregateExec: mode=Partial, gby=[id@0 as id, 1 + id@0 as expr], aggr=[COUNT(c)]"
         );
 
         let p0_statistics = aggregate_exec_partial.partition_statistics(Some(0))?;
@@ -646,7 +641,10 @@ mod test {
         )?) as _;
 
         let agg_plan = get_plan_string(&agg_partial).remove(0);
-        assert_eq!("AggregateExec: mode=Partial, gby=[id@0 as id, 1 + id@0 as expr], aggr=[COUNT(c)]",agg_plan);
+        assert_snapshot!(
+            agg_plan,
+            @"AggregateExec: mode=Partial, gby=[id@0 as id, 1 + id@0 as expr], aggr=[COUNT(c)]"
+        );
 
         let empty_stat = Statistics {
             num_rows: Precision::Exact(0),
