@@ -240,7 +240,8 @@ fn gc_string_view_batch(batch: &RecordBatch) -> RecordBatch {
                     }
                 })
                 .sum();
-            let actual_buffer_size = s.get_buffer_memory_size();
+            let actual_buffer_size =
+                s.data_buffers().iter().map(|b| b.capacity()).sum::<usize>();
 
             // Re-creating the array copies data and can be time consuming.
             // We only do it if the array is sparse
