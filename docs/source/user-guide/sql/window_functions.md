@@ -330,7 +330,7 @@ row_number()
     FROM employees;
 ```
 
-````sql
+```sql
 +-------------+--------+---------+
 | department  | salary | row_num |
 +-------------+--------+---------+
@@ -341,7 +341,7 @@ row_number()
 | Engineering | 90000  | 1       |
 | Engineering | 80000  | 2       |
 +-------------+--------+---------+
-```#
+```
 
 
 ## Analytical Functions
@@ -358,7 +358,7 @@ Returns value evaluated at the row that is the first row of the window frame.
 
 ```sql
 first_value(expression)
-````
+```
 
 #### Arguments
 
