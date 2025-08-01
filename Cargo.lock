@@ -2220,6 +2220,7 @@ dependencies = [
  "insta",
  "log",
  "object_store",
+ "once_cell",
  "parking_lot",
  "rand 0.9.2",
  "tempfile",

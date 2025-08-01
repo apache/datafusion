@@ -454,6 +454,7 @@ impl<'a> Drop for MemoryProfilingHandle<'a> {
         let mut state = self.ctx.state.write();
         state.memory_profiling = false;
         state.memory_tracker.disable();
+        datafusion_execution::memory_tracker::set_global_memory_tracker(None);
     }
 }
 
@@ -594,6 +595,9 @@ impl SessionContext {
         let mut state = self.state.write();
         state.memory_profiling = true;
         state.memory_tracker.enable();
+        datafusion_execution::memory_tracker::set_global_memory_tracker(Some(
+            state.memory_tracker.clone(),
+        ));
         MemoryProfilingHandle::new(self)
     }
 

@@ -1,10 +1,12 @@
+use once_cell::sync::Lazy;
 use std::collections::HashMap;
+use std::sync::Mutex as StdMutex;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex,
 };
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct MemoryMetrics {
     entries: HashMap<String, usize>,
 }
@@ -23,6 +25,7 @@ impl MemoryMetrics {
     }
 }
 
+#[derive(Debug)]
 pub struct LightweightMemoryTracker {
     enabled: AtomicBool,
     metrics: Arc<Mutex<MemoryMetrics>>,
@@ -59,4 +62,17 @@ impl LightweightMemoryTracker {
     pub fn reset(&self) {
         self.metrics.lock().unwrap().clear();
     }
+}
+
+static GLOBAL_TRACKER: Lazy<StdMutex<Option<Arc<LightweightMemoryTracker>>>> =
+    Lazy::new(|| StdMutex::new(None));
+
+/// Set or clear the global memory tracker used for automatic instrumentation
+pub fn set_global_memory_tracker(tracker: Option<Arc<LightweightMemoryTracker>>) {
+    *GLOBAL_TRACKER.lock().unwrap() = tracker;
+}
+
+/// Get the currently configured global memory tracker
+pub fn global_memory_tracker() -> Option<Arc<LightweightMemoryTracker>> {
+    GLOBAL_TRACKER.lock().unwrap().clone()
 }

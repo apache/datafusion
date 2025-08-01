@@ -18,6 +18,7 @@
 //! [`MemoryPool`] for memory management during query execution, [`proxy`] for
 //! help with allocation accounting.
 
+use crate::memory_tracker::{global_memory_tracker, LightweightMemoryTracker};
 use datafusion_common::{internal_err, Result};
 use std::hash::{Hash, Hasher};
 use std::{cmp::Ordering, fmt, sync::atomic, sync::Arc};
@@ -316,12 +317,15 @@ impl MemoryConsumer {
     /// a [`MemoryReservation`] that can be used to grow or shrink the memory reservation
     pub fn register(self, pool: &Arc<dyn MemoryPool>) -> MemoryReservation {
         pool.register(&self);
+        let tracker = global_memory_tracker();
         MemoryReservation {
             registration: Arc::new(SharedRegistration {
                 pool: Arc::clone(pool),
                 consumer: self,
             }),
             size: 0,
+            peak: 0,
+            tracker,
         }
     }
 }
@@ -351,6 +355,8 @@ impl Drop for SharedRegistration {
 pub struct MemoryReservation {
     registration: Arc<SharedRegistration>,
     size: usize,
+    peak: usize,
+    tracker: Option<Arc<LightweightMemoryTracker>>,
 }
 
 impl MemoryReservation {
@@ -409,6 +415,9 @@ impl MemoryReservation {
             Ordering::Less => self.shrink(self.size - capacity),
             _ => {}
         }
+        if self.size > self.peak {
+            self.peak = self.size;
+        }
     }
 
     /// Try to set the size of this reservation to `capacity`
@@ -418,6 +427,9 @@ impl MemoryReservation {
             Ordering::Less => self.shrink(self.size - capacity),
             _ => {}
         };
+        if self.size > self.peak {
+            self.peak = self.size;
+        }
         Ok(())
     }
 
@@ -425,6 +437,9 @@ impl MemoryReservation {
     pub fn grow(&mut self, capacity: usize) {
         self.registration.pool.grow(self, capacity);
         self.size += capacity;
+        if self.size > self.peak {
+            self.peak = self.size;
+        }
     }
 
     /// Try to increase the size of this reservation by `capacity`
@@ -433,6 +448,9 @@ impl MemoryReservation {
     pub fn try_grow(&mut self, capacity: usize) -> Result<()> {
         self.registration.pool.try_grow(self, capacity)?;
         self.size += capacity;
+        if self.size > self.peak {
+            self.peak = self.size;
+        }
         Ok(())
     }
 
@@ -451,6 +469,8 @@ impl MemoryReservation {
         Self {
             size: capacity,
             registration: Arc::clone(&self.registration),
+            peak: capacity,
+            tracker: self.tracker.clone(),
         }
     }
 
@@ -459,6 +479,8 @@ impl MemoryReservation {
         Self {
             size: 0,
             registration: Arc::clone(&self.registration),
+            peak: 0,
+            tracker: self.tracker.clone(),
         }
     }
 
@@ -471,6 +493,9 @@ impl MemoryReservation {
 
 impl Drop for MemoryReservation {
     fn drop(&mut self) {
+        if let Some(tracker) = &self.tracker {
+            tracker.record_memory(self.consumer().name(), self.peak);
+        }
         self.free();
     }
 }
