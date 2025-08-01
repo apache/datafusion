@@ -47,6 +47,7 @@ compression = [
     "bzip2",
     "flate2",
     "zstd",
+    "arrow-ipc/zstd",
     "datafusion-datasource/compression",
 ]
 crypto_expressions = ["datafusion-functions/crypto_expressions"]

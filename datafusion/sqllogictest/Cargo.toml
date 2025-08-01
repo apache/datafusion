@@ -48,7 +48,7 @@ datafusion-spark = { workspace = true, default-features = true }
 datafusion-substrait = { workspace = true, default-features = true }
 futures = { workspace = true }
 half = { workspace = true, default-features = true }
-indicatif = "0.17"
+indicatif = "0.18"
 itertools = { workspace = true }
 log = { workspace = true }
 object_store = { workspace = true }

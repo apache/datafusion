@@ -434,7 +434,7 @@ impl SessionState {
             .with_dialect(dialect.as_ref())
             .with_recursion_limit(recursion_limit)
             .build()?
-            .parse_expr()?;
+            .parse_into_expr()?;
 
         Ok(expr)
     }
@@ -496,6 +496,10 @@ impl SessionState {
             support_varchar_with_length: sql_parser_options.support_varchar_with_length,
             map_string_types_to_utf8view: sql_parser_options.map_string_types_to_utf8view,
             collect_spans: sql_parser_options.collect_spans,
+            default_null_ordering: sql_parser_options
+                .default_null_ordering
+                .as_str()
+                .into(),
         }
     }
 

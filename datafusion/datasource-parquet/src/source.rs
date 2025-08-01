@@ -169,7 +169,7 @@ use object_store::ObjectStore;
 /// ```no_run
 /// # use std::sync::Arc;
 /// # use arrow::datatypes::Schema;
-/// # use datafusion_datasource::file_scan_config::FileScanConfig;
+/// # use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 /// # use datafusion_datasource::PartitionedFile;
 /// # use datafusion_datasource::source::DataSourceExec;
 ///
@@ -183,9 +183,9 @@ use object_store::ObjectStore;
 ///   .iter()
 ///   .map(|file_group| {
 ///     // create a new exec by copying the existing exec's source config
-///     let new_config = base_config
-///         .clone()
-///        .with_file_groups(vec![file_group.clone()]);
+///     let new_config = FileScanConfigBuilder::from(base_config.clone())
+///        .with_file_groups(vec![file_group.clone()])
+///       .build();
 ///
 ///     (DataSourceExec::from_data_source(new_config))
 ///   })
@@ -468,12 +468,6 @@ impl FileSource for ParquetSource {
         let projection = base_config
             .file_column_projection_indices()
             .unwrap_or_else(|| (0..base_config.file_schema.fields().len()).collect());
-
-        if self.schema_adapter_factory.is_some() {
-            log::warn!("The SchemaAdapter API will be removed from ParquetSource in a future release. \
-                Use PhysicalExprAdapterFactory API instead. \
-                See https://github.com/apache/datafusion/issues/16800 for discussion and https://datafusion.apache.org/library-user-guide/upgrading.html#datafusion-49-0-0 for upgrade instructions.");
-        }
 
         let (expr_adapter_factory, schema_adapter_factory) = match (
             base_config.expr_adapter_factory.as_ref(),

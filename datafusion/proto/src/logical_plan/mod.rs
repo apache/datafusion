@@ -35,6 +35,7 @@ use crate::{
 use crate::protobuf::{proto_error, ToProtoError};
 use arrow::datatypes::{DataType, Schema, SchemaBuilder, SchemaRef};
 use datafusion::datasource::cte_worktable::CteWorkTable;
+use datafusion::datasource::file_format::arrow::ArrowFormat;
 #[cfg(feature = "avro")]
 use datafusion::datasource::file_format::avro::AvroFormat;
 #[cfg(feature = "parquet")]
@@ -439,12 +440,15 @@ impl AsLogicalPlan for LogicalPlanNode {
                         }
                         #[cfg_attr(not(feature = "avro"), allow(unused_variables))]
                         FileFormatType::Avro(..) => {
-                            #[cfg(feature = "avro")] 
+                            #[cfg(feature = "avro")]
                             {
                                 Arc::new(AvroFormat)
                             }
                             #[cfg(not(feature = "avro"))]
                             panic!("Unable to process avro file since `avro` feature is not enabled");
+                        }
+                        FileFormatType::Arrow(..) => {
+                            Arc::new(ArrowFormat)
                         }
                     };
 
@@ -1057,13 +1061,18 @@ impl AsLogicalPlan for LogicalPlanNode {
                                 Some(FileFormatType::Avro(protobuf::AvroFormat {}))
                         }
 
+                        if any.is::<ArrowFormat>() {
+                            maybe_some_type =
+                                Some(FileFormatType::Arrow(protobuf::ArrowFormat {}))
+                        }
+
                         if let Some(file_format_type) = maybe_some_type {
                             file_format_type
                         } else {
                             return Err(proto_error(format!(
-                            "Error converting file format, {:?} is invalid as a datafusion format.",
-                            listing_table.options().format
-                        )));
+                                "Error deserializing unknown file format: {:?}",
+                                listing_table.options().format
+                            )));
                         }
                     };
 
