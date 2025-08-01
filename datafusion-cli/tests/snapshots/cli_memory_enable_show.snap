@@ -3,22 +3,22 @@ source: datafusion-cli/tests/cli_integration.rs
 info:
   program: datafusion-cli
   args:
-    - "--command"
-    - "\\memory enable"
-    - "--command"
-    - "select 1"
-    - "--command"
-    - "\\memory show"
     - "-q"
+  stdin: "\\memory enable\nselect 1;\n\\memory show\n"
 ---
 success: true
 exit_code: 0
 ----- stdout -----
+[CLI_VERSION]
+Memory profiling enabled for next query
 +----------+
 | Int64(1) |
 +----------+
 | 1        |
 +----------+
-ProjectionExec: 1024
------ stderr -----
+1 row(s) fetched.
+[ELAPSED]
+DataFusion-Cli: 16
+\q
 
+----- stderr -----

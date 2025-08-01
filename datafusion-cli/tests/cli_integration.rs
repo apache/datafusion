@@ -247,18 +247,9 @@ fn cli_memory_enable_show() {
     settings.set_snapshot_suffix("memory_enable_show");
     let _bound = settings.bind_to_scope();
 
-    let mut cmd = cli();
-    cmd.args([
-        "--command",
-        "\\memory enable",
-        "--command",
-        "select 1",
-        "--command",
-        "\\memory show",
-        "-q",
-    ]);
+    let input = "\\memory enable\nselect 1;\n\\memory show\n";
 
-    assert_cmd_snapshot!(cmd);
+    assert_cmd_snapshot!(cli().arg("-q").pass_stdin(input));
 }
 
 #[tokio::test]

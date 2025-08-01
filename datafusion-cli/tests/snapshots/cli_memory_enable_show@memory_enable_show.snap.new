@@ -1,0 +1,20 @@
+---
+source: datafusion-cli/tests/cli_integration.rs
+assertion_line: 261
+info:
+  program: datafusion-cli
+  args:
+    - "--command"
+    - "\\memory enable"
+    - "--command"
+    - select 1
+    - "--command"
+    - "\\memory show"
+    - "-q"
+---
+success: false
+exit_code: 1
+----- stdout -----
+Error: SQL error: ParserError("Expected: an SQL statement, found: \\ at Line: 1, Column: 1")
+
+----- stderr -----
