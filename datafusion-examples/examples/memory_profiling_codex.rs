@@ -15,17 +15,123 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion::error::Result;
-use datafusion::prelude::*;
+use datafusion::arrow::array::{Float64Array, Int64Array, StringArray};
+use datafusion::arrow::datatypes::{DataType, Field, Schema};
+use datafusion::arrow::record_batch::RecordBatch;
+use datafusion::catalog::MemTable;
+use datafusion::common::Result;
+use datafusion::execution::context::SessionContext;
+use std::sync::Arc;
+use std::time::Instant;
 
-async fn register_aggregate_test_data(name: &str, ctx: &SessionContext) -> Result<()> {
-    let testdata = datafusion::test_util::arrow_test_data();
-    ctx.register_csv(
-        name,
-        &format!("{testdata}/csv/aggregate_test_100.csv"),
-        CsvReadOptions::default(),
-    )
-    .await?;
+/// Creates a large dataset with multiple columns to simulate memory-intensive operations
+fn create_large_dataset(num_rows: usize) -> Result<RecordBatch> {
+    let mut ids = Vec::with_capacity(num_rows);
+    let mut values = Vec::with_capacity(num_rows);
+    let mut categories = Vec::with_capacity(num_rows);
+    let mut prices = Vec::with_capacity(num_rows);
+
+    for i in 0..num_rows {
+        ids.push(i as i64);
+        values.push((i % 1000) as f64);
+        categories.push(format!("category_{}", i % 100));
+        prices.push((i as f64) * 1.5);
+    }
+
+    Ok(RecordBatch::try_new(
+        Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("value", DataType::Float64, false),
+            Field::new("category", DataType::Utf8, false),
+            Field::new("price", DataType::Float64, false),
+        ])),
+        vec![
+            Arc::new(Int64Array::from(ids)),
+            Arc::new(Float64Array::from(values)),
+            Arc::new(StringArray::from(categories)),
+            Arc::new(Float64Array::from(prices)),
+        ],
+    )?)
+}
+
+/// Runs a memory-intensive multi-stage query
+async fn run_memory_intensive_query(ctx: &SessionContext) -> Result<()> {
+    // Create a large dataset
+    let batch = create_large_dataset(100_000)?;
+    let provider = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
+    ctx.register_table("large_table", Arc::new(provider))?;
+
+    // Multi-stage query: aggregation, join, and window functions
+    let sql = r#"
+        WITH large_data AS (
+            SELECT * FROM large_table
+            UNION ALL
+            SELECT * FROM large_table
+            UNION ALL
+            SELECT * FROM large_table
+        ),
+        aggregated AS (
+            SELECT
+                category,
+                SUM(value) as total_value,
+                AVG(price) as avg_price,
+                COUNT(*) as row_count
+            FROM large_data
+            GROUP BY category
+        ),
+        ranked AS (
+            SELECT
+                category,
+                total_value,
+                avg_price,
+                row_count,
+                RANK() OVER (ORDER BY total_value DESC) as value_rank,
+                RANK() OVER (ORDER BY avg_price DESC) as price_rank
+            FROM aggregated
+        ),
+        with_rank_diff AS (
+            SELECT
+                category,
+                total_value,
+                avg_price,
+                row_count,
+                value_rank,
+                price_rank,
+                ABS(value_rank - price_rank) as rank_diff
+            FROM ranked
+        )
+        SELECT
+            category,
+            total_value,
+            avg_price,
+            row_count,
+            value_rank,
+            price_rank,
+            rank_diff
+        FROM with_rank_diff
+        WHERE rank_diff <= 10
+        ORDER BY total_value DESC
+        LIMIT 100
+    "#;
+
+    let start = Instant::now();
+    let df = ctx.sql(sql).await?;
+    let results = df.collect().await?;
+    let duration = start.elapsed();
+
+    println!("Query completed in: {:?}", duration);
+    println!(
+        "Number of result rows: {}",
+        results.iter().map(|r| r.num_rows()).sum::<usize>()
+    );
+
+    // Calculate total memory used by results
+    let total_bytes: usize = results.iter().map(|r| r.get_array_memory_size()).sum();
+    println!(
+        "Total result memory: {:.2} MB",
+        total_bytes as f64 / 1024.0 / 1024.0
+    );
+
     Ok(())
 }
 
@@ -34,26 +140,11 @@ async fn main() -> Result<()> {
     // create execution context
     let ctx = SessionContext::new();
 
-    // register the same data twice so we can join it
-    register_aggregate_test_data("t1", &ctx).await?;
-    register_aggregate_test_data("t2", &ctx).await?;
-
     // enable memory profiling for the next query
     let _profile = ctx.enable_memory_profiling();
 
     // run a multi-stage query that joins and aggregates
-    let df = ctx
-        .sql(
-            r#"
-            SELECT t1.c1, COUNT(*) AS cnt
-            FROM t1 JOIN t2 ON t1.c1 = t2.c1
-            GROUP BY t1.c1
-            ORDER BY cnt DESC
-            "#,
-        )
-        .await?;
-
-    df.show().await?;
+    run_memory_intensive_query(&ctx).await?;
 
     // print memory usage collected by the profiler
     println!("\nMemory profile:");
