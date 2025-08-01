@@ -280,10 +280,8 @@ async fn sort_spill_reservation() {
     let mem_limit =
         ((partition_size * 2 + 1024) as f64 / MEMORY_FRACTION).ceil() as usize;
     let test = TestCase::new()
-    // This query uses a different order than the input table to
-    // force a sort. It also needs to have multiple columns to
-    // force RowFormat / interner that makes merge require
-    // substantial memory
+    // This query benefits from PartialSortExec optimization since input is sorted on (a, b)
+    // and we're requesting (a, b DESC) - only the second column needs reordering
         .with_query("select * from t ORDER BY a , b DESC")
     // enough memory to sort if we don't try to merge it all at once
         .with_memory_limit(mem_limit)
@@ -291,16 +289,15 @@ async fn sort_spill_reservation() {
         .with_scenario(scenario)
         .with_disk_manager_builder(DiskManagerBuilder::default())
         .with_expected_plan(
-            // It is important that this plan only has a SortExec, not
-            // also merge, so we can ensure the sort could finish
-            // given enough merging memory
+            // With the optimization, PartialSortExec is used instead of SortExec
+            // This is more memory-efficient since only part of the data needs sorting
             &[
                 "+---------------+-------------------------------------------------------------------------------------------------------------+",
                 "| plan_type     | plan                                                                                                        |",
                 "+---------------+-------------------------------------------------------------------------------------------------------------+",
                 "| logical_plan  | Sort: t.a ASC NULLS LAST, t.b DESC NULLS FIRST                                                              |",
                 "|               |   TableScan: t projection=[a, b]                                                                            |",
-                "| physical_plan | SortExec: expr=[a@0 ASC NULLS LAST, b@1 DESC], preserve_partitioning=[false]                                |",
+                "| physical_plan | PartialSortExec: expr=[a@0 ASC NULLS LAST, b@1 DESC], common_prefix_length=[1]                              |",
                 "|               |   DataSourceExec: partitions=1, partition_sizes=[5], output_ordering=a@0 ASC NULLS LAST, b@1 ASC NULLS LAST |",
                 "|               |                                                                                                             |",
                 "+---------------+-------------------------------------------------------------------------------------------------------------+",
@@ -310,8 +307,53 @@ async fn sort_spill_reservation() {
     let config = base_config
         .clone()
         // provide insufficient reserved space for merging,
-        // the sort will fail while trying to merge
+        // but PartialSortExec is efficient enough to succeed
         .with_sort_spill_reservation_bytes(1024);
+
+    test.clone()
+        .with_expected_success() // PartialSortExec is more memory-efficient
+        .with_config(config)
+        .run()
+        .await;
+
+    let config = base_config
+        // reserve sufficient space up front for merge
+        .with_sort_spill_reservation_bytes(mem_limit / 2);
+
+    test.with_config(config).with_expected_success().run().await;
+}
+
+// Add a new test that specifically tests SortExec memory limits
+#[tokio::test]
+async fn sort_spill_reservation_full_sort() {
+    let scenario = Scenario::new_dictionary_strings(1);
+    let partition_size = scenario.partition_size();
+
+    let base_config = SessionConfig::new().with_sort_in_place_threshold_bytes(10);
+
+    let mem_limit =
+        ((partition_size * 2 + 1024) as f64 / MEMORY_FRACTION).ceil() as usize;
+    let test = TestCase::new()
+        // Use completely incompatible sort order to force SortExec
+        .with_query("select * from t ORDER BY b DESC, a DESC")
+        .with_memory_limit(mem_limit)
+        .with_scenario(scenario)
+        .with_disk_manager_builder(DiskManagerBuilder::default())
+        .with_expected_plan(
+            &[
+                "+---------------+-------------------------------------------------------------------------------------------------------------+",
+                "| plan_type     | plan                                                                                                        |",
+                "+---------------+-------------------------------------------------------------------------------------------------------------+",
+                "| logical_plan  | Sort: t.b DESC NULLS FIRST, t.a DESC NULLS FIRST                                                            |",
+                "|               |   TableScan: t projection=[a, b]                                                                            |",
+                "| physical_plan | SortExec: expr=[b@1 DESC, a@0 DESC], preserve_partitioning=[false]                                          |",
+                "|               |   DataSourceExec: partitions=1, partition_sizes=[5], output_ordering=a@0 ASC NULLS LAST, b@1 ASC NULLS LAST |",
+                "|               |                                                                                                             |",
+                "+---------------+-------------------------------------------------------------------------------------------------------------+",
+            ]
+        );
+
+    let config = base_config.clone().with_sort_spill_reservation_bytes(1024);
 
     test.clone()
         .with_expected_errors(vec![
@@ -322,11 +364,7 @@ async fn sort_spill_reservation() {
         .run()
         .await;
 
-    let config = base_config
-        // reserve sufficient space up front for merge and this time,
-        // which will force the spills to happen with less buffered
-        // input and thus with enough to merge.
-        .with_sort_spill_reservation_bytes(mem_limit / 2);
+    let config = base_config.with_sort_spill_reservation_bytes(mem_limit / 2);
 
     test.with_config(config).with_expected_success().run().await;
 }
