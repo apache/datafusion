@@ -45,6 +45,8 @@ pub struct NdJsonFormat {
     #[prost(message, optional, tag = "1")]
     pub options: ::core::option::Option<JsonOptions>,
 }
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+pub struct ArrowFormat {}
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PrimaryKeyConstraint {
     #[prost(uint64, repeated, tag = "1")]

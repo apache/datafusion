@@ -1088,9 +1088,9 @@ fn batches_byte_size(batches: &[RecordBatch]) -> usize {
 }
 
 #[derive(Debug)]
-struct DummyStreamPartition {
-    schema: SchemaRef,
-    batches: Vec<RecordBatch>,
+pub(crate) struct DummyStreamPartition {
+    pub(crate) schema: SchemaRef,
+    pub(crate) batches: Vec<RecordBatch>,
 }
 
 impl PartitionStream for DummyStreamPartition {
