@@ -42,7 +42,7 @@ impl LightweightMemoryTracker {
 
     pub fn enable(&self) {
         self.enabled.store(true, Ordering::Relaxed);
-        self.metrics.lock().unwrap().clear();
+        self.metrics.lock().clear();
     }
 
     pub fn disable(&self) {
@@ -53,15 +53,15 @@ impl LightweightMemoryTracker {
         if !self.enabled.load(Ordering::Relaxed) {
             return;
         }
-        self.metrics.lock().unwrap().record(operator, bytes);
+        self.metrics.lock().record(operator, bytes);
     }
 
     pub fn metrics(&self) -> HashMap<String, usize> {
-        self.metrics.lock().unwrap().snapshot()
+        self.metrics.lock().snapshot()
     }
 
     pub fn reset(&self) {
-        self.metrics.lock().unwrap().clear();
+        self.metrics.lock().clear();
     }
 }
 
