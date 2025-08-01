@@ -1,9 +1,10 @@
 use once_cell::sync::Lazy;
+use parking_lot::Mutex as StdMutex;
+use parking_lot::Mutex;
 use std::collections::HashMap;
-use std::sync::Mutex as StdMutex;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Arc, Mutex,
+    Arc,
 };
 
 #[derive(Default, Debug)]
@@ -69,10 +70,10 @@ static GLOBAL_TRACKER: Lazy<StdMutex<Option<Arc<LightweightMemoryTracker>>>> =
 
 /// Set or clear the global memory tracker used for automatic instrumentation
 pub fn set_global_memory_tracker(tracker: Option<Arc<LightweightMemoryTracker>>) {
-    *GLOBAL_TRACKER.lock().unwrap() = tracker;
+    *GLOBAL_TRACKER.lock() = tracker;
 }
 
 /// Get the currently configured global memory tracker
 pub fn global_memory_tracker() -> Option<Arc<LightweightMemoryTracker>> {
-    GLOBAL_TRACKER.lock().unwrap().clone()
+    GLOBAL_TRACKER.lock().clone()
 }
