@@ -292,7 +292,6 @@ pub enum SpillCompression {
 pub enum MemoryProfilingMode {
     Disabled,
     OnDemand,
-    AutoSample,
 }
 
 impl Default for MemoryProfilingMode {
@@ -308,7 +307,6 @@ impl FromStr for MemoryProfilingMode {
         match s.to_ascii_lowercase().as_str() {
             "disabled" | "" => Ok(Self::Disabled),
             "on_demand" => Ok(Self::OnDemand),
-            "auto_sample" => Ok(Self::AutoSample),
             other => Err(DataFusionError::Configuration(format!(
                 "Invalid memory profiling mode: {other}"
             ))),
@@ -321,7 +319,6 @@ impl Display for MemoryProfilingMode {
         match self {
             MemoryProfilingMode::Disabled => write!(f, "disabled"),
             MemoryProfilingMode::OnDemand => write!(f, "on_demand"),
-            MemoryProfilingMode::AutoSample => write!(f, "auto_sample"),
         }
     }
 }
@@ -2173,6 +2170,8 @@ impl ConfigField for ConfigFileEncryptionProperties {
         let desc = "If true, store the AAD prefix";
         self.store_aad_prefix.visit(v, key.as_str(), desc);
 
+        let key = format!("{key_prefix}.aad_prefix_as_hex");
+        let desc = "AAD prefix to use";
         self.aad_prefix_as_hex.visit(v, key.as_str(), desc);
     }
 
