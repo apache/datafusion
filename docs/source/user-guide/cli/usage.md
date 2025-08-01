@@ -125,11 +125,11 @@ Available commands inside DataFusion CLI are:
  - Memory
  
  ```bash
- > MEMORY enable
+ > \MEMORY enable
  ```
 
  ```bash
- > MEMORY show
+ > \MEMORY show
  ```
 ```text
 ProjectionExec: 1024
