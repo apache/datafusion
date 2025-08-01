@@ -152,7 +152,6 @@ impl ScalarUDFImpl for ParseUrl {
                 arg_types.len()
             );
         }
-        // The return type should match the largest size datatype
         match arg_types.len() {
             2 | 3 => {
                 if arg_types
@@ -160,6 +159,11 @@ impl ScalarUDFImpl for ParseUrl {
                     .any(|arg| matches!(arg, DataType::LargeUtf8))
                 {
                     Ok(DataType::LargeUtf8)
+                } else if arg_types
+                    .iter()
+                    .any(|arg| matches!(arg, DataType::Utf8View))
+                {
+                    Ok(DataType::Utf8View)
                 } else {
                     Ok(DataType::Utf8)
                 }
@@ -207,12 +211,8 @@ fn spark_parse_url(args: &[ArrayRef]) -> Result<ArrayRef> {
     let part = &args[1];
 
     let result = if args.len() == 3 {
-        // In this case, the 'key' argument is passed
         let key = &args[2];
 
-        // Handle all 27 combinations - 3 arguments, each argument can have 3 different data types
-        // The result data type would be LargeStringArray if there is any argument with LargeUtf8 data type
-        // Else the StringArray would be returned
         match (url.data_type(), part.data_type(), key.data_type()) {
             (DataType::Utf8, DataType::Utf8, DataType::Utf8) => {
                 process_parse_url::<_, _, _, StringArray>(
@@ -221,178 +221,10 @@ fn spark_parse_url(args: &[ArrayRef]) -> Result<ArrayRef> {
                     as_string_array(key)?,
                 )
             }
-            (DataType::Utf8, DataType::Utf8, DataType::Utf8View) => {
-                process_parse_url::<_, _, _, StringArray>(
-                    as_string_array(url)?,
-                    as_string_array(part)?,
-                    as_string_view_array(key)?,
-                )
-            }
-            (DataType::Utf8, DataType::Utf8, DataType::LargeUtf8) => {
-                process_parse_url::<_, _, _, LargeStringArray>(
-                    as_string_array(url)?,
-                    as_string_array(part)?,
-                    as_large_string_array(key)?,
-                )
-            }
-            (DataType::Utf8, DataType::Utf8View, DataType::Utf8) => {
-                process_parse_url::<_, _, _, StringArray>(
-                    as_string_array(url)?,
-                    as_string_view_array(part)?,
-                    as_string_array(key)?,
-                )
-            }
-            (DataType::Utf8, DataType::Utf8View, DataType::Utf8View) => {
-                process_parse_url::<_, _, _, StringArray>(
-                    as_string_array(url)?,
-                    as_string_view_array(part)?,
-                    as_string_view_array(key)?,
-                )
-            }
-            (DataType::Utf8, DataType::Utf8View, DataType::LargeUtf8) => {
-                process_parse_url::<_, _, _, LargeStringArray>(
-                    as_string_array(url)?,
-                    as_string_view_array(part)?,
-                    as_large_string_array(key)?,
-                )
-            }
-            (DataType::Utf8, DataType::LargeUtf8, DataType::Utf8) => {
-                process_parse_url::<_, _, _, LargeStringArray>(
-                    as_string_array(url)?,
-                    as_large_string_array(part)?,
-                    as_string_array(key)?,
-                )
-            }
-            (DataType::Utf8, DataType::LargeUtf8, DataType::Utf8View) => {
-                process_parse_url::<_, _, _, LargeStringArray>(
-                    as_string_array(url)?,
-                    as_large_string_array(part)?,
-                    as_string_view_array(key)?,
-                )
-            }
-            (DataType::Utf8, DataType::LargeUtf8, DataType::LargeUtf8) => {
-                process_parse_url::<_, _, _, LargeStringArray>(
-                    as_string_array(url)?,
-                    as_large_string_array(part)?,
-                    as_large_string_array(key)?,
-                )
-            }
-            (DataType::Utf8View, DataType::Utf8, DataType::Utf8) => {
-                process_parse_url::<_, _, _, StringArray>(
-                    as_string_view_array(url)?,
-                    as_string_array(part)?,
-                    as_string_array(key)?,
-                )
-            }
-            (DataType::Utf8View, DataType::Utf8, DataType::Utf8View) => {
-                process_parse_url::<_, _, _, StringArray>(
-                    as_string_view_array(url)?,
-                    as_string_array(part)?,
-                    as_string_view_array(key)?,
-                )
-            }
-            (DataType::Utf8View, DataType::Utf8, DataType::LargeUtf8) => {
-                process_parse_url::<_, _, _, LargeStringArray>(
-                    as_string_view_array(url)?,
-                    as_string_array(part)?,
-                    as_large_string_array(key)?,
-                )
-            }
-            (DataType::Utf8View, DataType::Utf8View, DataType::Utf8) => {
-                process_parse_url::<_, _, _, StringArray>(
-                    as_string_view_array(url)?,
-                    as_string_view_array(part)?,
-                    as_string_array(key)?,
-                )
-            }
             (DataType::Utf8View, DataType::Utf8View, DataType::Utf8View) => {
                 process_parse_url::<_, _, _, StringArray>(
                     as_string_view_array(url)?,
                     as_string_view_array(part)?,
-                    as_string_view_array(key)?,
-                )
-            }
-            (DataType::Utf8View, DataType::Utf8View, DataType::LargeUtf8) => {
-                process_parse_url::<_, _, _, LargeStringArray>(
-                    as_string_view_array(url)?,
-                    as_string_view_array(part)?,
-                    as_large_string_array(key)?,
-                )
-            }
-            (DataType::Utf8View, DataType::LargeUtf8, DataType::Utf8) => {
-                process_parse_url::<_, _, _, LargeStringArray>(
-                    as_string_view_array(url)?,
-                    as_large_string_array(part)?,
-                    as_string_array(key)?,
-                )
-            }
-            (DataType::Utf8View, DataType::LargeUtf8, DataType::Utf8View) => {
-                process_parse_url::<_, _, _, LargeStringArray>(
-                    as_string_view_array(url)?,
-                    as_large_string_array(part)?,
-                    as_string_view_array(key)?,
-                )
-            }
-            (DataType::Utf8View, DataType::LargeUtf8, DataType::LargeUtf8) => {
-                process_parse_url::<_, _, _, LargeStringArray>(
-                    as_string_view_array(url)?,
-                    as_large_string_array(part)?,
-                    as_large_string_array(key)?,
-                )
-            }
-            (DataType::LargeUtf8, DataType::Utf8, DataType::Utf8) => {
-                process_parse_url::<_, _, _, LargeStringArray>(
-                    as_large_string_array(url)?,
-                    as_string_array(part)?,
-                    as_string_array(key)?,
-                )
-            }
-            (DataType::LargeUtf8, DataType::Utf8, DataType::Utf8View) => {
-                process_parse_url::<_, _, _, LargeStringArray>(
-                    as_large_string_array(url)?,
-                    as_string_array(part)?,
-                    as_string_view_array(key)?,
-                )
-            }
-            (DataType::LargeUtf8, DataType::Utf8, DataType::LargeUtf8) => {
-                process_parse_url::<_, _, _, LargeStringArray>(
-                    as_large_string_array(url)?,
-                    as_string_array(part)?,
-                    as_large_string_array(key)?,
-                )
-            }
-            (DataType::LargeUtf8, DataType::Utf8View, DataType::Utf8) => {
-                process_parse_url::<_, _, _, LargeStringArray>(
-                    as_large_string_array(url)?,
-                    as_string_view_array(part)?,
-                    as_string_array(key)?,
-                )
-            }
-            (DataType::LargeUtf8, DataType::Utf8View, DataType::Utf8View) => {
-                process_parse_url::<_, _, _, LargeStringArray>(
-                    as_large_string_array(url)?,
-                    as_string_view_array(part)?,
-                    as_string_view_array(key)?,
-                )
-            }
-            (DataType::LargeUtf8, DataType::Utf8View, DataType::LargeUtf8) => {
-                process_parse_url::<_, _, _, LargeStringArray>(
-                    as_large_string_array(url)?,
-                    as_string_view_array(part)?,
-                    as_large_string_array(key)?,
-                )
-            }
-            (DataType::LargeUtf8, DataType::LargeUtf8, DataType::Utf8) => {
-                process_parse_url::<_, _, _, LargeStringArray>(
-                    as_large_string_array(url)?,
-                    as_large_string_array(part)?,
-                    as_string_array(key)?,
-                )
-            }
-            (DataType::LargeUtf8, DataType::LargeUtf8, DataType::Utf8View) => {
-                process_parse_url::<_, _, _, LargeStringArray>(
-                    as_large_string_array(url)?,
-                    as_large_string_array(part)?,
                     as_string_view_array(key)?,
                 )
             }
@@ -414,9 +246,6 @@ fn spark_parse_url(args: &[ArrayRef]) -> Result<ArrayRef> {
         }
         let key = builder.finish();
 
-        // Handle 9 combinations - 2 arguments, each argument can have 3 different data types
-        // The result data type would be LargeStringArray if there is any argument with LargeUtf8 data type
-        // Else the StringArray would be returned
         match (url.data_type(), part.data_type()) {
             (DataType::Utf8, DataType::Utf8) => {
                 process_parse_url::<_, _, _, StringArray>(
@@ -425,51 +254,9 @@ fn spark_parse_url(args: &[ArrayRef]) -> Result<ArrayRef> {
                     &key,
                 )
             }
-            (DataType::Utf8, DataType::Utf8View) => {
-                process_parse_url::<_, _, _, StringArray>(
-                    as_string_array(url)?,
-                    as_string_view_array(part)?,
-                    &key,
-                )
-            }
-            (DataType::Utf8, DataType::LargeUtf8) => {
-                process_parse_url::<_, _, _, LargeStringArray>(
-                    as_string_array(url)?,
-                    as_large_string_array(part)?,
-                    &key,
-                )
-            }
-            (DataType::Utf8View, DataType::Utf8) => {
-                process_parse_url::<_, _, _, StringArray>(
-                    as_string_view_array(url)?,
-                    as_string_array(part)?,
-                    &key,
-                )
-            }
             (DataType::Utf8View, DataType::Utf8View) => {
                 process_parse_url::<_, _, _, StringArray>(
                     as_string_view_array(url)?,
-                    as_string_view_array(part)?,
-                    &key,
-                )
-            }
-            (DataType::Utf8View, DataType::LargeUtf8) => {
-                process_parse_url::<_, _, _, LargeStringArray>(
-                    as_string_view_array(url)?,
-                    as_large_string_array(part)?,
-                    &key,
-                )
-            }
-            (DataType::LargeUtf8, DataType::Utf8) => {
-                process_parse_url::<_, _, _, LargeStringArray>(
-                    as_large_string_array(url)?,
-                    as_string_array(part)?,
-                    &key,
-                )
-            }
-            (DataType::LargeUtf8, DataType::Utf8View) => {
-                process_parse_url::<_, _, _, LargeStringArray>(
-                    as_large_string_array(url)?,
                     as_string_view_array(part)?,
                     &key,
                 )
