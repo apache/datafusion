@@ -21,23 +21,162 @@ use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::catalog::MemTable;
 use datafusion::common::Result;
 use datafusion::execution::context::SessionContext;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
-/// Categorizes memory operators for better understanding
-fn categorize_operator(op_name: &str) -> &'static str {
-    match op_name.to_lowercase().as_str() {
-        name if name.contains("scan") || name.contains("reader") => "Data Input",
-        name if name.contains("aggregate") || name.contains("group") => "Aggregation",
-        name if name.contains("join") || name.contains("hash") => "Join Operation",
-        name if name.contains("sort") || name.contains("order") => "Sorting",
-        name if name.contains("filter") || name.contains("where") => "Filtering",
-        name if name.contains("project") || name.contains("select") => "Projection",
-        name if name.contains("union") || name.contains("concat") => "Set Operation",
-        name if name.contains("window") || name.contains("rank") => "Window Function",
-        name if name.contains("limit") || name.contains("top") => "Limit/TopK",
-        name if name.contains("spill") || name.contains("buffer") => "Memory Management",
-        _ => "Other",
+/// Enhanced memory profiling report with categorization and analysis
+#[derive(Debug)]
+struct EnhancedMemoryReport {
+    raw_report: HashMap<String, usize>,
+    categorized_operators: HashMap<String, String>,
+    peak_memory: usize,
+    total_memory: usize,
+}
+
+impl EnhancedMemoryReport {
+    /// Creates an enhanced memory report from the raw memory report
+    fn from_raw_report(raw_report: HashMap<String, usize>) -> Self {
+        let mut categorized_operators = HashMap::new();
+        let total_memory: usize = raw_report.values().sum();
+        let peak_memory = raw_report.values().copied().max().unwrap_or(0);
+
+        for operator in raw_report.keys() {
+            categorized_operators.insert(
+                operator.clone(),
+                Self::categorize_operator(operator).to_string(),
+            );
+        }
+
+        Self {
+            raw_report,
+            categorized_operators,
+            peak_memory,
+            total_memory,
+        }
+    }
+
+    /// Categorizes memory operators for better understanding
+    fn categorize_operator(op_name: &str) -> &'static str {
+        match op_name.to_lowercase().as_str() {
+            name if name.contains("scan") || name.contains("reader") => "Data Input",
+            name if name.contains("aggregate") || name.contains("group") => "Aggregation",
+            name if name.contains("join") || name.contains("hash") => "Join Operation",
+            name if name.contains("sort") || name.contains("order") => "Sorting",
+            name if name.contains("filter") || name.contains("where") => "Filtering",
+            name if name.contains("project") || name.contains("select") => "Projection",
+            name if name.contains("union") || name.contains("concat") => "Set Operation",
+            name if name.contains("window") || name.contains("rank") => "Window Function",
+            name if name.contains("limit") || name.contains("top") => "Limit/TopK",
+            name if name.contains("spill") || name.contains("buffer") => {
+                "Memory Management"
+            }
+            name if name.contains("output") || name.contains("result") => "Query Output",
+            _ => "Other",
+        }
+    }
+
+    /// Prints a detailed analysis of the memory report
+    fn print_analysis(&self) {
+        if self.raw_report.is_empty() {
+            println!("❌ No memory tracking data available");
+            println!("📝 Note: DataFusion's memory profiling is experimental and currently only tracks:");
+            println!("   • Query output memory (result materialization)");
+            println!("   • Operators must be manually instrumented to appear in reports");
+            println!(
+                "   • Individual operator memory tracking is not yet fully implemented"
+            );
+            println!(
+                "   • Future versions may include automatic operator instrumentation"
+            );
+            return;
+        }
+
+        println!("📊 Enhanced Memory Profiling Analysis");
+        println!("=====================================");
+
+        // Sort operators by memory usage (descending)
+        let mut operators: Vec<_> = self.raw_report.iter().collect();
+        operators.sort_by(|a, b| b.1.cmp(a.1));
+
+        println!("🔍 Detailed Operator Breakdown:");
+        for (i, (operator, bytes)) in operators.iter().enumerate() {
+            let percentage = if self.total_memory > 0 {
+                (**bytes as f64 / self.total_memory as f64) * 100.0
+            } else {
+                0.0
+            };
+
+            let category = self
+                .categorized_operators
+                .get(*operator)
+                .map(|s| s.as_str())
+                .unwrap_or("Unknown");
+            println!(
+                "  {}. {}: {:.2} MB ({:.1}%) [{}]",
+                i + 1,
+                operator,
+                **bytes as f64 / 1024.0 / 1024.0,
+                percentage,
+                category
+            );
+        }
+
+        println!("\n📈 Memory Summary:");
+        println!(
+            "  Peak memory usage: {:.2} MB",
+            self.peak_memory as f64 / 1024.0 / 1024.0
+        );
+        println!(
+            "  Total tracked memory: {:.2} MB",
+            self.total_memory as f64 / 1024.0 / 1024.0
+        );
+
+        // Category breakdown
+        let mut category_memory: HashMap<&str, usize> = HashMap::new();
+        for (operator, bytes) in &self.raw_report {
+            let category = Self::categorize_operator(operator);
+            *category_memory.entry(category).or_insert(0) += bytes;
+        }
+
+        if category_memory.len() > 1 {
+            println!("\n🎯 Memory by Category:");
+            for (category, memory) in &category_memory {
+                let percentage = if self.total_memory > 0 {
+                    (*memory as f64 / self.total_memory as f64) * 100.0
+                } else {
+                    0.0
+                };
+                println!(
+                    "  {}: {:.2} MB ({:.1}%)",
+                    category,
+                    *memory as f64 / 1024.0 / 1024.0,
+                    percentage
+                );
+            }
+        }
+
+        println!("\n💡 Memory Profiling Status:");
+        if self.raw_report.len() == 1 && self.raw_report.contains_key("query_output") {
+            println!("  ⚠️  Only 'query_output' tracked - this is expected behavior");
+            println!(
+                "  📋 DataFusion currently only instruments query result materialization"
+            );
+            println!("  🔬 Individual operators (scans, joins, aggregations) are not yet tracked");
+            println!("  🚀 Future enhancement: automatic operator-level memory instrumentation");
+        }
+    }
+}
+
+/// Enhanced wrapper around SessionContext::get_last_query_memory_report()
+trait EnhancedMemoryProfiling {
+    fn get_enhanced_memory_report(&self) -> EnhancedMemoryReport;
+}
+
+impl EnhancedMemoryProfiling for SessionContext {
+    fn get_enhanced_memory_report(&self) -> EnhancedMemoryReport {
+        let raw_report = self.get_last_query_memory_report();
+        EnhancedMemoryReport::from_raw_report(raw_report)
     }
 }
 
@@ -165,51 +304,8 @@ async fn main() -> Result<()> {
 
     // print memory usage collected by the profiler
     println!("\nMemory profile:");
-    let memory_report = ctx.get_last_query_memory_report();
-
-    if memory_report.is_empty() {
-        println!("  No memory tracking data available");
-    } else {
-        // Sort operators by memory usage (descending)
-        let mut operators: Vec<_> = memory_report.iter().collect();
-        operators.sort_by(|a, b| b.1.cmp(a.1));
-
-        // Find peak memory usage
-        let peak_memory = operators
-            .iter()
-            .map(|(_, bytes)| **bytes)
-            .max()
-            .unwrap_or(0);
-        let total_memory: usize = operators.iter().map(|(_, bytes)| **bytes).sum();
-
-        println!(
-            "  Peak memory usage: {:.2} MB",
-            peak_memory as f64 / 1024.0 / 1024.0
-        );
-        println!(
-            "  Total tracked memory: {:.2} MB",
-            total_memory as f64 / 1024.0 / 1024.0
-        );
-        println!("\n  Memory by operator:");
-
-        for (op, bytes) in operators {
-            let percentage = if total_memory > 0 {
-                (*bytes as f64 / total_memory as f64) * 100.0
-            } else {
-                0.0
-            };
-
-            // Categorize operators for better understanding
-            let category = categorize_operator(op);
-            println!(
-                "    {}: {:.2} MB ({:.1}%) [{}]",
-                op,
-                *bytes as f64 / 1024.0 / 1024.0,
-                percentage,
-                category
-            );
-        }
-    }
+    let enhanced_report = ctx.get_enhanced_memory_report();
+    enhanced_report.print_analysis();
 
     Ok(())
 }
