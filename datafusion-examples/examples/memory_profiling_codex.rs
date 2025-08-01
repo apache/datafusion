@@ -29,7 +29,7 @@ fn categorize_operator(op_name: &str) -> &'static str {
     match op_name.to_lowercase().as_str() {
         name if name.contains("scan") || name.contains("reader") => "Data Input",
         name if name.contains("aggregate") || name.contains("group") => "Aggregation",
-        name if name.contains("join") || name.contains("hash") => "Join Operation", 
+        name if name.contains("join") || name.contains("hash") => "Join Operation",
         name if name.contains("sort") || name.contains("order") => "Sorting",
         name if name.contains("filter") || name.contains("where") => "Filtering",
         name if name.contains("project") || name.contains("select") => "Projection",
@@ -37,7 +37,7 @@ fn categorize_operator(op_name: &str) -> &'static str {
         name if name.contains("window") || name.contains("rank") => "Window Function",
         name if name.contains("limit") || name.contains("top") => "Limit/TopK",
         name if name.contains("spill") || name.contains("buffer") => "Memory Management",
-        _ => "Other"
+        _ => "Other",
     }
 }
 
@@ -166,33 +166,44 @@ async fn main() -> Result<()> {
     // print memory usage collected by the profiler
     println!("\nMemory profile:");
     let memory_report = ctx.get_last_query_memory_report();
-    
+
     if memory_report.is_empty() {
         println!("  No memory tracking data available");
     } else {
         // Sort operators by memory usage (descending)
         let mut operators: Vec<_> = memory_report.iter().collect();
         operators.sort_by(|a, b| b.1.cmp(a.1));
-        
+
         // Find peak memory usage
-        let peak_memory = operators.iter().map(|(_, bytes)| **bytes).max().unwrap_or(0);
+        let peak_memory = operators
+            .iter()
+            .map(|(_, bytes)| **bytes)
+            .max()
+            .unwrap_or(0);
         let total_memory: usize = operators.iter().map(|(_, bytes)| **bytes).sum();
-        
-        println!("  Peak memory usage: {:.2} MB", peak_memory as f64 / 1024.0 / 1024.0);
-        println!("  Total tracked memory: {:.2} MB", total_memory as f64 / 1024.0 / 1024.0);
+
+        println!(
+            "  Peak memory usage: {:.2} MB",
+            peak_memory as f64 / 1024.0 / 1024.0
+        );
+        println!(
+            "  Total tracked memory: {:.2} MB",
+            total_memory as f64 / 1024.0 / 1024.0
+        );
         println!("\n  Memory by operator:");
-        
+
         for (op, bytes) in operators {
             let percentage = if total_memory > 0 {
                 (*bytes as f64 / total_memory as f64) * 100.0
             } else {
                 0.0
             };
-            
+
             // Categorize operators for better understanding
             let category = categorize_operator(op);
-            println!("    {}: {:.2} MB ({:.1}%) [{}]", 
-                op, 
+            println!(
+                "    {}: {:.2} MB ({:.1}%) [{}]",
+                op,
                 *bytes as f64 / 1024.0 / 1024.0,
                 percentage,
                 category
