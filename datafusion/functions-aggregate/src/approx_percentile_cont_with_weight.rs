@@ -25,11 +25,12 @@ use arrow::datatypes::FieldRef;
 use arrow::{array::ArrayRef, datatypes::DataType};
 use datafusion_common::ScalarValue;
 use datafusion_common::{not_impl_err, plan_err, Result};
+use datafusion_expr::expr::{AggregateFunction, Sort};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::type_coercion::aggregates::{INTEGERS, NUMERICS};
 use datafusion_expr::Volatility::Immutable;
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, Documentation, Signature, TypeSignature,
+    Accumulator, AggregateUDFImpl, Documentation, Expr, Signature, TypeSignature,
 };
 use datafusion_functions_aggregate_common::tdigest::{
     Centroid, TDigest, DEFAULT_MAX_SIZE,
@@ -38,13 +39,35 @@ use datafusion_macros::user_doc;
 
 use crate::approx_percentile_cont::{ApproxPercentileAccumulator, ApproxPercentileCont};
 
-make_udaf_expr_and_func!(
+create_func!(
     ApproxPercentileContWithWeight,
-    approx_percentile_cont_with_weight,
-    expression weight percentile centroids,
-    "Computes the approximate percentile continuous with weight of a set of numbers",
     approx_percentile_cont_with_weight_udaf
 );
+
+/// Computes the approximate percentile continuous with weight of a set of numbers
+pub fn approx_percentile_cont_with_weight(
+    order_by: Sort,
+    weight: Expr,
+    percentile: Expr,
+    centroids: Option<Expr>,
+) -> Expr {
+    let expr = order_by.expr.clone();
+
+    let args = if let Some(centroids) = centroids {
+        vec![expr, weight, percentile, centroids]
+    } else {
+        vec![expr, weight, percentile]
+    };
+
+    Expr::AggregateFunction(AggregateFunction::new_udf(
+        approx_percentile_cont_with_weight_udaf(),
+        args,
+        false,
+        None,
+        vec![order_by],
+        None,
+    ))
+}
 
 /// APPROX_PERCENTILE_CONT_WITH_WEIGHT aggregate expression
 #[user_doc(
