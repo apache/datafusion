@@ -116,10 +116,25 @@ Available commands inside DataFusion CLI are:
 > \h
 ```
 
-- Search and describe function
+ - Search and describe function
 
-```bash
-> \h function
+ ```bash
+ > \h function
+ ```
+  
+ - Memory
+ 
+ ```bash
+ > MEMORY enable
+ ```
+
+ ```bash
+ > MEMORY show
+ ```
+```text
+ProjectionExec: 1024
+FilterExec: 2048
+HashJoinExec: 5120
 ```
 
 ## Supported SQL
