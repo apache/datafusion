@@ -1,5 +1,5 @@
 use datafusion::prelude::*;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 #[tokio::test]
 async fn test_memory_profiling_enabled_vs_disabled() {
@@ -28,8 +28,15 @@ async fn test_memory_profiling_enabled_vs_disabled() {
         .unwrap();
     let enabled_duration = start.elapsed();
 
-    // Verify the difference is minimal (less than 100 microseconds)
-    // Allow for some variance in timing measurements
-    let overhead = enabled_duration.saturating_sub(disabled_duration);
-    assert!(overhead < Duration::from_micros(100));
+    // Assert that enabled duration remains within 110% of the disabled (baseline) duration
+    let max_allowed = disabled_duration.mul_f64(1.10);
+    // Compute percentage overhead of enabled vs disabled
+    let ratio = enabled_duration.as_secs_f64() / disabled_duration.as_secs_f64() * 100.0;
+    assert!(
+        enabled_duration <= max_allowed,
+        "enabled duration {:?} exceeds 110% of disabled duration {:?} ({:.1}%)",
+        enabled_duration,
+        disabled_duration,
+        ratio
+    );
 }
