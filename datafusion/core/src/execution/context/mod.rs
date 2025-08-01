@@ -96,7 +96,7 @@ use url::Url;
 #[derive(Debug)]
 pub struct EnhancedMemoryReport {
     raw_report: std::collections::HashMap<String, usize>,
-    categorized_operators: std::collections::HashMap<String, String>,
+    categorized_operators: std::collections::HashMap<String, &'static str>,
     peak_memory: usize,
     total_memory: usize,
 }
@@ -109,10 +109,8 @@ impl EnhancedMemoryReport {
         let peak_memory = raw_report.values().copied().max().unwrap_or(0);
 
         for operator in raw_report.keys() {
-            categorized_operators.insert(
-                operator.clone(),
-                Self::categorize_operator(operator).to_string(),
-            );
+            categorized_operators
+                .insert(operator.clone(), Self::categorize_operator(operator));
         }
 
         Self {
@@ -166,7 +164,7 @@ impl EnhancedMemoryReport {
             let category = self
                 .categorized_operators
                 .get(*operator)
-                .map(|s| s.as_str())
+                .copied()
                 .unwrap_or("Unknown");
             println!(
                 "  {}. {}: {:.2} MB ({:.1}%) [{}]",
@@ -221,6 +219,7 @@ impl EnhancedMemoryReport {
             );
             println!("  🔬 Individual operators (scans, joins, aggregations) are not yet tracked");
             println!("  🚀 Future enhancement: automatic operator-level memory instrumentation");
+            return;
         }
     }
 }
