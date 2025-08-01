@@ -30,6 +30,8 @@ pub const DEFAULT_CSV_EXTENSION: &str = ".csv";
 pub const DEFAULT_JSON_EXTENSION: &str = ".json";
 /// The default file extension of parquet files
 pub const DEFAULT_PARQUET_EXTENSION: &str = ".parquet";
+// An interal file extension for extensionless single files
+pub const SINGLE_FILE_EXTENSION: &str = ".single";
 
 /// Define each `FileType`/`FileCompressionType`'s extension
 pub trait GetExt {
