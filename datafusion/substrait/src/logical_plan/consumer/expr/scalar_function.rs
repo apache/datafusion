@@ -124,9 +124,7 @@ pub fn name_to_op(name: &str) -> Option<Operator> {
 
 pub fn substrait_to_df_name(name: &str) -> Option<&str> {
     match name {
-        "sign" => Some("signum"),
         "is_nan" => Some("isnan"),
-        "logb" => Some("log"),
         _ => None,
     }
 }
@@ -393,8 +391,8 @@ mod tests {
     async fn test_substrait_to_df_name_mapping() -> Result<()> {
         // Build substrait extensions (we are using only one function)
         let mut extensions = Extensions::default();
-        //sign is one of the functions that has a different name in Substrait (mapping is in substrait_to_df_name())
-        extensions.functions.insert(0, String::from("sign:i8"));
+        //is_nan is one of the functions that has a different name in Substrait (mapping is in substrait_to_df_name())
+        extensions.functions.insert(0, String::from("is_nan:fp32"));
         // Build substrait consumer
         let consumer = DefaultSubstraitConsumer::new(&extensions, &TEST_SESSION_STATE);
 
@@ -404,7 +402,7 @@ mod tests {
                 rex_type: Some(RexType::Literal(Literal {
                     nullable: false,
                     type_variation_reference: 0,
-                    literal_type: Some(LiteralType::I8(1)),
+                    literal_type: Some(LiteralType::Fp32(1.0)),
                 })),
             })),
         };
@@ -415,7 +413,7 @@ mod tests {
             ..Default::default()
         };
         // Trivial input schema
-        let schema = Schema::new(vec![Field::new("a", DataType::Int8, false)]);
+        let schema = Schema::new(vec![Field::new("a", DataType::Float32, false)]);
         let df_schema = DFSchema::try_from(schema).unwrap();
 
         // Consume the expression and ensure we don't get an error

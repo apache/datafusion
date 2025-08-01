@@ -462,16 +462,6 @@ async fn scalar_function_is_nan_mapping() -> Result<()> {
 }
 
 #[tokio::test]
-async fn scalar_function_sign_mapping() -> Result<()> {
-    test_substrait_to_df_name_mapping("sign", "SELECT SIGNUM(a) FROM data").await
-}
-
-#[tokio::test]
-async fn scalar_function_logb_mapping() -> Result<()> {
-    test_substrait_to_df_name_mapping("logb", "SELECT LOG(a, b) FROM data").await
-}
-
-#[tokio::test]
 async fn simple_scalar_function_is_null() -> Result<()> {
     roundtrip("SELECT * FROM data WHERE a IS NULL").await
 }
