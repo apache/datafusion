@@ -474,10 +474,15 @@ mod tests {
         let metrics = SpillMetrics::new(&ExecutionPlanMetricsSet::new(), 0);
         let spill_manager = SpillManager::new(env, metrics, Arc::clone(&schema));
 
-        let spill_file = spill_manager
-            .spill_record_batch_by_size(&batch1, "Test Spill", 1)?
+        let (spill_file, max_batch_mem) = spill_manager
+            .spill_record_batch_by_size_and_return_max_batch_memory(
+                &batch1,
+                "Test Spill",
+                1,
+            )?
             .unwrap();
         assert!(spill_file.path().exists());
+        assert!(max_batch_mem > 0);
 
         let stream = spill_manager.read_spill_as_stream(spill_file)?;
         assert_eq!(stream.schema(), schema);
@@ -853,7 +858,7 @@ mod tests {
         let completed_file = spill_manager.spill_record_batch_and_finish(&[], "Test")?;
         assert!(completed_file.is_none());
 
-        // Test write empty batch with interface `spill_record_batch_by_size()`
+        // Test write empty batch with interface `spill_record_batch_by_size_and_return_max_batch_memory()`
         let empty_batch = RecordBatch::try_new(
             Arc::clone(&schema),
             vec![
@@ -861,8 +866,12 @@ mod tests {
                 Arc::new(StringArray::from(Vec::<Option<&str>>::new())),
             ],
         )?;
-        let completed_file =
-            spill_manager.spill_record_batch_by_size(&empty_batch, "Test", 1)?;
+        let completed_file = spill_manager
+            .spill_record_batch_by_size_and_return_max_batch_memory(
+                &empty_batch,
+                "Test",
+                1,
+            )?;
         assert!(completed_file.is_none());
 
         Ok(())
