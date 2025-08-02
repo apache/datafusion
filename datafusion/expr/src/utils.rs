@@ -22,7 +22,7 @@ use std::collections::{BTreeSet, HashSet};
 use std::hash::Hasher;
 use std::sync::Arc;
 
-use crate::expr::{Alias, Sort, WildcardOptions, WindowFunctionParams};
+use crate::expr::{Sort, WildcardOptions, WindowFunctionParams};
 use crate::expr_rewriter::strip_outer_reference;
 use crate::{
     and, BinaryExpr, Expr, ExprSchemable, Filter, GroupingSet, LogicalPlan, Operator,
@@ -945,7 +945,9 @@ fn split_conjunction_impl<'a>(expr: &'a Expr, mut exprs: Vec<&'a Expr>) -> Vec<&
             let exprs = split_conjunction_impl(left, exprs);
             split_conjunction_impl(right, exprs)
         }
-        Expr::Alias(Alias { expr, .. }) => split_conjunction_impl(expr, exprs),
+        Expr::Alias(boxed_alias) => {
+            split_conjunction_impl(boxed_alias.expr.as_ref(), exprs)
+        }
         other => {
             exprs.push(other);
             exprs
@@ -969,7 +971,9 @@ pub fn iter_conjunction(expr: &Expr) -> impl Iterator<Item = &Expr> {
                     stack.push(right);
                     stack.push(left);
                 }
-                Expr::Alias(Alias { expr, .. }) => stack.push(expr),
+                Expr::Alias(boxed_alias) => {
+                    stack.push(&*boxed_alias.expr);
+                }
                 other => return Some(other),
             }
         }
@@ -993,7 +997,7 @@ pub fn iter_conjunction_owned(expr: Expr) -> impl Iterator<Item = Expr> {
                     stack.push(*right);
                     stack.push(*left);
                 }
-                Expr::Alias(Alias { expr, .. }) => stack.push(*expr),
+                Expr::Alias(boxed_alias) => stack.push(*boxed_alias.expr),
                 other => return Some(other),
             }
         }
@@ -1062,8 +1066,8 @@ fn split_binary_owned_impl(
             let exprs = split_binary_owned_impl(*left, operator, exprs);
             split_binary_owned_impl(*right, operator, exprs)
         }
-        Expr::Alias(Alias { expr, .. }) => {
-            split_binary_owned_impl(*expr, operator, exprs)
+        Expr::Alias(boxed_alias) => {
+            split_binary_owned_impl(*boxed_alias.expr, operator, exprs)
         }
         other => {
             exprs.push(other);
@@ -1089,7 +1093,9 @@ fn split_binary_impl<'a>(
             let exprs = split_binary_impl(left, operator, exprs);
             split_binary_impl(right, operator, exprs)
         }
-        Expr::Alias(Alias { expr, .. }) => split_binary_impl(expr, operator, exprs),
+        Expr::Alias(boxed_alias) => {
+            split_binary_impl(boxed_alias.expr.as_ref(), operator, exprs)
+        }
         other => {
             exprs.push(other);
             exprs

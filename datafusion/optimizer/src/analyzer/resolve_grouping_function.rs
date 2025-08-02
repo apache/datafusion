@@ -103,11 +103,11 @@ fn replace_grouping_exprs(
                     &group_expr_to_bitmap_index,
                     is_grouping_set,
                 )?;
-                projection_exprs.push(Expr::Alias(Alias::new(
+                projection_exprs.push(Expr::Alias(Box::new(Alias::new(
                     grouping_expr,
                     column.relation,
                     column.name,
-                )));
+                ))));
             }
             _ => {
                 projection_exprs.push(Expr::Column(column));

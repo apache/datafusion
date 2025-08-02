@@ -279,7 +279,7 @@ use sqlparser::ast::{
 #[derive(Clone, PartialEq, PartialOrd, Eq, Debug, Hash)]
 pub enum Expr {
     /// An expression with a specific name.
-    Alias(Alias),
+    Alias(Box<Alias>),
     /// A named reference to a qualified field in a schema.
     Column(Column),
     /// A named reference to a variable in a registry.
@@ -362,7 +362,7 @@ pub enum Expr {
     Placeholder(Placeholder),
     /// A placeholder which holds a reference to a qualified field
     /// in the outer query, used for correlated sub queries.
-    OuterReferenceColumn(DataType, Column),
+    OuterReferenceColumn(Box<(DataType, Column)>),
     /// Unnest expression
     Unnest(Unnest),
 }
@@ -1424,7 +1424,9 @@ impl Expr {
                 name,
                 spans: _,
             }) => (relation.clone(), name.clone()),
-            Expr::Alias(Alias { relation, name, .. }) => (relation.clone(), name.clone()),
+            Expr::Alias(boxed_alias) => {
+                (boxed_alias.relation.clone(), boxed_alias.name.clone())
+            }
             _ => (None, self.schema_name().to_string()),
         }
     }
@@ -1446,7 +1448,7 @@ impl Expr {
             Expr::Case { .. } => "Case",
             Expr::Cast { .. } => "Cast",
             Expr::Column(..) => "Column",
-            Expr::OuterReferenceColumn(_, _) => "Outer",
+            Expr::OuterReferenceColumn(_) => "Outer",
             Expr::Exists { .. } => "Exists",
             Expr::GroupingSet(..) => "GroupingSet",
             Expr::InList { .. } => "InList",
@@ -1572,7 +1574,7 @@ impl Expr {
 
     /// Return `self AS name` alias expression
     pub fn alias(self, name: impl Into<String>) -> Expr {
-        Expr::Alias(Alias::new(self, None::<&str>, name.into()))
+        Expr::Alias(Box::new(Alias::new(self, None::<&str>, name.into())))
     }
 
     /// Return `self AS name` alias expression with metadata
@@ -1595,7 +1597,9 @@ impl Expr {
         name: impl Into<String>,
         metadata: Option<FieldMetadata>,
     ) -> Expr {
-        Expr::Alias(Alias::new(self, None::<&str>, name.into()).with_metadata(metadata))
+        Expr::Alias(Box::new(
+            Alias::new(self, None::<&str>, name.into()).with_metadata(metadata),
+        ))
     }
 
     /// Return `self AS name` alias expression with a specific qualifier
@@ -1604,7 +1608,7 @@ impl Expr {
         relation: Option<impl Into<TableReference>>,
         name: impl Into<String>,
     ) -> Expr {
-        Expr::Alias(Alias::new(self, relation, name.into()))
+        Expr::Alias(Box::new(Alias::new(self, relation, name.into())))
     }
 
     /// Return `self AS name` alias expression with a specific qualifier and metadata
@@ -1628,7 +1632,9 @@ impl Expr {
         name: impl Into<String>,
         metadata: Option<FieldMetadata>,
     ) -> Expr {
-        Expr::Alias(Alias::new(self, relation, name.into()).with_metadata(metadata))
+        Expr::Alias(Box::new(
+            Alias::new(self, relation, name.into()).with_metadata(metadata),
+        ))
     }
 
     /// Remove an alias from an expression if one exists.
@@ -2021,7 +2027,7 @@ impl Expr {
             | Expr::SimilarTo(..)
             | Expr::Not(..)
             | Expr::Negative(..)
-            | Expr::OuterReferenceColumn(_, _)
+            | Expr::OuterReferenceColumn(_)
             | Expr::TryCast(..)
             | Expr::Unnest(..)
             | Expr::Wildcard { .. }
@@ -2109,23 +2115,10 @@ impl NormalizeEq for Expr {
                         && self_right.normalize_eq(other_right)
                 }
             }
-            (
-                Expr::Alias(Alias {
-                    expr: self_expr,
-                    relation: self_relation,
-                    name: self_name,
-                    ..
-                }),
-                Expr::Alias(Alias {
-                    expr: other_expr,
-                    relation: other_relation,
-                    name: other_name,
-                    ..
-                }),
-            ) => {
-                self_name == other_name
-                    && self_relation == other_relation
-                    && self_expr.normalize_eq(other_expr)
+            (Expr::Alias(boxed_alias), Expr::Alias(boxed_other_alias)) => {
+                boxed_alias.name == boxed_other_alias.name
+                    && boxed_alias.relation == boxed_other_alias.relation
+                    && boxed_alias.expr.normalize_eq(&*boxed_other_alias.expr)
             }
             (
                 Expr::Like(Like {
@@ -2459,14 +2452,9 @@ impl HashNode for Expr {
     fn hash_node<H: Hasher>(&self, state: &mut H) {
         mem::discriminant(self).hash(state);
         match self {
-            Expr::Alias(Alias {
-                expr: _expr,
-                relation,
-                name,
-                ..
-            }) => {
-                relation.hash(state);
-                name.hash(state);
+            Expr::Alias(boxed_alias) => {
+                boxed_alias.relation.hash(state);
+                boxed_alias.name.hash(state);
             }
             Expr::Column(column) => {
                 column.hash(state);
@@ -2609,7 +2597,8 @@ impl HashNode for Expr {
             Expr::Placeholder(place_holder) => {
                 place_holder.hash(state);
             }
-            Expr::OuterReferenceColumn(data_type, column) => {
+            Expr::OuterReferenceColumn(boxed_orc) => {
+                let (data_type, column) = boxed_orc.as_ref();
                 data_type.hash(state);
                 column.hash(state);
             }
@@ -2673,12 +2662,14 @@ impl Display for SchemaDisplay<'_> {
                 }
             }
             // Expr is not shown since it is aliased
-            Expr::Alias(Alias {
-                name,
-                relation: Some(relation),
-                ..
-            }) => write!(f, "{relation}.{name}"),
-            Expr::Alias(Alias { name, .. }) => write!(f, "{name}"),
+            Expr::Alias(boxed_alias) => {
+                let alias = boxed_alias.as_ref();
+                if let Some(relation) = &alias.relation {
+                    write!(f, "{relation}.{}", alias.name)
+                } else {
+                    write!(f, "{}", alias.name)
+                }
+            }
             Expr::Between(Between {
                 expr,
                 negated,
@@ -2929,7 +2920,10 @@ impl Display for SqlDisplay<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self.0 {
             Expr::Literal(scalar, _) => scalar.fmt(f),
-            Expr::Alias(Alias { name, .. }) => write!(f, "{name}"),
+            Expr::Alias(boxed_alias) => {
+                let name = &boxed_alias.as_ref().name;
+                write!(f, "{name}")
+            }
             Expr::Between(Between {
                 expr,
                 negated,
@@ -3189,9 +3183,13 @@ pub const UNNEST_COLUMN_PREFIX: &str = "UNNEST";
 impl Display for Expr {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match self {
-            Expr::Alias(Alias { expr, name, .. }) => write!(f, "{expr} AS {name}"),
+            Expr::Alias(boxed_alias) => {
+                let Alias { expr, name, .. } = boxed_alias.as_ref();
+                write!(f, "{expr} AS {name}")
+            }
             Expr::Column(c) => write!(f, "{c}"),
-            Expr::OuterReferenceColumn(_, c) => {
+            Expr::OuterReferenceColumn(boxed_orc) => {
+                let (_, c) = boxed_orc.as_ref();
                 write!(f, "{OUTER_REFERENCE_COLUMN_PREFIX}({c})")
             }
             Expr::ScalarVariable(_, var_names) => write!(f, "{}", var_names.join(".")),
@@ -3839,7 +3837,7 @@ mod test {
         // If this test fails when you change `Expr`, please try
         // `Box`ing the fields to make `Expr` smaller
         // See https://github.com/apache/datafusion/issues/16199 for details
-        assert_eq!(size_of::<Expr>(), 128);
+        assert_eq!(size_of::<Expr>(), 112);
         assert_eq!(size_of::<ScalarValue>(), 64);
         assert_eq!(size_of::<DataType>(), 24); // 3 ptrs
         assert_eq!(size_of::<Vec<Expr>>(), 24);

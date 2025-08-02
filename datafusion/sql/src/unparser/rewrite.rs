@@ -359,12 +359,12 @@ pub(super) fn inject_column_aliases(
                 _ => None,
             };
 
-            Expr::Alias(Alias {
+            Expr::Alias(Box::new(Alias {
                 expr: Box::new(expr.clone()),
                 relation,
                 name: col_alias.value,
                 metadata: None,
-            })
+            }))
         })
         .collect::<Vec<_>>();
 

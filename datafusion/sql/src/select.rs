@@ -31,7 +31,7 @@ use datafusion_common::error::DataFusionErrorBuilder;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{not_impl_err, plan_err, Result};
 use datafusion_common::{RecursionUnnestOption, UnnestOptions};
-use datafusion_expr::expr::{Alias, PlannedReplaceSelectItem, WildcardOptions};
+use datafusion_expr::expr::{PlannedReplaceSelectItem, WildcardOptions};
 use datafusion_expr::expr_rewriter::{
     normalize_col, normalize_col_with_schemas_and_ambiguity_check, normalize_sorts,
 };
@@ -189,8 +189,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 .iter()
                 .filter(|select_expr| match select_expr {
                     Expr::AggregateFunction(_) => false,
-                    Expr::Alias(Alias { expr, name: _, .. }) => {
-                        !matches!(**expr, Expr::AggregateFunction(_))
+                    Expr::Alias(boxed_alias) => {
+                        !matches!(boxed_alias.expr.as_ref(), Expr::AggregateFunction(_))
                     }
                     _ => true,
                 })

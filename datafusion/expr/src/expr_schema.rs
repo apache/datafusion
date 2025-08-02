@@ -103,16 +103,18 @@ impl ExprSchemable for Expr {
     #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
     fn get_type(&self, schema: &dyn ExprSchema) -> Result<DataType> {
         match self {
-            Expr::Alias(Alias { expr, name, .. }) => match &**expr {
+            Expr::Alias(boxed_alias) => match boxed_alias.expr.as_ref() {
                 Expr::Placeholder(Placeholder { data_type, .. }) => match &data_type {
-                    None => schema.data_type(&Column::from_name(name)).cloned(),
+                    None => schema
+                        .data_type(&Column::from_name(&boxed_alias.name))
+                        .cloned(),
                     Some(dt) => Ok(dt.clone()),
                 },
-                _ => expr.get_type(schema),
+                _ => boxed_alias.expr.get_type(schema),
             },
             Expr::Negative(expr) => expr.get_type(schema),
             Expr::Column(c) => Ok(schema.data_type(c)?.clone()),
-            Expr::OuterReferenceColumn(ty, _) => Ok(ty.clone()),
+            Expr::OuterReferenceColumn(boxed_orc) => Ok(boxed_orc.as_ref().0.clone()),
             Expr::ScalarVariable(ty, _) => Ok(ty.clone()),
             Expr::Literal(l, _) => Ok(l.data_type()),
             Expr::Case(case) => {
@@ -242,9 +244,11 @@ impl ExprSchemable for Expr {
     /// column that does not exist in the schema.
     fn nullable(&self, input_schema: &dyn ExprSchema) -> Result<bool> {
         match self {
-            Expr::Alias(Alias { expr, .. }) | Expr::Not(expr) | Expr::Negative(expr) => {
+            Expr::Alias(boxed_alias) => {
+                let Alias { expr, .. } = boxed_alias.as_ref();
                 expr.nullable(input_schema)
             }
+            Expr::Not(expr) | Expr::Negative(expr) => expr.nullable(input_schema),
 
             Expr::InList(InList { expr, list, .. }) => {
                 // Avoid inspecting too many expressions.
@@ -276,7 +280,7 @@ impl ExprSchemable for Expr {
                 || high.nullable(input_schema)?),
 
             Expr::Column(c) => input_schema.nullable(c),
-            Expr::OuterReferenceColumn(_, _) => Ok(true),
+            Expr::OuterReferenceColumn(_) => Ok(true),
             Expr::Literal(value, _) => Ok(value.is_null()),
             Expr::Case(case) => {
                 // This expression is nullable if any of the input expressions are nullable
@@ -380,30 +384,30 @@ impl ExprSchemable for Expr {
         let (relation, schema_name) = self.qualified_name();
         #[allow(deprecated)]
         let field = match self {
-            Expr::Alias(Alias {
-                expr,
-                name,
-                metadata,
-                ..
-            }) => {
-                let field = match &**expr {
+            Expr::Alias(boxed_alias) => {
+                let field = match &*boxed_alias.expr {
                     Expr::Placeholder(Placeholder { data_type, .. }) => {
                         match &data_type {
                             None => schema
-                                .data_type_and_nullable(&Column::from_name(name))
+                                .data_type_and_nullable(&Column::from_name(
+                                    &boxed_alias.name,
+                                ))
                                 .map(|(d, n)| Field::new(&schema_name, d.clone(), n)),
                             Some(dt) => Ok(Field::new(
                                 &schema_name,
                                 dt.clone(),
-                                expr.nullable(schema)?,
+                                boxed_alias.expr.nullable(schema)?,
                             )),
                         }
                     }
-                    _ => expr.to_field(schema).map(|(_, f)| f.as_ref().clone()),
+                    _ => boxed_alias
+                        .expr
+                        .to_field(schema)
+                        .map(|(_, f)| f.as_ref().clone()),
                 }?;
 
-                let mut combined_metadata = expr.metadata(schema)?;
-                if let Some(metadata) = metadata {
+                let mut combined_metadata = boxed_alias.expr.metadata(schema)?;
+                if let Some(metadata) = &boxed_alias.metadata {
                     combined_metadata.extend(metadata.clone());
                 }
 
@@ -411,9 +415,11 @@ impl ExprSchemable for Expr {
             }
             Expr::Negative(expr) => expr.to_field(schema).map(|(_, f)| f),
             Expr::Column(c) => schema.field_from_column(c).map(|f| Arc::new(f.clone())),
-            Expr::OuterReferenceColumn(ty, _) => {
-                Ok(Arc::new(Field::new(&schema_name, ty.clone(), true)))
-            }
+            Expr::OuterReferenceColumn(boxed_alias) => Ok(Arc::new(Field::new(
+                &schema_name,
+                boxed_alias.as_ref().0.clone(),
+                true,
+            ))),
             Expr::ScalarVariable(ty, _) => {
                 Ok(Arc::new(Field::new(&schema_name, ty.clone(), true)))
             }

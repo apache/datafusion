@@ -24,8 +24,8 @@ use std::collections::HashMap;
 use datafusion_common::{NullEquality, TableReference, UnnestOptions};
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::expr::{
-    self, AggregateFunctionParams, Alias, Between, BinaryExpr, Cast, GroupingSet, InList,
-    Like, Placeholder, ScalarFunction, Unnest,
+    self, AggregateFunctionParams, Between, BinaryExpr, Cast, GroupingSet, InList, Like,
+    Placeholder, ScalarFunction, Unnest,
 };
 use datafusion_expr::WriteOp;
 use datafusion_expr::{
@@ -198,20 +198,17 @@ pub fn serialize_expr(
         Expr::Column(c) => protobuf::LogicalExprNode {
             expr_type: Some(ExprType::Column(c.into())),
         },
-        Expr::Alias(Alias {
-            expr,
-            relation,
-            name,
-            metadata,
-        }) => {
+        Expr::Alias(boxed_alias) => {
             let alias = Box::new(protobuf::AliasNode {
-                expr: Some(Box::new(serialize_expr(expr.as_ref(), codec)?)),
-                relation: relation
+                expr: Some(Box::new(serialize_expr(boxed_alias.expr.as_ref(), codec)?)),
+                relation: boxed_alias
+                    .relation
                     .to_owned()
                     .map(|r| vec![r.into()])
                     .unwrap_or(vec![]),
-                alias: name.to_owned(),
-                metadata: metadata
+                alias: boxed_alias.name.to_owned(),
+                metadata: boxed_alias
+                    .metadata
                     .as_ref()
                     .map(|m| m.to_hashmap())
                     .unwrap_or(HashMap::new()),
