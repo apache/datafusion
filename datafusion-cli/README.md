@@ -36,8 +36,8 @@ See the [`datafusion-cli` documentation](https://datafusion.apache.org/user-guid
 Enable memory tracking for the next query and display the report afterwards:
 
 ```text
-\memory enable
+\memory_profiling enable
 SELECT * FROM large_table;
-\memory disable   # optional
-\memory show
+\memory_profiling disable   # optional
+\memory_profiling show
 ```
