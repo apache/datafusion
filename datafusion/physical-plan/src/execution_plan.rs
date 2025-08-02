@@ -47,7 +47,7 @@ use crate::stream::RecordBatchStreamAdapter;
 use arrow::array::{Array, RecordBatch};
 use arrow::datatypes::SchemaRef;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::{exec_err, Constraints, Result};
+use datafusion_common::{exec_err, Constraints, DataFusionError, Result};
 use datafusion_common_runtime::JoinSet;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::EquivalenceProperties;
@@ -117,10 +117,11 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// Returns an error if this individual node does not conform to its invariants.
     /// These invariants are typically only checked in debug mode.
     ///
-    /// A default set of invariants is provided in the default implementation.
+    /// A default set of invariants is provided in the [check_default_invariants] function.
+    /// The default implementation of `check_invariants` calls this function.
     /// Extension nodes can provide their own invariants.
-    fn check_invariants(&self, _check: InvariantLevel) -> Result<()> {
-        Ok(())
+    fn check_invariants(&self, check: InvariantLevel) -> Result<()> {
+        check_default_invariants(self, check)
     }
 
     /// Specifies the data distribution requirements for all the
@@ -1033,6 +1034,37 @@ impl PlanProperties {
     pub(crate) fn schema(&self) -> &SchemaRef {
         self.eq_properties.schema()
     }
+}
+
+macro_rules! check_len {
+    ($target:expr, $func_name:ident, $expected_len:expr) => {
+        let actual_len = $target.$func_name().len();
+        if actual_len != $expected_len {
+            return internal_err!(
+                "{}::{} returned Vec with incorrect size: {} != {}",
+                $target.name(),
+                stringify!($func_name),
+                actual_len,
+                $expected_len
+            );
+        }
+    };
+}
+
+/// Checks a set of invariants that apply to all ExecutionPlan implementations.
+/// Returns an error if the given node does not conform.
+pub fn check_default_invariants<P: ExecutionPlan + ?Sized>(
+    plan: &P,
+    _check: InvariantLevel,
+) -> Result<(), DataFusionError> {
+    let children_len = plan.children().len();
+
+    check_len!(plan, maintains_input_order, children_len);
+    check_len!(plan, required_input_ordering, children_len);
+    check_len!(plan, required_input_distribution, children_len);
+    check_len!(plan, benefits_from_input_partitioning, children_len);
+
+    Ok(())
 }
 
 /// Indicate whether a data exchange is needed for the input of `plan`, which will be very helpful

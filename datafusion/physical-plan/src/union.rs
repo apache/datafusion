@@ -33,7 +33,8 @@ use super::{
     SendableRecordBatchStream, Statistics,
 };
 use crate::execution_plan::{
-    boundedness_from_children, emission_type_from_children, InvariantLevel,
+    boundedness_from_children, check_default_invariants, emission_type_from_children,
+    InvariantLevel,
 };
 use crate::metrics::BaselineMetrics;
 use crate::projection::{make_with_child, ProjectionExec};
@@ -176,7 +177,9 @@ impl ExecutionPlan for UnionExec {
         &self.cache
     }
 
-    fn check_invariants(&self, _check: InvariantLevel) -> Result<()> {
+    fn check_invariants(&self, check: InvariantLevel) -> Result<()> {
+        check_default_invariants(self, check)?;
+
         (self.inputs().len() >= 2)
             .then_some(())
             .ok_or(DataFusionError::Internal(

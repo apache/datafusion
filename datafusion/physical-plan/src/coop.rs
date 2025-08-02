@@ -252,7 +252,7 @@ impl ExecutionPlan for CooperativeExec {
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {
-        self.input.maintains_input_order()
+        vec![true; self.children().len()]
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
