@@ -116,36 +116,70 @@ impl EnhancedMemoryReport {
         Self {
             raw_report,
             categorized_operators,
-            peak_memory,
-            total_memory,
-        }
-    }
+            #[cfg(test)]
+            mod enhanced_memory_report_tests {
 
-    /// Categorizes memory operators for better understanding
-    fn categorize_operator(op_name: &str) -> &'static str {
-        match op_name.to_lowercase().as_str() {
-            name if name.contains("scan") || name.contains("reader") => "Data Input",
-            name if name.contains("aggregate") || name.contains("group") => "Aggregation",
-            name if name.contains("join") || name.contains("hash") => "Join Operation",
-            name if name.contains("sort") || name.contains("order") => "Sorting",
-            name if name.contains("filter") || name.contains("where") => "Filtering",
-            name if name.contains("project") || name.contains("select") => "Projection",
-            name if name.contains("union") || name.contains("concat") => "Set Operation",
-            name if name.contains("window") || name.contains("rank") => "Window Function",
-            name if name.contains("limit") || name.contains("top") => "Limit/TopK",
-            name if name.contains("spill") || name.contains("buffer") => {
-                "Memory Management"
+                #[test]
+                fn test_enhanced_memory_report_basic() {
+                    // simple report with three operators
+                    let mut raw = HashMap::new();
+                    raw.insert("ScanOp".to_string(), 100);
+                    raw.insert("JoinOp".to_string(), 200);
+                    raw.insert("Custom".to_string(), 50);
+
+                    let report = EnhancedMemoryReport::from_raw_report(raw.clone());
+
+                    // total is sum, peak is max
+                    assert_eq!(report.total_memory, 350);
+                    assert_eq!(report.peak_memory, 200);
+
+                    // raw_report should be preserved
+                    assert_eq!(report.raw_report, raw);
+
+                    // categorization matches expectations
+                    assert_eq!(report.categorized_operators.get("ScanOp"), Some(&"Data Input"));
+                    assert_eq!(report.categorized_operators.get("JoinOp"), Some(&"Join Operation"));
+                    assert_eq!(report.categorized_operators.get("Custom"), Some(&"Other"));
+                }
+
+                #[test]
+                fn test_enhanced_memory_report_category_breakdown() {
+                    // cover all categorize_operator branches
+                    let entries = vec![
+                        ("scanReader", 10),
+                        ("filterWhere", 20),
+                        ("aggregateGroup", 30),
+                        ("sortOrder", 40),
+                        ("projectSelect", 50),
+                        ("unionConcat", 60),
+                        ("windowRank", 70),
+                        ("limitTop", 80),
+                        ("spillBuffer", 90),
+                        ("unknownOp", 5),
+                    ];
+                    let raw = entries
+                        .into_iter()
+                        .map(|(k, v)| (k.to_string(), v))
+                        .collect::<HashMap<_, _>>();
+
+                    let report = EnhancedMemoryReport::from_raw_report(raw.clone());
+
+                    assert_eq!(report.total_memory, 10+20+30+40+50+60+70+80+90+5);
+                    assert_eq!(report.peak_memory, 90);
+
+                    let cats = &report.categorized_operators;
+                    assert_eq!(cats["scanReader"], "Data Input");
+                    assert_eq!(cats["filterWhere"], "Filtering");
+                    assert_eq!(cats["aggregateGroup"], "Aggregation");
+                    assert_eq!(cats["sortOrder"], "Sorting");
+                    assert_eq!(cats["projectSelect"], "Projection");
+                    assert_eq!(cats["unionConcat"], "Set Operation");
+                    assert_eq!(cats["windowRank"], "Window Function");
+                    assert_eq!(cats["limitTop"], "Limit/TopK");
+                    assert_eq!(cats["spillBuffer"], "Memory Management");
+                    assert_eq!(cats["unknownOp"], "Other");
+                }
             }
-            _ => "Other",
-        }
-    }
-
-    /// Prints detailed analysis of memory usage patterns with educational information
-    pub fn print_analysis(&self) {
-        if self.raw_report.is_empty() {
-            println!("No memory tracking data available");
-            return;
-        }
 
         println!("\n📊 Enhanced Memory Analysis:");
 
@@ -2172,6 +2206,8 @@ mod tests {
 
     use sqlparser::ast;
     use tempfile::TempDir;
+use super::EnhancedMemoryReport;
+use std::collections::HashMap;
 
     #[test]
     fn categorize_unknown_operator_as_other() {
