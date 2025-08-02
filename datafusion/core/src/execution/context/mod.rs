@@ -90,6 +90,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use object_store::ObjectStore;
 use parking_lot::RwLock;
+use url::Url;
 /// Enhanced memory profiling report with categorization and analysis
 #[derive(Debug)]
 pub struct EnhancedMemoryReport {
