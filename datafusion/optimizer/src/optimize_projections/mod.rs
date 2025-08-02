@@ -345,11 +345,26 @@ fn optimize_projections(
                 .collect::<Result<Vec<_>>>()?
         }
         LogicalPlan::EmptyRelation(_)
-        | LogicalPlan::RecursiveQuery(_)
         | LogicalPlan::Values(_)
         | LogicalPlan::DescribeTable(_) => {
             // These operators have no inputs, so stop the optimization process.
             return Ok(Transformed::no(plan));
+        }
+        LogicalPlan::RecursiveQuery(_) => {
+            if plan_contains_subquery_alias(&plan) {
+                // https://github.com/apache/datafusion/pull/16696#discussion_r2241482599
+                return Ok(Transformed::no(plan));
+            }
+
+            plan.inputs()
+                .into_iter()
+                .map(|input| {
+                    indices
+                        .clone()
+                        .with_projection_beneficial()
+                        .with_plan_exprs(&plan, input.schema())
+                })
+                .collect::<Result<Vec<_>>>()?
         }
         LogicalPlan::Join(join) => {
             let left_len = join.left.schema().fields().len();
@@ -824,6 +839,34 @@ pub fn is_projection_unnecessary(
             }
         },
     ))
+}
+
+fn plan_contains_subquery_alias(plan: &LogicalPlan) -> bool {
+    // in recursive ctes, ambiguity of aliases can arise if there are
+    // 2 or more subquery aliases in the plan
+    const THRESHOLD: usize = 2;
+    count_subquery_aliases(plan, 0, THRESHOLD) >= THRESHOLD
+}
+
+fn count_subquery_aliases(plan: &LogicalPlan, count: usize, threshold: usize) -> usize {
+    if count >= threshold {
+        return count;
+    }
+
+    let mut new_count = if matches!(*plan, LogicalPlan::SubqueryAlias(_)) {
+        count + 1
+    } else {
+        count
+    };
+
+    for input in plan.inputs() {
+        new_count = count_subquery_aliases(input, new_count, threshold);
+        if new_count >= threshold {
+            break;
+        }
+    }
+
+    new_count
 }
 
 #[cfg(test)]
