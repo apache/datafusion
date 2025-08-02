@@ -254,6 +254,11 @@ pub struct ParquetReadOptions<'a> {
     pub file_sort_order: Vec<Vec<SortExpr>>,
     /// Properties for decryption of Parquet files that use modular encryption
     pub file_decryption_properties: Option<ConfigFileDecryptionProperties>,
+    /// Whether or not to enable the caching of embedded metadata of this Parquet file (footer and
+    /// page metadata). Enabling it can offer substantial performance improvements for repeated
+    /// queries over large files. By default, the cache is automatically invalidated when the
+    /// underlying file is modified.
+    pub cache_metadata: Option<bool>,
 }
 
 impl Default for ParquetReadOptions<'_> {
@@ -266,6 +271,7 @@ impl Default for ParquetReadOptions<'_> {
             schema: None,
             file_sort_order: vec![],
             file_decryption_properties: None,
+            cache_metadata: None,
         }
     }
 }
@@ -323,6 +329,12 @@ impl<'a> ParquetReadOptions<'a> {
         file_decryption_properties: ConfigFileDecryptionProperties,
     ) -> Self {
         self.file_decryption_properties = Some(file_decryption_properties);
+        self
+    }
+
+    /// Specify whether to enable or not metadata caching
+    pub fn cache_metadata(mut self, cache_metadata: bool) -> Self {
+        self.cache_metadata = Some(cache_metadata);
         self
     }
 }
@@ -589,6 +601,9 @@ impl ReadOptions<'_> for ParquetReadOptions<'_> {
         let mut options = table_options.parquet;
         if let Some(file_decryption_properties) = &self.file_decryption_properties {
             options.crypto.file_decryption = Some(file_decryption_properties.clone());
+        }
+        if let Some(cache_metadata) = self.cache_metadata {
+            options.global.cache_metadata = cache_metadata;
         }
         let mut file_format = ParquetFormat::new().with_options(options);
 
