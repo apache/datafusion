@@ -996,6 +996,29 @@ physical_plan
 08)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 09)------------WorkTableExec: name=numbers
 
+# Test for issue #16998: SortExec shares DynamicFilterPhysicalExpr across multiple executions
+# This should return 5 rows but currently returns only 2 due to the bug
+query II
+with recursive r as (
+  select 0 as k, 0 as v
+  union all
+  (
+    select *
+    from r
+    order by v
+    limit 1
+  )
+)
+select *
+from r
+limit 5;
+----
+0 0
+0 0
+0 0
+0 0
+0 0
+
 statement count 0
 set datafusion.execution.enable_recursive_ctes = false;
 

@@ -323,6 +323,14 @@ impl PhysicalExpr for DynamicFilterPhysicalExpr {
     }
 }
 
+impl Clone for DynamicFilterPhysicalExpr {
+    fn clone(&self) -> Self {
+        DynamicFilterPhysicalExpr::new(
+            self.children().into_iter().cloned().collect(),
+            self.current().unwrap_or_else(|_| crate::expressions::lit(true)))
+    }
+}
+
 #[cfg(test)]
 mod test {
     use crate::{
