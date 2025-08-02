@@ -1,10 +1,9 @@
-use once_cell::sync::Lazy;
 use parking_lot::Mutex as StdMutex;
 use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Arc,
+    Arc, LazyLock,
 };
 
 #[derive(Default, Debug)]
@@ -65,8 +64,8 @@ impl LightweightMemoryTracker {
     }
 }
 
-static GLOBAL_TRACKER: Lazy<StdMutex<Option<Arc<LightweightMemoryTracker>>>> =
-    Lazy::new(|| StdMutex::new(None));
+static GLOBAL_TRACKER: LazyLock<StdMutex<Option<Arc<LightweightMemoryTracker>>>> =
+    LazyLock::new(|| StdMutex::new(None));
 
 /// Set or clear the global memory tracker used for automatic instrumentation
 pub fn set_global_memory_tracker(tracker: Option<Arc<LightweightMemoryTracker>>) {

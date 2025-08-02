@@ -48,7 +48,6 @@ parking_lot = { workspace = true }
 rand = { workspace = true }
 tempfile = { workspace = true }
 url = { workspace = true }
-once_cell = { workspace = true }
 
 [dev-dependencies]
 chrono = { workspace = true }

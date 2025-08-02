@@ -108,7 +108,6 @@ bytes = "1.10"
 chrono = { version = "0.4.41", default-features = false }
 criterion = "0.5.1"
 ctor = "0.4.3"
-once_cell = "1.19"
 dashmap = "6.0.1"
 datafusion = { path = "datafusion/core", version = "49.0.0", default-features = false }
 datafusion-catalog = { path = "datafusion/catalog", version = "49.0.0" }
