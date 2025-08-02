@@ -44,6 +44,7 @@ mod sp_repartition_fuzz_tests {
     use datafusion_physical_expr::ConstExpr;
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
     use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
+    use datafusion_physical_plan::repartition::on_demand_repartition::OnDemandRepartitionExec;
     use test_utils::add_empty_batches;
 
     use itertools::izip;
@@ -295,25 +296,40 @@ mod sp_repartition_fuzz_tests {
         // behaviour. We can choose, n_distinct as we like. However,
         // we chose it a large number to decrease probability of having same rows in the table.
         let n_distinct = 1_000_000;
-        for (is_first_roundrobin, is_first_sort_preserving) in
-            [(false, false), (false, true), (true, false), (true, true)]
-        {
-            for is_second_roundrobin in [false, true] {
-                let mut handles = Vec::new();
+        for use_on_demand_repartition in [false, true] {
+            for (is_first_roundrobin, is_first_sort_preserving) in
+                [(false, false), (false, true), (true, false), (true, true)]
+            {
+                for is_second_roundrobin in [false, true] {
+                    // On demand repartition only replaces the roundrobin repartition
+                    if use_on_demand_repartition
+                        && !is_first_roundrobin
+                        && !is_second_roundrobin
+                    {
+                        continue;
+                    }
+                    let mut handles = Vec::new();
 
-                for seed in seed_start..seed_end {
-                    #[allow(clippy::disallowed_methods)] // spawn allowed only in tests
-                    let job = tokio::spawn(run_sort_preserving_repartition_test(
-                        make_staggered_batches::<true>(n_row, n_distinct, seed as u64),
-                        is_first_roundrobin,
-                        is_first_sort_preserving,
-                        is_second_roundrobin,
-                    ));
-                    handles.push(job);
-                }
+                    for seed in seed_start..seed_end {
+                        #[allow(clippy::disallowed_methods)]
+                        // spawn allowed only in tests
+                        let job = tokio::spawn(run_sort_preserving_repartition_test(
+                            make_staggered_batches::<true>(
+                                n_row,
+                                n_distinct,
+                                seed as u64,
+                            ),
+                            is_first_roundrobin,
+                            is_first_sort_preserving,
+                            is_second_roundrobin,
+                            use_on_demand_repartition,
+                        ));
+                        handles.push(job);
+                    }
 
-                for job in handles {
-                    job.await.unwrap();
+                    for job in handles {
+                        job.await.unwrap();
+                    }
                 }
             }
         }
@@ -342,9 +358,17 @@ mod sp_repartition_fuzz_tests {
         // If `true`, second repartition executor after `DataSourceExec` will be in `RoundRobin` mode
         // else it will be in `Hash` mode
         is_second_roundrobin: bool,
+        // If `true`, `OnDemandRepartitionExec` will be used instead of `RepartitionExec`
+        use_on_demand_repartition: bool,
     ) {
         let schema = input1[0].schema();
-        let session_config = SessionConfig::new().with_batch_size(50);
+        let mut session_config = SessionConfig::new().with_batch_size(50);
+        if use_on_demand_repartition {
+            session_config
+                .options_mut()
+                .optimizer
+                .prefer_round_robin_repartition = false;
+        }
         let ctx = SessionContext::new_with_config(session_config);
         let sort_keys = ["a", "b", "c"].map(|ordering_col| {
             PhysicalSortExpr::new_default(col(ordering_col, &schema).unwrap())
@@ -362,8 +386,20 @@ mod sp_repartition_fuzz_tests {
         let hash_exprs = vec![col("c", &schema).unwrap()];
 
         let intermediate = match (is_first_roundrobin, is_first_sort_preserving) {
-            (true, true) => sort_preserving_repartition_exec_round_robin(running_source),
-            (true, false) => repartition_exec_round_robin(running_source),
+            (true, true) => {
+                if use_on_demand_repartition {
+                    sort_preserving_repartition_exec_on_demand(running_source)
+                } else {
+                    sort_preserving_repartition_exec_round_robin(running_source)
+                }
+            }
+            (true, false) => {
+                if use_on_demand_repartition {
+                    repartition_exec_on_demand(running_source)
+                } else {
+                    repartition_exec_round_robin(running_source)
+                }
+            }
             (false, true) => {
                 sort_preserving_repartition_exec_hash(running_source, hash_exprs.clone())
             }
@@ -371,7 +407,11 @@ mod sp_repartition_fuzz_tests {
         };
 
         let intermediate = if is_second_roundrobin {
-            sort_preserving_repartition_exec_round_robin(intermediate)
+            if use_on_demand_repartition {
+                sort_preserving_repartition_exec_on_demand(intermediate)
+            } else {
+                sort_preserving_repartition_exec_round_robin(intermediate)
+            }
         } else {
             sort_preserving_repartition_exec_hash(intermediate, hash_exprs.clone())
         };
@@ -394,11 +434,29 @@ mod sp_repartition_fuzz_tests {
         )
     }
 
+    fn sort_preserving_repartition_exec_on_demand(
+        input: Arc<dyn ExecutionPlan>,
+    ) -> Arc<dyn ExecutionPlan> {
+        Arc::new(
+            OnDemandRepartitionExec::try_new(input, Partitioning::OnDemand(2))
+                .unwrap()
+                .with_preserve_order(),
+        )
+    }
+
     fn repartition_exec_round_robin(
         input: Arc<dyn ExecutionPlan>,
     ) -> Arc<dyn ExecutionPlan> {
         Arc::new(
             RepartitionExec::try_new(input, Partitioning::RoundRobinBatch(2)).unwrap(),
+        )
+    }
+
+    fn repartition_exec_on_demand(
+        input: Arc<dyn ExecutionPlan>,
+    ) -> Arc<dyn ExecutionPlan> {
+        Arc::new(
+            OnDemandRepartitionExec::try_new(input, Partitioning::OnDemand(2)).unwrap(),
         )
     }
 

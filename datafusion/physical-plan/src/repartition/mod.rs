@@ -30,7 +30,7 @@ use super::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use super::{
     DisplayAs, ExecutionPlanProperties, RecordBatchStream, SendableRecordBatchStream,
 };
-use crate::execution_plan::{CardinalityEffect, EvaluationType, SchedulingType};
+use crate::execution_plan::CardinalityEffect;
 use crate::hash_utils::create_hashes;
 use crate::metrics::BaselineMetrics;
 use crate::projection::{all_columns, make_with_child, update_expr, ProjectionExec};
@@ -59,16 +59,76 @@ use crate::filter_pushdown::{
     FilterPushdownPropagation,
 };
 use futures::stream::Stream;
-use futures::{FutureExt, StreamExt, TryStreamExt};
+use futures::{ready, FutureExt, StreamExt, TryStreamExt};
 use log::trace;
 use parking_lot::Mutex;
 
 mod distributor_channels;
+pub mod on_demand_repartition;
 
 type MaybeBatch = Option<Result<RecordBatch>>;
 type InputPartitionsToCurrentPartitionSender = Vec<DistributionSender<MaybeBatch>>;
 type InputPartitionsToCurrentPartitionReceiver = Vec<DistributionReceiver<MaybeBatch>>;
 
+/// create channels for sending batches from input partitions to output partitions.
+fn create_repartition_channels(
+    preserve_order: bool,
+    num_input_partitions: usize,
+    num_output_partitions: usize,
+) -> (
+    Vec<InputPartitionsToCurrentPartitionSender>,
+    Vec<InputPartitionsToCurrentPartitionReceiver>,
+) {
+    if preserve_order {
+        let (txs, rxs) =
+            partition_aware_channels(num_input_partitions, num_output_partitions);
+        // Take transpose of senders and receivers. `state.channels` keeps track of entries per output partition
+        let txs = transpose(txs);
+        let rxs = transpose(rxs);
+        (txs, rxs)
+    } else {
+        // create one channel per *output* partition
+        // note we use a custom channel that ensures there is always data for each receiver
+        // but limits the amount of buffering if required.
+        let (txs, rxs) = channels(num_output_partitions);
+        // Clone sender for each input partitions
+        let txs = txs
+            .into_iter()
+            .map(|item| vec![item; num_input_partitions])
+            .collect::<Vec<_>>();
+        let rxs = rxs.into_iter().map(|item| vec![item]).collect::<Vec<_>>();
+        (txs, rxs)
+    }
+}
+
+/// Create a hashmap of channels for sending batches from input partitions to output partitions.
+fn create_partition_channels_hashmap(
+    txs: Vec<InputPartitionsToCurrentPartitionSender>,
+    rxs: Vec<InputPartitionsToCurrentPartitionReceiver>,
+    name: String,
+    context: Arc<TaskContext>,
+) -> HashMap<
+    usize,
+    (
+        InputPartitionsToCurrentPartitionSender,
+        InputPartitionsToCurrentPartitionReceiver,
+        SharedMemoryReservation,
+    ),
+> {
+    let mut channels = HashMap::with_capacity(txs.len());
+
+    for (partition, (tx, rx)) in txs.into_iter().zip(rxs).enumerate() {
+        let reservation = Arc::new(Mutex::new(
+            MemoryConsumer::new(format!("{name}[{partition}]"))
+                .register(context.memory_pool()),
+        ));
+        channels.insert(partition, (tx, rx, reservation));
+    }
+
+    channels
+}
+
+/// Inner state of [`RepartitionExec`].
 #[derive(Debug)]
 struct ConsumingInputStreamsState {
     /// Channels for sending batches from input partitions to output partitions.
@@ -179,35 +239,14 @@ impl RepartitionExecState {
         let num_input_partitions = streams_and_metrics.len();
         let num_output_partitions = partitioning.partition_count();
 
-        let (txs, rxs) = if preserve_order {
-            let (txs, rxs) =
-                partition_aware_channels(num_input_partitions, num_output_partitions);
-            // Take transpose of senders and receivers. `state.channels` keeps track of entries per output partition
-            let txs = transpose(txs);
-            let rxs = transpose(rxs);
-            (txs, rxs)
-        } else {
-            // create one channel per *output* partition
-            // note we use a custom channel that ensures there is always data for each receiver
-            // but limits the amount of buffering if required.
-            let (txs, rxs) = channels(num_output_partitions);
-            // Clone sender for each input partitions
-            let txs = txs
-                .into_iter()
-                .map(|item| vec![item; num_input_partitions])
-                .collect::<Vec<_>>();
-            let rxs = rxs.into_iter().map(|item| vec![item]).collect::<Vec<_>>();
-            (txs, rxs)
-        };
+        let (txs, rxs) = create_repartition_channels(
+            preserve_order,
+            num_input_partitions,
+            num_output_partitions,
+        );
 
-        let mut channels = HashMap::with_capacity(txs.len());
-        for (partition, (tx, rx)) in txs.into_iter().zip(rxs).enumerate() {
-            let reservation = Arc::new(Mutex::new(
-                MemoryConsumer::new(format!("{name}[{partition}]"))
-                    .register(context.memory_pool()),
-            ));
-            channels.insert(partition, (tx, rx, reservation));
-        }
+        let channels =
+            create_partition_channels_hashmap(txs, rxs, name, Arc::clone(&context));
 
         // launch one async task per *input* partition
         let mut spawned_tasks = Vec::with_capacity(num_input_partitions);
@@ -230,12 +269,14 @@ impl RepartitionExecState {
 
             // In a separate task, wait for each input to be done
             // (and pass along any errors, including panic!s)
+
             let wait_for_task = SpawnedTask::spawn(RepartitionExec::wait_for_task(
                 input_task,
                 txs.into_iter()
                     .map(|(partition, (tx, _reservation))| (partition, tx))
                     .collect(),
             ));
+
             spawned_tasks.push(wait_for_task);
         }
         *self = Self::ConsumingInputStreams(ConsumingInputStreamsState {
@@ -266,6 +307,9 @@ enum BatchPartitionerState {
         num_partitions: usize,
         next_idx: usize,
     },
+    OnDemand {
+        num_partitions: usize,
+    },
 }
 
 impl BatchPartitioner {
@@ -287,6 +331,9 @@ impl BatchPartitioner {
                 random_state: ahash::RandomState::with_seeds(0, 0, 0, 0),
                 hash_buffer: vec![],
             },
+            Partitioning::OnDemand(num_partitions) => {
+                BatchPartitionerState::OnDemand { num_partitions }
+            }
             other => return not_impl_err!("Unsupported repartitioning scheme {other:?}"),
         };
 
@@ -330,6 +377,9 @@ impl BatchPartitioner {
                     let idx = *next_idx;
                     *next_idx = (*next_idx + 1) % *num_partitions;
                     Box::new(std::iter::once(Ok((idx, batch))))
+                }
+                BatchPartitionerState::OnDemand { .. } => {
+                    Box::new(std::iter::once(Ok((0, batch))))
                 }
                 BatchPartitionerState::Hash {
                     random_state,
@@ -401,6 +451,90 @@ impl BatchPartitioner {
         match self.state {
             BatchPartitionerState::RoundRobin { num_partitions, .. } => num_partitions,
             BatchPartitionerState::Hash { num_partitions, .. } => num_partitions,
+            BatchPartitionerState::OnDemand { num_partitions } => num_partitions,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct RepartitionExecBase {
+    /// Input execution plan
+    input: Arc<dyn ExecutionPlan>,
+    /// Execution metrics
+    metrics: ExecutionPlanMetricsSet,
+    /// Boolean flag to decide whether to preserve ordering. If true means
+    /// `SortPreservingRepartitionExec`, false means `RepartitionExec`.
+    preserve_order: bool,
+    /// Cache holding plan properties like equivalences, output partitioning etc.
+    cache: PlanProperties,
+}
+
+impl RepartitionExecBase {
+    fn maintains_input_order_helper(
+        input: &Arc<dyn ExecutionPlan>,
+        preserve_order: bool,
+    ) -> Vec<bool> {
+        // We preserve ordering when repartition is order preserving variant or input partitioning is 1
+        vec![preserve_order || input.output_partitioning().partition_count() <= 1]
+    }
+
+    fn eq_properties_helper(
+        input: &Arc<dyn ExecutionPlan>,
+        preserve_order: bool,
+    ) -> EquivalenceProperties {
+        // Equivalence Properties
+        let mut eq_properties = input.equivalence_properties().clone();
+        // If the ordering is lost, reset the ordering equivalence class:
+        if !Self::maintains_input_order_helper(input, preserve_order)[0] {
+            eq_properties.clear_orderings();
+        }
+        // When there are more than one input partitions, they will be fused at the output.
+        // Therefore, remove per partition constants.
+        if input.output_partitioning().partition_count() > 1 {
+            eq_properties.clear_per_partition_constants();
+        }
+        eq_properties
+    }
+
+    /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
+    fn compute_properties(
+        input: &Arc<dyn ExecutionPlan>,
+        partitioning: Partitioning,
+        preserve_order: bool,
+    ) -> PlanProperties {
+        PlanProperties::new(
+            Self::eq_properties_helper(input, preserve_order),
+            partitioning,
+            input.pipeline_behavior(),
+            input.boundedness(),
+        )
+    }
+
+    /// Specify if this repartitioning operation should preserve the order of
+    /// rows from its input when producing output. Preserving order is more
+    /// expensive at runtime, so should only be set if the output of this
+    /// operator can take advantage of it.
+    ///
+    /// If the input is not ordered, or has only one partition, this is a no op,
+    /// and the node remains a `RepartitionExec`.
+    pub fn with_preserve_order(mut self) -> Self {
+        self.preserve_order =
+                // If the input isn't ordered, there is no ordering to preserve
+                self.input.output_ordering().is_some() &&
+                // if there is only one input partition, merging is not required
+                // to maintain order
+                self.input.output_partitioning().partition_count() > 1;
+        let eq_properties = Self::eq_properties_helper(&self.input, self.preserve_order);
+        self.cache = self.cache.with_eq_properties(eq_properties);
+        self
+    }
+
+    /// Return the sort expressions that are used to merge
+    fn sort_exprs(&self) -> Option<&LexOrdering> {
+        if self.preserve_order {
+            self.input.output_ordering()
+        } else {
+            None
         }
     }
 }
@@ -473,18 +607,10 @@ impl BatchPartitioner {
 /// data across threads.
 #[derive(Debug, Clone)]
 pub struct RepartitionExec {
-    /// Input execution plan
-    input: Arc<dyn ExecutionPlan>,
-    /// Inner state that is initialized when the parent calls .execute() on this node
-    /// and consumed as soon as the parent starts consuming this node.
+    /// Common fields for all repartitioning executors
+    base: RepartitionExecBase,
+    /// Inner state that is initialized when the first output stream is created.
     state: Arc<Mutex<RepartitionExecState>>,
-    /// Execution metrics
-    metrics: ExecutionPlanMetricsSet,
-    /// Boolean flag to decide whether to preserve ordering. If true means
-    /// `SortPreservingRepartitionExec`, false means `RepartitionExec`.
-    preserve_order: bool,
-    /// Cache holding plan properties like equivalences, output partitioning etc.
-    cache: PlanProperties,
 }
 
 #[derive(Debug, Clone)]
@@ -535,18 +661,30 @@ impl RepartitionMetrics {
 impl RepartitionExec {
     /// Input execution plan
     pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
-        &self.input
+        &self.base.input
     }
 
     /// Partitioning scheme to use
     pub fn partitioning(&self) -> &Partitioning {
-        &self.cache.partitioning
+        &self.base.cache.partitioning
     }
 
     /// Get preserve_order flag of the RepartitionExecutor
     /// `true` means `SortPreservingRepartitionExec`, `false` means `RepartitionExec`
     pub fn preserve_order(&self) -> bool {
-        self.preserve_order
+        self.base.preserve_order
+    }
+
+    /// Specify if this reparititoning operation should preserve the order of
+    /// rows from its input when producing output. Preserving order is more
+    /// expensive at runtime, so should only be set if the output of this
+    /// operator can take advantage of it.
+    ///
+    /// If the input is not ordered, or has only one partition, this is a no op,
+    /// and the node remains a `RepartitionExec`.
+    pub fn with_preserve_order(mut self) -> Self {
+        self.base = self.base.with_preserve_order();
+        self
     }
 
     /// Get name used to display this Exec
@@ -564,14 +702,14 @@ impl DisplayAs for RepartitionExec {
                     "{}: partitioning={}, input_partitions={}",
                     self.name(),
                     self.partitioning(),
-                    self.input.output_partitioning().partition_count()
+                    self.base.input.output_partitioning().partition_count()
                 )?;
 
-                if self.preserve_order {
+                if self.base.preserve_order {
                     write!(f, ", preserve_order=true")?;
                 }
 
-                if let Some(sort_exprs) = self.sort_exprs() {
+                if let Some(sort_exprs) = self.base.sort_exprs() {
                     write!(f, ", sort_exprs={}", sort_exprs.clone())?;
                 }
                 Ok(())
@@ -580,7 +718,7 @@ impl DisplayAs for RepartitionExec {
                 writeln!(f, "partitioning_scheme={}", self.partitioning(),)?;
 
                 let input_partition_count =
-                    self.input.output_partitioning().partition_count();
+                    self.base.input.output_partitioning().partition_count();
                 let output_partition_count = self.partitioning().partition_count();
                 let input_to_output_partition_str =
                     format!("{input_partition_count} -> {output_partition_count}");
@@ -589,8 +727,8 @@ impl DisplayAs for RepartitionExec {
                     "partition_count(in->out)={input_to_output_partition_str}"
                 )?;
 
-                if self.preserve_order {
-                    writeln!(f, "preserve_order={}", self.preserve_order)?;
+                if self.preserve_order() {
+                    writeln!(f, "preserve_order={}", self.preserve_order())?;
                 }
                 Ok(())
             }
@@ -609,11 +747,11 @@ impl ExecutionPlan for RepartitionExec {
     }
 
     fn properties(&self) -> &PlanProperties {
-        &self.cache
+        &self.base.cache
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
-        vec![&self.input]
+        vec![&self.base.input]
     }
 
     fn with_new_children(
@@ -624,7 +762,7 @@ impl ExecutionPlan for RepartitionExec {
             children.swap_remove(0),
             self.partitioning().clone(),
         )?;
-        if self.preserve_order {
+        if self.base.preserve_order {
             repartition = repartition.with_preserve_order();
         }
         Ok(Arc::new(repartition))
@@ -635,7 +773,10 @@ impl ExecutionPlan for RepartitionExec {
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {
-        Self::maintains_input_order_helper(self.input(), self.preserve_order)
+        RepartitionExecBase::maintains_input_order_helper(
+            self.input(),
+            self.base.preserve_order,
+        )
     }
 
     fn execute(
@@ -649,16 +790,16 @@ impl ExecutionPlan for RepartitionExec {
             partition
         );
 
-        let input = Arc::clone(&self.input);
+        let input = Arc::clone(&self.base.input);
         let partitioning = self.partitioning().clone();
-        let metrics = self.metrics.clone();
-        let preserve_order = self.sort_exprs().is_some();
+        let metrics = self.base.metrics.clone();
+        let preserve_order = self.base.preserve_order;
         let name = self.name().to_owned();
         let schema = self.schema();
         let schema_captured = Arc::clone(&schema);
 
         // Get existing ordering to use for merging
-        let sort_exprs = self.sort_exprs().cloned();
+        let sort_exprs = self.base.sort_exprs().cloned();
 
         let state = Arc::clone(&self.state);
         if let Some(mut state) = state.try_lock() {
@@ -747,16 +888,16 @@ impl ExecutionPlan for RepartitionExec {
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
-        Some(self.metrics.clone_inner())
+        Some(self.base.metrics.clone_inner())
     }
 
     fn statistics(&self) -> Result<Statistics> {
-        self.input.partition_statistics(None)
+        self.partition_statistics(None)
     }
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
         if partition.is_none() {
-            self.input.partition_statistics(None)
+            self.base.input.partition_statistics(None)
         } else {
             Ok(Statistics::new_unknown(&self.schema()))
         }
@@ -834,85 +975,20 @@ impl RepartitionExec {
         partitioning: Partitioning,
     ) -> Result<Self> {
         let preserve_order = false;
-        let cache =
-            Self::compute_properties(&input, partitioning.clone(), preserve_order);
-        Ok(RepartitionExec {
-            input,
-            state: Default::default(),
-            metrics: ExecutionPlanMetricsSet::new(),
+        let cache = RepartitionExecBase::compute_properties(
+            &input,
+            partitioning.clone(),
             preserve_order,
-            cache,
+        );
+        Ok(RepartitionExec {
+            base: RepartitionExecBase {
+                input,
+                metrics: ExecutionPlanMetricsSet::new(),
+                preserve_order,
+                cache,
+            },
+            state: Default::default(),
         })
-    }
-
-    fn maintains_input_order_helper(
-        input: &Arc<dyn ExecutionPlan>,
-        preserve_order: bool,
-    ) -> Vec<bool> {
-        // We preserve ordering when repartition is order preserving variant or input partitioning is 1
-        vec![preserve_order || input.output_partitioning().partition_count() <= 1]
-    }
-
-    fn eq_properties_helper(
-        input: &Arc<dyn ExecutionPlan>,
-        preserve_order: bool,
-    ) -> EquivalenceProperties {
-        // Equivalence Properties
-        let mut eq_properties = input.equivalence_properties().clone();
-        // If the ordering is lost, reset the ordering equivalence class:
-        if !Self::maintains_input_order_helper(input, preserve_order)[0] {
-            eq_properties.clear_orderings();
-        }
-        // When there are more than one input partitions, they will be fused at the output.
-        // Therefore, remove per partition constants.
-        if input.output_partitioning().partition_count() > 1 {
-            eq_properties.clear_per_partition_constants();
-        }
-        eq_properties
-    }
-
-    /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
-    fn compute_properties(
-        input: &Arc<dyn ExecutionPlan>,
-        partitioning: Partitioning,
-        preserve_order: bool,
-    ) -> PlanProperties {
-        PlanProperties::new(
-            Self::eq_properties_helper(input, preserve_order),
-            partitioning,
-            input.pipeline_behavior(),
-            input.boundedness(),
-        )
-        .with_scheduling_type(SchedulingType::Cooperative)
-        .with_evaluation_type(EvaluationType::Eager)
-    }
-
-    /// Specify if this repartitioning operation should preserve the order of
-    /// rows from its input when producing output. Preserving order is more
-    /// expensive at runtime, so should only be set if the output of this
-    /// operator can take advantage of it.
-    ///
-    /// If the input is not ordered, or has only one partition, this is a no op,
-    /// and the node remains a `RepartitionExec`.
-    pub fn with_preserve_order(mut self) -> Self {
-        self.preserve_order =
-                // If the input isn't ordered, there is no ordering to preserve
-                self.input.output_ordering().is_some() &&
-                // if there is only one input partition, merging is not required
-                // to maintain order
-                self.input.output_partitioning().partition_count() > 1;
-        let eq_properties = Self::eq_properties_helper(&self.input, self.preserve_order);
-        self.cache = self.cache.with_eq_properties(eq_properties);
-        self
-    }
-
-    /// Return the sort expressions that are used to merge
-    fn sort_exprs(&self) -> Option<&LexOrdering> {
-        if self.preserve_order {
-            self.input.output_ordering()
-        } else {
-            None
-        }
     }
 
     /// Pulls data from the specified input plan, feeding it to the
@@ -1065,8 +1141,8 @@ impl Stream for RepartitionStream {
         cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
         loop {
-            match self.input.recv().poll_unpin(cx) {
-                Poll::Ready(Some(Some(v))) => {
+            match ready!(self.input.recv().poll_unpin(cx)) {
+                Some(Some(v)) => {
                     if let Ok(batch) = &v {
                         self.reservation
                             .lock()
@@ -1075,7 +1151,7 @@ impl Stream for RepartitionStream {
 
                     return Poll::Ready(Some(v));
                 }
-                Poll::Ready(Some(None)) => {
+                Some(None) => {
                     self.num_input_partitions_processed += 1;
 
                     if self.num_input_partitions == self.num_input_partitions_processed {
@@ -1086,11 +1162,8 @@ impl Stream for RepartitionStream {
                         continue;
                     }
                 }
-                Poll::Ready(None) => {
+                None => {
                     return Poll::Ready(None);
-                }
-                Poll::Pending => {
-                    return Poll::Pending;
                 }
             }
         }
@@ -1127,21 +1200,21 @@ impl Stream for PerPartitionStream {
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
-        match self.receiver.recv().poll_unpin(cx) {
-            Poll::Ready(Some(Some(v))) => {
+        match ready!(self.receiver.recv().poll_unpin(cx)) {
+            Some(Some(v)) => {
                 if let Ok(batch) = &v {
                     self.reservation
                         .lock()
                         .shrink(batch.get_array_memory_size());
                 }
+
                 Poll::Ready(Some(v))
             }
-            Poll::Ready(Some(None)) => {
+            Some(None) => {
                 // Input partition has finished sending batches
                 Poll::Ready(None)
             }
-            Poll::Ready(None) => Poll::Ready(None),
-            Poll::Pending => Poll::Pending,
+            None => Poll::Ready(None),
         }
     }
 }
@@ -1160,6 +1233,8 @@ mod tests {
     use super::*;
     use crate::test::TestMemoryExec;
     use crate::{
+        collect,
+        expressions::col,
         test::{
             assert_is_pending,
             exec::{
@@ -1167,7 +1242,6 @@ mod tests {
                 ErrorExec, MockExec,
             },
         },
-        {collect, expressions::col},
     };
 
     use arrow::array::{ArrayRef, StringArray, UInt32Array};
@@ -1707,7 +1781,6 @@ mod tests {
         .unwrap()
     }
 }
-
 #[cfg(test)]
 mod test {
     use arrow::compute::SortOptions;
