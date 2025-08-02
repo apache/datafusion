@@ -883,7 +883,6 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     /// * 'info': [crate::simplify::SimplifyInfo]
     ///
     /// closure returns simplified [Expr] or an error.
-    ///
     fn simplify(&self) -> Option<AggregateFunctionSimplification> {
         None
     }

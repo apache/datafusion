@@ -76,7 +76,6 @@ pub trait GroupColumn: Send + Sync {
     ///
     /// And if found nth result in `equal_to_results` is already
     /// `false`, the check for nth row will be skipped.
-    ///
     fn vectorized_equal_to(
         &self,
         lhs_rows: &[usize],
@@ -136,7 +135,6 @@ pub fn nulls_equal_to(lhs_null: bool, rhs_null: bool) -> Option<bool> {
 ///   +---------------------+---------------------------------------------+
 ///
 /// `inlined flag`: 1 represents `non-inlined`, and 0 represents `inlined`
-///
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct GroupIndexView(u64);
 
@@ -165,7 +163,6 @@ impl GroupIndexView {
 
 /// A [`GroupValues`] that stores multiple columns of group values,
 /// and supports vectorized operators for them
-///
 pub struct GroupValuesColumn<const STREAMING: bool> {
     /// The output schema
     schema: SchemaRef,
@@ -182,8 +179,6 @@ pub struct GroupValuesColumn<const STREAMING: bool> {
     /// We don't really store the actual `group values` in `hashtable`,
     /// instead we store the `group indices` pointing to values in `GroupValues`.
     /// And we use [`GroupIndexView`] to represent such `group indices` in table.
-    ///
-    ///
     map: HashTable<(u64, GroupIndexView)>,
 
     /// The size of `map` in bytes
@@ -196,7 +191,6 @@ pub struct GroupValuesColumn<const STREAMING: bool> {
     ///
     /// The chained indices is like:
     ///   `latest group index -> older group index -> even older group index -> ...`
-    ///
     group_index_lists: Vec<Vec<usize>>,
 
     /// When emitting first n, we need to decrease/erase group indices in
@@ -322,7 +316,6 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
     ///
     /// `Group indices` order are against with their input order, and this will lead to error
     /// in `streaming aggregation`.
-    ///
     fn scalarized_intern(
         &mut self,
         cols: &[ArrayRef],
@@ -424,7 +417,6 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
     ///
     /// The vectorized approach can offer higher performance for avoiding row by row
     /// downcast for `cols` and being able to implement even more optimizations(like simd).
-    ///
     fn vectorized_intern(
         &mut self,
         cols: &[ArrayRef],
@@ -492,7 +484,6 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
     ///   - Check if the `group index view` is `inlined` or `non_inlined`:
     ///     If it is inlined, add to `vectorized_equal_to_group_indices` directly.
     ///     Otherwise get all group indices from `group_index_lists`, and add them.
-    ///
     fn collect_vectorized_process_context(
         &mut self,
         batch_hashes: &[u64],
@@ -720,7 +711,6 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
     /// The hash collision may be not frequent, so the fallback will indeed hardly happen.
     /// In most situations, `scalarized_indices` will found to be empty after finishing to
     /// preform `vectorized_equal_to`.
-    ///
     fn scalarized_intern_remaining(
         &mut self,
         cols: &[ArrayRef],
@@ -885,7 +875,6 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
 /// `$v`: the vector to push the new builder into
 /// `$nullable`: whether the input can contains nulls
 /// `$t`: the primitive type of the builder
-///
 macro_rules! instantiate_primitive {
     ($v:expr, $nullable:expr, $t:ty, $data_type:ident) => {
         if $nullable {
@@ -1447,7 +1436,6 @@ mod tests {
     ///   - Group not exist + bucket not found in `map`
     ///   - Group not exist + not equal to inlined group view(tested in hash collision)
     ///   - Group not exist + not equal to non-inlined group view(tested in hash collision)
-    ///
     struct VectorizedTestDataSet {
         test_batches: Vec<Vec<ArrayRef>>,
         expected_batch: RecordBatch,

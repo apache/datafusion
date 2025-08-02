@@ -562,7 +562,6 @@ fn push_down_join(
 ///
 /// * `on_filters` filters from the join ON clause that have not already been
 ///   identified as join predicates
-///
 fn infer_join_predicates(
     join: &Join,
     predicates: &[Expr],
@@ -649,7 +648,6 @@ impl InferredPredicates {
 /// * `predicates` the pushed down predicates
 ///
 /// * `inferred_predicates` the inferred results
-///
 fn infer_join_predicates_from_predicates(
     join_col_keys: &[(&Column, &Column)],
     predicates: &[Expr],
@@ -673,7 +671,6 @@ fn infer_join_predicates_from_predicates(
 ///   identified as join predicates
 ///
 /// * `inferred_predicates` the inferred results
-///
 fn infer_join_predicates_from_on_filters(
     join_col_keys: &[(&Column, &Column)],
     join_type: JoinType,
@@ -719,7 +716,6 @@ fn infer_join_predicates_from_on_filters(
 ///
 /// * `ENABLE_RIGHT_TO_LEFT` indicates that the left table related predicate can
 ///   be inferred from the right table related predicate
-///
 fn infer_join_predicates_impl<
     const ENABLE_LEFT_TO_RIGHT: bool,
     const ENABLE_RIGHT_TO_LEFT: bool,

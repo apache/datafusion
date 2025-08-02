@@ -87,7 +87,6 @@ pub struct GroupValuesPrimitive<T: ArrowPrimitiveType> {
     /// is obvious in high cardinality group by situation.
     /// More details can see:
     /// <https://github.com/apache/datafusion/issues/15961>
-    ///
     map: HashTable<(usize, u64)>,
     /// The group index of the null value if any
     null_group: Option<usize>,

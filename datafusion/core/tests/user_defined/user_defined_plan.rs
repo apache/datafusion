@@ -56,7 +56,6 @@
 //!
 //! The same answer can be produced by simply keeping track of the top
 //! N elements, reducing the total amount of required buffer memory.
-//!
 
 use std::fmt::Debug;
 use std::hash::Hash;
