@@ -131,7 +131,7 @@ async fn run_tests() -> Result<()> {
     if !scratch_errors.is_empty() {
         eprintln!("Scratch file sanity check failed:");
         for error in &scratch_errors {
-            eprintln!("  {}", error);
+            eprintln!("  {error}");
         }
 
         eprintln!("\nTemporary file check failed. Please ensure that within each test file, any scratch file created is placed under a folder with the same name as the test file (without extension).\nExample: inside `join.slt`, temporary files must be created under `.../scratch/join/`\n");
