@@ -15,17 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{
-    collections::HashMap,
-    ffi::{c_char, c_void, CString},
-};
-
 use abi_stable::{
     std_types::{RHashMap, RString},
     StableAbi,
 };
 use datafusion::{config::ConfigOptions, error::Result};
 use datafusion::{error::DataFusionError, prelude::SessionConfig};
+use std::sync::Arc;
+use std::{
+    collections::HashMap,
+    ffi::{c_char, c_void, CString},
+};
 
 /// A stable struct for sharing [`SessionConfig`] across FFI boundaries.
 /// Instead of attempting to expose the entire SessionConfig interface, we
@@ -85,11 +85,9 @@ unsafe extern "C" fn release_fn_wrapper(config: &mut FFI_SessionConfig) {
 
 unsafe extern "C" fn clone_fn_wrapper(config: &FFI_SessionConfig) -> FFI_SessionConfig {
     let old_private_data = config.private_data as *mut SessionConfigPrivateData;
-    let old_config = &(*old_private_data).config;
+    let old_config = Arc::clone(&(*old_private_data).config);
 
-    let private_data = Box::new(SessionConfigPrivateData {
-        config: old_config.clone(),
-    });
+    let private_data = Box::new(SessionConfigPrivateData { config: old_config });
 
     FFI_SessionConfig {
         config_options: config_options_fn_wrapper,
@@ -100,7 +98,7 @@ unsafe extern "C" fn clone_fn_wrapper(config: &FFI_SessionConfig) -> FFI_Session
 }
 
 struct SessionConfigPrivateData {
-    pub config: ConfigOptions,
+    pub config: Arc<ConfigOptions>,
 }
 
 impl From<&SessionConfig> for FFI_SessionConfig {
@@ -120,7 +118,7 @@ impl From<&SessionConfig> for FFI_SessionConfig {
         }
 
         let private_data = Box::new(SessionConfigPrivateData {
-            config: session.options().clone(),
+            config: Arc::clone(session.options()),
         });
 
         Self {

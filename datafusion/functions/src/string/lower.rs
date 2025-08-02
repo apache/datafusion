@@ -100,6 +100,7 @@ mod tests {
     use arrow::array::{Array, ArrayRef, StringArray};
     use arrow::datatypes::DataType::Utf8;
     use arrow::datatypes::Field;
+    use datafusion_common::config::ConfigOptions;
     use std::sync::Arc;
 
     fn to_lower(input: ArrayRef, expected: ArrayRef) -> Result<()> {
@@ -111,6 +112,7 @@ mod tests {
             args: vec![ColumnarValue::Array(input)],
             arg_fields,
             return_field: Field::new("f", Utf8, true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
         };
 
         let result = match func.invoke_with_args(args)? {

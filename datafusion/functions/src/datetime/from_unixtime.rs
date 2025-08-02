@@ -164,6 +164,7 @@ mod test {
     use crate::datetime::from_unixtime::FromUnixtimeFunc;
     use arrow::datatypes::TimeUnit::Second;
     use arrow::datatypes::{DataType, Field};
+    use datafusion_common::config::ConfigOptions;
     use datafusion_common::ScalarValue;
     use datafusion_common::ScalarValue::Int64;
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
@@ -177,6 +178,7 @@ mod test {
             arg_fields: vec![arg_field],
             number_rows: 1,
             return_field: Field::new("f", DataType::Timestamp(Second, None), true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
         };
         let result = FromUnixtimeFunc::new().invoke_with_args(args).unwrap();
 
@@ -209,6 +211,7 @@ mod test {
                 true,
             )
             .into(),
+            config_options: Arc::new(ConfigOptions::default()),
         };
         let result = FromUnixtimeFunc::new().invoke_with_args(args).unwrap();
 

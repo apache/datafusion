@@ -85,6 +85,7 @@ fn test_pushdown_volatile_functions_not_allowed() {
     // Test that we do not push down filters with volatile functions
     // Use random() as an example of a volatile function
     let scan = TestScanBuilder::new(schema()).with_support(true).build();
+    let cfg = Arc::new(ConfigOptions::default());
     let predicate = Arc::new(BinaryExpr::new(
         Arc::new(Column::new_with_schema("a", &schema()).unwrap()),
         Operator::Eq,
@@ -93,6 +94,7 @@ fn test_pushdown_volatile_functions_not_allowed() {
                 Arc::new(ScalarUDF::from(RandomFunc::new())),
                 vec![],
                 &schema(),
+                cfg,
             )
             .unwrap(),
         ),

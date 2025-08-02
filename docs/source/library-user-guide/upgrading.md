@@ -24,6 +24,48 @@
 **Note:** DataFusion `50.0.0` has not been released yet. The information provided in this section pertains to features and changes that have already been merged to the main branch and are awaiting release in this version.
 You can see the current [status of the `50.0.0 `release here](https://github.com/apache/datafusion/issues/16799)
 
+### API Change to `AsyncScalarUDFImpl::invoke_async_with_args`
+
+The `invoke_async_with_args` method of the `AsyncScalarUDFImpl` trait has been
+updated to remove the `_option: &ConfigOptions` parameter to simplify the API
+now that the `ConfigOptions` can be accessed through the `ScalarFunctionArgs`
+parameter.
+
+You can change your code like this
+
+```rust
+# /* comment to avoid running
+impl AsyncScalarUDFImpl for AskLLM {
+    async fn invoke_async_with_args(
+        &self,
+        args: ScalarFunctionArgs,
+        _option: &ConfigOptions,
+    ) -> Result<ArrayRef> {
+        ..
+    }
+    ...
+}
+# */
+```
+
+To this:
+
+```rust
+# /* comment to avoid running
+
+impl AsyncScalarUDFImpl for AskLLM {
+    async fn invoke_async_with_args(
+        &self,
+        args: ScalarFunctionArgs,
+    ) -> Result<ArrayRef> {
+        let options = &args.config_options;
+        ..
+    }
+    ...
+}
+# */
+```
+
 ## DataFusion `49.0.0`
 
 ### `MSRV` updated to 1.85.1

@@ -23,6 +23,7 @@ use criterion::{
     black_box, criterion_group, criterion_main, measurement::Measurement, BenchmarkGroup,
     Criterion, SamplingMode,
 };
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDF};
 use datafusion_functions::string;
@@ -137,6 +138,8 @@ fn run_with_string_type<M: Measurement>(
         .enumerate()
         .map(|(idx, arg)| Field::new(format!("arg_{idx}"), arg.data_type(), true).into())
         .collect::<Vec<_>>();
+    let config_options = Arc::new(ConfigOptions::default());
+
     group.bench_function(
         format!(
             "{string_type} [size={size}, len_before={len}, len_after={remaining_len}]",
@@ -149,6 +152,7 @@ fn run_with_string_type<M: Measurement>(
                     arg_fields: arg_fields.clone(),
                     number_rows: size,
                     return_field: Field::new("f", DataType::Utf8, true).into(),
+                    config_options: Arc::clone(&config_options),
                 }))
             })
         },

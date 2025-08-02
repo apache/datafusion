@@ -140,6 +140,7 @@ mod test {
     use arrow::array::{ArrayRef, Float32Array, Float64Array};
     use arrow::datatypes::{DataType, Field};
     use datafusion_common::cast::{as_float32_array, as_float64_array};
+    use datafusion_common::config::ConfigOptions;
     use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
 
     use crate::math::signum::SignumFunc;
@@ -163,6 +164,7 @@ mod test {
             arg_fields,
             number_rows: array.len(),
             return_field: Field::new("f", DataType::Float32, true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
         };
         let result = SignumFunc::new()
             .invoke_with_args(args)
@@ -209,6 +211,7 @@ mod test {
             arg_fields,
             number_rows: array.len(),
             return_field: Field::new("f", DataType::Float64, true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
         };
         let result = SignumFunc::new()
             .invoke_with_args(args)

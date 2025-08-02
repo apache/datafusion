@@ -24,14 +24,14 @@ use arrow::datatypes::{DataType, Field};
 use chrono::prelude::*;
 use chrono::TimeDelta;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use rand::prelude::IndexedRandom;
-use rand::rngs::ThreadRng;
-use rand::Rng;
-
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::ScalarValue;
 use datafusion_common::ScalarValue::TimestampNanosecond;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::datetime::to_char;
+use rand::prelude::IndexedRandom;
+use rand::rngs::ThreadRng;
+use rand::Rng;
 
 fn random_date_in_range(
     rng: &mut ThreadRng,
@@ -81,6 +81,8 @@ fn patterns(rng: &mut ThreadRng) -> StringArray {
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
+    let config_options = Arc::new(ConfigOptions::default());
+
     c.bench_function("to_char_array_array_1000", |b| {
         let mut rng = rand::rng();
         let data_arr = data(&mut rng);
@@ -99,6 +101,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         ],
                         number_rows: batch_len,
                         return_field: Field::new("f", DataType::Utf8, true).into(),
+                        config_options: Arc::clone(&config_options),
                     })
                     .expect("to_char should work on valid values"),
             )
@@ -124,6 +127,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         ],
                         number_rows: batch_len,
                         return_field: Field::new("f", DataType::Utf8, true).into(),
+                        config_options: Arc::clone(&config_options),
                     })
                     .expect("to_char should work on valid values"),
             )
@@ -155,6 +159,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         ],
                         number_rows: 1,
                         return_field: Field::new("f", DataType::Utf8, true).into(),
+                        config_options: Arc::clone(&config_options),
                     })
                     .expect("to_char should work on valid values"),
             )

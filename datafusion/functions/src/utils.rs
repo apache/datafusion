@@ -128,8 +128,9 @@ pub mod test {
     /// $EXPECTED_TYPE is the expected value type
     /// $EXPECTED_DATA_TYPE is the expected result type
     /// $ARRAY_TYPE is the column type after function applied
+    /// $CONFIG_OPTIONS config options to pass to function
     macro_rules! test_function {
-        ($FUNC:expr, $ARGS:expr, $EXPECTED:expr, $EXPECTED_TYPE:ty, $EXPECTED_DATA_TYPE:expr, $ARRAY_TYPE:ident) => {
+        ($FUNC:expr, $ARGS:expr, $EXPECTED:expr, $EXPECTED_TYPE:ty, $EXPECTED_DATA_TYPE:expr, $ARRAY_TYPE:ident, $CONFIG_OPTIONS:expr) => {
             let expected: Result<Option<$EXPECTED_TYPE>> = $EXPECTED;
             let func = $FUNC;
 
@@ -174,7 +175,13 @@ pub mod test {
                     let return_type = return_field.data_type();
                     assert_eq!(return_type, &$EXPECTED_DATA_TYPE);
 
-                    let result = func.invoke_with_args(datafusion_expr::ScalarFunctionArgs{args: $ARGS, arg_fields, number_rows: cardinality, return_field});
+                    let result = func.invoke_with_args(datafusion_expr::ScalarFunctionArgs{
+                        args: $ARGS,
+                        arg_fields,
+                        number_rows: cardinality,
+                        return_field,
+                        config_options: $CONFIG_OPTIONS
+                    });
                     assert_eq!(result.is_ok(), true, "function returned an error: {}", result.unwrap_err());
 
                     let result = result.unwrap().to_array(cardinality).expect("Failed to convert to array");
@@ -198,7 +205,13 @@ pub mod test {
                         let return_field = return_field.unwrap();
 
                         // invoke is expected error - cannot use .expect_err() due to Debug not being implemented
-                        match func.invoke_with_args(datafusion_expr::ScalarFunctionArgs{args: $ARGS, arg_fields, number_rows: cardinality, return_field}) {
+                        match func.invoke_with_args(datafusion_expr::ScalarFunctionArgs{
+                            args: $ARGS,
+                            arg_fields,
+                            number_rows: cardinality,
+                            return_field,
+                            config_options: $CONFIG_OPTIONS})
+                        {
                             Ok(_) => assert!(false, "expected error"),
                             Err(error) => {
                                 assert!(expected_error.strip_backtrace().starts_with(&error.strip_backtrace()));
@@ -207,6 +220,18 @@ pub mod test {
                     }
                 }
             };
+        };
+
+        ($FUNC:expr, $ARGS:expr, $EXPECTED:expr, $EXPECTED_TYPE:ty, $EXPECTED_DATA_TYPE:expr, $ARRAY_TYPE:ident) => {
+            test_function!(
+                $FUNC,
+                $ARGS,
+                $EXPECTED,
+                $EXPECTED_TYPE,
+                $EXPECTED_DATA_TYPE,
+                $ARRAY_TYPE,
+                std::sync::Arc::new(datafusion_common::config::ConfigOptions::default())
+            )
         };
     }
 

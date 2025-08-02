@@ -21,16 +21,16 @@ use arrow::array::{Int32Array, ListArray, StringArray};
 use arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use arrow::datatypes::{DataType, Field};
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use rand::prelude::ThreadRng;
-use rand::Rng;
-use std::collections::HashSet;
-use std::sync::Arc;
-
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::ScalarValue;
 use datafusion_expr::planner::ExprPlanner;
 use datafusion_expr::{ColumnarValue, Expr, ScalarFunctionArgs};
 use datafusion_functions_nested::map::map_udf;
 use datafusion_functions_nested::planner::NestedFunctionPlanner;
+use rand::prelude::ThreadRng;
+use rand::Rng;
+use std::collections::HashSet;
+use std::sync::Arc;
 
 fn keys(rng: &mut ThreadRng) -> Vec<String> {
     let mut keys = HashSet::with_capacity(1000);
@@ -105,6 +105,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             Field::new("a", values.data_type(), true).into(),
         ];
         let return_field = Field::new("f", return_type, true).into();
+        let config_options = Arc::new(ConfigOptions::default());
 
         b.iter(|| {
             black_box(
@@ -114,6 +115,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         arg_fields: arg_fields.clone(),
                         number_rows: 1,
                         return_field: Arc::clone(&return_field),
+                        config_options: Arc::clone(&config_options),
                     })
                     .expect("map should work on valid values"),
             );

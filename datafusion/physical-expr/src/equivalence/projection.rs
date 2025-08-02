@@ -167,6 +167,7 @@ mod tests {
 
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
+    use datafusion_common::config::ConfigOptions;
     use datafusion_expr::{Operator, ScalarUDF};
 
     #[test]
@@ -689,6 +690,7 @@ mod tests {
             test_fun,
             vec![Arc::clone(col_c)],
             &schema,
+            Arc::new(ConfigOptions::default()),
         )?) as PhysicalExprRef;
 
         let option_asc = SortOptions {

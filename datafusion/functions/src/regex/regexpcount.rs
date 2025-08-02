@@ -581,6 +581,7 @@ mod tests {
     use super::*;
     use arrow::array::{GenericStringArray, StringViewArray};
     use arrow::datatypes::Field;
+    use datafusion_common::config::ConfigOptions;
     use datafusion_expr::ScalarFunctionArgs;
 
     #[test]
@@ -626,6 +627,7 @@ mod tests {
             arg_fields,
             number_rows: args.len(),
             return_field: Field::new("f", Int64, true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
         })
     }
 

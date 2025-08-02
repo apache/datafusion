@@ -28,6 +28,7 @@ use datafusion_physical_expr::expressions::{col, BinaryExpr};
 use datafusion_physical_expr::{LexOrdering, ScalarFunctionExpr};
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 
+use datafusion_common::config::ConfigOptions;
 use itertools::Itertools;
 
 #[test]
@@ -49,6 +50,7 @@ fn test_find_longest_permutation_random() -> Result<()> {
             Arc::clone(&test_fun),
             vec![col_a],
             &test_schema,
+            Arc::new(ConfigOptions::default()),
         )?) as _;
 
         let a_plus_b = Arc::new(BinaryExpr::new(

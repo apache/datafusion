@@ -69,6 +69,7 @@ impl OptimizerRule for SimplifyExpressions {
     ) -> Result<Transformed<LogicalPlan>, DataFusionError> {
         let mut execution_props = ExecutionProps::new();
         execution_props.query_execution_start_time = config.query_execution_start_time();
+        execution_props.config_options = Some(config.options());
         Self::optimize_internal(plan, &execution_props)
     }
 }

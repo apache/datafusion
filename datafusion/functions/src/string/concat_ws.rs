@@ -409,6 +409,7 @@ mod tests {
     use arrow::array::{Array, ArrayRef, StringArray};
     use arrow::datatypes::DataType::Utf8;
     use arrow::datatypes::Field;
+    use datafusion_common::config::ConfigOptions;
     use datafusion_common::Result;
     use datafusion_common::ScalarValue;
     use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
@@ -493,6 +494,7 @@ mod tests {
             arg_fields,
             number_rows: 3,
             return_field: Field::new("f", Utf8, true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
         };
 
         let result = ConcatWsFunc::new().invoke_with_args(args)?;
@@ -529,6 +531,7 @@ mod tests {
             arg_fields,
             number_rows: 3,
             return_field: Field::new("f", Utf8, true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
         };
 
         let result = ConcatWsFunc::new().invoke_with_args(args)?;

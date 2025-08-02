@@ -156,6 +156,7 @@ impl ScalarUDFImpl for UnionTagFunc {
 mod tests {
     use super::UnionTagFunc;
     use arrow::datatypes::{DataType, Field, UnionFields, UnionMode};
+    use datafusion_common::config::ConfigOptions;
     use datafusion_common::ScalarValue;
     use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
     use std::sync::Arc;
@@ -182,6 +183,7 @@ mod tests {
                 number_rows: 1,
                 return_field: Field::new("res", return_type, true).into(),
                 arg_fields: vec![],
+                config_options: Arc::new(ConfigOptions::default()),
             })
             .unwrap();
 
@@ -204,6 +206,7 @@ mod tests {
                 number_rows: 1,
                 return_field: Field::new("res", return_type, true).into(),
                 arg_fields: vec![],
+                config_options: Arc::new(ConfigOptions::default()),
             })
             .unwrap();
 

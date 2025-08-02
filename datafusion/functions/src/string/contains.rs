@@ -153,6 +153,7 @@ mod test {
     use crate::expr_fn::contains;
     use arrow::array::{BooleanArray, StringArray};
     use arrow::datatypes::{DataType, Field};
+    use datafusion_common::config::ConfigOptions;
     use datafusion_common::ScalarValue;
     use datafusion_expr::{ColumnarValue, Expr, ScalarFunctionArgs, ScalarUDFImpl};
     use std::sync::Arc;
@@ -175,6 +176,7 @@ mod test {
             arg_fields,
             number_rows: 2,
             return_field: Field::new("f", DataType::Boolean, true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
         };
 
         let actual = udf.invoke_with_args(args).unwrap();

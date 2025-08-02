@@ -38,6 +38,7 @@ use datafusion_execution::runtime_env::RuntimeEnvBuilder;
 use datafusion_expr::{col, lit, Expr};
 
 use datafusion::datasource::physical_plan::FileScanConfig;
+use datafusion_common::config::ConfigOptions;
 use datafusion_physical_optimizer::filter_pushdown::FilterPushdown;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::filter::FilterExec;
@@ -55,7 +56,7 @@ async fn check_stats_precision_with_filter_pushdown() {
     let table = get_listing_table(&table_path, None, &opt).await;
 
     let (_, _, state) = get_cache_runtime_state();
-    let mut options = state.config().options().clone();
+    let mut options: ConfigOptions = state.config().options().as_ref().clone();
     options.execution.parquet.pushdown_filters = true;
 
     // Scan without filter, stats are exact

@@ -19,6 +19,7 @@ use arrow::array::ArrayRef;
 use arrow::datatypes::{DataType, Field};
 use arrow::util::bench_util::create_string_array_with_len;
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::string::concat;
@@ -44,6 +45,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                 Field::new(format!("arg_{idx}"), arg.data_type(), true).into()
             })
             .collect::<Vec<_>>();
+        let config_options = Arc::new(ConfigOptions::default());
 
         let mut group = c.benchmark_group("concat function");
         group.bench_function(BenchmarkId::new("concat", size), |b| {
@@ -56,6 +58,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                             arg_fields: arg_fields.clone(),
                             number_rows: size,
                             return_field: Field::new("f", DataType::Utf8, true).into(),
+                            config_options: Arc::clone(&config_options),
                         })
                         .unwrap(),
                 )

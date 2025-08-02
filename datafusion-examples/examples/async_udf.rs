@@ -29,7 +29,6 @@ use datafusion::common::cast::as_string_view_array;
 use datafusion::common::error::Result;
 use datafusion::common::not_impl_err;
 use datafusion::common::utils::take_function_args;
-use datafusion::config::ConfigOptions;
 use datafusion::execution::SessionStateBuilder;
 use datafusion::logical_expr::async_udf::{AsyncScalarUDF, AsyncScalarUDFImpl};
 use datafusion::logical_expr::{
@@ -195,11 +194,7 @@ impl AsyncScalarUDFImpl for AskLLM {
     /// is processing the query, so you may wish to make actual network requests
     /// on a different `Runtime`, as explained in the `thread_pools.rs` example
     /// in this directory.
-    async fn invoke_async_with_args(
-        &self,
-        args: ScalarFunctionArgs,
-        _option: &ConfigOptions,
-    ) -> Result<ArrayRef> {
+    async fn invoke_async_with_args(&self, args: ScalarFunctionArgs) -> Result<ArrayRef> {
         // in a real UDF you would likely want to special case constant
         // arguments to improve performance, but this example converts the
         // arguments to arrays for simplicity.

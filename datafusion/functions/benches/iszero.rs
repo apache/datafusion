@@ -23,6 +23,7 @@ use arrow::{
     util::bench_util::create_primitive_array,
 };
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use datafusion_common::config::ConfigOptions;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::math::iszero;
 use std::sync::Arc;
@@ -41,6 +42,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             })
             .collect::<Vec<_>>();
         let return_field = Arc::new(Field::new("f", DataType::Boolean, true));
+        let config_options = Arc::new(ConfigOptions::default());
 
         c.bench_function(&format!("iszero f32 array: {size}"), |b| {
             b.iter(|| {
@@ -51,6 +53,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                             arg_fields: arg_fields.clone(),
                             number_rows: batch_len,
                             return_field: Arc::clone(&return_field),
+                            config_options: Arc::clone(&config_options),
                         })
                         .unwrap(),
                 )
@@ -77,6 +80,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                             arg_fields: arg_fields.clone(),
                             number_rows: batch_len,
                             return_field: Arc::clone(&return_field),
+                            config_options: Arc::clone(&config_options),
                         })
                         .unwrap(),
                 )

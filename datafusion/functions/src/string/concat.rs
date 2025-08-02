@@ -377,6 +377,7 @@ mod tests {
     use arrow::array::{Array, LargeStringArray, StringViewArray};
     use arrow::array::{ArrayRef, StringArray};
     use arrow::datatypes::Field;
+    use datafusion_common::config::ConfigOptions;
     use DataType::*;
 
     #[test]
@@ -485,6 +486,7 @@ mod tests {
             arg_fields,
             number_rows: 3,
             return_field: Field::new("f", Utf8, true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
         };
 
         let result = ConcatFunc::new().invoke_with_args(args)?;

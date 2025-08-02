@@ -32,6 +32,7 @@ use arrow::{
     ffi::{from_ffi, to_ffi, FFI_ArrowSchema},
 };
 use arrow_schema::FieldRef;
+use datafusion::config::ConfigOptions;
 use datafusion::logical_expr::{udf_equals_hash, ReturnFieldArgs};
 use datafusion::{
     error::DataFusionError,
@@ -207,6 +208,8 @@ unsafe extern "C" fn invoke_with_args_fn_wrapper(
         arg_fields,
         number_rows,
         return_field,
+        // todo - should the config options go through serdes?
+        config_options: Arc::new(ConfigOptions::default()),
     };
 
     let result = rresult_return!(udf
@@ -378,6 +381,8 @@ impl ScalarUDFImpl for ForeignScalarUDF {
             arg_fields,
             number_rows,
             return_field,
+            // todo - should the config options go through serdes?
+            config_options: _config_options,
         } = invoke_args;
 
         let args = args
