@@ -23,5 +23,116 @@
 
 ## Original Query: SELECT shiftrightunsigned(4, 1);
 ## PySpark 3.5.5 Result: {'shiftrightunsigned(4, 1)': 2, 'typeof(shiftrightunsigned(4, 1))': 'int', 'typeof(4)': 'int', 'typeof(1)': 'int'}
-#query
-#SELECT shiftrightunsigned(4::int, 1::int);
+
+# Basic shiftrightunsigned tests
+query I
+SELECT shiftrightunsigned(4::int, 1::int);
+----
+2
+
+query I
+SELECT shiftrightunsigned(8::int, 2::int);
+----
+2
+
+query I
+SELECT shiftrightunsigned(16::int, 3::int);
+----
+2
+
+# Different data types
+query I
+SELECT shiftrightunsigned(4::bigint, 1::int);
+----
+2
+
+query I
+SELECT shiftrightunsigned(8::bigint, 2::int);
+----
+2
+
+query I
+SELECT shiftrightunsigned(4::int, 1::bigint);
+----
+2
+
+# Large shifts (should handle modulo correctly)
+query I
+SELECT shiftrightunsigned(1::int, 32::int);
+----
+1
+
+query I
+SELECT shiftrightunsigned(2::int, 33::int);
+----
+1
+
+query I
+SELECT shiftrightunsigned(3::int, 64::int);
+----
+3
+
+# Negative shifts
+query I
+SELECT shiftrightunsigned(4::int, -1::int);
+----
+0
+
+query I
+SELECT shiftrightunsigned(8::int, -2::int);
+----
+0
+
+query I
+SELECT shiftrightunsigned(16::int, -3::int);
+----
+0
+
+# Zero shifts
+query I
+SELECT shiftrightunsigned(5::int, 0::int);
+----
+5
+
+query I
+SELECT shiftrightunsigned(0::int, 5::int);
+----
+0
+
+# Edge cases - unsigned right shift treats negative values as large positive
+query I
+SELECT shiftrightunsigned(-4::int, 1::int);
+----
+2147483646
+
+query I
+SELECT shiftrightunsigned(-8::int, 2::int);
+----
+1073741822
+
+query I
+SELECT shiftrightunsigned(-16::int, 3::int);
+----
+536870910
+
+query I
+SELECT shiftrightunsigned(2147483647::int, 1::int);
+----
+1073741823
+
+
+# Null handling
+query I
+SELECT shiftrightunsigned(NULL::int, 1::int);
+----
+NULL
+
+query I
+SELECT shiftrightunsigned(1::int, NULL::int);
+----
+NULL
+
+query I
+SELECT shiftrightunsigned(NULL::int, NULL::int);
+----
+NULL
