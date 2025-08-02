@@ -234,6 +234,7 @@ impl ParquetOptions {
             binary_as_string: _, // not used for writer props
             coerce_int96: _,     // not used for writer props
             skip_arrow_metadata: _,
+            cache_metadata: _,
         } = self;
 
         let mut builder = WriterProperties::builder()
@@ -501,6 +502,7 @@ mod tests {
             binary_as_string: defaults.binary_as_string,
             skip_arrow_metadata: defaults.skip_arrow_metadata,
             coerce_int96: None,
+            cache_metadata: defaults.cache_metadata,
         }
     }
 
@@ -611,6 +613,7 @@ mod tests {
                 binary_as_string: global_options_defaults.binary_as_string,
                 skip_arrow_metadata: global_options_defaults.skip_arrow_metadata,
                 coerce_int96: None,
+                cache_metadata: global_options_defaults.cache_metadata,
             },
             column_specific_options,
             key_value_metadata,
