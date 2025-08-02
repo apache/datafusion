@@ -79,7 +79,7 @@ use datafusion_expr::{
     expr_rewriter::FunctionRewrite,
     logical_plan::{DdlStatement, Statement},
     planner::ExprPlanner,
-    Expr, UserDefinedLogicalNode, WindowUDF,
+    Expr, Operator, UserDefinedLogicalNode, WindowUDF,
 };
 use datafusion_optimizer::analyzer::type_coercion::TypeCoercion;
 use datafusion_optimizer::Analyzer;
@@ -255,6 +255,58 @@ where
         self.iter()
             .map(ListingTableUrl::parse)
             .collect::<Result<Vec<ListingTableUrl>>>()
+    }
+}
+
+/// Categories used to group [`Operator`]s in query plans.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OperatorCategory {
+    /// Numeric arithmetic such as `+` or `*`.
+    Arithmetic,
+    /// Comparison operations such as `=` or `>`.
+    Comparison,
+    /// Boolean logic like `AND` / `OR`.
+    Boolean,
+    /// String and pattern matching operations.
+    String,
+    /// Bitwise operations like `&` or `|`.
+    Bitwise,
+    /// Fallback for operators without an explicit category.
+    Other,
+}
+
+/// Return the [`OperatorCategory`] for a given [`Operator`].
+///
+/// Operators that are not explicitly handled are categorized as
+/// [`OperatorCategory::Other`].
+///
+/// # Examples
+///
+/// ```
+/// use datafusion::execution::context::{categorize_operator, OperatorCategory};
+/// use datafusion_expr::Operator;
+///
+/// assert_eq!(categorize_operator(&Operator::Plus), OperatorCategory::Arithmetic);
+/// assert_eq!(categorize_operator(&Operator::Arrow), OperatorCategory::Other);
+/// ```
+pub fn categorize_operator(op: &Operator) -> OperatorCategory {
+    use Operator::*;
+    match op {
+        Eq | NotEq | Lt | LtEq | Gt | GtEq | IsDistinctFrom | IsNotDistinctFrom => {
+            OperatorCategory::Comparison
+        }
+        Plus | Minus | Multiply | Divide | Modulo | IntegerDivide => {
+            OperatorCategory::Arithmetic
+        }
+        And | Or => OperatorCategory::Boolean,
+        LikeMatch | ILikeMatch | NotLikeMatch | NotILikeMatch | RegexMatch
+        | RegexIMatch | RegexNotMatch | RegexNotIMatch | StringConcat => {
+            OperatorCategory::String
+        }
+        BitwiseAnd | BitwiseOr | BitwiseXor | BitwiseShiftRight | BitwiseShiftLeft => {
+            OperatorCategory::Bitwise
+        }
+        _ => OperatorCategory::Other,
     }
 }
 
@@ -2117,8 +2169,17 @@ mod tests {
     use crate::physical_planner::PhysicalPlanner;
     use async_trait::async_trait;
     use datafusion_expr::planner::TypePlanner;
+
     use sqlparser::ast;
     use tempfile::TempDir;
+
+    #[test]
+    fn categorize_unknown_operator_as_other() {
+        assert_eq!(
+            categorize_operator(&Operator::Question),
+            OperatorCategory::Other
+        );
+    }
 
     #[tokio::test]
     async fn shared_memory_and_disk_manager() {
