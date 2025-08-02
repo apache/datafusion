@@ -127,6 +127,8 @@ impl EnhancedMemoryReport {
             "Data Input"
         } else if name.contains("filter") {
             "Filtering"
+        } else if name.contains("join") {
+            "Join Operation"
         } else if name.contains("aggregate") {
             "Aggregation"
         } else if name.contains("sort") {
@@ -257,13 +259,13 @@ mod enhanced_memory_report_tests {
             ("unknownOp", 5),
         ];
         let raw = entries
-            .into_iter()
-            .map(|(k, v)| (k.to_string(), v))
+            .iter()
+            .map(|(k, v)| (k.to_string(), *v))
             .collect::<HashMap<_, _>>();
         let report = EnhancedMemoryReport::from_raw_report(raw.clone());
         assert_eq!(
             report.total_memory,
-            entries.iter().map(|(_, v)| *v as usize).sum()
+            entries.iter().map(|(_, v)| *v as usize).sum::<usize>()
         );
         assert_eq!(report.peak_memory, 90);
         let cats = &report.categorized_operators;
@@ -2237,9 +2239,7 @@ mod tests {
     use async_trait::async_trait;
     use datafusion_expr::planner::TypePlanner;
 
-    use super::EnhancedMemoryReport;
     use sqlparser::ast;
-    use std::collections::HashMap;
     use tempfile::TempDir;
 
     #[test]
