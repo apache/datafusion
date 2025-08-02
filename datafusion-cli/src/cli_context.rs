@@ -21,7 +21,7 @@ use datafusion::{
     dataframe::DataFrame,
     error::DataFusionError,
     execution::{
-        context::{MemoryProfilingHandle, SessionState},
+        context::{EnhancedMemoryReport, MemoryProfilingHandle, SessionState},
         TaskContext,
     },
     logical_expr::LogicalPlan,
@@ -57,6 +57,9 @@ pub trait CliSessionContext {
     fn get_last_query_memory_report(
         &self,
     ) -> Option<std::collections::HashMap<String, usize>>;
+
+    /// Get enhanced memory report with categorization and analysis
+    fn get_enhanced_memory_report(&self) -> EnhancedMemoryReport;
 
     /// Execute a logical plan and return a DataFrame.
     async fn execute_logical_plan(
@@ -113,6 +116,10 @@ impl CliSessionContext for SessionContext {
         } else {
             Some(report)
         }
+    }
+
+    fn get_enhanced_memory_report(&self) -> EnhancedMemoryReport {
+        SessionContext::get_enhanced_memory_report(self)
     }
 
     async fn execute_logical_plan(

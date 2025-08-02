@@ -123,13 +123,7 @@ impl Command {
                         println!("Memory profiling disabled");
                     }
                     Some("show") => {
-                        if let Some(report) = ctx.get_last_query_memory_report() {
-                            for (op, bytes) in report {
-                                println!("{op}: {bytes}");
-                            }
-                        } else {
-                            println!("No memory usage recorded");
-                        }
+                        ctx.get_enhanced_memory_report().print_analysis();
                     }
                     _ => println!("Usage: MEMORY_PROFILING [enable|disable|show]"),
                 }

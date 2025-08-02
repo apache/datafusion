@@ -24,7 +24,7 @@ use datafusion::{
     dataframe::DataFrame,
     error::DataFusionError,
     execution::{
-        context::{MemoryProfilingHandle, SessionState},
+        context::{EnhancedMemoryReport, MemoryProfilingHandle, SessionState},
         TaskContext,
     },
     logical_expr::{LogicalPlan, LogicalPlanBuilder},
@@ -94,6 +94,10 @@ impl CliSessionContext for MyUnionerContext {
         } else {
             Some(report)
         }
+    }
+
+    fn get_enhanced_memory_report(&self) -> EnhancedMemoryReport {
+        self.ctx.get_enhanced_memory_report()
     }
 }
 
