@@ -210,6 +210,10 @@ impl EnhancedMemoryReport {
             }
         }
     }
+    /// Alias for CLI: print the enhanced memory analysis.
+    pub fn print_analysis(&self) {
+        self.print();
+    }
 }
 
 #[cfg(test)]
