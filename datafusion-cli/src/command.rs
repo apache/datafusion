@@ -46,7 +46,7 @@ pub enum Command {
     SearchFunctions(String),
     QuietMode(Option<bool>),
     OutputFormat(Option<String>),
-    Memory(Option<String>),
+    MemoryProfiling(Option<String>),
 }
 
 pub enum OutputFormat {
@@ -111,9 +111,10 @@ impl Command {
                 }
                 Ok(())
             }
-            Self::Memory(subcmd) => {
+            Self::MemoryProfiling(subcmd) => {
                 match subcmd.as_deref() {
                     Some("enable") => {
+                        let _ = ctx.enable_memory_profiling();
                         print_options.memory_profiling = true;
                         println!("Memory profiling enabled for next query");
                     }
@@ -130,7 +131,7 @@ impl Command {
                             println!("No memory usage recorded");
                         }
                     }
-                    _ => println!("Usage: MEMORY [enable|disable|show]"),
+                    _ => println!("Usage: MEMORY_PROFILING [enable|disable|show]"),
                 }
                 Ok(())
             }
@@ -166,8 +167,8 @@ impl Command {
             Self::OutputFormat(_) => {
                 ("\\pset [NAME [VALUE]]", "set table output option\n(format)")
             }
-            Self::Memory(_) => (
-                "MEMORY [enable|disable|show]",
+            Self::MemoryProfiling(_) => (
+                "MEMORY_PROFILING [enable|disable|show]",
                 "toggle memory profiling or display the report",
             ),
         }
@@ -184,7 +185,7 @@ const ALL_COMMANDS: [Command; 10] = [
     Command::SearchFunctions(String::new()),
     Command::QuietMode(None),
     Command::OutputFormat(None),
-    Command::Memory(None),
+    Command::MemoryProfiling(None),
 ];
 
 fn all_commands_info() -> RecordBatch {
@@ -235,7 +236,9 @@ impl FromStr for Command {
                 Self::OutputFormat(Some(subcommand.to_string()))
             }
             ("pset", None) => Self::OutputFormat(None),
-            ("memory", sub) => Self::Memory(sub.map(|s| s.to_string())),
+            ("memory_profiling", sub) => {
+                Self::MemoryProfiling(sub.map(|s| s.to_string()))
+            }
             _ => return Err(()),
         })
     }
