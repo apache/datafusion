@@ -180,20 +180,20 @@ impl LogicalExtensionCodec for CsvLogicalExtensionCodec {
         not_impl_err!("Method not implemented")
     }
 
-    fn try_decode_table_provider(
+    fn try_decode_table_source(
         &self,
         _buf: &[u8],
         _table_ref: &TableReference,
         _schema: arrow::datatypes::SchemaRef,
         _ctx: &SessionContext,
-    ) -> datafusion_common::Result<Arc<dyn datafusion::datasource::TableProvider>> {
+    ) -> datafusion_common::Result<Arc<dyn datafusion_expr::TableSource>> {
         not_impl_err!("Method not implemented")
     }
 
-    fn try_encode_table_provider(
+    fn try_encode_table_source(
         &self,
         _table_ref: &TableReference,
-        _node: Arc<dyn datafusion::datasource::TableProvider>,
+        _node: Arc<dyn datafusion_expr::TableSource>,
         _buf: &mut Vec<u8>,
     ) -> datafusion_common::Result<()> {
         not_impl_err!("Method not implemented")
@@ -287,20 +287,20 @@ impl LogicalExtensionCodec for JsonLogicalExtensionCodec {
         not_impl_err!("Method not implemented")
     }
 
-    fn try_decode_table_provider(
+    fn try_decode_table_source(
         &self,
         _buf: &[u8],
         _table_ref: &TableReference,
         _schema: arrow::datatypes::SchemaRef,
         _ctx: &SessionContext,
-    ) -> datafusion_common::Result<Arc<dyn datafusion::datasource::TableProvider>> {
+    ) -> datafusion_common::Result<Arc<dyn datafusion_expr::TableSource>> {
         not_impl_err!("Method not implemented")
     }
 
-    fn try_encode_table_provider(
+    fn try_encode_table_source(
         &self,
         _table_ref: &TableReference,
-        _node: Arc<dyn datafusion::datasource::TableProvider>,
+        _node: Arc<dyn datafusion_expr::TableSource>,
         _buf: &mut Vec<u8>,
     ) -> datafusion_common::Result<()> {
         not_impl_err!("Method not implemented")
@@ -605,20 +605,20 @@ impl LogicalExtensionCodec for ParquetLogicalExtensionCodec {
         not_impl_err!("Method not implemented")
     }
 
-    fn try_decode_table_provider(
+    fn try_decode_table_source(
         &self,
         _buf: &[u8],
         _table_ref: &TableReference,
         _schema: arrow::datatypes::SchemaRef,
         _ctx: &SessionContext,
-    ) -> datafusion_common::Result<Arc<dyn datafusion::datasource::TableProvider>> {
+    ) -> datafusion_common::Result<Arc<dyn datafusion_expr::TableSource>> {
         not_impl_err!("Method not implemented")
     }
 
-    fn try_encode_table_provider(
+    fn try_encode_table_source(
         &self,
         _table_ref: &TableReference,
-        _node: Arc<dyn datafusion::datasource::TableProvider>,
+        _node: Arc<dyn datafusion_expr::TableSource>,
         _buf: &mut Vec<u8>,
     ) -> datafusion_common::Result<()> {
         not_impl_err!("Method not implemented")
@@ -691,20 +691,20 @@ impl LogicalExtensionCodec for ArrowLogicalExtensionCodec {
         not_impl_err!("Method not implemented")
     }
 
-    fn try_decode_table_provider(
+    fn try_decode_table_source(
         &self,
         _buf: &[u8],
         _table_ref: &TableReference,
         _schema: arrow::datatypes::SchemaRef,
         _ctx: &SessionContext,
-    ) -> datafusion_common::Result<Arc<dyn datafusion::datasource::TableProvider>> {
+    ) -> datafusion_common::Result<Arc<dyn datafusion_expr::TableSource>> {
         not_impl_err!("Method not implemented")
     }
 
-    fn try_encode_table_provider(
+    fn try_encode_table_source(
         &self,
         _table_ref: &TableReference,
-        _node: Arc<dyn datafusion::datasource::TableProvider>,
+        _node: Arc<dyn datafusion_expr::TableSource>,
         _buf: &mut Vec<u8>,
     ) -> datafusion_common::Result<()> {
         not_impl_err!("Method not implemented")
@@ -749,20 +749,20 @@ impl LogicalExtensionCodec for AvroLogicalExtensionCodec {
         not_impl_err!("Method not implemented")
     }
 
-    fn try_decode_table_provider(
+    fn try_decode_table_source(
         &self,
         _buf: &[u8],
         _table_ref: &TableReference,
         _schema: arrow::datatypes::SchemaRef,
         _cts: &SessionContext,
-    ) -> datafusion_common::Result<Arc<dyn datafusion::datasource::TableProvider>> {
+    ) -> datafusion_common::Result<Arc<dyn datafusion_expr::TableSource>> {
         not_impl_err!("Method not implemented")
     }
 
-    fn try_encode_table_provider(
+    fn try_encode_table_source(
         &self,
         _table_ref: &TableReference,
-        _node: Arc<dyn datafusion::datasource::TableProvider>,
+        _node: Arc<dyn datafusion_expr::TableSource>,
         _buf: &mut Vec<u8>,
     ) -> datafusion_common::Result<()> {
         not_impl_err!("Method not implemented")

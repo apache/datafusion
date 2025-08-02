@@ -26,10 +26,10 @@ use std::sync::Arc;
 use crate::catalog::{CatalogProviderList, SchemaProvider, TableProviderFactory};
 use crate::datasource::cte_worktable::CteWorkTable;
 use crate::datasource::file_format::{format_as_file_type, FileFormatFactory};
-use crate::datasource::provider_as_source;
 use crate::execution::context::{EmptySerializerRegistry, FunctionFactory, QueryPlanner};
 use crate::execution::SessionStateDefaults;
 use crate::physical_planner::{DefaultPhysicalPlanner, PhysicalPlanner};
+use datafusion_catalog::default_table_source::DefaultTableSource;
 use datafusion_catalog::information_schema::{
     InformationSchemaProvider, INFORMATION_SCHEMA,
 };
@@ -109,11 +109,11 @@ use uuid::Uuid;
 /// # #[tokio::main]
 /// # async fn main() -> Result<()> {
 ///     let state = SessionStateBuilder::new()
-///         .with_config(SessionConfig::new())  
+///         .with_config(SessionConfig::new())
 ///         .with_runtime_env(Arc::new(RuntimeEnv::default()))
 ///         .with_default_features()
 ///         .build();
-///     Ok(())  
+///     Ok(())
 /// # }
 /// ```
 ///
@@ -475,7 +475,7 @@ impl SessionState {
                 let resolved = v.key();
                 if let Ok(schema) = self.schema_for_ref(resolved.clone()) {
                     if let Some(table) = schema.table(&resolved.table).await? {
-                        v.insert(provider_as_source(table));
+                        v.insert(DefaultTableSource::wrap(table));
                     }
                 }
             }
@@ -1304,7 +1304,7 @@ impl SessionStateBuilder {
     /// let url = Url::try_from("file://").unwrap();
     /// let object_store = object_store::local::LocalFileSystem::new();
     /// let state = SessionStateBuilder::new()
-    ///     .with_config(SessionConfig::new())  
+    ///     .with_config(SessionConfig::new())
     ///     .with_object_store(&url, Arc::new(object_store))
     ///     .with_default_features()
     ///     .build();
@@ -1688,7 +1688,7 @@ impl ContextProvider for SessionContextProvider<'_> {
             .collect::<datafusion_common::Result<Vec<_>>>()?;
         let provider = tbl_func.create_table_provider(&args)?;
 
-        Ok(provider_as_source(provider))
+        Ok(DefaultTableSource::wrap(provider))
     }
 
     /// Create a new CTE work table for a recursive CTE logical plan
@@ -1700,7 +1700,7 @@ impl ContextProvider for SessionContextProvider<'_> {
         schema: SchemaRef,
     ) -> datafusion_common::Result<Arc<dyn TableSource>> {
         let table = Arc::new(CteWorkTable::new(name, schema));
-        Ok(provider_as_source(table))
+        Ok(DefaultTableSource::wrap(table))
     }
 
     fn get_function_meta(&self, name: &str) -> Option<Arc<ScalarUDF>> {
@@ -1978,7 +1978,6 @@ mod tests {
     use crate::common::assert_contains;
     use crate::config::ConfigOptions;
     use crate::datasource::empty::EmptyTable;
-    use crate::datasource::provider_as_source;
     use crate::datasource::MemTable;
     use crate::execution::context::SessionState;
     use crate::logical_expr::planner::ExprPlanner;
@@ -1988,6 +1987,7 @@ mod tests {
     use crate::sql::{ResolvedTableReference, TableReference};
     use arrow::array::{ArrayRef, Int32Array, RecordBatch, StringArray};
     use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_catalog::default_table_source::DefaultTableSource;
     use datafusion_catalog::MemoryCatalogProviderList;
     use datafusion_common::DFSchema;
     use datafusion_common::Result;
@@ -2164,7 +2164,9 @@ mod tests {
         ) -> Result<Arc<dyn ExecutionPlan>> {
             let mut context_provider = MyContextProvider::new().with_table(
                 "t",
-                provider_as_source(Arc::new(EmptyTable::new(Schema::empty().into()))),
+                DefaultTableSource::wrap(Arc::new(EmptyTable::new(
+                    Schema::empty().into(),
+                ))),
             );
             if with_expr_planners {
                 context_provider = context_provider.with_expr_planners();

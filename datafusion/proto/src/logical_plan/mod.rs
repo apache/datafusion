@@ -43,6 +43,7 @@ use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::file_format::{
     file_type_to_format, format_as_file_type, FileFormatFactory,
 };
+use datafusion::datasource::DefaultTableSource;
 use datafusion::{
     datasource::{
         file_format::{
@@ -50,9 +51,7 @@ use datafusion::{
         },
         listing::{ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl},
         view::ViewTable,
-        TableProvider,
     },
-    datasource::{provider_as_source, source_as_provider},
     prelude::SessionContext,
 };
 use datafusion_common::file_options::file_type::FileType;
@@ -118,18 +117,28 @@ pub trait LogicalExtensionCodec: Debug + Send + Sync {
 
     fn try_encode(&self, node: &Extension, buf: &mut Vec<u8>) -> Result<()>;
 
-    fn try_decode_table_provider(
+    /// Attempts to decode a [TableSource].
+    ///
+    /// To wrap a custom [TableProvider](datafusion::catalog::TableProvider),
+    /// you can use [DefaultTableSource::wrap].
+    fn try_decode_table_source(
         &self,
         buf: &[u8],
         table_ref: &TableReference,
         schema: SchemaRef,
         ctx: &SessionContext,
-    ) -> Result<Arc<dyn TableProvider>>;
+    ) -> Result<Arc<dyn TableSource>>;
 
-    fn try_encode_table_provider(
+    /// Attempts to encode a [`TableSource`].
+    ///
+    /// Note that most instances of
+    /// [TableProvider](datafusion::catalog::TableProvider) will be wrapped in
+    /// a [DefaultTableSource]. You can use [DefaultTableSource::unwrap] to
+    /// downcast.
+    fn try_encode_table_source(
         &self,
         table_ref: &TableReference,
-        node: Arc<dyn TableProvider>,
+        node: Arc<dyn TableSource>,
         buf: &mut Vec<u8>,
     ) -> Result<()>;
 
@@ -193,20 +202,20 @@ impl LogicalExtensionCodec for DefaultLogicalExtensionCodec {
         not_impl_err!("LogicalExtensionCodec is not provided")
     }
 
-    fn try_decode_table_provider(
+    fn try_decode_table_source(
         &self,
         _buf: &[u8],
         _table_ref: &TableReference,
         _schema: SchemaRef,
         _ctx: &SessionContext,
-    ) -> Result<Arc<dyn TableProvider>> {
+    ) -> Result<Arc<dyn TableSource>> {
         not_impl_err!("LogicalExtensionCodec is not provided")
     }
 
-    fn try_encode_table_provider(
+    fn try_encode_table_source(
         &self,
         _table_ref: &TableReference,
-        _node: Arc<dyn TableProvider>,
+        _node: Arc<dyn TableSource>,
         _buf: &mut Vec<u8>,
     ) -> Result<()> {
         not_impl_err!("LogicalExtensionCodec is not provided")
@@ -498,7 +507,7 @@ impl AsLogicalPlan for LogicalPlanNode {
 
                 LogicalPlanBuilder::scan_with_filters(
                     table_name,
-                    provider_as_source(Arc::new(provider)),
+                    DefaultTableSource::wrap(Arc::new(provider)),
                     projection,
                     filters,
                 )?
@@ -523,7 +532,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let table_name =
                     from_table_reference(scan.table_name.as_ref(), "CustomScan")?;
 
-                let provider = extension_codec.try_decode_table_provider(
+                let source = extension_codec.try_decode_table_source(
                     &scan.custom_table_data,
                     &table_name,
                     schema,
@@ -531,10 +540,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 )?;
 
                 LogicalPlanBuilder::scan_with_filters(
-                    table_name,
-                    provider_as_source(provider),
-                    projection,
-                    filters,
+                    table_name, source, projection, filters,
                 )?
                 .build()
             }
@@ -876,7 +882,7 @@ impl AsLogicalPlan for LogicalPlanNode {
 
                 LogicalPlanBuilder::scan(
                     table_name,
-                    provider_as_source(Arc::new(provider)),
+                    DefaultTableSource::wrap(Arc::new(provider)),
                     projection,
                 )?
                 .build()
@@ -957,7 +963,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let cte_work_table = CteWorkTable::new(name.as_str(), Arc::new(schema));
                 LogicalPlanBuilder::scan(
                     name.as_str(),
-                    provider_as_source(Arc::new(cte_work_table)),
+                    DefaultTableSource::wrap(Arc::new(cte_work_table)),
                     None,
                 )?
                 .build()
@@ -1005,9 +1011,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 projection,
                 ..
             }) => {
-                let provider = source_as_provider(source)?;
-                let schema = provider.schema();
-                let source = provider.as_any();
+                let schema = source.schema();
 
                 let projection = match projection {
                     None => None,
@@ -1025,7 +1029,9 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let filters: Vec<protobuf::LogicalExprNode> =
                     serialize_exprs(filters, extension_codec)?;
 
-                if let Some(listing_table) = source.downcast_ref::<ListingTable>() {
+                if let Ok(listing_table) =
+                    DefaultTableSource::unwrap::<ListingTable>(source)
+                {
                     let any = listing_table.options().format.as_any();
                     let file_format_type = {
                         let mut maybe_some_type = None;
@@ -1139,7 +1145,9 @@ impl AsLogicalPlan for LogicalPlanNode {
                             },
                         )),
                     })
-                } else if let Some(view_table) = source.downcast_ref::<ViewTable>() {
+                } else if let Ok(view_table) =
+                    DefaultTableSource::unwrap::<ViewTable>(source)
+                {
                     let schema: protobuf::Schema = schema.as_ref().try_into()?;
                     Ok(LogicalPlanNode {
                         logical_plan_type: Some(LogicalPlanType::ViewScan(Box::new(
@@ -1160,7 +1168,8 @@ impl AsLogicalPlan for LogicalPlanNode {
                             },
                         ))),
                     })
-                } else if let Some(cte_work_table) = source.downcast_ref::<CteWorkTable>()
+                } else if let Ok(cte_work_table) =
+                    DefaultTableSource::unwrap::<CteWorkTable>(source)
                 {
                     let name = cte_work_table.name().to_string();
                     let schema = cte_work_table.schema();
@@ -1178,7 +1187,11 @@ impl AsLogicalPlan for LogicalPlanNode {
                     let schema: protobuf::Schema = schema.as_ref().try_into()?;
                     let mut bytes = vec![];
                     extension_codec
-                        .try_encode_table_provider(table_name, provider, &mut bytes)
+                        .try_encode_table_source(
+                            table_name,
+                            Arc::clone(source),
+                            &mut bytes,
+                        )
                         .map_err(|e| context!("Error serializing custom table", e))?;
                     let scan = CustomScan(CustomTableScanNode {
                         table_name: Some(table_name.clone().into()),

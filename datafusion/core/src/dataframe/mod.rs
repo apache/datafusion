@@ -25,9 +25,7 @@ use crate::arrow::util::pretty;
 use crate::datasource::file_format::csv::CsvFormatFactory;
 use crate::datasource::file_format::format_as_file_type;
 use crate::datasource::file_format::json::JsonFormatFactory;
-use crate::datasource::{
-    provider_as_source, DefaultTableSource, MemTable, TableProvider,
-};
+use crate::datasource::{DefaultTableSource, MemTable, TableProvider};
 use crate::error::Result;
 use crate::execution::context::{SessionState, TaskContext};
 use crate::execution::FunctionRegistry;
@@ -1088,7 +1086,7 @@ impl DataFrame {
 
         let plan = LogicalPlanBuilder::scan(
             UNNAMED_TABLE,
-            provider_as_source(Arc::new(provider)),
+            DefaultTableSource::wrap(Arc::new(provider)),
             None,
         )?
         .build()?;
@@ -1845,7 +1843,7 @@ impl DataFrame {
             _ => plan_err!("No table named '{table_name}'"),
         }?;
 
-        let target = Arc::new(DefaultTableSource::new(target));
+        let target = DefaultTableSource::wrap(target);
 
         let plan = LogicalPlanBuilder::insert_into(
             plan,

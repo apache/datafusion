@@ -18,8 +18,8 @@
 #[cfg(test)]
 mod tests {
 
+    use crate::datasource::DefaultTableSource;
     use crate::datasource::MemTable;
-    use crate::datasource::{provider_as_source, DefaultTableSource};
     use crate::physical_plan::collect;
     use crate::prelude::SessionContext;
     use arrow::array::{AsArray, Int32Array};
@@ -278,12 +278,12 @@ mod tests {
         // Create and register the initial table with the provided schema and data
         let initial_table = Arc::new(MemTable::try_new(schema.clone(), initial_data)?);
         session_ctx.register_table("t", initial_table.clone())?;
-        let target = Arc::new(DefaultTableSource::new(initial_table.clone()));
+        let target = DefaultTableSource::wrap(initial_table.clone());
         // Create and register the source table with the provided schema and inserted data
         let source_table = Arc::new(MemTable::try_new(schema.clone(), inserted_data)?);
         session_ctx.register_table("source", source_table.clone())?;
         // Convert the source table into a provider so that it can be used in a query
-        let source = provider_as_source(source_table);
+        let source = DefaultTableSource::wrap(source_table);
         // Create a table scan logical plan to read from the source table
         let scan_plan = LogicalPlanBuilder::scan("source", source, None)?.build()?;
         // Create an insert plan to insert the source data into the initial table

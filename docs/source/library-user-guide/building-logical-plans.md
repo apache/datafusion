@@ -159,7 +159,7 @@ specific algorithms and detailed optimizations compared to. Given a
 [`SessionState::create_physical_plan`] as shown below
 
 ```rust
-use datafusion::datasource::{provider_as_source, MemTable};
+use datafusion::datasource::{DefaultTableSource, MemTable};
 use datafusion::common::DataFusionError;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
@@ -182,8 +182,9 @@ async fn main() -> Result<(), DataFusionError> {
     // but in production code, this would have `RecordBatch`es with
     // in memory data
     let table_provider = Arc::new(MemTable::try_new(Arc::new(schema), vec![vec![]])?);
-    // Use the provider_as_source function to convert the TableProvider to a table source
-    let table_source = provider_as_source(table_provider);
+
+    // Wrap the `TableProvider` as a `TableSource`.
+    let table_source = DefaultTableSource::wrap(table_provider);
 
     // create a LogicalPlanBuilder for a table scan without projection or filters
     let logical_plan = LogicalPlanBuilder::scan("person", table_source, None)?.build()?;
@@ -210,7 +211,7 @@ The previous examples use a [LogicalTableSource], which is used for tests and do
 suitable if you are using DataFusion to build logical plans but do not use DataFusion's physical planner.
 
 However, it is more common to use a [TableProvider]. To get a [TableSource] from a
-[TableProvider], use [provider_as_source] or [DefaultTableSource].
+[TableProvider], use [DefaultTableSource::wrap].
 
 [query planning and execution overview]: https://docs.rs/datafusion/latest/datafusion/index.html#query-planning-and-execution-overview
 [architecture guide]: https://docs.rs/datafusion/latest/datafusion/index.html#architecture
@@ -219,7 +220,6 @@ However, it is more common to use a [TableProvider]. To get a [TableSource] from
 [dataframe]: using-the-dataframe-api.md
 [logicaltablesource]: https://docs.rs/datafusion-expr/latest/datafusion_expr/logical_plan/builder/struct.LogicalTableSource.html
 [defaulttablesource]: https://docs.rs/datafusion/latest/datafusion/datasource/default_table_source/struct.DefaultTableSource.html
-[provider_as_source]: https://docs.rs/datafusion/latest/datafusion/datasource/default_table_source/fn.provider_as_source.html
 [tableprovider]: https://docs.rs/datafusion/latest/datafusion/datasource/trait.TableProvider.html
 [tablesource]: https://docs.rs/datafusion-expr/latest/datafusion_expr/trait.TableSource.html
 [`executionplan`]: https://docs.rs/datafusion/latest/datafusion/physical_plan/trait.ExecutionPlan.html
