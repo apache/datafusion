@@ -4,7 +4,7 @@ info:
   program: datafusion-cli
   args:
     - "-q"
-  stdin: "\\memory enable\nselect 1;\n\\memory show\n"
+  stdin: "\\memory_profiling enable\nselect 1;\n\\memory_profiling show\n"
 ---
 success: true
 exit_code: 0
@@ -15,7 +15,14 @@ Memory profiling enabled for next query
 +----------+
 | 1        |
 +----------+
-DataFusion-Cli: 16
+
+📊 Enhanced Memory Analysis:
+🔍 Top Memory Consumers:
+  1. DataFusion-Cli: 0.00 MB (100.0%) [Other]
+
+📈 Memory Summary:
+  Peak memory usage: 0.00 MB
+  Total tracked memory: 0.00 MB
 \q
 
 ----- stderr -----
