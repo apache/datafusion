@@ -7,5 +7,5 @@ RUN apt-get update && export DEBIAN_FRONTEND=noninteractive \
 # Add protoc
 # https://datafusion.apache.org/contributor-guide/development_environment.html#protoc-installation
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends protobuf-compiler libprotobuf-dev \
+    && apt-get install -y --no-install-recommends protobuf-compiler libprotobuf-dev npm nodejs\
     && rm -rf /var/lib/apt/lists/*
