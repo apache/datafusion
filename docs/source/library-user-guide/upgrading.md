@@ -24,6 +24,48 @@
 **Note:** DataFusion `50.0.0` has not been released yet. The information provided in this section pertains to features and changes that have already been merged to the main branch and are awaiting release in this version.
 You can see the current [status of the `50.0.0 `release here](https://github.com/apache/datafusion/issues/16799)
 
+### `AsyncScalarUDFImpl::invoke_async_with_args` returns `ColumnarValue`
+
+In order to enable single value optimizations and be consistent with other
+user defined function APIs, the `AsyncScalarUDFImpl::invoke_async_with_args` method now
+returns a `ColumnarValue` instead of a `ArrayRef`.
+
+To upgrade, change the return type of your implementation
+
+```rust
+# /* comment to avoid running
+impl AsyncScalarUDFImpl for AskLLM {
+    async fn invoke_async_with_args(
+        &self,
+        args: ScalarFunctionArgs,
+        _option: &ConfigOptions,
+    ) -> Result<ColumnarValue> {
+        ..
+      return array_ref; // old code
+    }
+}
+# */
+```
+
+To return a `ColumnarValue`
+
+```rust
+# /* comment to avoid running
+impl AsyncScalarUDFImpl for AskLLM {
+    async fn invoke_async_with_args(
+        &self,
+        args: ScalarFunctionArgs,
+        _option: &ConfigOptions,
+    ) -> Result<ColumnarValue> {
+        ..
+      return ColumnarValue::from(array_ref); // new code
+    }
+}
+# */
+```
+
+See [#16896](https://github.com/apache/datafusion/issues/16896) for more details.
+
 ## DataFusion `49.0.0`
 
 ### `MSRV` updated to 1.85.1
