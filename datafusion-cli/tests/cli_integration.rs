@@ -247,7 +247,7 @@ fn cli_memory_enable_show() {
     settings.set_snapshot_suffix("memory_enable_show");
     let _bound = settings.bind_to_scope();
 
-    let input = "\\memory enable\nselect 1;\n\\memory show\n";
+    let input = "\\memory_profiling enable\nselect 1;\n\\memory_profiling show\n";
 
     assert_cmd_snapshot!(cli().arg("-q").pass_stdin(input));
 }
