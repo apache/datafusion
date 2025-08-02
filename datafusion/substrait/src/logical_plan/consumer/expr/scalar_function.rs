@@ -41,12 +41,21 @@ pub async fn from_scalar_function(
             f.function_reference
         );
     };
+
     let fn_name = substrait_fun_name(fn_signature);
     let args = from_substrait_func_args(consumer, &f.arguments, input_schema).await?;
 
+    let udf_func = consumer.get_function_registry().udf(fn_name).or_else(|e| {
+        if let Some(alt_name) = substrait_to_df_name(fn_name) {
+            consumer.get_function_registry().udf(alt_name).or(Err(e))
+        } else {
+            Err(e)
+        }
+    });
+
     // try to first match the requested function into registered udfs, then built-in ops
     // and finally built-in expressions
-    if let Ok(func) = consumer.get_function_registry().udf(fn_name) {
+    if let Ok(func) = udf_func {
         Ok(Expr::ScalarFunction(expr::ScalarFunction::new_udf(
             func.to_owned(),
             args,
@@ -109,6 +118,13 @@ pub fn name_to_op(name: &str) -> Option<Operator> {
         "bitwise_xor" => Some(Operator::BitwiseXor),
         "bitwise_shift_right" => Some(Operator::BitwiseShiftRight),
         "bitwise_shift_left" => Some(Operator::BitwiseShiftLeft),
+        _ => None,
+    }
+}
+
+pub fn substrait_to_df_name(name: &str) -> Option<&str> {
+    match name {
+        "is_nan" => Some("isnan"),
         _ => None,
     }
 }
@@ -367,6 +383,41 @@ mod tests {
         let expr =
             arg_list_to_binary_op_tree(Operator::Or, int64_literals(&[1, 2, 3, 4]))?;
         assert_snapshot!(expr.to_string(), @"Int64(1) OR Int64(2) OR Int64(3) OR Int64(4)");
+        Ok(())
+    }
+
+    //Test that DataFusion can consume scalar functions that have a different name in Substrait
+    #[tokio::test]
+    async fn test_substrait_to_df_name_mapping() -> Result<()> {
+        // Build substrait extensions (we are using only one function)
+        let mut extensions = Extensions::default();
+        //is_nan is one of the functions that has a different name in Substrait (mapping is in substrait_to_df_name())
+        extensions.functions.insert(0, String::from("is_nan:fp32"));
+        // Build substrait consumer
+        let consumer = DefaultSubstraitConsumer::new(&extensions, &TEST_SESSION_STATE);
+
+        // Build arguments for the function call
+        let arg = FunctionArgument {
+            arg_type: Some(ArgType::Value(Expression {
+                rex_type: Some(RexType::Literal(Literal {
+                    nullable: false,
+                    type_variation_reference: 0,
+                    literal_type: Some(LiteralType::Fp32(1.0)),
+                })),
+            })),
+        };
+        let arguments = vec![arg];
+        let func = ScalarFunction {
+            function_reference: 0,
+            arguments,
+            ..Default::default()
+        };
+        // Trivial input schema
+        let schema = Schema::new(vec![Field::new("a", DataType::Float32, false)]);
+        let df_schema = DFSchema::try_from(schema).unwrap();
+
+        // Consume the expression and ensure we don't get an error
+        let _ = consumer.consume_scalar_function(&func, &df_schema).await?;
         Ok(())
     }
 }
