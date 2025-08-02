@@ -1119,18 +1119,23 @@ impl ExecutionPlan for SortExec {
         let mut new_sort = SortExec::new(self.expr.clone(), Arc::clone(&children[0]))
             .with_fetch(self.fetch)
             .with_preserve_partitioning(self.preserve_partitioning);
-        // Fully clone the filter to avoid sharing across multiple executions
+        new_sort.filter = self.filter.clone();
+
+        Ok(Arc::new(new_sort))
+    }
+
+    fn with_fresh_state(
+        self: Arc<Self>,
+        child: &Arc<dyn ExecutionPlan>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let mut new_sort = SortExec::new(self.expr.clone(), child.clone())
+            .with_fetch(self.fetch)
+            .with_preserve_partitioning(self.preserve_partitioning);
+
+        // Create fresh filter instances to avoid sharing across multiple executions
         // This fixes issue #16998 where SortExec shares DynamicFilterPhysicalExpr
         // across multiple query executions, causing recursive queries to fail
-        new_sort.filter = self.filter.as_ref().map(|f| {
-            Arc::new(DynamicFilterPhysicalExpr::new(
-                f.children().into_iter().cloned().collect(),
-                f.current().unwrap_or_else(|_| {
-                    // Fallback to a true literal if we can't get the current expression
-                    lit(true)
-                })
-            ))
-        });
+        new_sort.filter = self.filter.as_ref().map(|f| Arc::new(f.as_ref().clone()));
 
         Ok(Arc::new(new_sort))
     }
@@ -2070,7 +2075,7 @@ mod tests {
     #[tokio::test]
     async fn test_sort_exec_filter_cloning_issue_16998() -> Result<()> {
         // Test for issue #16998: SortExec shares DynamicFilterPhysicalExpr across multiple executions
-        // This test ensures that when with_new_children is called multiple times (as happens in
+        // This test ensures that when with_fresh_state is called multiple times (as happens in
         // recursive queries), each SortExec instance gets its own copy of the dynamic filter.
 
         async fn collect_stream(mut stream: SendableRecordBatchStream) -> Result<Vec<RecordBatch>> {
@@ -2103,11 +2108,11 @@ mod tests {
             input,
         ).with_fetch(Some(1)));
 
-        // Call with_new_children multiple times to simulate recursive query scenario
+        // Call with_fresh_state multiple times to simulate recursive query scenario
         // This should create independent copies of the dynamic filter
-        let new_children = vec![sort_exec.input().clone()];
-        let sort_exec2 = sort_exec.clone().with_new_children(new_children.clone())?;
-        let sort_exec3 = sort_exec.clone().with_new_children(new_children)?;
+        let new_child = sort_exec.input().clone();
+        let sort_exec2 = sort_exec.clone().with_fresh_state(&new_child)?;
+        let sort_exec3 = sort_exec.clone().with_fresh_state(&new_child)?;
 
         // Execute both to ensure they work independently without shared state issues
         let stream1 = sort_exec2.execute(0, Arc::clone(&task_ctx))?;

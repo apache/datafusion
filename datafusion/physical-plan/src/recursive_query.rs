@@ -384,7 +384,7 @@ fn reset_plan_states(plan: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPl
             Ok(Transformed::no(plan))
         } else {
             let new_plan = Arc::clone(&plan)
-                .with_new_children(plan.children().into_iter().cloned().collect())?;
+                .with_fresh_state(&plan.children()[0])?;
             Ok(Transformed::yes(new_plan))
         }
     })

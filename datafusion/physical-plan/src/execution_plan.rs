@@ -194,6 +194,24 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>>;
 
+    /// Returns a new `ExecutionPlan` with fresh state, where all existing children 
+    /// were replaced by the `children`, in order.
+    ///
+    /// This method is intended for cases where you need a plan with fresh state
+    /// rather than preserving existing state (which `with_new_children` does).
+    /// For example, recursive queries need fresh state for each iteration to avoid
+    /// sharing stateful expressions across multiple executions.
+    ///
+    /// The default implementation simply calls `with_new_children()`, preserving
+    /// the existing behavior. ExecutionPlan implementations that need to provide
+    /// fresh state should override this method.
+    fn with_fresh_state(
+        self: Arc<Self>,
+        child: &Arc<dyn ExecutionPlan>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.with_new_children(vec![child.clone()])
+    }
+
     /// If supported, attempt to increase the partitioning of this `ExecutionPlan` to
     /// produce `target_partitions` partitions.
     ///
