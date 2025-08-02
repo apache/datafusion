@@ -8,5 +8,5 @@ RUN apt-get update && export DEBIAN_FRONTEND=noninteractive \
 # https://datafusion.apache.org/contributor-guide/development_environment.html#protoc-installation
 RUN apt-get update \
     && apt-get install -y --no-install-recommends protobuf-compiler libprotobuf-dev npm nodejs\
-    && npm install -y prettier@2.7.1
+    && npm install -y prettier@2.3.2
     && rm -rf /var/lib/apt/lists/*
