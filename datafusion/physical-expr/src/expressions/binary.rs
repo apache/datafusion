@@ -375,16 +375,43 @@ impl PhysicalExpr for BinaryExpr {
                 // as it takes into account cases where the selection contains null values.
                 let batch = filter_record_batch(batch, selection)?;
                 let right_ret = self.right.evaluate(&batch)?;
+
                 match &right_ret {
                     ColumnarValue::Array(array) => {
-                        return pre_selection_scatter(selection, array.as_boolean());
+                        // When the array on the right is all true or all false, skip the scatter process
+                        let boolean_array = array.as_boolean();
+                        let true_count = boolean_array.true_count();
+                        let length = boolean_array.len();
+                        if true_count == length {
+                            return Ok(lhs);
+                        } else if true_count == 0 && boolean_array.null_count() == 0 {
+                            // If the right-hand array is returned at this point,the lengths will be inconsistent;
+                            // returning a scalar can avoid this issue
+                            return Ok(ColumnarValue::Scalar(ScalarValue::Boolean(
+                                Some(false),
+                            )));
+                        }
+
+                        return pre_selection_scatter(selection, boolean_array);
                     }
                     ColumnarValue::Scalar(scalar) => {
                         if let ScalarValue::Boolean(v) = scalar {
-                            let array = BooleanArray::from(vec![*v; batch.num_rows()]);
-                            return pre_selection_scatter(selection, &array);
+                            // When the scalar is true or false, skip the scatter process
+                            if let Some(v) = v {
+                                if *v {
+                                    return Ok(lhs);
+                                } else {
+                                    return Ok(right_ret);
+                                }
+                            } else {
+                                let array =
+                                    BooleanArray::from(vec![*v; batch.num_rows()]);
+                                return pre_selection_scatter(selection, &array);
+                            }
                         } else {
-                            return Ok(right_ret);
+                            return internal_err!(
+                                "Expected boolean scalar value, found: {right_ret:?}"
+                            );
                         }
                     }
                 }
