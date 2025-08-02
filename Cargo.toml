@@ -107,7 +107,7 @@ bigdecimal = "0.4.8"
 bytes = "1.10"
 chrono = { version = "0.4.41", default-features = false }
 criterion = "0.5.1"
-ctor = "0.4.0"
+ctor = "0.4.3"
 dashmap = "6.0.1"
 datafusion = { path = "datafusion/core", version = "49.0.0", default-features = false }
 datafusion-catalog = { path = "datafusion/catalog", version = "49.0.0" }
@@ -175,7 +175,7 @@ sqlparser = { version = "0.55.0", default-features = false, features = ["std", "
 tempfile = "3"
 testcontainers = { version = "0.24", features = ["default"] }
 testcontainers-modules = { version = "0.12" }
-tokio = { version = "1.46", features = ["macros", "rt", "sync"] }
+tokio = { version = "1.47", features = ["macros", "rt", "sync"] }
 url = "2.5.4"
 
 [profile.release]
