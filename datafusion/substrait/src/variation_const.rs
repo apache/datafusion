@@ -122,3 +122,8 @@ pub const INTERVAL_MONTH_DAY_NANO_TYPE_REF: u32 = 3;
     note = "Use Substrait `IntervalCompund` type instead"
 )]
 pub const INTERVAL_MONTH_DAY_NANO_TYPE_NAME: &str = "interval-month-day-nano";
+
+/// For [`DataType::Float16`].
+///
+/// [`DataType::Float16`]: datafusion::arrow::datatypes::DataType::Float16
+pub const FLOAT16_TYPE_REF: u32 = 4;
