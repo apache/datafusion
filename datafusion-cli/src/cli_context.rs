@@ -110,12 +110,8 @@ impl CliSessionContext for SessionContext {
     fn get_last_query_memory_report(
         &self,
     ) -> Option<std::collections::HashMap<String, usize>> {
-        let report = self.get_last_query_memory_report();
-        if report.is_empty() {
-            None
-        } else {
-            Some(report)
-        }
+        // Delegate to core SessionContext implementation to avoid duplicate logic
+        SessionContext::get_last_query_memory_report_option(self)
     }
 
     fn get_enhanced_memory_report(&self) -> EnhancedMemoryReport {

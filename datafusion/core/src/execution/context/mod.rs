@@ -605,6 +605,18 @@ impl SessionContext {
         let raw_report = self.get_last_query_memory_report();
         EnhancedMemoryReport::from_raw_report(raw_report)
     }
+    /// Get memory metrics collected for the last profiled query as an Option,
+    /// returning None if no metrics were recorded.
+    pub fn get_last_query_memory_report_option(
+        &self,
+    ) -> Option<std::collections::HashMap<String, usize>> {
+        let report = self.get_last_query_memory_report();
+        if report.is_empty() {
+            None
+        } else {
+            Some(report)
+        }
+    }
 
     /// Convert the current `SessionContext` into a [`SessionStateBuilder`]
     ///
