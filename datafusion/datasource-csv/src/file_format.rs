@@ -151,14 +151,11 @@ impl CsvFormat {
         let stream = store
             .get(&object.location)
             .await
-            .map_err(|e| DataFusionError::ObjectStore(Box::new(e)));
+            .map_err(DataFusionError::from);
         let stream = match stream {
             Ok(stream) => self
                 .read_to_delimited_chunks_from_stream(
-                    stream
-                        .into_stream()
-                        .map_err(|e| DataFusionError::ObjectStore(Box::new(e)))
-                        .boxed(),
+                    stream.into_stream().map_err(DataFusionError::from).boxed(),
                 )
                 .await
                 .map_err(DataFusionError::from)
@@ -181,7 +178,10 @@ impl CsvFormat {
         let stream = match decoder {
             Ok(decoded_stream) => {
                 newline_delimited_stream(decoded_stream.map_err(|e| match e {
-                    DataFusionError::ObjectStore(e) => *e,
+                    DataFusionError::ObjectStore(e) => object_store::Error::Generic {
+                        store: "object_store",
+                        source: Box::new(*e),
+                    },
                     err => object_store::Error::Generic {
                         store: "read to delimited chunks failed",
                         source: Box::new(err),

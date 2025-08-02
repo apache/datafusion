@@ -161,10 +161,10 @@ impl CredentialsFromConfig {
         let credentials = config
             .credentials_provider()
             .ok_or_else(|| {
-                DataFusionError::ObjectStore(Box::new(Generic {
+                DataFusionError::from(object_store::Error::Generic {
                     store: "S3",
                     source: "Failed to get S3 credentials aws_config".into(),
-                }))
+                })
             })?
             .clone();
 
@@ -191,10 +191,10 @@ impl CredentialsFromConfig {
                     "Error getting credentials from provider: {e}{source_message}",
                 );
 
-                return Err(DataFusionError::ObjectStore(Box::new(Generic {
+                return Err(DataFusionError::from(object_store::Error::Generic {
                     store: "S3",
                     source: message.into(),
-                })));
+                }));
             }
         };
         Ok(Self {
