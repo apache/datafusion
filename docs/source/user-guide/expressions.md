@@ -285,27 +285,27 @@ select log(-1), log(0), sqrt(-1);
 
 ## Aggregate Functions
 
-| Syntax                                                            | Description                                                                             |
-| ----------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
-| avg(expr)                                                         | Сalculates the average value for `expr`.                                                |
-| approx_distinct(expr)                                             | Calculates an approximate count of the number of distinct values for `expr`.            |
-| approx_median(expr)                                               | Calculates an approximation of the median for `expr`.                                   |
-| approx_percentile_cont(expr, percentile)                          | Calculates an approximation of the specified `percentile` for `expr`.                   |
-| approx_percentile_cont_with_weight(expr, weight_expr, percentile) | Calculates an approximation of the specified `percentile` for `expr` and `weight_expr`. |
-| bit_and(expr)                                                     | Computes the bitwise AND of all non-null input values for `expr`.                       |
-| bit_or(expr)                                                      | Computes the bitwise OR of all non-null input values for `expr`.                        |
-| bit_xor(expr)                                                     | Computes the bitwise exclusive OR of all non-null input values for `expr`.              |
-| bool_and(expr)                                                    | Returns true if all non-null input values (`expr`) are true, otherwise false.           |
-| bool_or(expr)                                                     | Returns true if any non-null input value (`expr`) is true, otherwise false.             |
-| count(expr)                                                       | Returns the number of rows for `expr`.                                                  |
-| count_distinct                                                    | Creates an expression to represent the count(distinct) aggregate function               |
-| cube(exprs)                                                       | Creates a grouping set for all combination of `exprs`                                   |
-| grouping_set(exprs)                                               | Create a grouping set.                                                                  |
-| max(expr)                                                         | Finds the maximum value of `expr`.                                                      |
-| median(expr)                                                      | Сalculates the median of `expr`.                                                        |
-| min(expr)                                                         | Finds the minimum value of `expr`.                                                      |
-| rollup(exprs)                                                     | Creates a grouping set for rollup sets.                                                 |
-| sum(expr)                                                         | Сalculates the sum of `expr`.                                                           |
+| Syntax                                                                          | Description                                                                                                                                              |
+| ------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| avg(expr)                                                                       | Сalculates the average value for `expr`.                                                                                                                 |
+| approx_distinct(expr)                                                           | Calculates an approximate count of the number of distinct values for `expr`.                                                                             |
+| approx_median(expr)                                                             | Calculates an approximation of the median for `expr`.                                                                                                    |
+| approx_percentile_cont(expr, percentile [, centroids])                          | Calculates an approximation of the specified `percentile` for `expr`. Optional `centroids` parameter controls accuracy (default: 100).                   |
+| approx_percentile_cont_with_weight(expr, weight_expr, percentile [, centroids]) | Calculates an approximation of the specified `percentile` for `expr` and `weight_expr`. Optional `centroids` parameter controls accuracy (default: 100). |
+| bit_and(expr)                                                                   | Computes the bitwise AND of all non-null input values for `expr`.                                                                                        |
+| bit_or(expr)                                                                    | Computes the bitwise OR of all non-null input values for `expr`.                                                                                         |
+| bit_xor(expr)                                                                   | Computes the bitwise exclusive OR of all non-null input values for `expr`.                                                                               |
+| bool_and(expr)                                                                  | Returns true if all non-null input values (`expr`) are true, otherwise false.                                                                            |
+| bool_or(expr)                                                                   | Returns true if any non-null input value (`expr`) is true, otherwise false.                                                                              |
+| count(expr)                                                                     | Returns the number of rows for `expr`.                                                                                                                   |
+| count_distinct                                                                  | Creates an expression to represent the count(distinct) aggregate function                                                                                |
+| cube(exprs)                                                                     | Creates a grouping set for all combination of `exprs`                                                                                                    |
+| grouping_set(exprs)                                                             | Create a grouping set.                                                                                                                                   |
+| max(expr)                                                                       | Finds the maximum value of `expr`.                                                                                                                       |
+| median(expr)                                                                    | Сalculates the median of `expr`.                                                                                                                         |
+| min(expr)                                                                       | Finds the minimum value of `expr`.                                                                                                                       |
+| rollup(exprs)                                                                   | Creates a grouping set for rollup sets.                                                                                                                  |
+| sum(expr)                                                                       | Сalculates the sum of `expr`.                                                                                                                            |
 
 ## Aggregate Function Builder
 
