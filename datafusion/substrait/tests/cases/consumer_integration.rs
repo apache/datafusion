@@ -535,6 +535,62 @@ mod tests {
     }
 
     #[tokio::test]
+    //There are some Substrait functions that can be represented with nested built-in expressions
+    //xor:bool_bool is implemented in the consumer with binary expressions
+    //This tests that the consumer correctly builds the nested expressions for this function
+    async fn test_built_in_binary_exprs_for_xor() -> Result<()> {
+        let plan_str =
+            test_plan_to_string("scalar_fn_to_built_in_binary_expr_xor.substrait.json")
+                .await?;
+
+        //Test correct plan structure
+        assert_snapshot!(plan_str,
+          @r#"
+        Projection: a, b, (a OR b) AND NOT a AND b AS result
+          Values: (Boolean(true), Boolean(true)), (Boolean(true), Boolean(false)), (Boolean(false), Boolean(true)), (Boolean(false), Boolean(false))
+        "#
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    //There are some Substrait functions that can be represented with nested built-in expressions
+    //and_not:bool_bool is implemented in the consumer as binary expressions
+    //This tests that the consumer correctly builds the nested expressions for this function
+    async fn test_built_in_binary_exprs_for_and_not() -> Result<()> {
+        let plan_str = test_plan_to_string(
+            "scalar_fn_to_built_in_binary_expr_and_not.substrait.json",
+        )
+        .await?;
+
+        //Test correct plan structure
+        assert_snapshot!(plan_str,
+          @r#"
+        Projection: a, b, a AND NOT b AS result
+          Values: (Boolean(true), Boolean(true)), (Boolean(true), Boolean(false)), (Boolean(false), Boolean(true)), (Boolean(false), Boolean(false))
+        "#
+        );
+
+        Ok(())
+    }
+
+    //The between:any_any_any function is implemented as Expr::Between in the Substrait consumer
+    //This test tests that the consumer correctly builds the Expr::Between expression for this function
+    #[tokio::test]
+    async fn test_between_expr_for_scalar_functions() -> Result<()> {
+        let plan_str =
+            test_plan_to_string("scalar_fn_to_between_expr.substrait.json").await?;
+        assert_snapshot!(plan_str,
+          @r#"
+          Projection: expr BETWEEN low AND high AS result
+            Values: (Int8(2), Int8(1), Int8(3)), (Int8(4), Int8(1), Int8(2))
+          "#
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_multiple_joins() -> Result<()> {
         let plan_str = test_plan_to_string("multiple_joins.json").await?;
         assert_eq!(
