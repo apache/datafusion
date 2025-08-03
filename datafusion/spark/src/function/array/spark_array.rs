@@ -33,7 +33,7 @@ use datafusion_expr::{
 
 use crate::function::functions_nested_utils::make_scalar_function;
 
-const ARRAY_FIELD_DEFAULT_NAME: &'static str = "element";
+const ARRAY_FIELD_DEFAULT_NAME: &str = "element";
 
 #[derive(Debug)]
 pub struct SparkArray {
