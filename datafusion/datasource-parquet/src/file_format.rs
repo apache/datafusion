@@ -1008,10 +1008,20 @@ pub async fn fetch_parquet_metadata(
     #[cfg(feature = "parquet_encryption")]
     let reader = reader.with_decryption_properties(decryption_properties);
 
-    reader
+    let metadata = reader
         .load_and_finish(fetch, file_size)
         .await
-        .map_err(DataFusionError::from)
+        .map_err(DataFusionError::from)?;
+
+    if cache_metadata {
+        if let Some(cache) = file_metadata_cache {
+            let cached_metadata =
+                Arc::new(CachedParquetMetaData::new(Arc::new(metadata.clone())));
+            cache.put(meta, cached_metadata);
+        }
+    }
+
+    Ok(metadata)
 }
 
 /// Read and parse the schema of the Parquet file at location `path`

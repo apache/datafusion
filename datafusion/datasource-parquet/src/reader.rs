@@ -285,6 +285,10 @@ impl AsyncFileReader for CachedParquetFileReader {
 pub struct CachedParquetMetaData(Arc<ParquetMetaData>);
 
 impl CachedParquetMetaData {
+    pub fn new(metadata: Arc<ParquetMetaData>) -> Self {
+        Self(metadata)
+    }
+
     pub fn parquet_metadata(&self) -> &Arc<ParquetMetaData> {
         &self.0
     }
