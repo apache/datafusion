@@ -22,9 +22,8 @@ use std::{
     sync::Arc,
 };
 
-use datafusion_common::config::MemoryProfilingMode;
 use datafusion_common::{
-    config::{ConfigExtension, ConfigOptions, SpillCompression},
+    config::{ConfigExtension, ConfigOptions, MemoryProfilingMode, SpillCompression},
     Result, ScalarValue,
 };
 

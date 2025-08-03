@@ -43,7 +43,7 @@ pub mod registry {
 }
 
 pub use disk_manager::DiskManager;
-pub use memory_tracker::{LightweightMemoryTracker, MemoryMetrics};
+pub use memory_tracker::{MemoryMetrics, MemoryTracker};
 pub use registry::FunctionRegistry;
 pub use stream::{RecordBatchStream, SendableRecordBatchStream};
 pub use task::TaskContext;

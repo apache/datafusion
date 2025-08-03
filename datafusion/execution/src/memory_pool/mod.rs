@@ -18,7 +18,7 @@
 //! [`MemoryPool`] for memory management during query execution, [`proxy`] for
 //! help with allocation accounting.
 
-use crate::memory_tracker::{global_memory_tracker, LightweightMemoryTracker};
+use crate::memory_tracker::{global_memory_tracker, MemoryTracker};
 use datafusion_common::{internal_err, Result};
 use std::hash::{Hash, Hasher};
 use std::{cmp::Ordering, fmt, sync::atomic, sync::Arc};
@@ -356,7 +356,7 @@ pub struct MemoryReservation {
     registration: Arc<SharedRegistration>,
     size: usize,
     peak: usize,
-    tracker: Option<Arc<LightweightMemoryTracker>>,
+    tracker: Option<Arc<MemoryTracker>>,
 }
 
 impl MemoryReservation {

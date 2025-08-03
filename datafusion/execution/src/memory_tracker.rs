@@ -45,12 +45,12 @@ impl MemoryMetrics {
 }
 
 #[derive(Debug)]
-pub struct LightweightMemoryTracker {
+pub struct MemoryTracker {
     enabled: AtomicBool,
     metrics: Arc<Mutex<MemoryMetrics>>,
 }
 
-impl LightweightMemoryTracker {
+impl MemoryTracker {
     pub fn new() -> Self {
         Self {
             enabled: AtomicBool::new(false),
@@ -83,15 +83,15 @@ impl LightweightMemoryTracker {
     }
 }
 
-static GLOBAL_TRACKER: LazyLock<StdMutex<Option<Arc<LightweightMemoryTracker>>>> =
+static GLOBAL_TRACKER: LazyLock<StdMutex<Option<Arc<MemoryTracker>>>> =
     LazyLock::new(|| StdMutex::new(None));
 
 /// Set or clear the global memory tracker used for automatic instrumentation
-pub fn set_global_memory_tracker(tracker: Option<Arc<LightweightMemoryTracker>>) {
+pub fn set_global_memory_tracker(tracker: Option<Arc<MemoryTracker>>) {
     *GLOBAL_TRACKER.lock() = tracker;
 }
 
 /// Get the currently configured global memory tracker
-pub fn global_memory_tracker() -> Option<Arc<LightweightMemoryTracker>> {
+pub fn global_memory_tracker() -> Option<Arc<MemoryTracker>> {
     GLOBAL_TRACKER.lock().clone()
 }

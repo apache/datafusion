@@ -47,7 +47,7 @@ use datafusion_common::{
     ResolvedTableReference, TableReference,
 };
 use datafusion_execution::config::SessionConfig;
-use datafusion_execution::memory_tracker::LightweightMemoryTracker;
+use datafusion_execution::memory_tracker::MemoryTracker;
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_execution::TaskContext;
 use datafusion_expr::execution_props::ExecutionProps;
@@ -182,8 +182,8 @@ pub struct SessionState {
     prepared_plans: HashMap<String, Arc<PreparedPlan>>,
     /// Toggle for memory profiling
     pub(crate) memory_profiling: bool,
-    /// Lightweight tracker for memory metrics
-    pub(crate) memory_tracker: Arc<LightweightMemoryTracker>,
+    /// tracker for memory metrics
+    pub(crate) memory_tracker: Arc<MemoryTracker>,
 }
 
 impl Debug for SessionState {
@@ -921,7 +921,7 @@ pub struct SessionStateBuilder {
     runtime_env: Option<Arc<RuntimeEnv>>,
     function_factory: Option<Arc<dyn FunctionFactory>>,
     memory_profiling: Option<bool>,
-    memory_tracker: Option<Arc<LightweightMemoryTracker>>,
+    memory_tracker: Option<Arc<MemoryTracker>>,
     // fields to support convenience functions
     analyzer_rules: Option<Vec<Arc<dyn AnalyzerRule + Send + Sync>>>,
     optimizer_rules: Option<Vec<Arc<dyn OptimizerRule + Send + Sync>>>,
@@ -1308,7 +1308,7 @@ impl SessionStateBuilder {
     }
 
     /// Provide a custom memory tracker
-    pub fn with_memory_tracker(mut self, tracker: Arc<LightweightMemoryTracker>) -> Self {
+    pub fn with_memory_tracker(mut self, tracker: Arc<MemoryTracker>) -> Self {
         self.memory_tracker = Some(tracker);
         self
     }
@@ -1415,7 +1415,7 @@ impl SessionStateBuilder {
             prepared_plans: HashMap::new(),
             memory_profiling: memory_profiling.unwrap_or(false),
             memory_tracker: memory_tracker
-                .unwrap_or_else(|| Arc::new(LightweightMemoryTracker::new())),
+                .unwrap_or_else(|| Arc::new(MemoryTracker::new())),
         };
 
         if let Some(file_formats) = file_formats {
