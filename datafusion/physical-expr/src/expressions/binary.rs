@@ -392,7 +392,7 @@ impl PhysicalExpr for BinaryExpr {
                             )));
                         }
 
-                        return pre_selection_scatter(selection, boolean_array);
+                        return pre_selection_scatter(selection, Some(boolean_array));
                     }
                     ColumnarValue::Scalar(scalar) => {
                         if let ScalarValue::Boolean(v) = scalar {
@@ -404,9 +404,7 @@ impl PhysicalExpr for BinaryExpr {
                                     return Ok(right_ret);
                                 }
                             } else {
-                                let array =
-                                    BooleanArray::from(vec![*v; batch.num_rows()]);
-                                return pre_selection_scatter(selection, &array);
+                                return pre_selection_scatter(selection, None);
                             }
                         } else {
                             return internal_err!(
@@ -1013,7 +1011,7 @@ fn check_short_circuit<'a>(
 /// However, this is difficult to achieve under the immutable constraints of [`Arc`] and [`BooleanArray`].
 fn pre_selection_scatter(
     left_result: &BooleanArray,
-    right_result: &BooleanArray,
+    right_result: Option<&BooleanArray>,
 ) -> Result<ColumnarValue> {
     let result_len = left_result.len();
 
@@ -1024,22 +1022,39 @@ fn pre_selection_scatter(
 
     // keep track of how much is filled
     let mut last_end = 0;
-    SlicesIterator::new(left_result).for_each(|(start, end)| {
-        // the gap needs to be filled with false
-        if start > last_end {
-            result_array_builder.append_n(start - last_end, false);
+    // reduce if condition in for_each
+    match right_result {
+        Some(right_result) => {
+            SlicesIterator::new(left_result).for_each(|(start, end)| {
+                // the gap needs to be filled with false
+                if start > last_end {
+                    result_array_builder.append_n(start - last_end, false);
+                }
+
+                // copy values from right array for this slice
+                let len = end - start;
+                right_result
+                    .slice(right_array_pos, len)
+                    .iter()
+                    .for_each(|v| result_array_builder.append_option(v));
+
+                right_array_pos += len;
+                last_end = end;
+            });
         }
+        None => SlicesIterator::new(left_result).for_each(|(start, end)| {
+            // the gap needs to be filled with false
+            if start > last_end {
+                result_array_builder.append_n(start - last_end, false);
+            }
 
-        // copy values from right array for this slice
-        let len = end - start;
-        right_result
-            .slice(right_array_pos, len)
-            .iter()
-            .for_each(|v| result_array_builder.append_option(v));
+            // append nulls for this slice derictly
+            let len = end - start;
+            result_array_builder.append_nulls(len);
 
-        right_array_pos += len;
-        last_end = end;
-    });
+            last_end = end;
+        }),
+    }
 
     // Fill any remaining positions with false
     if last_end < result_len {
@@ -5257,7 +5272,7 @@ mod tests {
             let left = create_bool_array(vec![true, false, true, false, true]);
             let right = create_bool_array(vec![false, true, false]);
 
-            let result = pre_selection_scatter(&left, &right).unwrap();
+            let result = pre_selection_scatter(&left, Some(&right)).unwrap();
             let result_arr = result.into_array(left.len()).unwrap();
 
             let expected = create_bool_array(vec![false, false, true, false, false]);
@@ -5271,7 +5286,7 @@ mod tests {
                 create_bool_array(vec![false, true, true, false, true, true, true]);
             let right = create_bool_array(vec![true, false, false, true, false]);
 
-            let result = pre_selection_scatter(&left, &right).unwrap();
+            let result = pre_selection_scatter(&left, Some(&right)).unwrap();
             let result_arr = result.into_array(left.len()).unwrap();
 
             let expected =
@@ -5285,7 +5300,7 @@ mod tests {
             let left = create_bool_array(vec![true, false, false]);
             let right = create_bool_array(vec![false]);
 
-            let result = pre_selection_scatter(&left, &right).unwrap();
+            let result = pre_selection_scatter(&left, Some(&right)).unwrap();
             let result_arr = result.into_array(left.len()).unwrap();
 
             let expected = create_bool_array(vec![false, false, false]);
@@ -5298,7 +5313,7 @@ mod tests {
             let left = create_bool_array(vec![false, false, true]);
             let right = create_bool_array(vec![false]);
 
-            let result = pre_selection_scatter(&left, &right).unwrap();
+            let result = pre_selection_scatter(&left, Some(&right)).unwrap();
             let result_arr = result.into_array(left.len()).unwrap();
 
             let expected = create_bool_array(vec![false, false, false]);
@@ -5311,7 +5326,7 @@ mod tests {
             let left = create_bool_array(vec![false, true, false, true]);
             let right = BooleanArray::from(vec![None, Some(false)]);
 
-            let result = pre_selection_scatter(&left, &right).unwrap();
+            let result = pre_selection_scatter(&left, Some(&right)).unwrap();
             let result_arr = result.into_array(left.len()).unwrap();
 
             let expected = BooleanArray::from(vec![
