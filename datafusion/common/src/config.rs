@@ -298,16 +298,11 @@ pub enum SpillCompression {
     Uncompressed,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum MemoryProfilingMode {
+    #[default]
     Disabled,
     OnDemand,
-}
-
-impl Default for MemoryProfilingMode {
-    fn default() -> Self {
-        MemoryProfilingMode::Disabled
-    }
 }
 
 impl FromStr for MemoryProfilingMode {
