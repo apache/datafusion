@@ -54,8 +54,8 @@ physical_plan
 01)AggregateExec: mode=FinalPartitioned, gby=[column1@0 as column1], aggr=[sum(parquet_table.column2)]
 02)--CoalesceBatchesExec: target_batch_size=8192
 03)----RepartitionExec: partitioning=Hash([column1@0], 4), input_partitions=4
-04)------AggregateExec: mode=Partial, gby=[column1@0 as column1], aggr=[sum(parquet_table.column2)]
-05)--------OnDemandRepartitionExec: partitioning=OnDemand(4), input_partitions=1
+04)------OnDemandRepartitionExec: partitioning=OnDemand(4), input_partitions=1
+05)--------AggregateExec: mode=Partial, gby=[column1@0 as column1], aggr=[sum(parquet_table.column2)]
 06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition/parquet_table/2.parquet]]}, projection=[column1, column2], file_type=parquet
 
 # Disable on-demand repartitioning
@@ -72,8 +72,8 @@ physical_plan
 01)AggregateExec: mode=FinalPartitioned, gby=[column1@0 as column1], aggr=[sum(parquet_table.column2)]
 02)--CoalesceBatchesExec: target_batch_size=8192
 03)----RepartitionExec: partitioning=Hash([column1@0], 4), input_partitions=4
-04)------AggregateExec: mode=Partial, gby=[column1@0 as column1], aggr=[sum(parquet_table.column2)]
-05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+05)--------AggregateExec: mode=Partial, gby=[column1@0 as column1], aggr=[sum(parquet_table.column2)]
 06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition/parquet_table/2.parquet]]}, projection=[column1, column2], file_type=parquet
 
 # Cleanup
@@ -326,15 +326,10 @@ logical_plan
 03)--TableScan: join_t2 projection=[t2_id]
 physical_plan
 01)CoalesceBatchesExec: target_batch_size=2
-02)--HashJoinExec: mode=Partitioned, join_type=Left, on=[(t1_id@0, t2_id@0)]
-03)----CoalesceBatchesExec: target_batch_size=2
-04)------RepartitionExec: partitioning=Hash([t1_id@0], 2), input_partitions=2
-05)--------OnDemandRepartitionExec: partitioning=OnDemand(2), input_partitions=1
-06)----------DataSourceExec: partitions=1, partition_sizes=[1]
-07)----CoalesceBatchesExec: target_batch_size=2
-08)------RepartitionExec: partitioning=Hash([t2_id@0], 2), input_partitions=2
-09)--------OnDemandRepartitionExec: partitioning=OnDemand(2), input_partitions=1
-10)----------DataSourceExec: partitions=1, partition_sizes=[1]
+02)--HashJoinExec: mode=CollectLeft, join_type=Left, on=[(t1_id@0, t2_id@0)]
+03)----CoalescePartitionsExec
+04)------DataSourceExec: partitions=2, partition_sizes=[1, 1]
+05)----DataSourceExec: partitions=2, partition_sizes=[1, 1]
 
 # right join
 query TT
@@ -349,15 +344,10 @@ logical_plan
 03)--TableScan: join_t2 projection=[t2_id]
 physical_plan
 01)CoalesceBatchesExec: target_batch_size=2
-02)--HashJoinExec: mode=Partitioned, join_type=Right, on=[(t1_id@0, t2_id@0)]
-03)----CoalesceBatchesExec: target_batch_size=2
-04)------RepartitionExec: partitioning=Hash([t1_id@0], 2), input_partitions=2
-05)--------OnDemandRepartitionExec: partitioning=OnDemand(2), input_partitions=1
-06)----------DataSourceExec: partitions=1, partition_sizes=[1]
-07)----CoalesceBatchesExec: target_batch_size=2
-08)------RepartitionExec: partitioning=Hash([t2_id@0], 2), input_partitions=2
-09)--------OnDemandRepartitionExec: partitioning=OnDemand(2), input_partitions=1
-10)----------DataSourceExec: partitions=1, partition_sizes=[1]
+02)--HashJoinExec: mode=CollectLeft, join_type=Right, on=[(t1_id@0, t2_id@0)]
+03)----CoalescePartitionsExec
+04)------DataSourceExec: partitions=2, partition_sizes=[1, 1]
+05)----DataSourceExec: partitions=2, partition_sizes=[1, 1]
 
 # inner join
 query TT
@@ -372,15 +362,10 @@ logical_plan
 03)--TableScan: join_t2 projection=[t2_id]
 physical_plan
 01)CoalesceBatchesExec: target_batch_size=2
-02)--HashJoinExec: mode=Partitioned, join_type=Inner, on=[(t1_id@0, t2_id@0)]
-03)----CoalesceBatchesExec: target_batch_size=2
-04)------RepartitionExec: partitioning=Hash([t1_id@0], 2), input_partitions=2
-05)--------OnDemandRepartitionExec: partitioning=OnDemand(2), input_partitions=1
-06)----------DataSourceExec: partitions=1, partition_sizes=[1]
-07)----CoalesceBatchesExec: target_batch_size=2
-08)------RepartitionExec: partitioning=Hash([t2_id@0], 2), input_partitions=2
-09)--------OnDemandRepartitionExec: partitioning=OnDemand(2), input_partitions=1
-10)----------DataSourceExec: partitions=1, partition_sizes=[1]
+02)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(t1_id@0, t2_id@0)]
+03)----CoalescePartitionsExec
+04)------DataSourceExec: partitions=2, partition_sizes=[1, 1]
+05)----DataSourceExec: partitions=2, partition_sizes=[1, 1]
 
 statement ok
 DROP TABLE join_t1;
@@ -425,19 +410,19 @@ EXPLAIN SELECT
     FROM aggregate_test_100
 ----
 logical_plan
-01)Projection: sum(aggregate_test_100.c4) PARTITION BY [aggregate_test_100.c1, aggregate_test_100.c2] ORDER BY [aggregate_test_100.c2 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING, count(*) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c2 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING
-02)--WindowAggr: windowExpr=[[count(*) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c2 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING]]
+01)Projection: sum(aggregate_test_100.c4) PARTITION BY [aggregate_test_100.c1, aggregate_test_100.c2] ORDER BY [aggregate_test_100.c2 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING, count(Int64(1)) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c2 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING AS count(*) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c2 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING
+02)--WindowAggr: windowExpr=[[count(Int64(1)) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c2 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING]]
 03)----Projection: aggregate_test_100.c1, aggregate_test_100.c2, sum(aggregate_test_100.c4) PARTITION BY [aggregate_test_100.c1, aggregate_test_100.c2] ORDER BY [aggregate_test_100.c2 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING
 04)------WindowAggr: windowExpr=[[sum(CAST(aggregate_test_100.c4 AS Int64)) PARTITION BY [aggregate_test_100.c1, aggregate_test_100.c2] ORDER BY [aggregate_test_100.c2 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING]]
 05)--------TableScan: aggregate_test_100 projection=[c1, c2, c4]
 physical_plan
-01)ProjectionExec: expr=[sum(aggregate_test_100.c4) PARTITION BY [aggregate_test_100.c1, aggregate_test_100.c2] ORDER BY [aggregate_test_100.c2 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING@2 as sum(aggregate_test_100.c4) PARTITION BY [aggregate_test_100.c1, aggregate_test_100.c2] ORDER BY [aggregate_test_100.c2 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING, count(*) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c2 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING@3 as count(*) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c2 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING]
-02)--BoundedWindowAggExec: wdw=[count(*) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c2 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING: Ok(Field { name: "count(*) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c2 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(1)), end_bound: Following(UInt64(1)), is_causal: false }], mode=[Sorted]
+01)ProjectionExec: expr=[sum(aggregate_test_100.c4) PARTITION BY [aggregate_test_100.c1, aggregate_test_100.c2] ORDER BY [aggregate_test_100.c2 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING@2 as sum(aggregate_test_100.c4) PARTITION BY [aggregate_test_100.c1, aggregate_test_100.c2] ORDER BY [aggregate_test_100.c2 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING, count(Int64(1)) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c2 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING@3 as count(*) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c2 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING]
+02)--BoundedWindowAggExec: wdw=[count(Int64(1)) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c2 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING: Field { name: "count(Int64(1)) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c2 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING], mode=[Sorted]
 03)----SortExec: expr=[c1@0 ASC NULLS LAST, c2@1 ASC NULLS LAST], preserve_partitioning=[true]
 04)------CoalesceBatchesExec: target_batch_size=4096
 05)--------RepartitionExec: partitioning=Hash([c1@0], 2), input_partitions=2
 06)----------ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, sum(aggregate_test_100.c4) PARTITION BY [aggregate_test_100.c1, aggregate_test_100.c2] ORDER BY [aggregate_test_100.c2 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING@3 as sum(aggregate_test_100.c4) PARTITION BY [aggregate_test_100.c1, aggregate_test_100.c2] ORDER BY [aggregate_test_100.c2 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING]
-07)------------BoundedWindowAggExec: wdw=[sum(aggregate_test_100.c4) PARTITION BY [aggregate_test_100.c1, aggregate_test_100.c2] ORDER BY [aggregate_test_100.c2 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING: Ok(Field { name: "sum(aggregate_test_100.c4) PARTITION BY [aggregate_test_100.c1, aggregate_test_100.c2] ORDER BY [aggregate_test_100.c2 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(1)), end_bound: Following(UInt64(1)), is_causal: false }], mode=[Sorted]
+07)------------BoundedWindowAggExec: wdw=[sum(aggregate_test_100.c4) PARTITION BY [aggregate_test_100.c1, aggregate_test_100.c2] ORDER BY [aggregate_test_100.c2 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING: Field { name: "sum(aggregate_test_100.c4) PARTITION BY [aggregate_test_100.c1, aggregate_test_100.c2] ORDER BY [aggregate_test_100.c2 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING], mode=[Sorted]
 08)--------------SortExec: expr=[c1@0 ASC NULLS LAST, c2@1 ASC NULLS LAST], preserve_partitioning=[true]
 09)----------------CoalesceBatchesExec: target_batch_size=4096
 10)------------------RepartitionExec: partitioning=Hash([c1@0, c2@1], 2), input_partitions=2
