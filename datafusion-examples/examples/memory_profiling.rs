@@ -156,7 +156,7 @@ async fn run_without_profiling() -> Result<()> {
     run_memory_intensive_query(&ctx).await?;
     let total_time = start.elapsed();
 
-    println!("Total execution time: {:?}", total_time);
+    println!("Total execution time: {total_time:?}");
     println!(
         "Memory profiling enabled: {}",
         ctx.is_memory_profiling_enabled()
@@ -179,7 +179,7 @@ async fn run_with_profiling() -> Result<()> {
     run_memory_intensive_query(&ctx).await?;
     let total_time = start.elapsed();
 
-    println!("Total execution time: {:?}", total_time);
+    println!("Total execution time: {total_time:?}");
     println!(
         "Memory profiling enabled: {}",
         ctx.is_memory_profiling_enabled()
