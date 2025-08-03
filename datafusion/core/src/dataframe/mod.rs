@@ -1513,7 +1513,7 @@ impl DataFrame {
     pub async fn collect_partitioned(self) -> Result<Vec<Vec<RecordBatch>>> {
         // capture profiling info before `self` is moved
         let mem_prof = self.session_state.memory_profiling;
-        let tracker = self.session_state.memory_tracker.clone();
+        let tracker = Arc::clone(&self.session_state.memory_tracker);
 
         let task_ctx = Arc::new(self.task_ctx());
         let plan = self.create_physical_plan().await?;
@@ -2245,7 +2245,7 @@ impl DataFrame {
 
         // capture profiling info before `self` is moved
         let mem_prof = self.session_state.memory_profiling;
-        let tracker = self.session_state.memory_tracker.clone();
+        let tracker = Arc::clone(&self.session_state.memory_tracker);
 
         // The schema is consistent with the output
         let plan = self.clone().create_physical_plan().await?;
