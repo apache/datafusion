@@ -31,8 +31,7 @@ use arrow::datatypes::{
 use arrow::error::ArrowError;
 use arrow_buffer::i256;
 use datafusion_common::{
-    exec_err, internal_err, not_impl_err, plan_datafusion_err, plan_err, Result,
-    ScalarValue,
+    exec_err, internal_err, plan_datafusion_err, plan_err, Result, ScalarValue,
 };
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
@@ -153,12 +152,7 @@ impl ScalarUDFImpl for LogFunc {
         // Check last argument (value)
         match &arg_types.last().ok_or(plan_datafusion_err!("No args"))? {
             DataType::Float32 => Ok(DataType::Float32),
-            DataType::Float64 => Ok(DataType::Float64),
-            Decimal128(_, _) => Ok(DataType::Float64),
-            Decimal256(_, _) => Ok(DataType::Float64),
-            _ => {
-                not_impl_err!("Unsupported data type {} for function log", &arg_types[0])
-            }
+            _ => Ok(DataType::Float64),
         }
     }
 
