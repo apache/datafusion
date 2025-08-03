@@ -253,10 +253,10 @@ impl AsyncFileReader for CachedParquetFileReader {
 
             // lookup if the metadata is already cached
             if let Some(metadata) = metadata_cache.get(object_meta) {
-                if let Some(parquet_metadata) =
+                if let Some(cached_parquet_metadata) =
                     metadata.as_any().downcast_ref::<CachedParquetMetaData>()
                 {
-                    return Ok(Arc::clone(&parquet_metadata.0));
+                    return Ok(Arc::clone(cached_parquet_metadata.parquet_metadata()));
                 }
             }
 
@@ -283,6 +283,12 @@ impl AsyncFileReader for CachedParquetFileReader {
 
 /// Wrapper to implement [`FileMetadata`] for [`ParquetMetaData`].
 pub struct CachedParquetMetaData(Arc<ParquetMetaData>);
+
+impl CachedParquetMetaData {
+    pub fn parquet_metadata(&self) -> &Arc<ParquetMetaData> {
+        &self.0
+    }
+}
 
 impl FileMetadata for CachedParquetMetaData {
     fn as_any(&self) -> &dyn Any {
