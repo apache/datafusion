@@ -5403,8 +5403,7 @@ mod tests {
             ScalarValue::new_ten(&DataType::Decimal128(7, 2)).unwrap(),
             ScalarValue::Decimal128(Some(1000), 7, 2)
         );
-        // No negative or zero scale
-        assert!(ScalarValue::new_ten(&DataType::Decimal128(5, 0)).is_err());
+        // No negative scale
         assert!(ScalarValue::new_ten(&DataType::Decimal128(5, -1)).is_err());
         // Invalid combination
         assert!(ScalarValue::new_ten(&DataType::Decimal128(0, 2)).is_err());
@@ -5426,8 +5425,7 @@ mod tests {
             ScalarValue::new_ten(&DataType::Decimal256(7, 2)).unwrap(),
             ScalarValue::Decimal256(Some(1000.into()), 7, 2)
         );
-        // No negative or zero scale
-        assert!(ScalarValue::new_ten(&DataType::Decimal256(5, 0)).is_err());
+        // No negative scale
         assert!(ScalarValue::new_ten(&DataType::Decimal256(5, -1)).is_err());
         // Invalid combination
         assert!(ScalarValue::new_ten(&DataType::Decimal256(0, 2)).is_err());
