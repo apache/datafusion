@@ -251,7 +251,7 @@ impl AsyncFileReader for ParquetFileReader {
                     "AsyncChunkReader::get_metadata error: {e}"
                 ))
             })?;
-            Ok(Arc::new(metadata))
+            Ok(metadata)
         })
     }
 }

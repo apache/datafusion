@@ -985,7 +985,7 @@ pub async fn fetch_parquet_metadata(
     #[allow(unused)] decryption_properties: Option<&FileDecryptionProperties>,
     cache_metadata: bool,
     file_metadata_cache: Option<Arc<dyn FileMetadataCache>>,
-) -> Result<ParquetMetaData> {
+) -> Result<Arc<ParquetMetaData>> {
     // Check cache first if caching is enabled
     if cache_metadata {
         if let Some(cache) = &file_metadata_cache {
@@ -994,7 +994,7 @@ pub async fn fetch_parquet_metadata(
                     .as_any()
                     .downcast_ref::<CachedParquetMetaData>()
                 {
-                    return Ok(parquet_metadata.parquet_metadata().as_ref().clone());
+                    return Ok(Arc::clone(parquet_metadata.parquet_metadata()));
                 }
             }
         }
@@ -1007,16 +1007,18 @@ pub async fn fetch_parquet_metadata(
     #[cfg(feature = "parquet_encryption")]
     let reader = reader.with_decryption_properties(decryption_properties);
 
-    let metadata = reader
-        .load_and_finish(fetch, file_size)
-        .await
-        .map_err(DataFusionError::from)?;
+    let metadata = Arc::new(
+        reader
+            .load_and_finish(fetch, file_size)
+            .await
+            .map_err(DataFusionError::from)?,
+    );
 
     if cache_metadata {
         if let Some(cache) = file_metadata_cache {
             cache.put(
                 meta,
-                Arc::new(CachedParquetMetaData::new(Arc::new(metadata.clone()))),
+                Arc::new(CachedParquetMetaData::new(Arc::clone(&metadata))),
             );
         }
     }
