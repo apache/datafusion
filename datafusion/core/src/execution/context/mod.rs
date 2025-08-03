@@ -265,7 +265,7 @@ mod enhanced_memory_report_tests {
         let report = EnhancedMemoryReport::from_raw_report(raw.clone());
         assert_eq!(
             report.total_memory,
-            entries.iter().map(|(_, v)| *v as usize).sum::<usize>()
+            entries.iter().map(|(_, v)| *v).sum::<usize>()
         );
         assert_eq!(report.peak_memory, 90);
         let cats = &report.categorized_operators;
@@ -704,7 +704,7 @@ impl SessionContext {
         state.memory_profiling = true;
         state.memory_tracker.enable();
         datafusion_execution::memory_tracker::set_global_memory_tracker(Some(
-            state.memory_tracker.clone(),
+            Arc::clone(&state.memory_tracker),
         ));
         MemoryProfilingHandle::new(self)
     }
