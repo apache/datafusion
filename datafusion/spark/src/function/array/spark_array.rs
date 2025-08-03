@@ -33,11 +33,12 @@ use datafusion_expr::{
 
 use crate::function::functions_nested_utils::make_scalar_function;
 
+const ARRAY_FIELD_DEFAULT_NAME: &'static str = "element";
+
 #[derive(Debug)]
 pub struct SparkArray {
     signature: Signature,
     aliases: Vec<String>,
-    name: String,
 }
 
 impl Default for SparkArray {
@@ -47,8 +48,6 @@ impl Default for SparkArray {
 }
 
 impl SparkArray {
-    pub const ARRAY_FIELD_DEFAULT_NAME: &'static str = "element";
-
     pub fn new() -> Self {
         Self {
             signature: Signature::one_of(
@@ -56,19 +55,7 @@ impl SparkArray {
                 Volatility::Immutable,
             ),
             aliases: vec![String::from("spark_make_array")],
-            name: Self::ARRAY_FIELD_DEFAULT_NAME.to_string(),
         }
-    }
-
-    pub fn with_list_field_name(name: impl Into<String>) -> Self {
-        Self {
-            name: name.into(),
-            ..Self::new()
-        }
-    }
-
-    pub fn name(&self) -> &String {
-        &self.name
     }
 }
 
@@ -116,7 +103,11 @@ impl ScalarUDFImpl for SparkArray {
             .cloned()
             .collect::<Vec<_>>();
         let return_type = self.return_type(&data_types)?;
-        Ok(Arc::new(Field::new(self.name(), return_type, false)))
+        Ok(Arc::new(Field::new(
+            ARRAY_FIELD_DEFAULT_NAME,
+            return_type,
+            false,
+        )))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -154,7 +145,11 @@ impl ScalarUDFImpl for SparkArray {
 
 // Empty array is a special case that is useful for many other array functions
 pub(super) fn empty_array_type() -> DataType {
-    DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true)))
+    DataType::List(Arc::new(Field::new(
+        ARRAY_FIELD_DEFAULT_NAME,
+        DataType::Int32,
+        true,
+    )))
 }
 
 /// `make_array_inner` is the implementation of the `make_array` function.
@@ -272,7 +267,7 @@ fn array_array<O: OffsetSizeTrait>(
     let data = mutable.freeze();
 
     Ok(Arc::new(GenericListArray::<O>::try_new(
-        Arc::new(Field::new_list_field(data_type, true)),
+        Arc::new(Field::new(ARRAY_FIELD_DEFAULT_NAME, data_type, true)),
         OffsetBuffer::new(offsets.into()),
         make_array(data),
         None,
