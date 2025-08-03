@@ -104,9 +104,6 @@ fn log_decimal128(value: i128, scale: i8, base: f64) -> Result<f64, ArrowError> 
     } else {
         let unscaled_value = decimal128_to_i128(value, scale)?;
         let log_value: u32 = unscaled_value.ilog(base as i128);
-        log::trace!(
-            "Calculating {value} and {base} to unscaled {unscaled_value} -> {log_value}"
-        );
         Ok(log_value as f64)
     }
 }
@@ -243,7 +240,6 @@ impl ScalarUDFImpl for LogFunc {
 
             Decimal128(_preicison, scale) => match base {
                 ColumnarValue::Scalar(ScalarValue::Float32(Some(base))) => {
-                    log::trace!("Calculating array {:?} and {:?}", &x, &base);
                     let x = x.as_primitive::<Decimal128Type>();
                     let array: PrimitiveArray<Float64Type> =
                         x.try_unary(|x| log_decimal128(x, *scale, base as f64))?;
@@ -253,7 +249,6 @@ impl ScalarUDFImpl for LogFunc {
                     return exec_err!("unsupported log function base type {scalar}")
                 }
                 ColumnarValue::Array(base) => {
-                    log::trace!("Calculating array {:?} and {:?}", &x, &base);
                     let x = x.as_primitive::<Decimal128Type>();
                     let base_array = kernels::cast::cast(&base, &DataType::Float64)?;
                     let base = base_array.as_primitive::<Float64Type>();
