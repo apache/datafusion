@@ -20,9 +20,12 @@
 
 use crate::memory_tracker::{global_memory_tracker, MemoryTracker};
 use datafusion_common::{internal_err, Result};
-use std::hash::{Hash, Hasher};
-use std::{cmp::Ordering, fmt, sync::atomic, sync::Arc};
-
+use std::{
+    cmp::Ordering,
+    fmt,
+    hash::{Hash, Hasher},
+    sync::{atomic, Arc},
+};
 mod pool;
 pub mod proxy {
     pub use datafusion_common::utils::proxy::{

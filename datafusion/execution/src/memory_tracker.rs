@@ -17,14 +17,12 @@
 
 //! # Memory Tracker
 
-use parking_lot::Mutex as StdMutex;
-use parking_lot::Mutex;
-use std::collections::HashMap;
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc, LazyLock,
+use parking_lot::{Mutex, Mutex as StdMutex};
+use std::{
+    collections::HashMap,
+    sync::atomic::{AtomicBool, Ordering},
+    sync::{Arc, LazyLock},
 };
-
 #[derive(Default, Debug)]
 pub struct MemoryMetrics {
     entries: HashMap<String, usize>,
