@@ -25,15 +25,16 @@
 //! profiling information. Note that memory profiling is currently
 //! experimental and may not capture all memory allocations.
 
-use datafusion::arrow::array::{Float64Array, Int64Array, StringArray};
-use datafusion::arrow::datatypes::{DataType, Field, Schema};
-use datafusion::arrow::record_batch::RecordBatch;
-use datafusion::catalog::MemTable;
-use datafusion::common::Result;
 use datafusion::prelude::*;
-use std::sync::Arc;
-use std::time::Instant;
-
+use datafusion::{
+    arrow::{
+        array::Float64Array, array::Int64Array, array::StringArray, datatypes::DataType,
+        datatypes::Field, datatypes::Schema, record_batch::RecordBatch,
+    },
+    catalog::MemTable,
+    common::Result,
+};
+use std::{sync::Arc, time::Instant};
 /// Creates a large dataset with multiple columns to simulate memory-intensive operations
 fn create_large_dataset(num_rows: usize) -> Result<RecordBatch> {
     let mut ids = Vec::with_capacity(num_rows);
