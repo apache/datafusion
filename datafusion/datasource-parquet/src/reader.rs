@@ -282,7 +282,7 @@ impl AsyncFileReader for CachedParquetFileReader {
 }
 
 /// Wrapper to implement [`FileMetadata`] for [`ParquetMetaData`].
-struct CachedParquetMetaData(Arc<ParquetMetaData>);
+pub struct CachedParquetMetaData(Arc<ParquetMetaData>);
 
 impl FileMetadata for CachedParquetMetaData {
     fn as_any(&self) -> &dyn Any {
