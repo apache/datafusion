@@ -29,7 +29,6 @@ use arrow::compute::{filter, SortOptions};
 use arrow::datatypes::{DataType, Field, FieldRef, Fields};
 
 use datafusion_common::cast::as_list_array;
-use datafusion_common::scalar::copy_array_data;
 use datafusion_common::utils::{
     compare_rows, get_row_at_idx, take_function_args, SingleRowListArrayBuilder,
 };
@@ -393,6 +392,17 @@ impl Accumulator for ArrayAggAccumulator {
             + self
                 .values
                 .iter()
+                // Each ArrayRef might be just a reference to a bigger array, and many
+                // ArrayRefs here might be referencing exactly the same array, so if we
+                // were to call `arr.get_array_memory_size()`, we would be double-counting
+                // the same underlying data many times.
+                //
+                // Instead, we do an approximation by estimating how much memory each
+                // ArrayRef would occupy if its underlying data was fully owned by this
+                // accumulator.
+                //
+                // Note that this is just an estimation, but the reality is that this
+                // accumulator might not own any data.
                 .map(|arr| arr.to_data().get_slice_memory_size().unwrap_or_default())
                 .sum::<usize>()
             + self.datatype.size()
