@@ -17,7 +17,7 @@
 
 //! # Memory Profiling Tests
 use datafusion::prelude::*;
-use std::time::Instant;
+use datafusion_common::instant::Instant;
 
 #[tokio::test]
 async fn test_memory_profiling_enabled_vs_disabled() {
@@ -48,10 +48,7 @@ async fn test_memory_profiling_enabled_vs_disabled() {
     let ratio = enabled_duration.as_secs_f64() / disabled_duration.as_secs_f64() * 100.0;
     assert!(
         enabled_duration <= max_allowed,
-        "enabled duration {:?} exceeds 110% of disabled duration {:?} ({:.1}%)",
-        enabled_duration,
-        disabled_duration,
-        ratio
+        "enabled duration {enabled_duration:?} exceeds 110% of disabled duration {disabled_duration:?} ({ratio:.1}%)"
     );
 }
 

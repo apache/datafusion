@@ -34,7 +34,8 @@ use datafusion::{
     catalog::MemTable,
     common::Result,
 };
-use std::{sync::Arc, time::Instant};
+use datafusion_common::instant::Instant;
+use std::sync::Arc;
 /// Creates a large dataset with multiple columns to simulate memory-intensive operations
 fn create_large_dataset(num_rows: usize) -> Result<RecordBatch> {
     let mut ids = Vec::with_capacity(num_rows);
@@ -130,7 +131,7 @@ async fn run_memory_intensive_query(ctx: &SessionContext) -> Result<()> {
     let results = df.collect().await?;
     let duration = start.elapsed();
 
-    println!("Query completed in: {:?}", duration);
+    println!("Query completed in: {duration:?}");
     println!(
         "Number of result rows: {}",
         results.iter().map(|r| r.num_rows()).sum::<usize>()
