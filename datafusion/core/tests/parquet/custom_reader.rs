@@ -242,6 +242,8 @@ impl AsyncFileReader for ParquetFileReader {
                 &self.meta,
                 self.metadata_size_hint,
                 None,
+                false,
+                None,
             )
             .await
             .map_err(|e| {
