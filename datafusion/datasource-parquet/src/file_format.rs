@@ -1004,7 +1004,6 @@ pub async fn fetch_parquet_metadata(
     let fetch = ObjectStoreFetch::new(store, meta);
 
     let reader = ParquetMetaDataReader::new().with_prefetch_hint(size_hint);
-
     #[cfg(feature = "parquet_encryption")]
     let reader = reader.with_decryption_properties(decryption_properties);
 
@@ -1015,9 +1014,10 @@ pub async fn fetch_parquet_metadata(
 
     if cache_metadata {
         if let Some(cache) = file_metadata_cache {
-            let cached_metadata =
-                Arc::new(CachedParquetMetaData::new(Arc::new(metadata.clone())));
-            cache.put(meta, cached_metadata);
+            cache.put(
+                meta,
+                Arc::new(CachedParquetMetaData::new(Arc::new(metadata.clone()))),
+            );
         }
     }
 
