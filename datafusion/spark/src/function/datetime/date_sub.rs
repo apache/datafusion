@@ -1,0 +1,89 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
+use std::any::Any;
+use std::sync::Arc;
+
+use arrow::array::ArrayRef;
+use arrow::compute;
+use arrow::datatypes::{DataType, Date32Type};
+use datafusion_common::cast::{as_date32_array, as_int32_array};
+use datafusion_common::{internal_err, Result};
+use datafusion_expr::{
+    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+};
+use datafusion_functions::utils::make_scalar_function;
+
+#[derive(Debug)]
+pub struct SparkDateSub {
+    signature: Signature,
+}
+
+impl Default for SparkDateSub {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SparkDateSub {
+    pub fn new() -> Self {
+        Self {
+            signature: Signature::exact(
+                vec![DataType::Date32, DataType::Int32],
+                Volatility::Immutable,
+            ),
+        }
+    }
+}
+
+impl ScalarUDFImpl for SparkDateSub {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        "date_sub"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(DataType::Date32)
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        make_scalar_function(spark_date_sub, vec![])(&args.args)
+    }
+}
+
+fn spark_date_sub(args: &[ArrayRef]) -> Result<ArrayRef> {
+    let [date_arg, days_arg] = args else {
+        return internal_err!(
+            "Spark `date_sub` function requires 2 arguments, got {}",
+            args.len()
+        );
+    };
+    let date_array = as_date32_array(date_arg)?;
+    let days_array = as_int32_array(days_arg)?;
+    let result =
+        compute::binary::<_, _, _, Date32Type>(date_array, days_array, |date, days| {
+            date - days
+        })?;
+    Ok(Arc::new(result))
+}
