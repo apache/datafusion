@@ -27,8 +27,7 @@ dev/update_function_docs.sh file for updating surrounding text.
 
 # Scalar Functions
 
-
-## Math Functions 
+## Math Functions
 
 - [abs](#abs)
 - [acos](#acos)
@@ -77,6 +76,7 @@ Returns the absolute value of a number.
 ```sql
 abs(numeric_expression)
 ```
+
 #### Arguments
 
 - **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -88,6 +88,7 @@ Returns the arc cosine or inverse cosine of a number.
 ```sql
 acos(numeric_expression)
 ```
+
 #### Arguments
 
 - **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -99,6 +100,7 @@ Returns the area hyperbolic cosine or inverse hyperbolic cosine of a number.
 ```sql
 acosh(numeric_expression)
 ```
+
 #### Arguments
 
 - **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -110,6 +112,7 @@ Returns the arc sine or inverse sine of a number.
 ```sql
 asin(numeric_expression)
 ```
+
 #### Arguments
 
 - **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -121,6 +124,7 @@ Returns the area hyperbolic sine or inverse hyperbolic sine of a number.
 ```sql
 asinh(numeric_expression)
 ```
+
 #### Arguments
 
 - **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -132,6 +136,7 @@ Returns the arc tangent or inverse tangent of a number.
 ```sql
 atan(numeric_expression)
 ```
+
 #### Arguments
 
 - **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -143,12 +148,13 @@ Returns the arc tangent or inverse tangent of `expression_y / expression_x`.
 ```sql
 atan2(expression_y, expression_x)
 ```
+
 #### Arguments
 
 - **expression_y**: First numeric expression to operate on.
-Can be a constant, column, or function, and any combination of arithmetic operators.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
 - **expression_x**: Second numeric expression to operate on.
-Can be a constant, column, or function, and any combination of arithmetic operators.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
 
 ### `atanh`
 
@@ -157,6 +163,7 @@ Returns the area hyperbolic tangent or inverse hyperbolic tangent of a number.
 ```sql
 atanh(numeric_expression)
 ```
+
 #### Arguments
 
 - **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -168,6 +175,7 @@ Returns the cube root of a number.
 ```sql
 cbrt(numeric_expression)
 ```
+
 #### Arguments
 
 - **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -179,6 +187,7 @@ Returns the nearest integer greater than or equal to a number.
 ```sql
 ceil(numeric_expression)
 ```
+
 #### Arguments
 
 - **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -190,6 +199,7 @@ Returns the cosine of a number.
 ```sql
 cos(numeric_expression)
 ```
+
 #### Arguments
 
 - **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -201,6 +211,7 @@ Returns the hyperbolic cosine of a number.
 ```sql
 cosh(numeric_expression)
 ```
+
 #### Arguments
 
 - **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -212,6 +223,7 @@ Returns the cotangent of a number.
 ```sql
 cot(numeric_expression)
 ```
+
 #### Arguments
 
 - **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -223,6 +235,7 @@ Converts radians to degrees.
 ```sql
 degrees(numeric_expression)
 ```
+
 #### Arguments
 
 - **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -234,6 +247,7 @@ Returns the base-e exponential of a number.
 ```sql
 exp(numeric_expression)
 ```
+
 #### Arguments
 
 - **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -245,6 +259,7 @@ Factorial. Returns 1 if value is less than 2.
 ```sql
 factorial(numeric_expression)
 ```
+
 #### Arguments
 
 - **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -256,6 +271,7 @@ Returns the nearest integer less than or equal to a number.
 ```sql
 floor(numeric_expression)
 ```
+
 #### Arguments
 
 - **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -267,6 +283,7 @@ Returns the greatest common divisor of `expression_x` and `expression_y`. Return
 ```sql
 gcd(expression_x, expression_y)
 ```
+
 #### Arguments
 
 - **expression_x**: First numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -279,6 +296,7 @@ Returns true if a given number is +NaN or -NaN otherwise returns false.
 ```sql
 isnan(numeric_expression)
 ```
+
 #### Arguments
 
 - **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -290,6 +308,7 @@ Returns true if a given number is +0.0 or -0.0 otherwise returns false.
 ```sql
 iszero(numeric_expression)
 ```
+
 #### Arguments
 
 - **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -301,6 +320,7 @@ Returns the least common multiple of `expression_x` and `expression_y`. Returns 
 ```sql
 lcm(expression_x, expression_y)
 ```
+
 #### Arguments
 
 - **expression_x**: First numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -313,6 +333,7 @@ Returns the natural logarithm of a number.
 ```sql
 ln(numeric_expression)
 ```
+
 #### Arguments
 
 - **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -325,6 +346,7 @@ Returns the base-x logarithm of a number. Can either provide a specified base, o
 log(base, numeric_expression)
 log(numeric_expression)
 ```
+
 #### Arguments
 
 - **base**: Base numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -337,6 +359,7 @@ Returns the base-10 logarithm of a number.
 ```sql
 log10(numeric_expression)
 ```
+
 #### Arguments
 
 - **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -348,6 +371,7 @@ Returns the base-2 logarithm of a number.
 ```sql
 log2(numeric_expression)
 ```
+
 #### Arguments
 
 - **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -360,6 +384,7 @@ Returns the second argument otherwise.
 ```sql
 nanvl(expression_x, expression_y)
 ```
+
 #### Arguments
 
 - **expression_x**: Numeric expression to return if it's not _NaN_. Can be a constant, column, or function, and any combination of arithmetic operators.
@@ -372,7 +397,9 @@ Returns an approximate value of π.
 ```sql
 pi()
 ```
+
 ### `pow`
+
 _Alias of [power](#power)._
 
 ### `power`
@@ -382,11 +409,14 @@ Returns a base expression raised to the power of an exponent.
 ```sql
 power(base, exponent)
 ```
+
 #### Arguments
 
 - **base**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
 - **exponent**: Exponent numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
 #### Aliases
+
 - pow
 
 ### `radians`
@@ -396,6 +426,7 @@ Converts degrees to radians.
 ```sql
 radians(numeric_expression)
 ```
+
 #### Arguments
 
 - **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -416,6 +447,7 @@ Rounds a number to the nearest integer.
 ```sql
 round(numeric_expression[, decimal_places])
 ```
+
 #### Arguments
 
 - **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -430,6 +462,7 @@ Zero and positive numbers return `1`.
 ```sql
 signum(numeric_expression)
 ```
+
 #### Arguments
 
 - **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -441,6 +474,7 @@ Returns the sine of a number.
 ```sql
 sin(numeric_expression)
 ```
+
 #### Arguments
 
 - **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -452,6 +486,7 @@ Returns the hyperbolic sine of a number.
 ```sql
 sinh(numeric_expression)
 ```
+
 #### Arguments
 
 - **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -463,6 +498,7 @@ Returns the square root of a number.
 ```sql
 sqrt(numeric_expression)
 ```
+
 #### Arguments
 
 - **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -474,6 +510,7 @@ Returns the tangent of a number.
 ```sql
 tan(numeric_expression)
 ```
+
 #### Arguments
 
 - **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -485,6 +522,7 @@ Returns the hyperbolic tangent of a number.
 ```sql
 tanh(numeric_expression)
 ```
+
 #### Arguments
 
 - **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -496,6 +534,7 @@ Truncates a number to a whole number or truncated to the specified decimal place
 ```sql
 trunc(numeric_expression[, decimal_places])
 ```
+
 #### Arguments
 
 - **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -505,7 +544,7 @@ trunc(numeric_expression[, decimal_places])
   right of the decimal point. If `decimal_places` is a negative
   integer, replaces digits to the left of the decimal point with `0`.
 
-## Conditional Functions 
+## Conditional Functions
 
 - [coalesce](#coalesce)
 - [greatest](#greatest)
@@ -522,6 +561,7 @@ Returns the first of its arguments that is not _null_. Returns _null_ if all arg
 ```sql
 coalesce(expression1[, ..., expression_n])
 ```
+
 #### Arguments
 
 - **expression1, expression_n**: Expression to use if previous expressions are _null_. Can be a constant, column, or function, and any combination of arithmetic operators. Pass as many expression arguments as necessary.
@@ -537,7 +577,6 @@ coalesce(expression1[, ..., expression_n])
 +----------------------------------------+
 ```
 
-
 ### `greatest`
 
 Returns the greatest value in a list of expressions. Returns _null_ if all expressions are _null_.
@@ -545,6 +584,7 @@ Returns the greatest value in a list of expressions. Returns _null_ if all expre
 ```sql
 greatest(expression1[, ..., expression_n])
 ```
+
 #### Arguments
 
 - **expression1, expression_n**: Expressions to compare and return the greatest value.. Can be a constant, column, or function, and any combination of arithmetic operators. Pass as many expression arguments as necessary.
@@ -561,6 +601,7 @@ greatest(expression1[, ..., expression_n])
 ```
 
 ### `ifnull`
+
 _Alias of [nvl](#nvl)._
 
 ### `least`
@@ -570,6 +611,7 @@ Returns the smallest value in a list of expressions. Returns _null_ if all expre
 ```sql
 least(expression1[, ..., expression_n])
 ```
+
 #### Arguments
 
 - **expression1, expression_n**: Expressions to compare and return the smallest value. Can be a constant, column, or function, and any combination of arithmetic operators. Pass as many expression arguments as necessary.
@@ -585,7 +627,6 @@ least(expression1[, ..., expression_n])
 +---------------------------+
 ```
 
-
 ### `nullif`
 
 Returns _null_ if _expression1_ equals _expression2_; otherwise it returns _expression1_.
@@ -594,6 +635,7 @@ This can be used to perform the inverse operation of [`coalesce`](#coalesce).
 ```sql
 nullif(expression1, expression2)
 ```
+
 #### Arguments
 
 - **expression1**: Expression to compare and return if equal to expression2. Can be a constant, column, or function, and any combination of operators.
@@ -616,7 +658,6 @@ nullif(expression1, expression2)
 +-----------------------------------------------+
 ```
 
-
 ### `nvl`
 
 Returns _expression2_ if _expression1_ is NULL otherwise it returns _expression1_.
@@ -624,6 +665,7 @@ Returns _expression2_ if _expression1_ is NULL otherwise it returns _expression1
 ```sql
 nvl(expression1, expression2)
 ```
+
 #### Arguments
 
 - **expression1**: Expression to return if not null. Can be a constant, column, or function, and any combination of operators.
@@ -646,8 +688,8 @@ nvl(expression1, expression2)
 +--------------------------+
 ```
 
-
 #### Aliases
+
 - ifnull
 
 ### `nvl2`
@@ -657,6 +699,7 @@ Returns _expression2_ if _expression1_ is not NULL; otherwise it returns _expres
 ```sql
 nvl2(expression1, expression2, expression3)
 ```
+
 #### Arguments
 
 - **expression1**: Expression to test for null. Can be a constant, column, or function, and any combination of operators.
@@ -680,9 +723,7 @@ nvl2(expression1, expression2, expression3)
 +----------------------------------------+
 ```
 
-
-
-## String Functions 
+## String Functions
 
 - [ascii](#ascii)
 - [bit_length](#bit_length)
@@ -732,6 +773,7 @@ Returns the Unicode character code of the first character in a string.
 ```sql
 ascii(str)
 ```
+
 #### Arguments
 
 - **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -753,8 +795,8 @@ ascii(str)
 +-------------------+
 ```
 
-
 **Related functions**:
+
 - [chr](#chr)
 
 ### `bit_length`
@@ -764,6 +806,7 @@ Returns the bit length of a string.
 ```sql
 bit_length(str)
 ```
+
 #### Arguments
 
 - **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -779,8 +822,8 @@ bit_length(str)
 +--------------------------------+
 ```
 
-
 **Related functions**:
+
 - [length](#length)
 - [octet_length](#octet_length)
 
@@ -791,6 +834,7 @@ Trims the specified trim string from the start and end of a string. If no trim s
 ```sql
 btrim(str[, trim_str])
 ```
+
 #### Arguments
 
 - **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -812,16 +856,22 @@ btrim(str[, trim_str])
 ```sql
 trim(BOTH trim_str FROM str)
 ```
+
 ```sql
 trim(trim_str FROM str)
 ```
+
 #### Aliases
+
 - trim
 
 **Related functions**:
+
 - [ltrim](#ltrim)
 - [rtrim](#rtrim)
+
 ### `char_length`
+
 _Alias of [character_length](#character_length)._
 
 ### `character_length`
@@ -831,6 +881,7 @@ Returns the number of characters in a string.
 ```sql
 character_length(str)
 ```
+
 #### Arguments
 
 - **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -847,10 +898,12 @@ character_length(str)
 ```
 
 #### Aliases
+
 - length
-- char\_length
+- char_length
 
 **Related functions**:
+
 - [bit_length](#bit_length)
 - [octet_length](#octet_length)
 
@@ -861,6 +914,7 @@ Returns the character with the specified ASCII or Unicode code value.
 ```sql
 chr(expression)
 ```
+
 #### Arguments
 
 - **expression**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -876,8 +930,8 @@ chr(expression)
 +--------------------+
 ```
 
-
 **Related functions**:
+
 - [ascii](#ascii)
 
 ### `concat`
@@ -887,6 +941,7 @@ Concatenates multiple strings together.
 ```sql
 concat(str[, ..., str_n])
 ```
+
 #### Arguments
 
 - **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -903,8 +958,8 @@ concat(str[, ..., str_n])
 +-------------------------------------------------------+
 ```
 
-
 **Related functions**:
+
 - [concat_ws](#concat_ws)
 
 ### `concat_ws`
@@ -914,6 +969,7 @@ Concatenates multiple strings together with a specified separator.
 ```sql
 concat_ws(separator, str[, ..., str_n])
 ```
+
 #### Arguments
 
 - **separator**: Separator to insert between concatenated strings.
@@ -931,8 +987,8 @@ concat_ws(separator, str[, ..., str_n])
 +--------------------------------------------------+
 ```
 
-
 **Related functions**:
+
 - [concat](#concat)
 
 ### `contains`
@@ -942,6 +998,7 @@ Return true if search_str is found within string (case-sensitive).
 ```sql
 contains(str, search_str)
 ```
+
 #### Arguments
 
 - **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -958,7 +1015,6 @@ contains(str, search_str)
 +---------------------------------------------------+
 ```
 
-
 ### `ends_with`
 
 Tests if a string ends with a substring.
@@ -966,6 +1022,7 @@ Tests if a string ends with a substring.
 ```sql
 ends_with(str, substr)
 ```
+
 #### Arguments
 
 - **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -988,7 +1045,6 @@ ends_with(str, substr)
 +--------------------------------------------+
 ```
 
-
 ### `find_in_set`
 
 Returns a value in the range of 1 to N if the string str is in the string list strlist consisting of N substrings.
@@ -996,6 +1052,7 @@ Returns a value in the range of 1 to N if the string str is in the string list s
 ```sql
 find_in_set(str, strlist)
 ```
+
 #### Arguments
 
 - **str**: String expression to find in strlist.
@@ -1012,7 +1069,6 @@ find_in_set(str, strlist)
 +----------------------------------------+
 ```
 
-
 ### `initcap`
 
 Capitalizes the first character in each word in the input string. Words are delimited by non-alphanumeric characters.
@@ -1020,6 +1076,7 @@ Capitalizes the first character in each word in the input string. Words are deli
 ```sql
 initcap(str)
 ```
+
 #### Arguments
 
 - **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -1035,11 +1092,13 @@ initcap(str)
 +------------------------------------+
 ```
 
-
 **Related functions**:
+
 - [lower](#lower)
 - [upper](#upper)
+
 ### `instr`
+
 _Alias of [strpos](#strpos)._
 
 ### `left`
@@ -1049,6 +1108,7 @@ Returns a specified number of characters from the left side of a string.
 ```sql
 left(str, n)
 ```
+
 #### Arguments
 
 - **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -1065,10 +1125,12 @@ left(str, n)
 +-----------------------------------+
 ```
 
-
 **Related functions**:
+
 - [right](#right)
+
 ### `length`
+
 _Alias of [character_length](#character_length)._
 
 ### `levenshtein`
@@ -1078,6 +1140,7 @@ Returns the [`Levenshtein distance`](https://en.wikipedia.org/wiki/Levenshtein_d
 ```sql
 levenshtein(str1, str2)
 ```
+
 #### Arguments
 
 - **str1**: String expression to compute Levenshtein distance with str2.
@@ -1094,7 +1157,6 @@ levenshtein(str1, str2)
 +---------------------------------------------+
 ```
 
-
 ### `lower`
 
 Converts a string to lower-case.
@@ -1102,6 +1164,7 @@ Converts a string to lower-case.
 ```sql
 lower(str)
 ```
+
 #### Arguments
 
 - **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -1117,8 +1180,8 @@ lower(str)
 +-------------------------+
 ```
 
-
 **Related functions**:
+
 - [initcap](#initcap)
 - [upper](#upper)
 
@@ -1129,6 +1192,7 @@ Pads the left side of a string with another string to a specified string length.
 ```sql
 lpad(str, n[, padding_str])
 ```
+
 #### Arguments
 
 - **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -1146,8 +1210,8 @@ lpad(str, n[, padding_str])
 +---------------------------------------------+
 ```
 
-
 **Related functions**:
+
 - [rpad](#rpad)
 
 ### `ltrim`
@@ -1157,6 +1221,7 @@ Trims the specified trim string from the beginning of a string. If no trim strin
 ```sql
 ltrim(str[, trim_str])
 ```
+
 #### Arguments
 
 - **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -1186,6 +1251,7 @@ trim(LEADING trim_str FROM str)
 ```
 
 **Related functions**:
+
 - [btrim](#btrim)
 - [rtrim](#rtrim)
 
@@ -1196,6 +1262,7 @@ Returns the length of a string in bytes.
 ```sql
 octet_length(str)
 ```
+
 #### Arguments
 
 - **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -1211,8 +1278,8 @@ octet_length(str)
 +--------------------------------+
 ```
 
-
 **Related functions**:
+
 - [bit_length](#bit_length)
 - [length](#length)
 
@@ -1223,6 +1290,7 @@ Returns the string which is replaced by another string from the specified positi
 ```sql
 overlay(str PLACING substr FROM pos [FOR count])
 ```
+
 #### Arguments
 
 - **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -1242,6 +1310,7 @@ overlay(str PLACING substr FROM pos [FOR count])
 ```
 
 ### `position`
+
 _Alias of [strpos](#strpos)._
 
 ### `repeat`
@@ -1251,6 +1320,7 @@ Returns a string with an input string repeated a specified number.
 ```sql
 repeat(str, n)
 ```
+
 #### Arguments
 
 - **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -1267,7 +1337,6 @@ repeat(str, n)
 +-------------------------------+
 ```
 
-
 ### `replace`
 
 Replaces all occurrences of a specified substring in a string with a new substring.
@@ -1275,6 +1344,7 @@ Replaces all occurrences of a specified substring in a string with a new substri
 ```sql
 replace(str, substr, replacement)
 ```
+
 #### Arguments
 
 - **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -1292,7 +1362,6 @@ replace(str, substr, replacement)
 +-------------------------------------------------+
 ```
 
-
 ### `reverse`
 
 Reverses the character order of a string.
@@ -1300,6 +1369,7 @@ Reverses the character order of a string.
 ```sql
 reverse(str)
 ```
+
 #### Arguments
 
 - **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -1315,7 +1385,6 @@ reverse(str)
 +-----------------------------+
 ```
 
-
 ### `right`
 
 Returns a specified number of characters from the right side of a string.
@@ -1323,6 +1392,7 @@ Returns a specified number of characters from the right side of a string.
 ```sql
 right(str, n)
 ```
+
 #### Arguments
 
 - **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -1339,8 +1409,8 @@ right(str, n)
 +------------------------------------+
 ```
 
-
 **Related functions**:
+
 - [left](#left)
 
 ### `rpad`
@@ -1350,6 +1420,7 @@ Pads the right side of a string with another string to a specified string length
 ```sql
 rpad(str, n[, padding_str])
 ```
+
 #### Arguments
 
 - **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -1367,8 +1438,8 @@ rpad(str, n[, padding_str])
 +-----------------------------------------------+
 ```
 
-
 **Related functions**:
+
 - [lpad](#lpad)
 
 ### `rtrim`
@@ -1378,6 +1449,7 @@ Trims the specified trim string from the end of a string. If no trim string is p
 ```sql
 rtrim(str[, trim_str])
 ```
+
 #### Arguments
 
 - **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -1407,6 +1479,7 @@ trim(TRAILING trim_str FROM str)
 ```
 
 **Related functions**:
+
 - [btrim](#btrim)
 - [ltrim](#ltrim)
 
@@ -1417,6 +1490,7 @@ Splits a string based on a specified delimiter and returns the substring in the 
 ```sql
 split_part(str, delimiter, pos)
 ```
+
 #### Arguments
 
 - **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -1434,7 +1508,6 @@ split_part(str, delimiter, pos)
 +--------------------------------------------------+
 ```
 
-
 ### `starts_with`
 
 Tests if a string starts with a substring.
@@ -1442,6 +1515,7 @@ Tests if a string starts with a substring.
 ```sql
 starts_with(str, substr)
 ```
+
 #### Arguments
 
 - **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -1458,7 +1532,6 @@ starts_with(str, substr)
 +----------------------------------------------+
 ```
 
-
 ### `strpos`
 
 Returns the starting position of a specified substring in a string. Positions begin at 1. If the substring does not exist in the string, the function returns 0.
@@ -1466,6 +1539,7 @@ Returns the starting position of a specified substring in a string. Positions be
 ```sql
 strpos(str, substr)
 ```
+
 #### Arguments
 
 - **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -1479,7 +1553,7 @@ strpos(str, substr)
 | strpos(Utf8("datafusion"),Utf8("fus")) |
 +----------------------------------------+
 | 5                                      |
-+----------------------------------------+ 
++----------------------------------------+
 ```
 
 #### Alternative Syntax
@@ -1487,7 +1561,9 @@ strpos(str, substr)
 ```sql
 position(substr in origstr)
 ```
+
 #### Aliases
+
 - instr
 - position
 
@@ -1498,6 +1574,7 @@ Extracts a substring of a specified number of characters from a specific startin
 ```sql
 substr(str, start_pos[, length])
 ```
+
 #### Arguments
 
 - **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -1512,7 +1589,7 @@ substr(str, start_pos[, length])
 | substr(Utf8("datafusion"),Int64(5),Int64(3)) |
 +----------------------------------------------+
 | fus                                          |
-+----------------------------------------------+ 
++----------------------------------------------+
 ```
 
 #### Alternative Syntax
@@ -1520,7 +1597,9 @@ substr(str, start_pos[, length])
 ```sql
 substring(str from start_pos for length)
 ```
+
 #### Aliases
+
 - substring
 
 ### `substr_index`
@@ -1532,6 +1611,7 @@ If count is negative, everything to the right of the final delimiter (counting f
 ```sql
 substr_index(str, delim, count)
 ```
+
 #### Arguments
 
 - **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -1556,10 +1636,15 @@ substr_index(str, delim, count)
 ```
 
 #### Aliases
-- substring\_index
+
+- substring_index
+
 ### `substring`
+
 _Alias of [substr](#substr)._
+
 ### `substring_index`
+
 _Alias of [substr_index](#substr_index)._
 
 ### `to_hex`
@@ -1569,6 +1654,7 @@ Converts an integer to a hexadecimal string.
 ```sql
 to_hex(int)
 ```
+
 #### Arguments
 
 - **int**: Integer expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -1584,7 +1670,6 @@ to_hex(int)
 +-------------------------+
 ```
 
-
 ### `translate`
 
 Translates characters in a string to specified translation characters.
@@ -1592,6 +1677,7 @@ Translates characters in a string to specified translation characters.
 ```sql
 translate(str, chars, translation)
 ```
+
 #### Arguments
 
 - **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -1610,6 +1696,7 @@ translate(str, chars, translation)
 ```
 
 ### `trim`
+
 _Alias of [btrim](#btrim)._
 
 ### `upper`
@@ -1619,6 +1706,7 @@ Converts a string to upper-case.
 ```sql
 upper(str)
 ```
+
 #### Arguments
 
 - **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -1634,14 +1722,14 @@ upper(str)
 +---------------------------+
 ```
 
-
 **Related functions**:
+
 - [initcap](#initcap)
 - [lower](#lower)
 
 ### `uuid`
 
-Returns [`UUID v4`](https://en.wikipedia.org/wiki/Universally_unique_identifier#Version_4_(random)) string value which is unique per row.
+Returns [`UUID v4`](<https://en.wikipedia.org/wiki/Universally_unique_identifier#Version_4_(random)>) string value which is unique per row.
 
 ```sql
 uuid()
@@ -1658,8 +1746,7 @@ uuid()
 +--------------------------------------+
 ```
 
-
-## Binary String Functions 
+## Binary String Functions
 
 - [decode](#decode)
 - [encode](#encode)
@@ -1671,12 +1758,14 @@ Decode binary data from textual representation in string.
 ```sql
 decode(expression, format)
 ```
+
 #### Arguments
 
 - **expression**: Expression containing encoded string data
 - **format**: Same arguments as [encode](#encode)
 
 **Related functions**:
+
 - [encode](#encode)
 
 ### `encode`
@@ -1686,20 +1775,23 @@ Encode binary data into a textual representation.
 ```sql
 encode(expression, format)
 ```
+
 #### Arguments
 
 - **expression**: Expression containing string or binary data
 - **format**: Supported formats are: `base64`, `hex`
 
 **Related functions**:
+
 - [decode](#decode)
 
-## Regular Expression Functions 
+## Regular Expression Functions
 
 Apache DataFusion uses a [PCRE-like](https://en.wikibooks.org/wiki/Regular_Expressions/Perl-Compatible_Regular_Expressions)
 regular expression [syntax](https://docs.rs/regex/latest/regex/#syntax)
 (minus support for several features including look-around and backreferences).
 The following regular expression functions are supported:
+
 - [regexp_count](#regexp_count)
 - [regexp_instr](#regexp_instr)
 - [regexp_like](#regexp_like)
@@ -1713,6 +1805,7 @@ Returns the number of matches that a [regular expression](https://docs.rs/regex/
 ```sql
 regexp_count(str, regexp[, start, flags])
 ```
+
 #### Arguments
 
 - **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -1736,7 +1829,6 @@ regexp_count(str, regexp[, start, flags])
 +---------------------------------------------------------------+
 ```
 
-
 ### `regexp_instr`
 
 Returns the position in a string where the specified occurrence of a POSIX regular expression is located.
@@ -1744,6 +1836,7 @@ Returns the position in a string where the specified occurrence of a POSIX regul
 ```sql
 regexp_instr(str, regexp[, start[, N[, flags[, subexpr]]]])
 ```
+
 #### Arguments
 
 - **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -1769,7 +1862,6 @@ regexp_instr(str, regexp[, start[, N[, flags[, subexpr]]]])
 +---------------------------------------------------------------+
 ```
 
-
 ### `regexp_like`
 
 Returns true if a [regular expression](https://docs.rs/regex/latest/regex/#syntax) has at least one match in a string, false otherwise.
@@ -1777,6 +1869,7 @@ Returns true if a [regular expression](https://docs.rs/regex/latest/regex/#synta
 ```sql
 regexp_like(str, regexp[, flags])
 ```
+
 #### Arguments
 
 - **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -1804,9 +1897,8 @@ SELECT regexp_like('aBc', '(b|d)', 'i');
 | true                                             |
 +--------------------------------------------------+
 ```
+
 Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/regexp.rs)
-
-
 
 ### `regexp_match`
 
@@ -1815,11 +1907,12 @@ Returns the first [regular expression](https://docs.rs/regex/latest/regex/#synta
 ```sql
 regexp_match(str, regexp[, flags])
 ```
+
 #### Arguments
 
 - **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
 - **regexp**: Regular expression to match against.
-            Can be a constant, column, or function.
+  Can be a constant, column, or function.
 - **flags**: Optional regular expression flags that control the behavior of the regular expression. The following flags are supported:
   - **i**: case-insensitive: letters match both upper and lower case
   - **m**: multi-line mode: ^ and $ match begin/end of line
@@ -1843,9 +1936,8 @@ regexp_match(str, regexp[, flags])
             | [B]                                               |
             +---------------------------------------------------+
 ```
+
 Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/regexp.rs)
-
-
 
 ### `regexp_replace`
 
@@ -1854,6 +1946,7 @@ Replaces substrings in a string that match a [regular expression](https://docs.r
 ```sql
 regexp_replace(str, regexp, replacement[, flags])
 ```
+
 #### Arguments
 
 - **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -1861,7 +1954,7 @@ regexp_replace(str, regexp, replacement[, flags])
   Can be a constant, column, or function.
 - **replacement**: Replacement string expression to operate on. Can be a constant, column, or function, and any combination of operators.
 - **flags**: Optional regular expression flags that control the behavior of the regular expression. The following flags are supported:
-- **g**: (global) Search globally and don't return after the first match        
+- **g**: (global) Search globally and don't return after the first match
 - **i**: case-insensitive: letters match both upper and lower case
 - **m**: multi-line mode: ^ and $ match begin/end of line
 - **s**: allow . to match \n
@@ -1884,11 +1977,10 @@ SELECT regexp_replace('aBc', '(b|d)', 'Ab\\1a', 'i');
 | aAbBac                                                            |
 +-------------------------------------------------------------------+
 ```
+
 Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/regexp.rs)
 
-
-
-## Time and Date Functions 
+## Time and Date Functions
 
 - [current_date](#current_date)
 - [current_time](#current_time)
@@ -1915,61 +2007,59 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
 
 ### `current_date`
 
-
 Returns the current UTC date.
 
 The `current_date()` return value is determined at query time and will return the same date, no matter when in the query plan the function executes.
 
-
 ```sql
 current_date()
 ```
+
 #### Aliases
+
 - today
 
 ### `current_time`
-
 
 Returns the current UTC time.
 
 The `current_time()` return value is determined at query time and will return the same time, no matter when in the query plan the function executes.
 
-
 ```sql
 current_time()
 ```
+
 ### `current_timestamp`
+
 _Alias of [now](#now)._
 
 ### `date_bin`
-
 
 Calculates time intervals and returns the start of the interval nearest to the specified timestamp. Use `date_bin` to downsample time series data by grouping rows into time-based "bins" or "windows" and applying an aggregate or selector function to each window.
 
 For example, if you "bin" or "window" data into 15 minute intervals, an input timestamp of `2023-01-01T18:18:18Z` will be updated to the start time of the 15 minute bin it is in: `2023-01-01T18:15:00Z`.
 
-
 ```sql
 date_bin(interval, expression, origin-timestamp)
 ```
+
 #### Arguments
 
 - **interval**: Bin interval.
 - **expression**: Time expression to operate on. Can be a constant, column, or function.
 - **origin-timestamp**: Optional. Starting point used to determine bin boundaries. If not specified defaults 1970-01-01T00:00:00Z (the UNIX epoch in UTC). The following intervals are supported:
 
-    - nanoseconds
-    - microseconds
-    - milliseconds
-    - seconds
-    - minutes
-    - hours
-    - days
-    - weeks
-    - months
-    - years
-    - century
-
+  - nanoseconds
+  - microseconds
+  - milliseconds
+  - seconds
+  - minutes
+  - hours
+  - days
+  - weeks
+  - months
+  - years
+  - century
 
 #### Example
 
@@ -1998,6 +2088,7 @@ FROM VALUES ('2023-01-01T18:18:18Z'), ('2023-01-03T19:00:03Z')  t(time);
 ```
 
 ### `date_format`
+
 _Alias of [to_char](#to_char)._
 
 ### `date_part`
@@ -2007,32 +2098,36 @@ Returns the specified part of the date as an integer.
 ```sql
 date_part(part, expression)
 ```
+
 #### Arguments
 
 - **part**: Part of the date to return. The following date parts are supported:
-        
-    - year
-    - quarter (emits value in inclusive range [1, 4] based on which quartile of the year the date is in)
-    - month
-    - week (week of the year)
-    - day (day of the month)
-    - hour
-    - minute
-    - second
-    - millisecond
-    - microsecond
-    - nanosecond
-    - dow (day of the week)
-    - doy (day of the year)
-    - epoch (seconds since Unix epoch)
+
+  - year
+  - quarter (emits value in inclusive range [1, 4] based on which quartile of the year the date is in)
+  - month
+  - week (week of the year)
+  - day (day of the month)
+  - hour
+  - minute
+  - second
+  - millisecond
+  - microsecond
+  - nanosecond
+  - dow (day of the week)
+  - doy (day of the year)
+  - epoch (seconds since Unix epoch)
 
 - **expression**: Time expression to operate on. Can be a constant, column, or function.
+
 #### Alternative Syntax
 
 ```sql
 extract(field FROM source)
 ```
+
 #### Aliases
+
 - datepart
 
 ### `date_trunc`
@@ -2042,27 +2137,34 @@ Truncates a timestamp value to a specified precision.
 ```sql
 date_trunc(precision, expression)
 ```
+
 #### Arguments
 
 - **precision**: Time precision to truncate to. The following precisions are supported:
 
-    - year / YEAR
-    - quarter / QUARTER
-    - month / MONTH
-    - week / WEEK
-    - day / DAY
-    - hour / HOUR
-    - minute / MINUTE
-    - second / SECOND
-    - millisecond / MILLISECOND
-    - microsecond / MICROSECOND
+  - year / YEAR
+  - quarter / QUARTER
+  - month / MONTH
+  - week / WEEK
+  - day / DAY
+  - hour / HOUR
+  - minute / MINUTE
+  - second / SECOND
+  - millisecond / MILLISECOND
+  - microsecond / MICROSECOND
 
 - **expression**: Time expression to operate on. Can be a constant, column, or function.
+
 #### Aliases
+
 - datetrunc
+
 ### `datepart`
+
 _Alias of [date_part](#date_part)._
+
 ### `datetrunc`
+
 _Alias of [date_trunc](#date_trunc)._
 
 ### `from_unixtime`
@@ -2072,6 +2174,7 @@ Converts an integer to RFC3339 timestamp format (`YYYY-MM-DDT00:00:00.000000000Z
 ```sql
 from_unixtime(expression[, timezone])
 ```
+
 #### Arguments
 
 - **expression**: The expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -2088,7 +2191,6 @@ from_unixtime(expression[, timezone])
 +-----------------------------------------------------------+
 ```
 
-
 ### `make_date`
 
 Make a date from year/month/day component parts.
@@ -2096,6 +2198,7 @@ Make a date from year/month/day component parts.
 ```sql
 make_date(year, month, day)
 ```
+
 #### Arguments
 
 - **year**: Year to use when making the date. Can be a constant, column or function, and any combination of arithmetic operators.
@@ -2121,21 +2224,19 @@ make_date(year, month, day)
 
 Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/make_date.rs)
 
-
-
 ### `now`
-
 
 Returns the current UTC timestamp.
 
 The `now()` return value is determined at query time and will return the same timestamp, no matter when in the query plan the function executes.
 
-
 ```sql
 now()
 ```
+
 #### Aliases
-- current\_timestamp
+
+- current_timestamp
 
 ### `to_char`
 
@@ -2144,6 +2245,7 @@ Returns a string representation of a date, time, timestamp or duration based on 
 ```sql
 to_char(expression, format)
 ```
+
 #### Arguments
 
 - **expression**: Expression to operate on. Can be a constant, column, or function that results in a date, time, timestamp or duration.
@@ -2163,9 +2265,9 @@ to_char(expression, format)
 
 Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/to_char.rs)
 
-
 #### Aliases
-- date\_format
+
+- date_format
 
 ### `to_date`
 
@@ -2180,6 +2282,7 @@ Note: `to_date` returns Date32, which represents its values as the number of day
 ```sql
 to_date('2017-05-31', '%Y-%m-%d')
 ```
+
 #### Arguments
 
 - **expression**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -2190,7 +2293,7 @@ to_date('2017-05-31', '%Y-%m-%d')
 #### Example
 
 ```sql
-> select to_date('2023-01-31'); 
+> select to_date('2023-01-31');
 +-------------------------------+
 | to_date(Utf8("2023-01-31")) |
 +-------------------------------+
@@ -2206,8 +2309,6 @@ to_date('2017-05-31', '%Y-%m-%d')
 
 Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/to_date.rs)
 
-
-
 ### `to_local_time`
 
 Converts a timestamp with a timezone to a timestamp without a timezone (with no offset or timezone information). This function handles daylight saving time changes.
@@ -2215,6 +2316,7 @@ Converts a timestamp with a timezone to a timestamp without a timezone (with no 
 ```sql
 to_local_time(expression)
 ```
+
 #### Arguments
 
 - **expression**: Time expression to operate on. Can be a constant, column, or function.
@@ -2268,18 +2370,16 @@ FROM (
 +---------------------------+
 ```
 
-
 ### `to_timestamp`
-
 
 Converts a value to a timestamp (`YYYY-MM-DDT00:00:00Z`). Supports strings, integer, unsigned integer, and double types as input. Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00') if no [Chrono formats] are provided. Integers, unsigned integers, and doubles are interpreted as seconds since the unix epoch (`1970-01-01T00:00:00Z`). Returns the corresponding timestamp.
 
 Note: `to_timestamp` returns `Timestamp(Nanosecond)`. The supported range for integer input is between `-9223372037` and `9223372036`. Supported range for string input is between `1677-09-21T00:12:44.0` and `2262-04-11T23:47:16.0`. Please use `to_timestamp_seconds` for the input outside of supported bounds.
 
-
 ```sql
 to_timestamp(expression[, ..., format_n])
 ```
+
 #### Arguments
 
 - **expression**: Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.
@@ -2301,9 +2401,8 @@ to_timestamp(expression[, ..., format_n])
 | 2023-05-17T03:59:00.123456789                                                                          |
 +--------------------------------------------------------------------------------------------------------+
 ```
+
 Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs)
-
-
 
 ### `to_timestamp_micros`
 
@@ -2312,6 +2411,7 @@ Converts a value to a timestamp (`YYYY-MM-DDT00:00:00.000000Z`). Supports string
 ```sql
 to_timestamp_micros(expression[, ..., format_n])
 ```
+
 #### Arguments
 
 - **expression**: Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.
@@ -2333,9 +2433,8 @@ to_timestamp_micros(expression[, ..., format_n])
 | 2023-05-17T03:59:00.123456                                                                                    |
 +---------------------------------------------------------------------------------------------------------------+
 ```
+
 Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs)
-
-
 
 ### `to_timestamp_millis`
 
@@ -2344,6 +2443,7 @@ Converts a value to a timestamp (`YYYY-MM-DDT00:00:00.000Z`). Supports strings, 
 ```sql
 to_timestamp_millis(expression[, ..., format_n])
 ```
+
 #### Arguments
 
 - **expression**: Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.
@@ -2365,9 +2465,8 @@ to_timestamp_millis(expression[, ..., format_n])
 | 2023-05-17T03:59:00.123                                                                                       |
 +---------------------------------------------------------------------------------------------------------------+
 ```
+
 Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs)
-
-
 
 ### `to_timestamp_nanos`
 
@@ -2376,6 +2475,7 @@ Converts a value to a timestamp (`YYYY-MM-DDT00:00:00.000000000Z`). Supports str
 ```sql
 to_timestamp_nanos(expression[, ..., format_n])
 ```
+
 #### Arguments
 
 - **expression**: Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.
@@ -2397,9 +2497,8 @@ to_timestamp_nanos(expression[, ..., format_n])
 | 2023-05-17T03:59:00.123456789                                                                                |
 +---------------------------------------------------------------------------------------------------------------+
 ```
+
 Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs)
-
-
 
 ### `to_timestamp_seconds`
 
@@ -2408,6 +2507,7 @@ Converts a value to a timestamp (`YYYY-MM-DDT00:00:00.000Z`). Supports strings, 
 ```sql
 to_timestamp_seconds(expression[, ..., format_n])
 ```
+
 #### Arguments
 
 - **expression**: Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.
@@ -2429,9 +2529,8 @@ to_timestamp_seconds(expression[, ..., format_n])
 | 2023-05-17T03:59:00                                                                                            |
 +----------------------------------------------------------------------------------------------------------------+
 ```
+
 Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs)
-
-
 
 ### `to_unixtime`
 
@@ -2440,13 +2539,13 @@ Converts a value to seconds since the unix epoch (`1970-01-01T00:00:00Z`). Suppo
 ```sql
 to_unixtime(expression[, ..., format_n])
 ```
+
 #### Arguments
 
 - **expression**: Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.
 - **format_n**: Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression. Formats will be tried in the order they appear with the first successful one being returned. If none of the formats successfully parse the expression an error will be returned.
 
 #### Example
-
 
 ```sql
 > select to_unixtime('2020-09-08T12:00:00+00:00');
@@ -2463,11 +2562,11 @@ to_unixtime(expression[, ..., format_n])
 +-----------------------------------------------------------------------------------------------------------------------------+
 ```
 
-
 ### `today`
+
 _Alias of [current_date](#current_date)._
 
-## Array Functions 
+## Array Functions
 
 - [array_any_value](#array_any_value)
 - [array_append](#array_append)
@@ -2570,6 +2669,7 @@ Returns the first non-null element in the array.
 ```sql
 array_any_value(array)
 ```
+
 #### Arguments
 
 - **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
@@ -2586,7 +2686,8 @@ array_any_value(array)
 ```
 
 #### Aliases
-- list\_any\_value
+
+- list_any_value
 
 ### `array_append`
 
@@ -2595,6 +2696,7 @@ Appends an element to the end of an array.
 ```sql
 array_append(array, element)
 ```
+
 #### Arguments
 
 - **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
@@ -2612,10 +2714,13 @@ array_append(array, element)
 ```
 
 #### Aliases
-- list\_append
-- array\_push\_back
-- list\_push\_back
+
+- list_append
+- array_push_back
+- list_push_back
+
 ### `array_cat`
+
 _Alias of [array_concat](#array_concat)._
 
 ### `array_concat`
@@ -2625,6 +2730,7 @@ Concatenates arrays.
 ```sql
 array_concat(array[, ..., array_n])
 ```
+
 #### Arguments
 
 - **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
@@ -2642,10 +2748,13 @@ array_concat(array[, ..., array_n])
 ```
 
 #### Aliases
-- array\_cat
-- list\_concat
-- list\_cat
+
+- array_cat
+- list_concat
+- list_cat
+
 ### `array_contains`
+
 _Alias of [array_has](#array_has)._
 
 ### `array_dims`
@@ -2655,6 +2764,7 @@ Returns an array of the array's dimensions.
 ```sql
 array_dims(array)
 ```
+
 #### Arguments
 
 - **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
@@ -2671,7 +2781,8 @@ array_dims(array)
 ```
 
 #### Aliases
-- list\_dims
+
+- list_dims
 
 ### `array_distance`
 
@@ -2680,6 +2791,7 @@ Returns the Euclidean distance between two input arrays of equal length.
 ```sql
 array_distance(array1, array2)
 ```
+
 #### Arguments
 
 - **array1**: Array expression. Can be a constant, column, or function, and any combination of array operators.
@@ -2697,7 +2809,8 @@ array_distance(array1, array2)
 ```
 
 #### Aliases
-- list\_distance
+
+- list_distance
 
 ### `array_distinct`
 
@@ -2706,6 +2819,7 @@ Returns distinct values from the array after removing duplicates.
 ```sql
 array_distinct(array)
 ```
+
 #### Arguments
 
 - **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
@@ -2722,7 +2836,8 @@ array_distinct(array)
 ```
 
 #### Aliases
-- list\_distinct
+
+- list_distinct
 
 ### `array_element`
 
@@ -2731,6 +2846,7 @@ Extracts the element with the index n from the array.
 ```sql
 array_element(array, index)
 ```
+
 #### Arguments
 
 - **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
@@ -2748,10 +2864,13 @@ array_element(array, index)
 ```
 
 #### Aliases
-- array\_extract
-- list\_element
-- list\_extract
+
+- array_extract
+- list_element
+- list_extract
+
 ### `array_empty`
+
 _Alias of [empty](#empty)._
 
 ### `array_except`
@@ -2761,6 +2880,7 @@ Returns an array of the elements that appear in the first array but not in the s
 ```sql
 array_except(array1, array2)
 ```
+
 #### Arguments
 
 - **array1**: Array expression. Can be a constant, column, or function, and any combination of array operators.
@@ -2784,8 +2904,11 @@ array_except(array1, array2)
 ```
 
 #### Aliases
-- list\_except
+
+- list_except
+
 ### `array_extract`
+
 _Alias of [array_element](#array_element)._
 
 ### `array_has`
@@ -2795,6 +2918,7 @@ Returns true if the array contains the element.
 ```sql
 array_has(array, element)
 ```
+
 #### Arguments
 
 - **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
@@ -2812,9 +2936,10 @@ array_has(array, element)
 ```
 
 #### Aliases
-- list\_has
-- array\_contains
-- list\_contains
+
+- list_has
+- array_contains
+- list_contains
 
 ### `array_has_all`
 
@@ -2823,6 +2948,7 @@ Returns true if all elements of sub-array exist in array.
 ```sql
 array_has_all(array, sub-array)
 ```
+
 #### Arguments
 
 - **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
@@ -2840,7 +2966,8 @@ array_has_all(array, sub-array)
 ```
 
 #### Aliases
-- list\_has\_all
+
+- list_has_all
 
 ### `array_has_any`
 
@@ -2849,6 +2976,7 @@ Returns true if any elements exist in both arrays.
 ```sql
 array_has_any(array, sub-array)
 ```
+
 #### Arguments
 
 - **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
@@ -2866,9 +2994,12 @@ array_has_any(array, sub-array)
 ```
 
 #### Aliases
-- list\_has\_any
-- arrays\_overlap
+
+- list_has_any
+- arrays_overlap
+
 ### `array_indexof`
+
 _Alias of [array_position](#array_position)._
 
 ### `array_intersect`
@@ -2878,6 +3009,7 @@ Returns an array of elements in the intersection of array1 and array2.
 ```sql
 array_intersect(array1, array2)
 ```
+
 #### Arguments
 
 - **array1**: Array expression. Can be a constant, column, or function, and any combination of array operators.
@@ -2901,8 +3033,11 @@ array_intersect(array1, array2)
 ```
 
 #### Aliases
-- list\_intersect
+
+- list_intersect
+
 ### `array_join`
+
 _Alias of [array_to_string](#array_to_string)._
 
 ### `array_length`
@@ -2912,6 +3047,7 @@ Returns the length of the array dimension.
 ```sql
 array_length(array, dimension)
 ```
+
 #### Arguments
 
 - **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
@@ -2929,7 +3065,8 @@ array_length(array, dimension)
 ```
 
 #### Aliases
-- list\_length
+
+- list_length
 
 ### `array_max`
 
@@ -2938,6 +3075,7 @@ Returns the maximum value in the array.
 ```sql
 array_max(array)
 ```
+
 #### Arguments
 
 - **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
@@ -2954,7 +3092,8 @@ array_max(array)
 ```
 
 #### Aliases
-- list\_max
+
+- list_max
 
 ### `array_min`
 
@@ -2963,6 +3102,7 @@ Returns the minimum value in the array.
 ```sql
 array_min(array)
 ```
+
 #### Arguments
 
 - **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
@@ -2978,7 +3118,6 @@ array_min(array)
 +-----------------------------------------+
 ```
 
-
 ### `array_ndims`
 
 Returns the number of dimensions of the array.
@@ -2986,6 +3125,7 @@ Returns the number of dimensions of the array.
 ```sql
 array_ndims(array, element)
 ```
+
 #### Arguments
 
 - **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
@@ -3003,7 +3143,8 @@ array_ndims(array, element)
 ```
 
 #### Aliases
-- list\_ndims
+
+- list_ndims
 
 ### `array_pop_back`
 
@@ -3012,6 +3153,7 @@ Returns the array without the last element.
 ```sql
 array_pop_back(array)
 ```
+
 #### Arguments
 
 - **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
@@ -3028,7 +3170,8 @@ array_pop_back(array)
 ```
 
 #### Aliases
-- list\_pop\_back
+
+- list_pop_back
 
 ### `array_pop_front`
 
@@ -3037,6 +3180,7 @@ Returns the array without the first element.
 ```sql
 array_pop_front(array)
 ```
+
 #### Arguments
 
 - **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
@@ -3053,7 +3197,8 @@ array_pop_front(array)
 ```
 
 #### Aliases
-- list\_pop\_front
+
+- list_pop_front
 
 ### `array_position`
 
@@ -3063,6 +3208,7 @@ Returns the position of the first occurrence of the specified element in the arr
 array_position(array, element)
 array_position(array, element, index)
 ```
+
 #### Arguments
 
 - **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
@@ -3087,9 +3233,10 @@ array_position(array, element, index)
 ```
 
 #### Aliases
-- list\_position
-- array\_indexof
-- list\_indexof
+
+- list_position
+- array_indexof
+- list_indexof
 
 ### `array_positions`
 
@@ -3098,6 +3245,7 @@ Searches for an element in the array, returns all occurrences.
 ```sql
 array_positions(array, element)
 ```
+
 #### Arguments
 
 - **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
@@ -3115,7 +3263,8 @@ array_positions(array, element)
 ```
 
 #### Aliases
-- list\_positions
+
+- list_positions
 
 ### `array_prepend`
 
@@ -3124,6 +3273,7 @@ Prepends an element to the beginning of an array.
 ```sql
 array_prepend(element, array)
 ```
+
 #### Arguments
 
 - **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
@@ -3141,12 +3291,17 @@ array_prepend(element, array)
 ```
 
 #### Aliases
-- list\_prepend
-- array\_push\_front
-- list\_push\_front
+
+- list_prepend
+- array_push_front
+- list_push_front
+
 ### `array_push_back`
+
 _Alias of [array_append](#array_append)._
+
 ### `array_push_front`
+
 _Alias of [array_prepend](#array_prepend)._
 
 ### `array_remove`
@@ -3156,6 +3311,7 @@ Removes the first element from the array equal to the given value.
 ```sql
 array_remove(array, element)
 ```
+
 #### Arguments
 
 - **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
@@ -3173,7 +3329,8 @@ array_remove(array, element)
 ```
 
 #### Aliases
-- list\_remove
+
+- list_remove
 
 ### `array_remove_all`
 
@@ -3182,6 +3339,7 @@ Removes all elements from the array equal to the given value.
 ```sql
 array_remove_all(array, element)
 ```
+
 #### Arguments
 
 - **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
@@ -3199,7 +3357,8 @@ array_remove_all(array, element)
 ```
 
 #### Aliases
-- list\_remove\_all
+
+- list_remove_all
 
 ### `array_remove_n`
 
@@ -3208,6 +3367,7 @@ Removes the first `max` elements from the array equal to the given value.
 ```sql
 array_remove_n(array, element, max))
 ```
+
 #### Arguments
 
 - **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
@@ -3226,7 +3386,8 @@ array_remove_n(array, element, max))
 ```
 
 #### Aliases
-- list\_remove\_n
+
+- list_remove_n
 
 ### `array_repeat`
 
@@ -3235,6 +3396,7 @@ Returns an array containing element `count` times.
 ```sql
 array_repeat(element, count)
 ```
+
 #### Arguments
 
 - **element**: Element expression. Can be a constant, column, or function, and any combination of array operators.
@@ -3258,7 +3420,8 @@ array_repeat(element, count)
 ```
 
 #### Aliases
-- list\_repeat
+
+- list_repeat
 
 ### `array_replace`
 
@@ -3267,6 +3430,7 @@ Replaces the first occurrence of the specified element with another specified el
 ```sql
 array_replace(array, from, to)
 ```
+
 #### Arguments
 
 - **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
@@ -3285,7 +3449,8 @@ array_replace(array, from, to)
 ```
 
 #### Aliases
-- list\_replace
+
+- list_replace
 
 ### `array_replace_all`
 
@@ -3294,6 +3459,7 @@ Replaces all occurrences of the specified element with another specified element
 ```sql
 array_replace_all(array, from, to)
 ```
+
 #### Arguments
 
 - **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
@@ -3312,7 +3478,8 @@ array_replace_all(array, from, to)
 ```
 
 #### Aliases
-- list\_replace\_all
+
+- list_replace_all
 
 ### `array_replace_n`
 
@@ -3321,6 +3488,7 @@ Replaces the first `max` occurrences of the specified element with another speci
 ```sql
 array_replace_n(array, from, to, max)
 ```
+
 #### Arguments
 
 - **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
@@ -3340,7 +3508,8 @@ array_replace_n(array, from, to, max)
 ```
 
 #### Aliases
-- list\_replace\_n
+
+- list_replace_n
 
 ### `array_resize`
 
@@ -3349,6 +3518,7 @@ Resizes the list to contain size elements. Initializes new elements with value o
 ```sql
 array_resize(array, size, value)
 ```
+
 #### Arguments
 
 - **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
@@ -3367,7 +3537,8 @@ array_resize(array, size, value)
 ```
 
 #### Aliases
-- list\_resize
+
+- list_resize
 
 ### `array_reverse`
 
@@ -3376,6 +3547,7 @@ Returns the array with the order of the elements reversed.
 ```sql
 array_reverse(array)
 ```
+
 #### Arguments
 
 - **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
@@ -3392,7 +3564,8 @@ array_reverse(array)
 ```
 
 #### Aliases
-- list\_reverse
+
+- list_reverse
 
 ### `array_slice`
 
@@ -3401,6 +3574,7 @@ Returns a slice of the array based on 1-indexed start and end positions.
 ```sql
 array_slice(array, begin, end)
 ```
+
 #### Arguments
 
 - **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
@@ -3420,7 +3594,8 @@ array_slice(array, begin, end)
 ```
 
 #### Aliases
-- list\_slice
+
+- list_slice
 
 ### `array_sort`
 
@@ -3429,6 +3604,7 @@ Sort array.
 ```sql
 array_sort(array, desc, nulls_first)
 ```
+
 #### Arguments
 
 - **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
@@ -3447,7 +3623,8 @@ array_sort(array, desc, nulls_first)
 ```
 
 #### Aliases
-- list\_sort
+
+- list_sort
 
 ### `array_to_string`
 
@@ -3456,6 +3633,7 @@ Converts each element to its text representation.
 ```sql
 array_to_string(array, delimiter[, null_string])
 ```
+
 #### Arguments
 
 - **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
@@ -3474,9 +3652,10 @@ array_to_string(array, delimiter[, null_string])
 ```
 
 #### Aliases
-- list\_to\_string
-- array\_join
-- list\_join
+
+- list_to_string
+- array_join
+- list_join
 
 ### `array_union`
 
@@ -3485,6 +3664,7 @@ Returns an array of elements that are present in both arrays (all elements from 
 ```sql
 array_union(array1, array2)
 ```
+
 #### Arguments
 
 - **array1**: Array expression. Can be a constant, column, or function, and any combination of array operators.
@@ -3508,8 +3688,11 @@ array_union(array1, array2)
 ```
 
 #### Aliases
-- list\_union
+
+- list_union
+
 ### `arrays_overlap`
+
 _Alias of [array_has_any](#array_has_any)._
 
 ### `cardinality`
@@ -3519,6 +3702,7 @@ Returns the total number of elements in the array.
 ```sql
 cardinality(array)
 ```
+
 #### Arguments
 
 - **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
@@ -3534,7 +3718,6 @@ cardinality(array)
 +--------------------------------------+
 ```
 
-
 ### `empty`
 
 Returns 1 for an empty array or 0 for a non-empty array.
@@ -3542,6 +3725,7 @@ Returns 1 for an empty array or 0 for a non-empty array.
 ```sql
 empty(array)
 ```
+
 #### Arguments
 
 - **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
@@ -3558,8 +3742,9 @@ empty(array)
 ```
 
 #### Aliases
-- array\_empty
-- list\_empty
+
+- array_empty
+- list_empty
 
 ### `flatten`
 
@@ -3573,6 +3758,7 @@ The flattened array contains all the elements from all source arrays.
 ```sql
 flatten(array)
 ```
+
 #### Arguments
 
 - **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
@@ -3588,7 +3774,6 @@ flatten(array)
 +------------------------------+
 ```
 
-
 ### `generate_series`
 
 Similar to the range function, but it includes the upper bound.
@@ -3596,6 +3781,7 @@ Similar to the range function, but it includes the upper bound.
 ```sql
 generate_series(start, stop, step)
 ```
+
 #### Arguments
 
 - **start**: Start of the series. Ints, timestamps, dates or string types that can be coerced to Date32 are supported.
@@ -3614,86 +3800,167 @@ generate_series(start, stop, step)
 ```
 
 ### `list_any_value`
+
 _Alias of [array_any_value](#array_any_value)._
+
 ### `list_append`
+
 _Alias of [array_append](#array_append)._
+
 ### `list_cat`
+
 _Alias of [array_concat](#array_concat)._
+
 ### `list_concat`
+
 _Alias of [array_concat](#array_concat)._
+
 ### `list_contains`
+
 _Alias of [array_has](#array_has)._
+
 ### `list_dims`
+
 _Alias of [array_dims](#array_dims)._
+
 ### `list_distance`
+
 _Alias of [array_distance](#array_distance)._
+
 ### `list_distinct`
+
 _Alias of [array_distinct](#array_distinct)._
+
 ### `list_element`
+
 _Alias of [array_element](#array_element)._
+
 ### `list_empty`
+
 _Alias of [empty](#empty)._
+
 ### `list_except`
+
 _Alias of [array_except](#array_except)._
+
 ### `list_extract`
+
 _Alias of [array_element](#array_element)._
+
 ### `list_has`
+
 _Alias of [array_has](#array_has)._
+
 ### `list_has_all`
+
 _Alias of [array_has_all](#array_has_all)._
+
 ### `list_has_any`
+
 _Alias of [array_has_any](#array_has_any)._
+
 ### `list_indexof`
+
 _Alias of [array_position](#array_position)._
+
 ### `list_intersect`
+
 _Alias of [array_intersect](#array_intersect)._
+
 ### `list_join`
+
 _Alias of [array_to_string](#array_to_string)._
+
 ### `list_length`
+
 _Alias of [array_length](#array_length)._
+
 ### `list_max`
+
 _Alias of [array_max](#array_max)._
+
 ### `list_ndims`
+
 _Alias of [array_ndims](#array_ndims)._
+
 ### `list_pop_back`
+
 _Alias of [array_pop_back](#array_pop_back)._
+
 ### `list_pop_front`
+
 _Alias of [array_pop_front](#array_pop_front)._
+
 ### `list_position`
+
 _Alias of [array_position](#array_position)._
+
 ### `list_positions`
+
 _Alias of [array_positions](#array_positions)._
+
 ### `list_prepend`
+
 _Alias of [array_prepend](#array_prepend)._
+
 ### `list_push_back`
+
 _Alias of [array_append](#array_append)._
+
 ### `list_push_front`
+
 _Alias of [array_prepend](#array_prepend)._
+
 ### `list_remove`
+
 _Alias of [array_remove](#array_remove)._
+
 ### `list_remove_all`
+
 _Alias of [array_remove_all](#array_remove_all)._
+
 ### `list_remove_n`
+
 _Alias of [array_remove_n](#array_remove_n)._
+
 ### `list_repeat`
+
 _Alias of [array_repeat](#array_repeat)._
+
 ### `list_replace`
+
 _Alias of [array_replace](#array_replace)._
+
 ### `list_replace_all`
+
 _Alias of [array_replace_all](#array_replace_all)._
+
 ### `list_replace_n`
+
 _Alias of [array_replace_n](#array_replace_n)._
+
 ### `list_resize`
+
 _Alias of [array_resize](#array_resize)._
+
 ### `list_reverse`
+
 _Alias of [array_reverse](#array_reverse)._
+
 ### `list_slice`
+
 _Alias of [array_slice](#array_slice)._
+
 ### `list_sort`
+
 _Alias of [array_sort](#array_sort)._
+
 ### `list_to_string`
+
 _Alias of [array_to_string](#array_to_string)._
+
 ### `list_union`
+
 _Alias of [array_union](#array_union)._
 
 ### `make_array`
@@ -3703,6 +3970,7 @@ Returns an array using the specified input expressions.
 ```sql
 make_array(expression1[, ..., expression_n])
 ```
+
 #### Arguments
 
 - **expression_n**: Expression to include in the output array. Can be a constant, column, or function, and any combination of arithmetic or string operators.
@@ -3719,8 +3987,11 @@ make_array(expression1[, ..., expression_n])
 ```
 
 #### Aliases
-- make\_list
+
+- make_list
+
 ### `make_list`
+
 _Alias of [make_array](#make_array)._
 
 ### `range`
@@ -3730,6 +4001,7 @@ Returns an Arrow array between start and stop with step. The range start..end co
 ```sql
 range(start, stop, step)
 ```
+
 #### Arguments
 
 - **start**: Start of the range. Ints, timestamps, dates or string types that can be coerced to Date32 are supported.
@@ -3754,7 +4026,6 @@ range(start, stop, step)
 +--------------------------------------------------------------+
 ```
 
-
 ### `string_to_array`
 
 Splits a string into an array of substrings based on a delimiter. Any substrings matching the optional `null_str` argument are replaced with NULL.
@@ -3762,6 +4033,7 @@ Splits a string into an array of substrings based on a delimiter. Any substrings
 ```sql
 string_to_array(str, delimiter[, null_str])
 ```
+
 #### Arguments
 
 - **str**: String expression to split.
@@ -3786,11 +4058,14 @@ string_to_array(str, delimiter[, null_str])
 ```
 
 #### Aliases
-- string\_to\_list
+
+- string_to_list
+
 ### `string_to_list`
+
 _Alias of [string_to_array](#string_to_array)._
 
-## Struct Functions 
+## Struct Functions
 
 - [named_struct](#named_struct)
 - [row](#row)
@@ -3803,6 +4078,7 @@ Returns an Arrow struct using the specified name and input expressions pairs.
 ```sql
 named_struct(expression1_name, expression1_input[, ..., expression_n_name, expression_n_input])
 ```
+
 #### Arguments
 
 - **expression_n_name**: Name of the column field. Must be a constant string.
@@ -3810,9 +4086,9 @@ named_struct(expression1_name, expression1_input[, ..., expression_n_name, expre
 
 #### Example
 
-
 For example, this query converts two columns `a` and `b` to a single column with
 a struct type of fields `field_a` and `field_b`:
+
 ```sql
 > select * from t;
 +---+---+
@@ -3831,6 +4107,7 @@ a struct type of fields `field_a` and `field_b`:
 ```
 
 ### `row`
+
 _Alias of [struct](#struct)._
 
 ### `struct`
@@ -3842,6 +4119,7 @@ For example: `c0`, `c1`, `c2`, etc.
 ```sql
 struct(expression1[, ..., expression_n])
 ```
+
 #### Arguments
 
 - **expression1, expression_n**: Expression to include in the output struct. Can be a constant, column, or function, any combination of arithmetic or string operators.
@@ -3850,6 +4128,7 @@ struct(expression1[, ..., expression_n])
 
 For example, this query converts two columns `a` and `b` to a single column with
 a struct type of fields `field_a` and `c1`:
+
 ```sql
 > select * from t;
 +---+---+
@@ -3879,9 +4158,10 @@ select struct(a as field_a, b) from t;
 ```
 
 #### Aliases
+
 - row
 
-## Map Functions 
+## Map Functions
 
 - [element_at](#element_at)
 - [map](#map)
@@ -3889,7 +4169,9 @@ select struct(a as field_a, b) from t;
 - [map_extract](#map_extract)
 - [map_keys](#map_keys)
 - [map_values](#map_values)
+
 ### `element_at`
+
 _Alias of [map_extract](#map_extract)._
 
 ### `map`
@@ -3903,15 +4185,15 @@ map(key, value)
 map(key: value)
 make_map(['key1', 'key2'], ['value1', 'value2'])
 ```
+
 #### Arguments
 
 - **key**: For `map`: Expression to be used for key. Can be a constant, column, function, or any combination of arithmetic or string operators.
-For `make_map`: The list of keys to be used in the map. Each key must be unique and non-null.
+  For `make_map`: The list of keys to be used in the map. Each key must be unique and non-null.
 - **value**: For `map`: Expression to be used for value. Can be a constant, column, function, or any combination of arithmetic or string operators.
-For `make_map`: The list of values to be mapped to the corresponding keys.
+  For `make_map`: The list of values to be mapped to the corresponding keys.
 
 #### Example
-
 
 ```sql
 -- Using map function
@@ -3941,7 +4223,6 @@ SELECT MAKE_MAP(['key1', 'key2'], ['value1', null]);
 {key1: value1, key2: }
 ```
 
-
 ### `map_entries`
 
 Returns a list of all entries in the map.
@@ -3949,6 +4230,7 @@ Returns a list of all entries in the map.
 ```sql
 map_entries(map)
 ```
+
 #### Arguments
 
 - **map**: Map expression. Can be a constant, column, or function, and any combination of map operators.
@@ -3965,7 +4247,6 @@ SELECT map_entries(map([100, 5], [42, 43]));
 [{'key': 100, 'value': 42}, {'key': 5, 'value': 43}]
 ```
 
-
 ### `map_extract`
 
 Returns a list containing the value for the given key or an empty list if the key is not present in the map.
@@ -3973,6 +4254,7 @@ Returns a list containing the value for the given key or an empty list if the ke
 ```sql
 map_extract(map, key)
 ```
+
 #### Arguments
 
 - **map**: Map expression. Can be a constant, column, or function, and any combination of map operators.
@@ -3995,7 +4277,8 @@ SELECT map_extract(MAP {'x': 10, 'y': NULL, 'z': 30}, 'y');
 ```
 
 #### Aliases
-- element\_at
+
+- element_at
 
 ### `map_keys`
 
@@ -4004,6 +4287,7 @@ Returns a list of all keys in the map.
 ```sql
 map_keys(map)
 ```
+
 #### Arguments
 
 - **map**: Map expression. Can be a constant, column, or function, and any combination of map operators.
@@ -4020,7 +4304,6 @@ SELECT map_keys(map([100, 5], [42, 43]));
 [100, 5]
 ```
 
-
 ### `map_values`
 
 Returns a list of all values in the map.
@@ -4028,6 +4311,7 @@ Returns a list of all values in the map.
 ```sql
 map_values(map)
 ```
+
 #### Arguments
 
 - **map**: Map expression. Can be a constant, column, or function, and any combination of map operators.
@@ -4044,8 +4328,7 @@ SELECT map_values(map([100, 5], [42, 43]));
 [42, 43]
 ```
 
-
-## Hashing Functions 
+## Hashing Functions
 
 - [digest](#digest)
 - [md5](#md5)
@@ -4061,18 +4344,19 @@ Computes the binary hash of an expression using the specified algorithm.
 ```sql
 digest(expression, algorithm)
 ```
+
 #### Arguments
 
 - **expression**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
-- **algorithm**: String expression specifying algorithm to use. Must be one of:       
-    - md5
-    - sha224
-    - sha256
-    - sha384
-    - sha512
-    - blake2s
-    - blake2b
-    - blake3
+- **algorithm**: String expression specifying algorithm to use. Must be one of:
+  - md5
+  - sha224
+  - sha256
+  - sha384
+  - sha512
+  - blake2s
+  - blake2b
+  - blake3
 
 #### Example
 
@@ -4085,7 +4369,6 @@ digest(expression, algorithm)
 +------------------------------------------+
 ```
 
-
 ### `md5`
 
 Computes an MD5 128-bit checksum for a string expression.
@@ -4093,6 +4376,7 @@ Computes an MD5 128-bit checksum for a string expression.
 ```sql
 md5(expression)
 ```
+
 #### Arguments
 
 - **expression**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -4108,7 +4392,6 @@ md5(expression)
 +-------------------------------------+
 ```
 
-
 ### `sha224`
 
 Computes the SHA-224 hash of a binary string.
@@ -4116,6 +4399,7 @@ Computes the SHA-224 hash of a binary string.
 ```sql
 sha224(expression)
 ```
+
 #### Arguments
 
 - **expression**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -4131,7 +4415,6 @@ sha224(expression)
 +------------------------------------------+
 ```
 
-
 ### `sha256`
 
 Computes the SHA-256 hash of a binary string.
@@ -4139,6 +4422,7 @@ Computes the SHA-256 hash of a binary string.
 ```sql
 sha256(expression)
 ```
+
 #### Arguments
 
 - **expression**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -4154,7 +4438,6 @@ sha256(expression)
 +--------------------------------------+
 ```
 
-
 ### `sha384`
 
 Computes the SHA-384 hash of a binary string.
@@ -4162,6 +4445,7 @@ Computes the SHA-384 hash of a binary string.
 ```sql
 sha384(expression)
 ```
+
 #### Arguments
 
 - **expression**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -4177,7 +4461,6 @@ sha384(expression)
 +-----------------------------------------+
 ```
 
-
 ### `sha512`
 
 Computes the SHA-512 hash of a binary string.
@@ -4185,6 +4468,7 @@ Computes the SHA-512 hash of a binary string.
 ```sql
 sha512(expression)
 ```
+
 #### Arguments
 
 - **expression**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -4200,10 +4484,10 @@ sha512(expression)
 +-------------------------------------------+
 ```
 
-
-## Union Functions 
+## Union Functions
 
 Functions to work with the union data type, also know as tagged unions, variant types, enums or sum types. Note: Not related to the SQL UNION operator
+
 - [union_extract](#union_extract)
 - [union_tag](#union_tag)
 
@@ -4214,6 +4498,7 @@ Returns the value of the given field in the union when selected, or NULL otherwi
 ```sql
 union_extract(union, field_name)
 ```
+
 #### Arguments
 
 - **union**: Union expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -4234,7 +4519,6 @@ union_extract(union, field_name)
 +--------------+----------------------------------+----------------------------------+
 ```
 
-
 ### `union_tag`
 
 Returns the name of the currently selected field in the union
@@ -4242,6 +4526,7 @@ Returns the name of the currently selected field in the union
 ```sql
 union_tag(union_expression)
 ```
+
 #### Arguments
 
 - **union**: Union expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -4261,8 +4546,7 @@ union_tag(union_expression)
 +--------------+-------------------------+
 ```
 
-
-## Other Functions 
+## Other Functions
 
 - [arrow_cast](#arrow_cast)
 - [arrow_typeof](#arrow_typeof)
@@ -4276,6 +4560,7 @@ Casts a value to a specific Arrow data type.
 ```sql
 arrow_cast(expression, datatype)
 ```
+
 #### Arguments
 
 - **expression**: Expression to cast. The expression can be a constant, column, or function, and any combination of operators.
@@ -4296,7 +4581,6 @@ arrow_cast(expression, datatype)
 +----+-----+-----+---------------------------+
 ```
 
-
 ### `arrow_typeof`
 
 Returns the name of the underlying [Arrow data type](https://docs.rs/arrow/latest/arrow/datatypes/enum.DataType.html) of the expression.
@@ -4304,6 +4588,7 @@ Returns the name of the underlying [Arrow data type](https://docs.rs/arrow/lates
 ```sql
 arrow_typeof(expression)
 ```
+
 #### Arguments
 
 - **expression**: Expression to evaluate. The expression can be a constant, column, or function, and any combination of operators.
@@ -4319,18 +4604,17 @@ arrow_typeof(expression)
 +---------------------------+------------------------+
 ```
 
-
-
 ### `get_field`
 
 Returns a field within a map or a struct with the given key.
-    Note: most users invoke `get_field` indirectly via field access
-    syntax such as `my_struct_col['field_name']` which results in a call to
-    `get_field(my_struct_col, 'field_name')`.
+Note: most users invoke `get_field` indirectly via field access
+syntax such as `my_struct_col['field_name']` which results in a call to
+`get_field(my_struct_col, 'field_name')`.
 
 ```sql
 get_field(expression1, expression2)
 ```
+
 #### Arguments
 
 - **expression1**: The map or struct to retrieve a field for.
@@ -4363,7 +4647,6 @@ get_field(expression1, expression2)
 +-----------------------+
 ```
 
-
 ### `version`
 
 Returns the version of DataFusion.
@@ -4382,5 +4665,3 @@ version()
 | Apache DataFusion 42.0.0, aarch64 on macos |
 +--------------------------------------------+
 ```
-
-
