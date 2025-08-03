@@ -1379,10 +1379,7 @@ impl DataFrame {
         let plan = self.create_physical_plan().await?;
         let batches = collect(plan, task_ctx).await?;
         if mem_prof {
-            let bytes: usize = batches
-                .iter()
-                .map(|b| b.get_array_memory_size())
-                .sum();
+            let bytes: usize = batches.iter().map(|b| b.get_array_memory_size()).sum();
             tracker.record_memory("query_output", bytes);
         }
         Ok(batches)

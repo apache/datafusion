@@ -537,7 +537,6 @@ impl TopK {
     }
 }
 
-
 struct TopKMetrics {
     /// metrics
     pub baseline: BaselineMetrics,
