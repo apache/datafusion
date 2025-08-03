@@ -81,6 +81,13 @@ impl MemoryTracker {
     }
 }
 
+// Add Default impl to satisfy clippy new_without_default lint
+impl Default for MemoryTracker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 static GLOBAL_TRACKER: LazyLock<StdMutex<Option<Arc<MemoryTracker>>>> =
     LazyLock::new(|| StdMutex::new(None));
 
