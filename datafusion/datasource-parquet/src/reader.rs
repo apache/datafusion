@@ -91,7 +91,7 @@ impl DefaultParquetFileReaderFactory {
 /// This implementation does not coalesce I/O operations or cache bytes. Such
 /// optimizations can be done either at the object store level or by providing a
 /// custom implementation of [`ParquetFileReaderFactory`].
-pub(crate) struct ParquetFileReader {
+pub struct ParquetFileReader {
     pub file_metrics: ParquetFileMetrics,
     pub inner: ParquetObjectReader,
 }
@@ -212,7 +212,7 @@ impl ParquetFileReaderFactory for CachedParquetFileReaderFactory {
 /// Implements [`AsyncFileReader`] for a Parquet file in object storage. Reads the file metadata
 /// from the [`FileMetadataCache`], if available, otherwise reads it directly from the file and then
 /// updates the cache.
-pub(crate) struct CachedParquetFileReader {
+pub struct CachedParquetFileReader {
     pub file_metrics: ParquetFileMetrics,
     pub inner: ParquetObjectReader,
     file_meta: FileMeta,
