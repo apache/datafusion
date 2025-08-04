@@ -179,6 +179,7 @@ pub fn parse_physical_window_expr(
         Arc::new(window_frame),
         &extended_schema,
         false,
+        false,
     )
 }
 
@@ -368,7 +369,12 @@ pub fn parse_physical_expr(
                     e.name.as_str(),
                     scalar_fun_def,
                     args,
-                    Field::new("f", convert_required!(e.return_type)?, true).into(),
+                    Field::new(
+                        &e.return_field_name,
+                        convert_required!(e.return_type)?,
+                        true,
+                    )
+                    .into(),
                 )
                 .with_nullable(e.nullable),
             )

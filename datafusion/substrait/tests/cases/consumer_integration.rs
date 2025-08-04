@@ -520,6 +520,21 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_expressions_in_virtual_table() -> Result<()> {
+        let plan_str =
+            test_plan_to_string("virtual_table_with_expressions.substrait.json").await?;
+
+        assert_snapshot!(
+        plan_str,
+        @r#"
+            Projection: dummy1 AS result1, dummy2 AS result2
+              Values: (Int64(0), Utf8("temp")), (Int64(1), Utf8("test"))
+            "#
+                );
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_multiple_joins() -> Result<()> {
         let plan_str = test_plan_to_string("multiple_joins.json").await?;
         assert_eq!(

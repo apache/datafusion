@@ -1,3 +1,74 @@
+impl serde::Serialize for ArrowFormat {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let len = 0;
+        let struct_ser = serializer.serialize_struct("datafusion_common.ArrowFormat", len)?;
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for ArrowFormat {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                            Err(serde::de::Error::unknown_field(value, FIELDS))
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = ArrowFormat;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion_common.ArrowFormat")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<ArrowFormat, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                while map_.next_key::<GeneratedField>()?.is_some() {
+                    let _ = map_.next_value::<serde::de::IgnoredAny>()?;
+                }
+                Ok(ArrowFormat {
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion_common.ArrowFormat", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for ArrowOptions {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -4995,6 +5066,9 @@ impl serde::Serialize for ParquetOptions {
         if self.skip_arrow_metadata {
             len += 1;
         }
+        if self.cache_metadata {
+            len += 1;
+        }
         if self.dictionary_page_size_limit != 0 {
             len += 1;
         }
@@ -5096,6 +5170,9 @@ impl serde::Serialize for ParquetOptions {
         }
         if self.skip_arrow_metadata {
             struct_ser.serialize_field("skipArrowMetadata", &self.skip_arrow_metadata)?;
+        }
+        if self.cache_metadata {
+            struct_ser.serialize_field("cacheMetadata", &self.cache_metadata)?;
         }
         if self.dictionary_page_size_limit != 0 {
             #[allow(clippy::needless_borrow)]
@@ -5243,6 +5320,8 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             "binaryAsString",
             "skip_arrow_metadata",
             "skipArrowMetadata",
+            "cache_metadata",
+            "cacheMetadata",
             "dictionary_page_size_limit",
             "dictionaryPageSizeLimit",
             "data_page_row_count_limit",
@@ -5291,6 +5370,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             SchemaForceViewTypes,
             BinaryAsString,
             SkipArrowMetadata,
+            CacheMetadata,
             DictionaryPageSizeLimit,
             DataPageRowCountLimit,
             MaxRowGroupSize,
@@ -5343,6 +5423,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                             "schemaForceViewTypes" | "schema_force_view_types" => Ok(GeneratedField::SchemaForceViewTypes),
                             "binaryAsString" | "binary_as_string" => Ok(GeneratedField::BinaryAsString),
                             "skipArrowMetadata" | "skip_arrow_metadata" => Ok(GeneratedField::SkipArrowMetadata),
+                            "cacheMetadata" | "cache_metadata" => Ok(GeneratedField::CacheMetadata),
                             "dictionaryPageSizeLimit" | "dictionary_page_size_limit" => Ok(GeneratedField::DictionaryPageSizeLimit),
                             "dataPageRowCountLimit" | "data_page_row_count_limit" => Ok(GeneratedField::DataPageRowCountLimit),
                             "maxRowGroupSize" | "max_row_group_size" => Ok(GeneratedField::MaxRowGroupSize),
@@ -5393,6 +5474,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                 let mut schema_force_view_types__ = None;
                 let mut binary_as_string__ = None;
                 let mut skip_arrow_metadata__ = None;
+                let mut cache_metadata__ = None;
                 let mut dictionary_page_size_limit__ = None;
                 let mut data_page_row_count_limit__ = None;
                 let mut max_row_group_size__ = None;
@@ -5514,6 +5596,12 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                             }
                             skip_arrow_metadata__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::CacheMetadata => {
+                            if cache_metadata__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("cacheMetadata"));
+                            }
+                            cache_metadata__ = Some(map_.next_value()?);
+                        }
                         GeneratedField::DictionaryPageSizeLimit => {
                             if dictionary_page_size_limit__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("dictionaryPageSizeLimit"));
@@ -5629,6 +5717,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                     schema_force_view_types: schema_force_view_types__.unwrap_or_default(),
                     binary_as_string: binary_as_string__.unwrap_or_default(),
                     skip_arrow_metadata: skip_arrow_metadata__.unwrap_or_default(),
+                    cache_metadata: cache_metadata__.unwrap_or_default(),
                     dictionary_page_size_limit: dictionary_page_size_limit__.unwrap_or_default(),
                     data_page_row_count_limit: data_page_row_count_limit__.unwrap_or_default(),
                     max_row_group_size: max_row_group_size__.unwrap_or_default(),

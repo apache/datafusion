@@ -277,6 +277,16 @@ config_namespace! {
 
         /// Specifies the recursion depth limit when parsing complex SQL Queries
         pub recursion_limit: usize, default = 50
+
+        /// Specifies the default null ordering for query results. There are 4 options:
+        /// - `nulls_max`: Nulls appear last in ascending order.
+        /// - `nulls_min`: Nulls appear first in ascending order.
+        /// - `nulls_first`: Nulls always be first in any order.
+        /// - `nulls_last`: Nulls always be last in any order.
+        ///
+        /// By default, `nulls_max` is used to follow Postgres's behavior.
+        /// postgres rule: <https://www.postgresql.org/docs/current/queries-order.html>
+        pub default_null_ordering: String, default = "nulls_max".to_string()
     }
 }
 
@@ -548,6 +558,12 @@ config_namespace! {
 
         /// (reading) Use any available bloom filters when reading parquet files
         pub bloom_filter_on_read: bool, default = true
+
+        /// (reading) Whether or not to enable the caching of embedded metadata of Parquet files
+        /// (footer and page metadata). Enabling it can offer substantial performance improvements
+        /// for repeated queries over large files. By default, the cache is automatically
+        /// invalidated when the underlying file is modified.
+        pub cache_metadata: bool, default = false
 
         // The following options affect writing to parquet files
         // and map to parquet::file::properties::WriterProperties
@@ -840,6 +856,10 @@ config_namespace! {
         /// Display format of explain. Default is "indent".
         /// When set to "tree", it will print the plan in a tree-rendered format.
         pub format: String, default = "indent".to_string()
+
+        /// (format=tree only) Maximum total width of the rendered tree.
+        /// When set to 0, the tree will have no width limit.
+        pub tree_maximum_render_width: usize, default = 240
     }
 }
 
