@@ -739,10 +739,16 @@ impl LogicalPlan {
                 input,
                 exec_columns,
                 options,
+                function_name,
                 ..
             }) => {
                 // Update schema with unnested column type.
-                unnest_with_options(Arc::unwrap_or_clone(input), exec_columns, options)
+                unnest_with_options(
+                    Arc::unwrap_or_clone(input),
+                    function_name,
+                    exec_columns,
+                    options,
+                )
             }
         }
     }
@@ -1132,13 +1138,18 @@ impl LogicalPlan {
             LogicalPlan::Unnest(Unnest {
                 exec_columns: columns,
                 options,
+                function_name,
                 ..
             }) => {
                 self.assert_no_expressions(expr)?;
                 let input = self.only_input(inputs)?;
                 // Update schema with unnested column type.
-                let new_plan =
-                    unnest_with_options(input, columns.clone(), options.clone())?;
+                let new_plan = unnest_with_options(
+                    input,
+                    function_name.clone(),
+                    columns.clone(),
+                    options.clone(),
+                )?;
                 Ok(new_plan)
             }
         }
@@ -2001,7 +2012,7 @@ impl LogicalPlan {
                     LogicalPlan::Unnest(Unnest {
                         input: plan,
                         list_type_columns: list_col_indices,
-                        struct_type_columns: struct_col_indices, .. }) => {
+                        struct_type_columns: struct_col_indices, function_name, .. }) => {
                         let input_columns = plan.schema().columns();
                         let list_type_columns = list_col_indices
                             .iter()
@@ -2014,7 +2025,7 @@ impl LogicalPlan {
                             .map(|i| &input_columns[*i])
                             .collect::<Vec<&Column>>();
                         // get items from input_columns indexed by list_col_indices
-                        write!(f, "Unnest: lists[{}] structs[{}]",
+                        write!(f, "Unnest: function={function_name} lists[{}] structs[{}]",
                         expr_vec_fmt!(list_type_columns),
                         expr_vec_fmt!(struct_type_columns))
                     }
@@ -3902,6 +3913,8 @@ impl Display for ColumnUnnestList {
 pub struct Unnest {
     /// The incoming logical plan
     pub input: Arc<LogicalPlan>,
+    /// The specific unnesting function
+    pub function_name: String,
     /// Columns to run unnest on, can be a list of (List/Struct) columns
     pub exec_columns: Vec<Column>,
     /// refer to the indices(in the input schema) of columns
@@ -3924,6 +3937,7 @@ impl PartialOrd for Unnest {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         #[derive(PartialEq, PartialOrd)]
         struct ComparableUnnest<'a> {
+            pub function_name: &'a str,
             /// The incoming logical plan
             pub input: &'a Arc<LogicalPlan>,
             /// Columns to run unnest on, can be a list of (List/Struct) columns
@@ -3942,6 +3956,7 @@ impl PartialOrd for Unnest {
         }
         let comparable_self = ComparableUnnest {
             input: &self.input,
+            function_name: &self.function_name,
             exec_columns: &self.exec_columns,
             list_type_columns: &self.list_type_columns,
             struct_type_columns: &self.struct_type_columns,
@@ -3950,6 +3965,7 @@ impl PartialOrd for Unnest {
         };
         let comparable_other = ComparableUnnest {
             input: &other.input,
+            function_name: &self.function_name,
             exec_columns: &other.exec_columns,
             list_type_columns: &other.list_type_columns,
             struct_type_columns: &other.struct_type_columns,

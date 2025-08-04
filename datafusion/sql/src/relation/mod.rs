@@ -139,8 +139,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                             &schema,
                             planner_context,
                         )?;
-                        Self::check_unnest_arg(&expr, &schema)?;
-                        Ok(Expr::Unnest(Unnest::new(expr)))
+                        Self::check_unnest_arg(&expr, "unnest", &schema)?;
+                        Ok(Expr::Unnest(Unnest::new(expr, "UNNEST".into())))
                     })
                     .collect::<Result<Vec<_>>>()?;
                 if unnest_exprs.is_empty() {

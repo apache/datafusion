@@ -82,13 +82,20 @@ pub fn normalize_col_with_schemas_and_ambiguity_check(
     using_columns: &[HashSet<Column>],
 ) -> Result<Expr> {
     // Normalize column inside Unnest
-    if let Expr::Unnest(Unnest { expr }) = expr {
+    if let Expr::Unnest(Unnest {
+        expr,
+        function_name,
+    }) = expr
+    {
         let e = normalize_col_with_schemas_and_ambiguity_check(
             expr.as_ref().clone(),
             schemas,
             using_columns,
         )?;
-        return Ok(Expr::Unnest(Unnest { expr: Box::new(e) }));
+        return Ok(Expr::Unnest(Unnest {
+            expr: Box::new(e),
+            function_name,
+        }));
     }
 
     expr.transform(|expr| {

@@ -129,7 +129,11 @@ impl ExprSchemable for Expr {
             }
             Expr::Cast(Cast { data_type, .. })
             | Expr::TryCast(TryCast { data_type, .. }) => Ok(data_type.clone()),
-            Expr::Unnest(Unnest { expr }) => {
+            Expr::Unnest(Unnest {
+                expr,
+                function_name,
+                ..
+            }) => {
                 let arg_data_type = expr.get_type(schema)?;
                 // Unnest's output type is the inner type of the list
                 match arg_data_type {
@@ -138,11 +142,11 @@ impl ExprSchemable for Expr {
                     | DataType::FixedSizeList(field, _) => Ok(field.data_type().clone()),
                     DataType::Struct(_) => Ok(arg_data_type),
                     DataType::Null => {
-                        not_impl_err!("unnest() does not support null yet")
+                        not_impl_err!("{function_name}() does not support null yet")
                     }
                     _ => {
                         plan_err!(
-                            "unnest() can only be applied to array, struct and null"
+                            "{function_name}() can't be applied to {arg_data_type} type"
                         )
                     }
                 }

@@ -169,7 +169,7 @@ pub(crate) fn unproject_unnest_expr(expr: Expr, unnest: &Unnest) -> Result<Expr>
                     if let Ok(idx) = unnest.schema.index_of_column(col_ref) {
                         if let LogicalPlan::Projection(Projection { expr, .. }) = unnest.input.as_ref() {
                             if let Some(unprojected_expr) = expr.get(idx) {
-                                let unnest_expr = Expr::Unnest(expr::Unnest::new(unprojected_expr.clone()));
+                                let unnest_expr = Expr::Unnest(expr::Unnest::new(unprojected_expr.clone(), unnest.function_name.clone()));
                                 return Ok(Transformed::yes(unnest_expr));
                             }
                         }

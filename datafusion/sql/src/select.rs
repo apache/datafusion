@@ -335,7 +335,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             // from which column used for projection, before the unnest happen
             // including non unnest column and unnest column
             let mut inner_projection_exprs = vec![];
-
+            // The resulting unnesting function name
+            let mut function_name = String::new();
             // expr returned here maybe different from the originals in inner_projection_exprs
             // for example:
             // - unnest(struct_col) will be transformed into unnest(struct_col).field1, unnest(struct_col).field2
@@ -345,6 +346,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 &intermediate_plan,
                 &mut unnest_columns,
                 &mut inner_projection_exprs,
+                &mut function_name,
                 &intermediate_select_exprs,
             )?;
 
@@ -379,7 +381,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 }
                 let plan = LogicalPlanBuilder::from(intermediate_plan)
                     .project(inner_projection_exprs)?
-                    .unnest_columns_with_options(unnest_col_vec, unnest_options)?
+                    .unnest_columns_with_options(
+                        function_name,
+                        unnest_col_vec,
+                        unnest_options,
+                    )?
                     .build()?;
                 intermediate_plan = plan;
                 intermediate_select_exprs = outer_projection_exprs;
@@ -453,11 +459,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         loop {
             let mut unnest_columns = IndexMap::new();
             let mut inner_projection_exprs = vec![];
-
+            let mut function_name = String::new();
             let outer_projection_exprs = rewrite_recursive_unnests_bottom_up(
                 &intermediate_plan,
                 &mut unnest_columns,
                 &mut inner_projection_exprs,
+                &mut function_name,
                 &intermediate_select_exprs,
             )?;
 
@@ -506,7 +513,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
                 intermediate_plan = LogicalPlanBuilder::from(intermediate_plan)
                     .project(projection_exprs)?
-                    .unnest_columns_with_options(unnest_col_vec, unnest_options)?
+                    .unnest_columns_with_options(
+                        function_name,
+                        unnest_col_vec,
+                        unnest_options,
+                    )?
                     .build()?;
 
                 intermediate_select_exprs = outer_projection_exprs;

@@ -303,6 +303,7 @@ impl TreeNode for LogicalPlan {
             }
             LogicalPlan::Unnest(Unnest {
                 input,
+                function_name,
                 exec_columns: input_columns,
                 list_type_columns,
                 struct_type_columns,
@@ -312,6 +313,7 @@ impl TreeNode for LogicalPlan {
             }) => input.map_elements(f)?.update_data(|input| {
                 LogicalPlan::Unnest(Unnest {
                     input,
+                    function_name,
                     exec_columns: input_columns,
                     dependency_indices,
                     list_type_columns,

@@ -270,14 +270,14 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         }
 
         // Build Unnest expression
-        if name.eq("unnest") {
+        if Self::is_unnesting_function(&name) {
             let mut exprs = self.function_args_to_expr(args, schema, planner_context)?;
             if exprs.len() != 1 {
-                return plan_err!("unnest() requires exactly one argument");
+                return plan_err!("{name}() requires exactly one argument");
             }
             let expr = exprs.swap_remove(0);
-            Self::check_unnest_arg(&expr, schema)?;
-            return Ok(Expr::Unnest(Unnest::new(expr)));
+            Self::check_unnest_arg(&expr, &name, schema)?;
+            return Ok(Expr::Unnest(Unnest::new(expr, name)));
         }
 
         if !order_by.is_empty() && is_function_window {
@@ -606,18 +606,28 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             .collect::<Result<Vec<Expr>>>()
     }
 
-    pub(crate) fn check_unnest_arg(arg: &Expr, schema: &DFSchema) -> Result<()> {
+    pub(crate) fn is_unnesting_function(function_name: &str) -> bool {
         // Check argument type, array types are supported
-        match arg.get_type(schema)? {
+        return function_name == "unnest" || function_name == "jsonb_array_elements";
+    }
+
+    pub(crate) fn check_unnest_arg(
+        arg: &Expr,
+        name: &str,
+        schema: &DFSchema,
+    ) -> Result<()> {
+        // Check argument type, array types are supported
+        let arg_data_type = arg.get_type(schema)?;
+        match arg_data_type {
             DataType::List(_)
             | DataType::LargeList(_)
             | DataType::FixedSizeList(_, _)
             | DataType::Struct(_) => Ok(()),
             DataType::Null => {
-                not_impl_err!("unnest() does not support null yet")
+                not_impl_err!("{name}() does not support null yet")
             }
             _ => {
-                plan_err!("unnest() can only be applied to array, struct and null")
+                plan_err!("{name}() can't be applied to {arg_data_type} type")
             }
         }
     }
