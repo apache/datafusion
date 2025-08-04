@@ -73,7 +73,6 @@ futures = { workspace = true }
 log = { workspace = true }
 mimalloc = { version = "0.1", default-features = false }
 object_store = { workspace = true, features = ["aws", "http"] }
-parquet-key-management = { version = "0.3", features = ["_test_utils"] }
 prost = { workspace = true }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
@@ -84,6 +83,8 @@ tracing = { version = "0.1" }
 tracing-subscriber = { version = "0.3" }
 url = { workspace = true }
 uuid = "1.17"
+base64 = "0.22.1"
+rand = { workspace = true }
 
 [target.'cfg(not(target_os = "windows"))'.dev-dependencies]
 nix = { version = "0.30.1", features = ["fs"] }

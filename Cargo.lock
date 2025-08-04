@@ -2196,6 +2196,7 @@ dependencies = [
  "arrow-flight",
  "arrow-schema",
  "async-trait",
+ "base64 0.22.1",
  "bytes",
  "dashmap",
  "datafusion",
@@ -2207,8 +2208,8 @@ dependencies = [
  "mimalloc",
  "nix",
  "object_store",
- "parquet-key-management",
  "prost",
+ "rand 0.9.2",
  "serde_json",
  "tempfile",
  "test-utils",
@@ -4557,19 +4558,6 @@ dependencies = [
  "tokio",
  "twox-hash",
  "zstd",
-]
-
-[[package]]
-name = "parquet-key-management"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ea4e4d465462ac90306e7551f8d7d959f05a658c445bf55dd6b87578ad31a0d8"
-dependencies = [
- "base64 0.22.1",
- "parquet",
- "ring",
- "serde",
- "serde_json",
 ]
 
 [[package]]

@@ -17,53 +17,51 @@
 
 use arrow::array::{ArrayRef, Int32Array, RecordBatch, StringArray};
 use arrow_schema::SchemaRef;
-use datafusion::common::{extensions_options, DataFusionError};
+use base64::Engine;
+use datafusion::common::extensions_options;
 use datafusion::config::{EncryptionFactoryOptions, TableParquetOptions};
 use datafusion::dataframe::DataFrameWriteOptions;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::ListingOptions;
 use datafusion::error::Result;
 use datafusion::execution::parquet_encryption::EncryptionFactory;
+use datafusion::parquet::encryption::decrypt::KeyRetriever;
 use datafusion::parquet::encryption::{
     decrypt::FileDecryptionProperties, encrypt::FileEncryptionProperties,
 };
 use datafusion::prelude::SessionContext;
 use futures::StreamExt;
 use object_store::path::Path;
-use parquet_key_management::crypto_factory::{
-    CryptoFactory, DecryptionConfiguration, EncryptionConfiguration,
-};
-use parquet_key_management::kms::KmsConnectionConfig;
-use parquet_key_management::test_kms::TestKmsClientFactory;
+use rand::rand_core::{OsRng, TryRngCore};
 use std::collections::HashSet;
-use std::fmt::Formatter;
 use std::sync::Arc;
 use tempfile::TempDir;
 
-const ENCRYPTION_FACTORY_ID: &str = "example.memory_kms_encryption";
+const ENCRYPTION_FACTORY_ID: &str = "example.mock_kms_encryption";
 
 /// This example demonstrates reading and writing Parquet files that
-/// are encrypted using Parquet Modular Encryption, and uses the
-/// parquet-key-management crate to integrate with a Key Management Server (KMS).
+/// are encrypted using Parquet Modular Encryption.
 ///
 /// Compared to the `parquet_encrypted` example, where AES keys
-/// are specified directly, this example uses an `EncryptionFactory` so that
-/// encryption keys can be dynamically generated per file,
-/// and the encryption key metadata stored in files can be used to determine
-/// the decryption keys when reading.
+/// are specified directly, this example implements an `EncryptionFactory` that
+/// generates encryption keys dynamically per file.
+/// Encryption key metadata is stored inline in the Parquet files and is used to determine
+/// the decryption keys when reading the files.
+///
+/// In this example, encryption keys are simply stored base64 encoded in the Parquet metadata,
+/// which is not a secure way to store encryption keys.
+/// For production use, it is recommended to use a key-management service (KMS) to encrypt
+/// data encryption keys.
 #[tokio::main]
 async fn main() -> Result<()> {
     let ctx = SessionContext::new();
 
     // Register an `EncryptionFactory` implementation to be used for Parquet encryption
-    // in the session context.
-    // This example uses an in-memory test KMS from the `parquet_key_management` crate with
-    // a custom `KmsEncryptionFactory` wrapper type to integrate with DataFusion.
+    // in the runtime environment.
     // `EncryptionFactory` instances are registered with a name to identify them so
     // they can be later referenced in configuration options, and it's possible to register
     // multiple different factories to handle different ways of encrypting Parquet.
-    let crypto_factory = CryptoFactory::new(TestKmsClientFactory::with_default_keys());
-    let encryption_factory = KmsEncryptionFactory { crypto_factory };
+    let encryption_factory = TestEncryptionFactory::default();
     ctx.runtime_env().register_parquet_encryption_factory(
         ENCRYPTION_FACTORY_ID,
         Arc::new(encryption_factory),
@@ -77,7 +75,7 @@ async fn main() -> Result<()> {
     ctx.register_batch("test_data", batch)?;
 
     {
-        // Write and read with the programmatic API
+        // Write and read encrypted Parquet with the programmatic API
         let tmpdir = TempDir::new()?;
         let table_path = format!("{}/", tmpdir.path().to_str().unwrap());
         write_encrypted(&ctx, &table_path).await?;
@@ -85,7 +83,7 @@ async fn main() -> Result<()> {
     }
 
     {
-        // Write and read with the SQL API
+        // Write and read encrypted Parquet with the SQL API
         let tmpdir = TempDir::new()?;
         let table_path = format!("{}/", tmpdir.path().to_str().unwrap());
         write_encrypted_with_sql(&ctx, &table_path).await?;
@@ -101,11 +99,9 @@ async fn write_encrypted(ctx: &SessionContext, table_path: &str) -> Result<()> {
 
     let mut parquet_options = TableParquetOptions::new();
     // We specify that we want to use Parquet encryption by setting the identifier of the
-    // encryption factory to use and providing the factory specific configuration.
-    // Our encryption factory requires specifying the master key identifier to
-    // use for encryption, and we can optionally configure which columns are encrypted.
-    let encryption_config = KmsEncryptionConfig {
-        key_id: "kf".to_owned(),
+    // encryption factory to use and providing the factory-specific configuration.
+    // Our encryption factory only requires specifying the columns to encrypt.
+    let encryption_config = EncryptionConfig {
         encrypted_columns: "b,c".to_owned(),
     };
     parquet_options
@@ -128,10 +124,10 @@ async fn read_encrypted(ctx: &SessionContext, table_path: &str) -> Result<()> {
     let mut parquet_options = TableParquetOptions::new();
     // Specify the encryption factory to use for decrypting Parquet.
     // In this example, we don't require any additional configuration options when reading
-    // as master key identifiers are stored in the key metadata within Parquet files.
+    // as we only need the key metadata from the Parquet files to determine the decryption keys.
     parquet_options
         .crypto
-        .configure_factory(ENCRYPTION_FACTORY_ID, &KmsEncryptionConfig::default());
+        .configure_factory(ENCRYPTION_FACTORY_ID, &EncryptionConfig::default());
 
     let file_format = ParquetFormat::default().with_options(parquet_options);
     let listing_options = ListingOptions::new(Arc::new(file_format));
@@ -168,7 +164,6 @@ async fn write_encrypted_with_sql(ctx: &SessionContext, table_path: &str) -> Res
         STORED AS parquet
         OPTIONS (\
             'format.crypto.factory_id' '{ENCRYPTION_FACTORY_ID}', \
-            'format.crypto.factory_options.key_id' 'kf', \
             'format.crypto.factory_options.encrypted_columns' 'b,c' \
         )"
     );
@@ -178,7 +173,7 @@ async fn write_encrypted_with_sql(ctx: &SessionContext, table_path: &str) -> Res
     Ok(())
 }
 
-/// Read from an encrypted Parquet file using only the SQL API and string based configuration
+/// Read from an encrypted Parquet file using only the SQL API and string-based configuration
 async fn read_encrypted_with_sql(ctx: &SessionContext, table_path: &str) -> Result<()> {
     let ddl = format!(
         "CREATE EXTERNAL TABLE encrypted_parquet_table_2 \
@@ -201,33 +196,27 @@ async fn read_encrypted_with_sql(ctx: &SessionContext, table_path: &str) -> Resu
 
 // Options used to configure our example encryption factory
 extensions_options! {
-    struct KmsEncryptionConfig {
-        /// Identifier of the encryption key to use
-        pub key_id: String, default = "".to_owned()
-        /// Comma separated list of columns to encrypt
+    struct EncryptionConfig {
+        /// Comma-separated list of columns to encrypt
         pub encrypted_columns: String, default = "".to_owned()
     }
 }
 
-/// Wrapper type around `CryptoFactory` to allow implementing the `EncryptionFactory` trait
-struct KmsEncryptionFactory {
-    crypto_factory: CryptoFactory,
-}
+/// Mock implementation of an `EncryptionFactory` that stores encryption keys
+/// base64 encoded in the Parquet encryption metadata.
+/// For production use, integrating with a key-management service to encrypt
+/// data encryption keys is recommended.
+#[derive(Default, Debug)]
+struct TestEncryptionFactory {}
 
-impl std::fmt::Debug for KmsEncryptionFactory {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("KmsEncryptionFactory")
-            .finish_non_exhaustive()
-    }
-}
-
-/// `EncryptionFactory` is DataFusion trait for types that generate
+/// `EncryptionFactory` is a DataFusion trait for types that generate
 /// file encryption and decryption properties.
-impl EncryptionFactory for KmsEncryptionFactory {
+impl EncryptionFactory for TestEncryptionFactory {
     /// Generate file encryption properties to use when writing a Parquet file.
     /// The `schema` is provided so that it may be used to dynamically configure
     /// per-column encryption keys.
-    /// The file path is also provided, so that it may be used to set an
+    /// The file path is also available. We don't use the path in this example,
+    /// but other implementations may want to use this to compute an
     /// AAD prefix for the file, or to allow use of external key material
     /// (where key metadata is stored in a JSON file alongside Parquet files).
     fn get_file_encryption_properties(
@@ -236,53 +225,77 @@ impl EncryptionFactory for KmsEncryptionFactory {
         schema: &SchemaRef,
         _file_path: &Path,
     ) -> Result<Option<FileEncryptionProperties>> {
-        let config: KmsEncryptionConfig = options.to_extension_options()?;
-        if config.key_id.is_empty() {
-            return Err(DataFusionError::Configuration(
-                "Key id for encryption is not set".to_owned(),
-            ));
-        };
-        // Configure encryption key to use
-        let mut encryption_config_builder =
-            EncryptionConfiguration::builder(config.key_id.clone());
+        let config: EncryptionConfig = options.to_extension_options()?;
 
-        // Set up per-column encryption.
+        // Generate a random encryption key for this file.
+        let mut key = vec![0u8; 16];
+        OsRng.try_fill_bytes(&mut key).unwrap();
+
+        // Generate the key metadata that allows retrieving the key when reading the file.
+        let key_metadata = wrap_key(&key);
+
+        let mut builder = FileEncryptionProperties::builder(key.to_vec())
+            .with_footer_key_metadata(key_metadata.clone());
+
         let encrypted_columns: HashSet<&str> =
             config.encrypted_columns.split(",").collect();
         if !encrypted_columns.is_empty() {
-            let encrypted_columns: Vec<String> = schema
-                .fields
-                .iter()
-                .filter(|f| encrypted_columns.contains(f.name().as_str()))
-                .map(|f| f.name().clone())
-                .collect();
-            encryption_config_builder = encryption_config_builder
-                .add_column_key(config.key_id.clone(), encrypted_columns);
+            // Set up per-column encryption.
+            for field in schema.fields().iter() {
+                if encrypted_columns.contains(field.name().as_str()) {
+                    // Here we re-use the same key for all encrypted columns,
+                    // but new keys could also be generated per column.
+                    builder = builder.with_column_key_and_metadata(
+                        field.name().as_str(),
+                        key.clone(),
+                        key_metadata.clone(),
+                    );
+                }
+            }
         }
-        let encryption_config = encryption_config_builder.build()?;
 
-        // The KMS connection could be configured from the options if needed,
-        // but this example just uses the default options.
-        let kms_config = Arc::new(KmsConnectionConfig::default());
+        let encryption_properties = builder.build()?;
 
-        // Use the `CryptoFactory` to generate file encryption properties
-        Ok(Some(self.crypto_factory.file_encryption_properties(
-            kms_config,
-            &encryption_config,
-        )?))
+        Ok(Some(encryption_properties))
     }
 
     /// Generate file decryption properties to use when reading a Parquet file.
+    /// Rather than provide the AES keys directly for decryption, we set a `KeyRetriever`
+    /// that can determine the keys using the encryption metadata.
     fn get_file_decryption_properties(
         &self,
         _options: &EncryptionFactoryOptions,
         _file_path: &Path,
     ) -> Result<Option<FileDecryptionProperties>> {
-        let decryption_config = DecryptionConfiguration::builder().build();
-        let kms_config = Arc::new(KmsConnectionConfig::default());
-        Ok(Some(self.crypto_factory.file_decryption_properties(
-            kms_config,
-            decryption_config,
-        )?))
+        let decryption_properties =
+            FileDecryptionProperties::with_key_retriever(Arc::new(TestKeyRetriever {}))
+                .build()?;
+        Ok(Some(decryption_properties))
+    }
+}
+
+/// Mock implementation of encrypting a key that simply base64 encodes the key.
+/// Note that this is not a secure way to store encryption keys,
+/// and for production use keys should be encrypted with a KMS.
+fn wrap_key(key: &[u8]) -> Vec<u8> {
+    base64::prelude::BASE64_STANDARD
+        .encode(key)
+        .as_bytes()
+        .to_vec()
+}
+
+struct TestKeyRetriever {}
+
+impl KeyRetriever for TestKeyRetriever {
+    /// Get a data encryption key using the metadata stored in the Parquet file.
+    fn retrieve_key(
+        &self,
+        key_metadata: &[u8],
+    ) -> datafusion::parquet::errors::Result<Vec<u8>> {
+        let key_metadata = std::str::from_utf8(key_metadata)?;
+        let key = base64::prelude::BASE64_STANDARD
+            .decode(key_metadata)
+            .unwrap();
+        Ok(key)
     }
 }
