@@ -70,6 +70,12 @@ impl ExecutionProps {
         self
     }
 
+    #[deprecated(since = "50.0.0", note = "Use mark_start_execution instead")]
+    pub fn start_execution(&mut self) -> &Self {
+        let default_config = Arc::new(ConfigOptions::default());
+        self.mark_start_execution(default_config)
+    }
+
     /// Marks the execution of query started timestamp.
     /// This also instantiates a new alias generator.
     pub fn mark_start_execution(&mut self, config_options: Arc<ConfigOptions>) -> &Self {
