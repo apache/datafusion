@@ -107,4 +107,18 @@ mod tests {
         )
         .await
     }
+
+    #[tokio::test]
+    async fn test_logb_semantics() -> Result<()> {
+        let expected = vec![
+            "+-------+------+--------+",
+            "| x     | base | result |",
+            "+-------+------+--------+",
+            "| 1.0   | 10.0 | 0.0    |",
+            "| 100.0 | 10.0 | 2.0    |",
+            "+-------+------+--------+",
+        ];
+
+        test_scalar_fn_semantics("scalar_fn_logb_expr.substrait.json", expected).await
+    }
 }

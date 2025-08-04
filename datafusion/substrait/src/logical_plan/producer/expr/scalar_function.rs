@@ -34,6 +34,13 @@ pub fn from_scalar_function(
         });
     }
 
+    let arguments =
+        if let Some(handler) = CustomArgumentHandler::try_from_name(fun.name()) {
+            handler.build(arguments)?
+        } else {
+            arguments
+        };
+
     let function_anchor = producer.register_function(fun.name().to_string());
     #[allow(deprecated)]
     Ok(Expression {
@@ -45,6 +52,42 @@ pub fn from_scalar_function(
             args: vec![],
         })),
     })
+}
+
+// Handle functions that require custom handling for their arguments (e.g. log)
+struct CustomArgumentHandler {
+    fn_name: String,
+}
+
+impl CustomArgumentHandler {
+    pub fn try_from_name(name: &str) -> Option<Self> {
+        match name {
+            "log" => Some(Self {
+                fn_name: name.to_string(),
+            }),
+            _ => None,
+        }
+    }
+
+    pub fn build(
+        self,
+        args: Vec<FunctionArgument>,
+    ) -> datafusion::common::Result<Vec<FunctionArgument>> {
+        match self.fn_name.as_str() {
+            "log" => Self::build_log_args(args),
+            _ => not_impl_err!("No custom function handler for: {}", self.fn_name),
+        }
+    }
+
+    fn build_log_args(
+        args: Vec<FunctionArgument>,
+    ) -> datafusion::common::Result<Vec<FunctionArgument>> {
+        let [base, x]: [FunctionArgument; 2] = match args.try_into() {
+            Ok(args_arr) => args_arr,
+            Err(_) => not_impl_err!("Expected two arguments for log function")?,
+        };
+        Ok(vec![x, base])
+    }
 }
 
 pub fn from_unary_expr(

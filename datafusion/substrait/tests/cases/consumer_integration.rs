@@ -578,13 +578,25 @@ mod tests {
     //The between:any_any_any function is implemented as Expr::Between in the Substrait consumer
     //This test tests that the consumer correctly builds the Expr::Between expression for this function
     #[tokio::test]
-    async fn test_between_expr_for_scalar_functions() -> Result<()> {
+    async fn test_between_expr() -> Result<()> {
         let plan_str =
             test_plan_to_string("scalar_fn_to_between_expr.substrait.json").await?;
         assert_snapshot!(plan_str,
           @r#"
           Projection: expr BETWEEN low AND high AS result
             Values: (Int8(2), Int8(1), Int8(3)), (Int8(4), Int8(1), Int8(2))
+          "#
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_logb_expr() -> Result<()> {
+        let plan_str = test_plan_to_string("scalar_fn_logb_expr.substrait.json").await?;
+        assert_snapshot!(plan_str,
+          @r#"
+          Projection: x, base, log(base, x) AS result
+            Values: (Float32(1), Float32(10)), (Float32(100), Float32(10))
           "#
         );
         Ok(())
