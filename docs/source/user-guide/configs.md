@@ -164,3 +164,31 @@ The following runtime configuration settings are available:
 | datafusion.runtime.max_temp_directory_size | 100G    | Maximum temporary file directory size. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes). Example: '2G' for 2 gigabytes.    |
 | datafusion.runtime.memory_limit            | NULL    | Maximum memory limit for query execution. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes). Example: '2G' for 2 gigabytes. |
 | datafusion.runtime.temp_directory          | NULL    | The path to the temporary file directory.                                                                                                   |
+
+# Tuning Guide
+
+## Short Queries
+
+By default DataFusion will attempt to maximize parallelism and use all cores --
+For example, if you have 32 cores, each plan will split the data into 32
+partitions. However, if your data is small, the overhead of splitting the data
+to enable parallelization can dominate the actual computation.
+
+You can find out how many cores are being used via the [`EXPLAIN`] command and look
+at the number of partitions in the plan.
+
+[`explain`]: sql/explain.md
+
+The `datafusion.optimizer.repartition_file_min_size` option controls the minimum file size the
+[`ListingTable`] provider will attempt to repartition. However, this
+does not apply to user defined data sources and only works when DataFusion has accurate statistics.
+
+If you know your data is small, you can set the `datafusion.execution.target_partitions`
+option to a smaller number to reduce the overhead of repartitioning. For very small datasets (e.g. less
+than 1MB), we recommend setting `target_partitions` to 1 to avoid repartitioning altogether.
+
+```sql
+SET datafusion.execution.target_partitions = '1';
+```
+
+[`listingtable`]: https://docs.rs/datafusion/latest/datafusion/datasource/listing/struct.ListingTable.html
