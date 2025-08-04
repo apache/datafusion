@@ -305,6 +305,7 @@ fn optimize_projections(
                 .collect::<Result<_>>()?
         }
         LogicalPlan::Copy(_)
+        | LogicalPlan::RecursiveQuery(_)
         | LogicalPlan::Ddl(_)
         | LogicalPlan::Dml(_)
         | LogicalPlan::Explain(_)
@@ -345,7 +346,6 @@ fn optimize_projections(
                 .collect::<Result<Vec<_>>>()?
         }
         LogicalPlan::EmptyRelation(_)
-        | LogicalPlan::RecursiveQuery(_)
         | LogicalPlan::Values(_)
         | LogicalPlan::DescribeTable(_) => {
             // These operators have no inputs, so stop the optimization process.
