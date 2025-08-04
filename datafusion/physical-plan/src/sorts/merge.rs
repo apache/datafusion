@@ -195,7 +195,9 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
 
         match futures::ready!(self.streams.poll_next(cx, idx)) {
             None => Poll::Ready(Ok(())),
-            Some(Err(e)) => Poll::Ready(Err(e)),
+            Some(Err(e)) => {
+                Poll::Ready(Err(e))
+            }
             Some(Ok((cursor, batch))) => {
                 self.cursors[idx] = Some(Cursor::new(cursor));
                 Poll::Ready(self.in_progress.push_batch(idx, batch))
