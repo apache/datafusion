@@ -723,13 +723,12 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     /// Similarly to [`Hash`] and [`Eq`], if [`Self::equals`] returns true for two UDFs,
     /// their `hash_value`s must be the same.
     ///
-    /// By default, it is consistent with default implementation of [`Self::equals`].
+    /// By default, it only hashes the type. The other fields are not hashed, as usually the
+    /// name, signature, and aliases are implied by the UDF type. Recall that UDFs with state
+    /// (and thus possibly changing fields) must override [`Self::equals`] and [`Self::hash_value`].
     fn hash_value(&self) -> u64 {
         let hasher = &mut DefaultHasher::new();
         self.as_any().type_id().hash(hasher);
-        self.name().hash(hasher);
-        self.aliases().hash(hasher);
-        self.signature().hash(hasher);
         hasher.finish()
     }
 

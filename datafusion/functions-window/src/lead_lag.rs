@@ -159,15 +159,14 @@ static LAG_DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
         the value of expression should be retrieved. Defaults to 1.")
         .with_argument("default", "The default value if the offset is \
         not within the partition. Must be of the same type as expression.")
-        .with_sql_example(r#"```sql
-    --Example usage of the lag window function:
-    SELECT employee_id,
-           salary,
-           lag(salary, 1, 0) OVER (ORDER BY employee_id) AS prev_salary
-    FROM employees;
-```
-
+        .with_sql_example(r#"
 ```sql
+-- Example usage of the lag window function:
+SELECT employee_id,
+    salary,
+    lag(salary, 1, 0) OVER (ORDER BY employee_id) AS prev_salary
+FROM employees;
+
 +-------------+--------+-------------+
 | employee_id | salary | prev_salary |
 +-------------+--------+-------------+
@@ -176,7 +175,8 @@ static LAG_DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
 | 3           | 70000  | 50000       |
 | 4           | 60000  | 70000       |
 +-------------+--------+-------------+
-```"#)
+```
+"#)
         .build()
 });
 
@@ -195,17 +195,16 @@ static LEAD_DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
         forward the value of expression should be retrieved. Defaults to 1.")
         .with_argument("default", "The default value if the offset is \
         not within the partition. Must be of the same type as expression.")
-        .with_sql_example(r#"```sql
--- Example usage of lead() :
+        .with_sql_example(r#"
+```sql
+-- Example usage of lead window function:
 SELECT
     employee_id,
     department,
     salary,
     lead(salary, 1, 0) OVER (PARTITION BY department ORDER BY salary) AS next_salary
 FROM employees;
-```
 
-```sql
 +-------------+-------------+--------+--------------+
 | employee_id | department  | salary | next_salary  |
 +-------------+-------------+--------+--------------+
@@ -215,7 +214,8 @@ FROM employees;
 | 4           | Engineering | 40000  | 60000        |
 | 5           | Engineering | 60000  | 0            |
 +-------------+-------------+--------+--------------+
-```"#)
+```
+"#)
         .build()
 });
 
