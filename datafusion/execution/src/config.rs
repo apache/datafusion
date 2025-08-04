@@ -91,7 +91,10 @@ use datafusion_common::{
 /// [`SessionContext::new_with_config`]: https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionContext.html#method.new_with_config
 #[derive(Clone, Debug)]
 pub struct SessionConfig {
-    /// Configuration options, copy on write
+    /// Configuration options for the current session.
+    ///
+    /// A new copy is created on write, if there are other outstanding
+    /// references to the same options.
     options: Arc<ConfigOptions>,
     /// Opaque extensions.
     extensions: AnyMap,
