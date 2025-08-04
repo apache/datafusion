@@ -381,7 +381,7 @@ impl ScalarUDFImpl for ForeignScalarUDF {
             arg_fields,
             number_rows,
             return_field,
-        // TODO: pass config options: https://github.com/apache/datafusion/issues/17035
+            // TODO: pass config options: https://github.com/apache/datafusion/issues/17035
             config_options: _config_options,
         } = invoke_args;
 
