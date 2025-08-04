@@ -95,7 +95,7 @@ impl DataFrame {
 
         let plan = LogicalPlanBuilder::copy_to(
             plan,
-            path.into(),
+            path,
             file_type,
             Default::default(),
             options.partition_by,
