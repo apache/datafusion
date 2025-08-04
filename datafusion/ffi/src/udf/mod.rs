@@ -208,7 +208,7 @@ unsafe extern "C" fn invoke_with_args_fn_wrapper(
         arg_fields,
         number_rows,
         return_field,
-        // todo - should the config options go through serdes?
+        // TODO: pass config options: https://github.com/apache/datafusion/issues/17035
         config_options: Arc::new(ConfigOptions::default()),
     };
 
@@ -381,7 +381,7 @@ impl ScalarUDFImpl for ForeignScalarUDF {
             arg_fields,
             number_rows,
             return_field,
-            // todo - should the config options go through serdes?
+        // TODO: pass config options: https://github.com/apache/datafusion/issues/17035
             config_options: _config_options,
         } = invoke_args;
 
