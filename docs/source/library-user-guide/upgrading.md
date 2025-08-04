@@ -24,6 +24,34 @@
 **Note:** DataFusion `50.0.0` has not been released yet. The information provided in this section pertains to features and changes that have already been merged to the main branch and are awaiting release in this version.
 You can see the current [status of the `50.0.0 `release here](https://github.com/apache/datafusion/issues/16799)
 
+### `SessionState`, `SessionConfig`, and `OptimizerConfig` returns `&Arc<ConfigOptions>` instead of `&ConfigOptions`
+
+To provide broader access to `ConfigOptions` and reduce required clones, some
+APIs have been changed to return a `&Arc<ConfigOptions>` instead of a
+`&ConfigOptions`. This allows sharing the same `ConfigOptions` across multiple
+threads without needing to clone the entire `ConfigOptions` structure unless it
+is modified.
+
+Most users will not be impacted by this change since the Rust compiler typically
+automatically dereference the `Arc` when needed. However, in some cases you may
+have to change your code to explicitly call `as_ref()` for example, from
+
+```rust
+# /* comment to avoid running
+let optimizer_config: &ConfigOptions = state.options();
+#  */
+```
+
+To
+
+```rust
+# /* comment to avoid running
+let optimizer_config: &ConfigOptions = state.options().as_ref();
+#  */
+```
+
+See PR [#16970](https://github.com/apache/datafusion/pull/16970)
+
 ### API Change to `AsyncScalarUDFImpl::invoke_async_with_args`
 
 The `invoke_async_with_args` method of the `AsyncScalarUDFImpl` trait has been
