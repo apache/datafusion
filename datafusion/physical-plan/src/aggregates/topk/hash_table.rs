@@ -99,6 +99,7 @@ where
     owned: ArrayRef,
     map: TopKHashTable<Option<VAL::Native>>,
     rnd: RandomState,
+    kt: DataType,
 }
 
 impl StringHashTable {
@@ -216,12 +217,17 @@ where
     Option<<VAL as ArrowPrimitiveType>::Native>: Comparable,
     Option<<VAL as ArrowPrimitiveType>::Native>: HashValue,
 {
-    pub fn new(limit: usize) -> Self {
-        let owned = Arc::new(PrimitiveArray::<VAL>::builder(0).finish());
+    pub fn new(limit: usize, kt: DataType) -> Self {
+        let owned = Arc::new(
+            PrimitiveArray::<VAL>::builder(0)
+                .with_data_type(kt.clone())
+                .finish(),
+        );
         Self {
             owned,
             map: TopKHashTable::new(limit, limit * 10),
             rnd: RandomState::default(),
+            kt,
         }
     }
 }
@@ -249,7 +255,8 @@ where
 
     unsafe fn take_all(&mut self, indexes: Vec<usize>) -> ArrayRef {
         let ids = self.map.take_all(indexes);
-        let mut builder: PrimitiveBuilder<VAL> = PrimitiveArray::builder(ids.len());
+        let mut builder: PrimitiveBuilder<VAL> =
+            PrimitiveArray::builder(ids.len()).with_data_type(self.kt.clone());
         for id in ids.into_iter() {
             match id {
                 None => builder.append_null(),
@@ -413,7 +420,7 @@ pub fn new_hash_table(
 ) -> Result<Box<dyn ArrowHashTable + Send>> {
     macro_rules! downcast_helper {
         ($kt:ty, $d:ident) => {
-            return Ok(Box::new(PrimitiveHashTable::<$kt>::new(limit)))
+            return Ok(Box::new(PrimitiveHashTable::<$kt>::new(limit, kt)))
         };
     }
 
@@ -433,7 +440,26 @@ pub fn new_hash_table(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow::array::TimestampMillisecondArray;
+    use arrow_schema::TimeUnit;
     use std::collections::BTreeMap;
+
+    #[test]
+    fn should_emit_correct_type() -> Result<()> {
+        let ids =
+            TimestampMillisecondArray::from(vec![1000]).with_timezone("UTC".to_string());
+        let dt = DataType::Timestamp(TimeUnit::Millisecond, Some("UTC".into()));
+        let mut ht = new_hash_table(1, dt.clone())?;
+        ht.set_batch(Arc::new(ids));
+        let mut mapper = vec![];
+        let ids = unsafe {
+            ht.find_or_insert(0, 0, &mut mapper);
+            ht.take_all(vec![0])
+        };
+        assert_eq!(ids.data_type(), &dt);
+
+        Ok(())
+    }
 
     #[test]
     fn should_resize_properly() -> Result<()> {

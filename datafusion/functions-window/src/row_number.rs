@@ -46,15 +46,14 @@ define_udwf_and_expr!(
     doc_section(label = "Ranking Functions"),
     description = "Number of the current row within its partition, counting from 1.",
     syntax_example = "row_number()",
-    sql_example = r"```sql
-    --Example usage of the row_number window function:
-    SELECT department,
-           salary,
-           row_number() OVER (PARTITION BY department ORDER BY salary DESC) AS row_num
-    FROM employees;
-```
-
+    sql_example = r"
 ```sql
+-- Example usage of the row_number window function:
+SELECT department,
+  salary,
+  row_number() OVER (PARTITION BY department ORDER BY salary DESC) AS row_num
+FROM employees;
+
 +-------------+--------+---------+
 | department  | salary | row_num |
 +-------------+--------+---------+
@@ -65,7 +64,8 @@ define_udwf_and_expr!(
 | Engineering | 90000  | 1       |
 | Engineering | 80000  | 2       |
 +-------------+--------+---------+
-```#"
+```
+#"
 )]
 #[derive(Debug)]
 pub struct RowNumber {

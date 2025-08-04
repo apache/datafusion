@@ -65,10 +65,7 @@
 //! The optimizer rule currently checks the plan for exchange-like operators and leave operators
 //! that report [`SchedulingType::NonCooperative`] in their [plan properties](ExecutionPlan::properties).
 
-#[cfg(any(
-    datafusion_coop = "tokio_fallback",
-    not(any(datafusion_coop = "tokio", datafusion_coop = "per_stream"))
-))]
+#[cfg(datafusion_coop = "tokio_fallback")]
 use futures::Future;
 use std::any::Any;
 use std::pin::Pin;
@@ -133,10 +130,14 @@ where
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
-        #[cfg(datafusion_coop = "tokio")]
+        #[cfg(any(
+            datafusion_coop = "tokio",
+            not(any(
+                datafusion_coop = "tokio_fallback",
+                datafusion_coop = "per_stream"
+            ))
+        ))]
         {
-            // TODO this should be the default implementation
-            // Enable once https://github.com/tokio-rs/tokio/issues/7403 is merged and released
             let coop = std::task::ready!(tokio::task::coop::poll_proceed(cx));
             let value = self.inner.poll_next_unpin(cx);
             if value.is_ready() {
@@ -145,10 +146,7 @@ where
             value
         }
 
-        #[cfg(any(
-            datafusion_coop = "tokio_fallback",
-            not(any(datafusion_coop = "tokio", datafusion_coop = "per_stream"))
-        ))]
+        #[cfg(datafusion_coop = "tokio_fallback")]
         {
             // This is a temporary placeholder implementation that may have slightly
             // worse performance compared to `poll_proceed`

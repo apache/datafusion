@@ -45,6 +45,8 @@ pub struct NdJsonFormat {
     #[prost(message, optional, tag = "1")]
     pub options: ::core::option::Option<JsonOptions>,
 }
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+pub struct ArrowFormat {}
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PrimaryKeyConstraint {
     #[prost(uint64, repeated, tag = "1")]
@@ -762,6 +764,9 @@ pub struct ParquetOptions {
     /// default = false
     #[prost(bool, tag = "30")]
     pub skip_arrow_metadata: bool,
+    /// default = false
+    #[prost(bool, tag = "33")]
+    pub cache_metadata: bool,
     #[prost(uint64, tag = "12")]
     pub dictionary_page_size_limit: u64,
     #[prost(uint64, tag = "18")]

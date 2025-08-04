@@ -122,7 +122,6 @@ impl DynamicFilterPhysicalExpr {
     /// when evaluating the expression.
     ///
     /// [`collect_columns`]: crate::utils::collect_columns
-    #[allow(dead_code)] // Only used in tests for now
     pub fn new(
         children: Vec<Arc<dyn PhysicalExpr>>,
         inner: Arc<dyn PhysicalExpr>,
@@ -191,7 +190,6 @@ impl DynamicFilterPhysicalExpr {
     /// This should be called e.g.:
     /// - When we've computed the probe side's hash table in a HashJoinExec
     /// - After every batch is processed if we update the TopK heap in a SortExec using a TopK approach.
-    #[allow(dead_code)] // Only used in tests for now
     pub fn update(&self, new_expr: Arc<dyn PhysicalExpr>) -> Result<()> {
         let mut current = self.inner.write().map_err(|_| {
             datafusion_common::DataFusionError::Execution(
