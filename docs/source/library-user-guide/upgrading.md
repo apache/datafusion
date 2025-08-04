@@ -66,6 +66,12 @@ impl AsyncScalarUDFImpl for AskLLM {
 
 See [#16896](https://github.com/apache/datafusion/issues/16896) for more details.
 
+### Upgrade to arrow `56.0.0` and parquet `56.0.0`
+
+This version of DataFusion upgrades the underlying Apache Arrow implementation
+to version `56.0.0`. See the [release notes](https://github.com/apache/arrow-rs/releases/tag/56.0.0)
+for more details.
+
 ## DataFusion `49.0.0`
 
 ### `MSRV` updated to 1.85.1
