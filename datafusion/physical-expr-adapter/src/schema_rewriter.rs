@@ -20,7 +20,7 @@
 use std::sync::Arc;
 
 use arrow::compute::can_cast_types;
-use arrow::datatypes::{DataType, FieldRef, Schema, SchemaRef};
+use arrow::datatypes::{DataType, FieldRef, Schema};
 use datafusion_common::{
     exec_err,
     tree_node::{Transformed, TransformedResult, TreeNode},
@@ -315,10 +315,13 @@ impl<'a> PhysicalExprSchemaRewriter<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_common::{assert_contains, ScalarValue};
-    use datafusion_physical_expr::expressions::{CastExpr, Column, Literal};
+    use arrow::array::{RecordBatch, RecordBatchOptions};
+    use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+    use datafusion_common::{assert_contains, record_batch, Result, ScalarValue};
+    use datafusion_physical_expr::expressions::{col, lit, BinaryExpr, CastExpr, Column, Literal};
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+    use datafusion_expr::Operator;
+    use itertools::Itertools;
     use std::sync::Arc;
 
     fn create_test_schema() -> (Schema, Schema) {
@@ -340,23 +343,15 @@ mod tests {
     fn test_rewrite_column_with_type_cast() {
         let (physical_schema, logical_schema) = create_test_schema();
 
-        let factory = DefaultPhysicalExprAdapterFactory;
-        let adapter = factory.create(Arc::new(logical_schema), Arc::new(physical_schema));
+        let rewriter = PhysicalExprSchemaRewriter::new(&physical_schema, &logical_schema);
         let column_expr = Arc::new(Column::new("a", 0));
 
-        let result = adapter.rewrite(column_expr).unwrap();
+        let result = rewriter.rewrite(column_expr).unwrap();
 
-<<<<<<< HEAD:datafusion/physical-expr/src/schema_rewriter.rs
         let expected = Arc::new(CastExpr::new(
             Arc::new(Column::new("a", 0)),
             DataType::Int64,
             None,
-=======
-        let expected = Arc::new(CastExpr::new(
-            Arc::new(Column::new("a", 0)),
-            DataType::Int64,
-            None,
->>>>>>> f2143760b (feat: implement predicate adaptation missing fields of structs):datafusion/physical-expr-adapter/src/schema_rewriter.rs
         )) as Arc<dyn PhysicalExpr>;
 
         assert_eq!(result.to_string(), expected.to_string());
@@ -490,5 +485,165 @@ mod tests {
             Arc::new(Literal::new(partition_values[0].clone())) as Arc<dyn PhysicalExpr>;
 
         assert_eq!(result.to_string(), expected.to_string());
+    }
+
+    #[test]
+    fn test_rewrite_mulit_column_expr_with_type_cast() {
+        let (physical_schema, logical_schema) = create_test_schema();
+        let rewriter = PhysicalExprSchemaRewriter::new(&physical_schema, &logical_schema);
+
+        // Create a complex expression: (a + 5) OR (c > 0.0) that tests the recursive case of the rewriter
+        let column_a = Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>;
+        let column_c = Arc::new(Column::new("c", 2)) as Arc<dyn PhysicalExpr>;
+        let expr = BinaryExpr::new(
+            Arc::clone(&column_a),
+            Operator::Plus,
+            Arc::new(Literal::new(ScalarValue::Int64(Some(5)))),
+        );
+        let expr = BinaryExpr::new(
+            Arc::new(expr),
+            Operator::Or,
+            Arc::new(BinaryExpr::new(
+                Arc::clone(&column_c),
+                Operator::Gt,
+                Arc::new(Literal::new(ScalarValue::Float64(Some(0.0)))),
+            )),
+        );
+
+        let result = rewriter.rewrite(Arc::new(expr)).unwrap();
+
+        let expected = BinaryExpr::new(
+            Arc::new(CastExpr::new(
+                Arc::new(Column::new("a", 0)),
+                DataType::Int64,
+                None,
+            )),
+            Operator::Plus,
+            Arc::new(Literal::new(ScalarValue::Int64(Some(5)))),
+        );
+        let expected = Arc::new(BinaryExpr::new(
+            Arc::new(expected),
+            Operator::Or,
+            Arc::new(BinaryExpr::new(
+                lit(ScalarValue::Float64(None)), // c is missing, so it becomes null
+                Operator::Gt,
+                Arc::new(Literal::new(ScalarValue::Float64(Some(0.0)))),
+            )),
+        )) as Arc<dyn PhysicalExpr>;
+
+        assert_eq!(
+            result.to_string(),
+            expected.to_string(),
+            "The rewritten expression did not match the expected output"
+        );
+    }
+
+    #[test]
+    fn test_rewrite_no_change_needed() {
+        let (physical_schema, logical_schema) = create_test_schema();
+        let rewriter = PhysicalExprSchemaRewriter::new(&physical_schema, &logical_schema);
+        
+        // Column "b" exists in both schemas with the same type (Utf8)
+        let column_expr = Arc::new(Column::new("b", 1)) as Arc<dyn PhysicalExpr>;
+
+        let result = rewriter.rewrite(Arc::clone(&column_expr)).unwrap();
+
+        // The expression should remain unchanged since the column exists in both schemas
+        // with the same type. We check the actual content rather than pointer equality
+        // since the new API might create new instances.
+        assert_eq!(result.to_string(), column_expr.to_string());
+        
+        // Verify it's still a Column expression
+        assert!(result.as_any().downcast_ref::<Column>().is_some());
+    }
+
+    /// Helper function to project expressions onto a RecordBatch
+    fn batch_project(
+        expr: Vec<Arc<dyn PhysicalExpr>>,
+        batch: &RecordBatch,
+        schema: SchemaRef,
+    ) -> Result<RecordBatch> {
+        let arrays = expr
+            .iter()
+            .map(|expr| {
+                expr.evaluate(batch)
+                    .and_then(|v| v.into_array(batch.num_rows()))
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        if arrays.is_empty() {
+            let options =
+                RecordBatchOptions::new().with_row_count(Some(batch.num_rows()));
+            RecordBatch::try_new_with_options(Arc::clone(&schema), arrays, &options)
+                .map_err(Into::into)
+        } else {
+            RecordBatch::try_new(Arc::clone(&schema), arrays).map_err(Into::into)
+        }
+    }
+
+    /// Example showing how we can use the `PhysicalExprSchemaRewriter` to adapt RecordBatches during a scan
+    /// to apply projections, type conversions and handling of missing columns all at once.
+    #[test]
+    fn test_adapt_batches() {
+        let physical_batch = record_batch!(
+            ("a", Int32, vec![Some(1), None, Some(3)]),
+            ("extra", Utf8, vec![Some("x"), Some("y"), None])
+        )
+        .unwrap();
+
+        let physical_schema = physical_batch.schema();
+
+        let logical_schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, true), // Different type
+            Field::new("b", DataType::Utf8, true),  // Missing from physical
+        ]));
+
+        let projection = vec![
+            col("b", &logical_schema).unwrap(),
+            col("a", &logical_schema).unwrap(),
+        ];
+
+        let rewriter = PhysicalExprSchemaRewriter::new(&physical_schema, &logical_schema);
+
+        let adapted_projection = projection
+            .into_iter()
+            .map(|expr| rewriter.rewrite(expr).unwrap())
+            .collect_vec();
+
+        let adapted_schema = Arc::new(Schema::new(
+            adapted_projection
+                .iter()
+                .map(|expr| expr.return_field(&physical_schema).unwrap())
+                .collect_vec(),
+        ));
+
+        let res = batch_project(
+            adapted_projection,
+            &physical_batch,
+            Arc::clone(&adapted_schema),
+        )
+        .unwrap();
+
+        assert_eq!(res.num_columns(), 2);
+        assert_eq!(res.column(0).data_type(), &DataType::Utf8);
+        assert_eq!(res.column(1).data_type(), &DataType::Int64);
+        assert_eq!(
+            res.column(0)
+                .as_any()
+                .downcast_ref::<arrow::array::StringArray>()
+                .unwrap()
+                .iter()
+                .collect_vec(),
+            vec![None, None, None]
+        );
+        assert_eq!(
+            res.column(1)
+                .as_any()
+                .downcast_ref::<arrow::array::Int64Array>()
+                .unwrap()
+                .iter()
+                .collect_vec(),
+            vec![Some(1), None, Some(3)]
+        );
     }
 }
