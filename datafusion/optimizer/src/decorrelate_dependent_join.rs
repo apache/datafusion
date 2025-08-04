@@ -2153,7 +2153,7 @@ mod tests {
                 TableScan: customers [a:UInt32, b:UInt32, c:UInt32]
                 Projection: orders.c, customers_dscan_1.customers_a [c:UInt32, customers_a:UInt32;N]
                   Projection: orders.a, orders.b, orders.c, customers_dscan_1.customers_a [a:UInt32, b:UInt32, c:UInt32, customers_a:UInt32;N]
-                    Filter: row_number <= Int64(3) [a:UInt32, b:UInt32, c:UInt32, customers_a:UInt32;N, row_number:UInt64]
+                    Filter: row_number <= UInt64(3) [a:UInt32, b:UInt32, c:UInt32, customers_a:UInt32;N, row_number:UInt64]
                       WindowAggr: windowExpr=[[row_number() PARTITION BY [customers_dscan_1.customers_a] ORDER BY [orders.c DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS row_number]] [a:UInt32, b:UInt32, c:UInt32, customers_a:UInt32;N, row_number:UInt64]
                         Filter: orders.a = customers_dscan_1.customers_a AND orders.b = Int32(1) [a:UInt32, b:UInt32, c:UInt32, customers_a:UInt32;N]
                           Inner Join(DelimJoin):  Filter: Boolean(true) [a:UInt32, b:UInt32, c:UInt32, customers_a:UInt32;N]
@@ -2461,21 +2461,21 @@ mod tests {
             .build()?;
 
         assert_decorrelate!(plan, @r"
-           Projection: t1.t1_id, t1.t1_name [t1_id:Int32, t1_name:Utf8]
-             Projection: t1.t1_id, t1.t1_name, t1.t1_int [t1_id:Int32, t1_name:Utf8, t1_int:Int32]
-               Filter: __exists_sq_1 [t1_id:Int32, t1_name:Utf8, t1_int:Int32, __exists_sq_1:Boolean]
-                 Projection: t1.t1_id, t1.t1_name, t1.t1_int, mark AS __exists_sq_1 [t1_id:Int32, t1_name:Utf8, t1_int:Int32, __exists_sq_1:Boolean]
-                   LeftMark Join(ComparisonJoin):  Filter: t1.t1_id IS NOT DISTINCT FROM t1_dscan_1.t1_t1_id [t1_id:Int32, t1_name:Utf8, t1_int:Int32, mark:Boolean]
-                     TableScan: t1 [t1_id:Int32, t1_name:Utf8, t1_int:Int32]
-                     Projection: t2.t2_id, t2.t2_name, t2.t2_int, t1_dscan_1.t1_t1_id [t2_id:Int32, t2_name:Utf8, t2_int:Int32, t1_t1_id:Int32;N]
-                       Filter: row_number <= Int64(1) [t2_id:Int32, t2_name:Utf8, t2_int:Int32, t1_t1_id:Int32;N, row_number:UInt64]
-                         WindowAggr: windowExpr=[[row_number() PARTITION BY [t1_dscan_1.t1_t1_id] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS row_number]] [t2_id:Int32, t2_name:Utf8, t2_int:Int32, t1_t1_id:Int32;N, row_number:UInt64]
-                           Filter: t2.t2_id = t1_dscan_1.t1_t1_id [t2_id:Int32, t2_name:Utf8, t2_int:Int32, t1_t1_id:Int32;N]
-                             Inner Join(DelimJoin):  Filter: Boolean(true) [t2_id:Int32, t2_name:Utf8, t2_int:Int32, t1_t1_id:Int32;N]
-                               TableScan: t2 [t2_id:Int32, t2_name:Utf8, t2_int:Int32]
-                               Projection: t1.t1_id AS t1_dscan_1.t1_t1_id [t1_t1_id:Int32;N]
-                                 DelimGet: t1.t1_id [t1_id:Int32;N]
-            ");
+        Projection: t1.t1_id, t1.t1_name [t1_id:Int32, t1_name:Utf8]
+          Projection: t1.t1_id, t1.t1_name, t1.t1_int [t1_id:Int32, t1_name:Utf8, t1_int:Int32]
+            Filter: __exists_sq_1 [t1_id:Int32, t1_name:Utf8, t1_int:Int32, __exists_sq_1:Boolean]
+              Projection: t1.t1_id, t1.t1_name, t1.t1_int, mark AS __exists_sq_1 [t1_id:Int32, t1_name:Utf8, t1_int:Int32, __exists_sq_1:Boolean]
+                LeftMark Join(ComparisonJoin):  Filter: t1.t1_id IS NOT DISTINCT FROM t1_dscan_1.t1_t1_id [t1_id:Int32, t1_name:Utf8, t1_int:Int32, mark:Boolean]
+                  TableScan: t1 [t1_id:Int32, t1_name:Utf8, t1_int:Int32]
+                  Projection: t2.t2_id, t2.t2_name, t2.t2_int, t1_dscan_1.t1_t1_id [t2_id:Int32, t2_name:Utf8, t2_int:Int32, t1_t1_id:Int32;N]
+                    Filter: row_number <= UInt64(1) [t2_id:Int32, t2_name:Utf8, t2_int:Int32, t1_t1_id:Int32;N, row_number:UInt64]
+                      WindowAggr: windowExpr=[[row_number() PARTITION BY [t1_dscan_1.t1_t1_id] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS row_number]] [t2_id:Int32, t2_name:Utf8, t2_int:Int32, t1_t1_id:Int32;N, row_number:UInt64]
+                        Filter: t2.t2_id = t1_dscan_1.t1_t1_id [t2_id:Int32, t2_name:Utf8, t2_int:Int32, t1_t1_id:Int32;N]
+                          Inner Join(DelimJoin):  Filter: Boolean(true) [t2_id:Int32, t2_name:Utf8, t2_int:Int32, t1_t1_id:Int32;N]
+                            TableScan: t2 [t2_id:Int32, t2_name:Utf8, t2_int:Int32]
+                            Projection: t1.t1_id AS t1_dscan_1.t1_t1_id [t1_t1_id:Int32;N]
+                              DelimGet: t1.t1_id [t1_id:Int32;N]
+        ");
 
         Ok(())
     }
