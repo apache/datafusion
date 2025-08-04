@@ -19,7 +19,7 @@
 
 use std::any::Any;
 use std::fmt::Formatter;
-use std::ops::BitOr;
+use std::ops::{BitOr, ControlFlow};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::task::Poll;
@@ -64,7 +64,7 @@ use datafusion_physical_expr::equivalence::{
     join_equivalence_properties, ProjectionMapping,
 };
 
-use futures::{ready, Stream, StreamExt, TryStreamExt};
+use futures::{Stream, StreamExt, TryStreamExt};
 use log::debug;
 use parking_lot::Mutex;
 
@@ -822,15 +822,16 @@ impl Stream for NLJStream {
                 // side batch, before start joining.
                 NLJState::BufferingLeft => {
                     debug!("[NLJState] Entering: {:?}", self.state);
-                    match ready!(self.inner_table.get_shared(cx)) {
-                        Ok(left_data) => {
-                            self.buffered_left_data = Some(left_data);
-                            // TODO: implement memory-limited case
-                            self.left_exhausted = true;
-                            self.state = NLJState::FetchingRight;
-                            continue;
-                        }
-                        Err(e) => return Poll::Ready(Some(Err(e))),
+                    // inside `collect_left_input` (the rountine to buffer build
+                    // -side batches), related metrics except build time will be
+                    // updated.
+                    // stop on drop
+                    let build_metric = self.join_metrics.build_time.clone();
+                    let _build_timer = build_metric.timer();
+
+                    match self.handle_buffering_left(cx) {
+                        ControlFlow::Continue(()) => continue,
+                        ControlFlow::Break(poll) => return poll,
                     }
                 }
 
@@ -858,35 +859,13 @@ impl Stream for NLJStream {
                 // special handling (e.g., in cases like left join).
                 NLJState::FetchingRight => {
                     debug!("[NLJState] Entering: {:?}", self.state);
-                    match ready!(self.outer_table.poll_next_unpin(cx)) {
-                        Some(Ok(right_batch)) => {
-                            let right_batch_size = right_batch.num_rows();
+                    // stop on drop
+                    let join_metric = self.join_metrics.join_time.clone();
+                    let _join_timer = join_metric.timer();
 
-                            // Skip the empty batch
-                            if right_batch_size == 0 {
-                                continue;
-                            }
-
-                            self.current_right_batch = Some(right_batch);
-
-                            // Prepare right bitmap
-                            if self.should_track_unmatched_right {
-                                let zeroed_buf =
-                                    BooleanBuffer::new_unset(right_batch_size);
-                                self.current_right_batch_matched =
-                                    Some(BooleanArray::new(zeroed_buf, None));
-                            }
-
-                            self.l_probe_idx = 0;
-                            self.state = NLJState::ProbeRight;
-                            continue;
-                        }
-                        Some(Err(e)) => return Poll::Ready(Some(Err(e))),
-                        None => {
-                            // Right stream exhausted/as
-                            self.state = NLJState::EmitLeftUnmatched;
-                            continue;
-                        }
+                    match self.handle_fetching_right(cx) {
+                        ControlFlow::Continue(()) => continue,
+                        ControlFlow::Break(poll) => return poll,
                     }
                 }
 
@@ -906,33 +885,16 @@ impl Stream for NLJStream {
                 //    FetchRight state to check what to do next.
                 NLJState::ProbeRight => {
                     debug!("[NLJState] Entering: {:?}", self.state);
-                    // Return any completed batches first
-                    if let Some(poll) = self.maybe_flush_ready_batch() {
-                        return poll;
-                    }
 
-                    // Process current probe state
-                    match self.process_probe_batch() {
-                        // State unchanged (ProbeRight)
-                        // Continue probing until we have done joining the
-                        // current right batch with all buffered left rows.
-                        Ok(true) => continue,
-                        // To next FetchRightState
-                        // We have finished joining
-                        // (cur_right_batch x buffered_left_batches)
-                        Ok(false) => {
-                            // Left exhausted, transition to FetchingRight
-                            self.l_probe_idx = 0;
-                            if self.should_track_unmatched_right {
-                                debug_assert!(self.current_right_batch_matched.is_some());
-                                self.state = NLJState::EmitRightUnmatched;
-                            } else {
-                                self.current_right_batch = None;
-                                self.state = NLJState::FetchingRight;
-                            }
-                            continue;
+                    // stop on drop
+                    let join_metric = self.join_metrics.join_time.clone();
+                    let _join_timer = join_metric.timer();
+
+                    match self.handle_probe_right() {
+                        ControlFlow::Continue(()) => continue,
+                        ControlFlow::Break(poll) => {
+                            return self.join_metrics.baseline.record_poll(poll)
                         }
-                        Err(e) => return Poll::Ready(Some(Err(e))),
                     }
                 }
 
@@ -944,18 +906,17 @@ impl Stream for NLJStream {
                 // possible to output right unmatched (e.g. it's right join)
                 NLJState::EmitRightUnmatched => {
                     debug!("[NLJState] Entering: {:?}", self.state);
-                    debug_assert!(self.current_right_batch.is_some());
-                    debug_assert!(self.current_right_batch_matched.is_some());
 
-                    // Construct the result batch for unmatched right rows using a utility function
-                    if let Some(batch) = self.process_right_unmatched()? {
-                        self.output_buffer.push_batch(batch)?;
+                    // stop on drop
+                    let join_metric = self.join_metrics.join_time.clone();
+                    let _join_timer = join_metric.timer();
+
+                    match self.handle_emit_right_unmatched() {
+                        ControlFlow::Continue(()) => continue,
+                        ControlFlow::Break(poll) => {
+                            return self.join_metrics.baseline.record_poll(poll)
+                        }
                     }
-
-                    // Processed all in one pass
-                    // cleared inside `process_right_unmatched`
-                    debug_assert!(self.current_right_batch.is_none());
-                    self.state = NLJState::FetchingRight;
                 }
 
                 // NLJState transitions:
@@ -975,51 +936,31 @@ impl Stream for NLJStream {
                 // state again.
                 NLJState::EmitLeftUnmatched => {
                     debug!("[NLJState] Entering: {:?}", self.state);
-                    // Return any completed batches first
-                    if let Some(poll) = self.maybe_flush_ready_batch() {
-                        return poll;
-                    }
 
-                    // Process current unmatched state
-                    match self.process_left_unmatched() {
-                        // State unchanged (EmitLeftUnmatched)
-                        // Continue processing until we have processed all unmatched rows
-                        Ok(true) => continue,
-                        // To Done state
-                        // We have finished processing all unmatched rows
-                        Ok(false) => {
-                            self.output_buffer.finish_buffered_batch()?;
-                            self.state = NLJState::Done;
-                            continue;
+                    // stop on drop
+                    let join_metric = self.join_metrics.join_time.clone();
+                    let _join_timer = join_metric.timer();
+
+                    match self.handle_emit_left_unmatched() {
+                        ControlFlow::Continue(()) => continue,
+                        ControlFlow::Break(poll) => {
+                            return self.join_metrics.baseline.record_poll(poll)
                         }
-                        Err(e) => return Poll::Ready(Some(Err(e))),
                     }
                 }
 
                 // The final state and the exit point
                 NLJState::Done => {
                     debug!("[NLJState] Entering: {:?}", self.state);
-                    // Return any remaining completed batches before final termination
-                    if let Some(poll) = self.maybe_flush_ready_batch() {
-                        return poll;
-                    }
 
-                    // HACK for the doc test in https://github.com/apache/datafusion/blob/main/datafusion/core/src/dataframe/mod.rs#L1265
-                    // If this operator directly return `Poll::Ready(None)`
-                    // for empty result, the final result will become an empty
-                    // batch with empty schema, however the expected result
-                    // should be with the expected schema for this operator
-                    if !self.handled_empty_output {
-                        let zero_count = Count::new();
-                        if *self.join_metrics.baseline.output_rows() == zero_count {
-                            let empty_batch =
-                                RecordBatch::new_empty(Arc::clone(&self.output_schema));
-                            self.handled_empty_output = true;
-                            return Poll::Ready(Some(Ok(empty_batch)));
-                        }
-                    }
+                    // stop on drop
+                    let join_metric = self.join_metrics.join_time.clone();
+                    let _join_timer = join_metric.timer();
+                    // counting it in join timer due to there might be some
+                    // final resout batches to output in this state
 
-                    return Poll::Ready(None);
+                    let poll = self.handle_done();
+                    return self.join_metrics.baseline.record_poll(poll);
                 }
             }
         }
@@ -1074,6 +1015,194 @@ impl NLJStream {
             handled_empty_output: false,
             should_track_unmatched_right,
         }
+    }
+
+    // ==== State handler functions ====
+
+    /// Handle BufferingLeft state - prepare left side batches
+    fn handle_buffering_left(
+        &mut self,
+        cx: &mut std::task::Context<'_>,
+    ) -> ControlFlow<Poll<Option<Result<RecordBatch>>>> {
+        match self.inner_table.get_shared(cx) {
+            Poll::Ready(Ok(left_data)) => {
+                self.buffered_left_data = Some(left_data);
+                // TODO: implement memory-limited case
+                self.left_exhausted = true;
+                self.state = NLJState::FetchingRight;
+                // Continue to next state immediately
+                ControlFlow::Continue(())
+            }
+            Poll::Ready(Err(e)) => ControlFlow::Break(Poll::Ready(Some(Err(e)))),
+            Poll::Pending => ControlFlow::Break(Poll::Pending),
+        }
+    }
+
+    /// Handle FetchingRight state - fetch next right batch and prepare for processing
+    fn handle_fetching_right(
+        &mut self,
+        cx: &mut std::task::Context<'_>,
+    ) -> ControlFlow<Poll<Option<Result<RecordBatch>>>> {
+        match self.outer_table.poll_next_unpin(cx) {
+            Poll::Ready(result) => match result {
+                Some(Ok(right_batch)) => {
+                    // Update metrics
+                    self.join_metrics.input_rows.add(right_batch.num_rows());
+                    self.join_metrics.input_batches.add(1);
+
+                    let right_batch_size = right_batch.num_rows();
+
+                    // Skip the empty batch
+                    if right_batch_size == 0 {
+                        return ControlFlow::Continue(());
+                    }
+
+                    self.current_right_batch = Some(right_batch);
+
+                    // Prepare right bitmap
+                    if self.should_track_unmatched_right {
+                        let zeroed_buf = BooleanBuffer::new_unset(right_batch_size);
+                        self.current_right_batch_matched =
+                            Some(BooleanArray::new(zeroed_buf, None));
+                    }
+
+                    self.l_probe_idx = 0;
+                    self.state = NLJState::ProbeRight;
+                    ControlFlow::Continue(())
+                }
+                Some(Err(e)) => ControlFlow::Break(Poll::Ready(Some(Err(e)))),
+                None => {
+                    // Right stream exhausted
+                    self.state = NLJState::EmitLeftUnmatched;
+                    ControlFlow::Continue(())
+                }
+            },
+            Poll::Pending => ControlFlow::Break(Poll::Pending),
+        }
+    }
+
+    /// Handle ProbeRight state - process current probe batch
+    fn handle_probe_right(&mut self) -> ControlFlow<Poll<Option<Result<RecordBatch>>>> {
+        // Return any completed batches first
+        if let Some(poll) = self.maybe_flush_ready_batch() {
+            return ControlFlow::Break(poll);
+        }
+
+        // Process current probe state
+        match self.process_probe_batch() {
+            // State unchanged (ProbeRight)
+            // Continue probing until we have done joining the
+            // current right batch with all buffered left rows.
+            Ok(true) => ControlFlow::Continue(()),
+            // To next FetchRightState
+            // We have finished joining
+            // (cur_right_batch x buffered_left_batches)
+            Ok(false) => {
+                // Left exhausted, transition to FetchingRight
+                self.l_probe_idx = 0;
+                if self.should_track_unmatched_right {
+                    debug_assert!(self.current_right_batch_matched.is_some());
+                    self.state = NLJState::EmitRightUnmatched;
+                } else {
+                    self.current_right_batch = None;
+                    self.state = NLJState::FetchingRight;
+                }
+                ControlFlow::Continue(())
+            }
+            Err(e) => ControlFlow::Break(Poll::Ready(Some(Err(e)))),
+        }
+    }
+
+    /// Handle EmitRightUnmatched state - emit unmatched right rows
+    fn handle_emit_right_unmatched(
+        &mut self,
+    ) -> ControlFlow<Poll<Option<Result<RecordBatch>>>> {
+        // Return any completed batches first
+        if let Some(poll) = self.maybe_flush_ready_batch() {
+            return ControlFlow::Break(poll);
+        }
+
+        debug_assert!(self.current_right_batch.is_some());
+        debug_assert!(self.current_right_batch_matched.is_some());
+
+        // Construct the result batch for unmatched right rows using a utility function
+        match self.process_right_unmatched() {
+            Ok(Some(batch)) => {
+                match self.output_buffer.push_batch(batch) {
+                    Ok(()) => {
+                        // Processed all in one pass
+                        // cleared inside `process_right_unmatched`
+                        debug_assert!(self.current_right_batch.is_none());
+                        self.state = NLJState::FetchingRight;
+                        ControlFlow::Continue(())
+                    }
+                    Err(e) => ControlFlow::Break(Poll::Ready(Some(Err(
+                        DataFusionError::ArrowError(Box::new(e), None),
+                    )))),
+                }
+            }
+            Ok(None) => {
+                // Processed all in one pass
+                // cleared inside `process_right_unmatched`
+                debug_assert!(self.current_right_batch.is_none());
+                self.state = NLJState::FetchingRight;
+                ControlFlow::Continue(())
+            }
+            Err(e) => ControlFlow::Break(Poll::Ready(Some(Err(e)))),
+        }
+    }
+
+    /// Handle EmitLeftUnmatched state - emit unmatched left rows
+    fn handle_emit_left_unmatched(
+        &mut self,
+    ) -> ControlFlow<Poll<Option<Result<RecordBatch>>>> {
+        // Return any completed batches first
+        if let Some(poll) = self.maybe_flush_ready_batch() {
+            return ControlFlow::Break(poll);
+        }
+
+        // Process current unmatched state
+        match self.process_left_unmatched() {
+            // State unchanged (EmitLeftUnmatched)
+            // Continue processing until we have processed all unmatched rows
+            Ok(true) => ControlFlow::Continue(()),
+            // To Done state
+            // We have finished processing all unmatched rows
+            Ok(false) => match self.output_buffer.finish_buffered_batch() {
+                Ok(()) => {
+                    self.state = NLJState::Done;
+                    ControlFlow::Continue(())
+                }
+                Err(e) => ControlFlow::Break(Poll::Ready(Some(Err(
+                    DataFusionError::ArrowError(Box::new(e), None),
+                )))),
+            },
+            Err(e) => ControlFlow::Break(Poll::Ready(Some(Err(e)))),
+        }
+    }
+
+    /// Handle Done state - final state processing
+    fn handle_done(&mut self) -> Poll<Option<Result<RecordBatch>>> {
+        // Return any remaining completed batches before final termination
+        if let Some(poll) = self.maybe_flush_ready_batch() {
+            return poll;
+        }
+
+        // HACK for the doc test in https://github.com/apache/datafusion/blob/main/datafusion/core/src/dataframe/mod.rs#L1265
+        // If this operator directly return `Poll::Ready(None)`
+        // for empty result, the final result will become an empty
+        // batch with empty schema, however the expected result
+        // should be with the expected schema for this operator
+        if !self.handled_empty_output {
+            let zero_count = Count::new();
+            if *self.join_metrics.baseline.output_rows() == zero_count {
+                let empty_batch = RecordBatch::new_empty(Arc::clone(&self.output_schema));
+                self.handled_empty_output = true;
+                return Poll::Ready(Some(Ok(empty_batch)));
+            }
+        }
+
+        Poll::Ready(None)
     }
 
     // ==== Core logic handling for each state ====
@@ -1314,8 +1443,11 @@ impl NLJStream {
     fn maybe_flush_ready_batch(&mut self) -> Option<Poll<Option<Result<RecordBatch>>>> {
         if self.output_buffer.has_completed_batch() {
             if let Some(batch) = self.output_buffer.next_completed_batch() {
-                let poll = Poll::Ready(Some(Ok(batch)));
-                return Some(self.join_metrics.baseline.record_poll(poll));
+                // HACK: this is not part of `BaselineMetrics` yet, so update it
+                // manually
+                self.join_metrics.output_batches.add(1);
+
+                return Some(Poll::Ready(Some(Ok(batch))));
             }
         }
 
