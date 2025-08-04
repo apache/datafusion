@@ -322,16 +322,18 @@ impl BuiltinExprBuilder {
         consumer: &impl SubstraitConsumer,
         args: Vec<Expr>,
     ) -> Result<Expr> {
-        let [x, base] = match args.try_into() {
-            Ok(args_arr) => args_arr,
-            Err(_) => return substrait_err!("Expect two arguments for logb function"),
-        };
+        if args.len() != 2 {
+            return substrait_err!("Expect two arguments for logb function");
+        }
+
+        let mut args = args;
+        args.swap(0, 1);
 
         //The equivalent of logb in DataFusion is the log function (which has its arguments in reverse order)
         if let Ok(func) = consumer.get_function_registry().udf("log") {
             Ok(Expr::ScalarFunction(expr::ScalarFunction::new_udf(
                 func.to_owned(),
-                vec![base, x],
+                args,
             )))
         } else {
             not_impl_err!("Unsupported function name: logb")
