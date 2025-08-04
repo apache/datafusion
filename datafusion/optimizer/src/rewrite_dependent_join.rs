@@ -17,6 +17,7 @@
 
 //! [`DependentJoinRewriter`] converts correlated subqueries to `DependentJoin`
 
+use std::collections::VecDeque;
 use std::ops::Deref;
 use std::sync::Arc;
 
@@ -521,6 +522,7 @@ struct Node {
     columns_accesses_by_subquery_id: IndexMap<usize, Vec<ColumnAccess>>,
 
     is_dependent_join_node: bool,
+    subquery_types: VecDeque<SubqueryType>,
     // a dependent join node with LogicalPlan::Join variation can have subquery children
     // in two scenarios:
     // - it is a lateral join
@@ -644,11 +646,14 @@ impl TreeNodeRewriter for DependentJoinRewriter {
         let mut subquery_type = SubqueryType::None;
         // for each node, find which column it is accessing, which column it is providing
         // Set of columns current node access
+        let mut subquery_types = VecDeque::new();
         match &node {
             LogicalPlan::Filter(f) => {
-                if contains_subquery(&f.predicate) {
-                    is_dependent_join_node = true;
-                }
+                collect_subquery_types(
+                    &f.predicate,
+                    &mut is_dependent_join_node,
+                    &mut subquery_types,
+                );
 
                 f.predicate
                     .apply(|expr| {
@@ -659,29 +664,13 @@ impl TreeNodeRewriter for DependentJoinRewriter {
                     })
                     .expect("traversal is infallible");
             }
-            // TODO: maybe there are more logical plan that provides columns
-            // aside from TableScan
-            LogicalPlan::TableScan(tbl_scan) => {
-                tbl_scan
-                    .projected_schema
-                    .columns()
-                    .iter()
-                    .try_for_each(|col| {
-                        self.conclude_lowest_dependent_join_node_if_any(new_id, col)
-                    })?;
-            }
-            // Similar to TableScan, this node may provide column names which
-            // is referenced inside some subqueries
-            LogicalPlan::SubqueryAlias(alias) => {
-                alias.schema.columns().iter().try_for_each(|col| {
-                    self.conclude_lowest_dependent_join_node_if_any(new_id, col)
-                })?;
-            }
             LogicalPlan::Projection(proj) => {
                 for expr in &proj.expr {
-                    if contains_subquery(expr) {
-                        is_dependent_join_node = true;
-                    }
+                    collect_subquery_types(
+                        expr,
+                        &mut is_dependent_join_node,
+                        &mut subquery_types,
+                    );
                     expr.apply(|expr| {
                         if let Expr::OuterReferenceColumn(data_type, col) = expr {
                             self.mark_outer_column_access(new_id, data_type, col);
@@ -690,7 +679,7 @@ impl TreeNodeRewriter for DependentJoinRewriter {
                     })?;
                 }
             }
-            LogicalPlan::Subquery(subquery) => {
+            LogicalPlan::Subquery(_) => {
                 let parent = self.stack.last().ok_or(internal_datafusion_err!(
                     "subquery node cannot be at the beginning of the query plan"
                 ))?;
@@ -711,46 +700,18 @@ impl TreeNodeRewriter for DependentJoinRewriter {
                 if parent_node.is_lateral_join {
                     subquery_type = SubqueryType::LateralJoin;
                 } else {
-                    for expr in parent_node.plan.expressions() {
-                        expr.exists(|e| {
-                            let (found_sq, checking_type) = match e {
-                                Expr::ScalarSubquery(sq) => {
-                                    if sq == subquery {
-                                        (true, SubqueryType::Scalar)
-                                    } else {
-                                        (false, SubqueryType::None)
-                                    }
-                                }
-                                Expr::Exists(exist) => {
-                                    if &exist.subquery == subquery {
-                                        (true, SubqueryType::Exists)
-                                    } else {
-                                        (false, SubqueryType::None)
-                                    }
-                                }
-                                Expr::InSubquery(in_sq) => {
-                                    if &in_sq.subquery == subquery {
-                                        (true, SubqueryType::In)
-                                    } else {
-                                        (false, SubqueryType::None)
-                                    }
-                                }
-                                _ => (false, SubqueryType::None),
-                            };
-                            if found_sq {
-                                subquery_type = checking_type;
-                            }
-
-                            Ok(found_sq)
-                        })?;
-                    }
+                    subquery_type = parent_node.subquery_types.pop_front().ok_or(
+                        internal_datafusion_err!("subquery_types queue is empty"),
+                    )?;
                 }
             }
             LogicalPlan::Aggregate(aggregate) => {
                 for expr in &aggregate.group_expr {
-                    if contains_subquery(expr) {
-                        is_dependent_join_node = true;
-                    }
+                    collect_subquery_types(
+                        expr,
+                        &mut is_dependent_join_node,
+                        &mut subquery_types,
+                    );
 
                     expr.apply(|expr| {
                         if let Expr::OuterReferenceColumn(data_type, col) = expr {
@@ -761,9 +722,11 @@ impl TreeNodeRewriter for DependentJoinRewriter {
                 }
 
                 for expr in &aggregate.aggr_expr {
-                    if contains_subquery(expr) {
-                        is_dependent_join_node = true;
-                    }
+                    collect_subquery_types(
+                        expr,
+                        &mut is_dependent_join_node,
+                        &mut subquery_types,
+                    );
 
                     expr.apply(|expr| {
                         if let Expr::OuterReferenceColumn(data_type, col) = expr {
@@ -794,6 +757,7 @@ impl TreeNodeRewriter for DependentJoinRewriter {
                         Node {
                             plan: node.clone(),
                             is_dependent_join_node: true,
+                            subquery_types: VecDeque::new(),
                             columns_accesses_by_subquery_id: IndexMap::new(),
                             subquery_type,
                             is_lateral_join: true,
@@ -827,9 +791,11 @@ impl TreeNodeRewriter for DependentJoinRewriter {
                 }
 
                 if let Some(filter) = &join.filter {
-                    if contains_subquery(filter) {
-                        is_dependent_join_node = true;
-                    }
+                    collect_subquery_types(
+                        filter,
+                        &mut is_dependent_join_node,
+                        &mut subquery_types,
+                    );
 
                     filter.apply(|expr| {
                         if let Expr::OuterReferenceColumn(data_type, col) = expr {
@@ -841,9 +807,11 @@ impl TreeNodeRewriter for DependentJoinRewriter {
             }
             LogicalPlan::Sort(sort) => {
                 for expr in &sort.expr {
-                    if contains_subquery(&expr.expr) {
-                        is_dependent_join_node = true;
-                    }
+                    collect_subquery_types(
+                        &expr.expr,
+                        &mut is_dependent_join_node,
+                        &mut subquery_types,
+                    );
 
                     expr.expr.apply(|expr| {
                         if let Expr::OuterReferenceColumn(data_type, col) = expr {
@@ -852,6 +820,24 @@ impl TreeNodeRewriter for DependentJoinRewriter {
                         Ok(TreeNodeRecursion::Continue)
                     })?;
                 }
+            }
+            // TODO: maybe there are more logical plan that provides columns
+            // aside from TableScan
+            LogicalPlan::TableScan(tbl_scan) => {
+                tbl_scan
+                    .projected_schema
+                    .columns()
+                    .iter()
+                    .try_for_each(|col| {
+                        self.conclude_lowest_dependent_join_node_if_any(new_id, col)
+                    })?;
+            }
+            // Similar to TableScan, this node may provide column names which
+            // is referenced inside some subqueries
+            LogicalPlan::SubqueryAlias(alias) => {
+                alias.schema.columns().iter().try_for_each(|col| {
+                    self.conclude_lowest_dependent_join_node_if_any(new_id, col)
+                })?;
             }
             _ => {}
         };
@@ -866,6 +852,7 @@ impl TreeNodeRewriter for DependentJoinRewriter {
                 plan: node.clone(),
                 is_dependent_join_node,
                 columns_accesses_by_subquery_id: IndexMap::new(),
+                subquery_types,
                 subquery_type,
                 is_lateral_join: false,
             },
@@ -937,6 +924,7 @@ impl TreeNodeRewriter for DependentJoinRewriter {
                     subquery_alias_by_offset,
                 )?;
             }
+
             LogicalPlan::Join(join) => {
                 if node_info.is_lateral_join {
                     current_plan = self.rewrite_lateral_join(
@@ -974,6 +962,51 @@ impl TreeNodeRewriter for DependentJoinRewriter {
         }
         Ok(Transformed::yes(current_plan.build()?))
     }
+}
+
+fn collect_subquery_types(
+    sub_expr: &Expr,
+    is_dependent_join_node: &mut bool,
+    subquery_types: &mut VecDeque<SubqueryType>,
+) {
+    sub_expr
+        .apply(|expr| {
+            Ok(match expr {
+                Expr::ScalarSubquery(_) => {
+                    *is_dependent_join_node = true;
+                    subquery_types.push_back(SubqueryType::Scalar);
+                    TreeNodeRecursion::Continue
+                }
+                Expr::InSubquery(_) => {
+                    *is_dependent_join_node = true;
+                    subquery_types.push_back(SubqueryType::In);
+                    TreeNodeRecursion::Continue
+                }
+                Expr::Exists(_) => {
+                    *is_dependent_join_node = true;
+                    subquery_types.push_back(SubqueryType::Exists);
+                    TreeNodeRecursion::Continue
+                }
+                _ => TreeNodeRecursion::Continue,
+            })
+        })
+        .expect("Inner is always Ok");
+
+    //match sub_expr {
+    //    Expr::ScalarSubquery(_) => {
+    //        *is_dependent_join_node = true;
+    //        subquery_types.push_back(SubqueryType::Scalar);
+    //    }
+    //    Expr::InSubquery(_) => {
+    //        *is_dependent_join_node = true;
+    //        subquery_types.push_back(SubqueryType::In);
+    //    }
+    //    Expr::Exists(_) => {
+    //        *is_dependent_join_node = true;
+    //        subquery_types.push_back(SubqueryType::Exists);
+    //    }
+    //    _ => {}
+    //}
 }
 
 /// Normalize negated subqueries by extracting the NOT to the top level
@@ -1051,8 +1084,8 @@ mod tests {
     use datafusion_common::{alias::AliasGenerator, Result, Spans};
     use datafusion_expr::{
         and, binary_expr, exists, expr::InSubquery, expr_fn::col, in_subquery, lit,
-        out_ref_col, scalar_subquery, Expr, JoinType, LogicalPlan, LogicalPlanBuilder,
-        Operator, SortExpr, Subquery,
+        not_exists, out_ref_col, scalar_subquery, Expr, JoinType, LogicalPlan,
+        LogicalPlanBuilder, Operator, SortExpr, Subquery,
     };
     use datafusion_functions_aggregate::{count::count, sum::sum};
     use insta::assert_snapshot;
@@ -1064,16 +1097,16 @@ mod tests {
             // @ $expected:literal $(,)?
         ) => {{
             let mut index = DependentJoinRewriter::new(Arc::new(AliasGenerator::new()));
-            let transformed = index.rewrite_subqueries_into_dependent_joins($plan.clone());
-            if let Err(err) = transformed{
+            let transformed =
+                index.rewrite_subqueries_into_dependent_joins($plan.clone());
+            if let Err(err) = transformed {
                 // assert_snapshot!(
                 //     err,
                 //     @ $expected,
                 // )
-            } else{
-                panic!("rewriting {} was not returning error",$plan)
+            } else {
+                panic!("rewriting {} was not returning error", $plan)
             }
-
         }};
     }
 
@@ -2263,8 +2296,7 @@ mod tests {
         //   TableScan: t1
         //   TableScan: t2
         assert_dependent_join_rewrite_err!(
-            plan
-            //@"This feature is not implemented: subquery inside lateral join condition is not supported"
+            plan //@"This feature is not implemented: subquery inside lateral join condition is not supported"
         );
 
         Ok(())
@@ -2348,6 +2380,69 @@ mod tests {
                   TableScan: t3 [id:Int32, val:Int32]
             Filter: t3.id = outer_ref(t2.key) [id:Int32, val:Int32]
               TableScan: t3 [id:Int32, val:Int32]
+        "
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_two_exists_subqueries_with_or_filter() -> Result<()> {
+        // Test case for the SQL pattern mentioned in the documentation comment:
+        // SELECT ID FROM T1 WHERE EXISTS(SELECT * FROM T2 WHERE T2.ID=T1.ID) OR EXISTS(SELECT * FROM T2 WHERE T2.VALUE=T1.ID);
+
+        let t1 = test_table_with_columns(
+            "t1",
+            &[("id", DataType::Int32), ("value", DataType::Int32)],
+        )?;
+
+        let t2 = test_table_with_columns(
+            "t2",
+            &[("id", DataType::Int32), ("value", DataType::Int32)],
+        )?;
+
+        // First EXISTS subquery: SELECT * FROM T2 WHERE T2.ID=T1.ID
+        let exists_sq1 = Arc::new(
+            LogicalPlanBuilder::from(t2.clone())
+                .filter(col("t2.id").eq(out_ref_col(DataType::Int32, "t1.id")))?
+                .build()?,
+        );
+
+        // Second EXISTS subquery: SELECT * FROM T2 WHERE T2.VALUE=T1.ID
+        let exists_sq2 = Arc::new(
+            LogicalPlanBuilder::from(t2)
+                .filter(col("t2.value").eq(out_ref_col(DataType::Int32, "t1.id")))?
+                .build()?,
+        );
+
+        // Build the main query: SELECT ID FROM T1 WHERE EXISTS(...) OR EXISTS(...)
+        let plan = LogicalPlanBuilder::from(t1)
+            .filter(exists(exists_sq1).or(not_exists(exists_sq2)))?
+            .project(vec![col("t1.id")])?
+            .build()?;
+
+        // Filter: EXISTS (<subquery>) OR EXISTS (<subquery>)
+        //   Subquery:
+        //     Filter: t2.id = outer_ref(t1.id)
+        //       TableScan: t2
+        //   Subquery:
+        //     Filter: t2.value = outer_ref(t1.id)
+        //       TableScan: t2
+        //   TableScan: t1
+
+        assert_dependent_join_rewrite!(
+            plan,
+            @r"
+            Projection: t1.id [id:Int32]
+              Projection: t1.id, t1.value [id:Int32, value:Int32]
+                Filter: __exists_sq_1 OR NOT __exists_sq_2 [id:Int32, value:Int32, __exists_sq_1:Boolean, __exists_sq_2:Boolean]
+                  DependentJoin on [t1.id lvl 1] with expr EXISTS (<subquery>) depth 1 [id:Int32, value:Int32, __exists_sq_1:Boolean, __exists_sq_2:Boolean]
+                    DependentJoin on [t1.id lvl 1] with expr EXISTS (<subquery>) depth 1 [id:Int32, value:Int32, __exists_sq_1:Boolean]
+                      TableScan: t1 [id:Int32, value:Int32]
+                      Filter: t2.id = outer_ref(t1.id) [id:Int32, value:Int32]
+                        TableScan: t2 [id:Int32, value:Int32]
+                    Filter: t2.value = outer_ref(t1.id) [id:Int32, value:Int32]
+                      TableScan: t2 [id:Int32, value:Int32]
         "
         );
 

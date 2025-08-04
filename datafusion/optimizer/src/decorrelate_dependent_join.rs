@@ -1466,7 +1466,7 @@ impl OptimizerRule for DecorrelateDependentJoin {
         let rewrite_result = transformer.rewrite_subqueries_into_dependent_joins(plan)?;
 
         if rewrite_result.transformed {
-            // println!("{}", rewrite_result.data.display_indent_schema());
+            println!("{}", rewrite_result.data.display_indent_schema());
             let mut decorrelator = DependentJoinDecorrelator::new_root();
             return Ok(Transformed::yes(decorrelator.decorrelate(
                 &rewrite_result.data,
@@ -1474,6 +1474,7 @@ impl OptimizerRule for DecorrelateDependentJoin {
                 0,
             )?));
         }
+
         Ok(rewrite_result)
     }
 
@@ -2476,6 +2477,56 @@ mod tests {
                             Projection: t1.t1_id AS t1_dscan_1.t1_t1_id [t1_t1_id:Int32;N]
                               DelimGet: t1.t1_id [t1_id:Int32;N]
         ");
+
+        Ok(())
+    }
+
+    #[test]
+    fn subquery_slt_test5() -> Result<()> {
+        // Test case for: SELECT t1_id, (SELECT count(*) FROM t2 WHERE t2.t2_int = t1.t1_int) from t1;
+
+        // Create test tables matching the SQL schema
+        let t1 = test_table_with_columns(
+            "t1",
+            &[
+                ("t1_id", ArrowDataType::Int32),
+                ("t1_name", ArrowDataType::Utf8),
+                ("t1_int", ArrowDataType::Int32),
+            ],
+        )?;
+
+        let t2 = test_table_with_columns(
+            "t2",
+            &[
+                ("t2_id", ArrowDataType::Int32),
+                ("t2_name", ArrowDataType::Utf8),
+                ("t2_int", ArrowDataType::Int32),
+            ],
+        )?;
+
+        // Create the scalar subquery: SELECT count(*) FROM t2 WHERE t2.t2_int = t1.t1_int
+        let scalar_sq = Arc::new(
+            LogicalPlanBuilder::from(t2)
+                .filter(
+                    col("t2.t2_int").eq(out_ref_col(ArrowDataType::Int32, "t1.t1_int")),
+                )?
+                .aggregate(Vec::<Expr>::new(), vec![count(lit(1))])? // count(*) is represented as count(1)
+                .build()?,
+        );
+
+        // Create the main query plan: SELECT t1_id, (subquery) FROM t1
+        let plan = LogicalPlanBuilder::from(t1)
+            .project(vec![col("t1_id"), scalar_subquery(scalar_sq)])?
+            .build()?;
+
+        // Projection: t1.t1_id, __scalar_sq_1 [t1_id:Int32, __scalar_sq_1:Int64]
+        //   DependentJoin on [t1.t1_int lvl 1] with expr (<subquery>) depth 1 [t1_id:Int32, t1_name:Utf8, t1_int:Int32, __scalar_sq_1:Int64]
+        //     TableScan: t1 [t1_id:Int32, t1_name:Utf8, t1_int:Int32]
+        //     Aggregate: groupBy=[[]], aggr=[[count(Int32(1))]] [count(Int32(1)):Int64]
+        //       Filter: t2.t2_int = outer_ref(t1.t1_int) [t2_id:Int32, t2_name:Utf8, t2_int:Int32]
+        //         TableScan: t2 [t2_id:Int32, t2_name:Utf8, t2_int:Int32]
+
+        assert_decorrelate!(plan, @r"");
 
         Ok(())
     }

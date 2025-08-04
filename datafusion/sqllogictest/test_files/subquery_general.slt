@@ -233,13 +233,12 @@ where exists (
 33 c 3
 44 d 4
 
-# fail
-# SELECT t1_id, t1_name FROM t1 WHERE NOT EXISTS (SELECT * FROM t2 WHERE t2_id = t1_id limit 0)
-# ----
-# 11 a
-# 22 b
-# 33 c
-# 44 d
+#SELECT t1_id, t1_name FROM t1 WHERE NOT EXISTS (SELECT * FROM t2 WHERE t2_id = t1_id limit 0)
+#----
+#11 a
+#22 b
+#33 c
+#44 d
 
 # fail
 # query II rowsort
