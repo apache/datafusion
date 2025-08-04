@@ -25,7 +25,7 @@ control additional aspects DataFusion's runtime behavior.
 
 [configuration settings]: configs.md
 
-## Using the latest, (non published) DataFusion crates
+## Using the nightly DataFusion builds
 
 DataFusion changes are published to `crates.io` according to the [release schedule](https://github.com/apache/datafusion/blob/main/dev/release/README.md#release-process)
 
