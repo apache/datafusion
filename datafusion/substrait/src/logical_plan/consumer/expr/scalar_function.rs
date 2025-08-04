@@ -327,6 +327,7 @@ impl BuiltinExprBuilder {
             Err(_) => return substrait_err!("Expect two arguments for logb function"),
         };
 
+        //The equivalent of logb in DataFusion is the log functions (which has its arguments in reverse order)
         if let Ok(func) = consumer.get_function_registry().udf("log") {
             Ok(Expr::ScalarFunction(expr::ScalarFunction::new_udf(
                 func.to_owned(),
