@@ -35,8 +35,8 @@ use datafusion_common::encryption::FileDecryptionProperties;
 
 use datafusion_common::{exec_err, DataFusionError, Result};
 use datafusion_datasource::PartitionedFile;
-use datafusion_physical_expr::schema_rewriter::PhysicalExprAdapterFactory;
 use datafusion_physical_expr::simplifier::PhysicalExprSimplifier;
+use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion_physical_expr_common::physical_expr::{
     is_dynamic_physical_expr, PhysicalExpr,
 };
@@ -585,9 +585,9 @@ mod test {
     };
     use datafusion_expr::{col, lit};
     use datafusion_physical_expr::{
-        expressions::DynamicFilterPhysicalExpr, planner::logical2physical,
-        schema_rewriter::DefaultPhysicalExprAdapterFactory, PhysicalExpr,
+        expressions::DynamicFilterPhysicalExpr, planner::logical2physical, PhysicalExpr,
     };
+    use datafusion_physical_expr_adapter::DefaultPhysicalExprAdapterFactory;
     use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
     use futures::{Stream, StreamExt};
     use object_store::{memory::InMemory, path::Path, ObjectMeta, ObjectStore};

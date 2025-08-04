@@ -439,9 +439,9 @@ mod tests {
     use arrow::array::{RecordBatch, RecordBatchOptions};
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use datafusion_common::{assert_contains, record_batch, Result, ScalarValue};
+    use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{col, lit, CastExpr, Column, Literal};
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
-    use datafusion_expr::Operator;
     use itertools::Itertools;
     use std::sync::Arc;
 
@@ -815,5 +815,44 @@ mod tests {
                 .collect_vec(),
             vec![Some(1), None, Some(3)]
         );
+    }
+
+    #[test]
+    fn test_try_rewrite_struct_field_access() {
+        // Test the core logic of try_rewrite_struct_field_access
+        let physical_schema = Schema::new(vec![Field::new(
+            "struct_col",
+            DataType::Struct(
+                vec![Field::new("existing_field", DataType::Int32, true)].into(),
+            ),
+            true,
+        )]);
+
+        let logical_schema = Schema::new(vec![Field::new(
+            "struct_col",
+            DataType::Struct(
+                vec![
+                    Field::new("existing_field", DataType::Int32, true),
+                    Field::new("missing_field", DataType::Utf8, true),
+                ]
+                .into(),
+            ),
+            true,
+        )]);
+
+        let rewriter = DefaultPhysicalExprAdapterRewriter {
+            logical_file_schema: &logical_schema,
+            physical_file_schema: &physical_schema,
+            partition_fields: &[],
+        };
+
+        // Test that when a field exists in physical schema, it returns None
+        let column = Arc::new(Column::new("struct_col", 0)) as Arc<dyn PhysicalExpr>;
+        let result = rewriter.try_rewrite_struct_field_access(&column).unwrap();
+        assert!(result.is_none());
+
+        // The actual test for the get_field expression would require creating a proper ScalarFunctionExpr
+        // with ScalarUDF, which is complex to set up in a unit test. The integration tests in
+        // datafusion/core/tests/parquet/schema_adapter.rs provide better coverage for this functionality.
     }
 }
