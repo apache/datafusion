@@ -366,14 +366,14 @@ impl ApproxPercentileAccumulator {
         }
     }
 
-    // Merge new TDigests into this accumulator. Public for approx_percentile_cont_with_weight.
-    //
-    // Important: max_size Preservation
-    // TDigest::merge_digests uses the max_size from the first digest in the iterator.
-    // By putting self.digest first, we ensure the accumulator's configured max_size
-    // is preserved rather than being overridden by the new digests' max_size.
+    // public for approx_percentile_cont_with_weight
+    pub(crate) fn max_size(&self) -> usize {
+        self.digest.max_size()
+    }
+
+    // public for approx_percentile_cont_with_weight
     pub fn merge_digests(&mut self, digests: &[TDigest]) {
-        let digests = std::iter::once(&self.digest).chain(digests.iter());
+        let digests = digests.iter().chain(std::iter::once(&self.digest));
         self.digest = TDigest::merge_digests(digests)
     }
 
@@ -564,42 +564,5 @@ mod tests {
         assert_eq!(accumulator.digest.count(), 50_000);
         accumulator.merge_digests(&[t2]);
         assert_eq!(accumulator.digest.count(), 100_000);
-    }
-
-    #[test]
-    fn test_merge_digests_preserves_max_size() {
-        // Create accumulator with specific max_size
-        let original_max_size = 200;
-        let mut accumulator = ApproxPercentileAccumulator::new_with_max_size(
-            0.5,
-            DataType::Float64,
-            original_max_size,
-        );
-
-        // Verify initial max_size
-        assert_eq!(accumulator.digest.max_size(), original_max_size);
-
-        // Create new TDigests with different max_size
-        let different_max_size = 50;
-        let mut new_digests: Vec<TDigest> = Vec::new();
-
-        for _ in 1..=5 {
-            let t = TDigest::new(different_max_size);
-            let values: Vec<_> = (1..=1_000).map(f64::from).collect();
-            let t = t.merge_unsorted_f64(values);
-            new_digests.push(t);
-        }
-
-        accumulator.merge_digests(&new_digests);
-        assert_eq!(
-            accumulator.digest.max_size(),
-            original_max_size,
-            "merge_digests should preserve the accumulator's original max_size"
-        );
-        assert_eq!(
-            accumulator.digest.count(),
-            5_000,
-            "Data should have been merged"
-        );
     }
 }

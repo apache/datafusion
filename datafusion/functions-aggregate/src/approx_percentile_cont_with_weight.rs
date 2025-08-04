@@ -32,9 +32,7 @@ use datafusion_expr::Volatility::Immutable;
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Documentation, Expr, Signature, TypeSignature,
 };
-use datafusion_functions_aggregate_common::tdigest::{
-    Centroid, TDigest, DEFAULT_MAX_SIZE,
-};
+use datafusion_functions_aggregate_common::tdigest::{Centroid, TDigest};
 use datafusion_macros::user_doc;
 
 use crate::approx_percentile_cont::{ApproxPercentileAccumulator, ApproxPercentileCont};
@@ -295,7 +293,7 @@ impl Accumulator for ApproxPercentileWithWeightAccumulator {
         let mut digests: Vec<TDigest> = vec![];
         for (mean, weight) in means_f64.iter().zip(weights_f64.iter()) {
             digests.push(TDigest::new_with_centroid(
-                DEFAULT_MAX_SIZE,
+                self.approx_percentile_cont_accumulator.max_size(),
                 Centroid::new(*mean, *weight),
             ))
         }
