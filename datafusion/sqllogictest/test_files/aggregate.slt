@@ -6088,6 +6088,84 @@ GROUP BY dummy
 ----
 text1
 
+
+# Test string_agg with ORDER BY clasuses (issue #17011)
+statement ok
+create table t (k varchar, v int);
+
+statement ok
+insert into t values ('a', 2), ('b', 3), ('c', 1), ('d', null);
+
+query T
+select string_agg(k, ',' order by k) from t;
+----
+a,b,c,d
+
+query T
+select string_agg(k, ',' order by k desc) from t;
+----
+d,c,b,a
+
+query T
+select string_agg(k, ',' order by v) from t;
+----
+c,a,b,d
+
+query T
+select string_agg(k, ',' order by v nulls first) from t;
+----
+d,c,a,b
+
+query T
+select string_agg(k, ',' order by v desc) from t;
+----
+d,b,a,c
+
+query T
+select string_agg(k, ',' order by v desc nulls last) from t;
+----
+b,a,c,d
+
+query T
+-- odd indexes should appear first, ties solved by v
+select string_agg(k, ',' order by v % 2 == 0, v) from t;
+----
+c,b,a,d
+
+query T
+-- odd indexes should appear first, ties solved by v desc
+select string_agg(k, ',' order by v % 2 == 0, v desc) from t;
+----
+b,c,a,d
+
+query T
+select string_agg(k, ',' order by
+  case
+    when k = 'a' then 3
+    when k = 'b' then 0
+    when k = 'c' then 2
+    when k = 'd' then 1 
+  end)
+from t;
+----
+b,d,c,a
+
+query T
+select string_agg(k, ',' order by
+  case
+    when k = 'a' then 3
+    when k = 'b' then 0
+    when k = 'c' then 2
+    when k = 'd' then 1 
+  end desc)
+from t;
+----
+a,c,d,b
+
+statement ok
+drop table t;
+
+
 # Tests for aggregating with NaN values
 statement ok
 CREATE TABLE float_table (

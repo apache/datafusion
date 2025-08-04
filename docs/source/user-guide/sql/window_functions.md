@@ -169,13 +169,11 @@ cume_dist()
 #### Example
 
 ```sql
-    --Example usage of the cume_dist window function:
-    SELECT salary,
-       cume_dist() OVER (ORDER BY salary) AS cume_dist
-    FROM employees;
-```
+-- Example usage of the cume_dist window function:
+SELECT salary,
+    cume_dist() OVER (ORDER BY salary) AS cume_dist
+FROM employees;
 
-```sql
 +--------+-----------+
 | salary | cume_dist |
 +--------+-----------+
@@ -196,14 +194,12 @@ dense_rank()
 #### Example
 
 ```sql
-    --Example usage of the dense_rank window function:
-    SELECT department,
-           salary,
-           dense_rank() OVER (PARTITION BY department ORDER BY salary DESC) AS dense_rank
-    FROM employees;
-```
+-- Example usage of the dense_rank window function:
+SELECT department,
+    salary,
+    dense_rank() OVER (PARTITION BY department ORDER BY salary DESC) AS dense_rank
+FROM employees;
 
-```sql
 +-------------+--------+------------+
 | department  | salary | dense_rank |
 +-------------+--------+------------+
@@ -231,14 +227,12 @@ ntile(expression)
 #### Example
 
 ```sql
-    --Example usage of the ntile window function:
-    SELECT employee_id,
-           salary,
-           ntile(4) OVER (ORDER BY salary DESC) AS quartile
-    FROM employees;
-```
+-- Example usage of the ntile window function:
+SELECT employee_id,
+    salary,
+    ntile(4) OVER (ORDER BY salary DESC) AS quartile
+FROM employees;
 
-```sql
 +-------------+--------+----------+
 | employee_id | salary | quartile |
 +-------------+--------+----------+
@@ -264,14 +258,12 @@ percent_rank()
 #### Example
 
 ```sql
-    --Example usage of the percent_rank window function:
-    SELECT employee_id,
-           salary,
-           percent_rank() OVER (ORDER BY salary) AS percent_rank
-    FROM employees;
-```
+    -- Example usage of the percent_rank window function:
+SELECT employee_id,
+    salary,
+    percent_rank() OVER (ORDER BY salary) AS percent_rank
+FROM employees;
 
-```sql
 +-------------+--------+---------------+
 | employee_id | salary | percent_rank  |
 +-------------+--------+---------------+
@@ -292,14 +284,12 @@ rank()
 #### Example
 
 ```sql
-    --Example usage of the rank window function:
-    SELECT department,
-           salary,
-           rank() OVER (PARTITION BY department ORDER BY salary DESC) AS rank
-    FROM employees;
-```
+-- Example usage of the rank window function:
+SELECT department,
+    salary,
+    rank() OVER (PARTITION BY department ORDER BY salary DESC) AS rank
+FROM employees;
 
-```sql
 +-------------+--------+------+
 | department  | salary | rank |
 +-------------+--------+------+
@@ -323,14 +313,12 @@ row_number()
 #### Example
 
 ```sql
-    --Example usage of the row_number window function:
-    SELECT department,
-           salary,
-           row_number() OVER (PARTITION BY department ORDER BY salary DESC) AS row_num
-    FROM employees;
-```
+-- Example usage of the row_number window function:
+SELECT department,
+  salary,
+  row_number() OVER (PARTITION BY department ORDER BY salary DESC) AS row_num
+FROM employees;
 
-````sql
 +-------------+--------+---------+
 | department  | salary | row_num |
 +-------------+--------+---------+
@@ -341,8 +329,9 @@ row_number()
 | Engineering | 90000  | 1       |
 | Engineering | 80000  | 2       |
 +-------------+--------+---------+
-```#
+```
 
+#
 
 ## Analytical Functions
 
@@ -358,7 +347,7 @@ Returns value evaluated at the row that is the first row of the window frame.
 
 ```sql
 first_value(expression)
-````
+```
 
 #### Arguments
 
@@ -367,15 +356,13 @@ first_value(expression)
 #### Example
 
 ```sql
-    --Example usage of the first_value window function:
-    SELECT department,
-           employee_id,
-           salary,
-           first_value(salary) OVER (PARTITION BY department ORDER BY salary DESC) AS top_salary
-    FROM employees;
-```
+-- Example usage of the first_value window function:
+SELECT department,
+  employee_id,
+  salary,
+  first_value(salary) OVER (PARTITION BY department ORDER BY salary DESC) AS top_salary
+FROM employees;
 
-```sql
 +-------------+-------------+--------+------------+
 | department  | employee_id | salary | top_salary |
 +-------------+-------------+--------+------------+
@@ -404,14 +391,12 @@ lag(expression, offset, default)
 #### Example
 
 ```sql
-    --Example usage of the lag window function:
-    SELECT employee_id,
-           salary,
-           lag(salary, 1, 0) OVER (ORDER BY employee_id) AS prev_salary
-    FROM employees;
-```
+-- Example usage of the lag window function:
+SELECT employee_id,
+    salary,
+    lag(salary, 1, 0) OVER (ORDER BY employee_id) AS prev_salary
+FROM employees;
 
-```sql
 +-------------+--------+-------------+
 | employee_id | salary | prev_salary |
 +-------------+--------+-------------+
@@ -443,9 +428,7 @@ SELECT department,
        salary,
        last_value(salary) OVER (PARTITION BY department ORDER BY salary) AS running_last_salary
 FROM employees;
-```
 
-```sql
 +-------------+-------------+--------+---------------------+
 | department  | employee_id | salary | running_last_salary |
 +-------------+-------------+--------+---------------------+
@@ -474,16 +457,14 @@ lead(expression, offset, default)
 #### Example
 
 ```sql
--- Example usage of lead() :
+-- Example usage of lead window function:
 SELECT
     employee_id,
     department,
     salary,
     lead(salary, 1, 0) OVER (PARTITION BY department ORDER BY salary) AS next_salary
 FROM employees;
-```
 
-```sql
 +-------------+-------------+--------+--------------+
 | employee_id | department  | salary | next_salary  |
 +-------------+-------------+--------+--------------+
@@ -526,9 +507,7 @@ SELECT nth_value(salary, 2) OVER (
   ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
 ) AS nth_value
 FROM employees;
-```
 
-```text
 +-----------+
 | nth_value |
 +-----------+
