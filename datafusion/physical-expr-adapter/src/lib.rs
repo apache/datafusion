@@ -25,4 +25,7 @@
 
 pub mod schema_rewriter;
 
-pub use schema_rewriter::PhysicalExprSchemaRewriter;
+pub use schema_rewriter::{
+    DefaultPhysicalExprAdapter, DefaultPhysicalExprAdapterFactory, PhysicalExprAdapter,
+    PhysicalExprAdapterFactory,
+};
