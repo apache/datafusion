@@ -67,8 +67,8 @@ use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::union::UnionExec;
 use datafusion_physical_plan::{
-    displayable, get_plan_string, DisplayAs, DisplayFormatType, ExecutionPlanProperties,
-    PlanProperties, Statistics,
+    displayable, DisplayAs, DisplayFormatType, ExecutionPlanProperties, PlanProperties,
+    Statistics,
 };
 
 /// Models operators like BoundedWindowExec that require an input
@@ -350,22 +350,6 @@ fn ensure_distribution_helper(
     ensure_distribution(distribution_context, &config).map(|item| item.data.plan)
 }
 
-/// Test whether plan matches with expected plan
-macro_rules! plans_matches_expected {
-    ($EXPECTED_LINES: expr, $PLAN: expr) => {
-        let physical_plan = $PLAN;
-        let actual = get_plan_string(&physical_plan);
-
-        let expected_plan_lines: Vec<&str> = $EXPECTED_LINES
-            .iter().map(|s| *s).collect();
-
-        assert_eq!(
-            expected_plan_lines, actual,
-            "\n**Original Plan Mismatch\n\nexpected:\n\n{expected_plan_lines:#?}\nactual:\n\n{actual:#?}\n\n"
-        );
-    }
-}
-
 fn test_suite_default_config_options() -> ConfigOptions {
     let mut config = ConfigOptions::new();
 
@@ -507,20 +491,6 @@ impl TestConfig {
 
         Ok(actual_optimized)
     }
-}
-
-macro_rules! assert_plan_txt {
-    ($EXPECTED_LINES: expr, $PLAN: expr) => {
-        let expected_lines: Vec<&str> = $EXPECTED_LINES.iter().map(|s| *s).collect();
-        // Now format correctly
-        let actual_lines = get_plan_string(&$PLAN);
-
-        assert_eq!(
-            &expected_lines, &actual_lines,
-            "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-            expected_lines, actual_lines
-        );
-    };
 }
 
 #[test]
