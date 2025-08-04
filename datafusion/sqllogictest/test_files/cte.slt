@@ -997,7 +997,6 @@ physical_plan
 09)------------WorkTableExec: name=numbers
 
 # Test for issue #16998: SortExec shares DynamicFilterPhysicalExpr across multiple executions
-# This should return 5 rows but currently returns only 2 due to the bug
 query II
 with recursive r as (
   select 0 as k, 0 as v
