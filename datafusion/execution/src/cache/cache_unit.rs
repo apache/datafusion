@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use crate::cache::cache_manager::{FileMetadata, FileMetadataCache};
 use crate::cache::CacheAccessor;
@@ -23,6 +23,7 @@ use crate::cache::CacheAccessor;
 use datafusion_common::Statistics;
 
 use dashmap::DashMap;
+use lru::LruCache;
 use object_store::path::Path;
 use object_store::ObjectMeta;
 
@@ -158,33 +159,168 @@ impl CacheAccessor<Path, Arc<Vec<ObjectMeta>>> for DefaultListFilesCache {
     }
 }
 
-/// Collected file embedded metadata cache.
-/// The metadata for some file is invalided when the file size or last modification time have been
-/// changed.
-/// Users should use the `get` and `put` methods. The `get_with_extra` and `put_with_extra` methods
-/// simply call `get` and `put`, respectively.
-#[derive(Default)]
-pub struct DefaultFilesMetadataCache {
-    metadata: DashMap<Path, (ObjectMeta, Arc<dyn FileMetadata>)>,
+/// Handles the inner state of the [`DefaultFilesMetadataCache`] struct.
+struct DefaultFilesMetadataCacheState {
+    lru_cache: LruCache<Path, (ObjectMeta, Arc<dyn FileMetadata>)>,
+    memory_limit: Option<usize>,
+    memory_used: usize,
 }
 
-impl FileMetadataCache for DefaultFilesMetadataCache {}
+impl DefaultFilesMetadataCacheState {
+    fn new(memory_limit: Option<usize>) -> Self {
+        Self {
+            lru_cache: LruCache::unbounded(),
+            memory_limit,
+            memory_used: 0,
+        }
+    }
 
-impl CacheAccessor<ObjectMeta, Arc<dyn FileMetadata>> for DefaultFilesMetadataCache {
-    type Extra = ObjectMeta;
-
-    fn get(&self, k: &ObjectMeta) -> Option<Arc<dyn FileMetadata>> {
-        self.metadata
+    /// Returns the respective entry from the cache, if it exists and the `size` and `last_modified`
+    /// properties from [`ObjectMeta`] match.
+    /// If the entry exists, it becomes the most recently used.
+    fn get(&mut self, k: &ObjectMeta) -> Option<Arc<dyn FileMetadata>> {
+        self.lru_cache
             .get(&k.location)
-            .map(|s| {
-                let (extra, metadata) = s.value();
-                if extra.size != k.size || extra.last_modified != k.last_modified {
+            .map(|(object_meta, metadata)| {
+                if object_meta.size != k.size
+                    || object_meta.last_modified != k.last_modified
+                {
                     None
                 } else {
                     Some(Arc::clone(metadata))
                 }
             })
             .unwrap_or(None)
+    }
+
+    /// Checks if the metadata is currently cached (entry exists and the `size` and `last_modified`
+    /// properties of [`ObjectMeta`] match).
+    /// The LRU queue is not updated.
+    fn contains_key(&self, k: &ObjectMeta) -> bool {
+        self.lru_cache
+            .peek(&k.location)
+            .map(|(object_meta, _)| {
+                object_meta.size == k.size && object_meta.last_modified == k.last_modified
+            })
+            .unwrap_or(false)
+    }
+
+    /// Adds a new key-value pair to cache, meaning LRU entries might be evicted if required.
+    /// If the key is already in the cache, the previous metadata is returned.
+    /// If the size of the metadata is greater than the `memory_limit`, the value is not inserted.
+    fn put(
+        &mut self,
+        key: ObjectMeta,
+        value: Arc<dyn FileMetadata>,
+    ) -> Option<Arc<dyn FileMetadata>> {
+        let value_size = value.memory_size();
+
+        if let Some(limit) = self.memory_limit {
+            // no point in trying to add this value to the cache if it cannot fit entirely
+            if value_size > limit {
+                return None;
+            }
+        }
+
+        // if the key is already in the cache, the old value is removed
+        let old_value = self.lru_cache.put(key.location.clone(), (key, value));
+        self.memory_used += value_size;
+        if let Some((_, ref old_metadata)) = old_value {
+            self.memory_used -= old_metadata.memory_size();
+        }
+
+        self.evict_entries();
+
+        old_value.map(|v| v.1)
+    }
+
+    /// Evicts entries from the LRU cache until `memory_used` is lower than `memory_limit`.
+    /// If `memory_limit` is `None`, no entries are removed.
+    fn evict_entries(&mut self) {
+        let Some(memory_limit) = self.memory_limit else {
+            return;
+        };
+
+        while self.memory_used > memory_limit {
+            if let Some(removed) = self.lru_cache.pop_lru() {
+                let metadata: Arc<dyn FileMetadata> = removed.1 .1;
+                self.memory_used -= metadata.memory_size();
+            } else {
+                // cache is empty while memory_used > memory_limit, cannot happen
+                unreachable!();
+            }
+        }
+    }
+
+    /// Removes an entry from the cache and returns it, if it exists.
+    fn remove(&mut self, k: &ObjectMeta) -> Option<Arc<dyn FileMetadata>> {
+        if let Some((_, old_metadata)) = self.lru_cache.pop(&k.location) {
+            self.memory_used -= old_metadata.memory_size();
+            Some(old_metadata)
+        } else {
+            None
+        }
+    }
+
+    /// Returns the number of entries currently cached.
+    fn len(&self) -> usize {
+        self.lru_cache.len()
+    }
+
+    /// Removes all entries from the cache.
+    fn clear(&mut self) {
+        self.lru_cache.clear();
+        self.memory_used = 0;
+    }
+}
+
+/// Collected file embedded metadata cache.
+/// The metadata for some file is invalided when the file size or last modification time have been
+/// changed.
+/// The `memory_limit` passed in the constructor controls the maximum size of the cache, which uses
+/// a Least Recently Used eviction algorithm.
+/// Users should use the `get` and `put` methods. The `get_with_extra` and `put_with_extra` methods
+/// simply call `get` and `put`, respectively.
+pub struct DefaultFilesMetadataCache {
+    // the state is wrapped in a Mutex to ensure the operations are atomic
+    state: Mutex<DefaultFilesMetadataCacheState>,
+}
+
+impl DefaultFilesMetadataCache {
+    /// The `memory_limit` parameter controls the maximum size of the cache, in bytes, using a Least
+    /// Recently Used eviction algorithm. If `None` is provided, the cache is unbounded.
+    pub fn new(memory_limit: Option<usize>) -> Self {
+        Self {
+            state: Mutex::new(DefaultFilesMetadataCacheState::new(memory_limit)),
+        }
+    }
+
+    /// Returns the size of the cached memory, in bytes.
+    pub fn memory_used(&self) -> usize {
+        let state = self.state.lock().unwrap();
+        state.memory_used
+    }
+}
+
+impl FileMetadataCache for DefaultFilesMetadataCache {
+    fn cache_limit(&self) -> Option<usize> {
+        let state = self.state.lock().unwrap();
+        state.memory_limit
+    }
+
+    fn update_cache_limit(&self, limit: Option<usize>) {
+        let mut state = self.state.lock().unwrap();
+        state.memory_limit = limit;
+        state.evict_entries();
+    }
+}
+
+impl CacheAccessor<ObjectMeta, Arc<dyn FileMetadata>> for DefaultFilesMetadataCache {
+    type Extra = ObjectMeta;
+
+    fn get(&self, k: &ObjectMeta) -> Option<Arc<dyn FileMetadata>> {
+        let mut state = self.state.lock().unwrap();
+        state.get(k)
     }
 
     fn get_with_extra(
@@ -200,9 +336,8 @@ impl CacheAccessor<ObjectMeta, Arc<dyn FileMetadata>> for DefaultFilesMetadataCa
         key: &ObjectMeta,
         value: Arc<dyn FileMetadata>,
     ) -> Option<Arc<dyn FileMetadata>> {
-        self.metadata
-            .insert(key.location.clone(), (key.clone(), value))
-            .map(|x| x.1)
+        let mut state = self.state.lock().unwrap();
+        state.put(key.clone(), value)
     }
 
     fn put_with_extra(
@@ -215,25 +350,23 @@ impl CacheAccessor<ObjectMeta, Arc<dyn FileMetadata>> for DefaultFilesMetadataCa
     }
 
     fn remove(&mut self, k: &ObjectMeta) -> Option<Arc<dyn FileMetadata>> {
-        self.metadata.remove(&k.location).map(|x| x.1 .1)
+        let mut state = self.state.lock().unwrap();
+        state.remove(k)
     }
 
     fn contains_key(&self, k: &ObjectMeta) -> bool {
-        self.metadata
-            .get(&k.location)
-            .map(|s| {
-                let (extra, _) = s.value();
-                extra.size == k.size && extra.last_modified == k.last_modified
-            })
-            .unwrap_or(false)
+        let state = self.state.lock().unwrap();
+        state.contains_key(k)
     }
 
     fn len(&self) -> usize {
-        self.metadata.len()
+        let state = self.state.lock().unwrap();
+        state.len()
     }
 
     fn clear(&self) {
-        self.metadata.clear();
+        let mut state = self.state.lock().unwrap();
+        state.clear();
     }
 
     fn name(&self) -> String {
@@ -245,7 +378,7 @@ impl CacheAccessor<ObjectMeta, Arc<dyn FileMetadata>> for DefaultFilesMetadataCa
 mod tests {
     use std::sync::Arc;
 
-    use crate::cache::cache_manager::FileMetadata;
+    use crate::cache::cache_manager::{FileMetadata, FileMetadataCache};
     use crate::cache::cache_unit::{
         DefaultFileStatisticsCache, DefaultFilesMetadataCache, DefaultListFilesCache,
     };
@@ -330,10 +463,14 @@ mod tests {
         fn as_any(&self) -> &dyn std::any::Any {
             self
         }
+
+        fn memory_size(&self) -> usize {
+            self.metadata.len()
+        }
     }
 
     #[test]
-    fn test_file_metadata_cache() {
+    fn test_default_file_metadata_cache() {
         let object_meta = ObjectMeta {
             location: Path::from("test"),
             last_modified: DateTime::parse_from_rfc3339("2025-07-29T12:12:12+00:00")
@@ -348,11 +485,11 @@ mod tests {
             metadata: "retrieved_metadata".to_owned(),
         });
 
-        let mut cache = DefaultFilesMetadataCache::default();
+        let mut cache = DefaultFilesMetadataCache::new(None);
         assert!(cache.get(&object_meta).is_none());
 
         // put
-        cache.put(&object_meta, metadata);
+        cache.put(&object_meta, Arc::clone(&metadata));
 
         // get and contains of a valid entry
         assert!(cache.contains_key(&object_meta));
@@ -387,5 +524,146 @@ mod tests {
         cache.remove(&object_meta);
         assert!(cache.get(&object_meta).is_none());
         assert!(!cache.contains_key(&object_meta));
+
+        // len and clear
+        cache.put(&object_meta, Arc::clone(&metadata));
+        cache.put(&object_meta2, metadata);
+        assert_eq!(cache.len(), 2);
+        cache.clear();
+        assert_eq!(cache.len(), 0);
+    }
+
+    fn generate_test_metadata_with_size(
+        path: &str,
+        size: usize,
+    ) -> (ObjectMeta, Arc<dyn FileMetadata>) {
+        let object_meta = ObjectMeta {
+            location: Path::from(path),
+            last_modified: chrono::Utc::now(),
+            size: size as u64,
+            e_tag: None,
+            version: None,
+        };
+        let metadata: Arc<dyn FileMetadata> = Arc::new(TestFileMetadata {
+            metadata: "a".repeat(size),
+        });
+
+        (object_meta, metadata)
+    }
+
+    #[test]
+    fn test_default_file_metadata_cache_with_limit() {
+        let mut cache = DefaultFilesMetadataCache::new(Some(1000));
+        let (object_meta1, metadata1) = generate_test_metadata_with_size("1", 100);
+        let (object_meta2, metadata2) = generate_test_metadata_with_size("2", 500);
+        let (object_meta3, metadata3) = generate_test_metadata_with_size("3", 300);
+
+        cache.put(&object_meta1, metadata1);
+        cache.put(&object_meta2, metadata2);
+        cache.put(&object_meta3, metadata3);
+
+        // all entries will fit
+        assert_eq!(cache.len(), 3);
+        assert_eq!(cache.memory_used(), 900);
+        assert!(cache.contains_key(&object_meta1));
+        assert!(cache.contains_key(&object_meta2));
+        assert!(cache.contains_key(&object_meta3));
+
+        // add a new entry which will remove the least recently used ("1")
+        let (object_meta4, metadata4) = generate_test_metadata_with_size("4", 200);
+        cache.put(&object_meta4, metadata4);
+        assert_eq!(cache.len(), 3);
+        assert_eq!(cache.memory_used(), 1000);
+        assert!(!cache.contains_key(&object_meta1));
+        assert!(cache.contains_key(&object_meta4));
+
+        // get entry "2", which will move it to the top of the queue, and add a new one which will
+        // remove the new least recently used ("3")
+        cache.get(&object_meta2);
+        let (object_meta5, metadata5) = generate_test_metadata_with_size("5", 100);
+        cache.put(&object_meta5, metadata5);
+        assert_eq!(cache.len(), 3);
+        assert_eq!(cache.memory_used(), 800);
+        assert!(!cache.contains_key(&object_meta3));
+        assert!(cache.contains_key(&object_meta5));
+
+        // new entry which will not be able to fit in the 1000 bytes allocated
+        let (object_meta6, metadata6) = generate_test_metadata_with_size("6", 1200);
+        cache.put(&object_meta6, metadata6);
+        assert_eq!(cache.len(), 3);
+        assert_eq!(cache.memory_used(), 800);
+        assert!(!cache.contains_key(&object_meta6));
+
+        // new entry which is able to fit without removing any entry
+        let (object_meta7, metadata7) = generate_test_metadata_with_size("7", 200);
+        cache.put(&object_meta7, metadata7);
+        assert_eq!(cache.len(), 4);
+        assert_eq!(cache.memory_used(), 1000);
+        assert!(cache.contains_key(&object_meta7));
+
+        // new entry which will remove all other entries
+        let (object_meta8, metadata8) = generate_test_metadata_with_size("8", 999);
+        cache.put(&object_meta8, metadata8);
+        assert_eq!(cache.len(), 1);
+        assert_eq!(cache.memory_used(), 999);
+        assert!(cache.contains_key(&object_meta8));
+
+        // when updating an entry, the previous ones are not unnecessarily removed
+        let (object_meta9, metadata9) = generate_test_metadata_with_size("9", 300);
+        let (object_meta10, metadata10) = generate_test_metadata_with_size("10", 200);
+        let (object_meta11_v1, metadata11_v1) =
+            generate_test_metadata_with_size("11", 400);
+        cache.put(&object_meta9, metadata9);
+        cache.put(&object_meta10, metadata10);
+        cache.put(&object_meta11_v1, metadata11_v1);
+        assert_eq!(cache.memory_used(), 900);
+        assert_eq!(cache.len(), 3);
+        let (object_meta11_v2, metadata11_v2) =
+            generate_test_metadata_with_size("11", 500);
+        cache.put(&object_meta11_v2, metadata11_v2);
+        assert_eq!(cache.memory_used(), 1000);
+        assert_eq!(cache.len(), 3);
+        assert!(cache.contains_key(&object_meta9));
+        assert!(cache.contains_key(&object_meta10));
+        assert!(cache.contains_key(&object_meta11_v2));
+        assert!(!cache.contains_key(&object_meta11_v1));
+
+        // when updating an entry that now exceeds the limit, the LRU ("9") needs to be removed
+        let (object_meta11_v3, metadata11_v3) =
+            generate_test_metadata_with_size("11", 501);
+        cache.put(&object_meta11_v3, metadata11_v3);
+        assert_eq!(cache.memory_used(), 701);
+        assert_eq!(cache.len(), 2);
+        assert!(cache.contains_key(&object_meta10));
+        assert!(cache.contains_key(&object_meta11_v3));
+        assert!(!cache.contains_key(&object_meta11_v2));
+
+        // manually removing an entry that is not the LRU
+        cache.remove(&object_meta11_v3);
+        assert_eq!(cache.len(), 1);
+        assert_eq!(cache.memory_used(), 200);
+        assert!(cache.contains_key(&object_meta10));
+        assert!(!cache.contains_key(&object_meta11_v3));
+
+        // clear
+        cache.clear();
+        assert_eq!(cache.len(), 0);
+        assert_eq!(cache.memory_used(), 0);
+
+        // resizing the cache should clear the extra entries
+        let (object_meta12, metadata12) = generate_test_metadata_with_size("12", 300);
+        let (object_meta13, metadata13) = generate_test_metadata_with_size("13", 200);
+        let (object_meta14, metadata14) = generate_test_metadata_with_size("14", 500);
+        cache.put(&object_meta12, metadata12);
+        cache.put(&object_meta13, metadata13);
+        cache.put(&object_meta14, metadata14);
+        assert_eq!(cache.len(), 3);
+        assert_eq!(cache.memory_used(), 1000);
+        cache.update_cache_limit(Some(600));
+        assert_eq!(cache.len(), 1);
+        assert_eq!(cache.memory_used(), 500);
+        assert!(!cache.contains_key(&object_meta12));
+        assert!(!cache.contains_key(&object_meta13));
+        assert!(cache.contains_key(&object_meta14));
     }
 }

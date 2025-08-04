@@ -1068,6 +1068,10 @@ impl SessionContext {
                 builder.with_max_temp_directory_size(directory_size as u64)
             }
             "temp_directory" => builder.with_temp_file_path(value),
+            "file_metadata_cache_limit" => {
+                let limit = Self::parse_memory_limit(value)?;
+                builder.with_file_metadata_cache_limit(Some(limit))
+            }
             _ => {
                 return Err(DataFusionError::Plan(format!(
                     "Unknown runtime configuration: {variable}"
