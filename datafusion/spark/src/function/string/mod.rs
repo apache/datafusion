@@ -20,6 +20,7 @@ pub mod char;
 pub mod ilike;
 pub mod like;
 pub mod luhn_check;
+pub mod regexp_extract;
 
 use datafusion_expr::ScalarUDF;
 use datafusion_functions::make_udf_function;
@@ -30,6 +31,7 @@ make_udf_function!(char::SparkChar, char);
 make_udf_function!(ilike::SparkILike, ilike);
 make_udf_function!(like::SparkLike, like);
 make_udf_function!(luhn_check::SparkLuhnCheck, luhn_check);
+make_udf_function!(regexp_extract::SparkRegexpExtract, regexp_extract);
 
 pub mod expr_fn {
     use datafusion_functions::export_functions;
@@ -59,8 +61,20 @@ pub mod expr_fn {
         "Returns whether the input string of digits is valid according to the Luhn algorithm.",
         arg1
     ));
+    export_functions!((
+        regexp_extract,
+        "Extracts the first string in the str that match the regexp expression and corresponding to the regex group index.",
+        str pattern idx
+    ));
 }
 
 pub fn functions() -> Vec<Arc<ScalarUDF>> {
-    vec![ascii(), char(), ilike(), like(), luhn_check()]
+    vec![
+        ascii(),
+        char(),
+        ilike(),
+        like(),
+        luhn_check(),
+        regexp_extract(),
+    ]
 }
