@@ -44,6 +44,7 @@ impl MemoryPool for UnboundedMemoryPool {
 
     fn try_grow(&self, reservation: &MemoryReservation, additional: usize) -> Result<()> {
         self.grow(reservation, additional);
+        println!("[mem pool] {} used", self.reserved());
         Ok(())
     }
 
@@ -70,7 +71,8 @@ pub struct GreedyMemoryPool {
 impl GreedyMemoryPool {
     /// Create a new pool that can allocate up to `pool_size` bytes
     pub fn new(pool_size: usize) -> Self {
-        debug!("Created new GreedyMemoryPool(pool_size={pool_size})");
+        // debug!("Created new GreedyMemoryPool(pool_size={pool_size})");
+        println!("Created new GreedyMemoryPool(pool_size={pool_size})");
         Self {
             pool_size,
             used: AtomicUsize::new(0),

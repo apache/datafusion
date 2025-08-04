@@ -248,11 +248,15 @@ impl MultiLevelMergeBuilder {
                     // If we have no sorted spill files left, this is the last run
                     true,
                     true,
+                    0, // TODO(ding-young)
                 )
             }
 
             // Need to merge multiple streams
-            (_, _) => {
+            (spill, inmem) => {
+                println!(
+                    "[merge_sorted_runs_within_mem_limit] spill{spill}, inmem{inmem}"
+                );
                 let mut memory_reservation = self.reservation.new_empty();
 
                 // Don't account for existing streams memory
@@ -277,12 +281,17 @@ impl MultiLevelMergeBuilder {
                         .read_spill_as_stream(spill.file)?;
                     sorted_streams.push(stream);
                 }
-
+                println!(
+                    "[merge_sorted_runs_within_mem_limit] memory_reservation:{}",
+                    memory_reservation.size()
+                );
+                // TODO(ding-young) pass memory limit but what about in mem size?
                 let merge_sort_stream = self.create_new_merge_sort(
                     sorted_streams,
                     // If we have no sorted spill files left, this is the last run
                     self.sorted_spill_files.is_empty(),
                     is_only_merging_memory_streams,
+                    memory_reservation.size(),
                 )?;
 
                 // If we're only merging memory streams, we don't need to attach the memory reservation
@@ -308,6 +317,7 @@ impl MultiLevelMergeBuilder {
         streams: Vec<SendableRecordBatchStream>,
         is_output: bool,
         all_in_memory: bool,
+        expected_max_memory_usage: usize,
     ) -> Result<SendableRecordBatchStream> {
         let mut builder = StreamingMergeBuilder::new()
             .with_schema(Arc::clone(&self.schema))
@@ -328,7 +338,8 @@ impl MultiLevelMergeBuilder {
             // (reserving memory for the biggest batch in each stream)
             // TODO - avoid this hack as this can be broken easily when `SortPreservingMergeStream`
             //        changes the implementation to use more/less memory
-            builder = builder.with_bypass_mempool();
+            println!("create new merge sort with bypass mempool");
+            builder = builder.with_bypass_mempool(expected_max_memory_usage);
         } else {
             // If we are only merging in-memory streams, we need to use the memory reservation
             // because we don't know the maximum size of the batches in the streams
