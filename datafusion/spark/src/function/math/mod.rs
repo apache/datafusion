@@ -45,7 +45,6 @@ pub mod expr_fn {
     export_functions!((modulus, "Returns the remainder of division of the first argument by the second argument.", arg1 arg2));
     export_functions!((pmod, "Returns the positive remainder of division of the first argument by the second argument.", arg1 arg2));
     export_functions!((rint, "Returns the double value that is closest in value to the argument and is equal to a mathematical integer.", arg1));
-
 }
 
 pub fn functions() -> Vec<Arc<ScalarUDF>> {
