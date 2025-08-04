@@ -988,6 +988,7 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
                 protobuf::parquet_options::CoerceInt96Opt::CoerceInt96(v) => Some(v),
             }).unwrap_or(None),
             skip_arrow_metadata: value.skip_arrow_metadata,
+            cache_metadata: value.cache_metadata,
         })
     }
 }
