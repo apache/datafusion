@@ -15,10 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::cache::cache_unit::DefaultFilesMetadataCache;
 use crate::cache::CacheAccessor;
 use datafusion_common::{Result, Statistics};
 use object_store::path::Path;
 use object_store::ObjectMeta;
+use std::any::Any;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
@@ -32,6 +34,19 @@ pub type FileStatisticsCache =
 pub type ListFilesCache =
     Arc<dyn CacheAccessor<Path, Arc<Vec<ObjectMeta>>, Extra = ObjectMeta>>;
 
+/// Represents generic file-embedded metadata.
+pub trait FileMetadata: Any + Send + Sync {
+    /// Returns the file metadata as [`Any`] so that it can be downcasted to a specific
+    /// implementation.
+    fn as_any(&self) -> &dyn Any;
+}
+
+/// Cache to store file-embedded metadata.
+pub trait FileMetadataCache:
+    CacheAccessor<ObjectMeta, Arc<dyn FileMetadata>, Extra = ObjectMeta>
+{
+}
+
 impl Debug for dyn CacheAccessor<Path, Arc<Statistics>, Extra = ObjectMeta> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "Cache name: {} with length: {}", self.name(), self.len())
@@ -44,10 +59,17 @@ impl Debug for dyn CacheAccessor<Path, Arc<Vec<ObjectMeta>>, Extra = ObjectMeta>
     }
 }
 
+impl Debug for dyn FileMetadataCache {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Cache name: {} with length: {}", self.name(), self.len())
+    }
+}
+
 #[derive(Default, Debug)]
 pub struct CacheManager {
     file_statistic_cache: Option<FileStatisticsCache>,
     list_files_cache: Option<ListFilesCache>,
+    file_metadata_cache: Option<Arc<dyn FileMetadataCache>>,
 }
 
 impl CacheManager {
@@ -59,6 +81,13 @@ impl CacheManager {
         if let Some(lc) = &config.list_files_cache {
             manager.list_files_cache = Some(Arc::clone(lc))
         }
+        if let Some(mc) = &config.file_metadata_cache {
+            manager.file_metadata_cache = Some(Arc::clone(mc));
+        } else {
+            manager.file_metadata_cache =
+                Some(Arc::new(DefaultFilesMetadataCache::default()));
+        }
+
         Ok(Arc::new(manager))
     }
 
@@ -70,6 +99,11 @@ impl CacheManager {
     /// Get the cache of objectMeta under same path.
     pub fn get_list_files_cache(&self) -> Option<ListFilesCache> {
         self.list_files_cache.clone()
+    }
+
+    /// Get the file embedded metadata cache.
+    pub fn get_file_metadata_cache(&self) -> Option<Arc<dyn FileMetadataCache>> {
+        self.file_metadata_cache.clone()
     }
 }
 
@@ -86,6 +120,10 @@ pub struct CacheManagerConfig {
     /// location.  
     /// Default is disable.
     pub list_files_cache: Option<ListFilesCache>,
+    /// Cache of file-embedded metadata, used to avoid reading it multiple times when processing a
+    /// data file (e.g., Parquet footer and page metadata).
+    /// If not provided, the [`CacheManager`] will create a [`DefaultFilesMetadataCache`].
+    pub file_metadata_cache: Option<Arc<dyn FileMetadataCache>>,
 }
 
 impl CacheManagerConfig {
@@ -99,6 +137,14 @@ impl CacheManagerConfig {
 
     pub fn with_list_files_cache(mut self, cache: Option<ListFilesCache>) -> Self {
         self.list_files_cache = cache;
+        self
+    }
+
+    pub fn with_file_metadata_cache(
+        mut self,
+        cache: Option<Arc<dyn FileMetadataCache>>,
+    ) -> Self {
+        self.file_metadata_cache = cache;
         self
     }
 }
