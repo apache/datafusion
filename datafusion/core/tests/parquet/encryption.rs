@@ -134,7 +134,7 @@ async fn round_trip_encryption() {
 async fn round_trip_parquet_with_encryption_factory() {
     let ctx = SessionContext::new();
     let encryption_factory = Arc::new(MockEncryptionFactory::default());
-    ctx.register_parquet_encryption_factory(
+    ctx.runtime_env().register_parquet_encryption_factory(
         "test_encryption_factory",
         Arc::clone(&encryption_factory) as Arc<dyn EncryptionFactory>,
     );

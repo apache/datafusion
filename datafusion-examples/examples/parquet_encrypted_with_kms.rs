@@ -64,7 +64,7 @@ async fn main() -> Result<()> {
     // multiple different factories to handle different ways of encrypting Parquet.
     let crypto_factory = CryptoFactory::new(TestKmsClientFactory::with_default_keys());
     let encryption_factory = KmsEncryptionFactory { crypto_factory };
-    ctx.register_parquet_encryption_factory(
+    ctx.runtime_env().register_parquet_encryption_factory(
         ENCRYPTION_FACTORY_ID,
         Arc::new(encryption_factory),
     );
