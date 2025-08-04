@@ -281,24 +281,12 @@ impl BuiltinExprBuilder {
     }
 
     fn build_and_not_expr(a: Expr, b: Expr) -> Expr {
-        Expr::BinaryExpr(BinaryExpr {
-            left: Box::new(a),
-            op: Operator::And,
-            right: Box::new(Expr::Not(Box::new(b))),
-        })
+        a.and(Expr::Not(Box::new(b)))
     }
 
     fn build_xor_expr(a: Expr, b: Expr) -> Expr {
-        let or_expr = Expr::BinaryExpr(BinaryExpr {
-            left: Box::new(a.clone()),
-            op: Operator::Or,
-            right: Box::new(b.clone()),
-        });
-        let and_expr = Expr::BinaryExpr(BinaryExpr {
-            left: Box::new(a),
-            op: Operator::And,
-            right: Box::new(b),
-        });
+        let or_expr = a.clone().or(b.clone());
+        let and_expr = a.and(b);
         Self::build_and_not_expr(or_expr, and_expr)
     }
 
