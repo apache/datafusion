@@ -248,9 +248,8 @@ mod tests {
         partitioned_df.write_parquet(&path, options, None).await?;
 
         let test_path = std::path::Path::new(&path);
-        assert_eq!(
+        assert!(
             test_path.is_dir(),
-            true,
             "No extension and default DataFrameWriteOptons should have yielded a dir."
         );
 
@@ -287,9 +286,8 @@ mod tests {
         partitioned_df.write_parquet(&path, options, None).await?;
 
         let test_path = std::path::Path::new(&path);
-        assert_eq!(
+        assert!(
             test_path.is_file(),
-            true,
             "No extension and DataFrameWriteOptons::with_single_file_output(true) should have yielded a single file."
         );
 
