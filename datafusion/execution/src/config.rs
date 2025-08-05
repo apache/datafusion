@@ -120,6 +120,9 @@ impl SessionConfig {
     }
 
     /// Create an execution config with config options read from the environment
+    ///
+    /// See [`ConfigOptions::from_env`] for details on how environment variables
+    /// are mapped to config options.
     pub fn from_env() -> Result<Self> {
         Ok(ConfigOptions::from_env()?.into())
     }
