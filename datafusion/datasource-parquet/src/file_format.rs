@@ -77,10 +77,10 @@ use object_store::{ObjectMeta, ObjectStore};
 use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
 use parquet::arrow::arrow_writer::{
     compute_leaves, ArrowColumnChunk, ArrowColumnWriter, ArrowLeafColumn,
-    ArrowRowGroupWriterFactory, ArrowWriterOptions,
+    ArrowWriterOptions,
 };
 use parquet::arrow::async_reader::MetadataFetch;
-use parquet::arrow::{parquet_to_arrow_schema, ArrowSchemaConverter, AsyncArrowWriter};
+use parquet::arrow::{parquet_to_arrow_schema, ArrowSchemaConverter, ArrowWriter, AsyncArrowWriter};
 use parquet::basic::Type;
 
 use parquet::errors::ParquetError;
@@ -1457,13 +1457,10 @@ type ColSender = Sender<ArrowLeafColumn>;
 /// Returns join handles for each columns serialization task along with a send channel
 /// to send arrow arrays to each serialization task.
 fn spawn_column_parallel_row_group_writer(
-    arrow_row_group_writer_factory: Arc<ArrowRowGroupWriterFactory>,
+    col_writers: Vec<ArrowColumnWriter>,
     max_buffer_size: usize,
     pool: &Arc<dyn MemoryPool>,
 ) -> Result<(Vec<ColumnWriterTask>, Vec<ColSender>)> {
-    let arrow_row_group_writer =
-        arrow_row_group_writer_factory.create_row_group_writer(0)?;
-    let col_writers = arrow_row_group_writer.into_column_writers();
     let num_columns = col_writers.len();
 
     let mut col_writer_tasks = Vec::with_capacity(num_columns);
@@ -1558,7 +1555,7 @@ fn spawn_rg_join_and_finalize_task(
 /// across both columns and row_groups, with a theoretical max number of parallel tasks
 /// given by n_columns * num_row_groups.
 fn spawn_parquet_parallel_serialization_task(
-    arrow_row_group_writer_factory: Arc<ArrowRowGroupWriterFactory>,
+    arrow_writer: ArrowWriter<SerializedFileWriter<SharedBuffer>>,
     mut data: Receiver<RecordBatch>,
     serialize_tx: Sender<SpawnedTask<RBStreamSerializeResult>>,
     schema: Arc<Schema>,
@@ -1569,9 +1566,10 @@ fn spawn_parquet_parallel_serialization_task(
     SpawnedTask::spawn(async move {
         let max_buffer_rb = parallel_options.max_buffered_record_batches_per_stream;
         let max_row_group_rows = writer_props.max_row_group_size();
+        let col_writers = arrow_writer.get_column_writers().unwrap();
         let (mut column_writer_handles, mut col_array_channels) =
             spawn_column_parallel_row_group_writer(
-                Arc::clone(&arrow_row_group_writer_factory),
+                col_writers,
                 max_buffer_rb,
                 &pool,
             )?;
@@ -1625,7 +1623,7 @@ fn spawn_parquet_parallel_serialization_task(
 
                     (column_writer_handles, col_array_channels) =
                         spawn_column_parallel_row_group_writer(
-                            Arc::clone(&arrow_row_group_writer_factory),
+                            col_writers,
                             max_buffer_rb,
                             &pool,
                         )?;
@@ -1724,16 +1722,12 @@ async fn output_single_parquet_file_parallelized(
         parquet_schema.root_schema_ptr(),
         parquet_props.clone().into(),
     )?;
-    let arrow_row_group_writer_factory = ArrowRowGroupWriterFactory::new(
-        &parquet_writer,
-        parquet_schema,
-        Arc::clone(&output_schema),
-        parquet_props.clone().into(),
-    );
+    let writer = ArrowWriter::try_new(
+        parquet_writer, Arc::clone(&output_schema), Some(parquet_props.clone()))?;
 
     let arc_props = Arc::new(parquet_props.clone());
     let launch_serialization_task = spawn_parquet_parallel_serialization_task(
-        Arc::new(arrow_row_group_writer_factory),
+        writer,
         data,
         serialize_tx,
         Arc::clone(&output_schema),

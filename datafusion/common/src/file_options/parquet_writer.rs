@@ -25,8 +25,6 @@ use crate::{
     DataFusionError, Result, _internal_datafusion_err,
 };
 
-pub const DEFAULT_MAX_STATISTICS_SIZE: usize = 4096;
-
 use arrow::datatypes::Schema;
 // TODO: handle once deprecated
 use crate::encryption::add_crypto_to_writer_properties;
@@ -163,19 +161,6 @@ impl TryFrom<&TableParquetOptions> for WriterPropertiesBuilder {
                 builder =
                     builder.set_column_bloom_filter_ndv(path.clone(), bloom_filter_ndv);
             }
-<<<<<<< HEAD
-=======
-
-            // max_statistics_size is deprecated, currently it is not being used
-            // TODO: remove once deprecated
-            // #[allow(deprecated)]
-            // if let Some(max_statistics_size) = options.max_statistics_size {
-            //     builder = {
-            //         #[allow(deprecated)]
-            //         builder.set_column_max_statistics_size(path, max_statistics_size)
-            //     }
-            // }
->>>>>>> f1f6d637c (Initial commit)
         }
 
         Ok(builder)
@@ -224,10 +209,6 @@ impl ParquetOptions {
             dictionary_enabled,
             dictionary_page_size_limit,
             statistics_enabled,
-<<<<<<< HEAD
-=======
-            max_statistics_size: _max_statistics_size,
->>>>>>> f1f6d637c (Initial commit)
             max_row_group_size,
             created_by,
             column_index_truncate_length,
@@ -273,16 +254,6 @@ impl ParquetOptions {
             .set_data_page_row_count_limit(*data_page_row_count_limit)
             .set_bloom_filter_enabled(*bloom_filter_on_write);
 
-<<<<<<< HEAD
-=======
-        // builder = {
-        //     #[allow(deprecated)]
-        //     builder.set_max_statistics_size(
-        //         max_statistics_size.unwrap_or(DEFAULT_MAX_STATISTICS_SIZE),
-        //     )
-        // };
-
->>>>>>> f1f6d637c (Initial commit)
         if let Some(bloom_filter_fpp) = bloom_filter_fpp {
             builder = builder.set_bloom_filter_fpp(*bloom_filter_fpp);
         };
@@ -560,10 +531,6 @@ mod tests {
             ),
             bloom_filter_fpp: bloom_filter_default_props.map(|p| p.fpp),
             bloom_filter_ndv: bloom_filter_default_props.map(|p| p.ndv),
-<<<<<<< HEAD
-=======
-            max_statistics_size: Some(DEFAULT_MAX_STATISTICS_SIZE),
->>>>>>> f1f6d637c (Initial commit)
         }
     }
 
