@@ -1376,10 +1376,10 @@ impl Expr {
     /// ```
     /// # use datafusion_expr::{col, lit};
     /// let expr = col("foo").eq(lit(42));
-    /// assert_eq!("foo = Int32(42)", expr.schema_name().to_string());
+    /// assert_eq!("(foo = Int32(42))", expr.schema_name().to_string());
     ///
     /// let expr = col("foo").alias("bar").eq(lit(11));
-    /// assert_eq!("bar = Int32(11)", expr.schema_name().to_string());
+    /// assert_eq!("(bar = Int32(11))", expr.schema_name().to_string());
     /// ```
     ///
     /// [`Schema`]: arrow::datatypes::Schema
@@ -2704,7 +2704,7 @@ impl Display for SchemaDisplay<'_> {
                 }
             }
             Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
-                write!(f, "{} {op} {}", SchemaDisplay(left), SchemaDisplay(right),)
+                write!(f, "({} {op} {})", SchemaDisplay(left), SchemaDisplay(right),)
             }
             Expr::Case(Case {
                 expr,
@@ -3812,6 +3812,21 @@ mod test {
                 SchemaDisplay(&lit(1).alias_qualified(None::<&str>, "column_name"))
             ),
             "column_name"
+        );
+    }
+
+    #[test]
+    fn test_schema_display_nested_binary_expr() {
+        let expr = lit(1) * (lit(2) + lit(3));
+        assert_eq!(
+            format!("{}", SchemaDisplay(&expr)),
+            "(Int32(1) * (Int32(2) + Int32(3)))"
+        );
+
+        let expr = -(lit(1) + (lit(2)));
+        assert_eq!(
+            format!("{}", SchemaDisplay(&expr)),
+            "(- (Int32(1) + Int32(2)))"
         );
     }
 
