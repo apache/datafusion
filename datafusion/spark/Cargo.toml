@@ -45,6 +45,7 @@ datafusion-expr = { workspace = true }
 datafusion-functions = { workspace = true, features = ["crypto_expressions"] }
 datafusion-macros = { workspace = true }
 log = { workspace = true }
+regex = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }
