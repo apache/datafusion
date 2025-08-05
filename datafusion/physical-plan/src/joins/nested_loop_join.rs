@@ -1096,7 +1096,7 @@ impl NestedLoopJoinStream {
             };
 
             // Only setting up timer, input is exhausted
-            let _timer = self.join_metrics.join_time.timer();
+            let timer = self.join_metrics.join_time.timer();
             // use the global left bitmap to produce the left indices and right indices
 
             let (left_side, right_side) = get_final_indices_from_shared_bitmap(
@@ -1121,9 +1121,12 @@ impl NestedLoopJoinStream {
             if result.is_ok() {
                 timer.done();
             }
-          
-            let (left_side, right_side) =
-                get_final_indices_from_shared_bitmap(visited_left_side, self.join_type);
+
+            let (left_side, right_side) = get_final_indices_from_shared_bitmap(
+                visited_left_side,
+                self.join_type,
+                true,
+            );
 
             self.join_result_status = Some(JoinResultProgress {
                 build_indices: left_side,
