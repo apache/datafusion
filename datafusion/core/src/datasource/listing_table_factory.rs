@@ -63,16 +63,29 @@ impl TableProviderFactory for ListingTableFactory {
             ))?
             .create(session_state, &cmd.options)?;
 
-        let file_extension = get_extension(cmd.location.as_str());
+        let mut table_path = ListingTableUrl::parse(&cmd.location)?;
+        let file_extension = match table_path.is_collection() {
+            true => "",
+            false => &get_extension(cmd.location.as_str()),
+        };
+        let mut options = ListingOptions::new(file_format)
+            .with_session_config_options(session_state.config())
+            .with_file_extension(file_extension);
 
         let (provided_schema, table_partition_cols) = if cmd.schema.fields().is_empty() {
+            let part_cols = match cmd.table_partition_cols.is_empty() {
+                true => options
+                    .infer_partitions(session_state, &table_path)
+                    .await?
+                    .into_iter(),
+                false => cmd.table_partition_cols.clone().into_iter(),
+            };
             (
                 None,
-                cmd.table_partition_cols
-                    .iter()
-                    .map(|x| {
+                part_cols
+                    .map(|p| {
                         (
-                            x.clone(),
+                            p,
                             DataType::Dictionary(
                                 Box::new(DataType::UInt16),
                                 Box::new(DataType::Utf8),
@@ -108,13 +121,7 @@ impl TableProviderFactory for ListingTableFactory {
             (Some(schema), table_partition_cols)
         };
 
-        let mut table_path = ListingTableUrl::parse(&cmd.location)?;
-
-        let options = ListingOptions::new(file_format)
-            .with_file_extension(&file_extension)
-            .with_session_config_options(session_state.config())
-            .with_table_partition_cols(table_partition_cols);
-
+        options = options.with_table_partition_cols(table_partition_cols);
         options
             .validate_partitions(session_state, &table_path)
             .await?;
