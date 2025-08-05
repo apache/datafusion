@@ -1001,12 +1001,11 @@ UDF.</p>
 <span class="w">    </span><span class="p">}</span>
 
 <span class="w">    </span><span class="sd">/// This method is called to execute the async UDF and is similar</span>
-<span class="w">    </span><span class="sd">/// to the normal `invoke_with_args` except it returns an `ArrayRef`</span>
-<span class="w">    </span><span class="sd">/// instead of `ColumnarValue` and is `async`.</span>
+<span class="w">    </span><span class="sd">/// to the normal `invoke_with_args` except it is `async`.</span>
 <span class="w">    </span><span class="k">async</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">invoke_async_with_args</span><span class="p">(</span>
 <span class="w">        </span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span>
 <span class="w">        </span><span class="n">args</span><span class="p">:</span><span class="w"> </span><span class="nc">ScalarFunctionArgs</span><span class="p">,</span>
-<span class="w">    </span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="n">ArrayRef</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="n">ColumnarValue</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
 <span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">value</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="o">&amp;</span><span class="n">args</span><span class="p">.</span><span class="n">args</span><span class="p">[</span><span class="mi">0</span><span class="p">];</span>
 <span class="w">        </span><span class="c1">// This function simply implements a simple string to uppercase conversion</span>
 <span class="w">        </span><span class="c1">// but can be used for any async operation such as network calls.</span>
@@ -1021,7 +1020,7 @@ UDF.</p>
 <span class="w">            </span><span class="p">}</span>
 <span class="w">            </span><span class="n">_</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="n">internal_err</span><span class="o">!</span><span class="p">(</span><span class="s">&quot;Expected a string argument, got {:?}&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">value</span><span class="p">),</span>
 <span class="w">        </span><span class="p">};</span>
-<span class="w">        </span><span class="nb">Ok</span><span class="p">(</span><span class="n">result</span><span class="p">)</span>
+<span class="w">        </span><span class="nb">Ok</span><span class="p">(</span><span class="n">ColumnarValue</span><span class="p">::</span><span class="n">from</span><span class="p">(</span><span class="n">result</span><span class="p">))</span>
 <span class="w">    </span><span class="p">}</span>
 <span class="p">}</span>
 </pre></div>

@@ -555,6 +555,21 @@
   </a>
   <ul class="nav section-nav flex-column">
    <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#asyncscalarudfimpl-invoke-async-with-args-returns-columnarvalue">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       AsyncScalarUDFImpl::invoke_async_with_args
+      </span>
+     </code>
+     returns
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       ColumnarValue
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
     <a class="reference internal nav-link" href="#sessionstate-sessionconfig-and-optimizerconfig-returns-arc-configoptions-instead-of-configoptions">
      <code class="docutils literal notranslate">
       <span class="pre">
@@ -1137,6 +1152,39 @@
 <h2>DataFusion <code class="docutils literal notranslate"><span class="pre">50.0.0</span></code><a class="headerlink" href="#datafusion-50-0-0" title="Link to this heading">¶</a></h2>
 <p><strong>Note:</strong> DataFusion <code class="docutils literal notranslate"><span class="pre">50.0.0</span></code> has not been released yet. The information provided in this section pertains to features and changes that have already been merged to the main branch and are awaiting release in this version.
 You can see the current <a class="reference external" href="https://github.com/apache/datafusion/issues/16799">status of the <code class="docutils literal notranslate"><span class="pre">50.0.0</span> </code>release here</a></p>
+<section id="asyncscalarudfimpl-invoke-async-with-args-returns-columnarvalue">
+<h3><code class="docutils literal notranslate"><span class="pre">AsyncScalarUDFImpl::invoke_async_with_args</span></code> returns <code class="docutils literal notranslate"><span class="pre">ColumnarValue</span></code><a class="headerlink" href="#asyncscalarudfimpl-invoke-async-with-args-returns-columnarvalue" title="Link to this heading">¶</a></h3>
+<p>In order to enable single value optimizations and be consistent with other
+user defined function APIs, the <code class="docutils literal notranslate"><span class="pre">AsyncScalarUDFImpl::invoke_async_with_args</span></code> method now
+returns a <code class="docutils literal notranslate"><span class="pre">ColumnarValue</span></code> instead of a <code class="docutils literal notranslate"><span class="pre">ArrayRef</span></code>.</p>
+<p>To upgrade, change the return type of your implementation</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">impl</span><span class="w"> </span><span class="n">AsyncScalarUDFImpl</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">AskLLM</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">async</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">invoke_async_with_args</span><span class="p">(</span>
+<span class="w">        </span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span>
+<span class="w">        </span><span class="n">args</span><span class="p">:</span><span class="w"> </span><span class="nc">ScalarFunctionArgs</span><span class="p">,</span>
+<span class="w">        </span><span class="n">_option</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">ConfigOptions</span><span class="p">,</span>
+<span class="w">    </span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="n">ColumnarValue</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="o">..</span>
+<span class="w">      </span><span class="k">return</span><span class="w"> </span><span class="n">array_ref</span><span class="p">;</span><span class="w"> </span><span class="c1">// old code</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>To return a <code class="docutils literal notranslate"><span class="pre">ColumnarValue</span></code></p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">impl</span><span class="w"> </span><span class="n">AsyncScalarUDFImpl</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">AskLLM</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">async</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">invoke_async_with_args</span><span class="p">(</span>
+<span class="w">        </span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span>
+<span class="w">        </span><span class="n">args</span><span class="p">:</span><span class="w"> </span><span class="nc">ScalarFunctionArgs</span><span class="p">,</span>
+<span class="w">        </span><span class="n">_option</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">ConfigOptions</span><span class="p">,</span>
+<span class="w">    </span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="n">ColumnarValue</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="o">..</span>
+<span class="w">      </span><span class="k">return</span><span class="w"> </span><span class="n">ColumnarValue</span><span class="p">::</span><span class="n">from</span><span class="p">(</span><span class="n">array_ref</span><span class="p">);</span><span class="w"> </span><span class="c1">// new code</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>See <a class="reference external" href="https://github.com/apache/datafusion/issues/16896">#16896</a> for more details.</p>
+</section>
 <section id="sessionstate-sessionconfig-and-optimizerconfig-returns-arc-configoptions-instead-of-configoptions">
 <h3><code class="docutils literal notranslate"><span class="pre">SessionState</span></code>, <code class="docutils literal notranslate"><span class="pre">SessionConfig</span></code>, and <code class="docutils literal notranslate"><span class="pre">OptimizerConfig</span></code> returns <code class="docutils literal notranslate"><span class="pre">&amp;Arc&lt;ConfigOptions&gt;</span></code> instead of <code class="docutils literal notranslate"><span class="pre">&amp;ConfigOptions</span></code><a class="headerlink" href="#sessionstate-sessionconfig-and-optimizerconfig-returns-arc-configoptions-instead-of-configoptions" title="Link to this heading">¶</a></h3>
 <p>To provide broader access to <code class="docutils literal notranslate"><span class="pre">ConfigOptions</span></code> and reduce required clones, some
