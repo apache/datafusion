@@ -119,6 +119,38 @@ EOF
 echo "Running CLI and inserting runtime config docs table"
 $PRINT_RUNTIME_CONFIG_DOCS_COMMAND >> "$TARGET_FILE"
 
+cat <<'EOF' >> "$TARGET_FILE"
+
+# Tuning Guide
+
+## Short Queries
+
+By default DataFusion will attempt to maximize parallelism and use all cores --
+For example, if you have 32 cores, each plan will split the data into 32
+partitions. However, if your data is small, the overhead of splitting the data
+to enable parallelization can dominate the actual computation.
+
+You can find out how many cores are being used via the [`EXPLAIN`] command and look
+at the number of partitions in the plan.
+
+[`EXPLAIN`]: sql/explain.md
+
+The `datafusion.optimizer.repartition_file_min_size` option controls the minimum file size the
+[`ListingTable`] provider will attempt to repartition. However, this
+does not apply to user defined data sources and only works when DataFusion has accurate statistics.
+
+If you know your data is small, you can set the `datafusion.execution.target_partitions`
+option to a smaller number to reduce the overhead of repartitioning. For very small datasets (e.g. less
+than 1MB), we recommend setting `target_partitions` to 1 to avoid repartitioning altogether.
+
+```sql
+SET datafusion.execution.target_partitions = '1';
+```
+
+[`ListingTable`]: https://docs.rs/datafusion/latest/datafusion/datasource/listing/struct.ListingTable.html
+
+EOF
+
 
 echo "Running prettier"
 npx prettier@2.3.2 --write "$TARGET_FILE"
