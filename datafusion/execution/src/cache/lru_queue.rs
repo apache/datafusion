@@ -1,8 +1,10 @@
 use std::{
     collections::HashMap,
     hash::Hash,
-    sync::{Arc, Mutex, Weak},
+    sync::{Arc, Weak},
 };
+
+use parking_lot::Mutex;
 
 #[derive(Default)]
 /// Provides a Least Recently Used queue with unbounded capacity.
@@ -98,9 +100,8 @@ impl<K: Eq + Hash + Clone, V> LruQueue<K, V> {
                     .upgrade()
                     .expect("value has been unexpectedly dropped")
                     .lock()
-                    .unwrap()
                     .prev = Some(Arc::downgrade(&node));
-                node.lock().unwrap().next = Some(Weak::clone(old_head));
+                node.lock().next = Some(Weak::clone(old_head));
                 self.queue.head = Some(Arc::downgrade(&node));
             }
             // queue is empty
@@ -122,7 +123,6 @@ impl<K: Eq + Hash + Clone, V> LruQueue<K, V> {
             n.upgrade()
                 .expect("value has been unexpectedly dropped")
                 .lock()
-                .unwrap()
                 .key
                 .clone()
         });
@@ -137,7 +137,7 @@ impl<K: Eq + Hash + Clone, V> LruQueue<K, V> {
     /// Removes a specific entry from the queue, if it exists.
     pub fn remove(&mut self, key: &K) -> Option<V> {
         if let Some((old_node, old_value)) = self.data.remove(key) {
-            let LruNode { key: _, prev, next } = &*old_node.lock().unwrap();
+            let LruNode { key: _, prev, next } = &*old_node.lock();
             match (prev, next) {
                 // single node in the queue
                 (None, None) => {
@@ -148,14 +148,14 @@ impl<K: Eq + Hash + Clone, V> LruQueue<K, V> {
                 (None, Some(n)) => {
                     let n_strong =
                         n.upgrade().expect("value has been unexpectedly dropped");
-                    n_strong.lock().unwrap().prev = None;
+                    n_strong.lock().prev = None;
                     self.queue.head = Some(Weak::clone(n));
                 }
                 // removed the tail node
                 (Some(p), None) => {
                     let p_strong =
                         p.upgrade().expect("value has been unexpectedly dropped");
-                    p_strong.lock().unwrap().next = None;
+                    p_strong.lock().next = None;
                     self.queue.tail = Some(Weak::clone(p));
                 }
                 // removed a middle node
@@ -164,8 +164,8 @@ impl<K: Eq + Hash + Clone, V> LruQueue<K, V> {
                         n.upgrade().expect("value has been unexpectedly dropped");
                     let p_strong =
                         p.upgrade().expect("value has been unexpectedly dropped");
-                    n_strong.lock().unwrap().prev = Some(Weak::clone(p));
-                    p_strong.lock().unwrap().next = Some(Weak::clone(n));
+                    n_strong.lock().prev = Some(Weak::clone(p));
+                    p_strong.lock().next = Some(Weak::clone(n));
                 }
             };
             Some(old_value)
