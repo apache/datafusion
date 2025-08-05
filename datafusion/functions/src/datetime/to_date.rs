@@ -162,14 +162,14 @@ impl ScalarUDFImpl for ToDateFunc {
 
 #[cfg(test)]
 mod tests {
+    use super::ToDateFunc;
     use arrow::array::{Array, Date32Array, GenericStringArray, StringViewArray};
     use arrow::datatypes::{DataType, Field};
     use arrow::{compute::kernels::cast_utils::Parser, datatypes::Date32Type};
+    use datafusion_common::config::ConfigOptions;
     use datafusion_common::{DataFusionError, ScalarValue};
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
     use std::sync::Arc;
-
-    use super::ToDateFunc;
 
     fn invoke_to_date_with_args(
         args: Vec<ColumnarValue>,
@@ -185,6 +185,7 @@ mod tests {
             arg_fields,
             number_rows,
             return_field: Field::new("f", DataType::Date32, true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
         };
         ToDateFunc::new().invoke_with_args(args)
     }
