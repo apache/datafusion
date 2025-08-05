@@ -415,6 +415,12 @@ impl RecursiveUnnestRewriter<'_> {
 
         match data_type {
             DataType::Struct(inner_fields) => {
+                let mut alias_name = None;
+                if let Expr::Alias(Alias { name, .. }) = self.root_expr {
+                    alias_name = Some(name);
+                }
+
+                dbg!(alias_name.clone());
                 if !struct_allowed {
                     return internal_err!("unnest on struct can only be applied at the root level of select expression");
                 }
@@ -424,12 +430,11 @@ impl RecursiveUnnestRewriter<'_> {
                 );
                 self.columns_unnestings
                     .insert(Column::from_name(placeholder_name.clone()), None);
-                Ok(
-                    get_struct_unnested_columns(&placeholder_name, &inner_fields)
-                        .into_iter()
-                        .map(Expr::Column)
-                        .collect(),
-                )
+                Ok(get_struct_unnested_columns(
+                    &placeholder_name,
+                    &inner_fields,
+                    alias_name,
+                ))
             }
             DataType::List(_)
             | DataType::FixedSizeList(_, _)
@@ -554,7 +559,9 @@ impl TreeNodeRewriter for RecursiveUnnestRewriter<'_> {
                 // instead of unnest(struct_arr_col, depth = 2)
 
                 let unnest_recursion = unnest_stack.len();
-                let struct_allowed = (&expr == self.root_expr) && unnest_recursion == 1;
+                let struct_allowed = ((&expr == self.root_expr)
+                    || (matches!(self.root_expr, Expr::Alias(Alias { expr: inner, .. }) if inner.as_ref() == &expr)))
+                    && unnest_recursion == 1;
 
                 let mut transformed_exprs = self.transform(
                     unnest_recursion,
