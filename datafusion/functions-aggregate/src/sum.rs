@@ -34,7 +34,7 @@ use arrow::datatypes::{
 };
 use arrow::{array::ArrayRef, datatypes::Field};
 use datafusion_common::{
-    exec_err, not_impl_err, utils::take_function_args, Result, ScalarValue,
+    exec_err, not_impl_err, utils::take_function_args, HashMap, Result, ScalarValue,
 };
 use datafusion_expr::function::AccumulatorArgs;
 use datafusion_expr::function::StateFieldsArgs;
@@ -243,12 +243,23 @@ impl AggregateUDFImpl for Sum {
         &self,
         args: AccumulatorArgs,
     ) -> Result<Box<dyn Accumulator>> {
-        macro_rules! helper {
-            ($t:ty, $dt:expr) => {
-                Ok(Box::new(SlidingSumAccumulator::<$t>::new($dt.clone())))
-            };
+        if args.is_distinct {
+            // distinct path: use our sliding‐window distinct‐sum
+            macro_rules! helper_distinct {
+                ($t:ty, $dt:expr) => {
+                    Ok(Box::new(SlidingDistinctSumAccumulator::try_new(&$dt)?))
+                };
+            }
+            downcast_sum!(args, helper_distinct)
+        } else {
+            // non‐distinct path: existing sliding sum
+            macro_rules! helper {
+                ($t:ty, $dt:expr) => {
+                    Ok(Box::new(SlidingSumAccumulator::<$t>::new($dt.clone())))
+                };
+            }
+            downcast_sum!(args, helper)
         }
-        downcast_sum!(args, helper)
     }
 
     fn reverse_expr(&self) -> ReversedUDAF {
@@ -475,5 +486,109 @@ impl<T: ArrowPrimitiveType> Accumulator for DistinctSumAccumulator<T> {
 
     fn size(&self) -> usize {
         size_of_val(self) + self.values.capacity() * size_of::<T::Native>()
+    }
+}
+
+/// A sliding‐window accumulator for `SUM(DISTINCT)` over Int64 columns.
+/// Maintains a running sum so that `evaluate()` is O(1).
+#[derive(Debug)]
+pub struct SlidingDistinctSumAccumulator {
+    /// Map each distinct value → its current count in the window
+    counts: HashMap<i64, usize, RandomState>,
+    /// Running sum of all distinct keys currently in the window
+    sum: i64,
+    /// Data type (must be Int64)
+    data_type: DataType,
+}
+
+impl SlidingDistinctSumAccumulator {
+    /// Create a new accumulator; only `DataType::Int64` is supported.
+    pub fn try_new(data_type: &DataType) -> Result<Self> {
+        // TODO support other numeric types
+        if *data_type != DataType::Int64 {
+            return exec_err!("SlidingDistinctSumAccumulator only supports Int64");
+        }
+        Ok(Self {
+            counts: HashMap::default(),
+            sum: 0,
+            data_type: data_type.clone(),
+        })
+    }
+}
+
+impl Accumulator for SlidingDistinctSumAccumulator {
+    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        let arr = values[0].as_primitive::<Int64Type>();
+        for &v in arr.values() {
+            let cnt = self.counts.entry(v).or_insert(0);
+            if *cnt == 0 {
+                // first occurrence in window
+                self.sum = self.sum.wrapping_add(v);
+            }
+            *cnt += 1;
+        }
+        Ok(())
+    }
+
+    fn evaluate(&mut self) -> Result<ScalarValue> {
+        // O(1) wrap of running sum
+        Ok(ScalarValue::Int64(Some(self.sum)))
+    }
+
+    fn size(&self) -> usize {
+        size_of_val(self)
+    }
+
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
+        // Serialize distinct keys for cross-partition merge if needed
+        let keys = self
+            .counts
+            .keys()
+            .cloned()
+            .map(Some)
+            .map(ScalarValue::Int64)
+            .collect::<Vec<_>>();
+        Ok(vec![ScalarValue::List(ScalarValue::new_list_nullable(
+            &keys,
+            &self.data_type,
+        ))])
+    }
+
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        // Merge distinct keys from other partitions
+        let list_arr = states[0].as_list::<i32>();
+        for maybe_inner in list_arr.iter().flatten() {
+            for idx in 0..maybe_inner.len() {
+                if let ScalarValue::Int64(Some(v)) =
+                    ScalarValue::try_from_array(&*maybe_inner, idx)?
+                {
+                    let cnt = self.counts.entry(v).or_insert(0);
+                    if *cnt == 0 {
+                        self.sum = self.sum.wrapping_add(v);
+                    }
+                    *cnt += 1;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        let arr = values[0].as_primitive::<Int64Type>();
+        for &v in arr.values() {
+            if let Some(cnt) = self.counts.get_mut(&v) {
+                *cnt -= 1;
+                if *cnt == 0 {
+                    // last copy leaving window
+                    self.sum = self.sum.wrapping_sub(v);
+                    self.counts.remove(&v);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn supports_retract_batch(&self) -> bool {
+        true
     }
 }
