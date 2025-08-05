@@ -1133,23 +1133,12 @@ impl ExecutionPlan for SortExec {
             "SortExec should have exactly one child"
         );
         new_sort.input = Arc::clone(&children[0]);
-        // Recompute the properties based on the new input since they may have changed.
+        // Recompute the properties based on the new input since they may have changed
         let (cache, sort_prefix) = Self::compute_properties(
             &new_sort.input,
             new_sort.expr.clone(),
             new_sort.preserve_partitioning,
-        )
-        .expect(concat!(
-            "Safety: we had already been calling `compute_properties(...).unwrap()` in `new()` ",
-            "and it seems to be okay",
-            "\n",
-            "We assumed that doing the same thing here directly instead ",
-            "of calling `new()` (as we did before this commit) is also okay but it's possible that ",
-            "implementations have drifted and this is no longer safe even if `new()` still works, ",
-            "for example if `new()` now does something different than just calling `compute_properties(...).unwrap()`",
-            "\n",
-            "This is clearly a bug, please report it!"
-        ));
+        )?;
         new_sort.cache = cache;
         new_sort.common_sort_prefix = sort_prefix;
 

@@ -1018,6 +1018,30 @@ limit 5;
 0 0
 0 0
 
+query TT
+explain analyze
+with recursive r as (
+  select 0 as k, 0 as v
+  union all
+  (
+    select *
+    from r
+    order by v
+    limit 1
+  )
+)
+select *
+from r
+limit 5;
+----
+Plan with Metrics
+01)GlobalLimitExec: skip=0, fetch=5, metrics=[output_rows=5, elapsed_compute=33.167µs]
+02)--RecursiveQueryExec: name=r, is_distinct=false, metrics=[output_rows=0, elapsed_compute=1ns]
+03)----ProjectionExec: expr=[0 as k, 0 as v], metrics=[output_rows=1, elapsed_compute=12.042µs]
+04)------PlaceholderRowExec, metrics=[]
+05)----SortExec: TopK(fetch=1), expr=[v@1 ASC NULLS LAST], preserve_partitioning=[false], metrics=[]
+06)------WorkTableExec: name=r, metrics=[]
+
 statement count 0
 set datafusion.execution.enable_recursive_ctes = false;
 
