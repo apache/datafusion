@@ -94,6 +94,98 @@ NULL three
 1 one
 2 two
 
+statement ok
+set datafusion.sql_parser.default_null_ordering = 'nulls_min';
+
+# test asc with `nulls_min` null ordering
+
+query IT
+SELECT * FROM (VALUES (1, 'one'), (2, 'two'), (null, 'three')) AS t (num,letter) ORDER BY num
+----
+NULL three
+1 one
+2 two
+
+# test desc with `nulls_min` null ordering
+
+query IT
+SELECT * FROM (VALUES (1, 'one'), (2, 'two'), (null, 'three')) AS t (num,letter) ORDER BY num DESC
+----
+2 two
+1 one
+NULL three
+
+statement ok
+set datafusion.sql_parser.default_null_ordering = 'nulls_first';
+
+# test asc with `nulls_first` null ordering
+
+query IT
+SELECT * FROM (VALUES (1, 'one'), (2, 'two'), (null, 'three')) AS t (num,letter) ORDER BY num
+----
+NULL three
+1 one
+2 two
+
+# test desc with `nulls_first` null ordering
+
+query IT
+SELECT * FROM (VALUES (1, 'one'), (2, 'two'), (null, 'three')) AS t (num,letter) ORDER BY num DESC
+----
+NULL three
+2 two
+1 one
+
+
+statement ok
+set datafusion.sql_parser.default_null_ordering = 'nulls_last';
+
+# test asc with `nulls_last` null ordering
+
+query IT
+SELECT * FROM (VALUES (1, 'one'), (2, 'two'), (null, 'three')) AS t (num,letter) ORDER BY num
+----
+1 one
+2 two
+NULL three
+
+# test desc with `nulls_last` null ordering
+
+query IT
+SELECT * FROM (VALUES (1, 'one'), (2, 'two'), (null, 'three')) AS t (num,letter) ORDER BY num DESC
+----
+2 two
+1 one
+NULL three
+
+statement ok
+set datafusion.sql_parser.default_null_ordering = '';
+
+# test asc with an empty `default_null_ordering`. Expected to use the default null ordering which is `nulls_max`
+
+query IT
+SELECT * FROM (VALUES (1, 'one'), (2, 'two'), (null, 'three')) AS t (num,letter) ORDER BY num
+----
+1 one
+2 two
+NULL three
+
+# test desc with an empty `default_null_ordering`. Expected to use the default null ordering which is `nulls_max`
+
+query IT
+SELECT * FROM (VALUES (1, 'one'), (2, 'two'), (null, 'three')) AS t (num,letter) ORDER BY num DESC
+----
+NULL three
+2 two
+1 one
+
+statement error DataFusion error: Error during planning: Unsupported Value NULL
+set datafusion.sql_parser.default_null_ordering = null;
+
+# reset to default null ordering
+statement ok
+set datafusion.sql_parser.default_null_ordering = 'nulls_max';
+
 # sort
 
 statement ok
