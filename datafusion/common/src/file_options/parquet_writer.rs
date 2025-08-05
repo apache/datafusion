@@ -25,8 +25,6 @@ use crate::{
     DataFusionError, Result, _internal_datafusion_err,
 };
 
-pub const DEFAULT_MAX_STATISTICS_SIZE: usize = 4096;
-
 use arrow::datatypes::Schema;
 // TODO: handle once deprecated
 #[allow(deprecated)]
