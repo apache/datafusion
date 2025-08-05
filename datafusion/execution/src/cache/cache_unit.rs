@@ -18,12 +18,12 @@
 use std::sync::{Arc, Mutex};
 
 use crate::cache::cache_manager::{FileMetadata, FileMetadataCache};
+use crate::cache::lru_queue::LruQueue;
 use crate::cache::CacheAccessor;
 
 use datafusion_common::Statistics;
 
 use dashmap::DashMap;
-use lru::LruCache;
 use object_store::path::Path;
 use object_store::ObjectMeta;
 
@@ -161,7 +161,7 @@ impl CacheAccessor<Path, Arc<Vec<ObjectMeta>>> for DefaultListFilesCache {
 
 /// Handles the inner state of the [`DefaultFilesMetadataCache`] struct.
 struct DefaultFilesMetadataCacheState {
-    lru_cache: LruCache<Path, (ObjectMeta, Arc<dyn FileMetadata>)>,
+    lru_queue: LruQueue<Path, (ObjectMeta, Arc<dyn FileMetadata>)>,
     memory_limit: Option<usize>,
     memory_used: usize,
 }
@@ -169,7 +169,7 @@ struct DefaultFilesMetadataCacheState {
 impl DefaultFilesMetadataCacheState {
     fn new(memory_limit: Option<usize>) -> Self {
         Self {
-            lru_cache: LruCache::unbounded(),
+            lru_queue: LruQueue::new(),
             memory_limit,
             memory_used: 0,
         }
@@ -179,7 +179,7 @@ impl DefaultFilesMetadataCacheState {
     /// properties from [`ObjectMeta`] match.
     /// If the entry exists, it becomes the most recently used.
     fn get(&mut self, k: &ObjectMeta) -> Option<Arc<dyn FileMetadata>> {
-        self.lru_cache
+        self.lru_queue
             .get(&k.location)
             .map(|(object_meta, metadata)| {
                 if object_meta.size != k.size
@@ -197,7 +197,7 @@ impl DefaultFilesMetadataCacheState {
     /// properties of [`ObjectMeta`] match).
     /// The LRU queue is not updated.
     fn contains_key(&self, k: &ObjectMeta) -> bool {
-        self.lru_cache
+        self.lru_queue
             .peek(&k.location)
             .map(|(object_meta, _)| {
                 object_meta.size == k.size && object_meta.last_modified == k.last_modified
@@ -223,7 +223,7 @@ impl DefaultFilesMetadataCacheState {
         }
 
         // if the key is already in the cache, the old value is removed
-        let old_value = self.lru_cache.put(key.location.clone(), (key, value));
+        let old_value = self.lru_queue.put(key.location.clone(), (key, value));
         self.memory_used += value_size;
         if let Some((_, ref old_metadata)) = old_value {
             self.memory_used -= old_metadata.memory_size();
@@ -242,7 +242,7 @@ impl DefaultFilesMetadataCacheState {
         };
 
         while self.memory_used > memory_limit {
-            if let Some(removed) = self.lru_cache.pop_lru() {
+            if let Some(removed) = self.lru_queue.pop() {
                 let metadata: Arc<dyn FileMetadata> = removed.1 .1;
                 self.memory_used -= metadata.memory_size();
             } else {
@@ -254,7 +254,7 @@ impl DefaultFilesMetadataCacheState {
 
     /// Removes an entry from the cache and returns it, if it exists.
     fn remove(&mut self, k: &ObjectMeta) -> Option<Arc<dyn FileMetadata>> {
-        if let Some((_, old_metadata)) = self.lru_cache.pop(&k.location) {
+        if let Some((_, old_metadata)) = self.lru_queue.remove(&k.location) {
             self.memory_used -= old_metadata.memory_size();
             Some(old_metadata)
         } else {
@@ -264,12 +264,12 @@ impl DefaultFilesMetadataCacheState {
 
     /// Returns the number of entries currently cached.
     fn len(&self) -> usize {
-        self.lru_cache.len()
+        self.lru_queue.len()
     }
 
     /// Removes all entries from the cache.
     fn clear(&mut self) {
-        self.lru_cache.clear();
+        self.lru_queue.clear();
         self.memory_used = 0;
     }
 }
