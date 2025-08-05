@@ -16,7 +16,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-name: Generated Docs Check
+name: Generated Docs
 
 concurrency:
   group: ${{ github.repository }}-${{ github.head_ref || github.sha }}-${{ github.workflow }}
@@ -47,32 +47,32 @@ on:
   # https://docs.github.com/en/actions/managing-workflow-runs/manually-running-a-workflow
   workflow_dispatch:
 
-
-generated-docs-check:
-  name: check configs.md and ***_functions.md is up-to-date
-  needs: linux-build-lib
-  runs-on: ubuntu-latest
-  container:
-    image: amd64/rust
-  steps:
-    - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
-      with:
-        submodules: true
-        fetch-depth: 1
-    - name: Setup Rust toolchain
-      uses: ./.github/actions/setup-builder
-      with:
-        rust-version: stable
-    - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4.4.0
-      with:
-        node-version: "20"
-    - name: Check if configs.md has been modified
-      run: |
-        # If you encounter an error, run './dev/update_config_docs.sh' and commit
-        ./dev/update_config_docs.sh
-        git diff --exit-code
-    - name: Check if any of the ***_functions.md has been modified
-      run: |
-        # If you encounter an error, run './dev/update_function_docs.sh' and commit
-        ./dev/update_function_docs.sh
-        git diff --exit-code
+jobs:
+    generated-docs-check:
+      name: check configs.md and ***_functions.md is up-to-date
+      needs: linux-build-lib
+      runs-on: ubuntu-latest
+      container:
+        image: amd64/rust
+      steps:
+        - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+          with:
+            submodules: true
+            fetch-depth: 1
+        - name: Setup Rust toolchain
+          uses: ./.github/actions/setup-builder
+          with:
+            rust-version: stable
+        - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4.4.0
+          with:
+            node-version: "20"
+        - name: Check if configs.md has been modified
+          run: |
+            # If you encounter an error, run './dev/update_config_docs.sh' and commit
+            ./dev/update_config_docs.sh
+            git diff --exit-code
+        - name: Check if any of the ***_functions.md has been modified
+          run: |
+            # If you encounter an error, run './dev/update_function_docs.sh' and commit
+            ./dev/update_function_docs.sh
+            git diff --exit-code
