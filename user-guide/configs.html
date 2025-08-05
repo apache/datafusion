@@ -578,6 +578,18 @@
    Runtime Configuration Settings
   </a>
  </li>
+ <li class="toc-h1 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#tuning-guide">
+   Tuning Guide
+  </a>
+  <ul class="visible nav section-nav flex-column">
+   <li class="toc-h2 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#short-queries">
+     Short Queries
+    </a>
+   </li>
+  </ul>
+ </li>
 </ul>
 
 </nav>
@@ -1139,6 +1151,27 @@ example, to configure <code class="docutils literal notranslate"><span class="pr
 </tr>
 </tbody>
 </table>
+</section>
+<section id="tuning-guide">
+<h1>Tuning Guide<a class="headerlink" href="#tuning-guide" title="Link to this heading">¶</a></h1>
+<section id="short-queries">
+<h2>Short Queries<a class="headerlink" href="#short-queries" title="Link to this heading">¶</a></h2>
+<p>By default DataFusion will attempt to maximize parallelism and use all cores –
+For example, if you have 32 cores, each plan will split the data into 32
+partitions. However, if your data is small, the overhead of splitting the data
+to enable parallelization can dominate the actual computation.</p>
+<p>You can find out how many cores are being used via the <a class="reference internal" href="sql/explain.html"><span class="std std-doc"><code class="docutils literal notranslate"><span class="pre">EXPLAIN</span></code></span></a> command and look
+at the number of partitions in the plan.</p>
+<p>The <code class="docutils literal notranslate"><span class="pre">datafusion.optimizer.repartition_file_min_size</span></code> option controls the minimum file size the
+<a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/datasource/listing/struct.ListingTable.html"><code class="docutils literal notranslate"><span class="pre">ListingTable</span></code></a> provider will attempt to repartition. However, this
+does not apply to user defined data sources and only works when DataFusion has accurate statistics.</p>
+<p>If you know your data is small, you can set the <code class="docutils literal notranslate"><span class="pre">datafusion.execution.target_partitions</span></code>
+option to a smaller number to reduce the overhead of repartitioning. For very small datasets (e.g. less
+than 1MB), we recommend setting <code class="docutils literal notranslate"><span class="pre">target_partitions</span></code> to 1 to avoid repartitioning altogether.</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SET</span><span class="w"> </span><span class="n">datafusion</span><span class="p">.</span><span class="n">execution</span><span class="p">.</span><span class="n">target_partitions</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;1&#39;</span><span class="p">;</span>
+</pre></div>
+</div>
+</section>
 </section>
 
 
