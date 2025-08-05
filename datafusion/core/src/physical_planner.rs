@@ -24,7 +24,7 @@ use std::sync::Arc;
 use crate::datasource::file_format::file_type_to_format;
 use crate::datasource::listing::ListingTableUrl;
 use crate::datasource::physical_plan::FileSinkConfig;
-use crate::datasource::{source_as_provider, DefaultTableSource};
+use crate::datasource::DefaultTableSource;
 use crate::error::{DataFusionError, Result};
 use crate::execution::context::{ExecutionProps, SessionState};
 use crate::logical_expr::utils::generate_sort_key;
@@ -454,7 +454,15 @@ impl DefaultPhysicalPlanner {
                 fetch,
                 ..
             }) => {
-                let source = source_as_provider(source)?;
+                let Some(source) = source.as_any().downcast_ref::<DefaultTableSource>()
+                else {
+                    return Err(DataFusionError::Plan(
+                        "TableSource can only be used for logical planning".to_string(),
+                    ));
+                };
+
+                let source = Arc::clone(&source.table_provider);
+
                 // Remove all qualifiers from the scan as the provider
                 // doesn't know (nor should care) how the relation was
                 // referred to in the query

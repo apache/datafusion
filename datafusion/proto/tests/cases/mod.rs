@@ -21,13 +21,16 @@ use datafusion_common::plan_err;
 use datafusion_expr::function::AccumulatorArgs;
 use datafusion_expr::{
     udf_equals_hash, Accumulator, AggregateUDFImpl, PartitionEvaluator,
-    ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility, WindowUDFImpl,
+    ScalarFunctionArgs, ScalarUDFImpl, Signature, TableSource, Volatility, WindowUDFImpl,
 };
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
+use datafusion_proto::logical_plan::LogicalExtensionCodec;
 use std::any::Any;
 use std::fmt::Debug;
 use std::hash::{DefaultHasher, Hash, Hasher};
+use std::io::Write;
+use std::sync::Arc;
 
 mod roundtrip_logical_plan;
 mod roundtrip_physical_plan;
@@ -220,4 +223,71 @@ impl PartitionEvaluator for CustomUDWFEvaluator {}
 pub(in crate::cases) struct CustomUDWFNode {
     #[prost(string, tag = "1")]
     pub payload: String,
+}
+
+#[derive(Debug)]
+struct MyCustomTableSource {}
+
+impl TableSource for MyCustomTableSource {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn schema(&self) -> arrow::datatypes::SchemaRef {
+        arrow::datatypes::Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("name", DataType::Utf8, false),
+        ])
+        .into()
+    }
+}
+
+#[derive(Debug)]
+struct MyCustomTableSourceExtensionCodec {}
+
+impl LogicalExtensionCodec for MyCustomTableSourceExtensionCodec {
+    fn try_decode(
+        &self,
+        _buf: &[u8],
+        _inputs: &[datafusion_expr::LogicalPlan],
+        _ctx: &datafusion::prelude::SessionContext,
+    ) -> datafusion_common::Result<datafusion_expr::Extension> {
+        todo!()
+    }
+
+    fn try_encode(
+        &self,
+        _node: &datafusion_expr::Extension,
+        _buf: &mut Vec<u8>,
+    ) -> datafusion_common::Result<()> {
+        todo!()
+    }
+
+    fn try_decode_table_source(
+        &self,
+        buf: &[u8],
+        _table_ref: &datafusion_common::TableReference,
+        _schema: arrow::datatypes::SchemaRef,
+        _ctx: &datafusion::prelude::SessionContext,
+    ) -> datafusion_common::Result<std::sync::Arc<dyn TableSource>> {
+        if buf == b"encoded table" {
+            Ok(Arc::new(MyCustomTableSource {}))
+        } else {
+            panic!("unexpected table source")
+        }
+    }
+
+    fn try_encode_table_source(
+        &self,
+        _table_ref: &datafusion_common::TableReference,
+        node: std::sync::Arc<dyn TableSource>,
+        buf: &mut Vec<u8>,
+    ) -> datafusion_common::Result<()> {
+        if let Some(_source) = node.as_any().downcast_ref::<MyCustomTableSource>() {
+            buf.write_all("encoded table".as_bytes())?;
+            Ok(())
+        } else {
+            panic!("unexpected table source")
+        }
+    }
 }
