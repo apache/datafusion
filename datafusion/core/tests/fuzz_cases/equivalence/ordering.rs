@@ -21,6 +21,7 @@ use crate::fuzz_cases::equivalence::utils::{
     is_table_same_after_sort, TestScalarUDF,
 };
 use arrow::compute::SortOptions;
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::Result;
 use datafusion_expr::{Operator, ScalarUDF};
 use datafusion_physical_expr::equivalence::{
@@ -110,6 +111,7 @@ fn test_ordering_satisfy_with_equivalence_complex_random() -> Result<()> {
             Arc::clone(&test_fun),
             vec![col_a],
             &test_schema,
+            Arc::new(ConfigOptions::default()),
         )?);
         let a_plus_b = Arc::new(BinaryExpr::new(
             col("a", &test_schema)?,
