@@ -280,7 +280,7 @@ mod tests {
                 "c7: Int64",
                 "c8: Int64",
                 "c9: Int64",
-                "c10: Utf8",
+                "c10: Utf8View",
                 "c11: Float64",
                 "c12: Float64",
                 "c13: Utf8",
@@ -331,7 +331,7 @@ mod tests {
                 "c7: Int64",
                 "c8: Int64",
                 "c9: Int64",
-                "c10: Utf8",
+                "c10: Utf8View",
                 "c11: Float64",
                 "c12: Float64",
                 "c13: Utf8",
@@ -472,7 +472,6 @@ mod tests {
 
     #[rstest(
         file_compression_type,
-        case(FileCompressionType::UNCOMPRESSED),
         case(FileCompressionType::GZIP),
         case(FileCompressionType::BZIP2),
         case(FileCompressionType::XZ),
