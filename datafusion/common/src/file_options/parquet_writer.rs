@@ -24,8 +24,6 @@ use crate::{
     DataFusionError, Result, _internal_datafusion_err,
 };
 
-pub const DEFAULT_MAX_STATISTICS_SIZE: usize = 4096;
-
 use arrow::datatypes::Schema;
 use parquet::arrow::encode_arrow_schema;
 // TODO: handle once deprecated
