@@ -1,0 +1,78 @@
+
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+name: Generated Docs Check
+
+concurrency:
+  group: ${{ github.repository }}-${{ github.head_ref || github.sha }}-${{ github.workflow }}
+  cancel-in-progress: true
+
+on:
+  push:
+    paths:
+      - ".github/**"
+      - "datafusion/**"
+      - "dev/update_config_docs.sh"
+      - "dev/update_function_docs.sh"
+      - "docs/source/user-guide/configs.md"
+      - "docs/source/user-guide/sql/aggregate_functions.md"
+      - "docs/source/user-guide/sql/scalar_functions.md"
+      - "docs/source/user-guide/sql/window_functions.md"
+  pull_request:
+    paths:
+      - ".github/**"
+      - "datafusion/**"
+      - "dev/update_config_docs.sh"
+      - "dev/update_function_docs.sh"
+      - "docs/source/user-guide/configs.md"
+      - "docs/source/user-guide/sql/aggregate_functions.md"
+      - "docs/source/user-guide/sql/scalar_functions.md"
+      - "docs/source/user-guide/sql/window_functions.md"
+  # manual trigger
+  # https://docs.github.com/en/actions/managing-workflow-runs/manually-running-a-workflow
+  workflow_dispatch:
+
+
+generated-docs-check:
+  name: check configs.md and ***_functions.md is up-to-date
+  needs: linux-build-lib
+  runs-on: ubuntu-latest
+  container:
+    image: amd64/rust
+  steps:
+    - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+      with:
+        submodules: true
+        fetch-depth: 1
+    - name: Setup Rust toolchain
+      uses: ./.github/actions/setup-builder
+      with:
+        rust-version: stable
+    - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4.4.0
+      with:
+        node-version: "20"
+    - name: Check if configs.md has been modified
+      run: |
+        # If you encounter an error, run './dev/update_config_docs.sh' and commit
+        ./dev/update_config_docs.sh
+        git diff --exit-code
+    - name: Check if any of the ***_functions.md has been modified
+      run: |
+        # If you encounter an error, run './dev/update_function_docs.sh' and commit
+        ./dev/update_function_docs.sh
+        git diff --exit-code
