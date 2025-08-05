@@ -50,7 +50,6 @@ on:
 jobs:
     generated-docs-check:
       name: check configs.md and ***_functions.md is up-to-date
-      needs: linux-build-lib
       runs-on: ubuntu-latest
       container:
         image: amd64/rust
