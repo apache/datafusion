@@ -45,6 +45,7 @@ use datafusion_expr::{simplify::ExprSimplifyResult, Cast, TryCast};
 use datafusion_physical_expr::{create_physical_expr, execution_props::ExecutionProps};
 
 use super::inlist_simplifier::ShortenInListSimplifier;
+use super::make_interval_simplifier::MakeIntervalSimplifier;
 use super::utils::*;
 use crate::analyzer::type_coercion::TypeCoercionRewriter;
 use crate::simplify_expressions::guarantees::GuaranteeRewriter;
@@ -55,6 +56,7 @@ use crate::simplify_expressions::unwrap_cast::{
     unwrap_cast_in_comparison_for_binary,
 };
 use crate::simplify_expressions::SimplifyInfo;
+use arrow::datatypes::IntervalDayTime;
 use datafusion_expr::expr::FieldMetadata;
 use datafusion_expr_common::casts::try_cast_literal_to_type;
 use indexmap::IndexSet;
@@ -256,6 +258,10 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
         }
         // shorten inlist should be started after other inlist rules are applied
         expr = expr.rewrite(&mut shorten_in_list_simplifier).data()?;
+
+        let mut make_int_interval = MakeIntervalSimplifier::new();
+        expr = expr.rewrite(&mut make_int_interval).data()?;
+
         Ok((
             Transformed::new_transformed(expr, has_transformed),
             num_cycles,
@@ -767,8 +773,8 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
     fn f_up(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
         use datafusion_expr::Operator::{
             And, BitwiseAnd, BitwiseOr, BitwiseShiftLeft, BitwiseShiftRight, BitwiseXor,
-            Divide, Eq, Modulo, Multiply, NotEq, Or, RegexIMatch, RegexMatch,
-            RegexNotIMatch, RegexNotMatch,
+            Divide, Eq, Minus, Modulo, Multiply, NotEq, Or, Plus, RegexIMatch,
+            RegexMatch, RegexNotIMatch, RegexNotMatch,
         };
 
         let info = self.info;
