@@ -322,7 +322,6 @@ impl AsyncScalarUDFImpl for AsyncUpper {
     async fn invoke_async_with_args(
         &self,
         args: ScalarFunctionArgs,
-        _option: &ConfigOptions,
     ) -> Result<ArrayRef> {
         let value = &args.args[0];
         // This function simply implements a simple string to uppercase conversion
