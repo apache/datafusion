@@ -20,6 +20,7 @@ pub mod cancellation;
 pub mod clickbench;
 pub mod h2o;
 pub mod imdb;
+pub mod nlj;
 pub mod sort_tpch;
 pub mod tpch;
 pub mod util;
