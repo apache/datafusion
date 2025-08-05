@@ -192,7 +192,7 @@ impl AsyncFuncExpr {
             );
         }
 
-        let datas = result_batches
+        let datas = ColumnarValue::values_to_arrays(&result_batches)?
             .iter()
             .map(|b| b.to_data())
             .collect::<Vec<_>>();

@@ -19,7 +19,6 @@ use crate::utils::{arc_ptr_eq, arc_ptr_hash};
 use crate::{
     udf_equals_hash, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl,
 };
-use arrow::array::ArrayRef;
 use arrow::datatypes::{DataType, FieldRef};
 use async_trait::async_trait;
 use datafusion_common::error::Result;
@@ -48,7 +47,10 @@ pub trait AsyncScalarUDFImpl: ScalarUDFImpl {
     }
 
     /// Invoke the function asynchronously with the async arguments
-    async fn invoke_async_with_args(&self, args: ScalarFunctionArgs) -> Result<ArrayRef>;
+    async fn invoke_async_with_args(
+        &self,
+        args: ScalarFunctionArgs,
+    ) -> Result<ColumnarValue>;
 }
 
 /// A scalar UDF that must be invoked using async methods
@@ -95,7 +97,7 @@ impl AsyncScalarUDF {
     pub async fn invoke_async_with_args(
         &self,
         args: ScalarFunctionArgs,
-    ) -> Result<ArrayRef> {
+    ) -> Result<ColumnarValue> {
         self.inner.invoke_async_with_args(args).await
     }
 }
