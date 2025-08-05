@@ -278,7 +278,6 @@ mod tests {
         // Write encrypted parquet using write_parquet
         let mut options = TableParquetOptions::default();
         options.crypto.file_encryption = Some((&encrypt).into());
-        options.global.allow_single_file_parallelism = true;
 
         df.write_parquet(
             tempfile_str.as_str(),
