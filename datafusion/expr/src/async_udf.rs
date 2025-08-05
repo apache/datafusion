@@ -21,7 +21,6 @@ use crate::{
 };
 use arrow::datatypes::{DataType, FieldRef};
 use async_trait::async_trait;
-use datafusion_common::config::ConfigOptions;
 use datafusion_common::error::Result;
 use datafusion_common::internal_err;
 use datafusion_expr_common::columnar_value::ColumnarValue;
@@ -51,7 +50,6 @@ pub trait AsyncScalarUDFImpl: ScalarUDFImpl {
     async fn invoke_async_with_args(
         &self,
         args: ScalarFunctionArgs,
-        option: &ConfigOptions,
     ) -> Result<ColumnarValue>;
 }
 
@@ -99,9 +97,8 @@ impl AsyncScalarUDF {
     pub async fn invoke_async_with_args(
         &self,
         args: ScalarFunctionArgs,
-        option: &ConfigOptions,
     ) -> Result<ColumnarValue> {
-        self.inner.invoke_async_with_args(args, option).await
+        self.inner.invoke_async_with_args(args).await
     }
 }
 

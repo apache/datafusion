@@ -114,7 +114,7 @@ impl AsyncFuncExpr {
     pub async fn invoke_with_args(
         &self,
         batch: &RecordBatch,
-        option: &ConfigOptions,
+        config_options: Arc<ConfigOptions>,
     ) -> Result<ColumnarValue> {
         let Some(scalar_function_expr) =
             self.func.as_any().downcast_ref::<ScalarFunctionExpr>()
@@ -162,15 +162,13 @@ impl AsyncFuncExpr {
                     .collect::<Result<Vec<_>>>()?;
                 result_batches.push(
                     async_udf
-                        .invoke_async_with_args(
-                            ScalarFunctionArgs {
-                                args,
-                                arg_fields: arg_fields.clone(),
-                                number_rows: current_batch.num_rows(),
-                                return_field: Arc::clone(&self.return_field),
-                            },
-                            option,
-                        )
+                        .invoke_async_with_args(ScalarFunctionArgs {
+                            args,
+                            arg_fields: arg_fields.clone(),
+                            number_rows: current_batch.num_rows(),
+                            return_field: Arc::clone(&self.return_field),
+                            config_options: Arc::clone(&config_options),
+                        })
                         .await?,
                 );
             }
@@ -183,15 +181,13 @@ impl AsyncFuncExpr {
 
             result_batches.push(
                 async_udf
-                    .invoke_async_with_args(
-                        ScalarFunctionArgs {
-                            args: args.to_vec(),
-                            arg_fields,
-                            number_rows: batch.num_rows(),
-                            return_field: Arc::clone(&self.return_field),
-                        },
-                        option,
-                    )
+                    .invoke_async_with_args(ScalarFunctionArgs {
+                        args: args.to_vec(),
+                        arg_fields,
+                        number_rows: batch.num_rows(),
+                        return_field: Arc::clone(&self.return_field),
+                        config_options: Arc::clone(&config_options),
+                    })
                     .await?,
             );
         }

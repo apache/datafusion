@@ -448,7 +448,6 @@ impl AsyncScalarUDFImpl for AsyncUpper {
     async fn invoke_async_with_args(
         &self,
         args: ScalarFunctionArgs,
-        _option: &ConfigOptions,
     ) -> Result<ColumnarValue> {
         let value = &args.args[0];
         // This function simply implements a simple string to uppercase conversion
@@ -548,7 +547,6 @@ We can now transfer the async UDF into the normal scalar using `into_scalar_udf`
 #     async fn invoke_async_with_args(
 #         &self,
 #         args: ScalarFunctionArgs,
-#         _option: &ConfigOptions,
 #     ) -> Result<ColumnarValue> {
 #         trace!("Invoking async_upper with args: {:?}", args);
 #         let value = &args.args[0];
