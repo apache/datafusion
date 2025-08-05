@@ -545,18 +545,40 @@
 <nav id="bd-toc-nav">
     <ul class="visible nav section-nav flex-column">
  <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#add-latest-non-published-datafusion-dependency">
-   Add latest non published DataFusion dependency
+  <a class="reference internal nav-link" href="#using-the-nightly-datafusion-builds">
+   Using the nightly DataFusion builds
   </a>
  </li>
  <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#optimized-configuration">
-   Optimized Configuration
+  <a class="reference internal nav-link" href="#optimizing-builds">
+   Optimizing Builds
   </a>
+  <ul class="nav section-nav flex-column">
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#generate-code-with-cpu-specific-instructions">
+     Generate Code with CPU Specific Instructions
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#enable-link-time-optimization-single-codegen-unit">
+     Enable Link Time Optimization / Single Codegen Unit
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#alternate-allocator-snmalloc">
+     Alternate Allocator:
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       snmalloc
+      </span>
+     </code>
+    </a>
+   </li>
+  </ul>
  </li>
  <li class="toc-h2 nav-item toc-entry">
   <a class="reference internal nav-link" href="#enable-backtraces">
-   Enable backtraces
+   Enable Backtraces
   </a>
  </li>
 </ul>
@@ -607,14 +629,15 @@
 -->
 <section id="crate-configuration">
 <h1>Crate Configuration<a class="headerlink" href="#crate-configuration" title="Link to this heading">¶</a></h1>
-<p>This section contains information on how to configure DataFusion in your Rust
-project. See the <a class="reference internal" href="configs.html"><span class="std std-doc">Configuration Settings</span></a> section for a list of options that
-control DataFusion’s behavior.</p>
-<section id="add-latest-non-published-datafusion-dependency">
-<h2>Add latest non published DataFusion dependency<a class="headerlink" href="#add-latest-non-published-datafusion-dependency" title="Link to this heading">¶</a></h2>
+<p>This section contains information on how to configure builds of DataFusion in
+your Rust project. The <a class="reference internal" href="configs.html"><span class="std std-doc">Configuration Settings</span></a> section lists options that
+control additional aspects DataFusion’s runtime behavior.</p>
+<section id="using-the-nightly-datafusion-builds">
+<h2>Using the nightly DataFusion builds<a class="headerlink" href="#using-the-nightly-datafusion-builds" title="Link to this heading">¶</a></h2>
 <p>DataFusion changes are published to <code class="docutils literal notranslate"><span class="pre">crates.io</span></code> according to the <a class="reference external" href="https://github.com/apache/datafusion/blob/main/dev/release/README.md#release-process">release schedule</a></p>
-<p>If you would like to test out DataFusion changes which are merged but not yet
-published, Cargo supports adding dependency directly to GitHub branch:</p>
+<p>If you would like to use or test versions of the DataFusion code which are
+merged but not yet published, you can use Cargo’s [support for adding
+dependencies] directly to a GitHub branch:</p>
 <div class="highlight-toml notranslate"><div class="highlight"><pre><span></span><span class="n">datafusion</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">git</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">&quot;https://github.com/apache/datafusion&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">branch</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">&quot;main&quot;</span><span class="p">}</span>
 </pre></div>
 </div>
@@ -628,18 +651,48 @@ published, Cargo supports adding dependency directly to GitHub branch:</p>
 </div>
 <p>More on <a class="reference external" href="https://doc.rust-lang.org/cargo/reference/specifying-dependencies.html#specifying-dependencies">Cargo dependencies</a></p>
 </section>
-<section id="optimized-configuration">
-<h2>Optimized Configuration<a class="headerlink" href="#optimized-configuration" title="Link to this heading">¶</a></h2>
-<p>For an optimized build several steps are required. First, use the below in your <code class="docutils literal notranslate"><span class="pre">Cargo.toml</span></code>. It is
-worth noting that using the settings in the <code class="docutils literal notranslate"><span class="pre">[profile.release]</span></code> section will significantly increase the build time.</p>
-<div class="highlight-toml notranslate"><div class="highlight"><pre><span></span><span class="k">[dependencies]</span>
-<span class="n">datafusion</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">version</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">&quot;22.0&quot;</span><span class="w"> </span><span class="p">}</span>
-<span class="n">tokio</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">version</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">&quot;^1.0&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">features</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;rt-multi-thread&quot;</span><span class="p">]</span><span class="w"> </span><span class="p">}</span>
-<span class="n">snmalloc-rs</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;0.3&quot;</span>
-
-<span class="k">[profile.release]</span>
+<section id="optimizing-builds">
+<h2>Optimizing Builds<a class="headerlink" href="#optimizing-builds" title="Link to this heading">¶</a></h2>
+<p>Here are several suggestions to get the Rust compler to produce faster code when
+compiling DataFusion. Note that these changes may increase compile time and
+binary size.</p>
+<section id="generate-code-with-cpu-specific-instructions">
+<h3>Generate Code with CPU Specific Instructions<a class="headerlink" href="#generate-code-with-cpu-specific-instructions" title="Link to this heading">¶</a></h3>
+<p>By default, the Rust compiler produces code that runs on a wide range of CPUs,
+but may not take advantage of all the features of your specific CPU (such as
+certain <a class="reference external" href="https://en.wikipedia.org/wiki/SIMD">SIMD instructions</a>). This is especially true for x86_64 CPUs, where the
+default target is <code class="docutils literal notranslate"><span class="pre">x86_64-unknown-linux-gnu</span></code>, which only guarantees support for
+the <code class="docutils literal notranslate"><span class="pre">SSE2</span></code> instruction set. DataFusion can benefit from the more advanced
+instructions in the <code class="docutils literal notranslate"><span class="pre">AVX2</span></code> and <code class="docutils literal notranslate"><span class="pre">AVX512</span></code> to speed up operations like filtering,
+aggregation, and joins. To tell the Rust compiler to use these instructions, set
+the <code class="docutils literal notranslate"><span class="pre">RUSTFLAGS</span></code> environment variable to specify a more specific target CPU.</p>
+<p>We recommend setting <code class="docutils literal notranslate"><span class="pre">target-cpu</span></code> or at least <code class="docutils literal notranslate"><span class="pre">avx2</span></code>, or preferably at least
+<code class="docutils literal notranslate"><span class="pre">native</span></code> (whatever the current CPU is). For example, to build and run DataFusion
+with optimizations for your current CPU:</p>
+<div class="highlight-shell notranslate"><div class="highlight"><pre><span></span><span class="nv">RUSTFLAGS</span><span class="o">=</span><span class="s1">&#39;-C target-cpu=native&#39;</span><span class="w"> </span>cargo<span class="w"> </span>run<span class="w"> </span>--release
+</pre></div>
+</div>
+</section>
+<section id="enable-link-time-optimization-single-codegen-unit">
+<h3>Enable Link Time Optimization / Single Codegen Unit<a class="headerlink" href="#enable-link-time-optimization-single-codegen-unit" title="Link to this heading">¶</a></h3>
+<p>You can potentially improve your performance by compiling DataFusion into a
+single codegen unit which gives the Rust compiler more opportunity to optimize
+across crate boundaries. To do so, modify your projects’ <code class="docutils literal notranslate"><span class="pre">Cargo.toml</span></code> to include
+<code class="docutils literal notranslate"><span class="pre">lto</span> <span class="pre">=</span> <span class="pre">true</span></code> and <code class="docutils literal notranslate"><span class="pre">codegen-units</span> <span class="pre">=</span> <span class="pre">1</span></code> as shown below. Beware that using a single
+codegen unit <em>significantly</em> increases <code class="docutils literal notranslate"><span class="pre">--release</span></code> build times.</p>
+<div class="highlight-toml notranslate"><div class="highlight"><pre><span></span><span class="k">[profile.release]</span>
 <span class="n">lto</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
 <span class="n">codegen-units</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span>
+</pre></div>
+</div>
+</section>
+<section id="alternate-allocator-snmalloc">
+<h3>Alternate Allocator: <code class="docutils literal notranslate"><span class="pre">snmalloc</span></code><a class="headerlink" href="#alternate-allocator-snmalloc" title="Link to this heading">¶</a></h3>
+<p>You can also use <a class="reference external" href="https://crates.io/crates/snmalloc-rs">snmalloc-rs</a> crate as
+the memory allocator for DataFusion to improve performance. To do so, add the
+dependency to your <code class="docutils literal notranslate"><span class="pre">Cargo.toml</span></code> as shown below.</p>
+<div class="highlight-toml notranslate"><div class="highlight"><pre><span></span><span class="k">[dependencies]</span>
+<span class="n">snmalloc-rs</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;0.3&quot;</span>
 </pre></div>
 </div>
 <p>Then, in <code class="docutils literal notranslate"><span class="pre">main.rs.</span></code> update the memory allocator with the below after your imports:</p>
@@ -655,16 +708,12 @@ async fn main() -&gt; datafusion::error::Result&lt;()&gt; {
 }
 </pre></div>
 </div>
-<p>Based on the instruction set architecture you are building on you will want to configure the <code class="docutils literal notranslate"><span class="pre">target-cpu</span></code> as well, ideally
-with <code class="docutils literal notranslate"><span class="pre">native</span></code> or at least <code class="docutils literal notranslate"><span class="pre">avx2</span></code>.</p>
-<div class="highlight-shell notranslate"><div class="highlight"><pre><span></span><span class="nv">RUSTFLAGS</span><span class="o">=</span><span class="s1">&#39;-C target-cpu=native&#39;</span><span class="w"> </span>cargo<span class="w"> </span>run<span class="w"> </span>--release
-</pre></div>
-</div>
+</section>
 </section>
 <section id="enable-backtraces">
-<h2>Enable backtraces<a class="headerlink" href="#enable-backtraces" title="Link to this heading">¶</a></h2>
-<p>By default Datafusion returns errors as a plain message. There is option to enable more verbose details about the error,
-like error backtrace. To enable a backtrace you need to add Datafusion <code class="docutils literal notranslate"><span class="pre">backtrace</span></code> feature to your <code class="docutils literal notranslate"><span class="pre">Cargo.toml</span></code> file:</p>
+<h2>Enable Backtraces<a class="headerlink" href="#enable-backtraces" title="Link to this heading">¶</a></h2>
+<p>By default, Datafusion returns errors as a plain text message. You can enable more verbose details about the error,
+such as backtraces by enabling the <code class="docutils literal notranslate"><span class="pre">backtrace</span></code> feature to your <code class="docutils literal notranslate"><span class="pre">Cargo.toml</span></code> file like this:</p>
 <div class="highlight-toml notranslate"><div class="highlight"><pre><span></span><span class="n">datafusion</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">version</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">&quot;31.0.0&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">features</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;backtrace&quot;</span><span class="p">]}</span>
 </pre></div>
 </div>
