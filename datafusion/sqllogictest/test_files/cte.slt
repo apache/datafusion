@@ -1019,7 +1019,7 @@ limit 5;
 0 0
 
 query TT
-explain analyze
+explain
 with recursive r as (
   select 0 as k, 0 as v
   union all
@@ -1034,13 +1034,22 @@ select *
 from r
 limit 5;
 ----
-Plan with Metrics
-01)GlobalLimitExec: skip=0, fetch=5, metrics=[output_rows=5, elapsed_compute=33.167µs]
-02)--RecursiveQueryExec: name=r, is_distinct=false, metrics=[output_rows=0, elapsed_compute=1ns]
-03)----ProjectionExec: expr=[0 as k, 0 as v], metrics=[output_rows=1, elapsed_compute=12.042µs]
-04)------PlaceholderRowExec, metrics=[]
-05)----SortExec: TopK(fetch=1), expr=[v@1 ASC NULLS LAST], preserve_partitioning=[false], metrics=[]
-06)------WorkTableExec: name=r, metrics=[]
+logical_plan
+01)SubqueryAlias: r
+02)--Limit: skip=0, fetch=5
+03)----RecursiveQuery: is_distinct=false
+04)------Projection: Int64(0) AS k, Int64(0) AS v
+05)--------EmptyRelation
+06)------Sort: r.v ASC NULLS LAST, fetch=1
+07)--------Projection: r.k, r.v
+08)----------TableScan: r
+physical_plan
+01)GlobalLimitExec: skip=0, fetch=5
+02)--RecursiveQueryExec: name=r, is_distinct=false
+03)----ProjectionExec: expr=[0 as k, 0 as v]
+04)------PlaceholderRowExec
+05)----SortExec: TopK(fetch=1), expr=[v@1 ASC NULLS LAST], preserve_partitioning=[false]
+06)------WorkTableExec: name=r
 
 statement count 0
 set datafusion.execution.enable_recursive_ctes = false;
