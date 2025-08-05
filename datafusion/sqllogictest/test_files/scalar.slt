@@ -1690,7 +1690,7 @@ statement ok
 drop table t1
 
 # can't use like with non strings
-query error There isn't a common type to coerce Utf8 and Int64 in LIKE expression
+query error There isn't a common type to coerce Utf8View and Int64 in LIKE expression
 select column1 like 1 from (values('a'), ('b'), (NULL)) as t;
 
 
@@ -1867,7 +1867,7 @@ D false
 
 # test string_temporal_coercion
 query BBBBBBBBBB
-select 
+select
   arrow_cast(to_timestamp('2020-01-01 01:01:11.1234567890Z'), 'Timestamp(Second, None)') == '2020-01-01T01:01:11',
   arrow_cast(to_timestamp('2020-01-02 01:01:11.1234567890Z'), 'Timestamp(Second, None)') == arrow_cast('2020-01-02T01:01:11', 'LargeUtf8'),
   arrow_cast(to_timestamp('2020-01-03 01:01:11.1234567890Z'), 'Time32(Second)') == '01:01:11',

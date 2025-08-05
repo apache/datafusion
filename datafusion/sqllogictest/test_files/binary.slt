@@ -41,9 +41,9 @@ query T?TT
 SELECT column1, column2, arrow_typeof(column1), arrow_typeof(column2)
 FROM t;
 ----
-FF01 ff01 Utf8 Binary
-ABC 0abc Utf8 Binary
-000 0000 Utf8 Binary
+FF01 ff01 Utf8View Binary
+ABC 0abc Utf8View Binary
+000 0000 Utf8View Binary
 
 # comparisons
 query ?BBBB
