@@ -714,7 +714,7 @@ impl ExternalSorter {
 
             let sorted = sort_batch(&batch, &expressions, None)?;
 
-            metrics.record_output(sorted.num_rows());
+            metrics.record_output(sorted.num_rows(), get_record_batch_memory_size(&sorted));
             drop(batch);
             drop(reservation);
             Ok(sorted)
@@ -1513,6 +1513,7 @@ mod tests {
         let metrics = sort_exec.metrics().unwrap();
 
         assert_eq!(metrics.output_rows().unwrap(), 10000);
+        assert_eq!(metrics.output_bytes().unwrap(), 40000);
         assert!(metrics.elapsed_compute().unwrap() > 0);
 
         let spill_count = metrics.spill_count().unwrap();
@@ -1632,6 +1633,8 @@ mod tests {
         let metrics = sort_exec.metrics().unwrap();
 
         assert_eq!(metrics.output_rows().unwrap(), 20000);
+        // FIXME: This might be double-counting across batches.
+        assert_eq!(metrics.output_bytes().unwrap(), 958800);
         assert!(metrics.elapsed_compute().unwrap() > 0);
 
         let spill_count = metrics.spill_count().unwrap();
