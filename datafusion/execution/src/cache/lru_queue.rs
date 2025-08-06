@@ -320,6 +320,36 @@ mod tests {
     }
 
     #[test]
+    fn test_is_empty() {
+        let mut lru_queue: LruQueue<i32, i32> = LruQueue::new();
+
+        // empty
+        assert!(lru_queue.is_empty());
+
+        // puts
+        lru_queue.put(1, 10);
+        assert!(!lru_queue.is_empty());
+        lru_queue.put(2, 20);
+        assert!(!lru_queue.is_empty());
+
+        // removes
+        lru_queue.remove(&1);
+        assert!(!lru_queue.is_empty());
+        lru_queue.remove(&1);
+        assert!(!lru_queue.is_empty());
+        lru_queue.remove(&2);
+        assert!(lru_queue.is_empty());
+
+        // clear
+        lru_queue.put(1, 10);
+        lru_queue.put(2, 20);
+        lru_queue.put(3, 30);
+        assert!(!lru_queue.is_empty());
+        lru_queue.clear();
+        assert!(lru_queue.is_empty());
+    }
+
+    #[test]
     fn test_clear() {
         let mut lru_queue: LruQueue<i32, i32> = LruQueue::new();
 
