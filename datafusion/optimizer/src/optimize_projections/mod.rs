@@ -350,16 +350,30 @@ fn optimize_projections(
             // These operators have no inputs, so stop the optimization process.
             return Ok(Transformed::no(plan));
         }
-        LogicalPlan::RecursiveQuery(_) => plan
-            .inputs()
-            .into_iter()
-            .map(|input| {
-                indices
-                    .clone()
-                    .with_projection_beneficial()
-                    .with_plan_exprs(&plan, input.schema())
-            })
-            .collect::<Result<Vec<_>>>()?,
+        LogicalPlan::RecursiveQuery(_) => {
+            if let LogicalPlan::RecursiveQuery(recursive) = &plan {
+                if plan_contains_non_cte_subquery(
+                    recursive.static_term.as_ref(),
+                    &recursive.name,
+                ) || plan_contains_non_cte_subquery(
+                    recursive.recursive_term.as_ref(),
+                    &recursive.name,
+                ) {
+                    return Ok(Transformed::no(plan));
+                }
+            }
+
+            plan
+                .inputs()
+                .into_iter()
+                .map(|input| {
+                    indices
+                        .clone()
+                        .with_projection_beneficial()
+                        .with_plan_exprs(&plan, input.schema())
+                })
+                .collect::<Result<Vec<_>>>()?
+        }
         LogicalPlan::Join(join) => {
             let left_len = join.left.schema().fields().len();
             let (left_req_indices, right_req_indices) =
@@ -835,32 +849,47 @@ pub fn is_projection_unnecessary(
     ))
 }
 
-fn plan_contains_subquery_alias(plan: &LogicalPlan) -> bool {
-    // in recursive ctes, ambiguity of aliases can arise if there are
-    // 2 or more subquery aliases in the plan
-    const THRESHOLD: usize = 2;
-    count_subquery_aliases(plan, 0, THRESHOLD) >= THRESHOLD
-}
-
-fn count_subquery_aliases(plan: &LogicalPlan, count: usize, threshold: usize) -> usize {
-    if count >= threshold {
-        return count;
-    }
-
-    let mut new_count = if matches!(*plan, LogicalPlan::SubqueryAlias(_)) {
-        count + 1
-    } else {
-        count
-    };
-
-    for input in plan.inputs() {
-        new_count = count_subquery_aliases(input, new_count, threshold);
-        if new_count >= threshold {
-            break;
+fn plan_contains_non_cte_subquery(plan: &LogicalPlan, cte_name: &str) -> bool {
+    if let LogicalPlan::SubqueryAlias(alias) = plan {
+        if alias.alias.table() != cte_name {
+            return true;
         }
     }
 
-    new_count
+    let mut found = false;
+    plan
+        .apply_expressions(|expr| {
+            if expr_contains_subquery(expr) {
+                found = true;
+                Ok(TreeNodeRecursion::Stop)
+            } else {
+                Ok(TreeNodeRecursion::Continue)
+            }
+        })
+        .expect("expression traversal never fails");
+    if found {
+        return true;
+    }
+
+    plan.inputs().into_iter().any(|child| {
+        plan_contains_non_cte_subquery(child, cte_name)
+    })
+}
+
+fn expr_contains_subquery(expr: &Expr) -> bool {
+    let mut contains = false;
+    expr
+        .apply(|e| match e {
+            Expr::ScalarSubquery(_)
+            | Expr::Exists(_)
+            | Expr::InSubquery(_) => {
+                contains = true;
+                Ok(TreeNodeRecursion::Stop)
+            }
+            _ => Ok(TreeNodeRecursion::Continue),
+        })
+        .expect("expression traversal never fails");
+    contains
 }
 
 #[cfg(test)]
