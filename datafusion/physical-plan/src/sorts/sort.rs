@@ -50,6 +50,7 @@ use crate::{
 use arrow::array::{Array, RecordBatch, RecordBatchOptions, StringViewArray};
 use arrow::compute::{concat_batches, lexsort_to_indices, take_arrays};
 use arrow::datatypes::SchemaRef;
+use arrow::row::{RowConverter, SortField};
 use datafusion_common::config::SpillCompression;
 use datafusion_common::{internal_datafusion_err, internal_err, DataFusionError, Result};
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
@@ -251,6 +252,9 @@ struct ExternalSorter {
     /// How much memory to reserve for performing in-memory sort/merges
     /// prior to spilling.
     sort_spill_reservation_bytes: usize,
+
+    /// For precise memory calculation
+    ratio: Option<f64>,
 }
 
 impl ExternalSorter {
@@ -285,6 +289,8 @@ impl ExternalSorter {
         )
         .with_compression_type(spill_compression);
 
+        let ratio = None;
+
         Ok(Self {
             schema,
             in_mem_batches: vec![],
@@ -299,13 +305,66 @@ impl ExternalSorter {
             batch_size,
             sort_spill_reservation_bytes,
             sort_in_place_threshold_bytes,
+            ratio,
         })
+    }
+
+    fn calculate_ratio(&self, batch: &RecordBatch) -> Result<f64> {
+        let batch_size = get_record_batch_memory_size(batch);
+        // println!("[calculate_ratio] {batch_size}");
+        if self.expr.len() == 1 {
+            // Single sort column → use ArrayValues-like logic
+            let value = self.expr.first().expr.evaluate(batch)?;
+            let array = value.into_array(batch.num_rows())?;
+            let size_in_mem = array.get_buffer_memory_size();
+            // println!(
+            //     "[calculate_ratio] 1col:{size_in_mem}, ratio:{}",
+            //     size_in_mem as f64 / batch_size as f64
+            // );
+            Ok(size_in_mem as f64 / batch_size as f64 + 1.0)
+        } else {
+            let sort_fields = self
+                .expr
+                .iter()
+                .map(|sort_expr| {
+                    let data_type = sort_expr.expr.data_type(&self.schema)?;
+                    Ok(SortField::new_with_options(data_type, sort_expr.options))
+                })
+                .collect::<Result<Vec<_>>>()?;
+
+            let converter = RowConverter::new(sort_fields)?;
+            let mut rows = converter.empty_rows(0, 0);
+
+            let cols = self
+                .expr
+                .iter()
+                .map(|sort_expr| {
+                    sort_expr.expr.evaluate(batch)?.into_array(batch.num_rows())
+                })
+                .collect::<Result<Vec<_>>>()?;
+
+            converter.append(&mut rows, &cols)?;
+
+            let rows = Arc::new(rows);
+            // println!(
+            //     "[calculate_ratio] >=2 col:{}, ratio:{}",
+            //     rows.size(),
+            //     rows.size() as f64 / batch_size as f64
+            // );
+            Ok(rows.size() as f64 / batch_size as f64 + 1.0)
+        }
     }
 
     /// Appends an unsorted [`RecordBatch`] to `in_mem_batches`
     ///
     /// Updates memory usage metrics, and possibly triggers spilling to disk
     async fn insert_batch(&mut self, input: RecordBatch) -> Result<()> {
+        // Only for first time
+        if self.ratio.is_none() {
+            let ratio = self.calculate_ratio(&input)?;
+            self.ratio = Some(ratio);
+        }
+
         if input.num_rows() == 0 {
             return Ok(());
         }
@@ -536,7 +595,7 @@ impl ExternalSorter {
 
         while let Some(batch) = sorted_stream.next().await {
             let batch = batch?;
-            let sorted_size = get_reserved_byte_for_record_batch(&batch);
+            let sorted_size = get_reserved_byte_for_record_batch(&batch, self.ratio);
             if self.reservation.try_grow(sorted_size).is_err() {
                 // Although the reservation is not enough, the batch is
                 // already in memory, so it's okay to combine it with previously
@@ -663,7 +722,7 @@ impl ExternalSorter {
             let batch = concat_batches(&self.schema, &self.in_mem_batches)?;
             self.in_mem_batches.clear();
             self.reservation
-                .try_resize(get_reserved_byte_for_record_batch(&batch))
+                .try_resize(get_reserved_byte_for_record_batch(&batch, self.ratio))
                 .map_err(Self::err_with_oom_context)?;
             let reservation = self.reservation.take();
             return self.sort_batch_stream(batch, metrics, reservation);
@@ -675,12 +734,11 @@ impl ExternalSorter {
                 let metrics = self.metrics.baseline.intermediate();
                 let reservation = self
                     .reservation
-                    .split(get_reserved_byte_for_record_batch(&batch));
+                    .split(get_reserved_byte_for_record_batch(&batch, self.ratio));
                 let input = self.sort_batch_stream(batch, metrics, reservation)?;
                 Ok(spawn_buffered(input, 1))
             })
             .collect::<Result<_>>()?;
-
         StreamingMergeBuilder::new()
             .with_streams(streams)
             .with_schema(Arc::clone(&self.schema))
@@ -703,7 +761,7 @@ impl ExternalSorter {
         reservation: MemoryReservation,
     ) -> Result<SendableRecordBatchStream> {
         assert_eq!(
-            get_reserved_byte_for_record_batch(&batch),
+            get_reserved_byte_for_record_batch(&batch, self.ratio),
             reservation.size()
         );
         let schema = batch.schema();
@@ -746,8 +804,7 @@ impl ExternalSorter {
         &mut self,
         input: &RecordBatch,
     ) -> Result<()> {
-        let size = get_reserved_byte_for_record_batch(input);
-
+        let size = get_reserved_byte_for_record_batch(input, self.ratio);
         match self.reservation.try_grow(size) {
             Ok(_) => Ok(()),
             Err(e) => {
@@ -785,16 +842,20 @@ impl ExternalSorter {
 /// in sorting and merging. The sorted copies are in either row format or array format.
 /// Please refer to cursor.rs and stream.rs for more details. No matter what format the
 /// sorted copies are, they will use more memory than the original record batch.
-pub(crate) fn get_reserved_byte_for_record_batch_size(record_batch_size: usize) -> usize {
+pub(crate) fn get_reserved_byte_for_record_batch_size(
+    record_batch_size: usize,
+    ratio: Option<f64>,
+) -> usize {
     // 2x may not be enough for some cases, but it's a good start.
     // If 2x is not enough, user can set a larger value for `sort_spill_reservation_bytes`
     // to compensate for the extra memory needed.
-    record_batch_size * 2
+    let ratio = ratio.unwrap_or(2.0);
+    ((record_batch_size as f64) * ratio).ceil() as usize
 }
 
 /// Estimate how much memory is needed to sort a `RecordBatch`.
-fn get_reserved_byte_for_record_batch(batch: &RecordBatch) -> usize {
-    get_reserved_byte_for_record_batch_size(get_record_batch_memory_size(batch))
+fn get_reserved_byte_for_record_batch(batch: &RecordBatch, ratio: Option<f64>) -> usize {
+    get_reserved_byte_for_record_batch_size(get_record_batch_memory_size(batch), ratio)
 }
 
 impl Debug for ExternalSorter {
@@ -1601,7 +1662,8 @@ mod tests {
         {
             let mut stream = plan.execute(0, Arc::clone(&task_ctx))?;
             let first_batch = stream.next().await.unwrap()?;
-            let batch_reservation = get_reserved_byte_for_record_batch(&first_batch);
+            let batch_reservation =
+                get_reserved_byte_for_record_batch(&first_batch, None);
 
             assert_eq!(batch_reservation, expected_batch_reservation);
             assert!(memory_limit < (merge_reservation + batch_reservation));
