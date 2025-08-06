@@ -722,11 +722,11 @@ logical_plan
 04)------EmptyRelation
 05)----Projection: Int64(2) AS val
 06)------Cross Join: 
-07)--------Projection:
-08)----------Filter: recursive_cte.val < Int64(2)
-09)------------TableScan: recursive_cte projection=[val]
-10)--------SubqueryAlias: sub_cte
-11)----------EmptyRelation
+07)--------Filter: recursive_cte.val < Int64(2)
+08)----------TableScan: recursive_cte
+09)--------SubqueryAlias: sub_cte
+10)----------Projection: Int64(2) AS val
+11)------------EmptyRelation
 physical_plan
 01)RecursiveQueryExec: name=recursive_cte, is_distinct=false
 02)--ProjectionExec: expr=[1 as val]
@@ -734,12 +734,12 @@ physical_plan
 04)--ProjectionExec: expr=[2 as val]
 05)----CrossJoinExec
 06)------CoalescePartitionsExec
-07)--------ProjectionExec: expr=[]
-08)----------CoalesceBatchesExec: target_batch_size=8182
-09)------------FilterExec: val@0 < 2
-10)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-11)----------------WorkTableExec: name=recursive_cte
-12)------PlaceholderRowExec
+07)--------CoalesceBatchesExec: target_batch_size=8182
+08)----------FilterExec: val@0 < 2
+09)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+10)--------------WorkTableExec: name=recursive_cte
+11)------ProjectionExec: expr=[2 as val]
+12)--------PlaceholderRowExec
 
 # Test issue: https://github.com/apache/datafusion/issues/9794
 # Non-recursive term and recursive term have different types
