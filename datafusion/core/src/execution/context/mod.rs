@@ -189,6 +189,8 @@ impl EnhancedMemoryReport {
         }
     }
 
+    /// Prints an enhanced memory analysis report including top memory consumers,
+    /// overall peak and total memory usage, and a breakdown by operator category.
     pub fn print_analysis(&self) {
         println!("\n📊 Enhanced Memory Analysis:");
 
