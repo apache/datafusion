@@ -36,8 +36,42 @@ See the [`datafusion-cli` documentation](https://datafusion.apache.org/user-guid
 Enable memory tracking for the next query and display the report afterwards:
 
 ```text
-\memory_profiling enable
-SELECT * FROM large_table;
+> \memory_profiling on
+Memory profiling enabled for next query
+> SELECT v % 100 AS group_key, COUNT(*) AS cnt, SUM(v) AS sum_v  FROM generate_series(1,100000) AS t(v)  GROUP BY group_key  ORDER BY group_key;
+
++-----------+------+----------+
+| group_key | cnt  | sum_v    |
++-----------+------+----------+
+| 0         | 1000 | 50050000 |
+| 1         | 1000 | 49951000 |
+| 2         | 1000 | 49952000 |
+...
+
 \memory_profiling show
+
+📊 Enhanced Memory Analysis:
+🔍 Top Memory Consumers:
+  1. ExternalSorterMerge[8]: 20.00 MB (9.8%) [Sorting]
+  2. ExternalSorterMerge[2]: 20.00 MB (9.8%) [Sorting]
+  3. ExternalSorterMerge[0]: 20.00 MB (9.8%) [Sorting]
+  4. ExternalSorterMerge[7]: 20.00 MB (9.8%) [Sorting]
+  5. ExternalSorterMerge[4]: 20.00 MB (9.8%) [Sorting]
+  6. ExternalSorterMerge[9]: 20.00 MB (9.8%) [Sorting]
+  7. ExternalSorterMerge[3]: 20.00 MB (9.8%) [Sorting]
+  8. ExternalSorterMerge[1]: 20.00 MB (9.8%) [Sorting]
+  9. ExternalSorterMerge[5]: 20.00 MB (9.8%) [Sorting]
+  10. ExternalSorterMerge[6]: 20.00 MB (9.8%) [Sorting]
+
+📈 Memory Summary:
+  Peak memory usage: 20.00 MB
+  Total tracked memory: 203.07 MB
+
+🎯 Memory by Category:
+  Other: 1.51 MB (0.7%)
+  Aggregation: 1.49 MB (0.7%)
+  Sorting: 200.07 MB (98.5%)
+
+
 \memory_profiling disable   # optional
 ```
