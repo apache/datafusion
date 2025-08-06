@@ -449,7 +449,8 @@ impl SessionConfig {
 
     /// Set memory profiling mode
     pub fn with_memory_profiling_mode(mut self, mode: MemoryProfilingMode) -> Self {
-        self.options.execution.memory_profiling = mode;
+        // use options_mut() to get a mutable reference through the Arc
+        self.options_mut().execution.memory_profiling = mode;
         self
     }
 
