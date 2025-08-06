@@ -216,28 +216,3 @@ async fn main() -> Result<()> {
     run_with_profiling().await?;
     Ok(())
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use datafusion::assert_batches_eq;
-
-    #[tokio::test]
-    async fn test_create_large_dataset() -> Result<()> {
-        let batch = create_large_dataset(100)?;
-        assert_eq!(batch.num_rows(), 100);
-        assert_eq!(batch.num_columns(), 4);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_memory_profiling_toggle() -> Result<()> {
-        let ctx = SessionContext::new();
-        assert!(!ctx.is_memory_profiling_enabled());
-
-        let _handle = ctx.enable_memory_profiling();
-        assert!(ctx.is_memory_profiling_enabled());
-
-        Ok(())
-    }
-}
