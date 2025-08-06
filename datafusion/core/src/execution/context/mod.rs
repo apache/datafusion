@@ -78,7 +78,7 @@ use datafusion_expr::{
     expr_rewriter::FunctionRewrite,
     logical_plan::{DdlStatement, Statement},
     planner::ExprPlanner,
-    Expr, Operator, UserDefinedLogicalNode, WindowUDF,
+    Expr, UserDefinedLogicalNode, WindowUDF,
 };
 use datafusion_optimizer::analyzer::type_coercion::TypeCoercion;
 use datafusion_optimizer::Analyzer;
