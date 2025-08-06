@@ -444,13 +444,11 @@ impl AsyncScalarUDFImpl for AsyncUpper {
     }
 
     /// This method is called to execute the async UDF and is similar
-    /// to the normal `invoke_with_args` except it returns an `ArrayRef`
-    /// instead of `ColumnarValue` and is `async`.
+    /// to the normal `invoke_with_args` except it is `async`.
     async fn invoke_async_with_args(
         &self,
         args: ScalarFunctionArgs,
-        _option: &ConfigOptions,
-    ) -> Result<ArrayRef> {
+    ) -> Result<ColumnarValue> {
         let value = &args.args[0];
         // This function simply implements a simple string to uppercase conversion
         // but can be used for any async operation such as network calls.
@@ -465,7 +463,7 @@ impl AsyncScalarUDFImpl for AsyncUpper {
             }
             _ => return internal_err!("Expected a string argument, got {:?}", value),
         };
-        Ok(result)
+        Ok(ColumnarValue::from(result))
     }
 }
 ```
@@ -549,8 +547,7 @@ We can now transfer the async UDF into the normal scalar using `into_scalar_udf`
 #     async fn invoke_async_with_args(
 #         &self,
 #         args: ScalarFunctionArgs,
-#         _option: &ConfigOptions,
-#     ) -> Result<ArrayRef> {
+#     ) -> Result<ColumnarValue> {
 #         trace!("Invoking async_upper with args: {:?}", args);
 #         let value = &args.args[0];
 #         let result = match value {
@@ -564,7 +561,7 @@ We can now transfer the async UDF into the normal scalar using `into_scalar_udf`
 #             }
 #             _ => return internal_err!("Expected a string argument, got {:?}", value),
 #         };
-#         Ok(result)
+#         Ok(ColumnarValue::from(result))
 #     }
 # }
 use datafusion::execution::context::SessionContext;
