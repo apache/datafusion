@@ -77,8 +77,14 @@ pub fn approx_percentile_cont(
 #[user_doc(
     doc_section(label = "Approximate Functions"),
     description = "Returns the approximate percentile of input values using the t-digest algorithm.",
-    syntax_example = "approx_percentile_cont(percentile, centroids) WITHIN GROUP (ORDER BY expression)",
+    syntax_example = "approx_percentile_cont(percentile [, centroids]) WITHIN GROUP (ORDER BY expression)",
     sql_example = r#"```sql
+> SELECT approx_percentile_cont(0.75) WITHIN GROUP (ORDER BY column_name) FROM table_name;
++------------------------------------------------------------------+
+| approx_percentile_cont(0.75) WITHIN GROUP (ORDER BY column_name) |
++------------------------------------------------------------------+
+| 65.0                                                             |
++------------------------------------------------------------------+
 > SELECT approx_percentile_cont(0.75, 100) WITHIN GROUP (ORDER BY column_name) FROM table_name;
 +-----------------------------------------------------------------------+
 | approx_percentile_cont(0.75, 100) WITHIN GROUP (ORDER BY column_name) |
@@ -313,7 +319,7 @@ impl AggregateUDFImpl for ApproxPercentileCont {
         }
         if arg_types.len() == 3 && !arg_types[2].is_integer() {
             return plan_err!(
-                "approx_percentile_cont requires integer max_size input types"
+                "approx_percentile_cont requires integer centroids input types"
             );
         }
         Ok(arg_types[0].clone())
@@ -358,6 +364,11 @@ impl ApproxPercentileAccumulator {
             percentile,
             return_type,
         }
+    }
+
+    // public for approx_percentile_cont_with_weight
+    pub(crate) fn max_size(&self) -> usize {
+        self.digest.max_size()
     }
 
     // public for approx_percentile_cont_with_weight
