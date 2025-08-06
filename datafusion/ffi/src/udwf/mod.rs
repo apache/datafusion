@@ -40,7 +40,7 @@ use partition_evaluator::{FFI_PartitionEvaluator, ForeignPartitionEvaluator};
 use partition_evaluator_args::{
     FFI_PartitionEvaluatorArgs, ForeignPartitionEvaluatorArgs,
 };
-use std::hash::{DefaultHasher, Hash, Hasher};
+use std::hash::{DefaultHasher, Hasher};
 use std::{ffi::c_void, sync::Arc};
 mod partition_evaluator;
 mod partition_evaluator_args;
@@ -339,31 +339,13 @@ impl WindowUDFImpl for ForeignWindowUDF {
         let Some(other) = other.as_any().downcast_ref::<Self>() else {
             return false;
         };
-        let Self {
-            name,
-            aliases,
-            udf,
-            signature,
-        } = self;
-        name == &other.name
-            && aliases == &other.aliases
-            && std::ptr::eq(udf, &other.udf)
-            && signature == &other.signature
+        // FFI_WindowUDF cannot be compared, so identity equality is the best we can do.
+        std::ptr::eq(self, other)
     }
 
     fn hash_value(&self) -> u64 {
-        let Self {
-            name,
-            aliases,
-            udf,
-            signature,
-        } = self;
         let mut hasher = DefaultHasher::new();
-        std::any::type_name::<Self>().hash(&mut hasher);
-        name.hash(&mut hasher);
-        aliases.hash(&mut hasher);
-        std::ptr::hash(udf, &mut hasher);
-        signature.hash(&mut hasher);
+        std::ptr::hash(self, &mut hasher);
         hasher.finish()
     }
 }
