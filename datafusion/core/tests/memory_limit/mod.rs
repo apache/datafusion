@@ -313,11 +313,9 @@ async fn sort_spill_reservation() {
         // the sort will fail while trying to merge
         .with_sort_spill_reservation_bytes(1024);
 
+    // TODO since we col->row conversion first, sort succeeds without limited sort_spill_reservation_bytes
     test.clone()
-        .with_expected_errors(vec![
-            "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:",
-            "B for ExternalSorterMerge",
-        ])
+        .with_expected_success()
         .with_config(config)
         .run()
         .await;
