@@ -38,6 +38,6 @@ Enable memory tracking for the next query and display the report afterwards:
 ```text
 \memory_profiling enable
 SELECT * FROM large_table;
-\memory_profiling disable   # optional
 \memory_profiling show
+\memory_profiling disable   # optional
 ```
