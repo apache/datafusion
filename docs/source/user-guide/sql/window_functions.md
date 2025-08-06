@@ -331,8 +331,6 @@ FROM employees;
 +-------------+--------+---------+
 ```
 
-#
-
 ## Analytical Functions
 
 - [first_value](#first_value)
