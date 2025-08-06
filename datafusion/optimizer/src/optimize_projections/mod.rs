@@ -350,22 +350,16 @@ fn optimize_projections(
             // These operators have no inputs, so stop the optimization process.
             return Ok(Transformed::no(plan));
         }
-        LogicalPlan::RecursiveQuery(_) => {
-            if plan_contains_subquery_alias(&plan) {
-                // https://github.com/apache/datafusion/pull/16696#discussion_r2241482599
-                return Ok(Transformed::no(plan));
-            }
-
-            plan.inputs()
-                .into_iter()
-                .map(|input| {
-                    indices
-                        .clone()
-                        .with_projection_beneficial()
-                        .with_plan_exprs(&plan, input.schema())
-                })
-                .collect::<Result<Vec<_>>>()?
-        }
+        LogicalPlan::RecursiveQuery(_) => plan
+            .inputs()
+            .into_iter()
+            .map(|input| {
+                indices
+                    .clone()
+                    .with_projection_beneficial()
+                    .with_plan_exprs(&plan, input.schema())
+            })
+            .collect::<Result<Vec<_>>>()?,
         LogicalPlan::Join(join) => {
             let left_len = join.left.schema().fields().len();
             let (left_req_indices, right_req_indices) =
