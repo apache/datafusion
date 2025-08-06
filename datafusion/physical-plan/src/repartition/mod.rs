@@ -755,11 +755,7 @@ impl ExecutionPlan for RepartitionExec {
     }
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
-        if partition.is_none() {
-            self.input.partition_statistics(None)
-        } else {
-            Ok(Statistics::new_unknown(&self.schema()))
-        }
+        self.input.partition_statistics(partition)
     }
 
     fn cardinality_effect(&self) -> CardinalityEffect {
