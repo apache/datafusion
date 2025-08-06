@@ -692,8 +692,8 @@ config_namespace! {
         pub file_encryption: Option<ConfigFileEncryptionProperties>, default = None
 
         /// Identifier for the encryption factory to use to create file encryption and decryption properties.
-        /// Encryption factories can be registered in a session with
-        /// `SessionContext::register_parquet_encryption_factory`.
+        /// Encryption factories can be registered in the runtime environment with
+        /// `RuntimeEnv::register_parquet_encryption_factory`.
         pub factory_id: Option<String>, default = None
 
         /// Any encryption factory specific options
