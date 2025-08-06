@@ -286,6 +286,11 @@ impl ParquetFormat {
         self.options.global.coerce_int96 = time_unit;
         self
     }
+
+    pub fn with_cache_metadata(mut self, cache_metadata: bool) -> Self {
+        self.options.global.cache_metadata = cache_metadata;
+        self
+    }
 }
 
 /// Clears all metadata (Schema level and field level) on an iterator

@@ -391,6 +391,9 @@ mod tests {
         )));
         let (meta, _files) = store_parquet(vec![batch1, batch2], false).await?;
 
+        let session = SessionContext::new();
+        let ctx = session.state();
+
         // Use a size hint larger than the parquet footer but smaller than the actual metadata, requiring a second fetch
         // for the remaining metadata
         fetch_parquet_metadata(
@@ -403,11 +406,47 @@ mod tests {
         )
         .await
         .expect("error reading metadata with hint");
-
         assert_eq!(store.request_count(), 2);
 
-        let session = SessionContext::new();
-        let ctx = session.state();
+        // Increases by 2 because cache has no entries yet
+        fetch_parquet_metadata(
+            store.as_ref() as &dyn ObjectStore,
+            &meta[0],
+            Some(9),
+            None,
+            true,
+            ctx.runtime_env().cache_manager.get_file_metadata_cache(),
+        )
+        .await
+        .expect("error reading metadata with hint");
+        assert_eq!(store.request_count(), 4);
+
+        // No increase because cache has an entry
+        fetch_parquet_metadata(
+            store.as_ref() as &dyn ObjectStore,
+            &meta[0],
+            Some(9),
+            None,
+            true,
+            ctx.runtime_env().cache_manager.get_file_metadata_cache(),
+        )
+        .await
+        .expect("error reading metadata with hint");
+        assert_eq!(store.request_count(), 4);
+
+        // Increase by 2  because `cache_metadata` is false
+        fetch_parquet_metadata(
+            store.as_ref() as &dyn ObjectStore,
+            &meta[0],
+            Some(9),
+            None,
+            false,
+            ctx.runtime_env().cache_manager.get_file_metadata_cache(),
+        )
+        .await
+        .expect("error reading metadata with hint");
+        assert_eq!(store.request_count(), 6);
+
         let force_views = match force_views {
             ForceViews::Yes => true,
             ForceViews::No => false,
@@ -415,10 +454,33 @@ mod tests {
         let format = ParquetFormat::default()
             .with_metadata_size_hint(Some(9))
             .with_force_view_types(force_views);
+        let _schema = format
+            .infer_schema(&ctx, &store.upcast(), &meta)
+            .await
+            .unwrap();
+        // increase by 4, no cache being used.
+        assert_eq!(store.request_count(), 10);
+
+        let format = format.with_cache_metadata(true);
+        let _schema = format
+            .infer_schema(&ctx, &store.upcast(), &meta)
+            .await
+            .unwrap();
+        // increase by 2, partial cache being used.
+        assert_eq!(store.request_count(), 12);
+        let _schema = format
+            .infer_schema(&ctx, &store.upcast(), &meta)
+            .await
+            .unwrap();
+        // no increase, full cache being used.
+        assert_eq!(store.request_count(), 12);
+        let format = format.with_cache_metadata(false);
         let schema = format
             .infer_schema(&ctx, &store.upcast(), &meta)
             .await
             .unwrap();
+        // Increase by 4, no cache being used.
+        assert_eq!(store.request_count(), 16);
 
         let stats = fetch_statistics(
             store.upcast().as_ref(),
@@ -449,14 +511,54 @@ mod tests {
             &meta[0],
             Some(size_hint),
             None,
-            format.options().global.cache_metadata,
+            false,
+            None,
+        )
+        .await
+        .expect("error reading metadata with hint");
+        // ensure the requests were coalesced into a single request
+        assert_eq!(store.request_count(), 1);
+
+        let session = SessionContext::new();
+        let ctx = session.state();
+        // Increases by 1 because cache has no entries yet and new session context
+        fetch_parquet_metadata(
+            store.upcast().as_ref(),
+            &meta[0],
+            Some(size_hint),
+            None,
+            true,
             ctx.runtime_env().cache_manager.get_file_metadata_cache(),
         )
         .await
         .expect("error reading metadata with hint");
+        assert_eq!(store.request_count(), 2);
 
-        // ensure the requests were coalesced into a single request
-        assert_eq!(store.request_count(), 1);
+        // No increase because cache has an entry
+        fetch_parquet_metadata(
+            store.upcast().as_ref(),
+            &meta[0],
+            Some(size_hint),
+            None,
+            true,
+            ctx.runtime_env().cache_manager.get_file_metadata_cache(),
+        )
+        .await
+        .expect("error reading metadata with hint");
+        assert_eq!(store.request_count(), 2);
+
+        // Increase by 1  because `cache_metadata` is false
+        fetch_parquet_metadata(
+            store.upcast().as_ref(),
+            &meta[0],
+            Some(size_hint),
+            None,
+            false,
+            ctx.runtime_env().cache_manager.get_file_metadata_cache(),
+        )
+        .await
+        .expect("error reading metadata with hint");
+        assert_eq!(store.request_count(), 3);
 
         let format = ParquetFormat::default()
             .with_metadata_size_hint(Some(size_hint))
@@ -488,18 +590,29 @@ mod tests {
 
         // Use the a size hint larger than the file size to make sure we don't panic
         let size_hint = (meta[0].size + 100) as usize;
-
         fetch_parquet_metadata(
             store.upcast().as_ref(),
             &meta[0],
             Some(size_hint),
             None,
-            format.options().global.cache_metadata,
+            false,
+            None,
+        )
+        .await
+        .expect("error reading metadata with hint");
+        assert_eq!(store.request_count(), 1);
+
+        // No increase because cache has an entry
+        fetch_parquet_metadata(
+            store.upcast().as_ref(),
+            &meta[0],
+            Some(size_hint),
+            None,
+            true,
             ctx.runtime_env().cache_manager.get_file_metadata_cache(),
         )
         .await
         .expect("error reading metadata with hint");
-
         assert_eq!(store.request_count(), 1);
 
         Ok(())
@@ -527,23 +640,62 @@ mod tests {
         // Use store_parquet to write each batch to its own file
         // . batch1 written into first file and includes:
         //    - column c_dic that has 4 rows with no null. Stats min and max of dictionary column is available.
-        let store = Arc::new(LocalFileSystem::new()) as _;
+        let store = Arc::new(RequestCountingObjectStore::new(Arc::new(
+            LocalFileSystem::new(),
+        )));
         let (files, _file_names) = store_parquet(vec![batch1], false).await?;
 
         let state = SessionContext::new().state();
         let format = ParquetFormat::default();
-        let schema = format.infer_schema(&state, &store, &files).await.unwrap();
+        let _schema = format
+            .infer_schema(&state, &store.upcast(), &files)
+            .await
+            .unwrap();
+        assert_eq!(store.request_count(), 2);
+
+        let format = format.with_cache_metadata(true);
+        let _schema = format
+            .infer_schema(&state, &store.upcast(), &files)
+            .await
+            .unwrap();
+        // Increase by 2, no cache entries yet.
+        assert_eq!(store.request_count(), 4);
+        let _schema = format
+            .infer_schema(&state, &store.upcast(), &files)
+            .await
+            .unwrap();
+        // No increase, cache being used.
+        assert_eq!(store.request_count(), 4);
+        let format = format.with_cache_metadata(false);
+        let schema = format
+            .infer_schema(&state, &store.upcast(), &files)
+            .await
+            .unwrap();
+        // Increase by 2, no cache being used.
+        assert_eq!(store.request_count(), 6);
 
         // Fetch statistics for first file
+        let _pq_meta = fetch_parquet_metadata(
+            store.as_ref(),
+            &files[0],
+            None,
+            None,
+            true,
+            state.runtime_env().cache_manager.get_file_metadata_cache(),
+        )
+        .await?;
+        assert_eq!(store.request_count(), 6);
+        // No increase in request count because cache is not empty
         let pq_meta = fetch_parquet_metadata(
             store.as_ref(),
             &files[0],
             None,
             None,
-            format.options().global.cache_metadata,
+            true,
             state.runtime_env().cache_manager.get_file_metadata_cache(),
         )
         .await?;
+        assert_eq!(store.request_count(), 6);
         let stats = statistics_from_parquet_meta_calc(&pq_meta, schema.clone())?;
         assert_eq!(stats.num_rows, Precision::Exact(4));
 
@@ -580,7 +732,9 @@ mod tests {
         //    - column c1 that has 3 rows with one null. Stats min and max of string column is missing for this test even the column has values
         // . batch2 written into second file and includes:
         //    - column c2 that has 3 rows with one null. Stats min and max of int are available and 1 and 2 respectively
-        let store = Arc::new(LocalFileSystem::new()) as _;
+        let store = Arc::new(RequestCountingObjectStore::new(Arc::new(
+            LocalFileSystem::new(),
+        )));
         let (files, _file_names) = store_parquet(vec![batch1, batch2], false).await?;
 
         let force_views = match force_views {
@@ -591,7 +745,11 @@ mod tests {
         let mut state = SessionContext::new().state();
         state = set_view_state(state, force_views);
         let format = ParquetFormat::default().with_force_view_types(force_views);
-        let schema = format.infer_schema(&state, &store, &files).await.unwrap();
+        let schema = format
+            .infer_schema(&state, &store.upcast(), &files)
+            .await
+            .unwrap();
+        assert_eq!(store.request_count(), 4);
 
         let null_i64 = ScalarValue::Int64(None);
         let null_utf8 = if force_views {
@@ -601,15 +759,27 @@ mod tests {
         };
 
         // Fetch statistics for first file
+        let _pq_meta = fetch_parquet_metadata(
+            store.as_ref(),
+            &files[0],
+            None,
+            None,
+            true,
+            state.runtime_env().cache_manager.get_file_metadata_cache(),
+        )
+        .await?;
+        assert_eq!(store.request_count(), 6);
+        // No increase in request count because cache is not empty
         let pq_meta = fetch_parquet_metadata(
             store.as_ref(),
             &files[0],
             None,
             None,
-            format.options().global.cache_metadata,
+            true,
             state.runtime_env().cache_manager.get_file_metadata_cache(),
         )
         .await?;
+        assert_eq!(store.request_count(), 6);
         let stats = statistics_from_parquet_meta_calc(&pq_meta, schema.clone())?;
         assert_eq!(stats.num_rows, Precision::Exact(3));
         // column c1
@@ -635,15 +805,27 @@ mod tests {
         assert_eq!(c2_stats.min_value, Precision::Exact(null_i64.clone()));
 
         // Fetch statistics for second file
+        let _pq_meta = fetch_parquet_metadata(
+            store.as_ref(),
+            &files[1],
+            None,
+            None,
+            true,
+            state.runtime_env().cache_manager.get_file_metadata_cache(),
+        )
+        .await?;
+        assert_eq!(store.request_count(), 8);
+        // No increase in request count because cache is not empty
         let pq_meta = fetch_parquet_metadata(
             store.as_ref(),
             &files[1],
             None,
             None,
-            format.options().global.cache_metadata,
+            true,
             state.runtime_env().cache_manager.get_file_metadata_cache(),
         )
         .await?;
+        assert_eq!(store.request_count(), 8);
         let stats = statistics_from_parquet_meta_calc(&pq_meta, schema.clone())?;
         assert_eq!(stats.num_rows, Precision::Exact(3));
         // column c1: missing from the file so the table treats all 3 rows as null
