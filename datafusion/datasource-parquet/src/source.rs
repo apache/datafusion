@@ -469,12 +469,6 @@ impl FileSource for ParquetSource {
             .file_column_projection_indices()
             .unwrap_or_else(|| (0..base_config.file_schema.fields().len()).collect());
 
-        if self.schema_adapter_factory.is_some() {
-            log::warn!("The SchemaAdapter API will be removed from ParquetSource in a future release. \
-                Use PhysicalExprAdapterFactory API instead. \
-                See https://github.com/apache/datafusion/issues/16800 for discussion and https://datafusion.apache.org/library-user-guide/upgrading.html#datafusion-49-0-0 for upgrade instructions.");
-        }
-
         let (expr_adapter_factory, schema_adapter_factory) = match (
             base_config.expr_adapter_factory.as_ref(),
             self.schema_adapter_factory.as_ref(),
