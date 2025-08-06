@@ -33,6 +33,7 @@ mod test {
     use datafusion_functions_aggregate::count::count_udaf;
     use datafusion_physical_expr::aggregate::AggregateExprBuilder;
     use datafusion_physical_expr::expressions::{binary, col, lit, Column};
+    use datafusion_physical_expr::Partitioning;
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
     use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
     use datafusion_physical_plan::aggregates::{
@@ -47,6 +48,7 @@ mod test {
     use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
     use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
     use datafusion_physical_plan::projection::ProjectionExec;
+    use datafusion_physical_plan::repartition::RepartitionExec;
     use datafusion_physical_plan::sorts::sort::SortExec;
     use datafusion_physical_plan::union::UnionExec;
     use datafusion_physical_plan::{
@@ -755,6 +757,49 @@ mod test {
         let actual = plan.partition_statistics(None)?;
         let expected = compute_record_batch_statistics(&all_batches, &schema, None);
         assert_eq!(actual, expected);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_statistic_by_partition_of_repartition() -> Result<()> {
+        let scan = create_scan_exec_with_statistics(None, Some(1)).await;
+
+        let repartition = Arc::new(RepartitionExec::try_new(
+            scan.clone(),
+            Partitioning::RoundRobinBatch(2),
+        )?);
+
+        let statistics = (0..repartition.partitioning().partition_count())
+            .map(|idx| repartition.partition_statistics(Some(idx)))
+            .collect::<Result<Vec<_>>>()?;
+        assert_eq!(statistics.len(), 2);
+
+        let expected_stats = Statistics {
+            num_rows: Precision::Inexact(2),
+            total_byte_size: Precision::Inexact(110),
+            column_statistics: vec![
+                ColumnStatistics {
+                    null_count: Precision::Absent,
+                    max_value: Precision::Exact(ScalarValue::Int32(Some(4))),
+                    min_value: Precision::Exact(ScalarValue::Int32(Some(1))),
+                    sum_value: Precision::Absent,
+                    distinct_count: Precision::Absent,
+                },
+                ColumnStatistics {
+                    null_count: Precision::Absent,
+                    max_value: Precision::Absent,
+                    min_value: Precision::Absent,
+                    sum_value: Precision::Absent,
+                    distinct_count: Precision::Absent,
+                },
+            ],
+        };
+
+        // All partitions should have the same statistics
+        for stat in statistics.iter() {
+            assert_eq!(stat, &expected_stats);
+        }
 
         Ok(())
     }
