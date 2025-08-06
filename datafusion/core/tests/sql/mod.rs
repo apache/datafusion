@@ -62,7 +62,6 @@ pub mod create_drop;
 pub mod explain_analyze;
 pub mod joins;
 mod path_partition;
-pub mod recursive_cte;
 mod runtime_config;
 pub mod select;
 mod sql_api;
