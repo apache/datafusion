@@ -350,7 +350,7 @@ mod tests {
     use crate::metrics::SpillMetrics;
     use crate::spill::spill_manager::SpillManager;
     use crate::test::build_table_i32;
-    use arrow::array::{Float64Array, Int32Array, ListArray, StringArray};
+    use arrow::array::{ArrayRef, Float64Array, Int32Array, ListArray, StringArray};
     use arrow::compute::cast;
     use arrow::datatypes::{DataType, Field, Int32Type, Schema};
     use arrow::record_batch::RecordBatch;
@@ -493,7 +493,6 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(all(feature = "lz4", feature = "zstd"))]
     fn build_compressible_batch() -> RecordBatch {
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Utf8, false),
@@ -510,7 +509,6 @@ mod tests {
         RecordBatch::try_new(schema, vec![a, b, c]).unwrap()
     }
 
-    #[cfg(all(feature = "lz4", feature = "zstd"))]
     async fn validate(
         spill_manager: &SpillManager,
         spill_file: RefCountedTempFile,
@@ -530,7 +528,6 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(all(feature = "lz4", feature = "zstd"))]
     #[tokio::test]
     async fn test_spill_compression() -> Result<()> {
         let batch = build_compressible_batch();
