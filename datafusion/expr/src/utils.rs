@@ -19,7 +19,6 @@
 
 use std::cmp::Ordering;
 use std::collections::{BTreeSet, HashSet};
-use std::hash::Hasher;
 use std::sync::Arc;
 
 use crate::expr::{Alias, Sort, WildcardOptions, WindowFunctionParams};
@@ -1340,15 +1339,6 @@ macro_rules! udf_equals_hash {
             Hasher::finish(hasher)
         }
     };
-}
-
-pub fn arc_ptr_eq<T: ?Sized>(a: &Arc<T>, b: &Arc<T>) -> bool {
-    // Not necessarily equivalent to `Arc::ptr_eq` for fat pointers.
-    std::ptr::eq(Arc::as_ptr(a), Arc::as_ptr(b))
-}
-
-pub fn arc_ptr_hash<T: ?Sized>(a: &Arc<T>, hasher: &mut impl Hasher) {
-    std::ptr::hash(Arc::as_ptr(a), hasher)
 }
 
 #[cfg(test)]
