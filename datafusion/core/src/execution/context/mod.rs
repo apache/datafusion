@@ -2237,7 +2237,6 @@ mod tests {
     use crate::physical_planner::PhysicalPlanner;
     use async_trait::async_trait;
     use datafusion_expr::planner::TypePlanner;
-
     use sqlparser::ast;
     use tempfile::TempDir;
 
