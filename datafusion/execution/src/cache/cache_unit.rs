@@ -240,7 +240,9 @@ impl DefaultFilesMetadataCacheState {
                 self.memory_used -= metadata.memory_size();
             } else {
                 // cache is empty while memory_used > memory_limit, cannot happen
-                unreachable!();
+                // use debug assert to find issue in debug builds, but don't panic release builds
+                debug_assert!(false, "cache is empty while memory_used > memory_limit, cannot happen")
+                return;
             }
         }
     }
