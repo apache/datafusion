@@ -351,6 +351,8 @@ fn optimize_projections(
             return Ok(Transformed::no(plan));
         }
         LogicalPlan::RecursiveQuery(_) => {
+            // If either the static or recursive term contains subqueries other than a reference to the CTE,
+            // skip projection pushdown to prevent pruning columns needed by those subqueries.
             if let LogicalPlan::RecursiveQuery(recursive) = &plan {
                 if plan_contains_non_cte_subquery(
                     recursive.static_term.as_ref(),
@@ -363,8 +365,7 @@ fn optimize_projections(
                 }
             }
 
-            plan
-                .inputs()
+            plan.inputs()
                 .into_iter()
                 .map(|input| {
                     indices
@@ -857,38 +858,34 @@ fn plan_contains_non_cte_subquery(plan: &LogicalPlan, cte_name: &str) -> bool {
     }
 
     let mut found = false;
-    plan
-        .apply_expressions(|expr| {
-            if expr_contains_subquery(expr) {
-                found = true;
-                Ok(TreeNodeRecursion::Stop)
-            } else {
-                Ok(TreeNodeRecursion::Continue)
-            }
-        })
-        .expect("expression traversal never fails");
+    plan.apply_expressions(|expr| {
+        if expr_contains_subquery(expr) {
+            found = true;
+            Ok(TreeNodeRecursion::Stop)
+        } else {
+            Ok(TreeNodeRecursion::Continue)
+        }
+    })
+    .expect("expression traversal never fails");
     if found {
         return true;
     }
 
-    plan.inputs().into_iter().any(|child| {
-        plan_contains_non_cte_subquery(child, cte_name)
-    })
+    plan.inputs()
+        .into_iter()
+        .any(|child| plan_contains_non_cte_subquery(child, cte_name))
 }
 
 fn expr_contains_subquery(expr: &Expr) -> bool {
     let mut contains = false;
-    expr
-        .apply(|e| match e {
-            Expr::ScalarSubquery(_)
-            | Expr::Exists(_)
-            | Expr::InSubquery(_) => {
-                contains = true;
-                Ok(TreeNodeRecursion::Stop)
-            }
-            _ => Ok(TreeNodeRecursion::Continue),
-        })
-        .expect("expression traversal never fails");
+    expr.apply(|e| match e {
+        Expr::ScalarSubquery(_) | Expr::Exists(_) | Expr::InSubquery(_) => {
+            contains = true;
+            Ok(TreeNodeRecursion::Stop)
+        }
+        _ => Ok(TreeNodeRecursion::Continue),
+    })
+    .expect("expression traversal never fails");
     contains
 }
 
