@@ -482,7 +482,7 @@ mod tests {
             metadata: "retrieved_metadata".to_owned(),
         });
 
-        let mut cache = DefaultFilesMetadataCache::new(1 * 1024 * 1024);
+        let mut cache = DefaultFilesMetadataCache::new(1024 * 1024);
         assert!(cache.get(&object_meta).is_none());
 
         // put
