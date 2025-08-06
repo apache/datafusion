@@ -428,7 +428,7 @@ Each of these statistics is wrapped in a `Precision` type that indicates whether
 exact or estimated, allowing the optimizer to make informed decisions about the reliability
 of its cardinality estimates.
 
-### Boundary Analaysis Flow
+### Boundary Analysis Flow
 
 The boundary analysis process flows through several stages, with each stage building
 upon the information gathered in previous stages. The `AnalysisContext` is continuously
