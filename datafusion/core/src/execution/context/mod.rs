@@ -131,7 +131,16 @@ impl From<std::collections::HashMap<String, usize>> for MemoryReport {
         Self::new(metrics)
     }
 }
-/// Enhanced memory profiling report with categorization and analysis
+// Implement IntoIterator for &MemoryReport to allow iterating over &report
+impl<'a> IntoIterator for &'a MemoryReport {
+    type Item = (&'a String, &'a usize);
+    type IntoIter = std::collections::hash_map::Iter<'a, String, usize>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.metrics.iter()
+    }
+}
+// Enhanced memory profiling report with categorization and analysis
 #[derive(Debug)]
 pub struct EnhancedMemoryReport {
     raw_report: std::collections::HashMap<String, usize>,
