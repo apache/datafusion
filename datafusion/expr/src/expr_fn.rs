@@ -661,11 +661,12 @@ pub fn create_udwf(
 
 /// Implements [`WindowUDFImpl`] for functions that have a single signature and
 /// return type.
+#[derive(PartialEq, Hash)]
 pub struct SimpleWindowUDF {
     name: String,
     signature: Signature,
     return_type: DataType,
-    partition_evaluator_factory: PartitionEvaluatorFactory,
+    partition_evaluator_factory: PtrEq<PartitionEvaluatorFactory>,
 }
 
 impl Debug for SimpleWindowUDF {
@@ -695,7 +696,7 @@ impl SimpleWindowUDF {
             name,
             signature,
             return_type,
-            partition_evaluator_factory,
+            partition_evaluator_factory: partition_evaluator_factory.into(),
         }
     }
 }
@@ -728,40 +729,7 @@ impl WindowUDFImpl for SimpleWindowUDF {
         )))
     }
 
-    fn equals(&self, other: &dyn WindowUDFImpl) -> bool {
-        let Some(other) = other.as_any().downcast_ref::<Self>() else {
-            return false;
-        };
-        let Self {
-            name,
-            signature,
-            return_type,
-            partition_evaluator_factory,
-        } = self;
-        name == &other.name
-            && signature == &other.signature
-            && return_type == &other.return_type
-            && Arc::ptr_eq(
-                partition_evaluator_factory,
-                &other.partition_evaluator_factory,
-            )
-    }
-
-    fn hash_value(&self) -> u64 {
-        let Self {
-            name,
-            signature,
-            return_type,
-            partition_evaluator_factory,
-        } = self;
-        let mut hasher = DefaultHasher::new();
-        std::any::type_name::<Self>().hash(&mut hasher);
-        name.hash(&mut hasher);
-        signature.hash(&mut hasher);
-        return_type.hash(&mut hasher);
-        Arc::as_ptr(partition_evaluator_factory).hash(&mut hasher);
-        hasher.finish()
-    }
+    udf_equals_hash!(WindowUDFImpl);
 }
 
 pub fn interval_year_month_lit(value: &str) -> Expr {
