@@ -1039,7 +1039,7 @@ approx_median(expression)
 Returns the approximate percentile of input values using the t-digest algorithm.
 
 ```sql
-approx_percentile_cont(percentile, centroids) WITHIN GROUP (ORDER BY expression)
+approx_percentile_cont(percentile [, centroids]) WITHIN GROUP (ORDER BY expression)
 ```
 
 #### Arguments
@@ -1051,6 +1051,12 @@ approx_percentile_cont(percentile, centroids) WITHIN GROUP (ORDER BY expression)
 #### Example
 
 ```sql
+> SELECT approx_percentile_cont(0.75) WITHIN GROUP (ORDER BY column_name) FROM table_name;
++------------------------------------------------------------------+
+| approx_percentile_cont(0.75) WITHIN GROUP (ORDER BY column_name) |
++------------------------------------------------------------------+
+| 65.0                                                             |
++------------------------------------------------------------------+
 > SELECT approx_percentile_cont(0.75, 100) WITHIN GROUP (ORDER BY column_name) FROM table_name;
 +-----------------------------------------------------------------------+
 | approx_percentile_cont(0.75, 100) WITHIN GROUP (ORDER BY column_name) |
@@ -1064,7 +1070,7 @@ approx_percentile_cont(percentile, centroids) WITHIN GROUP (ORDER BY expression)
 Returns the weighted approximate percentile of input values using the t-digest algorithm.
 
 ```sql
-approx_percentile_cont_with_weight(weight, percentile) WITHIN GROUP (ORDER BY expression)
+approx_percentile_cont_with_weight(weight, percentile [, centroids]) WITHIN GROUP (ORDER BY expression)
 ```
 
 #### Arguments
@@ -1072,6 +1078,7 @@ approx_percentile_cont_with_weight(weight, percentile) WITHIN GROUP (ORDER BY ex
 - **expression**: The expression to operate on. Can be a constant, column, or function, and any combination of operators.
 - **weight**: Expression to use as weight. Can be a constant, column, or function, and any combination of arithmetic operators.
 - **percentile**: Percentile to compute. Must be a float value between 0 and 1 (inclusive).
+- **centroids**: Number of centroids to use in the t-digest algorithm. _Default is 100_. A higher number results in more accurate approximation but requires more memory.
 
 #### Example
 
@@ -1082,4 +1089,10 @@ approx_percentile_cont_with_weight(weight, percentile) WITHIN GROUP (ORDER BY ex
 +---------------------------------------------------------------------------------------------+
 | 78.5                                                                                        |
 +---------------------------------------------------------------------------------------------+
+> SELECT approx_percentile_cont_with_weight(weight_column, 0.90, 100) WITHIN GROUP (ORDER BY column_name) FROM table_name;
++--------------------------------------------------------------------------------------------------+
+| approx_percentile_cont_with_weight(weight_column, 0.90, 100) WITHIN GROUP (ORDER BY column_name) |
++--------------------------------------------------------------------------------------------------+
+| 78.5                                                                                             |
++--------------------------------------------------------------------------------------------------+
 ```
