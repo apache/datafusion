@@ -140,7 +140,7 @@ impl<'a> IntoIterator for &'a MemoryReport {
         self.metrics.iter()
     }
 }
-// Enhanced memory profiling report with categorization and analysis
+/// Enhanced memory profiling report with categorization and analysis
 #[derive(Debug)]
 pub struct EnhancedMemoryReport {
     raw_report: std::collections::HashMap<String, usize>,
