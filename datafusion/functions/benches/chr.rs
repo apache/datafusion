@@ -24,6 +24,7 @@ use datafusion_functions::string::chr;
 use rand::{Rng, SeedableRng};
 
 use arrow::datatypes::{DataType, Field};
+use datafusion_common::config::ConfigOptions;
 use rand::rngs::StdRng;
 use std::sync::Arc;
 
@@ -55,6 +56,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         .enumerate()
         .map(|(idx, arg)| Field::new(format!("arg_{idx}"), arg.data_type(), true).into())
         .collect::<Vec<_>>();
+    let config_options = Arc::new(ConfigOptions::default());
 
     c.bench_function("chr", |b| {
         b.iter(|| {
@@ -65,6 +67,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         arg_fields: arg_fields.clone(),
                         number_rows: size,
                         return_field: Field::new("f", DataType::Utf8, true).into(),
+                        config_options: Arc::clone(&config_options),
                     })
                     .unwrap(),
             )

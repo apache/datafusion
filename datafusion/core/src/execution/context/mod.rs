@@ -1919,7 +1919,7 @@ impl SessionContext {
     /// [`ConfigOptions`]: crate::config::ConfigOptions
     pub fn state(&self) -> SessionState {
         let mut state = self.state.read().clone();
-        state.execution_props_mut().start_execution();
+        state.mark_start_execution();
         state
     }
 
