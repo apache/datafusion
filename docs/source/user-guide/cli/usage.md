@@ -125,11 +125,11 @@ Available commands inside DataFusion CLI are:
 - Memory profiling
 
 ```bash
-> \MEMORY_PROFILING enable
+> \memory_profiling enable
 ```
 
 ```bash
-> \MEMORY_PROFILING show
+> \memory_profiling show
 ```
 
 ```text
@@ -139,7 +139,7 @@ HashJoinExec: 5120
 ```
 
 ```bash
-> \MEMORY_PROFILING disable
+> \memory_profiling disable
 ```
 
 ## Supported SQL
