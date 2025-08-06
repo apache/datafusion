@@ -482,6 +482,21 @@ mod tests {
         // Increase by 4, no cache being used.
         assert_eq!(store.request_count(), 16);
 
+        // increase by 2, no cache being used
+        let _stats = fetch_statistics(
+            store.upcast().as_ref(),
+            schema.clone(),
+            &meta[0],
+            Some(9),
+            None,
+            format.options().global.cache_metadata,
+            ctx.runtime_env().cache_manager.get_file_metadata_cache(),
+        )
+        .await?;
+        assert_eq!(store.request_count(), 18);
+
+        // No increase, cache being used
+        let format = format.with_cache_metadata(true);
         let stats = fetch_statistics(
             store.upcast().as_ref(),
             schema.clone(),
@@ -492,6 +507,7 @@ mod tests {
             ctx.runtime_env().cache_manager.get_file_metadata_cache(),
         )
         .await?;
+        assert_eq!(store.request_count(), 18);
 
         assert_eq!(stats.num_rows, Precision::Exact(3));
         let c1_stats = &stats.column_statistics[0];
@@ -563,10 +579,25 @@ mod tests {
         let format = ParquetFormat::default()
             .with_metadata_size_hint(Some(size_hint))
             .with_force_view_types(force_views);
+        let _schema = format
+            .infer_schema(&ctx, &store.upcast(), &meta)
+            .await
+            .unwrap();
+        // Increase by 2, no cache being used.
+        assert_eq!(store.request_count(), 5);
+        let format = format.with_cache_metadata(true);
+        let _schema = format
+            .infer_schema(&ctx, &store.upcast(), &meta)
+            .await
+            .unwrap();
+        // increase by 1, partial cache being used.
+        assert_eq!(store.request_count(), 6);
         let schema = format
             .infer_schema(&ctx, &store.upcast(), &meta)
             .await
             .unwrap();
+        // no increase, full cache being used.
+        assert_eq!(store.request_count(), 6);
         let stats = fetch_statistics(
             store.upcast().as_ref(),
             schema.clone(),
@@ -577,6 +608,8 @@ mod tests {
             ctx.runtime_env().cache_manager.get_file_metadata_cache(),
         )
         .await?;
+        // No increase, cache being used
+        assert_eq!(store.request_count(), 6);
 
         assert_eq!(stats.num_rows, Precision::Exact(3));
         let c1_stats = &stats.column_statistics[0];
