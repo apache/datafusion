@@ -30,6 +30,7 @@ use crate::datasource::{
 };
 use crate::error::Result;
 use crate::execution::context::{SessionState, TaskContext};
+use crate::execution::memory_tracker::MemoryTracker;
 use crate::execution::FunctionRegistry;
 use crate::logical_expr::utils::find_window_exprs;
 use crate::logical_expr::{
@@ -230,6 +231,13 @@ pub struct DataFrame {
     // will require that work. Any operation that update the plan in any way
     // via anything other than a `project` call should set this to true.
     projection_requires_validation: bool,
+}
+
+fn record_query_output_memory<I>(tracker: &MemoryTracker, sizes: I)
+where
+    I: Iterator<Item = usize>,
+{
+    tracker.record_memory("query_output", sizes.sum());
 }
 
 impl DataFrame {
@@ -1379,8 +1387,10 @@ impl DataFrame {
         let plan = self.create_physical_plan().await?;
         let batches = collect(plan, task_ctx).await?;
         if mem_prof {
-            let bytes: usize = batches.iter().map(|b| b.get_array_memory_size()).sum();
-            tracker.record_memory("query_output", bytes);
+            record_query_output_memory(
+                tracker.as_ref(),
+                batches.iter().map(|b| b.get_array_memory_size()),
+            );
         }
         Ok(batches)
     }
@@ -1519,12 +1529,13 @@ impl DataFrame {
         let plan = self.create_physical_plan().await?;
         let partitions = collect_partitioned(plan, task_ctx).await?;
         if mem_prof {
-            let bytes: usize = partitions
-                .iter()
-                .flat_map(|p| p.iter())
-                .map(|b| b.get_array_memory_size())
-                .sum();
-            tracker.record_memory("query_output", bytes);
+            record_query_output_memory(
+                tracker.as_ref(),
+                partitions
+                    .iter()
+                    .flat_map(|p| p.iter())
+                    .map(|b| b.get_array_memory_size()),
+            );
         }
         Ok(partitions)
     }
@@ -2253,12 +2264,13 @@ impl DataFrame {
         let task_ctx = Arc::new(self.task_ctx());
         let partitions = collect_partitioned(plan, task_ctx).await?;
         if mem_prof {
-            let bytes: usize = partitions
-                .iter()
-                .flat_map(|p| p.iter())
-                .map(|b| b.get_array_memory_size())
-                .sum();
-            tracker.record_memory("query_output", bytes);
+            record_query_output_memory(
+                tracker.as_ref(),
+                partitions
+                    .iter()
+                    .flat_map(|p| p.iter())
+                    .map(|b| b.get_array_memory_size()),
+            );
         }
         let mem_table = MemTable::try_new(schema, partitions)?;
         context.read_table(Arc::new(mem_table))

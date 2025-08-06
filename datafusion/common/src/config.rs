@@ -536,7 +536,9 @@ config_namespace! {
         /// the remote end point.
         pub objectstore_writer_buffer_size: usize, default = 10 * 1024 * 1024
 
-        /// Memory profiling mode
+        /// Memory profiling mode.
+        /// Valid options: `"disabled"` (default) or `"on_demand"`.
+        /// Use `"on_demand"` to enable profiling for individual queries.
         pub memory_profiling: MemoryProfilingMode, default = MemoryProfilingMode::Disabled
     }
 }

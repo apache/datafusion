@@ -228,6 +228,7 @@ pub(super) async fn exec_and_print(
     let statements = DFParser::parse_sql_with_dialect(&sql, dialect.as_ref())?;
     for statement in statements {
         let _mem_handle = if print_options.memory_profiling {
+            // RAII guard: dropping the handle disables profiling after execution
             Some(ctx.enable_memory_profiling())
         } else {
             None

@@ -89,6 +89,7 @@ impl Default for MemoryTracker {
 }
 
 static GLOBAL_TRACKER: LazyLock<StdMutex<Option<Arc<MemoryTracker>>>> =
+    // std::sync::Mutex is used as contention is low; switch to parking_lot if performance issues arise
     LazyLock::new(|| StdMutex::new(None));
 
 /// Set or clear the global memory tracker used for automatic instrumentation
