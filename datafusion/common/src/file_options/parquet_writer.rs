@@ -89,6 +89,8 @@ impl TryFrom<&TableParquetOptions> for WriterPropertiesBuilder {
     /// Convert the session's [`TableParquetOptions`] into a single write action's [`WriterPropertiesBuilder`].
     ///
     /// The returned [`WriterPropertiesBuilder`] includes customizations applicable per column.
+    /// Note that any encryption options are ignored as building the `FileEncryptionProperties`
+    /// might require other inputs besides the [`TableParquetOptions`].
     fn try_from(table_parquet_options: &TableParquetOptions) -> Result<Self> {
         // Table options include kv_metadata and col-specific options
         let TableParquetOptions {
