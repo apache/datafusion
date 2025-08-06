@@ -1342,11 +1342,11 @@ but these operators always return a <code class="docutils literal notranslate"><
 <tr class="row-even"><td><p>approx_median(expr)</p></td>
 <td><p>Calculates an approximation of the median for <code class="docutils literal notranslate"><span class="pre">expr</span></code>.</p></td>
 </tr>
-<tr class="row-odd"><td><p>approx_percentile_cont(expr, percentile)</p></td>
-<td><p>Calculates an approximation of the specified <code class="docutils literal notranslate"><span class="pre">percentile</span></code> for <code class="docutils literal notranslate"><span class="pre">expr</span></code>.</p></td>
+<tr class="row-odd"><td><p>approx_percentile_cont(expr, percentile [, centroids])</p></td>
+<td><p>Calculates an approximation of the specified <code class="docutils literal notranslate"><span class="pre">percentile</span></code> for <code class="docutils literal notranslate"><span class="pre">expr</span></code>. Optional <code class="docutils literal notranslate"><span class="pre">centroids</span></code> parameter controls accuracy (default: 100).</p></td>
 </tr>
-<tr class="row-even"><td><p>approx_percentile_cont_with_weight(expr, weight_expr, percentile)</p></td>
-<td><p>Calculates an approximation of the specified <code class="docutils literal notranslate"><span class="pre">percentile</span></code> for <code class="docutils literal notranslate"><span class="pre">expr</span></code> and <code class="docutils literal notranslate"><span class="pre">weight_expr</span></code>.</p></td>
+<tr class="row-even"><td><p>approx_percentile_cont_with_weight(expr, weight_expr, percentile [, centroids])</p></td>
+<td><p>Calculates an approximation of the specified <code class="docutils literal notranslate"><span class="pre">percentile</span></code> for <code class="docutils literal notranslate"><span class="pre">expr</span></code> and <code class="docutils literal notranslate"><span class="pre">weight_expr</span></code>. Optional <code class="docutils literal notranslate"><span class="pre">centroids</span></code> parameter controls accuracy (default: 100).</p></td>
 </tr>
 <tr class="row-odd"><td><p>bit_and(expr)</p></td>
 <td><p>Computes the bitwise AND of all non-null input values for <code class="docutils literal notranslate"><span class="pre">expr</span></code>.</p></td>
