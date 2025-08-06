@@ -69,14 +69,14 @@ fn recursive_query_column_pruning() -> Result<()> {
             RecursiveQuery: is_distinct=false
               Projection: test.col_int32 AS id, Int64(1) AS level
                 Filter: test.col_int32 = Int32(1)
-                  TableScan: test projection=[col_int32]
+                  TableScan: test
               Projection: t.col_int32, numbers.level + Int64(1)
                 Inner Join: CAST(t.col_int32 AS Int64) = CAST(numbers.id AS Int64) + Int64(1)
                   SubqueryAlias: t
                     Filter: CAST(test.col_int32 AS Int64) IS NOT NULL
-                      TableScan: test projection=[col_int32]
+                      TableScan: test
                   Filter: CAST(numbers.id AS Int64) + Int64(1) IS NOT NULL
-                    TableScan: numbers projection=[id, level]
+                    TableScan: numbers
         "#
     );
     Ok(())
