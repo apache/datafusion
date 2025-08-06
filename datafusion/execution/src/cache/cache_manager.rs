@@ -92,13 +92,11 @@ impl CacheManager {
             .as_ref()
             .map(Arc::clone)
             .unwrap_or_else(|| {
-                Arc::new(DefaultFilesMetadataCache::new(
-                    config.file_metadata_cache_limit,
-                ))
+                Arc::new(DefaultFilesMetadataCache::new(config.metadata_cache_limit))
             });
 
         // the cache memory limit might have changed, ensure the limit is updated
-        file_metadata_cache.update_cache_limit(config.file_metadata_cache_limit);
+        file_metadata_cache.update_cache_limit(config.metadata_cache_limit);
 
         Ok(Arc::new(CacheManager {
             file_statistic_cache,
@@ -123,12 +121,12 @@ impl CacheManager {
     }
 
     /// Get the limit of the file embedded metadata cache.
-    pub fn get_file_metadata_cache_limit(&self) -> Option<usize> {
+    pub fn get_metadata_cache_limit(&self) -> Option<usize> {
         self.file_metadata_cache.cache_limit()
     }
 }
 
-const DEFAULT_FILE_METADATA_CACHE_LIMIT: usize = 1024 * 1024 * 1024; // 1G
+const DEFAULT_METADATA_CACHE_LIMIT: usize = 50 * 1024 * 1024; // 50M
 
 #[derive(Clone)]
 pub struct CacheManagerConfig {
@@ -148,7 +146,7 @@ pub struct CacheManagerConfig {
     /// If not provided, the [`CacheManager`] will create a [`DefaultFilesMetadataCache`].
     pub file_metadata_cache: Option<Arc<dyn FileMetadataCache>>,
     /// Limit of the file-embedded metadata cache, in bytes.
-    pub file_metadata_cache_limit: Option<usize>,
+    pub metadata_cache_limit: Option<usize>,
 }
 
 impl Default for CacheManagerConfig {
@@ -157,7 +155,7 @@ impl Default for CacheManagerConfig {
             table_files_statistics_cache: Default::default(),
             list_files_cache: Default::default(),
             file_metadata_cache: Default::default(),
-            file_metadata_cache_limit: Some(DEFAULT_FILE_METADATA_CACHE_LIMIT),
+            metadata_cache_limit: Some(DEFAULT_METADATA_CACHE_LIMIT),
         }
     }
 }
@@ -184,8 +182,8 @@ impl CacheManagerConfig {
         self
     }
 
-    pub fn with_file_metadata_cache_limit(mut self, limit: Option<usize>) -> Self {
-        self.file_metadata_cache_limit = limit;
+    pub fn with_metadata_cache_limit(mut self, limit: Option<usize>) -> Self {
+        self.metadata_cache_limit = limit;
         self
     }
 }

@@ -201,13 +201,12 @@ async fn test_max_temp_directory_size_enforcement() {
 }
 
 #[tokio::test]
-async fn test_file_metadata_cache_limit() {
+async fn test_test_metadata_cache_limit() {
     let ctx = SessionContext::new();
 
     let update_limit = async |ctx: &SessionContext, limit: &str| {
         ctx.sql(
-            format!("SET datafusion.runtime.file_metadata_cache_limit = '{limit}'")
-                .as_str(),
+            format!("SET datafusion.runtime.metadata_cache_limit = '{limit}'").as_str(),
         )
         .await
         .unwrap()

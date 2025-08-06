@@ -270,8 +270,8 @@ impl RuntimeEnvBuilder {
 
     /// Specify the limit of the file-embedded metadata cache, in bytes.
     /// If `None`, the metadata cache should have no limit.
-    pub fn with_file_metadata_cache_limit(mut self, limit: Option<usize>) -> Self {
-        self.cache_manager = self.cache_manager.with_file_metadata_cache_limit(limit);
+    pub fn with_metadata_cache_limit(mut self, limit: Option<usize>) -> Self {
+        self.cache_manager = self.cache_manager.with_metadata_cache_limit(limit);
         self
     }
 
@@ -315,9 +315,7 @@ impl RuntimeEnvBuilder {
             file_metadata_cache: Some(
                 runtime_env.cache_manager.get_file_metadata_cache(),
             ),
-            file_metadata_cache_limit: runtime_env
-                .cache_manager
-                .get_file_metadata_cache_limit(),
+            metadata_cache_limit: runtime_env.cache_manager.get_metadata_cache_limit(),
         };
 
         Self {
@@ -351,9 +349,9 @@ impl RuntimeEnvBuilder {
                 description: "The path to the temporary file directory.",
             },
             ConfigEntry {
-                key: "datafusion.runtime.file_metadata_cache_limit".to_string(),
-                value: Some("1G".to_owned()),
-                description: "Maximum memory limit for the file-embedded metadata cache. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes). Example: '2G' for 2 gigabytes.",
+                key: "datafusion.runtime.metadata_cache_limit".to_string(),
+                value: Some("50M".to_owned()),
+                description: "Maximum memory to use for file metadata cache such as Parquet metadata. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes). Example: '2G' for 2 gigabytes.",
             }
         ]
     }
