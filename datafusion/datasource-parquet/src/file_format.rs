@@ -1499,7 +1499,7 @@ fn spawn_rg_join_and_finalize_task(
 /// across both columns and row_groups, with a theoretical max number of parallel tasks
 /// given by n_columns * num_row_groups.
 fn spawn_parquet_parallel_serialization_task(
-    arrow_writer: ArrowWriter<SerializedFileWriter<SharedBuffer>>,
+    mut arrow_writer: ArrowWriter<SharedBuffer>,
     mut data: Receiver<RecordBatch>,
     serialize_tx: Sender<SpawnedTask<RBStreamSerializeResult>>,
     schema: Arc<Schema>,
@@ -1565,6 +1565,7 @@ fn spawn_parquet_parallel_serialization_task(
                     current_rg_rows = 0;
                     rb = rb.slice(rows_left, rb.num_rows() - rows_left);
 
+                    let col_writers = arrow_writer.get_column_writers().unwrap();
                     (column_writer_handles, col_array_channels) =
                         spawn_column_parallel_row_group_writer(
                             col_writers,
@@ -1667,7 +1668,7 @@ async fn output_single_parquet_file_parallelized(
         parquet_props.clone().into(),
     )?;
     let writer = ArrowWriter::try_new(
-        parquet_writer, Arc::clone(&output_schema), Some(parquet_props.clone()))?;
+        merged_buff.clone(), Arc::clone(&output_schema), Some(parquet_props.clone()))?;
 
     let arc_props = Arc::new(parquet_props.clone());
     let launch_serialization_task = spawn_parquet_parallel_serialization_task(
