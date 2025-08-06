@@ -116,4 +116,3 @@ select last_day(last_day('2016-02-07'::string, 'foo'));
 
 statement error Failed to coerce arguments to satisfy a call to 'last_day' function
 select last_day(last_day('2016-02-31'::string));
-
