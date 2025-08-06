@@ -189,8 +189,7 @@ impl EnhancedMemoryReport {
         }
     }
 
-    /// Pretty-print the enhanced memory report to stdout.
-    pub fn print(&self) {
+    pub fn print_analysis(&self) {
         println!("\n📊 Enhanced Memory Analysis:");
 
         // Sort operators by memory usage
@@ -252,10 +251,6 @@ impl EnhancedMemoryReport {
                 );
             }
         }
-    }
-    /// Alias for CLI: print the enhanced memory analysis.
-    pub fn print_analysis(&self) {
-        self.print();
     }
 }
 
