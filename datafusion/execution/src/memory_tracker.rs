@@ -17,7 +17,7 @@
 
 //! # Memory Tracker
 
-use parking_lot::{Mutex, Mutex as StdMutex};
+use parking_lot::Mutex;
 use std::{
     collections::HashMap,
     sync::atomic::{AtomicBool, Ordering},
@@ -88,9 +88,9 @@ impl Default for MemoryTracker {
     }
 }
 
-static GLOBAL_TRACKER: LazyLock<StdMutex<Option<Arc<MemoryTracker>>>> =
-    // std::sync::Mutex is used as contention is low; switch to parking_lot if performance issues arise
-    LazyLock::new(|| StdMutex::new(None));
+static GLOBAL_TRACKER: LazyLock<Mutex<Option<Arc<MemoryTracker>>>> =
+    // global memory tracker guarded by parking_lot::Mutex
+    LazyLock::new(|| Mutex::new(None));
 
 /// Set or clear the global memory tracker used for automatic instrumentation
 pub fn set_global_memory_tracker(tracker: Option<Arc<MemoryTracker>>) {
