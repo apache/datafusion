@@ -21,7 +21,9 @@ use datafusion::{
     dataframe::DataFrame,
     error::DataFusionError,
     execution::{
-        context::{EnhancedMemoryReport, MemoryProfilingHandle, SessionState},
+        context::{
+            EnhancedMemoryReport, MemoryProfilingHandle, MemoryReport, SessionState,
+        },
         TaskContext,
     },
     logical_expr::LogicalPlan,
@@ -54,12 +56,11 @@ pub trait CliSessionContext {
     fn enable_memory_profiling(&self) -> MemoryProfilingHandle<'_>;
 
     /// Get memory report from last profiled query
-    fn get_last_query_memory_report(
-        &self,
-    ) -> Option<std::collections::HashMap<String, usize>>;
+    fn get_last_query_memory_report(&self) -> Option<MemoryReport>;
 
     /// Get enhanced memory report with categorization and analysis
-    fn get_enhanced_memory_report(&self) -> EnhancedMemoryReport;
+    fn get_enhanced_memory_report(&self)
+        -> Result<EnhancedMemoryReport, DataFusionError>;
 
     /// Execute a logical plan and return a DataFrame.
     async fn execute_logical_plan(
@@ -107,14 +108,14 @@ impl CliSessionContext for SessionContext {
         SessionContext::enable_memory_profiling(self)
     }
 
-    fn get_last_query_memory_report(
-        &self,
-    ) -> Option<std::collections::HashMap<String, usize>> {
+    fn get_last_query_memory_report(&self) -> Option<MemoryReport> {
         // Delegate to core SessionContext implementation to avoid duplicate logic
         SessionContext::get_last_query_memory_report_option(self)
     }
 
-    fn get_enhanced_memory_report(&self) -> EnhancedMemoryReport {
+    fn get_enhanced_memory_report(
+        &self,
+    ) -> Result<EnhancedMemoryReport, DataFusionError> {
         SessionContext::get_enhanced_memory_report(self)
     }
 

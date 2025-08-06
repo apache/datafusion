@@ -90,6 +90,47 @@ use chrono::{DateTime, Utc};
 use object_store::ObjectStore;
 use parking_lot::RwLock;
 use url::Url;
+/// Memory profiling report for a query.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MemoryReport {
+    metrics: std::collections::HashMap<String, usize>,
+}
+
+impl MemoryReport {
+    /// Create a new [`MemoryReport`] from the provided metrics.
+    pub fn new(metrics: std::collections::HashMap<String, usize>) -> Self {
+        Self { metrics }
+    }
+
+    /// Returns `true` if the report contains no metrics.
+    pub fn is_empty(&self) -> bool {
+        self.metrics.is_empty()
+    }
+
+    /// Number of tracked operators in the report.
+    pub fn len(&self) -> usize {
+        self.metrics.len()
+    }
+
+    /// Consume the report and return the underlying metrics.
+    pub fn into_inner(self) -> std::collections::HashMap<String, usize> {
+        self.metrics
+    }
+}
+
+impl std::ops::Deref for MemoryReport {
+    type Target = std::collections::HashMap<String, usize>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.metrics
+    }
+}
+
+impl From<std::collections::HashMap<String, usize>> for MemoryReport {
+    fn from(metrics: std::collections::HashMap<String, usize>) -> Self {
+        Self::new(metrics)
+    }
+}
 /// Enhanced memory profiling report with categorization and analysis
 #[derive(Debug)]
 pub struct EnhancedMemoryReport {
@@ -101,7 +142,8 @@ pub struct EnhancedMemoryReport {
 
 impl EnhancedMemoryReport {
     /// Creates an enhanced memory report from the raw memory report
-    pub fn from_raw_report(raw_report: std::collections::HashMap<String, usize>) -> Self {
+    pub fn from_raw_report(report: MemoryReport) -> Self {
+        let raw_report = report.into_inner();
         let mut categorized_operators = std::collections::HashMap::new();
         let total_memory: usize = raw_report.values().sum();
         let peak_memory = raw_report.values().copied().max().unwrap_or(0);
@@ -228,7 +270,7 @@ mod enhanced_memory_report_tests {
         raw.insert("ScanOp".to_string(), 100);
         raw.insert("JoinOp".to_string(), 200);
         raw.insert("Custom".to_string(), 50);
-        let report = EnhancedMemoryReport::from_raw_report(raw.clone());
+        let report = EnhancedMemoryReport::from_raw_report(raw.clone().into());
         assert_eq!(report.total_memory, 350);
         assert_eq!(report.peak_memory, 200);
         assert_eq!(report.raw_report, raw);
@@ -261,7 +303,7 @@ mod enhanced_memory_report_tests {
             .iter()
             .map(|(k, v)| (k.to_string(), *v))
             .collect::<HashMap<_, _>>();
-        let report = EnhancedMemoryReport::from_raw_report(raw.clone());
+        let report = EnhancedMemoryReport::from_raw_report(raw.clone().into());
         assert_eq!(
             report.total_memory,
             entries.iter().map(|(_, v)| *v).sum::<usize>()
@@ -662,22 +704,24 @@ impl SessionContext {
     }
 
     /// Get memory metrics collected for the last profiled query
-    pub fn get_last_query_memory_report(
-        &self,
-    ) -> std::collections::HashMap<String, usize> {
-        self.state.read().memory_tracker.metrics()
+    pub fn get_last_query_memory_report(&self) -> MemoryReport {
+        MemoryReport::from(self.state.read().memory_tracker.metrics())
     }
 
     /// Get enhanced memory report with categorization and detailed analysis
-    pub fn get_enhanced_memory_report(&self) -> EnhancedMemoryReport {
-        let raw_report = self.get_last_query_memory_report();
-        EnhancedMemoryReport::from_raw_report(raw_report)
+    pub fn get_enhanced_memory_report(&self) -> Result<EnhancedMemoryReport> {
+        let report = self.get_last_query_memory_report();
+        if report.is_empty() {
+            Err(DataFusionError::Execution(
+                "no memory metrics recorded".to_string(),
+            ))
+        } else {
+            Ok(EnhancedMemoryReport::from_raw_report(report))
+        }
     }
     /// Get memory metrics collected for the last profiled query as an Option,
     /// returning None if no metrics were recorded.
-    pub fn get_last_query_memory_report_option(
-        &self,
-    ) -> Option<std::collections::HashMap<String, usize>> {
+    pub fn get_last_query_memory_report_option(&self) -> Option<MemoryReport> {
         let report = self.get_last_query_memory_report();
         if report.is_empty() {
             None

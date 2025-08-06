@@ -24,7 +24,9 @@ use datafusion::{
     dataframe::DataFrame,
     error::DataFusionError,
     execution::{
-        context::{EnhancedMemoryReport, MemoryProfilingHandle, SessionState},
+        context::{
+            EnhancedMemoryReport, MemoryProfilingHandle, MemoryReport, SessionState,
+        },
         TaskContext,
     },
     logical_expr::{LogicalPlan, LogicalPlanBuilder},
@@ -85,9 +87,7 @@ impl CliSessionContext for MyUnionerContext {
         self.ctx.enable_memory_profiling()
     }
 
-    fn get_last_query_memory_report(
-        &self,
-    ) -> Option<std::collections::HashMap<String, usize>> {
+    fn get_last_query_memory_report(&self) -> Option<MemoryReport> {
         let report = self.ctx.get_last_query_memory_report();
         if report.is_empty() {
             None
@@ -96,7 +96,9 @@ impl CliSessionContext for MyUnionerContext {
         }
     }
 
-    fn get_enhanced_memory_report(&self) -> EnhancedMemoryReport {
+    fn get_enhanced_memory_report(
+        &self,
+    ) -> Result<EnhancedMemoryReport, DataFusionError> {
         self.ctx.get_enhanced_memory_report()
     }
 }

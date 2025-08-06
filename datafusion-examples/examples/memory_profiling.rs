@@ -192,8 +192,10 @@ async fn run_with_profiling() -> Result<()> {
         println!("Number of operators tracked: {}", memory_report.len());
 
         // Use enhanced memory profiling for detailed analysis
-        let enhanced_report = ctx.get_enhanced_memory_report();
-        enhanced_report.print_analysis();
+        match ctx.get_enhanced_memory_report() {
+            Ok(enhanced_report) => enhanced_report.print_analysis(),
+            Err(e) => println!("Failed to retrieve enhanced report: {e}"),
+        }
     } else {
         println!("No memory profiling information available");
         println!("This is expected for this simple query because:");
