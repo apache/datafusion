@@ -215,7 +215,7 @@ async fn test_test_metadata_cache_limit() {
         .unwrap();
     };
 
-    let get_limit = |ctx: &SessionContext| -> Option<usize> {
+    let get_limit = |ctx: &SessionContext| -> usize {
         ctx.task_ctx()
             .runtime_env()
             .cache_manager
@@ -224,13 +224,13 @@ async fn test_test_metadata_cache_limit() {
     };
 
     update_limit(&ctx, "100M").await;
-    assert_eq!(get_limit(&ctx), Some(100 * 1024 * 1024));
+    assert_eq!(get_limit(&ctx), 100 * 1024 * 1024);
 
     update_limit(&ctx, "2G").await;
-    assert_eq!(get_limit(&ctx), Some(2 * 1024 * 1024 * 1024));
+    assert_eq!(get_limit(&ctx), 2 * 1024 * 1024 * 1024);
 
     update_limit(&ctx, "123K").await;
-    assert_eq!(get_limit(&ctx), Some(123 * 1024));
+    assert_eq!(get_limit(&ctx), 123 * 1024);
 }
 
 #[tokio::test]

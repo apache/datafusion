@@ -1070,7 +1070,7 @@ impl SessionContext {
             "temp_directory" => builder.with_temp_file_path(value),
             "metadata_cache_limit" => {
                 let limit = Self::parse_memory_limit(value)?;
-                builder.with_metadata_cache_limit(Some(limit))
+                builder.with_metadata_cache_limit(limit)
             }
             _ => {
                 return Err(DataFusionError::Plan(format!(

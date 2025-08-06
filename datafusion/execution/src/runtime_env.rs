@@ -269,8 +269,7 @@ impl RuntimeEnvBuilder {
     }
 
     /// Specify the limit of the file-embedded metadata cache, in bytes.
-    /// If `None`, the metadata cache should have no limit.
-    pub fn with_metadata_cache_limit(mut self, limit: Option<usize>) -> Self {
+    pub fn with_metadata_cache_limit(mut self, limit: usize) -> Self {
         self.cache_manager = self.cache_manager.with_metadata_cache_limit(limit);
         self
     }

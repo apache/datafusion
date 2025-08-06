@@ -48,11 +48,11 @@ pub trait FileMetadata: Any + Send + Sync {
 pub trait FileMetadataCache:
     CacheAccessor<ObjectMeta, Arc<dyn FileMetadata>, Extra = ObjectMeta>
 {
-    // Returns the cache's memory limit in bytes, or `None` for no limit.
-    fn cache_limit(&self) -> Option<usize>;
+    // Returns the cache's memory limit in bytes.
+    fn cache_limit(&self) -> usize;
 
-    // Updates the cache with a new memory limit in bytes, or `None` for no limit.
-    fn update_cache_limit(&self, limit: Option<usize>);
+    // Updates the cache with a new memory limit in bytes.
+    fn update_cache_limit(&self, limit: usize);
 }
 
 impl Debug for dyn CacheAccessor<Path, Arc<Statistics>, Extra = ObjectMeta> {
@@ -121,7 +121,7 @@ impl CacheManager {
     }
 
     /// Get the limit of the file embedded metadata cache.
-    pub fn get_metadata_cache_limit(&self) -> Option<usize> {
+    pub fn get_metadata_cache_limit(&self) -> usize {
         self.file_metadata_cache.cache_limit()
     }
 }
@@ -146,7 +146,7 @@ pub struct CacheManagerConfig {
     /// If not provided, the [`CacheManager`] will create a [`DefaultFilesMetadataCache`].
     pub file_metadata_cache: Option<Arc<dyn FileMetadataCache>>,
     /// Limit of the file-embedded metadata cache, in bytes.
-    pub metadata_cache_limit: Option<usize>,
+    pub metadata_cache_limit: usize,
 }
 
 impl Default for CacheManagerConfig {
@@ -155,7 +155,7 @@ impl Default for CacheManagerConfig {
             table_files_statistics_cache: Default::default(),
             list_files_cache: Default::default(),
             file_metadata_cache: Default::default(),
-            metadata_cache_limit: Some(DEFAULT_METADATA_CACHE_LIMIT),
+            metadata_cache_limit: DEFAULT_METADATA_CACHE_LIMIT,
         }
     }
 }
@@ -182,7 +182,7 @@ impl CacheManagerConfig {
         self
     }
 
-    pub fn with_metadata_cache_limit(mut self, limit: Option<usize>) -> Self {
+    pub fn with_metadata_cache_limit(mut self, limit: usize) -> Self {
         self.metadata_cache_limit = limit;
         self
     }

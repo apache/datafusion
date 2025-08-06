@@ -162,12 +162,12 @@ impl CacheAccessor<Path, Arc<Vec<ObjectMeta>>> for DefaultListFilesCache {
 /// Handles the inner state of the [`DefaultFilesMetadataCache`] struct.
 struct DefaultFilesMetadataCacheState {
     lru_queue: LruQueue<Path, (ObjectMeta, Arc<dyn FileMetadata>)>,
-    memory_limit: Option<usize>,
+    memory_limit: usize,
     memory_used: usize,
 }
 
 impl DefaultFilesMetadataCacheState {
-    fn new(memory_limit: Option<usize>) -> Self {
+    fn new(memory_limit: usize) -> Self {
         Self {
             lru_queue: LruQueue::new(),
             memory_limit,
@@ -215,11 +215,9 @@ impl DefaultFilesMetadataCacheState {
     ) -> Option<Arc<dyn FileMetadata>> {
         let value_size = value.memory_size();
 
-        if let Some(limit) = self.memory_limit {
-            // no point in trying to add this value to the cache if it cannot fit entirely
-            if value_size > limit {
-                return None;
-            }
+        // no point in trying to add this value to the cache if it cannot fit entirely
+        if value_size > self.memory_limit {
+            return None;
         }
 
         // if the key is already in the cache, the old value is removed
@@ -235,13 +233,8 @@ impl DefaultFilesMetadataCacheState {
     }
 
     /// Evicts entries from the LRU cache until `memory_used` is lower than `memory_limit`.
-    /// If `memory_limit` is `None`, no entries are removed.
     fn evict_entries(&mut self) {
-        let Some(memory_limit) = self.memory_limit else {
-            return;
-        };
-
-        while self.memory_used > memory_limit {
+        while self.memory_used > self.memory_limit {
             if let Some(removed) = self.lru_queue.pop() {
                 let metadata: Arc<dyn FileMetadata> = removed.1 .1;
                 self.memory_used -= metadata.memory_size();
@@ -288,8 +281,8 @@ pub struct DefaultFilesMetadataCache {
 
 impl DefaultFilesMetadataCache {
     /// The `memory_limit` parameter controls the maximum size of the cache, in bytes, using a Least
-    /// Recently Used eviction algorithm. If `None` is provided, the cache is unbounded.
-    pub fn new(memory_limit: Option<usize>) -> Self {
+    /// Recently Used eviction algorithm.
+    pub fn new(memory_limit: usize) -> Self {
         Self {
             state: Mutex::new(DefaultFilesMetadataCacheState::new(memory_limit)),
         }
@@ -303,12 +296,12 @@ impl DefaultFilesMetadataCache {
 }
 
 impl FileMetadataCache for DefaultFilesMetadataCache {
-    fn cache_limit(&self) -> Option<usize> {
+    fn cache_limit(&self) -> usize {
         let state = self.state.lock().unwrap();
         state.memory_limit
     }
 
-    fn update_cache_limit(&self, limit: Option<usize>) {
+    fn update_cache_limit(&self, limit: usize) {
         let mut state = self.state.lock().unwrap();
         state.memory_limit = limit;
         state.evict_entries();
@@ -485,7 +478,7 @@ mod tests {
             metadata: "retrieved_metadata".to_owned(),
         });
 
-        let mut cache = DefaultFilesMetadataCache::new(None);
+        let mut cache = DefaultFilesMetadataCache::new(1 * 1024 * 1024);
         assert!(cache.get(&object_meta).is_none());
 
         // put
@@ -553,7 +546,7 @@ mod tests {
 
     #[test]
     fn test_default_file_metadata_cache_with_limit() {
-        let mut cache = DefaultFilesMetadataCache::new(Some(1000));
+        let mut cache = DefaultFilesMetadataCache::new(1000);
         let (object_meta1, metadata1) = generate_test_metadata_with_size("1", 100);
         let (object_meta2, metadata2) = generate_test_metadata_with_size("2", 500);
         let (object_meta3, metadata3) = generate_test_metadata_with_size("3", 300);
@@ -659,7 +652,7 @@ mod tests {
         cache.put(&object_meta14, metadata14);
         assert_eq!(cache.len(), 3);
         assert_eq!(cache.memory_used(), 1000);
-        cache.update_cache_limit(Some(600));
+        cache.update_cache_limit(600);
         assert_eq!(cache.len(), 1);
         assert_eq!(cache.memory_used(), 500);
         assert!(!cache.contains_key(&object_meta12));
