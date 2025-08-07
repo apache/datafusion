@@ -25,11 +25,12 @@ use crate::function::{
     AccumulatorArgs, AccumulatorFactoryFunction, PartitionEvaluatorFactory,
     StateFieldsArgs,
 };
+use crate::ptr_eq::PtrEq;
 use crate::select_expr::SelectExpr;
 use crate::{
     conditional_expressions::CaseBuilder, expr::Sort, logical_plan::Subquery,
-    AggregateUDF, Expr, LogicalPlan, Operator, PartitionEvaluator, ScalarFunctionArgs,
-    ScalarFunctionImplementation, ScalarUDF, Signature, Volatility,
+    udf_equals_hash, AggregateUDF, Expr, LogicalPlan, Operator, PartitionEvaluator,
+    ScalarFunctionArgs, ScalarFunctionImplementation, ScalarUDF, Signature, Volatility,
 };
 use crate::{
     AggregateUDFImpl, ColumnarValue, ScalarUDFImpl, WindowFrame, WindowUDF, WindowUDFImpl,
@@ -44,6 +45,7 @@ use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 use sqlparser::ast::NullTreatment;
 use std::any::Any;
 use std::fmt::Debug;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::ops::Not;
 use std::sync::Arc;
 
@@ -401,11 +403,12 @@ pub fn create_udf(
 
 /// Implements [`ScalarUDFImpl`] for functions that have a single signature and
 /// return type.
+#[derive(PartialEq, Hash)]
 pub struct SimpleScalarUDF {
     name: String,
     signature: Signature,
     return_type: DataType,
-    fun: ScalarFunctionImplementation,
+    fun: PtrEq<ScalarFunctionImplementation>,
 }
 
 impl Debug for SimpleScalarUDF {
@@ -449,7 +452,7 @@ impl SimpleScalarUDF {
             name: name.into(),
             signature,
             return_type,
-            fun,
+            fun: fun.into(),
         }
     }
 }
@@ -474,6 +477,8 @@ impl ScalarUDFImpl for SimpleScalarUDF {
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         (self.fun)(&args.args)
     }
+
+    udf_equals_hash!(ScalarUDFImpl);
 }
 
 /// Creates a new UDAF with a specific signature, state type and return type.
@@ -594,6 +599,42 @@ impl AggregateUDFImpl for SimpleAggregateUDF {
     fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         Ok(self.state_fields.clone())
     }
+
+    fn equals(&self, other: &dyn AggregateUDFImpl) -> bool {
+        let Some(other) = other.as_any().downcast_ref::<Self>() else {
+            return false;
+        };
+        let Self {
+            name,
+            signature,
+            return_type,
+            accumulator,
+            state_fields,
+        } = self;
+        name == &other.name
+            && signature == &other.signature
+            && return_type == &other.return_type
+            && Arc::ptr_eq(accumulator, &other.accumulator)
+            && state_fields == &other.state_fields
+    }
+
+    fn hash_value(&self) -> u64 {
+        let Self {
+            name,
+            signature,
+            return_type,
+            accumulator,
+            state_fields,
+        } = self;
+        let mut hasher = DefaultHasher::new();
+        std::any::type_name::<Self>().hash(&mut hasher);
+        name.hash(&mut hasher);
+        signature.hash(&mut hasher);
+        return_type.hash(&mut hasher);
+        Arc::as_ptr(accumulator).hash(&mut hasher);
+        state_fields.hash(&mut hasher);
+        hasher.finish()
+    }
 }
 
 /// Creates a new UDWF with a specific signature, state type and return type.
@@ -620,11 +661,12 @@ pub fn create_udwf(
 
 /// Implements [`WindowUDFImpl`] for functions that have a single signature and
 /// return type.
+#[derive(PartialEq, Hash)]
 pub struct SimpleWindowUDF {
     name: String,
     signature: Signature,
     return_type: DataType,
-    partition_evaluator_factory: PartitionEvaluatorFactory,
+    partition_evaluator_factory: PtrEq<PartitionEvaluatorFactory>,
 }
 
 impl Debug for SimpleWindowUDF {
@@ -654,7 +696,7 @@ impl SimpleWindowUDF {
             name,
             signature,
             return_type,
-            partition_evaluator_factory,
+            partition_evaluator_factory: partition_evaluator_factory.into(),
         }
     }
 }
@@ -686,6 +728,8 @@ impl WindowUDFImpl for SimpleWindowUDF {
             true,
         )))
     }
+
+    udf_equals_hash!(WindowUDFImpl);
 }
 
 pub fn interval_year_month_lit(value: &str) -> Expr {
@@ -841,6 +885,7 @@ impl ExprFuncBuilder {
                         window_frame: window_frame
                             .unwrap_or_else(|| WindowFrame::new(has_order_by)),
                         null_treatment,
+                        distinct,
                     },
                 })
             }

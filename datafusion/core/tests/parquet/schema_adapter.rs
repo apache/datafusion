@@ -26,6 +26,7 @@ use datafusion::common::Result;
 use datafusion::datasource::listing::{ListingTable, ListingTableConfig};
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_common::DataFusionError;
 use datafusion_common::{ColumnStatistics, ScalarValue};
 use datafusion_datasource::schema_adapter::{
     DefaultSchemaAdapterFactory, SchemaAdapter, SchemaAdapterFactory, SchemaMapper,
@@ -187,7 +188,7 @@ impl PhysicalExprAdapter for CustomPhysicalExprAdapter {
                             .logical_file_schema
                             .field_with_name(field_name)
                             .map_err(|_| {
-                                datafusion_common::DataFusionError::Plan(format!(
+                                DataFusionError::Plan(format!(
                                     "Field '{field_name}' not found in logical file schema",
                                 ))
                             })?;
@@ -264,9 +265,7 @@ async fn test_custom_schema_adapter_and_custom_expression_adapter() {
             .unwrap()
             .with_schema(table_schema.clone())
             .with_schema_adapter_factory(Arc::new(DefaultSchemaAdapterFactory))
-            .with_physical_expr_adapter_factory(Arc::new(
-                DefaultPhysicalExprAdapterFactory,
-            ));
+            .with_expr_adapter_factory(Arc::new(DefaultPhysicalExprAdapterFactory));
 
     let table = ListingTable::try_new(listing_table_config).unwrap();
     ctx.register_table("t", Arc::new(table)).unwrap();
@@ -324,9 +323,7 @@ async fn test_custom_schema_adapter_and_custom_expression_adapter() {
             .await
             .unwrap()
             .with_schema(table_schema.clone())
-            .with_physical_expr_adapter_factory(Arc::new(
-                CustomPhysicalExprAdapterFactory,
-            ));
+            .with_expr_adapter_factory(Arc::new(CustomPhysicalExprAdapterFactory));
     let table = ListingTable::try_new(listing_table_config).unwrap();
     ctx.deregister_table("t").unwrap();
     ctx.register_table("t", Arc::new(table)).unwrap();
@@ -354,9 +351,7 @@ async fn test_custom_schema_adapter_and_custom_expression_adapter() {
             .unwrap()
             .with_schema(table_schema.clone())
             .with_schema_adapter_factory(Arc::new(CustomSchemaAdapterFactory))
-            .with_physical_expr_adapter_factory(Arc::new(
-                CustomPhysicalExprAdapterFactory,
-            ));
+            .with_expr_adapter_factory(Arc::new(CustomPhysicalExprAdapterFactory));
     let table = ListingTable::try_new(listing_table_config).unwrap();
     ctx.deregister_table("t").unwrap();
     ctx.register_table("t", Arc::new(table)).unwrap();

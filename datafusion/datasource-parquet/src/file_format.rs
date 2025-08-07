@@ -63,6 +63,7 @@ use datafusion_physical_plan::Accumulator;
 use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
 use datafusion_session::Session;
 
+use crate::reader::CachedParquetFileReaderFactory;
 use crate::source::{parse_coerce_int96_string, ParquetSource};
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -435,7 +436,7 @@ impl FileFormat for ParquetFormat {
 
     async fn create_physical_plan(
         &self,
-        _state: &dyn Session,
+        state: &dyn Session,
         conf: FileScanConfig,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let mut metadata_size_hint = None;
@@ -445,6 +446,18 @@ impl FileFormat for ParquetFormat {
         }
 
         let mut source = ParquetSource::new(self.options.clone());
+
+        // Use the CachedParquetFileReaderFactory when metadata caching is enabled
+        if self.options.global.cache_metadata {
+            let metadata_cache =
+                state.runtime_env().cache_manager.get_file_metadata_cache();
+            let store = state
+                .runtime_env()
+                .object_store(conf.object_store_url.clone())?;
+            let cached_parquet_read_factory =
+                Arc::new(CachedParquetFileReaderFactory::new(store, metadata_cache));
+            source = source.with_parquet_file_reader_factory(cached_parquet_read_factory);
+        }
 
         if let Some(metadata_size_hint) = metadata_size_hint {
             source = source.with_metadata_size_hint(metadata_size_hint)

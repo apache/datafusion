@@ -17,7 +17,7 @@
 
 use std::any::Any;
 use std::collections::HashMap;
-use std::hash::{DefaultHasher, Hash, Hasher};
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use arrow::array::{as_string_array, create_array, record_batch, Int8Array, UInt64Array};
@@ -28,7 +28,7 @@ use arrow::array::{
 use arrow::compute::kernels::numeric::add;
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow_schema::extension::{Bool8, CanonicalExtensionType, ExtensionType};
-use arrow_schema::{ArrowError, FieldRef};
+use arrow_schema::{ArrowError, FieldRef, SchemaRef};
 use datafusion::common::test_util::batches_to_string;
 use datafusion::execution::context::{FunctionFactory, RegisterFunction, SessionState};
 use datafusion::prelude::*;
@@ -43,9 +43,9 @@ use datafusion_common::{
 use datafusion_expr::expr::FieldMetadata;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::{
-    lit_with_metadata, Accumulator, ColumnarValue, CreateFunction, CreateFunctionBody,
-    LogicalPlanBuilder, OperateFunctionArg, ReturnFieldArgs, ScalarFunctionArgs,
-    ScalarUDF, ScalarUDFImpl, Signature, Volatility,
+    lit_with_metadata, udf_equals_hash, Accumulator, ColumnarValue, CreateFunction,
+    CreateFunctionBody, LogicalPlanBuilder, OperateFunctionArg, ReturnFieldArgs,
+    ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_functions_nested::range::range_udf;
 use parking_lot::Mutex;
@@ -181,6 +181,7 @@ async fn scalar_udf() -> Result<()> {
     Ok(())
 }
 
+#[derive(PartialEq, Hash)]
 struct Simple0ArgsScalarUDF {
     name: String,
     signature: Signature,
@@ -217,6 +218,8 @@ impl ScalarUDFImpl for Simple0ArgsScalarUDF {
     fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         Ok(ColumnarValue::Scalar(ScalarValue::Int32(Some(100))))
     }
+
+    udf_equals_hash!(ScalarUDFImpl);
 }
 
 #[tokio::test]
@@ -489,7 +492,7 @@ async fn test_user_defined_functions_with_alias() -> Result<()> {
 }
 
 /// Volatile UDF that should append a different value to each row
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Hash)]
 struct AddIndexToStringVolatileScalarUDF {
     name: String,
     signature: Signature,
@@ -557,6 +560,8 @@ impl ScalarUDFImpl for AddIndexToStringVolatileScalarUDF {
         };
         Ok(ColumnarValue::Array(Arc::new(StringArray::from(answer))))
     }
+
+    udf_equals_hash!(ScalarUDFImpl);
 }
 
 #[tokio::test]
@@ -936,7 +941,7 @@ impl FunctionFactory for CustomFunctionFactory {
 //
 // it also defines custom [ScalarUDFImpl::simplify()]
 // to replace ScalarUDF expression with one instance contains.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Hash)]
 struct ScalarFunctionWrapper {
     name: String,
     expr: Expr,
@@ -974,6 +979,8 @@ impl ScalarUDFImpl for ScalarFunctionWrapper {
 
         Ok(ExprSimplifyResult::Simplified(replacement))
     }
+
+    udf_equals_hash!(ScalarUDFImpl);
 }
 
 impl ScalarFunctionWrapper {
@@ -1208,6 +1215,21 @@ struct MyRegexUdf {
     regex: Regex,
 }
 
+impl PartialEq for MyRegexUdf {
+    fn eq(&self, other: &Self) -> bool {
+        let Self { signature, regex } = self;
+        signature == &other.signature && regex.as_str() == other.regex.as_str()
+    }
+}
+
+impl Hash for MyRegexUdf {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        let Self { signature, regex } = self;
+        signature.hash(state);
+        regex.as_str().hash(state);
+    }
+}
+
 impl MyRegexUdf {
     fn new(pattern: &str) -> Self {
         Self {
@@ -1260,19 +1282,7 @@ impl ScalarUDFImpl for MyRegexUdf {
         }
     }
 
-    fn equals(&self, other: &dyn ScalarUDFImpl) -> bool {
-        if let Some(other) = other.as_any().downcast_ref::<MyRegexUdf>() {
-            self.regex.as_str() == other.regex.as_str()
-        } else {
-            false
-        }
-    }
-
-    fn hash_value(&self) -> u64 {
-        let hasher = &mut DefaultHasher::new();
-        self.regex.as_str().hash(hasher);
-        hasher.finish()
-    }
+    udf_equals_hash!(ScalarUDFImpl);
 }
 
 #[tokio::test]
@@ -1370,11 +1380,23 @@ async fn plan_and_collect(ctx: &SessionContext, sql: &str) -> Result<Vec<RecordB
     ctx.sql(sql).await?.collect().await
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 struct MetadataBasedUdf {
     name: String,
     signature: Signature,
     metadata: HashMap<String, String>,
+}
+
+impl Hash for MetadataBasedUdf {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        let Self {
+            name,
+            signature,
+            metadata: _, // unhashable
+        } = self;
+        name.hash(state);
+        signature.hash(state);
+    }
 }
 
 impl MetadataBasedUdf {
@@ -1449,9 +1471,7 @@ impl ScalarUDFImpl for MetadataBasedUdf {
         }
     }
 
-    fn equals(&self, other: &dyn ScalarUDFImpl) -> bool {
-        self.name == other.name()
-    }
+    udf_equals_hash!(ScalarUDFImpl);
 }
 
 #[tokio::test]
@@ -1669,10 +1689,6 @@ impl ScalarUDFImpl for ExtensionBasedUdf {
             }
         }
     }
-
-    fn equals(&self, other: &dyn ScalarUDFImpl) -> bool {
-        self.name == other.name()
-    }
 }
 
 struct MyUserExtentionType {}
@@ -1768,5 +1784,60 @@ async fn test_extension_based_udf() -> Result<()> {
     assert_eq!(expected, actual[0]);
 
     ctx.deregister_table("t")?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_config_options_work_for_scalar_func() -> Result<()> {
+    #[derive(Debug)]
+    struct TestScalarUDF {
+        signature: Signature,
+    }
+
+    impl ScalarUDFImpl for TestScalarUDF {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+        fn name(&self) -> &str {
+            "TestScalarUDF"
+        }
+
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+
+        fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+            Ok(DataType::Utf8)
+        }
+
+        fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+            let tz = args.config_options.execution.time_zone.clone();
+            Ok(ColumnarValue::Scalar(ScalarValue::from(tz)))
+        }
+    }
+
+    let udf = ScalarUDF::from(TestScalarUDF {
+        signature: Signature::uniform(1, vec![DataType::Utf8], Volatility::Stable),
+    });
+
+    let mut config = SessionConfig::new();
+    config.options_mut().execution.time_zone = "AEST".into();
+
+    let ctx = SessionContext::new_with_config(config);
+
+    ctx.register_udf(udf.clone());
+
+    let df = ctx.read_empty()?;
+    let df = df.select(vec![udf.call(vec![lit("a")]).alias("a")])?;
+    let actual = df.collect().await?;
+
+    let expected_schema = Schema::new(vec![Field::new("a", DataType::Utf8, false)]);
+    let expected = RecordBatch::try_new(
+        SchemaRef::from(expected_schema),
+        vec![create_array!(Utf8, ["AEST"])],
+    )?;
+
+    assert_eq!(expected, actual[0]);
+
     Ok(())
 }

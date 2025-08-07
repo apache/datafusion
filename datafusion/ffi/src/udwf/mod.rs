@@ -15,8 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{ffi::c_void, sync::Arc};
-
 use abi_stable::{
     std_types::{ROption, RResult, RString, RVec},
     StableAbi,
@@ -27,6 +25,7 @@ use arrow::{
     datatypes::{DataType, SchemaRef},
 };
 use arrow_schema::{Field, FieldRef};
+use datafusion::logical_expr::udf_equals_hash;
 use datafusion::{
     error::DataFusionError,
     logical_expr::{
@@ -42,6 +41,9 @@ use partition_evaluator::{FFI_PartitionEvaluator, ForeignPartitionEvaluator};
 use partition_evaluator_args::{
     FFI_PartitionEvaluatorArgs, ForeignPartitionEvaluatorArgs,
 };
+use std::hash::{Hash, Hasher};
+use std::{ffi::c_void, sync::Arc};
+
 mod partition_evaluator;
 mod partition_evaluator_args;
 mod range;
@@ -253,6 +255,18 @@ pub struct ForeignWindowUDF {
 unsafe impl Send for ForeignWindowUDF {}
 unsafe impl Sync for ForeignWindowUDF {}
 
+impl PartialEq for ForeignWindowUDF {
+    fn eq(&self, other: &Self) -> bool {
+        // FFI_WindowUDF cannot be compared, so identity equality is the best we can do.
+        std::ptr::eq(self, other)
+    }
+}
+impl Hash for ForeignWindowUDF {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        std::ptr::hash(self, state)
+    }
+}
+
 impl TryFrom<&FFI_WindowUDF> for ForeignWindowUDF {
     type Error = DataFusionError;
 
@@ -334,6 +348,8 @@ impl WindowUDFImpl for ForeignWindowUDF {
         let options: Option<&FFI_SortOptions> = self.udf.sort_options.as_ref().into();
         options.map(|s| s.into())
     }
+
+    udf_equals_hash!(WindowUDFImpl);
 }
 
 #[repr(C)]

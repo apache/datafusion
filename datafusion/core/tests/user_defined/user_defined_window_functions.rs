@@ -28,8 +28,10 @@ use datafusion::common::test_util::batches_to_string;
 use datafusion::common::{Result, ScalarValue};
 use datafusion::prelude::SessionContext;
 use datafusion_common::exec_datafusion_err;
+use datafusion_expr::ptr_eq::PtrEq;
 use datafusion_expr::{
-    PartitionEvaluator, Signature, TypeSignature, Volatility, WindowUDF, WindowUDFImpl,
+    udf_equals_hash, PartitionEvaluator, Signature, TypeSignature, Volatility, WindowUDF,
+    WindowUDFImpl,
 };
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 use datafusion_functions_window_common::{
@@ -40,6 +42,7 @@ use datafusion_physical_expr::{
     PhysicalExpr,
 };
 use std::collections::HashMap;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::{
     any::Any,
     ops::Range,
@@ -522,10 +525,10 @@ impl OddCounter {
     }
 
     fn register(ctx: &mut SessionContext, test_state: Arc<TestState>) {
-        #[derive(Debug, Clone)]
+        #[derive(Debug, Clone, PartialEq, Hash)]
         struct SimpleWindowUDF {
             signature: Signature,
-            test_state: Arc<TestState>,
+            test_state: PtrEq<Arc<TestState>>,
             aliases: Vec<String>,
         }
 
@@ -535,7 +538,7 @@ impl OddCounter {
                     Signature::exact(vec![DataType::Float64], Volatility::Immutable);
                 Self {
                     signature,
-                    test_state,
+                    test_state: test_state.into(),
                     aliases: vec!["odd_counter_alias".to_string()],
                 }
             }
@@ -568,6 +571,8 @@ impl OddCounter {
             fn field(&self, field_args: WindowUDFFieldArgs) -> Result<FieldRef> {
                 Ok(Field::new(field_args.name(), DataType::Int64, true).into())
             }
+
+            udf_equals_hash!(WindowUDFImpl);
         }
 
         ctx.register_udwf(WindowUDF::from(SimpleWindowUDF::new(test_state)))
@@ -814,6 +819,33 @@ impl WindowUDFImpl for MetadataBasedWindowUdf {
         Ok(Field::new(field_args.name(), DataType::UInt64, true)
             .with_metadata(self.metadata.clone())
             .into())
+    }
+
+    fn equals(&self, other: &dyn WindowUDFImpl) -> bool {
+        let Some(other) = other.as_any().downcast_ref::<Self>() else {
+            return false;
+        };
+        let Self {
+            name,
+            signature,
+            metadata,
+        } = self;
+        name == &other.name
+            && signature == &other.signature
+            && metadata == &other.metadata
+    }
+
+    fn hash_value(&self) -> u64 {
+        let Self {
+            name,
+            signature,
+            metadata: _, // unhashable
+        } = self;
+        let mut hasher = DefaultHasher::new();
+        std::any::type_name::<Self>().hash(&mut hasher);
+        name.hash(&mut hasher);
+        signature.hash(&mut hasher);
+        hasher.finish()
     }
 }
 

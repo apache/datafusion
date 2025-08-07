@@ -213,6 +213,8 @@ pub fn rename_data_type(
         | DataType::Utf8
         | DataType::LargeUtf8
         | DataType::Utf8View
+        | DataType::Decimal32(_, _)
+        | DataType::Decimal64(_, _)
         | DataType::Decimal128(_, _)
         | DataType::Decimal256(_, _) => Ok(data_type.clone()),
     }
