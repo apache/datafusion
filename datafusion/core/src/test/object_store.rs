@@ -19,14 +19,14 @@
 
 use crate::execution::context::SessionState;
 use crate::execution::session_state::SessionStateBuilder;
-use crate::prelude::SessionContext;
-use futures::stream::BoxStream;
-use futures::FutureExt;
-use object_store::{
+use crate::object_store::{
     memory::InMemory, path::Path, Error, GetOptions, GetResult, ListResult,
     MultipartUpload, ObjectMeta, ObjectStore, PutMultipartOptions, PutOptions,
     PutPayload, PutResult,
 };
+use crate::prelude::SessionContext;
+use futures::stream::BoxStream;
+use futures::FutureExt;
 use std::fmt::{Debug, Display, Formatter};
 use std::sync::Arc;
 use tokio::{
