@@ -82,7 +82,6 @@ use tokio::io::AsyncWriteExt;
 /// ```
 #[derive(Debug, Clone, Default)]
 pub struct CsvSource {
-    batch_size: Option<usize>,
     file_schema: Option<SchemaRef>,
     file_projection: Option<Vec<usize>>,
     pub(crate) has_header: bool,
@@ -159,8 +158,8 @@ impl CsvSource {
 }
 
 impl CsvSource {
-    fn open<R: Read>(&self, reader: R) -> Result<csv::Reader<R>> {
-        Ok(self.builder().build(reader)?)
+    fn open<R: Read>(&self, reader: R, batch_size: usize) -> Result<csv::Reader<R>> {
+        Ok(self.builder().with_batch_size(batch_size).build(reader)?)
     }
 
     fn builder(&self) -> csv::ReaderBuilder {
@@ -170,10 +169,6 @@ impl CsvSource {
                 .expect("Schema must be set before initializing builder"),
         ))
         .with_delimiter(self.delimiter)
-        .with_batch_size(
-            self.batch_size
-                .expect("Batch size must be set before initializing builder"),
-        )
         .with_header(self.has_header)
         .with_quote(self.quote);
         if let Some(terminator) = self.terminator {
@@ -198,6 +193,7 @@ pub struct CsvOpener {
     config: Arc<CsvSource>,
     file_compression_type: FileCompressionType,
     object_store: Arc<dyn ObjectStore>,
+    batch_size: usize,
 }
 
 impl CsvOpener {
@@ -206,11 +202,13 @@ impl CsvOpener {
         config: Arc<CsvSource>,
         file_compression_type: FileCompressionType,
         object_store: Arc<dyn ObjectStore>,
+        batch_size: usize,
     ) -> Self {
         Self {
             config,
             file_compression_type,
             object_store,
+            batch_size,
         }
     }
 }
@@ -227,22 +225,18 @@ impl FileSource for CsvSource {
         object_store: Arc<dyn ObjectStore>,
         base_config: &FileScanConfig,
         _partition: usize,
+        batch_size: usize,
     ) -> Arc<dyn FileOpener> {
         Arc::new(CsvOpener {
             config: Arc::new(self.clone()),
             file_compression_type: base_config.file_compression_type,
             object_store,
+            batch_size,
         })
     }
 
     fn as_any(&self) -> &dyn Any {
         self
-    }
-
-    fn with_batch_size(&self, batch_size: usize) -> Arc<dyn FileSource> {
-        let mut conf = self.clone();
-        conf.batch_size = Some(batch_size);
-        Arc::new(conf)
     }
 
     fn with_schema(&self, schema: SchemaRef) -> Arc<dyn FileSource> {
@@ -354,6 +348,7 @@ impl FileOpener for CsvOpener {
 
         let store = Arc::clone(&self.object_store);
         let terminator = self.config.terminator;
+        let batch_size = self.batch_size;
 
         Ok(Box::pin(async move {
             // Current partition contains bytes [start_byte, end_byte) (might contain incomplete lines at boundaries)
@@ -392,7 +387,7 @@ impl FileOpener for CsvOpener {
                         )?
                     };
 
-                    Ok(futures::stream::iter(config.open(decoder)?).boxed())
+                    Ok(futures::stream::iter(config.open(decoder, batch_size)?).boxed())
                 }
                 GetResultPayload::Stream(s) => {
                     let decoder = config.builder().build_decoder();

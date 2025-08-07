@@ -57,6 +57,7 @@ impl FileSource for ArrowSource {
         object_store: Arc<dyn ObjectStore>,
         base_config: &FileScanConfig,
         _partition: usize,
+        _batch_size: usize,
     ) -> Arc<dyn FileOpener> {
         Arc::new(ArrowOpener {
             object_store,
@@ -66,10 +67,6 @@ impl FileSource for ArrowSource {
 
     fn as_any(&self) -> &dyn Any {
         self
-    }
-
-    fn with_batch_size(&self, _batch_size: usize) -> Arc<dyn FileSource> {
-        Arc::new(Self { ..self.clone() })
     }
 
     fn with_schema(&self, _schema: SchemaRef) -> Arc<dyn FileSource> {
