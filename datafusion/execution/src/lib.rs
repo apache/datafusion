@@ -34,6 +34,7 @@ pub mod object_store;
 pub mod runtime_env;
 mod stream;
 mod task;
+pub mod virtual_object_store;
 
 pub mod registry {
     pub use datafusion_expr::registry::{
