@@ -268,6 +268,12 @@ impl RuntimeEnvBuilder {
         self.with_disk_manager_builder(builder.with_max_temp_directory_size(size))
     }
 
+    /// Specify the limit of the file-embedded metadata cache, in bytes.
+    pub fn with_metadata_cache_limit(mut self, limit: usize) -> Self {
+        self.cache_manager = self.cache_manager.with_metadata_cache_limit(limit);
+        self
+    }
+
     /// Build a RuntimeEnv
     pub fn build(self) -> Result<RuntimeEnv> {
         let Self {
@@ -305,7 +311,10 @@ impl RuntimeEnvBuilder {
                 .cache_manager
                 .get_file_statistic_cache(),
             list_files_cache: runtime_env.cache_manager.get_list_files_cache(),
-            file_metadata_cache: runtime_env.cache_manager.get_file_metadata_cache(),
+            file_metadata_cache: Some(
+                runtime_env.cache_manager.get_file_metadata_cache(),
+            ),
+            metadata_cache_limit: runtime_env.cache_manager.get_metadata_cache_limit(),
         };
 
         Self {
@@ -337,6 +346,11 @@ impl RuntimeEnvBuilder {
                 key: "datafusion.runtime.temp_directory".to_string(),
                 value: None, // Default is system-dependent
                 description: "The path to the temporary file directory.",
+            },
+            ConfigEntry {
+                key: "datafusion.runtime.metadata_cache_limit".to_string(),
+                value: Some("50M".to_owned()),
+                description: "Maximum memory to use for file metadata cache such as Parquet metadata. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes). Example: '2G' for 2 gigabytes.",
             }
         ]
     }

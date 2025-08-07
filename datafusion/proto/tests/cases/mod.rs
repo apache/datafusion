@@ -151,7 +151,7 @@ pub struct MyAggregateUdfNode {
     pub result: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Hash)]
 pub(in crate::cases) struct CustomUDWF {
     signature: Signature,
     payload: String,
@@ -193,22 +193,7 @@ impl WindowUDFImpl for CustomUDWF {
         Ok(Field::new(field_args.name(), DataType::UInt64, false).into())
     }
 
-    fn equals(&self, other: &dyn WindowUDFImpl) -> bool {
-        let Some(other) = other.as_any().downcast_ref::<Self>() else {
-            return false;
-        };
-        let Self { signature, payload } = self;
-        signature == &other.signature && payload == &other.payload
-    }
-
-    fn hash_value(&self) -> u64 {
-        let Self { signature, payload } = self;
-        let mut hasher = DefaultHasher::new();
-        std::any::type_name::<Self>().hash(&mut hasher);
-        signature.hash(&mut hasher);
-        payload.hash(&mut hasher);
-        hasher.finish()
-    }
+    udf_equals_hash!(WindowUDFImpl);
 }
 
 #[derive(Debug)]

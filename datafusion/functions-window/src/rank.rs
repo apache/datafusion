@@ -29,14 +29,15 @@ use datafusion_common::utils::get_row_at_idx;
 use datafusion_common::{exec_err, Result, ScalarValue};
 use datafusion_expr::window_doc_sections::DOC_SECTION_RANKING;
 use datafusion_expr::{
-    Documentation, PartitionEvaluator, Signature, Volatility, WindowUDFImpl,
+    udf_equals_hash, Documentation, PartitionEvaluator, Signature, Volatility,
+    WindowUDFImpl,
 };
 use datafusion_functions_window_common::field;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 use field::WindowUDFFieldArgs;
 use std::any::Any;
 use std::fmt::Debug;
-use std::hash::{DefaultHasher, Hash, Hasher};
+use std::hash::Hash;
 use std::iter;
 use std::ops::Range;
 use std::sync::{Arc, LazyLock};
@@ -63,7 +64,7 @@ define_udwf_and_expr!(
 );
 
 /// Rank calculates the rank in the window function with order by
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Hash)]
 pub struct Rank {
     name: String,
     signature: Signature,
@@ -241,33 +242,7 @@ impl WindowUDFImpl for Rank {
         }
     }
 
-    fn equals(&self, other: &dyn WindowUDFImpl) -> bool {
-        let Some(other) = other.as_any().downcast_ref::<Self>() else {
-            return false;
-        };
-        let Self {
-            name,
-            signature,
-            rank_type,
-        } = self;
-        name == &other.name
-            && signature == &other.signature
-            && rank_type == &other.rank_type
-    }
-
-    fn hash_value(&self) -> u64 {
-        let Self {
-            name,
-            signature,
-            rank_type,
-        } = self;
-        let mut hasher = DefaultHasher::new();
-        std::any::type_name::<Self>().hash(&mut hasher);
-        name.hash(&mut hasher);
-        signature.hash(&mut hasher);
-        rank_type.hash(&mut hasher);
-        hasher.finish()
-    }
+    udf_equals_hash!(WindowUDFImpl);
 }
 
 /// State for the RANK(rank) built-in window function.

@@ -448,9 +448,9 @@ impl FileFormat for ParquetFormat {
         let mut source = ParquetSource::new(self.options.clone());
 
         // Use the CachedParquetFileReaderFactory
-        if let Some(metadata_cache) =
-            state.runtime_env().cache_manager.get_file_metadata_cache()
-        {
+        if state.runtime_env().cache_manager.get_file_metadata_cache() {
+            let metadata_cache =
+                state.runtime_env().cache_manager.get_file_metadata_cache();
             let store = state
                 .runtime_env()
                 .object_store(conf.object_store_url.clone())?;
