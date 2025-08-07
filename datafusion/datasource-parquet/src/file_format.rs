@@ -448,16 +448,13 @@ impl FileFormat for ParquetFormat {
         let mut source = ParquetSource::new(self.options.clone());
 
         // Use the CachedParquetFileReaderFactory
-        if state.runtime_env().cache_manager.get_file_metadata_cache() {
-            let metadata_cache =
-                state.runtime_env().cache_manager.get_file_metadata_cache();
-            let store = state
-                .runtime_env()
-                .object_store(conf.object_store_url.clone())?;
-            let cached_parquet_read_factory =
-                Arc::new(CachedParquetFileReaderFactory::new(store, metadata_cache));
-            source = source.with_parquet_file_reader_factory(cached_parquet_read_factory);
-        }
+        let metadata_cache = state.runtime_env().cache_manager.get_file_metadata_cache();
+        let store = state
+            .runtime_env()
+            .object_store(conf.object_store_url.clone())?;
+        let cached_parquet_read_factory =
+            Arc::new(CachedParquetFileReaderFactory::new(store, metadata_cache));
+        source = source.with_parquet_file_reader_factory(cached_parquet_read_factory);
 
         if let Some(metadata_size_hint) = metadata_size_hint {
             source = source.with_metadata_size_hint(metadata_size_hint)
