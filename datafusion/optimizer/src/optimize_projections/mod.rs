@@ -351,8 +351,8 @@ fn optimize_projections(
             return Ok(Transformed::no(plan));
         }
         LogicalPlan::RecursiveQuery(_) => {
-            // If either the static or recursive term contains subqueries other than a reference to the CTE,
-            // skip projection pushdown to prevent pruning columns needed by those subqueries.
+            // Only allow subqueries that reference the current CTE.
+            // https://github.com/apache/datafusion/pull/16696#discussion_r2246415968
             if let LogicalPlan::RecursiveQuery(recursive) = &plan {
                 if plan_contains_non_cte_subquery(
                     recursive.static_term.as_ref(),
