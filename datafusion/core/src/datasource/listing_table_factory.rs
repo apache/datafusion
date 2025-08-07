@@ -196,6 +196,8 @@ fn get_extension(path: &str) -> String {
 mod tests {
     use glob::Pattern;
     use std::collections::HashMap;
+    use std::fs;
+    use std::path::PathBuf;
 
     use super::*;
     use crate::{
@@ -381,5 +383,87 @@ mod tests {
             table_path.get_glob().clone().unwrap(),
             Pattern::new("*.csv").unwrap()
         );
+    }
+
+    #[tokio::test]
+    async fn test_create_with_hive_partitions() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut path = PathBuf::from(dir.path());
+        path.extend(["key1=value1", "key2=value2"]);
+        fs::create_dir_all(&path).unwrap();
+        path.push("data.parquet");
+        fs::File::create_new(&path).unwrap();
+
+        let factory = ListingTableFactory::new();
+        let context = SessionContext::new();
+        let state = context.state();
+        let name = TableReference::bare("foo");
+
+        let cmd = CreateExternalTable {
+            name,
+            location: dir.path().to_str().unwrap().to_string(),
+            file_type: "parquet".to_string(),
+            schema: Arc::new(DFSchema::empty()),
+            table_partition_cols: vec![],
+            if_not_exists: false,
+            temporary: false,
+            definition: None,
+            order_exprs: vec![],
+            unbounded: false,
+            options: HashMap::new(),
+            constraints: Constraints::default(),
+            column_defaults: HashMap::new(),
+        };
+        let table_provider = factory.create(&state, &cmd).await.unwrap();
+        let listing_table = table_provider
+            .as_any()
+            .downcast_ref::<ListingTable>()
+            .unwrap();
+
+        let listing_options = listing_table.options();
+        let dtype =
+            DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::Utf8));
+        let expected_cols = vec![
+            (String::from("key1"), dtype.clone()),
+            (String::from("key2"), dtype.clone()),
+        ];
+        assert_eq!(expected_cols, listing_options.table_partition_cols);
+    }
+
+    #[tokio::test]
+    async fn test_odd_directory_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut path = PathBuf::from(dir.path());
+        path.extend(["odd.v1", "odd.v2"]);
+        fs::create_dir_all(&path).unwrap();
+
+        let factory = ListingTableFactory::new();
+        let context = SessionContext::new();
+        let state = context.state();
+        let name = TableReference::bare("foo");
+
+        let cmd = CreateExternalTable {
+            name,
+            location: dir.path().to_str().unwrap().to_string(),
+            file_type: "parquet".to_string(),
+            schema: Arc::new(DFSchema::empty()),
+            table_partition_cols: vec![],
+            if_not_exists: false,
+            temporary: false,
+            definition: None,
+            order_exprs: vec![],
+            unbounded: false,
+            options: HashMap::new(),
+            constraints: Constraints::default(),
+            column_defaults: HashMap::new(),
+        };
+        let table_provider = factory.create(&state, &cmd).await.unwrap();
+        let listing_table = table_provider
+            .as_any()
+            .downcast_ref::<ListingTable>()
+            .unwrap();
+
+        let listing_options = listing_table.options();
+        assert_eq!("", listing_options.file_extension);
     }
 }
