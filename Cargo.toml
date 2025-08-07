@@ -89,20 +89,20 @@ ahash = { version = "0.8", default-features = false, features = [
     "runtime-rng",
 ] }
 apache-avro = { version = "0.17", default-features = false }
-arrow = { git = "https://github.com/rok/arrow-rs.git", branch = "multi-threaded_encrypted_writing_2", features = [
+arrow = { git = "https://github.com/apache/arrow-rs.git", features = [
     "prettyprint",
     "chrono-tz",
 ] }
 
-arrow-buffer = { git = "https://github.com/rok/arrow-rs.git", branch = "multi-threaded_encrypted_writing_2", default-features = false }
-arrow-flight = { git = "https://github.com/rok/arrow-rs.git", features = [
+arrow-buffer = { git = "https://github.com/apache/arrow-rs.git", default-features = false }
+arrow-flight = { git = "https://github.com/apache/arrow-rs.git", features = [
     "flight-sql-experimental",
 ] }
-arrow-ipc = { git = "https://github.com/rok/arrow-rs.git", branch = "multi-threaded_encrypted_writing_2", default-features = false, features = [
+arrow-ipc = { git = "https://github.com/apache/arrow-rs.git", default-features = false, features = [
     "lz4",
 ] }
-arrow-ord = { git = "https://github.com/rok/arrow-rs.git", branch = "multi-threaded_encrypted_writing_2", default-features = false }
-arrow-schema = { git = "https://github.com/rok/arrow-rs.git", branch = "multi-threaded_encrypted_writing_2", default-features = false }
+arrow-ord = { git = "https://github.com/apache/arrow-rs.git", default-features = false }
+arrow-schema = { git = "https://github.com/apache/arrow-rs.git", default-features = false }
 async-trait = "0.1.88"
 bigdecimal = "0.4.8"
 bytes = "1.10"
@@ -156,7 +156,7 @@ itertools = "0.14"
 log = "^0.4"
 object_store = { version = "0.12.3", default-features = false }
 parking_lot = "0.12"
-parquet = { git = "https://github.com/rok/arrow-rs.git", branch = "multi-threaded_encrypted_writing_2", default-features = false, features = [
+parquet = { git = "https://github.com/apache/arrow-rs.git", default-features = false, features = [
     "arrow",
     "async",
     "object_store",
