@@ -36,7 +36,7 @@ use datafusion_common::{exec_err, internal_err, Result, ScalarValue};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, Documentation, Signature, Volatility,
+    udf_equals_hash, Accumulator, AggregateUDFImpl, Documentation, Signature, Volatility,
 };
 use datafusion_functions_aggregate_common::merge_arrays::merge_ordered_arrays;
 use datafusion_functions_aggregate_common::utils::ordering_fields;
@@ -74,7 +74,7 @@ This aggregation function can only mix DISTINCT and ORDER BY if the ordering exp
 "#,
     standard_argument(name = "expression",)
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 /// ARRAY_AGG aggregate expression
 pub struct ArrayAgg {
     signature: Signature,
@@ -222,6 +222,8 @@ impl AggregateUDFImpl for ArrayAgg {
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }
+
+    udf_equals_hash!(AggregateUDFImpl);
 }
 
 #[derive(Debug)]
