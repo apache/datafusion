@@ -1145,7 +1145,11 @@ example, to configure <code class="docutils literal notranslate"><span class="pr
 <td><p>NULL</p></td>
 <td><p>Maximum memory limit for query execution. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes). Example: ‘2G’ for 2 gigabytes.</p></td>
 </tr>
-<tr class="row-even"><td><p>datafusion.runtime.temp_directory</p></td>
+<tr class="row-even"><td><p>datafusion.runtime.metadata_cache_limit</p></td>
+<td><p>50M</p></td>
+<td><p>Maximum memory to use for file metadata cache such as Parquet metadata. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes). Example: ‘2G’ for 2 gigabytes.</p></td>
+</tr>
+<tr class="row-odd"><td><p>datafusion.runtime.temp_directory</p></td>
 <td><p>NULL</p></td>
 <td><p>The path to the temporary file directory.</p></td>
 </tr>
