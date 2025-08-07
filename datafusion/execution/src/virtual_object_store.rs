@@ -26,10 +26,7 @@ impl VirtualObjectStore {
     }
 
     /// Resolve the given [`Path`] to the underlying store and the remaining path
-    fn resolve<'a>(
-        &'a self,
-        location: &'a Path,
-    ) -> Result<(&Arc<dyn ObjectStore>, Path)> {
+    fn resolve(&self, location: &Path) -> Result<(&Arc<dyn ObjectStore>, Path)> {
         let mut parts = location.parts();
         let key = parts
             .next()
