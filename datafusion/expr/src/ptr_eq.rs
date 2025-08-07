@@ -20,11 +20,16 @@ use std::hash::{Hash, Hasher};
 use std::ops::Deref;
 use std::sync::Arc;
 
+/// Compares two `Arc` pointers for equality based on their underlying pointers values.
+/// This is not equivalent to [`Arc::ptr_eq`] for fat pointers, see that method
+/// for more information.
 pub fn arc_ptr_eq<T: ?Sized>(a: &Arc<T>, b: &Arc<T>) -> bool {
-    // Not necessarily equivalent to `Arc::ptr_eq` for fat pointers.
     std::ptr::eq(Arc::as_ptr(a), Arc::as_ptr(b))
 }
 
+/// Hashes an `Arc` pointer based on its underlying pointer value.
+/// The general contract for this function is that if [`arc_ptr_eq`] returns `true`
+/// for two `Arc`s, then this function should return the same hash value for both.
 pub fn arc_ptr_hash<T: ?Sized>(a: &Arc<T>, hasher: &mut impl Hasher) {
     std::ptr::hash(Arc::as_ptr(a), hasher)
 }
