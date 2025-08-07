@@ -41,7 +41,7 @@ use crate::groups_accumulator::GroupsAccumulator;
 use crate::udf_eq::UdfEq;
 use crate::utils::format_state_name;
 use crate::utils::AggregateOrderSensitivity;
-use crate::{expr_vec_fmt, Accumulator, Expr};
+use crate::{expr_vec_fmt, udf_equals_hash, Accumulator, Expr};
 use crate::{Documentation, Signature};
 
 /// Logical representation of a user-defined [aggregate function] (UDAF).
@@ -1138,18 +1138,7 @@ impl AggregateUDFImpl for AliasedAggregateUDFImpl {
         self.inner.coerce_types(arg_types)
     }
 
-    fn equals(&self, other: &dyn AggregateUDFImpl) -> bool {
-        let Some(other) = other.as_any().downcast_ref::<AliasedAggregateUDFImpl>() else {
-            return false;
-        };
-        self == other
-    }
-
-    fn hash_value(&self) -> u64 {
-        let hasher = &mut DefaultHasher::new();
-        self.hash(hasher);
-        hasher.finish()
-    }
+    udf_equals_hash!(AggregateUDFImpl);
 
     fn is_descending(&self) -> Option<bool> {
         self.inner.is_descending()
