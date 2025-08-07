@@ -574,7 +574,7 @@ impl SessionState {
             // analyze & capture output of each rule
             let analyzer_result = self.analyzer.execute_and_check(
                 e.plan.as_ref().clone(),
-                self.options(),
+                &self.options(),
                 |analyzed_plan, analyzer| {
                     let analyzer_name = analyzer.name().to_string();
                     let plan_type = PlanType::AnalyzedLogicalPlan { analyzer_name };
@@ -636,7 +636,7 @@ impl SessionState {
         } else {
             let analyzed_plan = self.analyzer.execute_and_check(
                 plan.clone(),
-                self.options(),
+                &self.options(),
                 |_, _| {},
             )?;
             self.optimizer.optimize(analyzed_plan, self, |_, _| {})
@@ -738,8 +738,14 @@ impl SessionState {
     }
 
     /// return the configuration options
-    pub fn config_options(&self) -> &ConfigOptions {
+    pub fn config_options(&self) -> &Arc<ConfigOptions> {
         self.config.options()
+    }
+
+    /// Mark the start of the execution
+    pub fn mark_start_execution(&mut self) {
+        let config = Arc::clone(self.config.options());
+        self.execution_props.mark_start_execution(config);
     }
 
     /// Return the table options
@@ -1891,8 +1897,8 @@ impl OptimizerConfig for SessionState {
         &self.execution_props.alias_generator
     }
 
-    fn options(&self) -> &ConfigOptions {
-        self.config_options()
+    fn options(&self) -> Arc<ConfigOptions> {
+        Arc::clone(self.config.options())
     }
 
     fn function_registry(&self) -> Option<&dyn FunctionRegistry> {
