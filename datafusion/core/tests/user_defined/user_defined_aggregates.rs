@@ -1014,6 +1014,51 @@ impl Accumulator for MetadataBasedAccumulator {
     }
 }
 
+#[derive(Debug)]
+struct SchemaBasedAggregateUdf {
+    signature: Signature,
+}
+
+impl SchemaBasedAggregateUdf {
+    fn new() -> Self {
+        Self {
+            signature: Signature::any(1, Volatility::Immutable),
+        }
+    }
+}
+
+impl AggregateUDFImpl for SchemaBasedAggregateUdf {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        "schema_based_udf"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(DataType::UInt64)
+    }
+
+    fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+        let field = acc_args.schema.field(0).clone();
+        let double_output = field
+            .metadata()
+            .get("modify_values")
+            .map(|v| v == "double_output")
+            .unwrap_or(false);
+
+        Ok(Box::new(MetadataBasedAccumulator {
+            double_output,
+            curr_sum: 0,
+        }))
+    }
+}
+
 #[tokio::test]
 async fn test_metadata_based_aggregate() -> Result<()> {
     let data_array = Arc::new(UInt64Array::from(vec![0, 5, 10, 15, 20])) as ArrayRef;
@@ -1168,5 +1213,36 @@ async fn test_metadata_based_aggregate_as_window() -> Result<()> {
 
     assert_eq!(expected, actual[0]);
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_scalar_udaf_schema_metadata() -> Result<()> {
+    use datafusion_expr::{expr::FieldMetadata, lit_with_metadata};
+    use std::collections::BTreeMap;
+
+    let ctx = SessionContext::new();
+    let udf = AggregateUDF::from(SchemaBasedAggregateUdf::new());
+
+    let metadata = FieldMetadata::new(BTreeMap::from([(
+        "modify_values".to_string(),
+        "double_output".to_string(),
+    )]));
+
+    let expr = udf
+        .call(vec![lit_with_metadata(
+            ScalarValue::UInt64(Some(1)),
+            Some(metadata),
+        )])
+        .alias("res");
+
+    let plan = LogicalPlanBuilder::empty(true)
+        .aggregate(Vec::<Expr>::new(), vec![expr])?
+        .build()?;
+
+    let df = DataFrame::new(ctx.state(), plan);
+    let batches = df.collect().await?;
+    let array = batches[0].column(0).as_primitive::<UInt64Type>();
+    assert_eq!(array.value(0), 2);
     Ok(())
 }
