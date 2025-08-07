@@ -330,7 +330,7 @@ SELECT ascii('222')
 50
 
 query I
-SELECT ascii('0xa') 
+SELECT ascii('0xa')
 ----
 48
 
@@ -530,7 +530,7 @@ NULL
 query T
 SELECT ltrim(' zzzytest ')
 ----
-zzzytest 
+zzzytest
 
 query T
 SELECT ltrim('zzzytest', 'xyz')
@@ -721,7 +721,7 @@ tom
 query T
 SELECT trim(LEADING ' tom ')
 ----
-tom 
+tom
 
 query T
 SELECT trim(TRAILING ' tom ')
@@ -736,7 +736,7 @@ tom
 query T
 SELECT trim(LEADING ' ' FROM ' tom ')
 ----
-tom 
+tom
 
 query T
 SELECT trim(TRAILING ' ' FROM ' tom ')
@@ -842,7 +842,7 @@ NULL
 
 # test_random_expression
 query BB
-SELECT 
+SELECT
     random() BETWEEN 0.0 AND 1.0,
     random() = random()
 ----
@@ -1172,7 +1172,7 @@ SELECT encode('','base64');
 query ?
 SELECT decode('','base64');
 ----
-    
+
 
 query T
 SELECT encode('','hex');
@@ -1182,7 +1182,7 @@ SELECT encode('','hex');
 query ?
 SELECT decode('','hex');
 ----
-    
+
 
 query T
 SELECT md5('tom');
@@ -1631,15 +1631,15 @@ query B
 select column1 <=> column2 from (VALUES (1, 1), (2, 3), (NULL, NULL)) as t;
 ----
 true
-false 
+false
 true
 
 # Sanity test - comparing <=> with equivalent expression
 query B
-SELECT 
-  (column1 <=> column2) = 
+SELECT
+  (column1 <=> column2) =
   (IFNULL(column1, false) = IFNULL(column2, false)) AS comparison_result
-FROM (VALUES 
+FROM (VALUES
   (1, 1),      -- equal values
   (1, 2),      -- different values
   (NULL, NULL), -- both NULL
@@ -1933,20 +1933,20 @@ host3 3.3
 
 # can have an aggregate function with an inner CASE WHEN
 query TR
-select 
-    t2.server_host as host, 
+select
+    t2.server_host as host,
     sum((
-        case when t2.server_host is not null 
+        case when t2.server_host is not null
         then t2.server_load2
         end
-    )) 
+    ))
     from (
-        select 
+        select
             struct(time,load1,load2,host)['c2'] as server_load2,
             struct(time,load1,load2,host)['c3'] as server_host
         from t1
-    ) t2 
-    where server_host IS NOT NULL 
+    ) t2
+    where server_host IS NOT NULL
     group by server_host order by host;
 ----
 host1 101
@@ -1955,19 +1955,19 @@ host3 303
 
 # TODO: Issue tracked in https://github.com/apache/datafusion/issues/10364
 query TR
-select 
-    t2.server['c3'] as host, 
+select
+    t2.server['c3'] as host,
     sum((
-        case when t2.server['c3'] is not null 
+        case when t2.server['c3'] is not null
         then t2.server['c2']
         end
-    )) 
+    ))
     from (
-        select 
+        select
             struct(time,load1,load2,host) as server
         from t1
-    ) t2 
-    where t2.server['c3'] IS NOT NULL 
+    ) t2
+    where t2.server['c3'] IS NOT NULL
     group by t2.server['c3'] order by host;
 ----
 host1 101
@@ -1976,22 +1976,22 @@ host3 303
 
 # can have 2 projections with aggr(short_circuited), with different short-circuited expr
 query TRR
-select 
-    t2.server_host as host, 
+select
+    t2.server_host as host,
     sum(coalesce(server_load1)),
     sum((
-        case when t2.server_host is not null 
+        case when t2.server_host is not null
         then t2.server_load2
         end
-    )) 
+    ))
     from (
-        select 
+        select
             struct(time,load1,load2,host)['c1'] as server_load1,
             struct(time,load1,load2,host)['c2'] as server_load2,
             struct(time,load1,load2,host)['c3'] as server_host
         from t1
-    ) t2 
-    where server_host IS NOT NULL 
+    ) t2
+    where server_host IS NOT NULL
     group by server_host order by host;
 ----
 host1 1.1 101
@@ -2000,43 +2000,43 @@ host3 3.3 303
 
 # TODO: Issue tracked in https://github.com/apache/datafusion/issues/10364
 query error
-select 
-    t2.server['c3'] as host, 
+select
+    t2.server['c3'] as host,
     sum(coalesce(server['c1'])),
     sum((
-        case when t2.server['c3'] is not null 
+        case when t2.server['c3'] is not null
         then t2.server['c2']
         end
-    )) 
+    ))
     from (
-        select 
+        select
             struct(time,load1,load2,host) as server,
         from t1
-    ) t2 
-    where server_host IS NOT NULL 
+    ) t2
+    where server_host IS NOT NULL
     group by server_host order by host;
 
 query TRR
-select 
-    t2.server_host as host, 
+select
+    t2.server_host as host,
     sum((
-        case when t2.server_host is not null 
-        then server_load1 
+        case when t2.server_host is not null
+        then server_load1
         end
-    )), 
+    )),
     sum((
-        case when server_host is not null 
-        then server_load2 
+        case when server_host is not null
+        then server_load2
         end
-    )) 
+    ))
     from (
-        select 
+        select
             struct(time,load1,load2,host)['c1'] as server_load1,
             struct(time,load1,load2,host)['c2'] as server_load2,
             struct(time,load1,load2,host)['c3'] as server_host
         from t1
-    ) t2 
-    where server_host IS NOT NULL 
+    ) t2
+    where server_host IS NOT NULL
     group by server_host order by host;
 ----
 host1 1.1 101
@@ -2045,24 +2045,24 @@ host3 3.3 303
 
 # TODO: Issue tracked in https://github.com/apache/datafusion/issues/10364
 query TRR
-select 
-    t2.server['c3'] as host, 
+select
+    t2.server['c3'] as host,
     sum((
-        case when t2.server['c3'] is not null 
+        case when t2.server['c3'] is not null
         then t2.server['c1']
         end
-    )), 
+    )),
     sum((
-        case when t2.server['c3'] is not null 
+        case when t2.server['c3'] is not null
         then t2.server['c2']
         end
-    )) 
+    ))
     from (
-        select 
-            struct(time,load1,load2,host) as server 
+        select
+            struct(time,load1,load2,host) as server
         from t1
-    ) t2 
-    where t2.server['c3'] IS NOT NULL 
+    ) t2
+    where t2.server['c3'] IS NOT NULL
     group by t2.server['c3'] order by host;
 ----
 host1 1.1 101
@@ -2143,6 +2143,14 @@ select greatest(a is not null, false) from t;
 true
 false
 true
+
+# same for is null
+query B
+select greatest(a is null, false) from t;
+----
+false
+true
+false
 
 statement ok
 drop table t;
