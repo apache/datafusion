@@ -151,7 +151,7 @@ pub struct MyAggregateUdfNode {
     pub result: String,
 }
 
-#[derive(Debug, PartialEq, Hash)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub(in crate::cases) struct CustomUDWF {
     signature: Signature,
     payload: String,

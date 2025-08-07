@@ -755,6 +755,7 @@ impl PartialEq for AliasedScalarUDFImpl {
         inner.equals(other.inner.as_ref()) && aliases == &other.aliases
     }
 }
+impl Eq for AliasedScalarUDFImpl {}
 
 impl Hash for AliasedScalarUDFImpl {
     fn hash<H: Hasher>(&self, state: &mut H) {

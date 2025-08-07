@@ -479,7 +479,7 @@ impl PartialOrd for dyn WindowUDFImpl {
 
 /// WindowUDF that adds an alias to the underlying function. It is better to
 /// implement [`WindowUDFImpl`], which supports aliases, directly if possible.
-#[derive(Debug, PartialEq, Hash)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 struct AliasedWindowUDFImpl {
     inner: PtrEq<Arc<dyn WindowUDFImpl>>,
     aliases: Vec<String>,

@@ -403,7 +403,7 @@ pub fn create_udf(
 
 /// Implements [`ScalarUDFImpl`] for functions that have a single signature and
 /// return type.
-#[derive(PartialEq, Hash)]
+#[derive(PartialEq, Eq, Hash)]
 pub struct SimpleScalarUDF {
     name: String,
     signature: Signature,
@@ -661,7 +661,7 @@ pub fn create_udwf(
 
 /// Implements [`WindowUDFImpl`] for functions that have a single signature and
 /// return type.
-#[derive(PartialEq, Hash)]
+#[derive(PartialEq, Eq, Hash)]
 pub struct SimpleWindowUDF {
     name: String,
     signature: Signature,
