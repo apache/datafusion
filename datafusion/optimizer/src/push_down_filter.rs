@@ -453,12 +453,17 @@ fn push_down_all_join(
         }
     }
 
-    // For infer predicates, if they can not push through join, just drop them
+    // For inferred predicates, if they can not be pushed to either side of the join
+    // (for example because the corresponding input is not preserved by the join
+    // type), retain them as join filters so they can still participate in
+    // dynamic filter pushdown.
     for predicate in inferred_join_predicates {
         if left_preserved && checker.is_left_only(&predicate) {
             left_push.push(predicate);
         } else if right_preserved && checker.is_right_only(&predicate) {
             right_push.push(predicate);
+        } else {
+            join_conditions.push(predicate);
         }
     }
 
@@ -2689,7 +2694,7 @@ mod tests {
         assert_optimized_plan_equal!(
             plan,
             @r"
-        Left Join: Using test.a = test2.a
+        Left Join: Using test.a = test2.a Filter: test2.a <= Int64(1)
           TableScan: test, full_filters=[test.a <= Int64(1)]
           Projection: test2.a
             TableScan: test2
@@ -2730,7 +2735,7 @@ mod tests {
         assert_optimized_plan_equal!(
             plan,
             @r"
-        Right Join: Using test.a = test2.a
+        Right Join: Using test.a = test2.a Filter: test.a <= Int64(1)
           TableScan: test
           Projection: test2.a
             TableScan: test2, full_filters=[test2.a <= Int64(1)]
@@ -2909,7 +2914,7 @@ mod tests {
         assert_optimized_plan_equal!(
             plan,
             @r"
-        Left Join: test.a = test2.a Filter: test.a > UInt32(1) AND test.b < test2.b
+        Left Join: test.a = test2.a Filter: test2.a > UInt32(1) AND test.a > UInt32(1) AND test.b < test2.b
           Projection: test.a, test.b, test.c
             TableScan: test
           Projection: test2.a, test2.b, test2.c
@@ -2960,6 +2965,89 @@ mod tests {
             TableScan: test, full_filters=[test.a > UInt32(1)]
           Projection: test2.a, test2.b, test2.c
             TableScan: test2
+        "
+        )
+    }
+
+    /// A filter on the preserved(left) side of a left join should be
+    /// converted into a join filter on the right side via dynamic filter pushdown
+    #[test]
+    fn left_join_dynamic_filter_pushdown() -> Result<()> {
+        let left = test_table_scan()?;
+        let right = test_table_scan_with_name("test2")?;
+
+        let filter = col("test.a").gt(lit(1u32));
+        let plan = LogicalPlanBuilder::from(left)
+            .join(
+                right,
+                JoinType::Left,
+                (vec![Column::from_name("a")], vec![Column::from_name("a")]),
+                None,
+            )?
+            .filter(filter)?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Left Join: test.a = test2.a Filter: test2.a > UInt32(1)
+          TableScan: test, full_filters=[test.a > UInt32(1)]
+          TableScan: test2
+        "
+        )
+    }
+
+    /// A filter on the preserved(right) side of a right join should be
+    /// converted into a join filter on the left side via dynamic filter pushdown
+    #[test]
+    fn right_join_dynamic_filter_pushdown() -> Result<()> {
+        let left = test_table_scan()?;
+        let right = test_table_scan_with_name("test2")?;
+
+        let filter = col("test2.a").gt(lit(1u32));
+        let plan = LogicalPlanBuilder::from(left)
+            .join(
+                right,
+                JoinType::Right,
+                (vec![Column::from_name("a")], vec![Column::from_name("a")]),
+                None,
+            )?
+            .filter(filter)?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Right Join: test.a = test2.a Filter: test.a > UInt32(1)
+          TableScan: test
+          TableScan: test2, full_filters=[test2.a > UInt32(1)]
+        "
+        )
+    }
+
+    /// Filters that do not restrict nulls should not generate dynamic filters
+    #[test]
+    fn left_join_dynamic_filter_pushdown_with_nulls() -> Result<()> {
+        let left = test_table_scan()?;
+        let right = test_table_scan_with_name("test2")?;
+
+        let filter = col("test.a").is_null();
+        let plan = LogicalPlanBuilder::from(left)
+            .join(
+                right,
+                JoinType::Left,
+                (vec![Column::from_name("a")], vec![Column::from_name("a")]),
+                None,
+            )?
+            .filter(filter)?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Left Join: test.a = test2.a
+          TableScan: test, full_filters=[test.a IS NULL]
+          TableScan: test2
         "
         )
     }
