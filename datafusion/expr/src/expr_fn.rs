@@ -25,8 +25,8 @@ use crate::function::{
     AccumulatorArgs, AccumulatorFactoryFunction, PartitionEvaluatorFactory,
     StateFieldsArgs,
 };
+use crate::ptr_eq::PtrEq;
 use crate::select_expr::SelectExpr;
-use crate::utils::{arc_ptr_eq, arc_ptr_hash};
 use crate::{
     conditional_expressions::CaseBuilder, expr::Sort, logical_plan::Subquery,
     udf_equals_hash, AggregateUDF, Expr, LogicalPlan, Operator, PartitionEvaluator,
@@ -403,41 +403,12 @@ pub fn create_udf(
 
 /// Implements [`ScalarUDFImpl`] for functions that have a single signature and
 /// return type.
+#[derive(PartialEq, Hash)]
 pub struct SimpleScalarUDF {
     name: String,
     signature: Signature,
     return_type: DataType,
-    fun: ScalarFunctionImplementation,
-}
-
-impl PartialEq for SimpleScalarUDF {
-    fn eq(&self, other: &Self) -> bool {
-        let Self {
-            name,
-            signature,
-            return_type,
-            fun,
-        } = self;
-        name == &other.name
-            && signature == &other.signature
-            && return_type == &other.return_type
-            && arc_ptr_eq(fun, &other.fun)
-    }
-}
-
-impl Hash for SimpleScalarUDF {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        let Self {
-            name,
-            signature,
-            return_type,
-            fun,
-        } = self;
-        name.hash(state);
-        signature.hash(state);
-        return_type.hash(state);
-        arc_ptr_hash(fun, state);
-    }
+    fun: PtrEq<ScalarFunctionImplementation>,
 }
 
 impl Debug for SimpleScalarUDF {
@@ -481,7 +452,7 @@ impl SimpleScalarUDF {
             name: name.into(),
             signature,
             return_type,
-            fun,
+            fun: fun.into(),
         }
     }
 }
@@ -690,11 +661,12 @@ pub fn create_udwf(
 
 /// Implements [`WindowUDFImpl`] for functions that have a single signature and
 /// return type.
+#[derive(PartialEq, Hash)]
 pub struct SimpleWindowUDF {
     name: String,
     signature: Signature,
     return_type: DataType,
-    partition_evaluator_factory: PartitionEvaluatorFactory,
+    partition_evaluator_factory: PtrEq<PartitionEvaluatorFactory>,
 }
 
 impl Debug for SimpleWindowUDF {
@@ -724,7 +696,7 @@ impl SimpleWindowUDF {
             name,
             signature,
             return_type,
-            partition_evaluator_factory,
+            partition_evaluator_factory: partition_evaluator_factory.into(),
         }
     }
 }
@@ -757,40 +729,7 @@ impl WindowUDFImpl for SimpleWindowUDF {
         )))
     }
 
-    fn equals(&self, other: &dyn WindowUDFImpl) -> bool {
-        let Some(other) = other.as_any().downcast_ref::<Self>() else {
-            return false;
-        };
-        let Self {
-            name,
-            signature,
-            return_type,
-            partition_evaluator_factory,
-        } = self;
-        name == &other.name
-            && signature == &other.signature
-            && return_type == &other.return_type
-            && Arc::ptr_eq(
-                partition_evaluator_factory,
-                &other.partition_evaluator_factory,
-            )
-    }
-
-    fn hash_value(&self) -> u64 {
-        let Self {
-            name,
-            signature,
-            return_type,
-            partition_evaluator_factory,
-        } = self;
-        let mut hasher = DefaultHasher::new();
-        std::any::type_name::<Self>().hash(&mut hasher);
-        name.hash(&mut hasher);
-        signature.hash(&mut hasher);
-        return_type.hash(&mut hasher);
-        Arc::as_ptr(partition_evaluator_factory).hash(&mut hasher);
-        hasher.finish()
-    }
+    udf_equals_hash!(WindowUDFImpl);
 }
 
 pub fn interval_year_month_lit(value: &str) -> Expr {

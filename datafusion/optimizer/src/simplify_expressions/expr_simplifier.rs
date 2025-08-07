@@ -4443,7 +4443,7 @@ mod tests {
 
     /// A Mock UDWF which defines `simplify` to be used in tests
     /// related to UDWF simplification
-    #[derive(Debug, Clone)]
+    #[derive(Debug, Clone, PartialEq, Hash)]
     struct SimplifyMockUdwf {
         simplify: bool,
     }
@@ -4491,21 +4491,7 @@ mod tests {
             unimplemented!("not needed for tests")
         }
 
-        fn equals(&self, other: &dyn WindowUDFImpl) -> bool {
-            let Some(other) = other.as_any().downcast_ref::<Self>() else {
-                return false;
-            };
-            let Self { simplify } = self;
-            simplify == &other.simplify
-        }
-
-        fn hash_value(&self) -> u64 {
-            let Self { simplify } = self;
-            let mut hasher = DefaultHasher::new();
-            std::any::type_name::<Self>().hash(&mut hasher);
-            simplify.hash(&mut hasher);
-            hasher.finish()
-        }
+        udf_equals_hash!(WindowUDFImpl);
     }
     #[derive(Debug)]
     struct VolatileUdf {

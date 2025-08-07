@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::utils::{arc_ptr_eq, arc_ptr_hash};
+use crate::ptr_eq::{arc_ptr_eq, arc_ptr_hash};
 use crate::{
     udf_equals_hash, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl,
 };
