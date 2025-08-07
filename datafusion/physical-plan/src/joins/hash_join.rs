@@ -1007,7 +1007,7 @@ impl ExecutionPlan for HashJoinExec {
         }
 
         // Get basic filter descriptions for both children
-        let mut left_child = crate::filter_pushdown::ChildFilterDescription::from_child(
+        let left_child = crate::filter_pushdown::ChildFilterDescription::from_child(
             &parent_filters,
             self.left(),
         )?;
@@ -1020,9 +1020,6 @@ impl ExecutionPlan for HashJoinExec {
         if matches!(phase, FilterPushdownPhase::Post)
             && config.optimizer.enable_dynamic_filter_pushdown
         {
-            // Add placeholder to left side (build side)
-            left_child = left_child.with_self_filter(lit(true));
-
             // Add actual dynamic filter to right side (probe side)
             let dynamic_filter =
                 Arc::clone(&self.dynamic_filter) as Arc<dyn PhysicalExpr>;
