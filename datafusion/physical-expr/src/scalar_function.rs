@@ -194,7 +194,7 @@ impl DynHash for ScalarFunctionExpr {
         self.name.hash(&mut state);
         self.args.hash(&mut state);
         self.return_field.hash(&mut state);
-        self.config_options.entries().hash(&mut state);
+        sorted_config_entries(&self.config_options).hash(&mut state);
     }
 }
 
