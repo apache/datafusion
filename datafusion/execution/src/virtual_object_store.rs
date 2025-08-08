@@ -16,6 +16,43 @@
 // under the License.
 
 //! Virtual object store implementation for DataFusion.
+//!
+//! `VirtualObjectStore` enables routing object operations to multiple underlying stores
+//! based on the first segment (prefix) of the object path. This allows, for example,
+//! mixing S3, local filesystem, or other stores under a single unified interface.
+//!
+//! # Configuration
+//!
+//! Create a mapping from string prefixes to concrete `ObjectStore` implementations:
+//!
+//! ```rust
+//! use std::collections::HashMap;
+//! use std::sync::Arc;
+//! use object_store::{memory::InMemory, path::Path, ObjectStore};
+//! use datafusion_execution::virtual_object_store::VirtualObjectStore;
+//!
+//! let mut stores: HashMap<String, Arc<dyn ObjectStore>> = HashMap::new();
+//! // Prefix "s3" routes to S3 store
+//! // stores.insert("s3".into(), Arc::new(S3::new(...)));
+//! // Prefix "fs" routes to local filesystem
+//! // stores.insert("fs".into(), Arc::new(LocalFileSystem::new()));
+//! // For testing, use an in-memory store at prefix "mem"
+//! stores.insert("mem".into(), Arc::new(InMemory::new()));
+//!
+//! let vos = VirtualObjectStore::new(stores);
+//! ```
+//!
+//! # Example Usage
+//!
+//! ```rust
+//! use object_store::path::Path;
+//!
+//! // List objects under the "mem" prefix
+//! let all = vos.list(Some(&Path::from("mem/"))).collect::<Vec<_>>().await?;
+//!
+//! // Copy a file from one prefix to another
+//! vos.copy(&Path::from("mem/file1"), &Path::from("mem_backup/file1")).await?;
+//! ```
 
 use async_trait::async_trait;
 use futures::{stream, stream::BoxStream, StreamExt, TryStreamExt};
