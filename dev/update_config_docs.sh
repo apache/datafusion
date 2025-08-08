@@ -154,10 +154,10 @@ SET datafusion.execution.target_partitions = '1';
 When executing a memory-consuming query under a tight memory limit, DataFusion 
 will spill intermediate results to disk.
 
-If the [`FairSpillPool`] is used, partitions will attempt to divide the available
-memory evenly. If the partition count `datafusion.execution.target_partitions`
-is set too high, each partition will be allocated less memory, and the out-of-core
-execution path will trigger more spills and possibly slow down the query.
+When the [`FairSpillPool`] is used, memory is divided evenly among partitions. 
+The higher the value of `datafusion.execution.target_partitions` 
+the less memory is allocated to each partition, and the out-of-core
+execution path may trigger more frequently, slowing down execution.
 
 Additionally, all of the external join, aggregate, and sort operations now rely on the external
 sort implementation, which sorts the buffered data first, then spills, and in the
