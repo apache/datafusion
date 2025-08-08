@@ -306,9 +306,6 @@ where
 ///     .unwrap();
 /// ```
 pub trait WindowUDFImpl: Debug + Send + Sync {
-    // Note: When adding any methods (with default implementations), remember to add them also
-    // into the AliasedWindowUDFImpl below!
-
     /// Returns this object as an [`Any`] trait object
     fn as_any(&self) -> &dyn Any;
 
@@ -500,6 +497,7 @@ impl AliasedWindowUDFImpl {
     }
 }
 
+#[warn(clippy::missing_trait_methods)] // Delegates, so it should implement every single trait method
 impl WindowUDFImpl for AliasedWindowUDFImpl {
     fn as_any(&self) -> &dyn Any {
         self
@@ -547,6 +545,10 @@ impl WindowUDFImpl for AliasedWindowUDFImpl {
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         self.inner.coerce_types(arg_types)
+    }
+
+    fn reverse_expr(&self) -> ReversedUDWF {
+        self.inner.reverse_expr()
     }
 
     fn documentation(&self) -> Option<&Documentation> {
