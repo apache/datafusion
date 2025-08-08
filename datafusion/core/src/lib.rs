@@ -744,16 +744,10 @@ pub mod physical_planner;
 pub mod prelude;
 pub mod scalar;
 
-// re-export dependencies to minimize version maintenance for crate users
+// Re-export dependencies that are part of DataFusion public API (e.g. via DataFusionError)
 pub use arrow;
-/// Re-export of the [`object_store`] crate so users can access object store
-/// types without depending on `object_store` directly.
-///
-/// ```no_run
-/// use datafusion::object_store::path::Path;
-/// let _path = Path::from("example");
-/// ```
 pub use object_store;
+
 #[cfg(feature = "parquet")]
 pub use parquet;
 
