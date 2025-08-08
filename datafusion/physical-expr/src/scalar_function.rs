@@ -175,6 +175,10 @@ impl fmt::Display for ScalarFunctionExpr {
 
 impl PartialEq for ScalarFunctionExpr {
     fn eq(&self, o: &Self) -> bool {
+        if std::ptr::eq(self, o) {
+            // The equality implementation is somewhat expensive, so let's short-circuit when possible.
+            return true;
+        }
         let Self {
             fun,
             name,
@@ -186,8 +190,9 @@ impl PartialEq for ScalarFunctionExpr {
             && name.eq(&o.name)
             && args.eq(&o.args)
             && return_field.eq(&o.return_field)
-            && sorted_config_entries(config_options)
-                == sorted_config_entries(&o.config_options)
+            && (Arc::ptr_eq(config_options, &o.config_options)
+                || sorted_config_entries(config_options)
+                    == sorted_config_entries(&o.config_options))
     }
 }
 impl Eq for ScalarFunctionExpr {}
