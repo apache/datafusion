@@ -1,0 +1,116 @@
+{
+    "extensionUris": [
+      {
+        "extensionUriAnchor": 1,
+        "uri": "https://github.com/substrait-io/substrait/blob/main/extensions/functions_boolean.yaml"
+      }
+    ],
+    "extensions": [
+      {
+        "extensionFunction": {
+          "extensionUriReference": 1,
+          "functionAnchor": 1,
+          "name": "logb:fp32_fp32"
+        }
+      }
+    ],
+    "relations": [
+      {
+        "root": {
+          "input": {
+            "project": {
+              "common": {
+                "direct": {}
+              },
+              "expressions": [
+                {
+                  "scalarFunction": {
+                    "arguments": [{
+                      "value": {
+                        "selection": {
+                          "directReference": {
+                            "structField": {
+                              "field": 0
+                            }
+                          },
+                          "rootReference": {
+                          }
+                        }
+                      }
+                    }, {
+                      "value": {
+                        "selection": {
+                          "directReference": {
+                            "structField": {
+                              "field": 1
+                            }
+                          },
+                          "rootReference": {
+                          }
+                        }
+                      }
+                    }],
+                    "functionReference": 1,
+                    "outputType": {
+                      "bool": {
+                        "nullability": "NULLABILITY_REQUIRED"
+                      }
+                    }
+                  }
+                }
+              ],
+              "input": {
+                "read": {
+                  "baseSchema": {
+                    "names": [
+                      "x", "base"
+                    ],
+                    "struct": {
+                      "types": [
+                        {
+                          "fp32": {
+                            "nullability": "NULLABILITY_REQUIRED"
+                          }
+                        },
+                        {
+                          "fp32": {
+                            "nullability": "NULLABILITY_REQUIRED"
+                          }
+                        }
+                      ],
+                      "nullability": "NULLABILITY_REQUIRED"
+                    }
+                  },
+                  "common": {
+                    "direct": {}
+                  },
+                  "virtualTable": {
+                    "values": [{
+                      "fields": [{
+                        "fp32": 1.0,
+                        "nullable": false
+                      }, {
+                        "fp32": 10.0,
+                        "nullable": false
+                      }]
+                    }, {
+                      "fields": [{
+                        "fp32": 100.0,
+                        "nullable": false
+                      }, {
+                        "fp32": 10.0,
+                        "nullable": false
+                      }]
+                    }]
+                  }
+                }
+              }
+            }
+          },
+          "names": [
+            "x", "base", "result"
+          ]
+        }
+      }
+    ]
+  }
