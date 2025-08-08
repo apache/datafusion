@@ -31,6 +31,16 @@ SELECT date_add('2016-07-30'::date, 1::int);
 2016-07-31
 
 query D
+SELECT date_add('2016-07-30'::date, arrow_cast(1, 'Int8'));
+----
+2016-07-31
+
+query D
+SELECT date_add('2016-07-30'::date, arrow_cast(1, 'Int8'));
+----
+2016-07-31
+
+query D
 SELECT date_sub('2016-07-30'::date, 0::int);
 ----
 2016-07-30

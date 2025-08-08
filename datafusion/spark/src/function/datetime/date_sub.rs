@@ -21,10 +21,13 @@ use std::sync::Arc;
 use arrow::array::ArrayRef;
 use arrow::compute;
 use arrow::datatypes::{DataType, Date32Type};
-use datafusion_common::cast::{as_date32_array, as_int32_array};
+use datafusion_common::cast::{
+    as_date32_array, as_int16_array, as_int32_array, as_int8_array,
+};
 use datafusion_common::{internal_err, Result};
 use datafusion_expr::{
-    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
+    Volatility,
 };
 use datafusion_functions::utils::make_scalar_function;
 
@@ -42,8 +45,12 @@ impl Default for SparkDateSub {
 impl SparkDateSub {
     pub fn new() -> Self {
         Self {
-            signature: Signature::exact(
-                vec![DataType::Date32, DataType::Int32],
+            signature: Signature::one_of(
+                vec![
+                    TypeSignature::Exact(vec![DataType::Date32, DataType::Int8]),
+                    TypeSignature::Exact(vec![DataType::Date32, DataType::Int16]),
+                    TypeSignature::Exact(vec![DataType::Date32, DataType::Int32]),
+                ],
                 Volatility::Immutable,
             ),
         }
@@ -80,10 +87,37 @@ fn spark_date_sub(args: &[ArrayRef]) -> Result<ArrayRef> {
         );
     };
     let date_array = as_date32_array(date_arg)?;
-    let days_array = as_int32_array(days_arg)?;
-    let result =
-        compute::binary::<_, _, _, Date32Type>(date_array, days_array, |date, days| {
-            date - days
-        })?;
+    let result = match days_arg.data_type() {
+        DataType::Int8 => {
+            let days_array = as_int8_array(days_arg)?;
+            compute::binary::<_, _, _, Date32Type>(
+                date_array,
+                days_array,
+                |date, days| date - days as i32,
+            )?
+        }
+        DataType::Int16 => {
+            let days_array = as_int16_array(days_arg)?;
+            compute::binary::<_, _, _, Date32Type>(
+                date_array,
+                days_array,
+                |date, days| date - days as i32,
+            )?
+        }
+        DataType::Int32 => {
+            let days_array = as_int32_array(days_arg)?;
+            compute::binary::<_, _, _, Date32Type>(
+                date_array,
+                days_array,
+                |date, days| date - days,
+            )?
+        }
+        _ => {
+            return internal_err!(
+                "Spark `date_add` function: argument must be int8, int16, int32, got {:?}",
+                days_arg.data_type()
+            );
+        }
+    };
     Ok(Arc::new(result))
 }
