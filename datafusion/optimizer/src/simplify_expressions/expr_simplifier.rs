@@ -3950,6 +3950,56 @@ mod tests {
     }
 
     #[test]
+    fn simplify_null_in_empty_inlist() {
+        // `NULL::boolean IN ()` == `NULL::boolean IN (SELECT foo FROM empty)` == false
+        let expr = in_list(lit_bool_null(), vec![], false);
+        assert_eq!(simplify(expr), lit(false));
+
+        // `NULL::boolean NOT IN ()` == `NULL::boolean NOT IN (SELECT foo FROM empty)` == true
+        let expr = in_list(lit_bool_null(), vec![], true);
+        assert_eq!(simplify(expr), lit(true));
+
+        // `NULL IN ()` == `NULL IN (SELECT foo FROM empty)` == false
+        let null_null = || Expr::Literal(ScalarValue::Null, None);
+        let expr = in_list(null_null(), vec![], false);
+        assert_eq!(simplify(expr), lit(false));
+
+        // `NULL NOT IN ()` == `NULL NOT IN (SELECT foo FROM empty)` == true
+        let expr = in_list(null_null(), vec![], true);
+        assert_eq!(simplify(expr), lit(true));
+    }
+
+    #[test]
+    fn just_simplifier_simplify_null_in_empty_inlist() {
+        let simplify = |expr: Expr| -> Expr {
+            let schema = expr_test_schema();
+            let execution_props = ExecutionProps::new();
+            let info = SimplifyContext::new(&execution_props).with_schema(schema);
+            let simplifier = &mut Simplifier::new(&info);
+            expr.rewrite(simplifier)
+                .expect("Failed to simplify expression")
+                .data
+        };
+
+        // `NULL::boolean IN ()` == `NULL::boolean IN (SELECT foo FROM empty)` == false
+        let expr = in_list(lit_bool_null(), vec![], false);
+        assert_eq!(simplify(expr), lit(false));
+
+        // `NULL::boolean NOT IN ()` == `NULL::boolean NOT IN (SELECT foo FROM empty)` == true
+        let expr = in_list(lit_bool_null(), vec![], true);
+        assert_eq!(simplify(expr), lit(true));
+
+        // `NULL IN ()` == `NULL IN (SELECT foo FROM empty)` == false
+        let null_null = || Expr::Literal(ScalarValue::Null, None);
+        let expr = in_list(null_null(), vec![], false);
+        assert_eq!(simplify(expr), lit(false));
+
+        // `NULL NOT IN ()` == `NULL NOT IN (SELECT foo FROM empty)` == true
+        let expr = in_list(null_null(), vec![], true);
+        assert_eq!(simplify(expr), lit(true));
+    }
+
+    #[test]
     fn simplify_large_or() {
         let expr = (0..5)
             .map(|i| col("c1").eq(lit(i)))
