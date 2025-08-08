@@ -4,11 +4,14 @@ fo = "fo"
 flate = "flate"
 nd = "nd"
 Nd = "Nd"
+YOUY = "YOUY"
+
 
 [files]
 extend-exclude = [
     "*.slt",
     "*.svg",
     "*.sql",
-    "dev/changelog/**"
+    "dev/changelog/**",
+    "benchmarks/**",
 ]
