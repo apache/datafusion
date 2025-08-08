@@ -30,8 +30,11 @@ use crate::Span;
 /// ```rust
 /// # use datafusion_common::{Location, Span, Diagnostic};
 /// let span = Some(Span {
-///     start: Location{ line: 2, column: 1 },
-///     end: Location{ line: 4, column: 15 }
+///     start: Location { line: 2, column: 1 },
+///     end: Location {
+///         line: 4,
+///         column: 15,
+///     },
 /// });
 /// let diagnostic = Diagnostic::new_error("Something went wrong", span)
 ///     .with_help("Have you tried turning it on and off again?", None);

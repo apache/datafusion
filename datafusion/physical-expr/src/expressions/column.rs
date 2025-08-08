@@ -49,9 +49,9 @@ use datafusion_expr::ColumnarValue;
 /// # use arrow::datatypes::{DataType, Field, Schema};
 /// // Schema with columns a, b, c
 /// let schema = Schema::new(vec![
-///    Field::new("a", DataType::Int32, false),
-///    Field::new("b", DataType::Int32, false),
-///    Field::new("c", DataType::Int32, false),
+///     Field::new("a", DataType::Int32, false),
+///     Field::new("b", DataType::Int32, false),
+///     Field::new("c", DataType::Int32, false),
 /// ]);
 ///
 /// // reference to column b is index 1

@@ -655,7 +655,6 @@ pub fn combine_two_batches(
 /// * `visited` - A hash set to store the visited indices.
 /// * `offset` - An offset to the indices in the `PrimitiveArray`.
 /// * `indices` - The input `PrimitiveArray` of type `T` which stores the indices to be recorded.
-///
 pub fn record_visited_indices<T: ArrowPrimitiveType>(
     visited: &mut HashSet<usize>,
     offset: usize,

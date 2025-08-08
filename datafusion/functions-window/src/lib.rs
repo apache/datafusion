@@ -30,7 +30,6 @@
 //! implemented using the extension API.
 //!
 //! [DataFusion]: https://crates.io/crates/datafusion
-//!
 
 use std::sync::Arc;
 

@@ -36,7 +36,6 @@ use datafusion_physical_expr::{physical_exprs_equal, PhysicalExpr};
 /// into a Single AggregateExec if their grouping exprs and aggregate exprs equal.
 ///
 /// This rule should be applied after the EnforceDistribution and EnforceSorting rules
-///
 #[derive(Default, Debug)]
 pub struct CombinePartialFinalAggregate {}
 

@@ -175,14 +175,14 @@ fn visit_statement(statement: &DFStatement, visitor: &mut RelationVisitor) {
 /// ## Example with CTEs  
 ///  
 /// ```  
-/// # use datafusion_sql::parser::DFParser;  
+/// # use datafusion_sql::parser::DFParser;
 /// # use datafusion_sql::resolve::resolve_table_references;
-/// let query = "with my_cte as (values (1), (2)) SELECT * from my_cte;";  
-/// let statement = DFParser::parse_sql(query).unwrap().pop_back().unwrap();  
-/// let (table_refs, ctes) = resolve_table_references(&statement, true).unwrap();  
+/// let query = "with my_cte as (values (1), (2)) SELECT * from my_cte;";
+/// let statement = DFParser::parse_sql(query).unwrap().pop_back().unwrap();
+/// let (table_refs, ctes) = resolve_table_references(&statement, true).unwrap();
 /// assert_eq!(table_refs.len(), 0);
-/// assert_eq!(ctes.len(), 1);  
-/// assert_eq!(ctes[0].to_string(), "my_cte");  
+/// assert_eq!(ctes.len(), 1);
+/// assert_eq!(ctes[0].to_string(), "my_cte");
 /// ```
 pub fn resolve_table_references(
     statement: &crate::parser::Statement,

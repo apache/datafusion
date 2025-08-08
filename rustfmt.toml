@@ -17,6 +17,7 @@
 
 edition = "2021"
 max_width = 90
+format_code_in_doc_comments = true # nightly-only feature
 
 # ignore generated files
 # ignore = [

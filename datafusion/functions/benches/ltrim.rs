@@ -100,7 +100,6 @@ pub fn create_string_array_and_characters(
 /// Outputs:
 ///   - testing string array
 ///   - trimmed characters
-///
 fn create_args(
     size: usize,
     characters: &str,

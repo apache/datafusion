@@ -67,23 +67,21 @@ use regex::Regex;
 ///
 /// For example:
 /// ```
-/// use arrow::datatypes::{Schema, Field, DataType};
-/// use datafusion_expr::{col, lit};
+/// use arrow::datatypes::{DataType, Field, Schema};
 /// use datafusion_common::{DataFusionError, ToDFSchema};
 /// use datafusion_expr::execution_props::ExecutionProps;
 /// use datafusion_expr::simplify::SimplifyContext;
+/// use datafusion_expr::{col, lit};
 /// use datafusion_optimizer::simplify_expressions::ExprSimplifier;
 ///
 /// // Create the schema
-/// let schema = Schema::new(vec![
-///     Field::new("i", DataType::Int64, false),
-///   ])
-///   .to_dfschema_ref().unwrap();
+/// let schema = Schema::new(vec![Field::new("i", DataType::Int64, false)])
+///     .to_dfschema_ref()
+///     .unwrap();
 ///
 /// // Create the simplifier
 /// let props = ExecutionProps::new();
-/// let context = SimplifyContext::new(&props)
-///    .with_schema(schema);
+/// let context = SimplifyContext::new(&props).with_schema(schema);
 /// let simplifier = ExprSimplifier::new(context);
 ///
 /// // Use the simplifier
@@ -142,35 +140,35 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     ///
     /// ```
     /// use arrow::datatypes::DataType;
-    /// use datafusion_expr::{col, lit, Expr};
+    /// use datafusion_common::DFSchema;
     /// use datafusion_common::Result;
     /// use datafusion_expr::execution_props::ExecutionProps;
     /// use datafusion_expr::simplify::SimplifyContext;
     /// use datafusion_expr::simplify::SimplifyInfo;
+    /// use datafusion_expr::{col, lit, Expr};
     /// use datafusion_optimizer::simplify_expressions::ExprSimplifier;
-    /// use datafusion_common::DFSchema;
     /// use std::sync::Arc;
     ///
     /// /// Simple implementation that provides `Simplifier` the information it needs
     /// /// See SimplifyContext for a structure that does this.
     /// #[derive(Default)]
     /// struct Info {
-    ///   execution_props: ExecutionProps,
+    ///     execution_props: ExecutionProps,
     /// };
     ///
     /// impl SimplifyInfo for Info {
-    ///   fn is_boolean_type(&self, expr: &Expr) -> Result<bool> {
-    ///     Ok(false)
-    ///   }
-    ///   fn nullable(&self, expr: &Expr) -> Result<bool> {
-    ///     Ok(true)
-    ///   }
-    ///   fn execution_props(&self) -> &ExecutionProps {
-    ///     &self.execution_props
-    ///   }
-    ///   fn get_data_type(&self, expr: &Expr) -> Result<DataType> {
-    ///     Ok(DataType::Int32)
-    ///   }
+    ///     fn is_boolean_type(&self, expr: &Expr) -> Result<bool> {
+    ///         Ok(false)
+    ///     }
+    ///     fn nullable(&self, expr: &Expr) -> Result<bool> {
+    ///         Ok(true)
+    ///     }
+    ///     fn execution_props(&self) -> &ExecutionProps {
+    ///         &self.execution_props
+    ///     }
+    ///     fn get_data_type(&self, expr: &Expr) -> Result<DataType> {
+    ///         Ok(DataType::Int32)
+    ///     }
     /// }
     ///
     /// // Create the simplifier
@@ -196,7 +194,6 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     /// optimizations.
     ///
     /// See [Self::simplify] for details and usage examples.
-    ///
     #[deprecated(
         since = "48.0.0",
         note = "Use `simplify_with_cycle_count_transformed` instead"
@@ -220,7 +217,6 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     /// - The number of simplification cycles that were performed
     ///
     /// See [Self::simplify] for details and usage examples.
-    ///
     pub fn simplify_with_cycle_count_transformed(
         &self,
         mut expr: Expr,
@@ -284,24 +280,24 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     ///
     /// ```rust
     /// use arrow::datatypes::{DataType, Field, Schema};
-    /// use datafusion_expr::{col, lit, Expr};
-    /// use datafusion_expr::interval_arithmetic::{Interval, NullableInterval};
     /// use datafusion_common::{Result, ScalarValue, ToDFSchema};
     /// use datafusion_expr::execution_props::ExecutionProps;
+    /// use datafusion_expr::interval_arithmetic::{Interval, NullableInterval};
     /// use datafusion_expr::simplify::SimplifyContext;
+    /// use datafusion_expr::{col, lit, Expr};
     /// use datafusion_optimizer::simplify_expressions::ExprSimplifier;
     ///
     /// let schema = Schema::new(vec![
-    ///   Field::new("x", DataType::Int64, false),
-    ///   Field::new("y", DataType::UInt32, false),
-    ///   Field::new("z", DataType::Int64, false),
-    ///   ])
-    ///   .to_dfschema_ref().unwrap();
+    ///     Field::new("x", DataType::Int64, false),
+    ///     Field::new("y", DataType::UInt32, false),
+    ///     Field::new("z", DataType::Int64, false),
+    /// ])
+    /// .to_dfschema_ref()
+    /// .unwrap();
     ///
     /// // Create the simplifier
     /// let props = ExecutionProps::new();
-    /// let context = SimplifyContext::new(&props)
-    ///    .with_schema(schema);
+    /// let context = SimplifyContext::new(&props).with_schema(schema);
     ///
     /// // Expression: (x >= 3) AND (y + 2 < 10) AND (z > 5)
     /// let expr_x = col("x").gt_eq(lit(3_i64));
@@ -310,15 +306,18 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     /// let expr = expr_x.and(expr_y).and(expr_z.clone());
     ///
     /// let guarantees = vec![
-    ///    // x ∈ [3, 5]
-    ///    (
-    ///        col("x"),
-    ///        NullableInterval::NotNull {
-    ///            values: Interval::make(Some(3_i64), Some(5_i64)).unwrap()
-    ///        }
-    ///    ),
-    ///    // y = 3
-    ///    (col("y"), NullableInterval::from(ScalarValue::UInt32(Some(3)))),
+    ///     // x ∈ [3, 5]
+    ///     (
+    ///         col("x"),
+    ///         NullableInterval::NotNull {
+    ///             values: Interval::make(Some(3_i64), Some(5_i64)).unwrap(),
+    ///         },
+    ///     ),
+    ///     // y = 3
+    ///     (
+    ///         col("y"),
+    ///         NullableInterval::from(ScalarValue::UInt32(Some(3))),
+    ///     ),
     /// ];
     /// let simplifier = ExprSimplifier::new(context).with_guarantees(guarantees);
     /// let output = simplifier.simplify(expr).unwrap();
@@ -343,24 +342,24 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     ///
     /// ```rust
     /// use arrow::datatypes::{DataType, Field, Schema};
-    /// use datafusion_expr::{col, lit, Expr};
-    /// use datafusion_expr::interval_arithmetic::{Interval, NullableInterval};
     /// use datafusion_common::{Result, ScalarValue, ToDFSchema};
     /// use datafusion_expr::execution_props::ExecutionProps;
+    /// use datafusion_expr::interval_arithmetic::{Interval, NullableInterval};
     /// use datafusion_expr::simplify::SimplifyContext;
+    /// use datafusion_expr::{col, lit, Expr};
     /// use datafusion_optimizer::simplify_expressions::ExprSimplifier;
     ///
     /// let schema = Schema::new(vec![
-    ///   Field::new("a", DataType::Int64, false),
-    ///   Field::new("b", DataType::Int64, false),
-    ///   Field::new("c", DataType::Int64, false),
-    ///   ])
-    ///   .to_dfschema_ref().unwrap();
+    ///     Field::new("a", DataType::Int64, false),
+    ///     Field::new("b", DataType::Int64, false),
+    ///     Field::new("c", DataType::Int64, false),
+    /// ])
+    /// .to_dfschema_ref()
+    /// .unwrap();
     ///
     /// // Create the simplifier
     /// let props = ExecutionProps::new();
-    /// let context = SimplifyContext::new(&props)
-    ///    .with_schema(schema);
+    /// let context = SimplifyContext::new(&props).with_schema(schema);
     /// let simplifier = ExprSimplifier::new(context);
     ///
     /// // Expression: a = c AND 1 = b
@@ -374,9 +373,9 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     ///
     /// // If canonicalization is disabled, the expression is not changed
     /// let non_canonicalized = simplifier
-    ///   .with_canonicalize(false)
-    ///   .simplify(expr.clone())
-    ///   .unwrap();
+    ///     .with_canonicalize(false)
+    ///     .simplify(expr.clone())
+    ///     .unwrap();
     ///
     /// assert_eq!(non_canonicalized, expr);
     /// ```
@@ -435,7 +434,6 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     /// assert_eq!(simplified_expr.data, lit(true));
     /// // Only 1 cycle was executed
     /// assert_eq!(count, 1);
-    ///
     /// ```
     pub fn with_max_cycles(mut self, max_simplifier_cycles: u32) -> Self {
         self.max_simplifier_cycles = max_simplifier_cycles;

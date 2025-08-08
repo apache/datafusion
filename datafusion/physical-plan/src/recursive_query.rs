@@ -247,7 +247,6 @@ impl DisplayAs for RecursiveQueryExec {
 ///    while batch := recursive_stream.next():
 ///        buffer.append(batch)
 ///        yield buffer
-///
 struct RecursiveQueryStream {
     /// The context to be used for managing handlers & executing new tasks
     task_context: Arc<TaskContext>,
