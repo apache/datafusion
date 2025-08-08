@@ -744,8 +744,10 @@ pub mod physical_planner;
 pub mod prelude;
 pub mod scalar;
 
-// re-export dependencies from arrow-rs to minimize version maintenance for crate users
+// Re-export dependencies that are part of DataFusion public API (e.g. via DataFusionError)
 pub use arrow;
+pub use object_store;
+
 #[cfg(feature = "parquet")]
 pub use parquet;
 
