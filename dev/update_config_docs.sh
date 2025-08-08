@@ -155,9 +155,9 @@ When executing a memory-consuming query under a tight memory limit, DataFusion
 will spill intermediate results to disk.
 
 When the [`FairSpillPool`] is used, memory is divided evenly among partitions. 
-The higher the value of `datafusion.execution.target_partitions` 
-the less memory is allocated to each partition, and the out-of-core
-execution path may trigger more frequently, slowing down execution.
+The higher the value of `datafusion.execution.target_partitions`, the less memory 
+is allocated to each partition, and the out-of-core execution path may trigger 
+more frequently, possibly slowing down execution.
 
 Additionally, while spilling, data is read back in `datafusion.execution.batch_size` size batches.
 The larger this value, the fewer spilled sorted runs can be merged. Decreasing this setting
