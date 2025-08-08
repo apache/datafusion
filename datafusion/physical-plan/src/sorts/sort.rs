@@ -899,6 +899,29 @@ impl SortExec {
         self
     }
 
+    /// Add or reset `self.filter` to a new `DynamicFilterPhysicalExpr`.
+    fn create_filter(&self) -> Arc<DynamicFilterPhysicalExpr> {
+        let children = self
+            .expr
+            .iter()
+            .map(|sort_expr| Arc::clone(&sort_expr.expr))
+            .collect::<Vec<_>>();
+        Arc::new(DynamicFilterPhysicalExpr::new(children, lit(true)))
+    }
+
+    fn cloned(&self) -> Self {
+        SortExec {
+            input: Arc::clone(&self.input),
+            expr: self.expr.clone(),
+            metrics_set: self.metrics_set.clone(),
+            preserve_partitioning: self.preserve_partitioning,
+            common_sort_prefix: self.common_sort_prefix.clone(),
+            fetch: self.fetch,
+            cache: self.cache.clone(),
+            filter: self.filter.clone(),
+        }
+    }
+
     /// Modify how many rows to include in the result
     ///
     /// If None, then all rows will be returned, in sorted order.
@@ -920,25 +943,13 @@ impl SortExec {
         }
         let filter = fetch.is_some().then(|| {
             // If we already have a filter, keep it. Otherwise, create a new one.
-            self.filter.clone().unwrap_or_else(|| {
-                let children = self
-                    .expr
-                    .iter()
-                    .map(|sort_expr| Arc::clone(&sort_expr.expr))
-                    .collect::<Vec<_>>();
-                Arc::new(DynamicFilterPhysicalExpr::new(children, lit(true)))
-            })
+            self.filter.clone().unwrap_or_else(|| self.create_filter())
         });
-        SortExec {
-            input: Arc::clone(&self.input),
-            expr: self.expr.clone(),
-            metrics_set: self.metrics_set.clone(),
-            preserve_partitioning: self.preserve_partitioning,
-            common_sort_prefix: self.common_sort_prefix.clone(),
-            fetch,
-            cache,
-            filter,
-        }
+        let mut new_sort = self.cloned();
+        new_sort.fetch = fetch;
+        new_sort.cache = cache;
+        new_sort.filter = filter;
+        new_sort
     }
 
     /// Input schema
@@ -1110,10 +1121,35 @@ impl ExecutionPlan for SortExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let mut new_sort = SortExec::new(self.expr.clone(), Arc::clone(&children[0]))
-            .with_fetch(self.fetch)
-            .with_preserve_partitioning(self.preserve_partitioning);
-        new_sort.filter = self.filter.clone();
+        let mut new_sort = self.cloned();
+        assert!(
+            children.len() == 1,
+            "SortExec should have exactly one child"
+        );
+        new_sort.input = Arc::clone(&children[0]);
+        // Recompute the properties based on the new input since they may have changed
+        let (cache, sort_prefix) = Self::compute_properties(
+            &new_sort.input,
+            new_sort.expr.clone(),
+            new_sort.preserve_partitioning,
+        )?;
+        new_sort.cache = cache;
+        new_sort.common_sort_prefix = sort_prefix;
+
+        Ok(Arc::new(new_sort))
+    }
+
+    fn reset_state(self: Arc<Self>) -> Result<Arc<dyn ExecutionPlan>> {
+        let children = self.children().into_iter().cloned().collect();
+        let new_sort = self.with_new_children(children)?;
+        let mut new_sort = new_sort
+            .as_any()
+            .downcast_ref::<SortExec>()
+            .expect("cloned 1 lines above this line, we know the type")
+            .clone();
+        // Our dynamic filter and execution metrics are the state we need to reset.
+        new_sort.filter = Some(new_sort.create_filter());
+        new_sort.metrics_set = ExecutionPlanMetricsSet::new();
 
         Ok(Arc::new(new_sort))
     }
