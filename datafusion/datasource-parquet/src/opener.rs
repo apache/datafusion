@@ -237,11 +237,11 @@ impl FileOpener for ParquetOpener {
                 )?;
             }
 
-            if coerce_int96.is_some() {
+            if let Some(ref coerce) = coerce_int96 {
                 if let Some(merged) = coerce_int96_to_resolution(
                     reader_metadata.parquet_schema(),
                     &physical_file_schema,
-                    &(coerce_int96.unwrap()),
+                    coerce,
                 ) {
                     physical_file_schema = Arc::new(merged);
                     options = options.with_schema(Arc::clone(&physical_file_schema));

@@ -523,7 +523,7 @@ impl DataFusionError {
         }
     }
 
-    pub fn message(&self) -> Cow<str> {
+    pub fn message(&self) -> Cow<'_, str> {
         match *self {
             DataFusionError::ArrowError(ref desc, ref backtrace) => {
                 let backtrace = backtrace.clone().unwrap_or_else(|| "".to_owned());

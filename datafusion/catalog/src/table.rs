@@ -75,7 +75,7 @@ pub trait TableProvider: Debug + Sync + Send {
     }
 
     /// Get the [`LogicalPlan`] of this table, if available.
-    fn get_logical_plan(&self) -> Option<Cow<LogicalPlan>> {
+    fn get_logical_plan(&'_ self) -> Option<Cow<'_, LogicalPlan>> {
         None
     }
 

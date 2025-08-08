@@ -260,7 +260,7 @@ pub fn evaluate_partition_ranges(
 /// the identifier by replacing it with two double quotes
 ///
 /// e.g. identifier `tab.le"name` becomes `"tab.le""name"`
-pub fn quote_identifier(s: &str) -> Cow<str> {
+pub fn quote_identifier(s: &str) -> Cow<'_, str> {
     if needs_quotes(s) {
         Cow::Owned(format!("\"{}\"", s.replace('"', "\"\"")))
     } else {
