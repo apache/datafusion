@@ -120,7 +120,7 @@ impl WindowShiftKind {
 }
 
 /// window shift expression
-#[derive(Debug, PartialEq, Hash)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct WindowShift {
     signature: Signature,
     kind: WindowShiftKind,

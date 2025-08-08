@@ -261,6 +261,7 @@ impl PartialEq for ForeignWindowUDF {
         std::ptr::eq(self, other)
     }
 }
+impl Eq for ForeignWindowUDF {}
 impl Hash for ForeignWindowUDF {
     fn hash<H: Hasher>(&self, state: &mut H) {
         std::ptr::hash(self, state)

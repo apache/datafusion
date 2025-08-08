@@ -17,7 +17,7 @@
 
 use std::any::Any;
 use std::fmt::{Debug, Formatter};
-use std::hash::{DefaultHasher, Hash, Hasher};
+use std::hash::Hash;
 use std::mem::size_of_val;
 use std::sync::Arc;
 
@@ -30,7 +30,8 @@ use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::type_coercion::aggregates::{INTEGERS, NUMERICS};
 use datafusion_expr::Volatility::Immutable;
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, Documentation, Expr, Signature, TypeSignature,
+    udf_equals_hash, Accumulator, AggregateUDFImpl, Documentation, Expr, Signature,
+    TypeSignature,
 };
 use datafusion_functions_aggregate_common::tdigest::{Centroid, TDigest};
 use datafusion_macros::user_doc;
@@ -100,6 +101,7 @@ pub fn approx_percentile_cont_with_weight(
         description = "Number of centroids to use in the t-digest algorithm. _Default is 100_. A higher number results in more accurate approximation but requires more memory."
     )
 )]
+#[derive(PartialEq, Eq, Hash)]
 pub struct ApproxPercentileContWithWeight {
     signature: Signature,
     approx_percentile_cont: ApproxPercentileCont,
@@ -237,29 +239,7 @@ impl AggregateUDFImpl for ApproxPercentileContWithWeight {
         self.doc()
     }
 
-    fn equals(&self, other: &dyn AggregateUDFImpl) -> bool {
-        let Some(other) = other.as_any().downcast_ref::<Self>() else {
-            return false;
-        };
-        let Self {
-            signature,
-            approx_percentile_cont,
-        } = self;
-        signature == &other.signature
-            && approx_percentile_cont.equals(&other.approx_percentile_cont)
-    }
-
-    fn hash_value(&self) -> u64 {
-        let Self {
-            signature,
-            approx_percentile_cont,
-        } = self;
-        let mut hasher = DefaultHasher::new();
-        std::any::type_name::<Self>().hash(&mut hasher);
-        signature.hash(&mut hasher);
-        hasher.write_u64(approx_percentile_cont.hash_value());
-        hasher.finish()
-    }
+    udf_equals_hash!(AggregateUDFImpl);
 }
 
 #[derive(Debug)]

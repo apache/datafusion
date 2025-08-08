@@ -19,7 +19,7 @@
 
 use std::any::Any;
 use std::fmt::{Debug, Formatter};
-use std::hash::{DefaultHasher, Hash, Hasher};
+use std::hash::Hash;
 use std::mem::align_of_val;
 use std::sync::Arc;
 
@@ -31,8 +31,8 @@ use datafusion_common::{plan_err, ScalarValue};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, Documentation, GroupsAccumulator, Signature,
-    Volatility,
+    udf_equals_hash, Accumulator, AggregateUDFImpl, Documentation, GroupsAccumulator,
+    Signature, Volatility,
 };
 use datafusion_functions_aggregate_common::stats::StatsType;
 use datafusion_macros::user_doc;
@@ -62,6 +62,7 @@ make_udaf_expr_and_func!(
     standard_argument(name = "expression",)
 )]
 /// STDDEV and STDDEV_SAMP (standard deviation) aggregate expression
+#[derive(PartialEq, Eq, Hash)]
 pub struct Stddev {
     signature: Signature,
     alias: Vec<String>,
@@ -155,22 +156,7 @@ impl AggregateUDFImpl for Stddev {
         self.doc()
     }
 
-    fn equals(&self, other: &dyn AggregateUDFImpl) -> bool {
-        let Some(other) = other.as_any().downcast_ref::<Self>() else {
-            return false;
-        };
-        let Self { signature, alias } = self;
-        signature == &other.signature && alias == &other.alias
-    }
-
-    fn hash_value(&self) -> u64 {
-        let Self { signature, alias } = self;
-        let mut hasher = DefaultHasher::new();
-        std::any::type_name::<Self>().hash(&mut hasher);
-        signature.hash(&mut hasher);
-        alias.hash(&mut hasher);
-        hasher.finish()
-    }
+    udf_equals_hash!(AggregateUDFImpl);
 }
 
 make_udaf_expr_and_func!(

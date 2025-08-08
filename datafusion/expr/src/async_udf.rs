@@ -69,6 +69,7 @@ impl PartialEq for AsyncScalarUDF {
         arc_ptr_eq(inner, &other.inner)
     }
 }
+impl Eq for AsyncScalarUDF {}
 
 impl Hash for AsyncScalarUDF {
     fn hash<H: Hasher>(&self, state: &mut H) {
