@@ -802,6 +802,7 @@ impl ListingOptions {
                     .rev()
                     .skip(1) // get parents only; skip the file itself
                     .rev()
+                    .filter(|s| s.contains('='))
                     .map(|s| s.split('=').take(1).collect())
                     .collect_vec()
             })
