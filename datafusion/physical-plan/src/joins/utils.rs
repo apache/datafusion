@@ -774,6 +774,23 @@ impl<T: 'static> OnceFut<T> {
     }
 }
 
+/// Should we use a bitmap to track each incoming right batch's each row's
+/// 'joined' status.
+///
+/// For example in right joins, we have to use a bit map to track matched
+/// right side rows, and later enter a `EmitRightUnmatched` stage to emit
+/// unmatched right rows.
+pub(crate) fn need_produce_right_in_final(join_type: JoinType) -> bool {
+    matches!(
+        join_type,
+        JoinType::Full
+            | JoinType::Right
+            | JoinType::RightAnti
+            | JoinType::RightMark
+            | JoinType::RightSemi
+    )
+}
+
 /// Some type `join_type` of join need to maintain the matched indices bit map for the left side, and
 /// use the bit map to generate the part of result of the join.
 ///

@@ -32,7 +32,8 @@ use crate::common::can_project;
 use crate::execution_plan::{boundedness_from_children, EmissionType};
 use crate::joins::utils::{
     build_join_schema, check_join_is_valid, estimate_join_statistics,
-    BuildProbeJoinMetrics, ColumnIndex, JoinFilter, OnceAsync, OnceFut,
+    need_produce_right_in_final, BuildProbeJoinMetrics, ColumnIndex, JoinFilter,
+    OnceAsync, OnceFut,
 };
 use crate::joins::SharedBitmapBuilder;
 use crate::metrics::{Count, ExecutionPlanMetricsSet, MetricsSet};
@@ -54,8 +55,8 @@ use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::{
-    internal_datafusion_err, internal_err, project_schema, unwrap_or_internal_err,
-    DataFusionError, JoinSide, Result, ScalarValue, Statistics,
+    arrow_err, internal_datafusion_err, internal_err, project_schema,
+    unwrap_or_internal_err, DataFusionError, JoinSide, Result, ScalarValue, Statistics,
 };
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
@@ -111,7 +112,11 @@ use parking_lot::Mutex;
 ///
 /// ## 1. Buffering Left Input
 /// - The operator eagerly buffers all left-side input batches into memory,
-///   unless a memory limit is reached (see 'Memory-limited Execution').
+///   util a memory limit is reached.
+///   Currently, an out-of-memory error will be thrown if all the left-side input batches
+///   cannot fit into memory at once.
+///   In the future, it's possible to make this case finish execution. (see
+///   'Memory-limited Execution' section)
 /// - The rationale for buffering the left side is that scanning the right side
 ///   can be expensive (e.g., decoding Parquet files), so buffering more left
 ///   rows reduces the number of right-side scan passes required.
@@ -148,9 +153,11 @@ use parking_lot::Mutex;
 ///   1 batch, for better cache locality and memory efficiency.
 ///
 /// # TODO: Memory-limited Execution
-/// - If the memory budget is exceeded during left-side buffering, fallback
-///   strategies such as streaming left batches and re-scanning the right side
-///   may be implemented in the future.
+/// If the memory budget is exceeded during left-side buffering, fallback
+/// strategies such as streaming left batches and re-scanning the right side
+/// may be implemented in the future.
+///
+/// Tracking issue: https://github.com/apache/datafusion/issues/15760
 ///
 /// # Clone / Shared State
 /// Note this structure includes a [`OnceAsync`] that is used to coordinate the
@@ -508,7 +515,7 @@ impl ExecutionPlan for NestedLoopJoinExec {
             None => self.column_indices.clone(),
         };
 
-        Ok(Box::pin(NLJStream::new(
+        Ok(Box::pin(NestedLoopJoinStream::new(
             self.schema(),
             self.filter.clone(),
             self.join_type,
@@ -695,7 +702,7 @@ enum NLJState {
     EmitLeftUnmatched,
     Done,
 }
-pub(crate) struct NLJStream {
+pub(crate) struct NestedLoopJoinStream {
     // ========================================================================
     // PROPERTIES:
     // Operator's properties that remain constant
@@ -710,9 +717,9 @@ pub(crate) struct NLJStream {
     /// type of the join
     pub(crate) join_type: JoinType,
     /// the outer(right) table data of the nested loop join
-    pub(crate) outer_table: SendableRecordBatchStream,
+    pub(crate) right_data: SendableRecordBatchStream,
     /// the inner(left) table data of the nested loop join
-    pub(crate) inner_table: OnceFut<JoinLeftData>,
+    pub(crate) left_data: OnceFut<JoinLeftData>,
     /// Projection to construct the output schema from the left and right tables.
     /// Example:
     /// - output_schema: ['a', 'c']
@@ -732,11 +739,7 @@ pub(crate) struct NLJStream {
     /// `batch_size` from configuration
     cfg_batch_size: usize,
 
-    /// Should we use a bitmap to track each incoming right batch's each row's
-    /// 'joined' status.
-    /// For example in right joins, we have to use a bit map to track matched
-    /// right side rows, and later enter a `EmitRightUnmatched` stage to emit
-    /// unmatched right rows.
+    /// See comments in [`need_produce_right_in_final`] for more detail
     should_track_unmatched_right: bool,
 
     // ========================================================================
@@ -756,9 +759,9 @@ pub(crate) struct NLJStream {
     /// The current buffered left data to join
     buffered_left_data: Option<Arc<JoinLeftData>>,
     /// Index into the left buffered batch. Used in `ProbeRight` state
-    l_probe_idx: usize,
+    left_probe_idx: usize,
     /// Index into the left buffered batch. Used in `EmitLeftUnmatched` state
-    l_emit_idx: usize,
+    left_emit_idx: usize,
     /// Should we go back to `BufferingLeft` state again after `EmitLeftUnmatched`
     /// state is over.
     left_exhausted: bool,
@@ -776,7 +779,7 @@ pub(crate) struct NLJStream {
     current_right_batch_matched: Option<BooleanArray>,
 }
 
-impl Stream for NLJStream {
+impl Stream for NestedLoopJoinStream {
     type Item = Result<RecordBatch>;
 
     /// See the comments [`NestedLoopJoinExec`] for high-level design ideas.
@@ -967,13 +970,13 @@ impl Stream for NLJStream {
     }
 }
 
-impl RecordBatchStream for NLJStream {
+impl RecordBatchStream for NestedLoopJoinStream {
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.output_schema)
     }
 }
 
-impl NLJStream {
+impl NestedLoopJoinStream {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         schema: Arc<Schema>,
@@ -985,22 +988,13 @@ impl NLJStream {
         join_metrics: BuildProbeJoinMetrics,
         cfg_batch_size: usize,
     ) -> Self {
-        let should_track_unmatched_right = matches!(
-            join_type,
-            JoinType::Full
-                | JoinType::Right
-                | JoinType::RightAnti
-                | JoinType::RightMark
-                | JoinType::RightSemi
-        );
-
         Self {
             output_schema: Arc::clone(&schema),
             join_filter: filter,
             join_type,
-            outer_table,
+            right_data: outer_table,
             column_indices,
-            inner_table,
+            left_data: inner_table,
             join_metrics,
             buffered_left_data: None,
             output_buffer: Box::new(BatchCoalescer::new(schema, cfg_batch_size)),
@@ -1008,12 +1002,12 @@ impl NLJStream {
             current_right_batch: None,
             current_right_batch_matched: None,
             state: NLJState::BufferingLeft,
-            l_probe_idx: 0,
-            l_emit_idx: 0,
+            left_probe_idx: 0,
+            left_emit_idx: 0,
             left_exhausted: false,
             left_buffered_in_one_pass: true,
             handled_empty_output: false,
-            should_track_unmatched_right,
+            should_track_unmatched_right: need_produce_right_in_final(join_type),
         }
     }
 
@@ -1024,7 +1018,7 @@ impl NLJStream {
         &mut self,
         cx: &mut std::task::Context<'_>,
     ) -> ControlFlow<Poll<Option<Result<RecordBatch>>>> {
-        match self.inner_table.get_shared(cx) {
+        match self.left_data.get_shared(cx) {
             Poll::Ready(Ok(left_data)) => {
                 self.buffered_left_data = Some(left_data);
                 // TODO: implement memory-limited case
@@ -1043,14 +1037,13 @@ impl NLJStream {
         &mut self,
         cx: &mut std::task::Context<'_>,
     ) -> ControlFlow<Poll<Option<Result<RecordBatch>>>> {
-        match self.outer_table.poll_next_unpin(cx) {
+        match self.right_data.poll_next_unpin(cx) {
             Poll::Ready(result) => match result {
                 Some(Ok(right_batch)) => {
                     // Update metrics
-                    self.join_metrics.input_rows.add(right_batch.num_rows());
-                    self.join_metrics.input_batches.add(1);
-
                     let right_batch_size = right_batch.num_rows();
+                    self.join_metrics.input_rows.add(right_batch_size);
+                    self.join_metrics.input_batches.add(1);
 
                     // Skip the empty batch
                     if right_batch_size == 0 {
@@ -1066,7 +1059,7 @@ impl NLJStream {
                             Some(BooleanArray::new(zeroed_buf, None));
                     }
 
-                    self.l_probe_idx = 0;
+                    self.left_probe_idx = 0;
                     self.state = NLJState::ProbeRight;
                     ControlFlow::Continue(())
                 }
@@ -1099,9 +1092,12 @@ impl NLJStream {
             // (cur_right_batch x buffered_left_batches)
             Ok(false) => {
                 // Left exhausted, transition to FetchingRight
-                self.l_probe_idx = 0;
+                self.left_probe_idx = 0;
                 if self.should_track_unmatched_right {
-                    debug_assert!(self.current_right_batch_matched.is_some());
+                    debug_assert!(
+                        self.current_right_batch_matched.is_some(),
+                        "If it's required to track matched rows in the right input, the right bitmap must be present"
+                    );
                     self.state = NLJState::EmitRightUnmatched;
                 } else {
                     self.current_right_batch = None;
@@ -1122,8 +1118,11 @@ impl NLJStream {
             return ControlFlow::Break(poll);
         }
 
-        debug_assert!(self.current_right_batch.is_some());
-        debug_assert!(self.current_right_batch_matched.is_some());
+        debug_assert!(
+            self.current_right_batch_matched.is_some()
+                && self.current_right_batch.is_some(),
+            "This state is yielding output for unmatched rows in the current right batch, so both the right batch and the bitmap must be present"
+        );
 
         // Construct the result batch for unmatched right rows using a utility function
         match self.process_right_unmatched() {
@@ -1136,9 +1135,7 @@ impl NLJStream {
                         self.state = NLJState::FetchingRight;
                         ControlFlow::Continue(())
                     }
-                    Err(e) => ControlFlow::Break(Poll::Ready(Some(Err(
-                        DataFusionError::ArrowError(Box::new(e), None),
-                    )))),
+                    Err(e) => ControlFlow::Break(Poll::Ready(Some(arrow_err!(e)))),
                 }
             }
             Ok(None) => {
@@ -1173,9 +1170,7 @@ impl NLJStream {
                     self.state = NLJState::Done;
                     ControlFlow::Continue(())
                 }
-                Err(e) => ControlFlow::Break(Poll::Ready(Some(Err(
-                    DataFusionError::ArrowError(Box::new(e), None),
-                )))),
+                Err(e) => ControlFlow::Break(Poll::Ready(Some(arrow_err!(e)))),
             },
             Err(e) => ControlFlow::Break(Poll::Ready(Some(Err(e)))),
         }
@@ -1220,7 +1215,7 @@ impl NLJStream {
             .clone();
 
         // stop probing, the caller will go to the next state
-        if self.l_probe_idx >= left_data.batch().num_rows() {
+        if self.left_probe_idx >= left_data.batch().num_rows() {
             return Ok(false);
         }
 
@@ -1229,7 +1224,7 @@ impl NLJStream {
         // and push the result into output_buffer
         // ========
 
-        let l_idx = self.l_probe_idx;
+        let l_idx = self.left_probe_idx;
         let join_batch =
             self.process_single_left_row_join(&left_data, &right_batch, l_idx)?;
 
@@ -1240,7 +1235,7 @@ impl NLJStream {
         // ==== Prepare for the next iteration ====
 
         // Advance left cursor
-        self.l_probe_idx += 1;
+        self.left_probe_idx += 1;
 
         // Return true to continue probing
         Ok(true)
@@ -1311,18 +1306,19 @@ impl NLJStream {
         let left_data = self.get_left_data()?;
         let left_batch = left_data.batch();
 
+        // ========
+        // Check early return conditions
+        // ========
+
         // Early return if join type can't have unmatched rows
-        if !need_produce_result_in_final(self.join_type) {
-            return Ok(false);
-        }
-
+        let join_type_no_produce_left = !need_produce_result_in_final(self.join_type);
         // Early return if another thread is already processing unmatched rows
-        if self.l_emit_idx == 0 && !left_data.report_probe_completed() {
-            return Ok(false);
-        }
-
+        let handled_by_other_partition =
+            self.left_emit_idx == 0 && !left_data.report_probe_completed();
         // Stop processing unmatched rows, the caller will go to the next state
-        if self.l_emit_idx >= left_batch.num_rows() {
+        let finished = self.left_emit_idx >= left_batch.num_rows();
+
+        if join_type_no_produce_left || handled_by_other_partition || finished {
             return Ok(false);
         }
 
@@ -1330,7 +1326,7 @@ impl NLJStream {
         // Process unmatched rows and push the result into output_buffer
         // Each time, the number to process is up to batch size
         // ========
-        let start_idx = self.l_emit_idx;
+        let start_idx = self.left_emit_idx;
         let end_idx =
             std::cmp::min(start_idx + self.cfg_batch_size, left_batch.num_rows());
 
@@ -1341,7 +1337,7 @@ impl NLJStream {
         }
 
         // ==== Prepare for the next iteration ====
-        self.l_emit_idx = end_idx;
+        self.left_emit_idx = end_idx;
 
         // Return true to continue processing unmatched rows
         Ok(true)
@@ -1391,7 +1387,7 @@ impl NLJStream {
             Arc::clone(&self.output_schema),
             &left_batch_sliced,
             bitmap_sliced,
-            self.outer_table.schema(),
+            self.right_data.schema(),
             &self.column_indices,
             self.join_type,
             JoinSide::Left,
