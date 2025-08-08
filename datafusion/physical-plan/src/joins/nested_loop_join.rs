@@ -157,7 +157,7 @@ use parking_lot::Mutex;
 /// strategies such as streaming left batches and re-scanning the right side
 /// may be implemented in the future.
 ///
-/// Tracking issue: https://github.com/apache/datafusion/issues/15760
+/// Tracking issue: <https://github.com/apache/datafusion/issues/15760>
 ///
 /// # Clone / Shared State
 /// Note this structure includes a [`OnceAsync`] that is used to coordinate the
