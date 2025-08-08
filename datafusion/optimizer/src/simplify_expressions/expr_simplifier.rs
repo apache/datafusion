@@ -2433,15 +2433,15 @@ mod tests {
 
     #[test]
     fn test_simplify_multiply_by_null() {
-        let null = lit(ScalarValue::Null);
+        let null = lit(ScalarValue::Int64(None));
         // A * null --> null
         {
-            let expr = col("c2") * null.clone();
+            let expr = col("c3") * null.clone();
             assert_eq!(simplify(expr), null);
         }
         // null * A --> null
         {
-            let expr = null.clone() * col("c2");
+            let expr = null.clone() * col("c3");
             assert_eq!(simplify(expr), null);
         }
     }
@@ -2497,14 +2497,14 @@ mod tests {
     #[test]
     fn test_simplify_divide_null() {
         // A / null --> null
-        let null = lit(ScalarValue::Null);
+        let null = lit(ScalarValue::Int64(None));
         {
-            let expr = col("c1") / null.clone();
+            let expr = col("c3") / null.clone();
             assert_eq!(simplify(expr), null);
         }
         // null / A --> null
         {
-            let expr = null.clone() / col("c1");
+            let expr = null.clone() / col("c3");
             assert_eq!(simplify(expr), null);
         }
     }
@@ -2520,15 +2520,15 @@ mod tests {
 
     #[test]
     fn test_simplify_modulo_by_null() {
-        let null = lit(ScalarValue::Null);
+        let null = lit(ScalarValue::Int64(None));
         // A % null --> null
         {
-            let expr = col("c2") % null.clone();
+            let expr = col("c3") % null.clone();
             assert_eq!(simplify(expr), null);
         }
         // null % A --> null
         {
-            let expr = null.clone() % col("c2");
+            let expr = null.clone() % col("c3");
             assert_eq!(simplify(expr), null);
         }
     }
@@ -2574,45 +2574,45 @@ mod tests {
 
     #[test]
     fn test_simplify_bitwise_xor_by_null() {
-        let null = lit(ScalarValue::Null);
+        let null = lit(ScalarValue::Int64(None));
         // A ^ null --> null
         {
-            let expr = col("c2") ^ null.clone();
+            let expr = col("c3") ^ null.clone();
             assert_eq!(simplify(expr), null);
         }
         // null ^ A --> null
         {
-            let expr = null.clone() ^ col("c2");
+            let expr = null.clone() ^ col("c3");
             assert_eq!(simplify(expr), null);
         }
     }
 
     #[test]
     fn test_simplify_bitwise_shift_right_by_null() {
-        let null = lit(ScalarValue::Null);
+        let null = lit(ScalarValue::Int64(None));
         // A >> null --> null
         {
-            let expr = col("c2") >> null.clone();
+            let expr = col("c3") >> null.clone();
             assert_eq!(simplify(expr), null);
         }
         // null >> A --> null
         {
-            let expr = null.clone() >> col("c2");
+            let expr = null.clone() >> col("c3");
             assert_eq!(simplify(expr), null);
         }
     }
 
     #[test]
     fn test_simplify_bitwise_shift_left_by_null() {
-        let null = lit(ScalarValue::Null);
+        let null = lit(ScalarValue::Int64(None));
         // A << null --> null
         {
-            let expr = col("c2") << null.clone();
+            let expr = col("c3") << null.clone();
             assert_eq!(simplify(expr), null);
         }
         // null << A --> null
         {
-            let expr = null.clone() << col("c2");
+            let expr = null.clone() << col("c3");
             assert_eq!(simplify(expr), null);
         }
     }
@@ -2679,15 +2679,15 @@ mod tests {
 
     #[test]
     fn test_simplify_bitwise_and_by_null() {
-        let null = lit(ScalarValue::Null);
+        let null = Expr::Literal(ScalarValue::Int64(None), None);
         // A & null --> null
         {
-            let expr = col("c2") & null.clone();
+            let expr = col("c3") & null.clone();
             assert_eq!(simplify(expr), null);
         }
         // null & A --> null
         {
-            let expr = null.clone() & col("c2");
+            let expr = null.clone() & col("c3");
             assert_eq!(simplify(expr), null);
         }
     }
