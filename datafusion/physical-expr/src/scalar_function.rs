@@ -39,7 +39,7 @@ use crate::PhysicalExpr;
 
 use arrow::array::{Array, RecordBatch};
 use arrow::datatypes::{DataType, FieldRef, Schema};
-use datafusion_common::config::ConfigOptions;
+use datafusion_common::config::{ConfigEntry, ConfigOptions};
 use datafusion_common::{internal_err, Result, ScalarValue};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::ExprProperties;
@@ -48,7 +48,6 @@ use datafusion_expr::{
     expr_vec_fmt, ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF,
 };
 use datafusion_physical_expr_common::physical_expr::{DynEq, DynHash};
-use itertools::Itertools;
 
 /// Physical expression of a scalar function
 pub struct ScalarFunctionExpr {
@@ -182,20 +181,8 @@ impl DynEq for ScalarFunctionExpr {
                 && self.name.eq(&o.name)
                 && self.args.eq(&o.args)
                 && self.return_field.eq(&o.return_field)
-                && self
-                    .config_options
-                    .entries()
-                    .iter()
-                    .sorted_by(|&l, &r| l.key.cmp(&r.key))
-                    .zip(
-                        o.config_options
-                            .entries()
-                            .iter()
-                            .sorted_by(|&l, &r| l.key.cmp(&r.key)),
-                    )
-                    .filter(|(l, r)| l.ne(r))
-                    .count()
-                    == 0
+                && sorted_config_entries(&self.config_options)
+                    == sorted_config_entries(&o.config_options)
         })
     }
 }
@@ -209,6 +196,12 @@ impl DynHash for ScalarFunctionExpr {
         self.return_field.hash(&mut state);
         self.config_options.entries().hash(&mut state);
     }
+}
+
+fn sorted_config_entries(config_options: &ConfigOptions) -> Vec<ConfigEntry> {
+    let mut entries = config_options.entries();
+    entries.sort_by(|l, r| l.key.cmp(&r.key));
+    entries
 }
 
 impl PhysicalExpr for ScalarFunctionExpr {
