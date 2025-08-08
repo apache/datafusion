@@ -164,11 +164,8 @@ impl ObjectStore for VirtualObjectStore {
                     };
                     let single_stream =
                         store.list(inner_prefix).map_ok(move |mut meta| {
-                            meta.location = Path::from(format!(
-                                "{}/{}",
-                                base.as_ref(),
-                                meta.location.as_ref()
-                            ));
+                            // Use Path::child to join base and meta.location
+                            meta.location = base.child(meta.location.as_ref());
                             meta
                         });
                     return single_stream.boxed();
@@ -185,12 +182,11 @@ impl ObjectStore for VirtualObjectStore {
             .collect();
         let streams = entries.into_iter().map(move |(key, store)| {
             let base = Path::from(key);
-            let prefix = prefix_owned
-                .as_ref()
-                .map(|p| Path::from(format!("{}/{}", base.as_ref(), p.as_ref())));
+            // Join prefix using child if present
+            let prefix = prefix_owned.as_ref().map(|p| base.child(p.as_ref()));
             store.list(prefix.as_ref()).map_ok(move |mut meta| {
-                meta.location =
-                    Path::from(format!("{}/{}", base.as_ref(), meta.location.as_ref()));
+                // Use Path::child to join base and meta.location
+                meta.location = base.child(meta.location.as_ref());
                 meta
             })
         });
