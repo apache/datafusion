@@ -21,6 +21,9 @@
 //! based on the first segment (prefix) of the object path. This allows, for example,
 //! mixing S3, local filesystem, or other stores under a single unified interface.
 //!
+//! Currently `VirtualObjectStore` only supports read operations such as `get` and
+//! `list`. Write operations like `put` and `delete` are not implemented.
+//!
 //! # Configuration
 //!
 //! Create a mapping from string prefixes to concrete `ObjectStore` implementations:
@@ -50,9 +53,6 @@
 //!
 //! // List objects under the "mem" prefix
 //! let all = vos.list(Some(&Path::from("mem/"))).collect::<Vec<_>>().await?;
-//!
-//! // Copy a file from one prefix to another
-//! vos.copy(&Path::from("mem/file1"), &Path::from("mem_backup/file1")).await?;
 //! # Ok::<_, object_store::Error>(())
 //! ```
 
@@ -119,21 +119,33 @@ impl fmt::Debug for VirtualObjectStore {
 impl ObjectStore for VirtualObjectStore {
     async fn put_opts(
         &self,
-        location: &Path,
-        payload: PutPayload,
-        opts: PutOptions,
+        _location: &Path,
+        _payload: PutPayload,
+        _opts: PutOptions,
     ) -> Result<PutResult> {
-        let (store, path) = self.resolve(location)?;
-        store.put_opts(&path, payload, opts).await
+        // TODO: Implement write operations if needed
+        Err(Error::NotSupported {
+            source: std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "VirtualObjectStore does not support write operations",
+            )
+            .into(),
+        })
     }
 
     async fn put_multipart_opts(
         &self,
-        location: &Path,
-        opts: PutMultipartOptions,
+        _location: &Path,
+        _opts: PutMultipartOptions,
     ) -> Result<Box<dyn MultipartUpload>> {
-        let (store, path) = self.resolve(location)?;
-        store.put_multipart_opts(&path, opts).await
+        // TODO: Implement write operations if needed
+        Err(Error::NotSupported {
+            source: std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "VirtualObjectStore does not support write operations",
+            )
+            .into(),
+        })
     }
 
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
@@ -141,9 +153,15 @@ impl ObjectStore for VirtualObjectStore {
         store.get_opts(&path, options).await
     }
 
-    async fn delete(&self, location: &Path) -> Result<()> {
-        let (store, path) = self.resolve(location)?;
-        store.delete(&path).await
+    async fn delete(&self, _location: &Path) -> Result<()> {
+        // TODO: Implement write operations if needed
+        Err(Error::NotSupported {
+            source: std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "VirtualObjectStore does not support write operations",
+            )
+            .into(),
+        })
     }
 
     fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
@@ -164,8 +182,13 @@ impl ObjectStore for VirtualObjectStore {
                     };
                     let single_stream =
                         store.list(inner_prefix).map_ok(move |mut meta| {
-                            // Use Path::child to join base and meta.location
-                            meta.location = base.child(meta.location.as_ref());
+                            // Join base and meta.location using string formatting to
+                            // preserve any nested paths
+                            meta.location = Path::from(format!(
+                                "{}/{}",
+                                base.as_ref(),
+                                meta.location.as_ref()
+                            ));
                             meta
                         });
                     return single_stream.boxed();
@@ -222,35 +245,26 @@ impl ObjectStore for VirtualObjectStore {
         })
     }
 
-    async fn copy(&self, from: &Path, to: &Path) -> Result<()> {
-        let (from_store, from_path) = self.resolve(from)?;
-        let (to_store, to_path) = self.resolve(to)?;
-        if Arc::ptr_eq(from_store, to_store) {
-            from_store.copy(&from_path, &to_path).await
-        } else {
-            let bytes = from_store.get(&from_path).await?.bytes().await?;
-            to_store.put(&to_path, bytes.into()).await.map(|_| ())
-        }
+    async fn copy(&self, _from: &Path, _to: &Path) -> Result<()> {
+        // TODO: Implement write operations if needed
+        Err(Error::NotSupported {
+            source: std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "VirtualObjectStore does not support write operations",
+            )
+            .into(),
+        })
     }
 
-    async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
-        let (from_store, from_path) = self.resolve(from)?;
-        let (to_store, to_path) = self.resolve(to)?;
-        if Arc::ptr_eq(from_store, to_store) {
-            from_store.copy_if_not_exists(&from_path, &to_path).await
-        } else {
-            match to_store.head(&to_path).await {
-                Ok(_) => Err(Error::AlreadyExists {
-                    path: to_path.to_string(),
-                    source: "destination exists".into(),
-                }),
-                Err(Error::NotFound { .. }) => {
-                    let bytes = from_store.get(&from_path).await?.bytes().await?;
-                    to_store.put(&to_path, bytes.into()).await.map(|_| ())
-                }
-                Err(e) => Err(e),
-            }
-        }
+    async fn copy_if_not_exists(&self, _from: &Path, _to: &Path) -> Result<()> {
+        // TODO: Implement write operations if needed
+        Err(Error::NotSupported {
+            source: std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "VirtualObjectStore does not support write operations",
+            )
+            .into(),
+        })
     }
 }
 
@@ -258,9 +272,7 @@ impl ObjectStore for VirtualObjectStore {
 mod tests {
     use super::*;
     use futures::TryStreamExt;
-    use object_store::{
-        memory::InMemory, path::Path, Error, ObjectStore, PutMultipartOptions,
-    };
+    use object_store::{memory::InMemory, path::Path, ObjectStore};
 
     /// Helper to collect list results into Vec<String>
     async fn collect_list(
@@ -321,51 +333,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn copy_if_not_exists_destination_exists() {
-        let mut stores: HashMap<String, Arc<dyn ObjectStore>> = HashMap::new();
-        let from = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
-        let to = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
-        from.put(&Path::from("f1"), b"v".to_vec().into())
-            .await
-            .unwrap();
-        to.put(&Path::from("f1"), b"old".to_vec().into())
-            .await
-            .unwrap();
-        stores.insert("s".to_string(), from);
-        stores.insert("t".to_string(), to.clone());
-        let v = VirtualObjectStore::new(stores);
-        let err = v
-            .copy_if_not_exists(&Path::from("t/f1"), &Path::from("t/f1"))
-            .await;
-        assert!(matches!(err.unwrap_err(), Error::AlreadyExists { .. }));
-    }
-
-    #[tokio::test]
-    async fn copy_if_not_exists_streams_copy() {
-        let mut stores: HashMap<String, Arc<dyn ObjectStore>> = HashMap::new();
-        let from = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
-        let to = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
-        from.put(&Path::from("f1"), b"123".to_vec().into())
-            .await
-            .unwrap();
-        stores.insert("src".to_string(), from.clone());
-        stores.insert("dst".to_string(), to.clone());
-        let v = VirtualObjectStore::new(stores);
-        v.copy_if_not_exists(&Path::from("src/f1"), &Path::from("dst/f1"))
-            .await
-            .unwrap();
-        // Verify data copied correctly
-        let data = to
-            .get(&Path::from("f1"))
-            .await
-            .unwrap()
-            .bytes()
-            .await
-            .unwrap();
-        assert_eq!(data, b"123".to_vec());
-    }
-
-    #[tokio::test]
     async fn list_with_delimiter_sorted() {
         let mut stores: HashMap<String, Arc<dyn ObjectStore>> = HashMap::new();
         let a = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
@@ -386,69 +353,5 @@ mod tests {
             .map(|o| o.location.as_ref().to_string())
             .collect();
         assert_eq!(locs, vec!["a/z1".to_string(), "b/a1".to_string()]);
-    }
-
-    #[tokio::test]
-    async fn multipart_upload_basic_and_abort() {
-        let mut stores = HashMap::new();
-        let a = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
-        stores.insert("a".to_string(), a.clone());
-        let v = VirtualObjectStore::new(stores);
-        // Initiate multipart upload
-        let mut upload = v
-            .put_multipart_opts(&Path::from("a/file"), PutMultipartOptions::default())
-            .await
-            .expect("multipart upload should succeed");
-        // Abort should succeed
-        let res = upload.abort().await;
-        assert!(res.is_ok(), "abort of multipart upload failed");
-    }
-
-    #[tokio::test]
-    async fn multipart_upload_no_matching_prefix_error() {
-        let mut stores = HashMap::new();
-        stores.insert(
-            "x".to_string(),
-            Arc::new(InMemory::new()) as Arc<dyn ObjectStore>,
-        );
-        let v = VirtualObjectStore::new(stores);
-        let err = v
-            .put_multipart_opts(&Path::from("nope/file"), PutMultipartOptions::default())
-            .await;
-        assert!(err.is_err(), "expected error for no matching prefix");
-        match err.unwrap_err() {
-            Error::Generic { store, source } => {
-                assert_eq!(store, "VirtualObjectStore");
-                assert!(format!("{}", source).contains("prefix 'nope'"));
-            }
-            other => panic!("unexpected error type: {:?}", other),
-        }
-    }
-
-    #[tokio::test]
-    async fn multipart_upload_complete_and_put_part() {
-        let mut stores = HashMap::new();
-        let a = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
-        stores.insert("a".to_string(), a.clone());
-        let v = VirtualObjectStore::new(stores);
-        // Initiate multipart upload
-        let mut upload = v
-            .put_multipart_opts(&Path::from("a/complete"), PutMultipartOptions::default())
-            .await
-            .expect("multipart upload should succeed");
-        // Upload parts
-        upload.put_part(b"foo".to_vec().into()).await.unwrap();
-        upload.put_part(b"bar".to_vec().into()).await.unwrap();
-        // Complete upload
-        upload.complete().await.unwrap();
-        // Verify data on underlying store
-        let data = a
-            .get(&Path::from("complete"))
-            .await
-            .unwrap()
-            .bytes()
-            .await
-            .unwrap();
-        assert_eq!(data, b"foobar".to_vec());
     }
 }
