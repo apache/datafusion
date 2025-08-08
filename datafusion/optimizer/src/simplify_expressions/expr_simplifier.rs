@@ -773,6 +773,29 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
 
         let info = self.info;
         Ok(match expr {
+            // `value op NULL` -> `NULL`
+            // `NULL op value` -> `NULL`
+            // except for few operators that can return non-null value even when one of the operands is NULL
+            ref expr @ Expr::BinaryExpr(BinaryExpr {
+                ref left,
+                ref op,
+                ref right,
+            }) if binary_op_null_on_null(*op)
+                && (is_null(left.as_ref()) || is_null(right.as_ref())) =>
+            {
+                Transformed::yes(Expr::Literal(
+                    ScalarValue::try_new_null(&info.get_data_type(expr)?)?,
+                    None,
+                ))
+            }
+
+            // `NULL {AND, OR} NULL` -> `NULL`
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: And | Or,
+                right,
+            }) if is_null(&left) && is_null(&right) => Transformed::yes(lit_bool_null()),
+
             //
             // Rules for Eq
             //
@@ -1048,14 +1071,6 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
             }) if is_one(&right) => {
                 simplify_right_is_one_case(info, left, &Multiply, &right)?
             }
-            // A * null --> null
-            Expr::BinaryExpr(BinaryExpr {
-                left,
-                op: Multiply,
-                right,
-            }) if is_null(&right) => {
-                simplify_right_is_null_case(info, &left, &Multiply, right)?
-            }
             // 1 * A --> A
             Expr::BinaryExpr(BinaryExpr {
                 left,
@@ -1064,14 +1079,6 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
             }) if is_one(&left) => {
                 // 1 * A is equivalent to A * 1
                 simplify_right_is_one_case(info, right, &Multiply, &left)?
-            }
-            // null * A --> null
-            Expr::BinaryExpr(BinaryExpr {
-                left,
-                op: Multiply,
-                right,
-            }) if is_null(&left) => {
-                simplify_right_is_null_case(info, &right, &Multiply, left)?
             }
 
             // A * 0 --> 0 (if A is not null and not floating, since NAN * 0 -> NAN)
@@ -1109,37 +1116,11 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
             }) if is_one(&right) => {
                 simplify_right_is_one_case(info, left, &Divide, &right)?
             }
-            // A / null --> null
-            Expr::BinaryExpr(BinaryExpr {
-                left,
-                op: Divide,
-                right,
-            }) if is_null(&right) => {
-                simplify_right_is_null_case(info, &left, &Divide, right)?
-            }
-            // null / A --> null
-            Expr::BinaryExpr(BinaryExpr {
-                left,
-                op: Divide,
-                right,
-            }) if is_null(&left) => simplify_null_div_other_case(info, left, &right)?,
 
             //
             // Rules for Modulo
             //
 
-            // A % null --> null
-            Expr::BinaryExpr(BinaryExpr {
-                left: _,
-                op: Modulo,
-                right,
-            }) if is_null(&right) => Transformed::yes(*right),
-            // null % A --> null
-            Expr::BinaryExpr(BinaryExpr {
-                left,
-                op: Modulo,
-                right: _,
-            }) if is_null(&left) => Transformed::yes(*left),
             // A % 1 --> 0 (if A is not nullable and not floating, since NAN % 1 --> NAN)
             Expr::BinaryExpr(BinaryExpr {
                 left,
@@ -1158,20 +1139,6 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
             //
             // Rules for BitwiseAnd
             //
-
-            // A & null -> null
-            Expr::BinaryExpr(BinaryExpr {
-                left: _,
-                op: BitwiseAnd,
-                right,
-            }) if is_null(&right) => Transformed::yes(*right),
-
-            // null & A -> null
-            Expr::BinaryExpr(BinaryExpr {
-                left,
-                op: BitwiseAnd,
-                right: _,
-            }) if is_null(&left) => Transformed::yes(*left),
 
             // A & 0 -> 0 (if A not nullable)
             Expr::BinaryExpr(BinaryExpr {
@@ -1247,20 +1214,6 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
             // Rules for BitwiseOr
             //
 
-            // A | null -> null
-            Expr::BinaryExpr(BinaryExpr {
-                left: _,
-                op: BitwiseOr,
-                right,
-            }) if is_null(&right) => Transformed::yes(*right),
-
-            // null | A -> null
-            Expr::BinaryExpr(BinaryExpr {
-                left,
-                op: BitwiseOr,
-                right: _,
-            }) if is_null(&left) => Transformed::yes(*left),
-
             // A | 0 -> A (even if A is null)
             Expr::BinaryExpr(BinaryExpr {
                 left,
@@ -1334,20 +1287,6 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
             //
             // Rules for BitwiseXor
             //
-
-            // A ^ null -> null
-            Expr::BinaryExpr(BinaryExpr {
-                left: _,
-                op: BitwiseXor,
-                right,
-            }) if is_null(&right) => Transformed::yes(*right),
-
-            // null ^ A -> null
-            Expr::BinaryExpr(BinaryExpr {
-                left,
-                op: BitwiseXor,
-                right: _,
-            }) if is_null(&left) => Transformed::yes(*left),
 
             // A ^ 0 -> A (if A not nullable)
             Expr::BinaryExpr(BinaryExpr {
@@ -1425,20 +1364,6 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
             // Rules for BitwiseShiftRight
             //
 
-            // A >> null -> null
-            Expr::BinaryExpr(BinaryExpr {
-                left: _,
-                op: BitwiseShiftRight,
-                right,
-            }) if is_null(&right) => Transformed::yes(*right),
-
-            // null >> A -> null
-            Expr::BinaryExpr(BinaryExpr {
-                left,
-                op: BitwiseShiftRight,
-                right: _,
-            }) if is_null(&left) => Transformed::yes(*left),
-
             // A >> 0 -> A (even if A is null)
             Expr::BinaryExpr(BinaryExpr {
                 left,
@@ -1449,20 +1374,6 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
             //
             // Rules for BitwiseShiftRight
             //
-
-            // A << null -> null
-            Expr::BinaryExpr(BinaryExpr {
-                left: _,
-                op: BitwiseShiftLeft,
-                right,
-            }) if is_null(&right) => Transformed::yes(*right),
-
-            // null << A -> null
-            Expr::BinaryExpr(BinaryExpr {
-                left,
-                op: BitwiseShiftLeft,
-                right: _,
-            }) if is_null(&left) => Transformed::yes(*left),
 
             // A << 0 -> A (even if A is null)
             Expr::BinaryExpr(BinaryExpr {
@@ -1947,6 +1858,53 @@ fn has_common_conjunction(lhs: &Expr, rhs: &Expr) -> bool {
     iter_conjunction(rhs).any(|e| lhs_set.contains(&e) && !e.is_volatile())
 }
 
+fn binary_op_null_on_null(op: Operator) -> bool {
+    match op {
+        Operator::Eq
+        | Operator::NotEq
+        | Operator::Lt
+        | Operator::LtEq
+        | Operator::Gt
+        | Operator::GtEq
+        | Operator::Plus
+        | Operator::Minus
+        | Operator::Multiply
+        | Operator::Divide
+        | Operator::Modulo
+        | Operator::RegexMatch
+        | Operator::RegexIMatch
+        | Operator::RegexNotMatch
+        | Operator::RegexNotIMatch
+        | Operator::LikeMatch
+        | Operator::ILikeMatch
+        | Operator::NotLikeMatch
+        | Operator::NotILikeMatch
+        | Operator::BitwiseAnd
+        | Operator::BitwiseOr
+        | Operator::BitwiseXor
+        | Operator::BitwiseShiftRight
+        | Operator::BitwiseShiftLeft
+        | Operator::AtArrow
+        | Operator::ArrowAt
+        | Operator::Arrow
+        | Operator::LongArrow
+        | Operator::HashArrow
+        | Operator::HashLongArrow
+        | Operator::AtAt
+        | Operator::IntegerDivide
+        | Operator::HashMinus
+        | Operator::AtQuestion
+        | Operator::Question
+        | Operator::QuestionAnd
+        | Operator::QuestionPipe => true,
+        Operator::Or
+        | Operator::And
+        | Operator::IsDistinctFrom
+        | Operator::IsNotDistinctFrom
+        | Operator::StringConcat => false,
+    }
+}
+
 // TODO: We might not need this after defer pattern for Box is stabilized. https://github.com/rust-lang/rust/issues/87121
 fn are_inlist_and_eq_and_match_neg(
     left: &Expr,
@@ -2099,58 +2057,6 @@ fn simplify_right_is_one_case<S: SimplifyInfo>(
     let left_type = info.get_data_type(&left)?;
     let right_type = info.get_data_type(right)?;
     match BinaryTypeCoercer::new(&left_type, op, &right_type).get_result_type() {
-        Ok(result_type) => {
-            // Only cast if the types differ
-            if left_type != result_type {
-                Ok(Transformed::yes(Expr::Cast(Cast::new(left, result_type))))
-            } else {
-                Ok(Transformed::yes(*left))
-            }
-        }
-        Err(_) => Ok(Transformed::yes(*left)),
-    }
-}
-
-// A * null -> null
-// A / null -> null
-//
-// Move this function body out of the large match branch avoid stack overflow
-fn simplify_right_is_null_case<S: SimplifyInfo>(
-    info: &S,
-    left: &Expr,
-    op: &Operator,
-    right: Box<Expr>,
-) -> Result<Transformed<Expr>> {
-    // Check if resulting type would be different due to coercion
-    let left_type = info.get_data_type(left)?;
-    let right_type = info.get_data_type(&right)?;
-    match BinaryTypeCoercer::new(&left_type, op, &right_type).get_result_type() {
-        Ok(result_type) => {
-            // Only cast if the types differ
-            if right_type != result_type {
-                Ok(Transformed::yes(Expr::Cast(Cast::new(right, result_type))))
-            } else {
-                Ok(Transformed::yes(*right))
-            }
-        }
-        Err(_) => Ok(Transformed::yes(*right)),
-    }
-}
-
-// null / A --> null
-//
-// Move this function body out of the large match branch avoid stack overflow
-fn simplify_null_div_other_case<S: SimplifyInfo>(
-    info: &S,
-    left: Box<Expr>,
-    right: &Expr,
-) -> Result<Transformed<Expr>> {
-    // Check if resulting type would be different due to coercion
-    let left_type = info.get_data_type(&left)?;
-    let right_type = info.get_data_type(right)?;
-    match BinaryTypeCoercer::new(&left_type, &Operator::Divide, &right_type)
-        .get_result_type()
-    {
         Ok(result_type) => {
             // Only cast if the types differ
             if left_type != result_type {
