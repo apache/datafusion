@@ -43,6 +43,7 @@ use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::disk_manager::RefCountedTempFile;
 use datafusion_execution::RecordBatchStream;
 use futures::{FutureExt as _, Stream};
+use log::warn;
 
 /// Stream that reads spill files from disk where each batch is read in a spawned blocking task
 /// It will read one batch at a time and will not do any buffering, to buffer data use [`crate::common::spawn_buffered`]
@@ -54,12 +55,15 @@ use futures::{FutureExt as _, Stream};
 struct SpillReaderStream {
     schema: SchemaRef,
     state: SpillReaderStreamState,
-    /// how much memory the largest memory batch is taking
-    pub max_record_batch_memory: Option<usize>,
+    /// Maximum memory size observed among spilling sorted record batches.
+    /// This is used for validation purposes during reading each RecordBatch from spill.
+    /// For context on why this value is recorded and validated,
+    /// see `physical_plan/sort/multi_level_merge.rs`.
+    max_record_batch_memory: Option<usize>,
 }
 
 // Small margin allowed to accommodate slight memory accounting variation
-const MEMORY_MARGIN: usize = 4096;
+const SPILL_BATCH_MEMORY_MARGIN: usize = 4096;
 
 /// When we poll for the next batch, we will get back both the batch and the reader,
 /// so we can call `next` again.
@@ -141,19 +145,15 @@ impl SpillReaderStream {
                                     let actual_size =
                                         get_record_batch_memory_size(&batch);
                                     if actual_size
-                                        > max_record_batch_memory + MEMORY_MARGIN
+                                        > max_record_batch_memory
+                                            + SPILL_BATCH_MEMORY_MARGIN
                                     {
-                                        return Poll::Ready(Some(Err(
-                                            DataFusionError::ResourcesExhausted(
-                                                format!(
-                                                    "Record batch memory usage ({actual_size} bytes) exceeds the expected limit ({max_record_batch_memory} bytes)\n
-                                                    by more than the allowed tolerance ({MEMORY_MARGIN} bytes).\n
-                                                    This likely indicates a bug in memory accounting during spilling.\n
-                                                    Please report this issue",
-                                                )
-                                                .to_owned(),
-                                            ),
-                                        )));
+                                        warn!(
+                                                "Record batch memory usage ({actual_size} bytes) exceeds the expected limit ({max_record_batch_memory} bytes) \n\
+                                                by more than the allowed tolerance ({SPILL_BATCH_MEMORY_MARGIN} bytes).\n\
+                                                This likely indicates a bug in memory accounting during spilling.\n\
+                                                Please report this issue in https://github.com/apache/datafusion/issues/17340."
+                                            );
                                     }
                                 }
                                 self.state = SpillReaderStreamState::Waiting(reader);
