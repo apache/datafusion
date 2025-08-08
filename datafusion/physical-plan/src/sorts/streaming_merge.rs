@@ -162,10 +162,8 @@ impl<'a> StreamingMergeBuilder<'a> {
     /// Bypass the mempool and avoid using the memory reservation.
     ///
     /// This is not marked as `pub` because it is not recommended to use this method
-    pub(super) fn with_bypass_mempool(self, memory_limit: usize) -> Self {
-        // TODO(ding-young) Bypass main memory pool and use separate GreedyMemoryPool for sanity check
-        // let mem_pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
-        let mem_pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(memory_limit));
+    pub(super) fn with_bypass_mempool(self) -> Self {
+        let mem_pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
 
         self.with_reservation(
             MemoryConsumer::new("merge stream mock memory").register(&mem_pool),
