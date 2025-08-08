@@ -54,3 +54,4 @@ async-trait = { workspace = true }
 [dev-dependencies]
 chrono = { workspace = true }
 insta = { workspace = true }
+tokio = { workspace = true }

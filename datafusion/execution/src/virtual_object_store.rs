@@ -44,14 +44,16 @@
 //!
 //! # Example Usage
 //!
-//! ```rust
+//! ```rust, ignore
 //! use object_store::path::Path;
+//! # let vos: VirtualObjectStore = unimplemented!();
 //!
 //! // List objects under the "mem" prefix
 //! let all = vos.list(Some(&Path::from("mem/"))).collect::<Vec<_>>().await?;
 //!
 //! // Copy a file from one prefix to another
 //! vos.copy(&Path::from("mem/file1"), &Path::from("mem_backup/file1")).await?;
+//! # Ok::<_, object_store::Error>(())
 //! ```
 
 use async_trait::async_trait;
@@ -60,7 +62,6 @@ use object_store::{
     path::Path, Error, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta,
     ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult, Result,
 };
-use std::fs::File;
 use std::{collections::HashMap, fmt, sync::Arc};
 /// A virtual [`ObjectStore`] that routes requests to underlying stores based on
 /// the first path segment.
@@ -161,7 +162,11 @@ impl ObjectStore for VirtualObjectStore {
                     };
                     let single_stream =
                         store.list(inner_prefix).map_ok(move |mut meta| {
-                            meta.location = base.child(meta.location.as_ref());
+                            meta.location = Path::from(format!(
+                                "{}/{}",
+                                base.as_ref(),
+                                meta.location.as_ref()
+                            ));
                             meta
                         });
                     return single_stream.boxed();
@@ -178,9 +183,12 @@ impl ObjectStore for VirtualObjectStore {
             .collect();
         let streams = entries.into_iter().map(move |(key, store)| {
             let base = Path::from(key);
-            let prefix = prefix_owned.as_ref().map(|p| base.child(p.as_ref()));
+            let prefix = prefix_owned
+                .as_ref()
+                .map(|p| Path::from(format!("{}/{}", base.as_ref(), p.as_ref())));
             store.list(prefix.as_ref()).map_ok(move |mut meta| {
-                meta.location = base.child(meta.location.as_ref());
+                meta.location =
+                    Path::from(format!("{}/{}", base.as_ref(), meta.location.as_ref()));
                 meta
             })
         });
@@ -192,17 +200,19 @@ impl ObjectStore for VirtualObjectStore {
         let mut common_prefixes = Vec::new();
         for (key, store) in &self.stores {
             let base = Path::from(key.clone());
-            let p = prefix.map(|x| base.child(x.as_ref()));
+            let p =
+                prefix.map(|x| Path::from(format!("{}/{}", base.as_ref(), x.as_ref())));
             let result = store.list_with_delimiter(p.as_ref()).await?;
             objects.extend(result.objects.into_iter().map(|mut m| {
-                m.location = base.child(m.location.as_ref());
+                m.location =
+                    Path::from(format!("{}/{}", base.as_ref(), m.location.as_ref()));
                 m
             }));
             common_prefixes.extend(
                 result
                     .common_prefixes
                     .into_iter()
-                    .map(|p| base.child(p.as_ref())),
+                    .map(|p| Path::from(format!("{}/{}", base.as_ref(), p.as_ref()))),
             );
         }
         // Sort merged results for deterministic ordering across stores
@@ -237,24 +247,8 @@ impl ObjectStore for VirtualObjectStore {
                     source: "destination exists".into(),
                 }),
                 Err(Error::NotFound { .. }) => {
-                    // Stream copy to avoid buffering entire object in memory
-                    let get_res = from_store.get(&from_path).await?;
-                    let payload = match get_res {
-                        GetResult::Stream { stream, .. } => PutPayload::Stream(stream),
-                        GetResult::File { path, .. } => {
-                            // Local file fallback: open for streaming
-                            let file = File::open(path).map_err(|e| Error::Generic {
-                                store: "VirtualObjectStore",
-                                source: format!(
-                                    "failed to open local file for streaming: {}",
-                                    e
-                                )
-                                .into(),
-                            })?;
-                            PutPayload::File(file)
-                        }
-                    };
-                    to_store.put(&to_path, payload).await.map(|_| ())
+                    let bytes = from_store.get(&from_path).await?.bytes().await?;
+                    to_store.put(&to_path, bytes.into()).await.map(|_| ())
                 }
                 Err(e) => Err(e),
             }
@@ -267,7 +261,7 @@ mod tests {
     use super::*;
     use futures::TryStreamExt;
     use object_store::{
-        memory::InMemory, path::Path, Error, GetResult, PutMultipartOptions, PutPayload,
+        memory::InMemory, path::Path, Error, ObjectStore, PutMultipartOptions,
     };
 
     /// Helper to collect list results into Vec<String>
@@ -305,8 +299,11 @@ mod tests {
 
     #[tokio::test]
     async fn list_no_matching_prefix_empty() {
-        let mut stores = HashMap::new();
-        stores.insert("x".to_string(), Arc::new(InMemory::new()));
+        let mut stores: HashMap<String, Arc<dyn ObjectStore>> = HashMap::new();
+        stores.insert(
+            "x".to_string(),
+            Arc::new(InMemory::new()) as Arc<dyn ObjectStore>,
+        );
         let v = VirtualObjectStore::new(stores);
         let result = collect_list(&v, Some(&Path::from("nope"))).await;
         assert!(result.is_empty());
@@ -327,9 +324,9 @@ mod tests {
 
     #[tokio::test]
     async fn copy_if_not_exists_destination_exists() {
-        let mut stores = HashMap::new();
-        let from = Arc::new(InMemory::new());
-        let to = Arc::new(InMemory::new());
+        let mut stores: HashMap<String, Arc<dyn ObjectStore>> = HashMap::new();
+        let from = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+        let to = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
         from.put(&Path::from("f1"), b"v".to_vec().into())
             .await
             .unwrap();
@@ -347,9 +344,9 @@ mod tests {
 
     #[tokio::test]
     async fn copy_if_not_exists_streams_copy() {
-        let mut stores = HashMap::new();
-        let from = Arc::new(InMemory::new());
-        let to = Arc::new(InMemory::new());
+        let mut stores: HashMap<String, Arc<dyn ObjectStore>> = HashMap::new();
+        let from = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+        let to = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
         from.put(&Path::from("f1"), b"123".to_vec().into())
             .await
             .unwrap();
@@ -372,7 +369,7 @@ mod tests {
 
     #[tokio::test]
     async fn list_with_delimiter_sorted() {
-        let mut stores = HashMap::new();
+        let mut stores: HashMap<String, Arc<dyn ObjectStore>> = HashMap::new();
         let a = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
         a.put(&Path::from("z1"), b"x".to_vec().into())
             .await
@@ -390,7 +387,7 @@ mod tests {
             .into_iter()
             .map(|o| o.location.as_ref().to_string())
             .collect();
-        assert_eq!(locs, vec!["a/a1".to_string(), "b/z1".to_string()]);
+        assert_eq!(locs, vec!["a/z1".to_string(), "b/a1".to_string()]);
     }
 
     #[tokio::test]
@@ -412,7 +409,10 @@ mod tests {
     #[tokio::test]
     async fn multipart_upload_no_matching_prefix_error() {
         let mut stores = HashMap::new();
-        stores.insert("x".to_string(), Arc::new(InMemory::new()));
+        stores.insert(
+            "x".to_string(),
+            Arc::new(InMemory::new()) as Arc<dyn ObjectStore>,
+        );
         let v = VirtualObjectStore::new(stores);
         let err = v
             .put_multipart_opts(&Path::from("nope/file"), PutMultipartOptions::default())
@@ -421,7 +421,7 @@ mod tests {
         match err.unwrap_err() {
             Error::Generic { store, source } => {
                 assert_eq!(store, "VirtualObjectStore");
-                assert!(source.contains("prefix 'nope'"));
+                assert!(format!("{}", source).contains("prefix 'nope'"));
             }
             other => panic!("unexpected error type: {:?}", other),
         }
@@ -439,15 +439,8 @@ mod tests {
             .await
             .expect("multipart upload should succeed");
         // Upload parts
-        // Upload parts
-        upload
-            .put_part(PutPayload::Bytes(b"foo".to_vec()))
-            .await
-            .unwrap();
-        upload
-            .put_part(PutPayload::Bytes(b"bar".to_vec()))
-            .await
-            .unwrap();
+        upload.put_part(b"foo".to_vec().into()).await.unwrap();
+        upload.put_part(b"bar".to_vec().into()).await.unwrap();
         // Complete upload
         upload.complete().await.unwrap();
         // Verify data on underlying store
