@@ -150,8 +150,10 @@ impl ObjectStore for VirtualObjectStore {
         let prefix_owned = prefix.cloned();
         // Short-circuit when prefix targets a single store key
         if let Some(ref pfx) = prefix_owned {
-            let mut p_parts = pfx.parts();
+            // Normalize prefix: skip empty segments to handle trailing slashes
+            let mut p_parts = pfx.parts().filter(|seg| !seg.as_ref().is_empty());
             if let Some(store_key) = p_parts.next().map(|s| s.as_ref().to_string()) {
+                // Collect remaining path segments
                 let remainder: Path = p_parts.collect();
                 if let Some(store) = self.stores.get(&store_key) {
                     let base = Path::from(store_key.clone());
