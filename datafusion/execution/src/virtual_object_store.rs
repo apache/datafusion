@@ -45,14 +45,18 @@ impl VirtualObjectStore {
             .next()
             .ok_or_else(|| Error::Generic {
                 store: "VirtualObjectStore",
-                source: "empty path".into(),
+                source: format!("empty path in location '{}'", location).into(),
             })?
             .as_ref()
             .to_string();
         let path: Path = parts.collect();
         let store = self.stores.get(&key).ok_or_else(|| Error::Generic {
             store: "VirtualObjectStore",
-            source: format!("ObjectStore not found for prefix {key}").into(),
+            source: format!(
+                "ObjectStore not found for prefix '{}' in location '{}'",
+                key, location
+            )
+            .into(),
         })?;
         Ok((store, path))
     }
