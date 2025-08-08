@@ -811,5 +811,26 @@ explain select x from t where x NOT IN (1,2,3,4,5) AND x IN (1,2,3);
 logical_plan EmptyRelation
 physical_plan EmptyExec
 
+query error DataFusion error: This feature is not implemented: Physical plan does not support logical expression InSubquery\(InSubquery \{ expr: Literal\(Int64\(NULL\), None\), subquery: <subquery>, negated: false \}\)
+WITH empty AS (SELECT 10 WHERE false)
+SELECT
+    NULL IN (SELECT * FROM empty), -- should be false, as the right side is empty relation
+    NULL NOT IN (SELECT * FROM empty) -- should be true, as the right side is empty relation
+FROM (SELECT 1) t;
+
+query I
+WITH empty AS (SELECT 10 WHERE false)
+SELECT * FROM (SELECT 1) t
+WHERE NOT (NULL IN (SELECT * FROM empty)); -- all rows should be returned
+----
+1
+
+query I
+WITH empty AS (SELECT 10 WHERE false)
+SELECT * FROM (SELECT 1) t
+WHERE NULL NOT IN (SELECT * FROM empty); -- all rows should be returned
+----
+1
+
 statement ok
 drop table t;
