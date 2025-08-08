@@ -103,6 +103,7 @@ pub struct ExprSimplifier<S> {
     /// Should expressions be canonicalized before simplification? Defaults to
     /// true
     canonicalize: bool,
+    evaluate_constants: bool,
     /// Maximum number of simplifier cycles
     max_simplifier_cycles: u32,
 }
@@ -121,6 +122,7 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
             info,
             guarantees: vec![],
             canonicalize: true,
+            evaluate_constants: true,
             max_simplifier_cycles: DEFAULT_MAX_SIMPLIFIER_CYCLES,
         }
     }
@@ -240,10 +242,14 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
         let mut num_cycles = 0;
         let mut has_transformed = false;
         loop {
+            let constant_folded = if self.evaluate_constants {
+                expr.rewrite(&mut const_evaluator)?
+            } else {
+                Transformed::no(expr)
+            };
             let Transformed {
                 data, transformed, ..
-            } = expr
-                .rewrite(&mut const_evaluator)?
+            } = constant_folded
                 .transform_data(|expr| expr.rewrite(&mut simplifier))?
                 .transform_data(|expr| expr.rewrite(&mut guarantee_rewriter))?;
             expr = data;
@@ -3360,12 +3366,18 @@ mod tests {
     // ------------------------------
 
     fn try_simplify(expr: Expr) -> Result<Expr> {
+        with_simplifier(|simplifier| simplifier.simplify(expr))
+    }
+
+    fn with_simplifier<T>(
+        callback: impl FnOnce(&mut ExprSimplifier<SimplifyContext>) -> T,
+    ) -> T {
         let schema = expr_test_schema();
         let execution_props = ExecutionProps::new();
-        let simplifier = ExprSimplifier::new(
+        let mut simplifier = ExprSimplifier::new(
             SimplifyContext::new(&execution_props).with_schema(schema),
         );
-        simplifier.simplify(expr)
+        callback(&mut simplifier)
     }
 
     fn coerce(expr: Expr) -> Expr {
@@ -3947,6 +3959,35 @@ mod tests {
         // https://github.com/apache/datafusion/issues/8970
         // assert_eq!(simplify(expr.clone()), lit(true));
         assert_eq!(simplify(expr.clone()), expr);
+    }
+
+    #[test]
+    fn simplify_null_in_empty_inlist() {
+        for canonicalize in [false, true] {
+            for evaluate_constants in [false, true] {
+                with_simplifier(|simplifier| {
+                    simplifier.canonicalize = canonicalize;
+                    simplifier.evaluate_constants = evaluate_constants;
+
+                    // `NULL::boolean IN ()` == `NULL::boolean IN (SELECT foo FROM empty)` == false
+                    let expr = in_list(lit_bool_null(), vec![], false);
+                    assert_eq!(simplifier.simplify(expr).unwrap(), lit(false));
+
+                    // `NULL::boolean NOT IN ()` == `NULL::boolean NOT IN (SELECT foo FROM empty)` == true
+                    let expr = in_list(lit_bool_null(), vec![], true);
+                    assert_eq!(simplifier.simplify(expr).unwrap(), lit(true));
+
+                    // `NULL IN ()` == `NULL IN (SELECT foo FROM empty)` == false
+                    let null_null = || Expr::Literal(ScalarValue::Null, None);
+                    let expr = in_list(null_null(), vec![], false);
+                    assert_eq!(simplifier.simplify(expr).unwrap(), lit(false));
+
+                    // `NULL NOT IN ()` == `NULL NOT IN (SELECT foo FROM empty)` == true
+                    let expr = in_list(null_null(), vec![], true);
+                    assert_eq!(simplifier.simplify(expr).unwrap(), lit(true));
+                })
+            }
+        }
     }
 
     #[test]
