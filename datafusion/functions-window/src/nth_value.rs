@@ -94,7 +94,7 @@ impl NthValueKind {
     }
 }
 
-#[derive(Debug, PartialEq, Hash)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct NthValue {
     signature: Signature,
     kind: NthValueKind,

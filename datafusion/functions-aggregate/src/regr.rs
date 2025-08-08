@@ -34,11 +34,11 @@ use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::type_coercion::aggregates::NUMERICS;
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, Documentation, Signature, Volatility,
+    udf_equals_hash, Accumulator, AggregateUDFImpl, Documentation, Signature, Volatility,
 };
 use std::any::Any;
 use std::fmt::Debug;
-use std::hash::{DefaultHasher, Hash, Hasher};
+use std::hash::Hash;
 use std::mem::size_of_val;
 use std::sync::{Arc, LazyLock};
 
@@ -59,6 +59,7 @@ make_regr_udaf_expr_and_func!(regr_sxx, regr_sxx_udaf, RegrType::SXX);
 make_regr_udaf_expr_and_func!(regr_syy, regr_syy_udaf, RegrType::SYY);
 make_regr_udaf_expr_and_func!(regr_sxy, regr_sxy_udaf, RegrType::SXY);
 
+#[derive(PartialEq, Eq, Hash)]
 pub struct Regr {
     signature: Signature,
     regr_type: RegrType,
@@ -527,33 +528,7 @@ impl AggregateUDFImpl for Regr {
         self.regr_type.documentation()
     }
 
-    fn equals(&self, other: &dyn AggregateUDFImpl) -> bool {
-        let Some(other) = other.as_any().downcast_ref::<Self>() else {
-            return false;
-        };
-        let Self {
-            signature,
-            regr_type,
-            func_name,
-        } = self;
-        signature == &other.signature
-            && regr_type == &other.regr_type
-            && func_name == &other.func_name
-    }
-
-    fn hash_value(&self) -> u64 {
-        let Self {
-            signature,
-            regr_type,
-            func_name,
-        } = self;
-        let mut hasher = DefaultHasher::new();
-        std::any::type_name::<Self>().hash(&mut hasher);
-        signature.hash(&mut hasher);
-        regr_type.hash(&mut hasher);
-        func_name.hash(&mut hasher);
-        hasher.finish()
-    }
+    udf_equals_hash!(AggregateUDFImpl);
 }
 
 /// `RegrAccumulator` is used to compute linear regression aggregate functions
