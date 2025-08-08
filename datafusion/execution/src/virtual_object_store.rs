@@ -23,6 +23,7 @@ use object_store::{
     path::Path, Error, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta,
     ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult, Result,
 };
+use std::fs::File;
 use std::{collections::HashMap, fmt, sync::Arc};
 /// A virtual [`ObjectStore`] that routes requests to underlying stores based on
 /// the first path segment.
@@ -167,6 +168,9 @@ impl ObjectStore for VirtualObjectStore {
                     .map(|p| base.child(p.as_ref())),
             );
         }
+        // Sort merged results for deterministic ordering across stores
+        objects.sort_by(|a, b| a.location.as_ref().cmp(b.location.as_ref()));
+        common_prefixes.sort_by(|a, b| a.as_ref().cmp(b.as_ref()));
         Ok(ListResult {
             objects,
             common_prefixes,
@@ -196,8 +200,24 @@ impl ObjectStore for VirtualObjectStore {
                     source: "destination exists".into(),
                 }),
                 Err(Error::NotFound { .. }) => {
-                    let bytes = from_store.get(&from_path).await?.bytes().await?;
-                    to_store.put(&to_path, bytes.into()).await.map(|_| ())
+                    // Stream copy to avoid buffering entire object in memory
+                    let get_res = from_store.get(&from_path).await?;
+                    let payload = match get_res {
+                        GetResult::Stream { stream, .. } => PutPayload::Stream(stream),
+                        GetResult::File { path, .. } => {
+                            // Local file fallback: open for streaming
+                            let file = File::open(path).map_err(|e| Error::Generic {
+                                store: "VirtualObjectStore",
+                                source: format!(
+                                    "failed to open local file for streaming: {}",
+                                    e
+                                )
+                                .into(),
+                            })?;
+                            PutPayload::File(file)
+                        }
+                    };
+                    to_store.put(&to_path, payload).await.map(|_| ())
                 }
                 Err(e) => Err(e),
             }
