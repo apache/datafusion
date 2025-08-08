@@ -413,13 +413,7 @@ impl HashJoinExec {
             projection.as_ref(),
         )?;
 
-        // Create a dynamic filter with the right-side join keys as children
-        let right_keys: Vec<_> = on.iter().map(|(_, r)| Arc::clone(r)).collect();
-
-        // Initialize with a placeholder expression (true) that will be updated
-        // when the hash table is built
-        let dynamic_filter =
-            Arc::new(DynamicFilterPhysicalExpr::new(right_keys, lit(true)));
+        let dynamic_filter = Self::create_dynamic_filter(&on);
 
         Ok(HashJoinExec {
             left,
@@ -438,6 +432,13 @@ impl HashJoinExec {
             cache,
             dynamic_filter,
         })
+    }
+
+    fn create_dynamic_filter(on: &JoinOn) -> Arc<DynamicFilterPhysicalExpr> {
+        // Extract the right-side keys from the `on` clauses
+        let right_keys: Vec<_> = on.iter().map(|(_, r)| Arc::clone(r)).collect();
+        // Initialize with a placeholder expression (true) that will be updated when the hash table is built
+        Arc::new(DynamicFilterPhysicalExpr::new(right_keys, lit(true)))
     }
 
     /// left (build) side which gets hashed
@@ -818,6 +819,7 @@ impl ExecutionPlan for HashJoinExec {
             column_indices: self.column_indices.clone(),
             null_equality: self.null_equality,
             cache: self.cache.clone(),
+            dynamic_filter: Self::create_dynamic_filter(&self.on),
         }))
     }
 
