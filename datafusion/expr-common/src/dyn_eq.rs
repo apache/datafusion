@@ -25,20 +25,36 @@ use std::hash::{Hash, Hasher};
 /// they must be [`DynEq`]-equal if and only if they are [`PartialEq`]-equal.
 /// It is therefore strongly discouraged to implement this trait for types
 /// that implement `PartialEq<Other>` or `Eq<Other>` for any type `Other` other than `Self`.
+///
+/// Note: This trait should not be implemented directly. Implement `Eq` and `Any` and use
+/// the blanket implementation.
 pub trait DynEq {
     fn dyn_eq(&self, other: &dyn Any) -> bool;
+
+    fn i_did_not_implement_the_trait_directly_but_using_the_blanked_impl_instead()
+    where
+        Self: Sized;
 }
 
 impl<T: Eq + Any> DynEq for T {
     fn dyn_eq(&self, other: &dyn Any) -> bool {
         other.downcast_ref::<Self>() == Some(self)
     }
+
+    fn i_did_not_implement_the_trait_directly_but_using_the_blanked_impl_instead() {}
 }
 
 /// A dyn-compatible version of [`Hash`] trait.
 /// If two values are equal according to [`DynEq`], they must produce the same hash value.
+///
+/// Note: This trait should not be implemented directly. Implement `Hash` and `Any` and use
+/// the blanket implementation.
 pub trait DynHash {
     fn dyn_hash(&self, _state: &mut dyn Hasher);
+
+    fn i_did_not_implement_the_trait_directly_but_using_the_blanked_impl_instead()
+    where
+        Self: Sized;
 }
 
 impl<T: Hash + Any> DynHash for T {
@@ -46,4 +62,6 @@ impl<T: Hash + Any> DynHash for T {
         self.type_id().hash(&mut state);
         self.hash(&mut state)
     }
+
+    fn i_did_not_implement_the_trait_directly_but_using_the_blanked_impl_instead() {}
 }
