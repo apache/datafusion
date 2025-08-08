@@ -1114,3 +1114,14 @@ approx_percentile_cont_with_weight(weight, percentile [, centroids]) WITHIN GROU
 | 78.5                                                                                             |
 +--------------------------------------------------------------------------------------------------+
 ```
+
+An alternative syntax is also supported:
+
+```sql
+> SELECT approx_percentile_cont_with_weight(column_name, weight_column, 0.90) FROM table_name;
++--------------------------------------------------+
+| approx_percentile_cont_with_weight(column_name, weight_column, 0.90) |
++--------------------------------------------------+
+| 78.5                                             |
++--------------------------------------------------+
+```
