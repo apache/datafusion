@@ -411,7 +411,6 @@ impl TableParquetOptionsProto {
                 coerce_int96_opt: global_options.global.coerce_int96.map(|compression| {
                     parquet_options::CoerceInt96Opt::CoerceInt96(compression)
                 }),
-                cache_metadata: global_options.global.cache_metadata,
             }),
             column_specific_options: column_specific_options.into_iter().map(|(column_name, options)| {
                 ParquetColumnSpecificOptions {
@@ -505,7 +504,6 @@ impl From<&ParquetOptionsProto> for ParquetOptions {
             coerce_int96: proto.coerce_int96_opt.as_ref().map(|opt| match opt {
                 parquet_options::CoerceInt96Opt::CoerceInt96(coerce_int96) => coerce_int96.clone(),
             }),
-            cache_metadata: proto.cache_metadata,
         }
     }
 }

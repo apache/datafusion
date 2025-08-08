@@ -87,18 +87,6 @@ impl Debug for RuntimeEnv {
 }
 
 impl RuntimeEnv {
-    #[deprecated(since = "43.0.0", note = "please use `RuntimeEnvBuilder` instead")]
-    #[allow(deprecated)]
-    pub fn new(config: RuntimeConfig) -> Result<Self> {
-        Self::try_new(config)
-    }
-    /// Create env based on configuration
-    #[deprecated(since = "44.0.0", note = "please use `RuntimeEnvBuilder` instead")]
-    #[allow(deprecated)]
-    pub fn try_new(config: RuntimeConfig) -> Result<Self> {
-        config.build()
-    }
-
     /// Registers a custom `ObjectStore` to be used with a specific url.
     /// This allows DataFusion to create external tables from urls that do not have
     /// built in support such as `hdfs://namenode:port/...`.
@@ -162,15 +150,10 @@ impl Default for RuntimeEnv {
     }
 }
 
-/// Please see: <https://github.com/apache/datafusion/issues/12156>
-/// This a type alias for backwards compatibility.
-#[deprecated(since = "43.0.0", note = "please use `RuntimeEnvBuilder` instead")]
-pub type RuntimeConfig = RuntimeEnvBuilder;
-
-#[derive(Clone)]
 /// Execution runtime configuration builder.
 ///
 /// See example on [`RuntimeEnv`]
+#[derive(Clone)]
 pub struct RuntimeEnvBuilder {
     #[allow(deprecated)]
     /// DiskManager to manage temporary disk file usage
@@ -268,6 +251,12 @@ impl RuntimeEnvBuilder {
         self.with_disk_manager_builder(builder.with_max_temp_directory_size(size))
     }
 
+    /// Specify the limit of the file-embedded metadata cache, in bytes.
+    pub fn with_metadata_cache_limit(mut self, limit: usize) -> Self {
+        self.cache_manager = self.cache_manager.with_metadata_cache_limit(limit);
+        self
+    }
+
     /// Build a RuntimeEnv
     pub fn build(self) -> Result<RuntimeEnv> {
         let Self {
@@ -305,7 +294,10 @@ impl RuntimeEnvBuilder {
                 .cache_manager
                 .get_file_statistic_cache(),
             list_files_cache: runtime_env.cache_manager.get_list_files_cache(),
-            file_metadata_cache: runtime_env.cache_manager.get_file_metadata_cache(),
+            file_metadata_cache: Some(
+                runtime_env.cache_manager.get_file_metadata_cache(),
+            ),
+            metadata_cache_limit: runtime_env.cache_manager.get_metadata_cache_limit(),
         };
 
         Self {
@@ -337,6 +329,11 @@ impl RuntimeEnvBuilder {
                 key: "datafusion.runtime.temp_directory".to_string(),
                 value: None, // Default is system-dependent
                 description: "The path to the temporary file directory.",
+            },
+            ConfigEntry {
+                key: "datafusion.runtime.metadata_cache_limit".to_string(),
+                value: Some("50M".to_owned()),
+                description: "Maximum memory to use for file metadata cache such as Parquet metadata. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes). Example: '2G' for 2 gigabytes.",
             }
         ]
     }

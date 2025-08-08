@@ -26,7 +26,7 @@ use datafusion_functions::make_udf_function;
 use std::sync::Arc;
 
 make_udf_function!(ascii::SparkAscii, ascii);
-make_udf_function!(char::SparkChar, char);
+make_udf_function!(char::CharFunc, char);
 make_udf_function!(ilike::SparkILike, ilike);
 make_udf_function!(like::SparkLike, like);
 make_udf_function!(luhn_check::SparkLuhnCheck, luhn_check);
