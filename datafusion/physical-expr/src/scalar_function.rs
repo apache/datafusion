@@ -47,7 +47,6 @@ use datafusion_expr::type_coercion::functions::data_types_with_scalar_udf;
 use datafusion_expr::{
     expr_vec_fmt, ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF,
 };
-use datafusion_physical_expr_common::physical_expr::{DynEq, DynHash};
 
 /// Physical expression of a scalar function
 pub struct ScalarFunctionExpr {
@@ -174,27 +173,38 @@ impl fmt::Display for ScalarFunctionExpr {
     }
 }
 
-impl DynEq for ScalarFunctionExpr {
-    fn dyn_eq(&self, other: &dyn Any) -> bool {
-        other.downcast_ref::<Self>().is_some_and(|o| {
-            self.fun.eq(&o.fun)
-                && self.name.eq(&o.name)
-                && self.args.eq(&o.args)
-                && self.return_field.eq(&o.return_field)
-                && sorted_config_entries(&self.config_options)
-                    == sorted_config_entries(&o.config_options)
-        })
+impl PartialEq for ScalarFunctionExpr {
+    fn eq(&self, o: &Self) -> bool {
+        let Self {
+            fun,
+            name,
+            args,
+            return_field,
+            config_options,
+        } = self;
+        fun.eq(&o.fun)
+            && name.eq(&o.name)
+            && args.eq(&o.args)
+            && return_field.eq(&o.return_field)
+            && sorted_config_entries(config_options)
+                == sorted_config_entries(&o.config_options)
     }
 }
-
-impl DynHash for ScalarFunctionExpr {
-    fn dyn_hash(&self, mut state: &mut dyn Hasher) {
-        self.type_id().hash(&mut state);
-        self.fun.hash(&mut state);
-        self.name.hash(&mut state);
-        self.args.hash(&mut state);
-        self.return_field.hash(&mut state);
-        sorted_config_entries(&self.config_options).hash(&mut state);
+impl Eq for ScalarFunctionExpr {}
+impl Hash for ScalarFunctionExpr {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        let Self {
+            fun,
+            name,
+            args,
+            return_field,
+            config_options,
+        } = self;
+        fun.hash(state);
+        name.hash(state);
+        args.hash(state);
+        return_field.hash(state);
+        sorted_config_entries(config_options).hash(state);
     }
 }
 
