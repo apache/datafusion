@@ -48,7 +48,6 @@ parquet_encryption = [
 pyarrow = ["pyo3", "arrow/pyarrow", "parquet"]
 force_hash_collisions = []
 recursive_protection = ["dep:recursive"]
-object_store = ["dep:object_store"]
 parquet = ["dep:parquet"]
 
 [dependencies]

@@ -83,9 +83,6 @@ pub use functional_dependencies::{
 use hashbrown::hash_map::DefaultHashBuilder;
 pub use join_type::{JoinConstraint, JoinSide, JoinType};
 pub use null_equality::NullEquality;
-#[cfg(feature = "object_store")]
-/// Reexport object_store crate
-pub use object_store;
 pub use param_value::ParamValues;
 pub use scalar::{ScalarType, ScalarValue};
 pub use schema_reference::SchemaReference;
