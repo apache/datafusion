@@ -110,15 +110,13 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + DynEq + DynHash {
             // When the scalar is true or false, skip the scatter process
             if let Some(v) = value {
                 if *v {
-                    return Ok(ColumnarValue::from(
-                        Arc::new(selection.clone()) as ArrayRef
-                    ));
+                    Ok(ColumnarValue::from(Arc::new(selection.clone()) as ArrayRef))
                 } else {
-                    return Ok(tmp_result);
+                    Ok(tmp_result)
                 }
             } else {
                 let array = BooleanArray::from(vec![None; batch.num_rows()]);
-                return scatter(selection, &array).map(ColumnarValue::Array);
+                scatter(selection, &array).map(ColumnarValue::Array)
             }
         } else {
             Ok(tmp_result)
