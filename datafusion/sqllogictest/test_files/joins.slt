@@ -3348,6 +3348,27 @@ physical_plan
 05)------BoundedWindowAggExec: wdw=[row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Field { name: "row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING], mode=[Sorted]
 06)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], file_type=csv, has_header=true
 
+# Test ordering preservation for RIGHT join
+query TT
+EXPLAIN SELECT *
+FROM annotated_data as l_table
+RIGHT JOIN (SELECT * FROM annotated_data) as r_table
+ON l_table.b = r_table.b
+ORDER BY r_table.a ASC NULLS FIRST, r_table.b, r_table.c, l_table.a ASC NULLS FIRST;
+----
+logical_plan
+01)Sort: r_table.a ASC NULLS FIRST, r_table.b ASC NULLS LAST, r_table.c ASC NULLS LAST, l_table.a ASC NULLS FIRST
+02)--Right Join: l_table.b = r_table.b
+03)----SubqueryAlias: l_table
+04)------TableScan: annotated_data projection=[a0, a, b, c, d]
+05)----SubqueryAlias: r_table
+06)------TableScan: annotated_data projection=[a0, a, b, c, d]
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=2
+02)--HashJoinExec: mode=CollectLeft, join_type=Right, on=[(b@2, b@2)]
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], file_type=csv, has_header=true
+04)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], file_type=csv, has_header=true
+
 query TT
 EXPLAIN SELECT l.a, LAST_VALUE(r.b ORDER BY r.a ASC NULLS FIRST) as last_col1
 FROM annotated_data as l
