@@ -903,8 +903,8 @@ async fn without_pushdown_filter() {
     )
     .unwrap();
 
-    // Same amount of bytes are scanned when defaulting to cache parquet metadata
-    assert!(bytes_scanned_with_filter == bytes_scanned_without_filter);
+    // Without filter will not read pageIndex.
+    assert!(bytes_scanned_with_filter > bytes_scanned_without_filter);
 }
 
 #[tokio::test]
