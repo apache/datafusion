@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 use crate::utils::scatter;
 
-use arrow::array::BooleanArray;
+use arrow::array::{ArrayRef, BooleanArray};
 use arrow::compute::filter_record_batch;
 use arrow::datatypes::{DataType, Field, FieldRef, Schema};
 use arrow::record_batch::RecordBatch;
@@ -106,6 +106,20 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + DynEq + DynHash {
             Ok(tmp_result)
         } else if let ColumnarValue::Array(a) = tmp_result {
             scatter(selection, a.as_ref()).map(ColumnarValue::Array)
+        } else if let ColumnarValue::Scalar(ScalarValue::Boolean(value)) = &tmp_result {
+            // When the scalar is true or false, skip the scatter process
+            if let Some(v) = value {
+                if *v {
+                    return Ok(ColumnarValue::from(
+                        Arc::new(selection.clone()) as ArrayRef
+                    ));
+                } else {
+                    return Ok(tmp_result);
+                }
+            } else {
+                let array = BooleanArray::from(vec![None; batch.num_rows()]);
+                return scatter(selection, &array).map(ColumnarValue::Array);
+            }
         } else {
             Ok(tmp_result)
         }
@@ -425,21 +439,6 @@ pub fn with_new_children_if_necessary(
         Ok(expr.with_new_children(children)?)
     } else {
         Ok(expr)
-    }
-}
-
-#[deprecated(since = "44.0.0")]
-pub fn down_cast_any_ref(any: &dyn Any) -> &dyn Any {
-    if any.is::<Arc<dyn PhysicalExpr>>() {
-        any.downcast_ref::<Arc<dyn PhysicalExpr>>()
-            .unwrap()
-            .as_any()
-    } else if any.is::<Box<dyn PhysicalExpr>>() {
-        any.downcast_ref::<Box<dyn PhysicalExpr>>()
-            .unwrap()
-            .as_any()
-    } else {
-        any
     }
 }
 

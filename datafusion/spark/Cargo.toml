@@ -37,16 +37,20 @@ name = "datafusion_spark"
 
 [dependencies]
 arrow = { workspace = true }
+bigdecimal = { workspace = true }
 chrono = { workspace = true }
+crc32fast = "1.4"
 datafusion-catalog = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-functions = { workspace = true, features = ["crypto_expressions"] }
 datafusion-macros = { workspace = true }
-bigdecimal = { workspace = true }
 log = { workspace = true }
+sha1 = "0.10"
 twox-hash = "2.1.1"
+url = { workspace = true }
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
 
 [dev-dependencies]
 criterion = { workspace = true }
