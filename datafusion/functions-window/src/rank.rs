@@ -64,7 +64,7 @@ define_udwf_and_expr!(
 );
 
 /// Rank calculates the rank in the window function with order by
-#[derive(Debug, PartialEq, Hash)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct Rank {
     name: String,
     signature: Signature,

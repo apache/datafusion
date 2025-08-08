@@ -1276,9 +1276,9 @@ pub fn collect_subquery_cols(
 /// # use datafusion_expr_common::signature::Signature;
 /// # use std::any::Any;
 ///
-/// // Implementing PartialEq & Hash is a prerequisite for using this macro,
+/// // Implementing Eq & Hash is a prerequisite for using this macro,
 /// // but the implementation can be derived.
-/// #[derive(Debug, PartialEq, Hash)]
+/// #[derive(Debug, PartialEq, Eq, Hash)]
 /// struct VarcharToTimestampTz {
 ///     safe: bool,
 /// }
@@ -1322,11 +1322,13 @@ macro_rules! udf_equals_hash {
     ($udf_type:tt) => {
         fn equals(&self, other: &dyn $udf_type) -> bool {
             use ::core::any::Any;
-            use ::core::cmp::PartialEq;
+            use ::core::cmp::{Eq, PartialEq};
             let Some(other) = <dyn Any + 'static>::downcast_ref::<Self>(other.as_any())
             else {
                 return false;
             };
+            fn assert_self_impls_eq<T: Eq>() {}
+            assert_self_impls_eq::<Self>();
             PartialEq::eq(self, other)
         }
 
@@ -1804,7 +1806,7 @@ mod tests {
             }
         }
 
-        #[derive(Debug, PartialEq, Hash)]
+        #[derive(Debug, PartialEq, Eq, Hash)]
         struct StatefulFunctionWithEqHashWithUdfEqualsHash {
             signature: Signature,
             state: bool,
