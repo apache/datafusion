@@ -34,6 +34,8 @@ pub fn from_scalar_function(
         });
     }
 
+    let arguments = custom_argument_handler(fun.name(), arguments);
+
     let function_anchor = producer.register_function(fun.name().to_string());
     #[allow(deprecated)]
     Ok(Expression {
@@ -45,6 +47,25 @@ pub fn from_scalar_function(
             args: vec![],
         })),
     })
+}
+
+// Handle functions that require custom handling for their arguments (e.g. log)
+pub fn custom_argument_handler(
+    name: &str,
+    args: Vec<FunctionArgument>,
+) -> Vec<FunctionArgument> {
+    match name {
+        "log" => {
+            if args.len() == 2 {
+                let mut args = args;
+                args.swap(0, 1);
+                args
+            } else {
+                args
+            }
+        }
+        _ => args,
+    }
 }
 
 pub fn from_unary_expr(

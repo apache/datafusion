@@ -17,6 +17,8 @@
 
 pub mod ascii;
 pub mod char;
+pub mod ilike;
+pub mod like;
 pub mod luhn_check;
 
 use datafusion_expr::ScalarUDF;
@@ -24,7 +26,9 @@ use datafusion_functions::make_udf_function;
 use std::sync::Arc;
 
 make_udf_function!(ascii::SparkAscii, ascii);
-make_udf_function!(char::SparkChar, char);
+make_udf_function!(char::CharFunc, char);
+make_udf_function!(ilike::SparkILike, ilike);
+make_udf_function!(like::SparkLike, like);
 make_udf_function!(luhn_check::SparkLuhnCheck, luhn_check);
 
 pub mod expr_fn {
@@ -41,6 +45,16 @@ pub mod expr_fn {
         arg1
     ));
     export_functions!((
+        ilike,
+        "Returns true if str matches pattern (case insensitive).",
+        str pattern
+    ));
+    export_functions!((
+        like,
+        "Returns true if str matches pattern (case sensitive).",
+        str pattern
+    ));
+    export_functions!((
         luhn_check,
         "Returns whether the input string of digits is valid according to the Luhn algorithm.",
         arg1
@@ -48,5 +62,5 @@ pub mod expr_fn {
 }
 
 pub fn functions() -> Vec<Arc<ScalarUDF>> {
-    vec![ascii(), char(), luhn_check()]
+    vec![ascii(), char(), ilike(), like(), luhn_check()]
 }

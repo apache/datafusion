@@ -23,6 +23,7 @@ use crate::simplify::{ExprSimplifyResult, SimplifyInfo};
 use crate::sort_properties::{ExprProperties, SortProperties};
 use crate::{udf_equals_hash, ColumnarValue, Documentation, Expr, Signature};
 use arrow::datatypes::{DataType, Field, FieldRef};
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::{not_impl_err, ExprSchema, Result, ScalarValue};
 use datafusion_expr_common::interval_arithmetic::Interval;
 use std::any::Any;
@@ -311,6 +312,8 @@ pub struct ScalarFunctionArgs {
     /// or `return_field_from_args`) when creating the physical expression
     /// from the logical expression
     pub return_field: FieldRef,
+    /// The config options at execution time
+    pub config_options: Arc<ConfigOptions>,
 }
 
 impl ScalarFunctionArgs {
@@ -720,13 +723,12 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     /// Similarly to [`Hash`] and [`Eq`], if [`Self::equals`] returns true for two UDFs,
     /// their `hash_value`s must be the same.
     ///
-    /// By default, it is consistent with default implementation of [`Self::equals`].
+    /// By default, it only hashes the type. The other fields are not hashed, as usually the
+    /// name, signature, and aliases are implied by the UDF type. Recall that UDFs with state
+    /// (and thus possibly changing fields) must override [`Self::equals`] and [`Self::hash_value`].
     fn hash_value(&self) -> u64 {
         let hasher = &mut DefaultHasher::new();
         self.as_any().type_id().hash(hasher);
-        self.name().hash(hasher);
-        self.aliases().hash(hasher);
-        self.signature().hash(hasher);
         hasher.finish()
     }
 

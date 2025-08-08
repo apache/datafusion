@@ -19,18 +19,19 @@
 
 # Crate Configuration
 
-This section contains information on how to configure DataFusion in your Rust
-project. See the [Configuration Settings] section for a list of options that
-control DataFusion's behavior.
+This section contains information on how to configure builds of DataFusion in
+your Rust project. The [Configuration Settings] section lists options that
+control additional aspects DataFusion's runtime behavior.
 
 [configuration settings]: configs.md
 
-## Add latest non published DataFusion dependency
+## Using the nightly DataFusion builds
 
 DataFusion changes are published to `crates.io` according to the [release schedule](https://github.com/apache/datafusion/blob/main/dev/release/README.md#release-process)
 
-If you would like to test out DataFusion changes which are merged but not yet
-published, Cargo supports adding dependency directly to GitHub branch:
+If you would like to use or test versions of the DataFusion code which are
+merged but not yet published, you can use Cargo's [support for adding
+dependencies] directly to a GitHub branch:
 
 ```toml
 datafusion = { git = "https://github.com/apache/datafusion", branch = "main"}
@@ -50,20 +51,56 @@ datafusion = { git = "https://github.com/apache/datafusion", branch = "main", de
 
 More on [Cargo dependencies](https://doc.rust-lang.org/cargo/reference/specifying-dependencies.html#specifying-dependencies)
 
-## Optimized Configuration
+## Optimizing Builds
 
-For an optimized build several steps are required. First, use the below in your `Cargo.toml`. It is
-worth noting that using the settings in the `[profile.release]` section will significantly increase the build time.
+Here are several suggestions to get the Rust compler to produce faster code when
+compiling DataFusion. Note that these changes may increase compile time and
+binary size.
+
+### Generate Code with CPU Specific Instructions
+
+By default, the Rust compiler produces code that runs on a wide range of CPUs,
+but may not take advantage of all the features of your specific CPU (such as
+certain [SIMD instructions]). This is especially true for x86_64 CPUs, where the
+default target is `x86_64-unknown-linux-gnu`, which only guarantees support for
+the `SSE2` instruction set. DataFusion can benefit from the more advanced
+instructions in the `AVX2` and `AVX512` to speed up operations like filtering,
+aggregation, and joins. To tell the Rust compiler to use these instructions, set
+the `RUSTFLAGS` environment variable to specify a more specific target CPU.
+
+We recommend setting `target-cpu` or at least `avx2`, or preferably at least
+`native` (whatever the current CPU is). For example, to build and run DataFusion
+with optimizations for your current CPU:
+
+```shell
+RUSTFLAGS='-C target-cpu=native' cargo run --release
+```
+
+[simd instructions]: https://en.wikipedia.org/wiki/SIMD
+
+### Enable Link Time Optimization / Single Codegen Unit
+
+You can potentially improve your performance by compiling DataFusion into a
+single codegen unit which gives the Rust compiler more opportunity to optimize
+across crate boundaries. To do so, modify your projects' `Cargo.toml` to include
+`lto = true` and `codegen-units = 1` as shown below. Beware that using a single
+codegen unit _significantly_ increases `--release` build times.
 
 ```toml
-[dependencies]
-datafusion = { version = "22.0" }
-tokio = { version = "^1.0", features = ["rt-multi-thread"] }
-snmalloc-rs = "0.3"
-
 [profile.release]
 lto = true
 codegen-units = 1
+```
+
+### Alternate Allocator: `snmalloc`
+
+You can also use [snmalloc-rs](https://crates.io/crates/snmalloc-rs) crate as
+the memory allocator for DataFusion to improve performance. To do so, add the
+dependency to your `Cargo.toml` as shown below.
+
+```toml
+[dependencies]
+snmalloc-rs = "0.3"
 ```
 
 Then, in `main.rs.` update the memory allocator with the below after your imports:
@@ -82,17 +119,10 @@ async fn main() -> datafusion::error::Result<()> {
 }
 ```
 
-Based on the instruction set architecture you are building on you will want to configure the `target-cpu` as well, ideally
-with `native` or at least `avx2`.
+## Enable Backtraces
 
-```shell
-RUSTFLAGS='-C target-cpu=native' cargo run --release
-```
-
-## Enable backtraces
-
-By default Datafusion returns errors as a plain message. There is option to enable more verbose details about the error,
-like error backtrace. To enable a backtrace you need to add Datafusion `backtrace` feature to your `Cargo.toml` file:
+By default, Datafusion returns errors as a plain text message. You can enable more verbose details about the error,
+such as backtraces by enabling the `backtrace` feature to your `Cargo.toml` file like this:
 
 ```toml
 datafusion = { version = "31.0.0", features = ["backtrace"]}
