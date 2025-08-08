@@ -68,10 +68,9 @@ async fn csv_opener() -> Result<()> {
     let config = CsvSource::new(true, b',', b'"')
         .with_comment(Some(b'#'))
         .with_schema(schema)
-        .with_batch_size(8192)
         .with_projection(&scan_config);
 
-    let opener = config.create_file_opener(object_store, &scan_config, 0);
+    let opener = config.create_file_opener(object_store, &scan_config, 0, 8192);
 
     let mut result = vec![];
     let mut stream =
