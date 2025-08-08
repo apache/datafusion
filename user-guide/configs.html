@@ -588,6 +588,11 @@
      Short Queries
     </a>
    </li>
+   <li class="toc-h2 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#memory-limited-queries">
+     Memory-limited Queries
+    </a>
+   </li>
   </ul>
  </li>
 </ul>
@@ -1169,6 +1174,26 @@ does not apply to user defined data sources and only works when DataFusion has a
 option to a smaller number to reduce the overhead of repartitioning. For very small datasets (e.g. less
 than 1MB), we recommend setting <code class="docutils literal notranslate"><span class="pre">target_partitions</span></code> to 1 to avoid repartitioning altogether.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SET</span><span class="w"> </span><span class="n">datafusion</span><span class="p">.</span><span class="n">execution</span><span class="p">.</span><span class="n">target_partitions</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;1&#39;</span><span class="p">;</span>
+</pre></div>
+</div>
+</section>
+<section id="memory-limited-queries">
+<h2>Memory-limited Queries<a class="headerlink" href="#memory-limited-queries" title="Link to this heading">¶</a></h2>
+<p>When executing a memory-consuming query under a tight memory limit, DataFusion
+will spill intermediate results to disk.</p>
+<p>When the <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/execution/memory_pool/struct.FairSpillPool.html"><code class="docutils literal notranslate"><span class="pre">FairSpillPool</span></code></a> is used, memory is divided evenly among partitions.
+The higher the value of <code class="docutils literal notranslate"><span class="pre">datafusion.execution.target_partitions</span></code>, the less memory
+is allocated to each partition, and the out-of-core execution path may trigger
+more frequently, possibly slowing down execution.</p>
+<p>Additionally, while spilling, data is read back in <code class="docutils literal notranslate"><span class="pre">datafusion.execution.batch_size</span></code> size batches.
+The larger this value, the fewer spilled sorted runs can be merged. Decreasing this setting
+can help reduce the number of subsequent spills required.</p>
+<p>In conclusion, for queries under a very tight memory limit, it’s recommended to
+set <code class="docutils literal notranslate"><span class="pre">target_partitions</span></code> and <code class="docutils literal notranslate"><span class="pre">batch_size</span></code> to smaller values.</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="c1">-- Query still gets paralleized, but each partition will have more memory to use</span>
+<span class="k">SET</span><span class="w"> </span><span class="n">datafusion</span><span class="p">.</span><span class="n">execution</span><span class="p">.</span><span class="n">target_partitions</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">4</span><span class="p">;</span>
+<span class="c1">-- Smaller than the default &#39;8192&#39;, while still keep the benefit of vectorized execution</span>
+<span class="k">SET</span><span class="w"> </span><span class="n">datafusion</span><span class="p">.</span><span class="n">execution</span><span class="p">.</span><span class="n">batch_size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1024</span><span class="p">;</span>
 </pre></div>
 </div>
 </section>
