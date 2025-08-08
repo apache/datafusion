@@ -4089,7 +4089,7 @@ mod tests {
         ];
         assert_batches_sorted_eq!(expected, &batches);
 
-        // THIS MIGRATION HAULTED DUE TO ISSUE #15312
+        // THIS MIGRATION HALTED DUE TO ISSUE #15312
         //allow_duplicates! {
         //    assert_snapshot!(batches_to_sort_string(&batches), @r#"
         //    +---+---+---+----+---+---+
@@ -4348,7 +4348,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn join_splitted_batch() {
+    async fn join_split_batch() {
         let left = build_table(
             ("a1", &vec![1, 2, 3, 4]),
             ("b1", &vec![1, 1, 1, 1]),

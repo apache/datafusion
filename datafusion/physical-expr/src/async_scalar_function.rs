@@ -192,13 +192,14 @@ impl AsyncFuncExpr {
             );
         }
 
-        let datas = ColumnarValue::values_to_arrays(&result_batches)?
+        let data_vec = ColumnarValue::values_to_arrays(&result_batches)?
             .iter()
             .map(|b| b.to_data())
             .collect::<Vec<_>>();
-        let total_len = datas.iter().map(|d| d.len()).sum();
-        let mut mutable = MutableArrayData::new(datas.iter().collect(), false, total_len);
-        datas.iter().enumerate().for_each(|(i, data)| {
+        let total_len = data_vec.iter().map(|d| d.len()).sum();
+        let mut mutable =
+            MutableArrayData::new(data_vec.iter().collect(), false, total_len);
+        data_vec.iter().enumerate().for_each(|(i, data)| {
             mutable.extend(i, 0, data.len());
         });
         let array_ref = make_array(mutable.freeze());
