@@ -517,7 +517,15 @@ impl DataSource for FileScanConfig {
         {
             Arc::clone(store)
         } else {
-            context.runtime_env().object_store(&self.object_store_url)?
+            context
+                .runtime_env()
+                .object_store(&self.object_store_url)
+                .map_err(|e| {
+                    e.context(format!(
+                        "get object store for URL {}",
+                        self.object_store_url
+                    ))
+                })?
         };
         let batch_size = self
             .batch_size
