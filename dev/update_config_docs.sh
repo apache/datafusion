@@ -151,9 +151,8 @@ SET datafusion.execution.target_partitions = '1';
 
 ## Memory-limited Queries
 
-When executing a memory-consuming query under a tight memory limit, DataFusion will
-attempt to use a separate execution path for the query, and the intermediate results
-will be spilled to disk.
+When executing a memory-consuming query under a tight memory limit, DataFusion 
+will spill intermediate results to disk.
 
 If the [`FairSpillPool`] is used, partitions will attempt to divide the available
 memory evenly. If the partition count `datafusion.execution.target_partitions`
