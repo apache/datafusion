@@ -1523,9 +1523,6 @@ fn spawn_parquet_parallel_serialization_task(
         let (mut column_writer_handles, mut col_array_channels) =
             spawn_column_parallel_row_group_writer(col_writers, max_buffer_rb, &pool)?;
         let mut current_rg_rows = 0;
-        // TODO: row_group_writer should use the correct row group index. Currently this would fail if
-        // multiple row groups were written.
-        // let mut rg_index = 0;
 
         while let Some(mut rb) = data.recv().await {
             // This loop allows the "else" block to repeatedly split the RecordBatch to handle the case
