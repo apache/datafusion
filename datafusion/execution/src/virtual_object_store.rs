@@ -109,6 +109,30 @@ impl ObjectStore for VirtualObjectStore {
 
     fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
         let prefix_owned = prefix.cloned();
+        // Short-circuit when prefix targets a single store key
+        if let Some(ref pfx) = prefix_owned {
+            let mut p_parts = pfx.parts();
+            if let Some(store_key) = p_parts.next().map(|s| s.as_ref().to_string()) {
+                let remainder: Path = p_parts.collect();
+                if let Some(store) = self.stores.get(&store_key) {
+                    let base = Path::from(store_key.clone());
+                    let inner_prefix = if remainder.as_ref().is_empty() {
+                        None
+                    } else {
+                        Some(&remainder)
+                    };
+                    let single_stream =
+                        store.list(inner_prefix).map_ok(move |mut meta| {
+                            meta.location = base.child(meta.location.as_ref());
+                            meta
+                        });
+                    return single_stream.boxed();
+                } else {
+                    // No matching store, return empty stream
+                    return stream::empty().boxed();
+                }
+            }
+        }
         let entries: Vec<(String, Arc<dyn ObjectStore>)> = self
             .stores
             .iter()
