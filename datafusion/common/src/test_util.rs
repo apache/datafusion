@@ -314,43 +314,43 @@ pub fn get_data_dir(
 #[macro_export]
 macro_rules! create_array {
     (Boolean, $values: expr) => {
-        std::sync::Arc::new(arrow::array::BooleanArray::from($values))
+        std::sync::Arc::new($crate::arrow::array::BooleanArray::from($values))
     };
     (Int8, $values: expr) => {
-        std::sync::Arc::new(arrow::array::Int8Array::from($values))
+        std::sync::Arc::new($crate::arrow::array::Int8Array::from($values))
     };
     (Int16, $values: expr) => {
-        std::sync::Arc::new(arrow::array::Int16Array::from($values))
+        std::sync::Arc::new($crate::arrow::array::Int16Array::from($values))
     };
     (Int32, $values: expr) => {
-        std::sync::Arc::new(arrow::array::Int32Array::from($values))
+        std::sync::Arc::new($crate::arrow::array::Int32Array::from($values))
     };
     (Int64, $values: expr) => {
-        std::sync::Arc::new(arrow::array::Int64Array::from($values))
+        std::sync::Arc::new($crate::arrow::array::Int64Array::from($values))
     };
     (UInt8, $values: expr) => {
-        std::sync::Arc::new(arrow::array::UInt8Array::from($values))
+        std::sync::Arc::new($crate::arrow::array::UInt8Array::from($values))
     };
     (UInt16, $values: expr) => {
-        std::sync::Arc::new(arrow::array::UInt16Array::from($values))
+        std::sync::Arc::new($crate::arrow::array::UInt16Array::from($values))
     };
     (UInt32, $values: expr) => {
-        std::sync::Arc::new(arrow::array::UInt32Array::from($values))
+        std::sync::Arc::new($crate::arrow::array::UInt32Array::from($values))
     };
     (UInt64, $values: expr) => {
-        std::sync::Arc::new(arrow::array::UInt64Array::from($values))
+        std::sync::Arc::new($crate::arrow::array::UInt64Array::from($values))
     };
     (Float16, $values: expr) => {
-        std::sync::Arc::new(arrow::array::Float16Array::from($values))
+        std::sync::Arc::new($crate::arrow::array::Float16Array::from($values))
     };
     (Float32, $values: expr) => {
-        std::sync::Arc::new(arrow::array::Float32Array::from($values))
+        std::sync::Arc::new($crate::arrow::array::Float32Array::from($values))
     };
     (Float64, $values: expr) => {
-        std::sync::Arc::new(arrow::array::Float64Array::from($values))
+        std::sync::Arc::new($crate::arrow::array::Float64Array::from($values))
     };
     (Utf8, $values: expr) => {
-        std::sync::Arc::new(arrow::array::StringArray::from($values))
+        std::sync::Arc::new($crate::arrow::array::StringArray::from($values))
     };
 }
 
@@ -370,13 +370,13 @@ macro_rules! create_array {
 macro_rules! record_batch {
     ($(($name: expr, $type: ident, $values: expr)),*) => {
         {
-            let schema = std::sync::Arc::new(arrow::datatypes::Schema::new(vec![
+            let schema = std::sync::Arc::new($crate::arrow::datatypes::Schema::new(vec![
                 $(
-                    arrow::datatypes::Field::new($name, arrow::datatypes::DataType::$type, true),
+                    $crate::arrow::datatypes::Field::new($name, $crate::arrow::datatypes::DataType::$type, true),
                 )*
             ]));
 
-            let batch = arrow::array::RecordBatch::try_new(
+            let batch = $crate::arrow::array::RecordBatch::try_new(
                 schema,
                 vec![$(
                     $crate::create_array!($type, $values),
