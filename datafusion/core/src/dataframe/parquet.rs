@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use rstest::rstest;
 use std::sync::Arc;
 
 use crate::datasource::file_format::{
@@ -103,6 +102,7 @@ impl DataFrame {
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
     use std::collections::HashMap;
     use std::sync::Arc;
 
