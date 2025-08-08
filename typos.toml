@@ -1,10 +1,14 @@
 [default.extend-words]
 Pn = "Pn"
 fo = "fo"
-2010YOUY01 = "2010YOUY01"
+flate = "flate"
+nd = "nd"
+Nd = "Nd"
 
 [files]
 extend-exclude = [
     "*.slt",
     "*.svg",
+    "*.sql",
+    "dev/changelog/**"
 ]
