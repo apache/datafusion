@@ -54,7 +54,12 @@ use futures::{FutureExt as _, Stream};
 struct SpillReaderStream {
     schema: SchemaRef,
     state: SpillReaderStreamState,
+    /// how much memory the largest memory batch is taking
+    pub max_record_batch_memory: Option<usize>,
 }
+
+// Small margin allowed to accommodate slight memory accounting variation
+const MEMORY_MARGIN: usize = 4096;
 
 /// When we poll for the next batch, we will get back both the batch and the reader,
 /// so we can call `next` again.
@@ -76,10 +81,15 @@ enum SpillReaderStreamState {
 }
 
 impl SpillReaderStream {
-    fn new(schema: SchemaRef, spill_file: RefCountedTempFile) -> Self {
+    fn new(
+        schema: SchemaRef,
+        spill_file: RefCountedTempFile,
+        max_record_batch_memory: Option<usize>,
+    ) -> Self {
         Self {
             schema,
             state: SpillReaderStreamState::Uninitialized(spill_file),
+            max_record_batch_memory,
         }
     }
 
@@ -125,6 +135,27 @@ impl SpillReaderStream {
                     Ok((reader, batch)) => {
                         match batch {
                             Some(batch) => {
+                                if let Some(max_record_batch_memory) =
+                                    self.max_record_batch_memory
+                                {
+                                    let actual_size =
+                                        get_record_batch_memory_size(&batch);
+                                    if actual_size
+                                        > max_record_batch_memory + MEMORY_MARGIN
+                                    {
+                                        return Poll::Ready(Some(Err(
+                                            DataFusionError::ResourcesExhausted(
+                                                format!(
+                                                    "Record batch memory usage ({actual_size} bytes) exceeds the expected limit ({max_record_batch_memory} bytes)\n
+                                                    by more than the allowed tolerance ({MEMORY_MARGIN} bytes).\n
+                                                    This likely indicates a bug in memory accounting during spilling.\n
+                                                    Please report this issue",
+                                                )
+                                                .to_owned(),
+                                            ),
+                                        )));
+                                    }
+                                }
                                 self.state = SpillReaderStreamState::Waiting(reader);
 
                                 Poll::Ready(Some(Ok(batch)))
@@ -417,7 +448,7 @@ mod tests {
         let spilled_rows = spill_manager.metrics.spilled_rows.value();
         assert_eq!(spilled_rows, num_rows);
 
-        let stream = spill_manager.read_spill_as_stream(spill_file)?;
+        let stream = spill_manager.read_spill_as_stream(spill_file, None)?;
         assert_eq!(stream.schema(), schema);
 
         let batches = collect(stream).await?;
@@ -481,7 +512,7 @@ mod tests {
         let spilled_rows = spill_manager.metrics.spilled_rows.value();
         assert_eq!(spilled_rows, num_rows);
 
-        let stream = spill_manager.read_spill_as_stream(spill_file)?;
+        let stream = spill_manager.read_spill_as_stream(spill_file, None)?;
         assert_eq!(stream.schema(), dict_schema);
         let batches = collect(stream).await?;
         assert_eq!(batches.len(), 2);
@@ -512,7 +543,7 @@ mod tests {
         assert!(spill_file.path().exists());
         assert!(max_batch_mem > 0);
 
-        let stream = spill_manager.read_spill_as_stream(spill_file)?;
+        let stream = spill_manager.read_spill_as_stream(spill_file, None)?;
         assert_eq!(stream.schema(), schema);
 
         let batches = collect(stream).await?;
@@ -547,7 +578,7 @@ mod tests {
         let spilled_rows = spill_manager.metrics.spilled_rows.value();
         assert_eq!(spilled_rows, num_rows);
 
-        let stream = spill_manager.read_spill_as_stream(spill_file)?;
+        let stream = spill_manager.read_spill_as_stream(spill_file, None)?;
         assert_eq!(stream.schema(), schema);
 
         let batches = collect(stream).await?;
@@ -931,8 +962,10 @@ mod tests {
                     .spill_record_batch_and_finish(&batches, "Test2")?
                     .unwrap();
 
-                let mut stream_1 = spill_manager.read_spill_as_stream(spill_file_1)?;
-                let mut stream_2 = spill_manager.read_spill_as_stream(spill_file_2)?;
+                let mut stream_1 =
+                    spill_manager.read_spill_as_stream(spill_file_1, None)?;
+                let mut stream_2 =
+                    spill_manager.read_spill_as_stream(spill_file_2, None)?;
                 stream_1.next().await;
                 stream_2.next().await;
 

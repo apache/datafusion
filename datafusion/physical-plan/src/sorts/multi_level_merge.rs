@@ -237,7 +237,8 @@ impl MultiLevelMergeBuilder {
                 let spill_file = self.sorted_spill_files.remove(0);
 
                 // Not reserving any memory for this disk as we are not holding it in memory
-                self.spill_manager.read_spill_as_stream(spill_file.file)
+                self.spill_manager
+                    .read_spill_as_stream(spill_file.file, None)
             }
 
             // Only in memory streams, so merge them all in a single pass
@@ -248,15 +249,11 @@ impl MultiLevelMergeBuilder {
                     // If we have no sorted spill files left, this is the last run
                     true,
                     true,
-                    0, // TODO(ding-young)
                 )
             }
 
             // Need to merge multiple streams
-            (spill, inmem) => {
-                println!(
-                    "[merge_sorted_runs_within_mem_limit] spill{spill}, inmem{inmem}"
-                );
+            (_, _) => {
                 let mut memory_reservation = self.reservation.new_empty();
 
                 // Don't account for existing streams memory
@@ -278,20 +275,17 @@ impl MultiLevelMergeBuilder {
                         .spill_manager
                         .clone()
                         .with_batch_read_buffer_capacity(buffer_size)
-                        .read_spill_as_stream(spill.file)?;
+                        .read_spill_as_stream(
+                            spill.file,
+                            Some(spill.max_record_batch_memory),
+                        )?;
                     sorted_streams.push(stream);
                 }
-                println!(
-                    "[merge_sorted_runs_within_mem_limit] memory_reservation:{}",
-                    memory_reservation.size()
-                );
-                // TODO(ding-young) pass memory limit but what about in mem size?
                 let merge_sort_stream = self.create_new_merge_sort(
                     sorted_streams,
                     // If we have no sorted spill files left, this is the last run
                     self.sorted_spill_files.is_empty(),
                     is_only_merging_memory_streams,
-                    memory_reservation.size(),
                 )?;
 
                 // If we're only merging memory streams, we don't need to attach the memory reservation
@@ -317,7 +311,6 @@ impl MultiLevelMergeBuilder {
         streams: Vec<SendableRecordBatchStream>,
         is_output: bool,
         all_in_memory: bool,
-        expected_max_memory_usage: usize,
     ) -> Result<SendableRecordBatchStream> {
         let mut builder = StreamingMergeBuilder::new()
             .with_schema(Arc::clone(&self.schema))
@@ -338,8 +331,7 @@ impl MultiLevelMergeBuilder {
             // (reserving memory for the biggest batch in each stream)
             // TODO - avoid this hack as this can be broken easily when `SortPreservingMergeStream`
             //        changes the implementation to use more/less memory
-            println!("create new merge sort with bypass mempool");
-            builder = builder.with_bypass_mempool(expected_max_memory_usage);
+            builder = builder.with_bypass_mempool();
         } else {
             // If we are only merging in-memory streams, we need to use the memory reservation
             // because we don't know the maximum size of the batches in the streams
