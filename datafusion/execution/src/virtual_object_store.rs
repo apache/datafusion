@@ -84,7 +84,7 @@ impl VirtualObjectStore {
             .next()
             .ok_or_else(|| Error::Generic {
                 store: "VirtualObjectStore",
-                source: format!("empty path in location '{}'", location).into(),
+                source: format!("empty path in location '{location}'").into(),
             })?
             .as_ref()
             .to_string();
@@ -92,8 +92,7 @@ impl VirtualObjectStore {
         let store = self.stores.get(&key).ok_or_else(|| Error::Generic {
             store: "VirtualObjectStore",
             source: format!(
-                "ObjectStore not found for prefix '{}' in location '{}'",
-                key, location
+                "ObjectStore not found for prefix '{key}' in location '{location}'"
             )
             .into(),
         })?;
@@ -125,8 +124,7 @@ impl ObjectStore for VirtualObjectStore {
     ) -> Result<PutResult> {
         // TODO: Implement write operations if needed
         Err(Error::NotSupported {
-            source: std::io::Error::new(
-                std::io::ErrorKind::Other,
+            source: std::io::Error::other(
                 "VirtualObjectStore does not support write operations",
             )
             .into(),
@@ -140,8 +138,7 @@ impl ObjectStore for VirtualObjectStore {
     ) -> Result<Box<dyn MultipartUpload>> {
         // TODO: Implement write operations if needed
         Err(Error::NotSupported {
-            source: std::io::Error::new(
-                std::io::ErrorKind::Other,
+            source: std::io::Error::other(
                 "VirtualObjectStore does not support write operations",
             )
             .into(),
@@ -156,8 +153,7 @@ impl ObjectStore for VirtualObjectStore {
     async fn delete(&self, _location: &Path) -> Result<()> {
         // TODO: Implement write operations if needed
         Err(Error::NotSupported {
-            source: std::io::Error::new(
-                std::io::ErrorKind::Other,
+            source: std::io::Error::other(
                 "VirtualObjectStore does not support write operations",
             )
             .into(),
@@ -248,8 +244,7 @@ impl ObjectStore for VirtualObjectStore {
     async fn copy(&self, _from: &Path, _to: &Path) -> Result<()> {
         // TODO: Implement write operations if needed
         Err(Error::NotSupported {
-            source: std::io::Error::new(
-                std::io::ErrorKind::Other,
+            source: std::io::Error::other(
                 "VirtualObjectStore does not support write operations",
             )
             .into(),
@@ -259,8 +254,7 @@ impl ObjectStore for VirtualObjectStore {
     async fn copy_if_not_exists(&self, _from: &Path, _to: &Path) -> Result<()> {
         // TODO: Implement write operations if needed
         Err(Error::NotSupported {
-            source: std::io::Error::new(
-                std::io::ErrorKind::Other,
+            source: std::io::Error::other(
                 "VirtualObjectStore does not support write operations",
             )
             .into(),
