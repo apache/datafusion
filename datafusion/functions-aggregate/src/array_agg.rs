@@ -17,8 +17,10 @@
 
 //! `ARRAY_AGG` aggregate implementation: [`ArrayAgg`]
 
+use std::any::{type_name, Any};
 use std::cmp::Ordering;
 use std::collections::{HashSet, VecDeque};
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::mem::{size_of, size_of_val, take};
 use std::sync::Arc;
 
@@ -36,7 +38,7 @@ use datafusion_common::{exec_err, internal_err, Result, ScalarValue};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
-    udf_equals_hash, Accumulator, AggregateUDFImpl, Documentation, Signature, Volatility,
+    Accumulator, AggregateUDFImpl, Documentation, Signature, Volatility,
 };
 use datafusion_functions_aggregate_common::merge_arrays::merge_ordered_arrays;
 use datafusion_functions_aggregate_common::utils::ordering_fields;
@@ -91,7 +93,7 @@ impl Default for ArrayAgg {
 }
 
 impl AggregateUDFImpl for ArrayAgg {
-    fn as_any(&self) -> &dyn std::any::Any {
+    fn as_any(&self) -> &dyn Any {
         self
     }
 
@@ -223,7 +225,22 @@ impl AggregateUDFImpl for ArrayAgg {
         self.doc()
     }
 
-    udf_equals_hash!(AggregateUDFImpl);
+    fn equals(&self, other: &dyn AggregateUDFImpl) -> bool {
+        let Some(other) = <dyn Any + 'static>::downcast_ref::<Self>(other.as_any())
+        else {
+            return false;
+        };
+        fn assert_self_impls_eq<T: Eq>() {}
+        assert_self_impls_eq::<Self>();
+        PartialEq::eq(self, other)
+    }
+
+    fn hash_value(&self) -> u64 {
+        let hasher = &mut DefaultHasher::new();
+        type_name::<Self>().hash(hasher);
+        Hash::hash(self, hasher);
+        Hasher::finish(hasher)
+    }
 }
 
 #[derive(Debug)]
