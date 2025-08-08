@@ -229,6 +229,10 @@ where
 /// This trait exposes the full API for implementing user defined window functions and
 /// can be used to implement any function.
 ///
+/// While the trait depends on [`DynEq`] and [`DynHash`] traits, these should not be
+/// implemented directly. Instead, implement [`Eq`] and [`Hash`] and leverage the
+/// blanked implementations of [`DynEq`] and [`DynHash`].
+///
 /// See [`advanced_udwf.rs`] for a full example with complete implementation and
 /// [`WindowUDF`] for other available options.
 ///
