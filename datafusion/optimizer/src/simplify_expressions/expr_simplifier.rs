@@ -2181,7 +2181,7 @@ mod tests {
     };
     use datafusion_functions_window_common::field::WindowUDFFieldArgs;
     use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
-    use std::hash::{DefaultHasher, Hash, Hasher};
+    use std::hash::Hash;
     use std::{
         collections::HashMap,
         ops::{BitAnd, BitOr, BitXor},
@@ -4347,7 +4347,7 @@ mod tests {
 
     /// A Mock UDAF which defines `simplify` to be used in tests
     /// related to UDAF simplification
-    #[derive(Debug, Clone)]
+    #[derive(Debug, Clone, PartialEq, Eq, Hash)]
     struct SimplifyMockUdaf {
         simplify: bool,
     }
@@ -4406,20 +4406,7 @@ mod tests {
             }
         }
 
-        fn equals(&self, other: &dyn AggregateUDFImpl) -> bool {
-            let Some(other) = other.as_any().downcast_ref::<Self>() else {
-                return false;
-            };
-            let Self { simplify } = self;
-            simplify == &other.simplify
-        }
-
-        fn hash_value(&self) -> u64 {
-            let Self { simplify } = self;
-            let mut hasher = DefaultHasher::new();
-            simplify.hash(&mut hasher);
-            hasher.finish()
-        }
+        udf_equals_hash!(AggregateUDFImpl);
     }
 
     #[test]
@@ -4443,7 +4430,7 @@ mod tests {
 
     /// A Mock UDWF which defines `simplify` to be used in tests
     /// related to UDWF simplification
-    #[derive(Debug, Clone, PartialEq, Hash)]
+    #[derive(Debug, Clone, PartialEq, Eq, Hash)]
     struct SimplifyMockUdwf {
         simplify: bool,
     }

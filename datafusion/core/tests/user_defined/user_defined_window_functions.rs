@@ -525,7 +525,7 @@ impl OddCounter {
     }
 
     fn register(ctx: &mut SessionContext, test_state: Arc<TestState>) {
-        #[derive(Debug, Clone, PartialEq, Hash)]
+        #[derive(Debug, Clone, PartialEq, Eq, Hash)]
         struct SimpleWindowUDF {
             signature: Signature,
             test_state: PtrEq<Arc<TestState>>,
