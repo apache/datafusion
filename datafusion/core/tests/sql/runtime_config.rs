@@ -193,7 +193,7 @@ async fn test_max_temp_directory_size_enforcement() {
         .unwrap();
 
     let result = ctx.sql(query).await.unwrap().collect().await;
-    println!("result is {result:?}");
+
     assert!(
         result.is_ok(),
         "Should not fail due to max temp directory size limit"

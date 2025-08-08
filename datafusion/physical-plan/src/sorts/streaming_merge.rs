@@ -29,9 +29,8 @@ use arrow::array::*;
 use arrow::datatypes::{DataType, SchemaRef};
 use datafusion_common::{internal_err, Result};
 use datafusion_execution::disk_manager::RefCountedTempFile;
-#[allow(unused_imports)]
 use datafusion_execution::memory_pool::{
-    human_readable_size, GreedyMemoryPool, MemoryConsumer, MemoryPool, MemoryReservation,
+    human_readable_size, MemoryConsumer, MemoryPool, MemoryReservation,
     UnboundedMemoryPool,
 };
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
