@@ -44,7 +44,9 @@ datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-functions = { workspace = true, features = ["crypto_expressions"] }
 datafusion-macros = { workspace = true }
+bigdecimal = { workspace = true }
 log = { workspace = true }
+twox-hash = "2.1.1"
 
 [dev-dependencies]
 criterion = { workspace = true }

@@ -2628,6 +2628,7 @@ name = "datafusion-spark"
 version = "49.0.0"
 dependencies = [
  "arrow",
+ "bigdecimal",
  "chrono",
  "criterion",
  "datafusion-catalog",
@@ -2638,6 +2639,7 @@ dependencies = [
  "datafusion-macros",
  "log",
  "rand 0.9.2",
+ "twox-hash",
 ]
 
 [[package]]
@@ -6840,6 +6842,9 @@ name = "twox-hash"
 version = "2.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8b907da542cbced5261bd3256de1b3a1bf340a3d37f93425a07362a1d687de56"
+dependencies = [
+ "rand 0.9.2",
+]
 
 [[package]]
 name = "typed-arena"
