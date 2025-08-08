@@ -1,0 +1,10 @@
+[default.extend-words]
+Pn = "Pn"
+fo = "fo"
+2010YOUY01 = "2010YOUY01"
+
+[files]
+extend-exclude = [
+    "*.slt",
+    "*.svg",
+]
