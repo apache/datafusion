@@ -159,13 +159,9 @@ The higher the value of `datafusion.execution.target_partitions`
 the less memory is allocated to each partition, and the out-of-core
 execution path may trigger more frequently, slowing down execution.
 
-Additionally, all of the external join, aggregate, and sort operations now rely on the external
-sort implementation, which sorts the buffered data first, then spills, and in the
-final stage reads spills back incrementally and performs a sort-preserving merge. If the
-`datafusion.execution.batch_size` is set too large, in the sort-preserving merge
-phase the executor can only merge a small number of spilled sorted runs, which
-causes more re-spills to happen. As a result, setting `batch_size` to a smaller
-value can help reduce the number of spills.
+Additionally, while spilling, data is read back in `datafusion.execution.batch_size` size batches.
+The larger this value, the fewer spilled sorted runs can be merged. Decreasing this setting
+can help reduce the number of subsequent spills required. 
 
 In conclusion, for queries under a very tight memory limit, it's recommended to
 set `target_partitions` and `batch_size` to smaller values.
