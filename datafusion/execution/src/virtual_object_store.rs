@@ -224,3 +224,203 @@ impl ObjectStore for VirtualObjectStore {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use futures::TryStreamExt;
+    use object_store::{
+        memory::InMemory, path::Path, Error, GetResult, PutMultipartOptions, PutPayload,
+    };
+
+    /// Helper to collect list results into Vec<String>
+    async fn collect_list(
+        store: &VirtualObjectStore,
+        prefix: Option<&Path>,
+    ) -> Vec<String> {
+        store
+            .list(prefix)
+            .map_ok(|meta| meta.location.as_ref().to_string())
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap_or_default()
+    }
+
+    #[tokio::test]
+    async fn list_empty_prefix_returns_all() {
+        let mut stores = HashMap::new();
+        let a = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+        let b = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+        a.put(&Path::from("a1"), b"data1".to_vec().into())
+            .await
+            .unwrap();
+        b.put(&Path::from("b1"), b"data2".to_vec().into())
+            .await
+            .unwrap();
+        stores.insert("a".to_string(), a);
+        stores.insert("b".to_string(), b);
+        let v = VirtualObjectStore::new(stores);
+        let result = collect_list(&v, None).await;
+        assert_eq!(result.len(), 2);
+        assert!(result.contains(&"a/a1".to_string()));
+        assert!(result.contains(&"b/b1".to_string()));
+    }
+
+    #[tokio::test]
+    async fn list_no_matching_prefix_empty() {
+        let mut stores = HashMap::new();
+        stores.insert("x".to_string(), Arc::new(InMemory::new()));
+        let v = VirtualObjectStore::new(stores);
+        let result = collect_list(&v, Some(&Path::from("nope"))).await;
+        assert!(result.is_empty());
+    }
+
+    #[tokio::test]
+    async fn list_nested_prefix_passes_remainder() {
+        let mut stores = HashMap::new();
+        let a = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+        a.put(&Path::from("sub/key"), b"x".to_vec().into())
+            .await
+            .unwrap();
+        stores.insert("a".to_string(), a);
+        let v = VirtualObjectStore::new(stores);
+        let result = collect_list(&v, Some(&Path::from("a/sub"))).await;
+        assert_eq!(result, vec!["a/sub/key".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn copy_if_not_exists_destination_exists() {
+        let mut stores = HashMap::new();
+        let from = Arc::new(InMemory::new());
+        let to = Arc::new(InMemory::new());
+        from.put(&Path::from("f1"), b"v".to_vec().into())
+            .await
+            .unwrap();
+        to.put(&Path::from("f1"), b"old".to_vec().into())
+            .await
+            .unwrap();
+        stores.insert("s".to_string(), from);
+        stores.insert("t".to_string(), to.clone());
+        let v = VirtualObjectStore::new(stores);
+        let err = v
+            .copy_if_not_exists(&Path::from("t/f1"), &Path::from("t/f1"))
+            .await;
+        assert!(matches!(err.unwrap_err(), Error::AlreadyExists { .. }));
+    }
+
+    #[tokio::test]
+    async fn copy_if_not_exists_streams_copy() {
+        let mut stores = HashMap::new();
+        let from = Arc::new(InMemory::new());
+        let to = Arc::new(InMemory::new());
+        from.put(&Path::from("f1"), b"123".to_vec().into())
+            .await
+            .unwrap();
+        stores.insert("src".to_string(), from.clone());
+        stores.insert("dst".to_string(), to.clone());
+        let v = VirtualObjectStore::new(stores);
+        v.copy_if_not_exists(&Path::from("src/f1"), &Path::from("dst/f1"))
+            .await
+            .unwrap();
+        // Verify data copied correctly
+        let data = to
+            .get(&Path::from("f1"))
+            .await
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap();
+        assert_eq!(data, b"123".to_vec());
+    }
+
+    #[tokio::test]
+    async fn list_with_delimiter_sorted() {
+        let mut stores = HashMap::new();
+        let a = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+        a.put(&Path::from("z1"), b"x".to_vec().into())
+            .await
+            .unwrap();
+        let b = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+        b.put(&Path::from("a1"), b"y".to_vec().into())
+            .await
+            .unwrap();
+        stores.insert("a".to_string(), a);
+        stores.insert("b".to_string(), b);
+        let v = VirtualObjectStore::new(stores);
+        let res = v.list_with_delimiter(None).await.unwrap();
+        let locs: Vec<_> = res
+            .objects
+            .into_iter()
+            .map(|o| o.location.as_ref().to_string())
+            .collect();
+        assert_eq!(locs, vec!["a/a1".to_string(), "b/z1".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn multipart_upload_basic_and_abort() {
+        let mut stores = HashMap::new();
+        let a = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+        stores.insert("a".to_string(), a.clone());
+        let v = VirtualObjectStore::new(stores);
+        // Initiate multipart upload
+        let mut upload = v
+            .put_multipart_opts(&Path::from("a/file"), PutMultipartOptions::default())
+            .await
+            .expect("multipart upload should succeed");
+        // Abort should succeed
+        let res = upload.abort().await;
+        assert!(res.is_ok(), "abort of multipart upload failed");
+    }
+
+    #[tokio::test]
+    async fn multipart_upload_no_matching_prefix_error() {
+        let mut stores = HashMap::new();
+        stores.insert("x".to_string(), Arc::new(InMemory::new()));
+        let v = VirtualObjectStore::new(stores);
+        let err = v
+            .put_multipart_opts(&Path::from("nope/file"), PutMultipartOptions::default())
+            .await;
+        assert!(err.is_err(), "expected error for no matching prefix");
+        match err.unwrap_err() {
+            Error::Generic { store, source } => {
+                assert_eq!(store, "VirtualObjectStore");
+                assert!(source.contains("prefix 'nope'"));
+            }
+            other => panic!("unexpected error type: {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn multipart_upload_complete_and_put_part() {
+        let mut stores = HashMap::new();
+        let a = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+        stores.insert("a".to_string(), a.clone());
+        let v = VirtualObjectStore::new(stores);
+        // Initiate multipart upload
+        let mut upload = v
+            .put_multipart_opts(&Path::from("a/complete"), PutMultipartOptions::default())
+            .await
+            .expect("multipart upload should succeed");
+        // Upload parts
+        // Upload parts
+        upload
+            .put_part(PutPayload::Bytes(b"foo".to_vec()))
+            .await
+            .unwrap();
+        upload
+            .put_part(PutPayload::Bytes(b"bar".to_vec()))
+            .await
+            .unwrap();
+        // Complete upload
+        upload.complete().await.unwrap();
+        // Verify data on underlying store
+        let data = a
+            .get(&Path::from("complete"))
+            .await
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap();
+        assert_eq!(data, b"foobar".to_vec());
+    }
+}
