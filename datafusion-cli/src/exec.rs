@@ -251,27 +251,6 @@ pub(super) async fn exec_and_print(
         StatementExecutor::new(statement)
             .execute(ctx, print_options)
             .await?;
-        if let Some(pool_any) = pool_any {
-            let metrics = if let Ok(pool) = pool_any
-                .clone()
-                .downcast::<TrackConsumersPool<FairSpillPool>>()
-            {
-                let m = pool.consumer_metrics();
-                pool.disable_tracking();
-                m
-            } else if let Ok(pool) = pool_any
-                .clone()
-                .downcast::<TrackConsumersPool<GreedyMemoryPool>>()
-            {
-                let m = pool.consumer_metrics();
-                pool.disable_tracking();
-                m
-            } else {
-                Vec::new()
-            };
-            print_options.last_memory_metrics = Some(metrics);
-            print_options.memory_profiling = false;
-        }
     }
 
     Ok(())
