@@ -2202,6 +2202,7 @@ name = "datafusion-execution"
 version = "49.0.0"
 dependencies = [
  "arrow",
+ "async-trait",
  "chrono",
  "dashmap",
  "datafusion-common",
@@ -2214,6 +2215,7 @@ dependencies = [
  "parquet",
  "rand 0.9.2",
  "tempfile",
+ "tokio",
  "url",
 ]
 
