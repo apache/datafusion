@@ -34,14 +34,29 @@ pub fn print_metrics(metrics: &[ConsumerMemoryMetrics]) {
 }
 
 /// Categorize operator names into high-level groups for reporting.
-pub fn operator_category(name: &str) -> &str {
-    if name.contains("Aggregate") {
+pub fn operator_category(name: &str) -> &'static str {
+    let name = name.to_lowercase();
+    if name.contains("scan") {
+        "Data Input"
+    } else if name.contains("filter") {
+        "Filtering"
+    } else if name.contains("join") {
+        "Join Operation"
+    } else if name.contains("aggregate") {
         "Aggregation"
-    } else if name.contains("Window") {
-        "Window"
-    } else if name.contains("Sort") {
+    } else if name.contains("sort") {
         "Sorting"
+    } else if name.contains("project") {
+        "Projection"
+    } else if name.contains("union") {
+        "Set Operation"
+    } else if name.contains("window") {
+        "Window Function"
+    } else if name.contains("limit") {
+        "Limit/TopK"
+    } else if name.contains("spill") {
+        "Memory Management"
     } else {
-        name
+        "Other"
     }
 }
