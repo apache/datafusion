@@ -203,13 +203,12 @@ impl Hash for ScalarFunctionExpr {
             name,
             args,
             return_field,
-            config_options,
+            config_options: _, // expensive to hash, and often equal
         } = self;
         fun.hash(state);
         name.hash(state);
         args.hash(state);
         return_field.hash(state);
-        sorted_config_entries(config_options).hash(state);
     }
 }
 
