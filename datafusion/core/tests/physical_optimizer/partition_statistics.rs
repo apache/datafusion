@@ -801,6 +801,20 @@ mod test {
             assert_eq!(stat, &expected_stats);
         }
 
+        // Verify that the result has exactly 2 partitions
+        let partitions = execute_stream_partitioned(
+            repartition.clone(),
+            Arc::new(TaskContext::default()),
+        )?;
+        assert_eq!(2, partitions.len());
+
+        // Verify each partition has exactly 2 records
+        for partition_stream in partitions.into_iter() {
+            let results: Vec<RecordBatch> = partition_stream.try_collect().await?;
+            let total_rows: usize = results.iter().map(|batch| batch.num_rows()).sum();
+            assert_eq!(2, total_rows);
+        }
+
         Ok(())
     }
 }
