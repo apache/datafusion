@@ -241,6 +241,17 @@ fn test_cli_top_memory_consumers<'a>(
     assert_cmd_snapshot!(cmd);
 }
 
+#[test]
+fn cli_memory_enable_show() {
+    let mut settings = make_settings();
+    settings.set_snapshot_suffix("memory_enable_show");
+    let _bound = settings.bind_to_scope();
+
+    let input = "\\memory_profiling enable\nselect 1;\n\\memory_profiling show\n";
+
+    assert_cmd_snapshot!(cli().arg("-q").pass_stdin(input));
+}
+
 #[tokio::test]
 async fn test_cli() {
     if env::var("TEST_STORAGE_INTEGRATION").is_err() {

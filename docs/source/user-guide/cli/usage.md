@@ -122,6 +122,29 @@ Available commands inside DataFusion CLI are:
 > \h function
 ```
 
+- Memory profiling
+
+```bash
+> \memory_profiling enable
+```
+
+```bash
+> \memory_profiling show
+```
+
+```text
+Peak memory usage: 10.0 MB
+Cumulative allocations: 101.6 MB
+Memory usage by operator:
+Aggregation: 762.2 KB
+Other: 887.1 KB
+Sorting: 100.0 MB
+```
+
+```bash
+> \memory_profiling disable
+```
+
 ## Supported SQL
 
 In addition to the normal [SQL supported in DataFusion], `datafusion-cli` also

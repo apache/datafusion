@@ -93,6 +93,6 @@ impl CliSessionContext for SessionContext {
         &self,
         plan: LogicalPlan,
     ) -> Result<DataFrame, DataFusionError> {
-        self.execute_logical_plan(plan).await
+        SessionContext::execute_logical_plan(self, plan).await
     }
 }
