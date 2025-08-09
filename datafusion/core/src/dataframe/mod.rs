@@ -2222,7 +2222,6 @@ impl DataFrame {
     /// ```
     pub async fn cache(self) -> Result<DataFrame> {
         let context = SessionContext::new_with_state((*self.session_state).clone());
-
         // The schema is consistent with the output
         let plan = self.clone().create_physical_plan().await?;
         let schema = plan.schema();
