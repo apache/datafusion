@@ -17,23 +17,24 @@
 
 //! Command within CLI
 
-use crate::cli_context::CliSessionContext;
-use crate::exec::{exec_and_print, exec_from_lines};
-use crate::functions::{display_all_functions, Function};
-use crate::print_format::PrintFormat;
-use crate::print_options::PrintOptions;
+use crate::{
+    cli_context::CliSessionContext,
+    exec::{exec_and_print, exec_from_lines},
+    functions::{display_all_functions, Function},
+    print_format::PrintFormat,
+    print_options::PrintOptions,
+};
 use clap::ValueEnum;
-use datafusion::arrow::array::{ArrayRef, StringArray};
-use datafusion::arrow::datatypes::{DataType, Field, Schema};
-use datafusion::arrow::record_batch::RecordBatch;
-use datafusion::common::exec_err;
-use datafusion::common::instant::Instant;
-use datafusion::error::{DataFusionError, Result};
-use datafusion::execution::memory_pool::print_metrics;
-use std::fs::File;
-use std::io::BufReader;
-use std::str::FromStr;
-use std::sync::Arc;
+use datafusion::{
+    arrow::{
+        array::ArrayRef, array::StringArray, datatypes::DataType, datatypes::Field,
+        datatypes::Schema, record_batch::RecordBatch,
+    },
+    common::{exec_err, instant::Instant},
+    error::{DataFusionError, Result},
+    execution::memory_pool::print_metrics,
+};
+use std::{fs::File, io::BufReader, str::FromStr, sync::Arc};
 
 #[derive(Debug, Clone, Copy)]
 pub enum MemoryProfilingCommand {
