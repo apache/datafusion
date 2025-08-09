@@ -201,6 +201,39 @@ async fn test_max_temp_directory_size_enforcement() {
 }
 
 #[tokio::test]
+async fn test_test_metadata_cache_limit() {
+    let ctx = SessionContext::new();
+
+    let update_limit = async |ctx: &SessionContext, limit: &str| {
+        ctx.sql(
+            format!("SET datafusion.runtime.metadata_cache_limit = '{limit}'").as_str(),
+        )
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    };
+
+    let get_limit = |ctx: &SessionContext| -> usize {
+        ctx.task_ctx()
+            .runtime_env()
+            .cache_manager
+            .get_file_metadata_cache()
+            .cache_limit()
+    };
+
+    update_limit(&ctx, "100M").await;
+    assert_eq!(get_limit(&ctx), 100 * 1024 * 1024);
+
+    update_limit(&ctx, "2G").await;
+    assert_eq!(get_limit(&ctx), 2 * 1024 * 1024 * 1024);
+
+    update_limit(&ctx, "123K").await;
+    assert_eq!(get_limit(&ctx), 123 * 1024);
+}
+
+#[tokio::test]
 async fn test_unknown_runtime_config() {
     let ctx = SessionContext::new();
 
