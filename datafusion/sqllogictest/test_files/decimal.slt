@@ -795,7 +795,7 @@ select log(100::decimal(38,0));
 
 # log for small decimal256
 query R
-select log(100::decimal(70,0));
+select log(100::decimal(76,0));
 ----
 2
 
@@ -818,13 +818,13 @@ select log(100000000000000000000000000000000000000::decimal(38,0))
 
 # log(10^35) for decimal256 for a value able to fit i128
 query R
-select log(100000000000000000000000000000000000::decimal(70,0));
+select log(100000000000000000000000000000000000::decimal(76,0));
 ----
 35
 
 # log(10^50) for decimal256 for a value larger than i128
 query error Arrow error: Compute error: Log of a large Decimal256 is not supported
-select log(100000000000000000000000000000000000000000000000000::decimal(70,0));
+select log(100000000000000000000000000000000000000000000000000::decimal(76,0));
 
 # log(10^35) for decimal128 with explicit base
 query R
@@ -832,9 +832,9 @@ select log(10, 100000000000000000000000000000000000::decimal(38,0));
 ----
 35
 
-# log(10^35) for decimal256 with explicit base
+# log(10^35) for decimal256 with explicit base - only float as a base
 query R
-select log(10, 100000000000000000000000000000000000::decimal(70,0));
+select log(10.0, 100000000000000000000000000000000000::decimal(76,0));
 ----
 35
 
@@ -854,7 +854,28 @@ select log(2, 100000000000000000000000000000000000::decimal(38,0));
 query R
 select log(2.0, 100000000000000000000000000000000000::decimal(38,0));
 ----
-116
+116.267483321058
+
+# null cases
+query R
+select log(null, 100);
+----
+NULL
+
+query R
+select log(null, 100000000000000000000000000000000000::decimal(38,0));
+----
+NULL
+
+query R
+select log(null);
+----
+NULL
+
+query R
+select log(2.0, null);
+----
+NULL
 
 # Set parse_float_as_decimal to false to test float parsing
 statement ok
@@ -867,6 +888,7 @@ select 100000000000000000000000000000000000::decimal(38,0)
 99999999999999996863366107917975552
 
 # log(10^35) for decimal128 with explicit decimal base
+# Float parsing is rounding down
 query R
 select log(10, 100000000000000000000000000000000000::decimal(38,0));
 ----

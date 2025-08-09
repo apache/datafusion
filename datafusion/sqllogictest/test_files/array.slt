@@ -695,7 +695,7 @@ SELECT array_length([now()])
 query ?
 select [abs(-1.2), sin(-1), log(2), ceil(3.141)]
 ----
-[1.2, -0.8414709848078965, 0.3010299801826477, 4.0]
+[1.2, -0.8414709848078965, 0.30102999566398114, 4.0]
 
 ## array literal with nested types
 query ???
