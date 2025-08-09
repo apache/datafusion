@@ -18,7 +18,7 @@
 //! Planner for [`LogicalPlan`] to [`ExecutionPlan`]
 
 use std::borrow::Cow;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::datasource::file_format::file_type_to_format;
@@ -149,46 +149,6 @@ pub trait ExtensionPlanner {
         physical_inputs: &[Arc<dyn ExecutionPlan>],
         session_state: &SessionState,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>>;
-}
-
-fn expr_canonical_string(expr: &Arc<dyn PhysicalExpr>) -> String {
-    format!("{}", expr)
-}
-
-fn dedupe_join_key_pairs(
-    left: Vec<Arc<dyn PhysicalExpr>>,
-    right: Vec<Arc<dyn PhysicalExpr>>,
-) -> (Vec<Arc<dyn PhysicalExpr>>, Vec<Arc<dyn PhysicalExpr>>) {
-    assert_eq!(left.len(), right.len());
-    let mut seen = HashSet::new();
-    let mut out_left = Vec::new();
-    let mut out_right = Vec::new();
-    for (l, r) in left.into_iter().zip(right.into_iter()) {
-        let l_s = expr_canonical_string(&l);
-        let r_s = expr_canonical_string(&r);
-        let key = if l_s <= r_s {
-            format!("{}={}", l_s, r_s)
-        } else {
-            format!("{}={}", r_s, l_s)
-        };
-        if seen.insert(key) {
-            out_left.push(l);
-            out_right.push(r);
-        }
-    }
-    (out_left, out_right)
-}
-
-fn dedupe_partition_exprs(exprs: Vec<Arc<dyn PhysicalExpr>>) -> Vec<Arc<dyn PhysicalExpr>> {
-    let mut seen = HashSet::new();
-    let mut out = Vec::new();
-    for e in exprs.into_iter() {
-        let key = expr_canonical_string(&e);
-        if seen.insert(key) {
-            out.push(e);
-        }
-    }
-    out
 }
 
 /// Default single node physical query planner that converts a
@@ -898,7 +858,6 @@ impl DefaultPhysicalPlanner {
                                 )
                             })
                             .collect::<Result<Vec<_>>>()?;
-                        let runtime_expr = dedupe_partition_exprs(runtime_expr);
                         Partitioning::Hash(runtime_expr, *n)
                     }
                     LogicalPartitioning::DistributeBy(_) => {
@@ -1129,10 +1088,6 @@ impl DefaultPhysicalPlanner {
                         Ok((l, r))
                     })
                     .collect::<Result<join_utils::JoinOn>>()?;
-                let (left_keys, right_keys): (Vec<_>, Vec<_>) = join_on.into_iter().unzip();
-                let (left_keys, right_keys) = dedupe_join_key_pairs(left_keys, right_keys);
-                let join_on: join_utils::JoinOn =
-                    left_keys.into_iter().zip(right_keys).collect();
 
                 let join_filter = match filter {
                     Some(expr) => {
@@ -2390,7 +2345,6 @@ impl<'a> OptimizationInvariantChecker<'a> {
 
         Ok(())
     }
-
 }
 
 impl<'n> TreeNodeVisitor<'n> for OptimizationInvariantChecker<'_> {
@@ -3565,30 +3519,5 @@ digraph {
         ));
 
         Ok(())
-    }
-
-    #[test]
-    fn test_dedupe_join_key_pairs() {
-        let l1: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 0));
-        let r1: Arc<dyn PhysicalExpr> = Arc::new(Column::new("b", 0));
-        let l2: Arc<dyn PhysicalExpr> = Arc::new(Column::new("b", 0));
-        let r2: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 0));
-        let (left, right) = dedupe_join_key_pairs(vec![l1.clone(), l2], vec![r1.clone(), r2]);
-        assert_eq!(left.len(), 1);
-        assert_eq!(format!("{}", left[0]), "a@0");
-        assert_eq!(format!("{}", right[0]), "b@0");
-    }
-
-    #[test]
-    fn test_dedupe_partition_exprs() {
-        let exprs: Vec<Arc<dyn PhysicalExpr>> = vec![
-            Arc::new(Column::new("a", 0)),
-            Arc::new(Column::new("a", 0)),
-            Arc::new(Column::new("b", 1)),
-        ];
-        let result = dedupe_partition_exprs(exprs);
-        assert_eq!(result.len(), 2);
-        assert_eq!(format!("{}", result[0]), "a@0");
-        assert_eq!(format!("{}", result[1]), "b@1");
     }
 }
