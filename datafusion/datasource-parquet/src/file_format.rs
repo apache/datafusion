@@ -63,7 +63,7 @@ use datafusion_physical_plan::Accumulator;
 use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
 use datafusion_session::Session;
 
-use crate::reader::CachedParquetFileReaderFactory;
+use crate::reader::{CachedParquetFileReaderFactory, CachedParquetMetaData};
 use crate::source::{parse_coerce_int96_string, ParquetSource};
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -84,6 +84,7 @@ use parquet::arrow::async_reader::MetadataFetch;
 use parquet::arrow::{parquet_to_arrow_schema, ArrowSchemaConverter, AsyncArrowWriter};
 use parquet::basic::Type;
 
+use datafusion_execution::cache::cache_manager::FileMetadataCache;
 use parquet::errors::ParquetError;
 use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader, RowGroupMetaData};
 use parquet::file::properties::{WriterProperties, WriterPropertiesBuilder};
@@ -312,6 +313,7 @@ async fn fetch_schema_with_location(
     file: &ObjectMeta,
     metadata_size_hint: Option<usize>,
     coerce_int96: Option<TimeUnit>,
+    file_metadata_cache: Option<Arc<dyn FileMetadataCache>>,
 ) -> Result<(Path, Schema)> {
     let file_decryption_properties =
         get_file_decryption_properties(state, options, &file.location)?;
@@ -322,6 +324,7 @@ async fn fetch_schema_with_location(
         metadata_size_hint,
         file_decryption_properties.as_ref(),
         coerce_int96,
+        file_metadata_cache,
     )
     .await?;
     Ok((loc_path, schema))
@@ -405,6 +408,7 @@ impl FileFormat for ParquetFormat {
                     object,
                     self.metadata_size_hint(),
                     coerce_int96,
+                    Some(state.runtime_env().cache_manager.get_file_metadata_cache()),
                 )
             })
             .boxed() // Workaround https://github.com/rust-lang/rust/issues/64552
@@ -461,6 +465,7 @@ impl FileFormat for ParquetFormat {
             object,
             self.metadata_size_hint(),
             file_decryption_properties.as_ref(),
+            Some(state.runtime_env().cache_manager.get_file_metadata_cache()),
         )
         .await?;
         Ok(stats)
@@ -1004,13 +1009,13 @@ pub fn transform_binary_to_string(schema: &Schema) -> Schema {
 }
 
 /// [`MetadataFetch`] adapter for reading bytes from an [`ObjectStore`]
-struct ObjectStoreFetch<'a> {
+pub struct ObjectStoreFetch<'a> {
     store: &'a dyn ObjectStore,
     meta: &'a ObjectMeta,
 }
 
 impl<'a> ObjectStoreFetch<'a> {
-    fn new(store: &'a dyn ObjectStore, meta: &'a ObjectMeta) -> Self {
+    pub fn new(store: &'a dyn ObjectStore, meta: &'a ObjectMeta) -> Self {
         Self { store, meta }
     }
 }
@@ -1033,24 +1038,62 @@ impl MetadataFetch for ObjectStoreFetch<'_> {
 /// through [`ParquetFileReaderFactory`].
 ///
 /// [`ParquetFileReaderFactory`]: crate::ParquetFileReaderFactory
-pub async fn fetch_parquet_metadata(
-    store: &dyn ObjectStore,
-    meta: &ObjectMeta,
+pub async fn fetch_parquet_metadata<F: MetadataFetch>(
+    fetch: F,
+    object_meta: &ObjectMeta,
     size_hint: Option<usize>,
     #[allow(unused)] decryption_properties: Option<&FileDecryptionProperties>,
-) -> Result<ParquetMetaData> {
-    let file_size = meta.size;
-    let fetch = ObjectStoreFetch::new(store, meta);
+    file_metadata_cache: Option<Arc<dyn FileMetadataCache>>,
+) -> Result<Arc<ParquetMetaData>> {
+    let cache_metadata =
+        !cfg!(feature = "parquet_encryption") || decryption_properties.is_none();
 
-    let reader = ParquetMetaDataReader::new().with_prefetch_hint(size_hint);
+    if cache_metadata {
+        if let Some(parquet_metadata) = file_metadata_cache
+            .as_ref()
+            .and_then(|file_metadata_cache| file_metadata_cache.get(object_meta))
+            .and_then(|file_metadata| {
+                file_metadata
+                    .as_any()
+                    .downcast_ref::<CachedParquetMetaData>()
+                    .map(|cached_parquet_metadata| {
+                        Arc::clone(cached_parquet_metadata.parquet_metadata())
+                    })
+            })
+        {
+            return Ok(parquet_metadata);
+        }
+    }
+
+    let mut reader = ParquetMetaDataReader::new().with_prefetch_hint(size_hint);
 
     #[cfg(feature = "parquet_encryption")]
-    let reader = reader.with_decryption_properties(decryption_properties);
+    if let Some(decryption_properties) = decryption_properties {
+        reader = reader.with_decryption_properties(Some(decryption_properties));
+    }
 
-    reader
-        .load_and_finish(fetch, file_size)
-        .await
-        .map_err(DataFusionError::from)
+    if cache_metadata && file_metadata_cache.is_some() {
+        // Need to retrieve the entire metadata for the caching to be effective.
+        reader = reader.with_page_indexes(true);
+    }
+
+    let metadata = Arc::new(
+        reader
+            .load_and_finish(fetch, object_meta.size)
+            .await
+            .map_err(DataFusionError::from)?,
+    );
+
+    if cache_metadata {
+        if let Some(file_metadata_cache) = file_metadata_cache {
+            file_metadata_cache.put(
+                object_meta,
+                Arc::new(CachedParquetMetaData::new(Arc::clone(&metadata))),
+            );
+        }
+    }
+
+    Ok(metadata)
 }
 
 /// Read and parse the schema of the Parquet file at location `path`
@@ -1060,12 +1103,15 @@ async fn fetch_schema(
     metadata_size_hint: Option<usize>,
     file_decryption_properties: Option<&FileDecryptionProperties>,
     coerce_int96: Option<TimeUnit>,
+    file_metadata_cache: Option<Arc<dyn FileMetadataCache>>,
 ) -> Result<Schema> {
+    let fetch = ObjectStoreFetch::new(store, file);
     let metadata = fetch_parquet_metadata(
-        store,
+        fetch,
         file,
         metadata_size_hint,
         file_decryption_properties,
+        file_metadata_cache,
     )
     .await?;
     let file_metadata = metadata.file_metadata();
@@ -1090,10 +1136,17 @@ pub async fn fetch_statistics(
     file: &ObjectMeta,
     metadata_size_hint: Option<usize>,
     decryption_properties: Option<&FileDecryptionProperties>,
+    file_metadata_cache: Option<Arc<dyn FileMetadataCache>>,
 ) -> Result<Statistics> {
-    let metadata =
-        fetch_parquet_metadata(store, file, metadata_size_hint, decryption_properties)
-            .await?;
+    let fetch = ObjectStoreFetch::new(store, file);
+    let metadata = fetch_parquet_metadata(
+        fetch,
+        file,
+        metadata_size_hint,
+        decryption_properties,
+        file_metadata_cache,
+    )
+    .await?;
     statistics_from_parquet_meta_calc(&metadata, table_schema)
 }
 
