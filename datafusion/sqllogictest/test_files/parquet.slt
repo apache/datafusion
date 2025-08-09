@@ -785,7 +785,7 @@ select v, k from t where (v between 1 and 2) or (v between 9999 and 10000) order
 9999 k-9999
 10000 k-10000
 
-# Updating the file should invalidate the cache. Otherwise, the following queries would fail 
+# Updating the file should invalidate the cache. Otherwise, the following queries would fail
 # (e.g., with "Arrow: Parquet argument error: External: incomplete frame").
 query I
 COPY (
@@ -862,4 +862,3 @@ select part, k, v from t order by k
 
 statement ok
 DROP TABLE t;
-

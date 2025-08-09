@@ -777,6 +777,52 @@ physical_plan
 16)--------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 17)----------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/tpch-csv/part.csv]]}, projection=[p_partkey, p_brand], file_type=csv, has_header=true
 
+# Simplification of a binary operator with a NULL value
+
+statement ok
+create table t(x int) as values (1), (2), (3);
+
+query TT
+EXPLAIN FORMAT INDENT SELECT x > NULL FROM t;
+----
+logical_plan
+01)Projection: Boolean(NULL) AS t.x > NULL
+02)--TableScan: t projection=[]
+physical_plan
+01)ProjectionExec: expr=[NULL as t.x > NULL]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query TT
+EXPLAIN FORMAT INDENT SELECT * FROM t WHERE x > NULL;
+----
+logical_plan EmptyRelation
+physical_plan EmptyExec
+
+query TT
+EXPLAIN FORMAT INDENT SELECT * FROM t WHERE x < 5 AND (10 * NULL < x);
+----
+logical_plan
+01)Filter: t.x < Int32(5) AND Boolean(NULL)
+02)--TableScan: t projection=[x]
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=8192
+02)--FilterExec: x@0 < 5 AND NULL
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+query TT
+EXPLAIN FORMAT INDENT SELECT * FROM t WHERE x < 5 OR (10 * NULL < x);
+----
+logical_plan
+01)Filter: t.x < Int32(5) OR Boolean(NULL)
+02)--TableScan: t projection=[x]
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=8192
+02)--FilterExec: x@0 < 5 OR NULL
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+drop table t;
+
 # Inlist simplification
 
 statement ok
