@@ -31,7 +31,6 @@ use arrow::record_batch::RecordBatch;
 use datafusion::common::instant::Instant;
 use datafusion::common::DataFusionError;
 use datafusion::error::Result;
-use datafusion::execution::memory_pool::ConsumerMemoryMetrics;
 use datafusion::physical_plan::RecordBatchStream;
 
 use datafusion::config::FormatOptions;
@@ -79,7 +78,6 @@ pub struct PrintOptions {
     pub maxrows: MaxRows,
     pub color: bool,
     pub memory_profiling: bool,
-    pub last_memory_metrics: Option<Vec<ConsumerMemoryMetrics>>,
     pub tracked_memory_pool: Option<Arc<dyn Any + Send + Sync>>,
 }
 

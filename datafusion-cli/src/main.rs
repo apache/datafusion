@@ -234,7 +234,6 @@ async fn main_inner() -> Result<()> {
         maxrows: args.maxrows,
         color: args.color,
         memory_profiling: false,
-        last_memory_metrics: None,
         tracked_memory_pool: tracked_pool.clone(),
     };
 

@@ -90,7 +90,6 @@ pub async fn main() {
         maxrows: datafusion_cli::print_options::MaxRows::Unlimited,
         color: true,
         memory_profiling: false,
-        last_memory_metrics: None,
         tracked_memory_pool: None,
     };
 
