@@ -71,5 +71,6 @@ path = "src/mod.rs"
 parquet_encryption = [
     "parquet/encryption",
     "datafusion-common/parquet_encryption",
+    "datafusion-execution/parquet_encryption",
     "dep:hex",
 ]
