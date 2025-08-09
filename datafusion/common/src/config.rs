@@ -299,7 +299,6 @@ pub enum SpillCompression {
     Uncompressed,
 }
 
-
 impl FromStr for SpillCompression {
     type Err = DataFusionError;
 
@@ -496,7 +495,6 @@ config_namespace! {
         /// written, it may be necessary to increase this size to avoid errors from
         /// the remote end point.
         pub objectstore_writer_buffer_size: usize, default = 10 * 1024 * 1024
-
     }
 }
 
@@ -2157,8 +2155,6 @@ impl ConfigField for ConfigFileEncryptionProperties {
         let desc = "If true, store the AAD prefix";
         self.store_aad_prefix.visit(v, key.as_str(), desc);
 
-        let key = format!("{key_prefix}.aad_prefix_as_hex");
-        let desc = "AAD prefix to use";
         self.aad_prefix_as_hex.visit(v, key.as_str(), desc);
     }
 
