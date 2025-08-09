@@ -16,14 +16,18 @@
 // under the License.
 
 //! [`SessionState`]: information required to run queries in a session
-
-use crate::catalog::{CatalogProviderList, SchemaProvider, TableProviderFactory};
-use crate::datasource::cte_worktable::CteWorkTable;
-use crate::datasource::file_format::{format_as_file_type, FileFormatFactory};
-use crate::datasource::provider_as_source;
-use crate::execution::context::{EmptySerializerRegistry, FunctionFactory, QueryPlanner};
-use crate::execution::SessionStateDefaults;
-use crate::physical_planner::{DefaultPhysicalPlanner, PhysicalPlanner};
+use crate::{
+    catalog::{CatalogProviderList, SchemaProvider, TableProviderFactory},
+    datasource::{
+        cte_worktable::CteWorkTable, file_format::format_as_file_type,
+        file_format::FileFormatFactory, provider_as_source,
+    },
+    execution::{
+        context::EmptySerializerRegistry, context::FunctionFactory,
+        context::QueryPlanner, SessionStateDefaults,
+    },
+    physical_planner::{DefaultPhysicalPlanner, PhysicalPlanner},
+};
 use datafusion_catalog::information_schema::{
     InformationSchemaProvider, INFORMATION_SCHEMA,
 };
