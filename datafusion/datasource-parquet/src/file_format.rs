@@ -1009,13 +1009,13 @@ pub fn transform_binary_to_string(schema: &Schema) -> Schema {
 }
 
 /// [`MetadataFetch`] adapter for reading bytes from an [`ObjectStore`]
-struct ObjectStoreFetch<'a> {
+pub struct ObjectStoreFetch<'a> {
     store: &'a dyn ObjectStore,
     meta: &'a ObjectMeta,
 }
 
 impl<'a> ObjectStoreFetch<'a> {
-    fn new(store: &'a dyn ObjectStore, meta: &'a ObjectMeta) -> Self {
+    pub fn new(store: &'a dyn ObjectStore, meta: &'a ObjectMeta) -> Self {
         Self { store, meta }
     }
 }
@@ -1038,30 +1038,45 @@ impl MetadataFetch for ObjectStoreFetch<'_> {
 /// through [`ParquetFileReaderFactory`].
 ///
 /// [`ParquetFileReaderFactory`]: crate::ParquetFileReaderFactory
-pub async fn fetch_parquet_metadata(
-    store: &dyn ObjectStore,
-    meta: &ObjectMeta,
+pub async fn fetch_parquet_metadata<F: MetadataFetch>(
+    fetch: F,
+    object_meta: &ObjectMeta,
     size_hint: Option<usize>,
     #[allow(unused)] decryption_properties: Option<&FileDecryptionProperties>,
     file_metadata_cache: Option<Arc<dyn FileMetadataCache>>,
 ) -> Result<Arc<ParquetMetaData>> {
-    if let Some(cache) = &file_metadata_cache {
-        if let Some(cached_metadata) = cache.get(meta) {
-            if let Some(parquet_metadata) = cached_metadata
+    if let Some(file_metadata_cache) = &file_metadata_cache {
+        if let Some(file_metadata) = file_metadata_cache.get(object_meta) {
+            if let Some(cached_parquet_metadata) = file_metadata
                 .as_any()
-                .downcast_ref::<CachedParquetMetaData>()
-            {
-                return Ok(Arc::clone(parquet_metadata.parquet_metadata()));
+                .downcast_ref::<CachedParquetMetaData>(
+            ) {
+                return Ok(Arc::clone(cached_parquet_metadata.parquet_metadata()));
             }
         }
     }
 
-    let file_size = meta.size;
-    let fetch = ObjectStoreFetch::new(store, meta);
+    let file_size = object_meta.size;
+    let mut reader = ParquetMetaDataReader::new().with_prefetch_hint(size_hint);
 
-    let reader = ParquetMetaDataReader::new().with_prefetch_hint(size_hint);
     #[cfg(feature = "parquet_encryption")]
-    let reader = reader.with_decryption_properties(decryption_properties);
+    {
+        if let Some(props) = decryption_properties {
+            reader = reader.with_decryption_properties(Some(props));
+        } else if file_metadata_cache.is_some() {
+            // Need to retrieve the entire metadata for the caching to be effective.
+            reader = reader.with_page_indexes(true);
+        }
+    }
+
+    #[cfg(not(feature = "parquet_encryption"))]
+    {
+        // Need to retrieve the entire metadata for the caching to be effective.
+        if file_metadata_cache.is_some() {
+            // Need to retrieve the entire metadata for the caching to be effective.
+            reader = reader.with_page_indexes(true);
+        }
+    }
 
     let metadata = Arc::new(
         reader
@@ -1070,9 +1085,9 @@ pub async fn fetch_parquet_metadata(
             .map_err(DataFusionError::from)?,
     );
 
-    if let Some(cache) = file_metadata_cache {
-        cache.put(
-            meta,
+    if let Some(file_metadata_cache) = file_metadata_cache {
+        file_metadata_cache.put(
+            object_meta,
             Arc::new(CachedParquetMetaData::new(Arc::clone(&metadata))),
         );
     }
@@ -1089,8 +1104,9 @@ async fn fetch_schema(
     coerce_int96: Option<TimeUnit>,
     file_metadata_cache: Option<Arc<dyn FileMetadataCache>>,
 ) -> Result<Schema> {
+    let fetch = ObjectStoreFetch::new(store, file);
     let metadata = fetch_parquet_metadata(
-        store,
+        fetch,
         file,
         metadata_size_hint,
         file_decryption_properties,
@@ -1121,8 +1137,9 @@ pub async fn fetch_statistics(
     decryption_properties: Option<&FileDecryptionProperties>,
     file_metadata_cache: Option<Arc<dyn FileMetadataCache>>,
 ) -> Result<Statistics> {
+    let fetch = ObjectStoreFetch::new(store, file);
     let metadata = fetch_parquet_metadata(
-        store,
+        fetch,
         file,
         metadata_size_hint,
         decryption_properties,

@@ -18,7 +18,7 @@
 //! [`ParquetFileReaderFactory`] and [`DefaultParquetFileReaderFactory`] for
 //! low level control of parquet file readers
 
-use crate::ParquetFileMetrics;
+use crate::{fetch_parquet_metadata, ParquetFileMetrics};
 use bytes::Bytes;
 use datafusion_datasource::file_meta::FileMeta;
 use datafusion_execution::cache::cache_manager::{FileMetadata, FileMetadataCache};
@@ -28,7 +28,7 @@ use futures::FutureExt;
 use object_store::ObjectStore;
 use parquet::arrow::arrow_reader::ArrowReaderOptions;
 use parquet::arrow::async_reader::{AsyncFileReader, ParquetObjectReader};
-use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
+use parquet::file::metadata::ParquetMetaData;
 use std::any::Any;
 use std::fmt::Debug;
 use std::ops::Range;
@@ -250,32 +250,20 @@ impl AsyncFileReader for CachedParquetFileReader {
 
         async move {
             let object_meta = &file_meta.object_meta;
-
-            // lookup if the metadata is already cached
-            if let Some(metadata) = metadata_cache.get(object_meta) {
-                if let Some(cached_parquet_metadata) =
-                    metadata.as_any().downcast_ref::<CachedParquetMetaData>()
-                {
-                    return Ok(Arc::clone(cached_parquet_metadata.parquet_metadata()));
-                }
-            }
-
-            let mut reader = ParquetMetaDataReader::new();
-            // the page index can only be loaded with unencrypted files
-            if let Some(file_decryption_properties) =
-                options.and_then(|o| o.file_decryption_properties())
-            {
-                reader =
-                    reader.with_decryption_properties(Some(file_decryption_properties));
-            } else {
-                reader = reader.with_page_indexes(true);
-            }
-            reader.try_load(&mut self.inner, object_meta.size).await?;
-            let metadata = Arc::new(reader.finish()?);
-            let cached_metadata = Arc::new(CachedParquetMetaData(Arc::clone(&metadata)));
-
-            metadata_cache.put(object_meta, cached_metadata);
-            Ok(metadata)
+            fetch_parquet_metadata(
+                &mut self.inner,
+                object_meta,
+                None,
+                options.and_then(|o| o.file_decryption_properties()),
+                Some(metadata_cache),
+            )
+            .await
+            .map_err(|e| {
+                parquet::errors::ParquetError::General(format!(
+                    "Failed to fetch metadata for file {}: {e}",
+                    object_meta.location,
+                ))
+            })
         }
         .boxed()
     }

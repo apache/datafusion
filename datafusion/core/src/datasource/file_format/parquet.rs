@@ -134,7 +134,7 @@ mod tests {
     use datafusion_datasource::{ListingTableUrl, PartitionedFile};
     use datafusion_datasource_parquet::{
         fetch_parquet_metadata, fetch_statistics, statistics_from_parquet_meta_calc,
-        ParquetFormat, ParquetFormatFactory, ParquetSink,
+        ObjectStoreFetch, ParquetFormat, ParquetFormatFactory, ParquetSink,
     };
     use datafusion_execution::object_store::ObjectStoreUrl;
     use datafusion_execution::runtime_env::RuntimeEnv;
@@ -393,7 +393,7 @@ mod tests {
         // Use a size hint larger than the parquet footer but smaller than the actual metadata, requiring a second fetch
         // for the remaining metadata
         fetch_parquet_metadata(
-            store.as_ref() as &dyn ObjectStore,
+            ObjectStoreFetch::new(store.as_ref() as &dyn ObjectStore, &meta[0]),
             &meta[0],
             Some(9),
             None,
@@ -405,7 +405,7 @@ mod tests {
 
         // Increases by 2 because cache has no entries yet
         fetch_parquet_metadata(
-            store.as_ref() as &dyn ObjectStore,
+            ObjectStoreFetch::new(store.as_ref() as &dyn ObjectStore, &meta[0]),
             &meta[0],
             Some(9),
             None,
@@ -417,7 +417,7 @@ mod tests {
 
         // No increase because cache has an entry
         fetch_parquet_metadata(
-            store.as_ref() as &dyn ObjectStore,
+            ObjectStoreFetch::new(store.as_ref() as &dyn ObjectStore, &meta[0]),
             &meta[0],
             Some(9),
             None,
@@ -429,7 +429,7 @@ mod tests {
 
         // Increase by 2  because `get_file_metadata_cache()` is None
         fetch_parquet_metadata(
-            store.as_ref() as &dyn ObjectStore,
+            ObjectStoreFetch::new(store.as_ref() as &dyn ObjectStore, &meta[0]),
             &meta[0],
             Some(9),
             None,
@@ -479,7 +479,7 @@ mod tests {
         let size_hint = meta[0].size as usize;
 
         fetch_parquet_metadata(
-            store.upcast().as_ref(),
+            ObjectStoreFetch::new(store.upcast().as_ref(), &meta[0]),
             &meta[0],
             Some(size_hint),
             None,
@@ -494,7 +494,7 @@ mod tests {
         let ctx = session.state();
         // Increases by 1 because cache has no entries yet and new session context
         fetch_parquet_metadata(
-            store.upcast().as_ref(),
+            ObjectStoreFetch::new(store.upcast().as_ref(), &meta[0]),
             &meta[0],
             Some(size_hint),
             None,
@@ -506,7 +506,7 @@ mod tests {
 
         // No increase because cache has an entry
         fetch_parquet_metadata(
-            store.upcast().as_ref(),
+            ObjectStoreFetch::new(store.upcast().as_ref(), &meta[0]),
             &meta[0],
             Some(size_hint),
             None,
@@ -518,7 +518,7 @@ mod tests {
 
         // Increase by 1  because `get_file_metadata_cache` is None
         fetch_parquet_metadata(
-            store.upcast().as_ref(),
+            ObjectStoreFetch::new(store.upcast().as_ref(), &meta[0]),
             &meta[0],
             Some(size_hint),
             None,
@@ -562,7 +562,7 @@ mod tests {
         // Use the a size hint larger than the file size to make sure we don't panic
         let size_hint = (meta[0].size + 100) as usize;
         fetch_parquet_metadata(
-            store.upcast().as_ref(),
+            ObjectStoreFetch::new(store.upcast().as_ref(), &meta[0]),
             &meta[0],
             Some(size_hint),
             None,
@@ -574,7 +574,7 @@ mod tests {
 
         // No increase because cache has an entry
         fetch_parquet_metadata(
-            store.upcast().as_ref(),
+            ObjectStoreFetch::new(store.upcast().as_ref(), &meta[0]),
             &meta[0],
             Some(size_hint),
             None,
@@ -623,7 +623,7 @@ mod tests {
 
         // No increase in request count because cache is not empty
         let pq_meta = fetch_parquet_metadata(
-            store.as_ref(),
+            ObjectStoreFetch::new(store.as_ref(), &files[0]),
             &files[0],
             None,
             None,
@@ -692,7 +692,7 @@ mod tests {
 
         // No increase in request count because cache is not empty
         let pq_meta = fetch_parquet_metadata(
-            store.as_ref(),
+            ObjectStoreFetch::new(store.as_ref(), &files[0]),
             &files[0],
             None,
             None,
@@ -726,7 +726,7 @@ mod tests {
 
         // No increase in request count because cache is not empty
         let pq_meta = fetch_parquet_metadata(
-            store.as_ref(),
+            ObjectStoreFetch::new(store.as_ref(), &files[1]),
             &files[1],
             None,
             None,
