@@ -24,7 +24,7 @@ pub mod file_format;
 mod metrics;
 mod opener;
 mod page_filter;
-pub mod reader;
+mod reader;
 mod row_filter;
 mod row_group_filter;
 pub mod source;
@@ -34,7 +34,7 @@ pub use access_plan::{ParquetAccessPlan, RowGroupAccess};
 pub use file_format::*;
 pub use metrics::ParquetFileMetrics;
 pub use page_filter::PagePruningAccessPlanFilter;
-pub use reader::{DefaultParquetFileReaderFactory, ParquetFileReaderFactory};
+pub use reader::*; // Expose so downstream crates can use it
 pub use row_filter::build_row_filter;
 pub use row_filter::can_expr_be_pushed_down_with_schemas;
 pub use row_group_filter::RowGroupAccessPlanFilter;
