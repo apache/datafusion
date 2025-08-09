@@ -17,7 +17,7 @@
 
 use crate::{AggregateUDFImpl, ScalarUDFImpl, WindowUDFImpl};
 use std::fmt::Debug;
-use std::hash::{Hash, Hasher};
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::ops::Deref;
 use std::sync::Arc;
 
@@ -97,7 +97,18 @@ macro_rules! impl_for_udf_eq {
 
 impl_for_udf_eq!(dyn AggregateUDFImpl + '_);
 impl_for_udf_eq!(dyn ScalarUDFImpl + '_);
-impl_for_udf_eq!(dyn WindowUDFImpl + '_);
+
+impl UdfPointer for Arc<dyn WindowUDFImpl + '_> {
+    fn equals(&self, other: &(dyn WindowUDFImpl + '_)) -> bool {
+        self.as_ref().dyn_eq(other.as_any())
+    }
+
+    fn hash_value(&self) -> u64 {
+        let hasher = &mut DefaultHasher::new();
+        self.as_ref().dyn_hash(hasher);
+        hasher.finish()
+    }
+}
 
 #[cfg(test)]
 mod tests {

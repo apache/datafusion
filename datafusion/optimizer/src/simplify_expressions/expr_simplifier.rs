@@ -4477,8 +4477,6 @@ mod tests {
         fn field(&self, _field_args: WindowUDFFieldArgs) -> Result<FieldRef> {
             unimplemented!("not needed for tests")
         }
-
-        udf_equals_hash!(WindowUDFImpl);
     }
     #[derive(Debug)]
     struct VolatileUdf {

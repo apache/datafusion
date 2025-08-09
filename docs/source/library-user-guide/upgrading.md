@@ -24,6 +24,12 @@
 **Note:** DataFusion `50.0.0` has not been released yet. The information provided in this section pertains to features and changes that have already been merged to the main branch and are awaiting release in this version.
 You can see the current [status of the `50.0.0 `release here](https://github.com/apache/datafusion/issues/16799)
 
+### `WindowUDFImpl` trait now requires `PartialEq`, `Eq`, and `Hash` traits
+
+To address error-proneness of `WindowUDFImpl::equals` method and to make it easy to implement function
+equality correctly, the `WindowUDFImpl::equals` and `WindowUDFImpl::hash_value` methods have been replaced
+with the requirement to implement the `PartialEq`, `Eq`, and `Hash` traits on any type implementing `WindowUDFImpl`.
+
 ### `AsyncScalarUDFImpl::invoke_async_with_args` returns `ColumnarValue`
 
 In order to enable single value optimizations and be consistent with other

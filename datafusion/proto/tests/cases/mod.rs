@@ -177,8 +177,6 @@ impl WindowUDFImpl for CustomUDWF {
     ) -> datafusion_common::Result<FieldRef> {
         Ok(Field::new(field_args.name(), DataType::UInt64, false).into())
     }
-
-    udf_equals_hash!(WindowUDFImpl);
 }
 
 #[derive(Debug)]
