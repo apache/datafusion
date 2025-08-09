@@ -11,11 +11,14 @@ exit_code: 0
 ----- stdout -----
 Memory profiling enabled for next query
 +----------+
-| Int64(1) |
-+----------+
-| 1        |
-+----------+
-DataFusion-Cli: 16
-\q
-
------ stderr -----
+ | Int64(1) |
+ +----------+
+ | 1        |
+ +----------+
+ Peak memory usage: 8.0 B
+ Cumulative allocations: 8.0 B
+ Memory usage by operator:
+ DataFusion-Cli: 8.0 B
+ \q
+ 
+ ----- stderr -----
