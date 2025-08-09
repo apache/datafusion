@@ -45,6 +45,7 @@ use arrow::array::{PrimitiveArray, RecordBatch, RecordBatchOptions};
 use arrow::compute::take_arrays;
 use arrow::datatypes::{SchemaRef, UInt32Type};
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::stats::Precision;
 use datafusion_common::utils::transpose;
 use datafusion_common::{internal_err, HashMap};
 use datafusion_common::{not_impl_err, DataFusionError, Result};
@@ -755,10 +756,43 @@ impl ExecutionPlan for RepartitionExec {
     }
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
-        if partition.is_none() {
-            self.input.partition_statistics(None)
+        if let Some(partition) = partition {
+            let partition_count = self.partitioning().partition_count();
+            if partition >= partition_count {
+                return internal_err!(
+                    "RepartitionExec invalid partition {} (expected less than {})",
+                    partition,
+                    self.partitioning().partition_count()
+                );
+            }
+
+            let mut stats = self.input.partition_statistics(None)?;
+
+            // Distribute statistics across partitions
+            stats.num_rows = stats
+                .num_rows
+                .get_value()
+                .map(|rows| Precision::Inexact(rows / partition_count))
+                .unwrap_or(Precision::Absent);
+            stats.total_byte_size = stats
+                .total_byte_size
+                .get_value()
+                .map(|bytes| Precision::Inexact(bytes / partition_count))
+                .unwrap_or(Precision::Absent);
+
+            // Handle column statistics: keep min/max values, make others absent
+            for col_stats in &mut stats.column_statistics {
+                // Keep min_value and max_value as they represent data range
+                // Make null_count, distinct_count, and sum_value absent as they're hard to estimate without
+                // the actual data
+                col_stats.null_count = Precision::Absent;
+                col_stats.distinct_count = Precision::Absent;
+                col_stats.sum_value = Precision::Absent;
+            }
+
+            Ok(stats)
         } else {
-            Ok(Statistics::new_unknown(&self.schema()))
+            self.input.partition_statistics(None)
         }
     }
 
