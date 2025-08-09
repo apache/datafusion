@@ -92,6 +92,11 @@ pub struct RunOpt {
     #[structopt(short = "j", long = "prefer_hash_join", default_value = "true")]
     prefer_hash_join: BoolDefaultTrue,
 
+    /// If true then round robin repartitioning is used, if false then on demand repartitioning
+    /// True by default.
+    #[structopt(short = "r", long = "prefer_round_robin", default_value = "true")]
+    prefer_round_robin: BoolDefaultTrue,
+
     /// Mark the first column of each table as sorted in ascending order.
     /// The tables should have been created with the `--sort` option for this to have any effect.
     #[structopt(short = "t", long = "sorted")]
@@ -112,6 +117,10 @@ impl RunOpt {
             .config()?
             .with_collect_statistics(!self.disable_statistics);
         config.options_mut().optimizer.prefer_hash_join = self.prefer_hash_join;
+        config
+            .options_mut()
+            .optimizer
+            .prefer_round_robin_repartition = self.prefer_round_robin;
         let rt_builder = self.common.runtime_env_builder()?;
         let ctx = SessionContext::new_with_config_rt(config, rt_builder.build_arc()?);
         // register tables
@@ -379,6 +388,7 @@ mod tests {
             output_path: None,
             disable_statistics: false,
             prefer_hash_join: true,
+            prefer_round_robin: true,
             sorted: false,
         };
         opt.register_tables(&ctx).await?;
@@ -416,6 +426,7 @@ mod tests {
             output_path: None,
             disable_statistics: false,
             prefer_hash_join: true,
+            prefer_round_robin: true,
             sorted: false,
         };
         opt.register_tables(&ctx).await?;
