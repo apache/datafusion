@@ -23,7 +23,7 @@ use std::{
 };
 
 use datafusion_common::{
-    config::{ConfigExtension, ConfigOptions, MemoryProfilingMode, SpillCompression},
+    config::{ConfigExtension, ConfigOptions, SpillCompression},
     Result, ScalarValue,
 };
 
@@ -269,11 +269,6 @@ impl SessionConfig {
         self.options.execution.spill_compression
     }
 
-    /// Memory profiling mode
-    pub fn memory_profiling_mode(&self) -> MemoryProfilingMode {
-        self.options.execution.memory_profiling
-    }
-
     /// Selects a name for the default catalog and schema
     pub fn with_default_catalog_and_schema(
         mut self,
@@ -444,13 +439,6 @@ impl SessionConfig {
     /// [`spill_compression`]: datafusion_common::config::ExecutionOptions::spill_compression
     pub fn with_spill_compression(mut self, spill_compression: SpillCompression) -> Self {
         self.options_mut().execution.spill_compression = spill_compression;
-        self
-    }
-
-    /// Set memory profiling mode
-    pub fn with_memory_profiling_mode(mut self, mode: MemoryProfilingMode) -> Self {
-        // use options_mut() to get a mutable reference through the Arc
-        self.options_mut().execution.memory_profiling = mode;
         self
     }
 

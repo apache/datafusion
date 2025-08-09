@@ -26,6 +26,8 @@ use crate::{
     object_storage::get_object_store,
     print_options::{MaxRows, PrintOptions},
 };
+use datafusion_execution::memory_tracker::{set_global_memory_tracker, MemoryTracker};
+use std::sync::Arc;
 use datafusion::common::instant::Instant;
 use datafusion::common::{plan_datafusion_err, plan_err};
 use datafusion::config::ConfigFileType;
@@ -227,17 +229,21 @@ pub(super) async fn exec_and_print(
 
     let statements = DFParser::parse_sql_with_dialect(&sql, dialect.as_ref())?;
     for statement in statements {
-        let _mem_handle = if print_options.memory_profiling {
-            // RAII guard: dropping the handle disables profiling after execution
-            Some(ctx.enable_memory_profiling())
+        let tracker = if print_options.memory_profiling {
+            let tracker = Arc::new(MemoryTracker::new());
+            tracker.enable();
+            set_global_memory_tracker(Some(Arc::clone(&tracker)));
+            Some(tracker)
         } else {
             None
         };
         StatementExecutor::new(statement)
             .execute(ctx, print_options)
             .await?;
-        // disable after each statement
-        if _mem_handle.is_some() {
+        if let Some(tracker) = tracker {
+            print_options.last_memory_metrics = Some(tracker.metrics());
+            set_global_memory_tracker(None);
+            tracker.disable();
             print_options.memory_profiling = false;
         }
     }

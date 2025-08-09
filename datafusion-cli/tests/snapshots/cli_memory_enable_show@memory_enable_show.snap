@@ -16,13 +16,7 @@ Memory profiling enabled for next query
 | 1        |
 +----------+
 
-📊 Enhanced Memory Analysis:
-🔍 Top Memory Consumers:
-  1. DataFusion-Cli: 0.00 MB (100.0%) [Other]
-
-📈 Memory Summary:
-  Peak memory usage: 0.00 MB
-  Total tracked memory: 0.00 MB
+no memory metrics recorded
 \q
 
 ----- stderr -----

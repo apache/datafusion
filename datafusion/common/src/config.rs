@@ -299,46 +299,6 @@ pub enum SpillCompression {
     Uncompressed,
 }
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub enum MemoryProfilingMode {
-    #[default]
-    Disabled,
-    OnDemand,
-}
-
-impl FromStr for MemoryProfilingMode {
-    type Err = DataFusionError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_ascii_lowercase().as_str() {
-            "disabled" | "" => Ok(Self::Disabled),
-            "on_demand" => Ok(Self::OnDemand),
-            other => Err(DataFusionError::Configuration(format!(
-                "Invalid memory profiling mode: {other}"
-            ))),
-        }
-    }
-}
-
-impl Display for MemoryProfilingMode {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            MemoryProfilingMode::Disabled => write!(f, "disabled"),
-            MemoryProfilingMode::OnDemand => write!(f, "on_demand"),
-        }
-    }
-}
-
-impl ConfigField for MemoryProfilingMode {
-    fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
-        v.some(key, self, description)
-    }
-
-    fn set(&mut self, _: &str, value: &str) -> Result<()> {
-        *self = MemoryProfilingMode::from_str(value)?;
-        Ok(())
-    }
-}
 
 impl FromStr for SpillCompression {
     type Err = DataFusionError;
@@ -537,10 +497,6 @@ config_namespace! {
         /// the remote end point.
         pub objectstore_writer_buffer_size: usize, default = 10 * 1024 * 1024
 
-        /// Memory profiling mode.
-        /// Valid options: `"disabled"` (default) or `"on_demand"`.
-        /// Use `"on_demand"` to enable profiling for individual queries.
-        pub memory_profiling: MemoryProfilingMode, default = MemoryProfilingMode::Disabled
     }
 }
 

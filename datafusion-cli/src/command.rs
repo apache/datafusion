@@ -121,7 +121,6 @@ impl Command {
             Self::MemoryProfiling(subcmd) => {
                 match subcmd {
                     Some(MemoryProfilingCommand::Enable) => {
-                        let _ = ctx.enable_memory_profiling();
                         print_options.memory_profiling = true;
                         println!("Memory profiling enabled for next query");
                     }
@@ -130,9 +129,18 @@ impl Command {
                         println!("Memory profiling disabled");
                     }
                     Some(MemoryProfilingCommand::Show) => {
-                        match ctx.get_enhanced_memory_report() {
-                            Ok(report) => report.print_analysis(),
-                            Err(e) => println!("{e}"),
+                        if let Some(metrics) = &print_options.last_memory_metrics {
+                            if metrics.is_empty() {
+                                println!("no memory metrics recorded");
+                            } else {
+                                let mut items: Vec<_> = metrics.iter().collect();
+                                items.sort_by(|a, b| b.1.cmp(a.1));
+                                for (op, bytes) in items {
+                                    println!("{op}: {bytes}");
+                                }
+                            }
+                        } else {
+                            println!("no memory metrics recorded");
                         }
                     }
                     None => println!("Usage: MEMORY_PROFILING [enable|disable|show]"),

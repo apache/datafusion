@@ -15,10 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::fmt::{Display, Formatter};
-use std::io::Write;
-use std::pin::Pin;
-use std::str::FromStr;
+use std::{
+    collections::HashMap,
+    fmt::{Display, Formatter},
+    io::Write,
+    pin::Pin,
+    str::FromStr,
+};
 
 use crate::print_format::PrintFormat;
 
@@ -74,6 +77,7 @@ pub struct PrintOptions {
     pub maxrows: MaxRows,
     pub color: bool,
     pub memory_profiling: bool,
+    pub last_memory_metrics: Option<HashMap<String, usize>>,
 }
 
 // Returns the query execution details formatted

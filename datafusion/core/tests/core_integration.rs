@@ -36,7 +36,6 @@ mod fifo;
 /// Run all tests that are found in the `memory_limit` directory
 mod memory_limit;
 /// Run memory profiling integration tests
-mod memory_profiling;
 
 /// Run all tests that are found in the `custom_sources_cases` directory
 mod custom_sources_cases;

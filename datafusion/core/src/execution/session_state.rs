@@ -49,10 +49,7 @@ use datafusion_common::{
     tree_node::TreeNode,
     DFSchema, DataFusionError, ResolvedTableReference, TableReference,
 };
-use datafusion_execution::{
-    config::SessionConfig, memory_tracker::MemoryTracker, runtime_env::RuntimeEnv,
-    TaskContext,
-};
+use datafusion_execution::{config::SessionConfig, runtime_env::RuntimeEnv, TaskContext};
 use datafusion_expr::{
     execution_props::ExecutionProps,
     expr_rewriter::FunctionRewrite,
@@ -185,10 +182,6 @@ pub struct SessionState {
     /// Cache logical plans of prepared statements for later execution.
     /// Key is the prepared statement name.
     prepared_plans: HashMap<String, Arc<PreparedPlan>>,
-    /// Toggle for memory profiling
-    pub(crate) memory_profiling: bool,
-    /// tracker for memory metrics
-    pub(crate) memory_tracker: Arc<MemoryTracker>,
 }
 
 impl Debug for SessionState {
@@ -217,7 +210,6 @@ impl Debug for SessionState {
             .field("aggregate_functions", &self.aggregate_functions)
             .field("window_functions", &self.window_functions)
             .field("prepared_plans", &self.prepared_plans)
-            .field("memory_profiling", &self.memory_profiling)
             .finish()
     }
 }
@@ -920,8 +912,6 @@ pub struct SessionStateBuilder {
     table_factories: Option<HashMap<String, Arc<dyn TableProviderFactory>>>,
     runtime_env: Option<Arc<RuntimeEnv>>,
     function_factory: Option<Arc<dyn FunctionFactory>>,
-    memory_profiling: Option<bool>,
-    memory_tracker: Option<Arc<MemoryTracker>>,
     // fields to support convenience functions
     analyzer_rules: Option<Vec<Arc<dyn AnalyzerRule + Send + Sync>>>,
     optimizer_rules: Option<Vec<Arc<dyn OptimizerRule + Send + Sync>>>,
@@ -958,8 +948,6 @@ impl SessionStateBuilder {
             table_factories: None,
             runtime_env: None,
             function_factory: None,
-            memory_profiling: None,
-            memory_tracker: None,
             // fields to support convenience functions
             analyzer_rules: None,
             optimizer_rules: None,
@@ -1011,8 +999,6 @@ impl SessionStateBuilder {
             table_factories: Some(existing.table_factories),
             runtime_env: Some(existing.runtime_env),
             function_factory: existing.function_factory,
-            memory_profiling: None,
-            memory_tracker: None,
 
             // fields to support convenience functions
             analyzer_rules: None,
@@ -1301,18 +1287,6 @@ impl SessionStateBuilder {
         self
     }
 
-    /// Enable memory profiling by default
-    pub fn with_memory_profiling(mut self, enabled: bool) -> Self {
-        self.memory_profiling = Some(enabled);
-        self
-    }
-
-    /// Provide a custom memory tracker
-    pub fn with_memory_tracker(mut self, tracker: Arc<MemoryTracker>) -> Self {
-        self.memory_tracker = Some(tracker);
-        self
-    }
-
     /// Register an `ObjectStore` to the [`RuntimeEnv`]. See [`RuntimeEnv::register_object_store`]
     /// for more details.
     ///
@@ -1375,8 +1349,6 @@ impl SessionStateBuilder {
             table_factories,
             runtime_env,
             function_factory,
-            memory_profiling,
-            memory_tracker,
             analyzer_rules,
             optimizer_rules,
             physical_optimizer_rules,
@@ -1413,9 +1385,6 @@ impl SessionStateBuilder {
             runtime_env,
             function_factory,
             prepared_plans: HashMap::new(),
-            memory_profiling: memory_profiling.unwrap_or(false),
-            memory_tracker: memory_tracker
-                .unwrap_or_else(|| Arc::new(MemoryTracker::new())),
         };
 
         if let Some(file_formats) = file_formats {

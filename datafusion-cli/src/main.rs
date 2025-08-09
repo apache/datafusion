@@ -225,6 +225,7 @@ async fn main_inner() -> Result<()> {
         maxrows: args.maxrows,
         color: args.color,
         memory_profiling: false,
+        last_memory_metrics: None,
     };
 
     let commands = args.command;

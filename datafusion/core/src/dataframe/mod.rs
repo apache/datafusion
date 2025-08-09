@@ -30,7 +30,6 @@ use crate::datasource::{
 };
 use crate::error::Result;
 use crate::execution::context::{SessionState, TaskContext};
-use crate::execution::memory_tracker::MemoryTracker;
 use crate::execution::FunctionRegistry;
 use crate::logical_expr::utils::find_window_exprs;
 use crate::logical_expr::{
@@ -231,13 +230,6 @@ pub struct DataFrame {
     // will require that work. Any operation that update the plan in any way
     // via anything other than a `project` call should set this to true.
     projection_requires_validation: bool,
-}
-
-fn record_query_output_memory<I>(tracker: &MemoryTracker, sizes: I)
-where
-    I: Iterator<Item = usize>,
-{
-    tracker.record_memory("query_output", sizes.sum());
 }
 
 impl DataFrame {
@@ -1379,19 +1371,9 @@ impl DataFrame {
     /// # }
     /// ```
     pub async fn collect(self) -> Result<Vec<RecordBatch>> {
-        // capture profiling info before `self` is moved
-        let mem_prof = self.session_state.memory_profiling;
-        let tracker = Arc::clone(&self.session_state.memory_tracker);
-
         let task_ctx = Arc::new(self.task_ctx());
         let plan = self.create_physical_plan().await?;
         let batches = collect(plan, task_ctx).await?;
-        if mem_prof {
-            record_query_output_memory(
-                tracker.as_ref(),
-                batches.iter().map(|b| b.get_array_memory_size()),
-            );
-        }
         Ok(batches)
     }
 
@@ -1521,22 +1503,9 @@ impl DataFrame {
     /// # }
     /// ```
     pub async fn collect_partitioned(self) -> Result<Vec<Vec<RecordBatch>>> {
-        // capture profiling info before `self` is moved
-        let mem_prof = self.session_state.memory_profiling;
-        let tracker = Arc::clone(&self.session_state.memory_tracker);
-
         let task_ctx = Arc::new(self.task_ctx());
         let plan = self.create_physical_plan().await?;
         let partitions = collect_partitioned(plan, task_ctx).await?;
-        if mem_prof {
-            record_query_output_memory(
-                tracker.as_ref(),
-                partitions
-                    .iter()
-                    .flat_map(|p| p.iter())
-                    .map(|b| b.get_array_memory_size()),
-            );
-        }
         Ok(partitions)
     }
 
@@ -2254,24 +2223,11 @@ impl DataFrame {
     pub async fn cache(self) -> Result<DataFrame> {
         let context = SessionContext::new_with_state((*self.session_state).clone());
 
-        // capture profiling info before `self` is moved
-        let mem_prof = self.session_state.memory_profiling;
-        let tracker = Arc::clone(&self.session_state.memory_tracker);
-
         // The schema is consistent with the output
         let plan = self.clone().create_physical_plan().await?;
         let schema = plan.schema();
         let task_ctx = Arc::new(self.task_ctx());
         let partitions = collect_partitioned(plan, task_ctx).await?;
-        if mem_prof {
-            record_query_output_memory(
-                tracker.as_ref(),
-                partitions
-                    .iter()
-                    .flat_map(|p| p.iter())
-                    .map(|b| b.get_array_memory_size()),
-            );
-        }
         let mem_table = MemTable::try_new(schema, partitions)?;
         context.read_table(Arc::new(mem_table))
     }

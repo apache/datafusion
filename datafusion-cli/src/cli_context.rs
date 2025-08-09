@@ -20,12 +20,7 @@ use std::sync::Arc;
 use datafusion::{
     dataframe::DataFrame,
     error::DataFusionError,
-    execution::{
-        context::{
-            EnhancedMemoryReport, MemoryProfilingHandle, MemoryReport, SessionState,
-        },
-        TaskContext,
-    },
+    execution::{context::SessionState, TaskContext},
     logical_expr::LogicalPlan,
     prelude::SessionContext,
 };
@@ -51,16 +46,6 @@ pub trait CliSessionContext {
 
     /// Register table options extension from scheme.
     fn register_table_options_extension_from_scheme(&self, scheme: &str);
-
-    /// Enable memory profiling for next query
-    fn enable_memory_profiling(&self) -> MemoryProfilingHandle<'_>;
-
-    /// Get memory report from last profiled query
-    fn get_last_query_memory_report(&self) -> Option<MemoryReport>;
-
-    /// Get enhanced memory report with categorization and analysis
-    fn get_enhanced_memory_report(&self)
-        -> Result<EnhancedMemoryReport, DataFusionError>;
 
     /// Execute a logical plan and return a DataFrame.
     async fn execute_logical_plan(
@@ -104,25 +89,10 @@ impl CliSessionContext for SessionContext {
         }
     }
 
-    fn enable_memory_profiling(&self) -> MemoryProfilingHandle<'_> {
-        SessionContext::enable_memory_profiling(self)
-    }
-
-    fn get_last_query_memory_report(&self) -> Option<MemoryReport> {
-        // Delegate to core SessionContext implementation to avoid duplicate logic
-        SessionContext::get_last_query_memory_report_option(self)
-    }
-
-    fn get_enhanced_memory_report(
-        &self,
-    ) -> Result<EnhancedMemoryReport, DataFusionError> {
-        SessionContext::get_enhanced_memory_report(self)
-    }
-
     async fn execute_logical_plan(
         &self,
         plan: LogicalPlan,
     ) -> Result<DataFrame, DataFusionError> {
-        self.execute_logical_plan(plan).await
+        SessionContext::execute_logical_plan(self, plan).await
     }
 }

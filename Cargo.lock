@@ -1965,6 +1965,7 @@ dependencies = [
  "clap 4.5.42",
  "ctor",
  "datafusion",
+ "datafusion-execution",
  "dirs",
  "env_logger",
  "futures",
