@@ -249,19 +249,25 @@ impl AsyncFileReader for CachedParquetFileReader {
         let metadata_cache = Arc::clone(&self.metadata_cache);
 
         async move {
-            let object_meta = &file_meta.object_meta;
+            #[cfg(feature = "parquet_encryption")]
+            let file_decryption_properties =
+                options.and_then(|o| o.file_decryption_properties());
+
+            #[cfg(not(feature = "parquet_encryption"))]
+            let file_decryption_properties = None;
+
             fetch_parquet_metadata(
                 &mut self.inner,
-                object_meta,
+                &file_meta.object_meta,
                 None,
-                options.and_then(|o| o.file_decryption_properties()),
+                file_decryption_properties,
                 Some(metadata_cache),
             )
             .await
             .map_err(|e| {
                 parquet::errors::ParquetError::General(format!(
                     "Failed to fetch metadata for file {}: {e}",
-                    object_meta.location,
+                    file_meta.object_meta.location,
                 ))
             })
         }
