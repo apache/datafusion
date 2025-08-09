@@ -15,8 +15,7 @@ Memory profiling enabled for next query
 +----------+
 | 1        |
 +----------+
-
-no memory metrics recorded
+DataFusion-Cli: 16
 \q
 
 ----- stderr -----
