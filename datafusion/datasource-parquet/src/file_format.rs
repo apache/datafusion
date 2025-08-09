@@ -80,7 +80,7 @@ use parquet::arrow::arrow_writer::{
     compute_leaves, get_column_writers, ArrowColumnChunk, ArrowColumnWriter,
     ArrowLeafColumn, ArrowWriterOptions,
 };
-use parquet::arrow::async_reader::MetadataFetch;
+use parquet::arrow::async_reader::{MetadataFetch, ParquetObjectReader};
 use parquet::arrow::{parquet_to_arrow_schema, ArrowSchemaConverter, AsyncArrowWriter};
 use parquet::basic::Type;
 
@@ -1061,9 +1061,8 @@ pub async fn fetch_parquet_metadata<F: MetadataFetch>(
 
     #[cfg(feature = "parquet_encryption")]
     {
-        if let Some(props) = decryption_properties {
-            reader = reader.with_decryption_properties(Some(props));
-        } else if file_metadata_cache.is_some() {
+        reader = reader.with_decryption_properties(decryption_properties);
+        if file_metadata_cache.is_some() {
             // Need to retrieve the entire metadata for the caching to be effective.
             reader = reader.with_page_indexes(true);
         }
@@ -1071,7 +1070,6 @@ pub async fn fetch_parquet_metadata<F: MetadataFetch>(
 
     #[cfg(not(feature = "parquet_encryption"))]
     {
-        // Need to retrieve the entire metadata for the caching to be effective.
         if file_metadata_cache.is_some() {
             // Need to retrieve the entire metadata for the caching to be effective.
             reader = reader.with_page_indexes(true);
