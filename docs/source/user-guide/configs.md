@@ -220,3 +220,29 @@ SET datafusion.execution.target_partitions = '1';
 ```
 
 [`listingtable`]: https://docs.rs/datafusion/latest/datafusion/datasource/listing/struct.ListingTable.html
+
+## Memory-limited Queries
+
+When executing a memory-consuming query under a tight memory limit, DataFusion
+will spill intermediate results to disk.
+
+When the [`FairSpillPool`] is used, memory is divided evenly among partitions.
+The higher the value of `datafusion.execution.target_partitions`, the less memory
+is allocated to each partition, and the out-of-core execution path may trigger
+more frequently, possibly slowing down execution.
+
+Additionally, while spilling, data is read back in `datafusion.execution.batch_size` size batches.
+The larger this value, the fewer spilled sorted runs can be merged. Decreasing this setting
+can help reduce the number of subsequent spills required.
+
+In conclusion, for queries under a very tight memory limit, it's recommended to
+set `target_partitions` and `batch_size` to smaller values.
+
+```sql
+-- Query still gets paralleized, but each partition will have more memory to use
+SET datafusion.execution.target_partitions = 4;
+-- Smaller than the default '8192', while still keep the benefit of vectorized execution
+SET datafusion.execution.batch_size = 1024;
+```
+
+[`fairspillpool`]: https://docs.rs/datafusion/latest/datafusion/execution/memory_pool/struct.FairSpillPool.html
