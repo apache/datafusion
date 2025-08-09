@@ -35,6 +35,7 @@ use datafusion_expr::expr_rewriter::replace_col;
 use datafusion_expr::logical_plan::{Join, JoinType, LogicalPlan, TableScan, Union};
 use datafusion_expr::utils::{
     conjunction, expr_to_columns, split_conjunction, split_conjunction_owned,
+    INFERRED_PREDICATE_ALIAS,
 };
 use datafusion_expr::{
     and, or, BinaryExpr, Expr, Filter, Operator, Projection, TableProviderFilterPushDown,
@@ -463,7 +464,11 @@ fn push_down_all_join(
         } else if right_preserved && checker.is_right_only(&predicate) {
             right_push.push(predicate);
         } else {
-            join_conditions.push(predicate);
+            // Mark inferred predicates so subsequent optimization passes do not
+            // treat them as additional equijoin keys. They should remain as
+            // residual join filters to enable dynamic filtering without
+            // widening the join key set.
+            join_conditions.push(predicate.alias(INFERRED_PREDICATE_ALIAS));
         }
     }
 
@@ -1485,6 +1490,53 @@ mod tests {
             assert_snapshot!(optimized_plan, @ $expected);
             Ok::<(), DataFusionError>(())
         }};
+    }
+
+    #[test]
+    fn inferred_predicate_stays_in_filter() -> Result<()> {
+        use datafusion_common::NullEquality;
+        use datafusion_expr::logical_plan::JoinConstraint;
+
+        let left = test_table_scan_with_name("l")?;
+        let right = test_table_scan_with_name("r")?;
+
+        let join = Join::try_new(
+            Arc::new(left),
+            Arc::new(right),
+            vec![],
+            None,
+            JoinType::Left,
+            JoinConstraint::On,
+            NullEquality::NullEqualsNull,
+        )?;
+
+        let inferred = col("l.a").eq(col("r.a"));
+        let Transformed { data: plan, .. } =
+            push_down_all_join(vec![], vec![inferred], join, vec![])?;
+
+        let join = match plan {
+            LogicalPlan::Join(j) => j,
+            _ => panic!("expected join"),
+        };
+
+        assert!(join.on.is_empty());
+        let filter = join.filter.clone().expect("expected filter");
+        match filter {
+            Expr::Alias(alias) => assert_eq!(alias.name, INFERRED_PREDICATE_ALIAS),
+            _ => panic!("expected aliased filter"),
+        }
+
+        let optimizer = Optimizer::with_rules(vec![
+            Arc::new(SimplifyExpressions::new()),
+            Arc::new(crate::extract_equijoin_predicate::ExtractEquijoinPredicate::new()),
+        ]);
+        let optimized = optimizer.optimize(LogicalPlan::Join(join), &OptimizerContext::new(), observe)?;
+        if let LogicalPlan::Join(j) = optimized {
+            assert!(j.on.is_empty());
+        } else {
+            panic!("expected join");
+        }
+        Ok(())
     }
 
     #[test]
