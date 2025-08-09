@@ -43,16 +43,17 @@ use arrow::record_batch::RecordBatch;
 use arrow_ord::cmp::lt;
 use async_trait::async_trait;
 use datafusion_common::{
-    exec_datafusion_err, exec_err, internal_err, HashMap, HashSet, Result, UnnestOptions,
+    exec_datafusion_err, exec_err, internal_err, Constraints, HashMap, HashSet, Result,
+    UnnestOptions,
 };
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::EquivalenceProperties;
+use datafusion_physical_expr::equivalence::ProjectionMapping;
 use futures::{Stream, StreamExt};
 use log::trace;
 
 /// Unnest the given columns (either with type struct or list)
-/// For list unnesting, each rows is vertically transformed into multiple rows
-/// For struct unnesting, each columns is horizontally transformed into multiple columns,
+/// For list unnesting, each row is vertically transformed into multiple rows
+/// For struct unnesting, each column is horizontally transformed into multiple columns,
 /// Thus the original RecordBatch with dimension (n x m) may have new dimension (n' x m')
 ///
 /// See [`UnnestOptions`] for more details and an example.
@@ -83,7 +84,12 @@ impl UnnestExec {
         schema: SchemaRef,
         options: UnnestOptions,
     ) -> Self {
-        let cache = Self::compute_properties(&input, Arc::clone(&schema));
+        let cache = Self::compute_properties(
+            &input,
+            &list_column_indices,
+            &struct_column_indices,
+            Arc::clone(&schema),
+        );
 
         UnnestExec {
             input,
@@ -99,10 +105,37 @@ impl UnnestExec {
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn compute_properties(
         input: &Arc<dyn ExecutionPlan>,
+        list_column_indices: &[ListUnnest],
+        struct_column_indices: &[usize],
         schema: SchemaRef,
     ) -> PlanProperties {
+        let list_column_indices: Vec<usize> = list_column_indices
+            .iter()
+            .map(|list_unnest| list_unnest.index_in_input_schema)
+            .collect();
+        let non_unnested_indices: Vec<usize> = input
+            .schema()
+            .fields()
+            .iter()
+            .enumerate()
+            .filter(|(idx, _)| {
+                !list_column_indices.contains(idx) && !struct_column_indices.contains(idx)
+            })
+            .map(|(idx, _)| idx)
+            .collect();
+
+        // Create the unnest equivalence properties by copying the input plan's equivalence properties
+        // for the unaffected columns.
+        // Except for the constraints, which are removed entirely because the unnest operation invalidates
+        // any global uniqueness or primary-key constraints.
+        let input_eq_properties = input.equivalence_properties();
+        let projection_mapping =
+            ProjectionMapping::from_indices(&non_unnested_indices, &schema).unwrap();
+        let eq_properties = input_eq_properties
+            .project(&projection_mapping, Arc::clone(&schema))
+            .with_constraints(Constraints::default());
         PlanProperties::new(
-            EquivalenceProperties::new(schema),
+            eq_properties,
             input.output_partitioning().to_owned(),
             input.pipeline_behavior(),
             input.boundedness(),
