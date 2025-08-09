@@ -34,6 +34,7 @@ pub mod utils {
     };
 }
 
+use std::borrow::Cow;
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -376,13 +377,35 @@ impl AggregateFunctionExpr {
             .into()
     }
 
+    /// Returns a schema containing the fields corresponding to this
+    /// aggregate's input expressions.
+    ///
+    /// When an aggregate is invoked with only literal values, the
+    /// physical input schema is empty. In this case a schema is
+    /// synthesized from the literal expressions so that field metadata
+    /// (such as Arrow extension types) remains available to the
+    /// [`Accumulator`].
+    fn args_schema(&self) -> Cow<'_, Schema> {
+        if self.schema.fields().is_empty() {
+            Cow::Owned(Schema::new(
+                self.input_fields
+                    .iter()
+                    .map(|f| f.as_ref().clone())
+                    .collect::<Vec<_>>(),
+            ))
+        } else {
+            Cow::Borrowed(&self.schema)
+        }
+    }
+
     /// the accumulator used to accumulate values from the expressions.
     /// the accumulator expects the same number of arguments as `expressions` and must
     /// return states with the same description as `state_fields`
     pub fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
+        let schema = self.args_schema();
         let acc_args = AccumulatorArgs {
             return_field: Arc::clone(&self.return_field),
-            schema: &self.schema,
+            schema: schema.as_ref(),
             ignore_nulls: self.ignore_nulls,
             order_bys: self.order_bys.as_ref(),
             is_distinct: self.is_distinct,
@@ -464,9 +487,10 @@ impl AggregateFunctionExpr {
 
     /// Creates accumulator implementation that supports retract
     pub fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
+        let schema = self.args_schema();
         let args = AccumulatorArgs {
             return_field: Arc::clone(&self.return_field),
-            schema: &self.schema,
+            schema: schema.as_ref(),
             ignore_nulls: self.ignore_nulls,
             order_bys: self.order_bys.as_ref(),
             is_distinct: self.is_distinct,
@@ -533,9 +557,10 @@ impl AggregateFunctionExpr {
     /// [`GroupsAccumulator`] implementation. If this returns true,
     /// `[Self::create_groups_accumulator`] will be called.
     pub fn groups_accumulator_supported(&self) -> bool {
+        let schema = self.args_schema();
         let args = AccumulatorArgs {
             return_field: Arc::clone(&self.return_field),
-            schema: &self.schema,
+            schema: schema.as_ref(),
             ignore_nulls: self.ignore_nulls,
             order_bys: self.order_bys.as_ref(),
             is_distinct: self.is_distinct,
@@ -552,9 +577,10 @@ impl AggregateFunctionExpr {
     /// For maximum performance, a [`GroupsAccumulator`] should be
     /// implemented in addition to [`Accumulator`].
     pub fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
+        let schema = self.args_schema();
         let args = AccumulatorArgs {
             return_field: Arc::clone(&self.return_field),
-            schema: &self.schema,
+            schema: schema.as_ref(),
             ignore_nulls: self.ignore_nulls,
             order_bys: self.order_bys.as_ref(),
             is_distinct: self.is_distinct,

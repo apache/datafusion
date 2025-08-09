@@ -30,7 +30,13 @@ pub struct AccumulatorArgs<'a> {
     /// The return field of the aggregate function.
     pub return_field: FieldRef,
 
-    /// The schema of the input arguments
+    /// The schema of the input arguments.
+    ///
+    /// This schema contains the fields corresponding to [`Self::exprs`]. When
+    /// an aggregate is invoked with only literal values, this schema is
+    /// synthesized from those literals so that field-level metadata (such as
+    /// Arrow extension types) remains available to accumulator
+    /// implementations.
     pub schema: &'a Schema,
 
     /// Whether to ignore nulls.
@@ -65,7 +71,9 @@ pub struct AccumulatorArgs<'a> {
     /// ```
     pub is_distinct: bool,
 
-    /// The physical expression of arguments the aggregate function takes.
+    /// The physical expressions for the aggregate function's arguments.
+    /// Use these expressions together with [`Self::schema`] to obtain the
+    /// [`FieldRef`] of each input via `expr.return_field(schema)`.
     pub exprs: &'a [Arc<dyn PhysicalExpr>],
 }
 
