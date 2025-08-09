@@ -56,6 +56,7 @@ mod tests {
     use async_trait::async_trait;
     use bytes::Bytes;
     use chrono::DateTime;
+    use datafusion_common::parsers::CompressionTypeVariant;
     use futures::stream::BoxStream;
     use futures::StreamExt;
     use insta::assert_snapshot;
@@ -63,7 +64,7 @@ mod tests {
     use object_store::path::Path;
     use object_store::{
         Attributes, GetOptions, GetResult, GetResultPayload, ListResult, MultipartUpload,
-        ObjectMeta, ObjectStore, PutMultipartOpts, PutOptions, PutPayload, PutResult,
+        ObjectMeta, ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult,
     };
     use regex::Regex;
     use rstest::*;
@@ -97,7 +98,7 @@ mod tests {
         async fn put_multipart_opts(
             &self,
             _location: &Path,
-            _opts: PutMultipartOpts,
+            _opts: PutMultipartOptions,
         ) -> object_store::Result<Box<dyn MultipartUpload>> {
             unimplemented!()
         }
@@ -796,62 +797,6 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
-    async fn test_csv_write_empty_file() -> Result<()> {
-        // Case 1. write to a single file
-        // Expect: an empty file created
-        let tmp_dir = tempfile::TempDir::new().unwrap();
-        let path = format!("{}/empty.csv", tmp_dir.path().to_string_lossy());
-
-        let ctx = SessionContext::new();
-
-        let df = ctx.sql("SELECT 1 limit 0").await?;
-
-        let cfg1 =
-            crate::dataframe::DataFrameWriteOptions::new().with_single_file_output(true);
-        let cfg2 = CsvOptions::default().with_has_header(true);
-
-        df.write_csv(&path, cfg1, Some(cfg2)).await?;
-        assert!(std::path::Path::new(&path).exists());
-
-        // Case 2. write to a directory without partition columns
-        // Expect: under the directory, an empty file is created
-        let tmp_dir = tempfile::TempDir::new().unwrap();
-        let path = format!("{}", tmp_dir.path().to_string_lossy());
-
-        let cfg1 =
-            crate::dataframe::DataFrameWriteOptions::new().with_single_file_output(true);
-        let cfg2 = CsvOptions::default().with_has_header(true);
-
-        let df = ctx.sql("SELECT 1 limit 0").await?;
-
-        df.write_csv(&path, cfg1, Some(cfg2)).await?;
-        assert!(std::path::Path::new(&path).exists());
-
-        let files = std::fs::read_dir(&path).unwrap();
-        assert!(files.count() == 1);
-
-        // Case 3. write to a directory with partition columns
-        // Expect: No file is created
-        let tmp_dir = tempfile::TempDir::new().unwrap();
-        let path = format!("{}", tmp_dir.path().to_string_lossy());
-
-        let df = ctx.sql("SELECT 1 as col1, 2 as col2 limit 0").await?;
-
-        let cfg1 = crate::dataframe::DataFrameWriteOptions::new()
-            .with_single_file_output(true)
-            .with_partition_by(vec!["col1".to_string()]);
-        let cfg2 = CsvOptions::default().with_has_header(true);
-
-        df.write_csv(&path, cfg1, Some(cfg2)).await?;
-
-        assert!(std::path::Path::new(&path).exists());
-        let files = std::fs::read_dir(&path).unwrap();
-        assert!(files.count() == 0);
-
-        Ok(())
-    }
-
     /// Read a single empty csv file with header
     ///
     /// empty.csv:
@@ -873,6 +818,86 @@ mod tests {
             ++
             ++
         "###);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_csv_extension_compressed() -> Result<()> {
+        // Write compressed CSV files
+        // Expect: under the directory, a file is created with ".csv.gz" extension
+        let ctx = SessionContext::new();
+
+        let df = ctx
+            .read_csv(
+                &format!("{}/csv/aggregate_test_100.csv", arrow_test_data()),
+                CsvReadOptions::default().has_header(true),
+            )
+            .await?;
+
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let path = format!("{}", tmp_dir.path().to_string_lossy());
+
+        let cfg1 = crate::dataframe::DataFrameWriteOptions::new();
+        let cfg2 = CsvOptions::default()
+            .with_has_header(true)
+            .with_compression(CompressionTypeVariant::GZIP);
+
+        df.write_csv(&path, cfg1, Some(cfg2)).await?;
+        assert!(std::path::Path::new(&path).exists());
+
+        let files: Vec<_> = std::fs::read_dir(&path).unwrap().collect();
+        assert_eq!(files.len(), 1);
+        assert!(files
+            .last()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .path()
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .ends_with(".csv.gz"));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_csv_extension_uncompressed() -> Result<()> {
+        // Write plain uncompressed CSV files
+        // Expect: under the directory, a file is created with ".csv" extension
+        let ctx = SessionContext::new();
+
+        let df = ctx
+            .read_csv(
+                &format!("{}/csv/aggregate_test_100.csv", arrow_test_data()),
+                CsvReadOptions::default().has_header(true),
+            )
+            .await?;
+
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let path = format!("{}", tmp_dir.path().to_string_lossy());
+
+        let cfg1 = crate::dataframe::DataFrameWriteOptions::new();
+        let cfg2 = CsvOptions::default().with_has_header(true);
+
+        df.write_csv(&path, cfg1, Some(cfg2)).await?;
+        assert!(std::path::Path::new(&path).exists());
+
+        let files: Vec<_> = std::fs::read_dir(&path).unwrap().collect();
+        assert_eq!(files.len(), 1);
+        assert!(files
+            .last()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .path()
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .ends_with(".csv"));
 
         Ok(())
     }

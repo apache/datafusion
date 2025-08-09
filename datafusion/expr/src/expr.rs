@@ -27,8 +27,8 @@ use std::sync::Arc;
 use crate::expr_fn::binary_expr;
 use crate::function::WindowFunctionSimplification;
 use crate::logical_plan::Subquery;
-use crate::Volatility;
-use crate::{udaf, ExprSchemable, Operator, Signature, WindowFrame, WindowUDF};
+use crate::{AggregateUDF, Volatility};
+use crate::{ExprSchemable, Operator, Signature, WindowFrame, WindowUDF};
 
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::cse::{HashNode, NormalizeEq, Normalizeable};
@@ -982,7 +982,7 @@ impl<'a> TreeNodeContainer<'a, Expr> for Sort {
 #[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
 pub struct AggregateFunction {
     /// Name of the function
-    pub func: Arc<crate::AggregateUDF>,
+    pub func: Arc<AggregateUDF>,
     pub params: AggregateFunctionParams,
 }
 
@@ -994,18 +994,18 @@ pub struct AggregateFunctionParams {
     /// Optional filter
     pub filter: Option<Box<Expr>>,
     /// Optional ordering
-    pub order_by: Option<Vec<Sort>>,
+    pub order_by: Vec<Sort>,
     pub null_treatment: Option<NullTreatment>,
 }
 
 impl AggregateFunction {
     /// Create a new AggregateFunction expression with a user-defined function (UDF)
     pub fn new_udf(
-        func: Arc<crate::AggregateUDF>,
+        func: Arc<AggregateUDF>,
         args: Vec<Expr>,
         distinct: bool,
         filter: Option<Box<Expr>>,
-        order_by: Option<Vec<Sort>>,
+        order_by: Vec<Sort>,
         null_treatment: Option<NullTreatment>,
     ) -> Self {
         Self {
@@ -1029,7 +1029,7 @@ impl AggregateFunction {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub enum WindowFunctionDefinition {
     /// A user defined aggregate function
-    AggregateUDF(Arc<crate::AggregateUDF>),
+    AggregateUDF(Arc<AggregateUDF>),
     /// A user defined aggregate function
     WindowUDF(Arc<WindowUDF>),
 }
@@ -1088,8 +1088,8 @@ impl Display for WindowFunctionDefinition {
     }
 }
 
-impl From<Arc<crate::AggregateUDF>> for WindowFunctionDefinition {
-    fn from(value: Arc<crate::AggregateUDF>) -> Self {
+impl From<Arc<AggregateUDF>> for WindowFunctionDefinition {
+    fn from(value: Arc<AggregateUDF>) -> Self {
         Self::AggregateUDF(value)
     }
 }
@@ -1131,6 +1131,8 @@ pub struct WindowFunctionParams {
     pub window_frame: WindowFrame,
     /// Specifies how NULL value is treated: ignore or respect
     pub null_treatment: Option<NullTreatment>,
+    /// Distinct flag
+    pub distinct: bool,
 }
 
 impl WindowFunction {
@@ -1145,6 +1147,7 @@ impl WindowFunction {
                 order_by: Vec::default(),
                 window_frame: WindowFrame::new(None),
                 null_treatment: None,
+                distinct: false,
             },
         }
     }
@@ -1170,38 +1173,6 @@ impl Exists {
     // Create a new Exists expression.
     pub fn new(subquery: Subquery, negated: bool) -> Self {
         Self { subquery, negated }
-    }
-}
-
-/// User Defined Aggregate Function
-///
-/// See [`udaf::AggregateUDF`] for more information.
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub struct AggregateUDF {
-    /// The function
-    pub fun: Arc<udaf::AggregateUDF>,
-    /// List of expressions to feed to the functions as arguments
-    pub args: Vec<Expr>,
-    /// Optional filter
-    pub filter: Option<Box<Expr>>,
-    /// Optional ORDER BY applied prior to aggregating
-    pub order_by: Option<Vec<Expr>>,
-}
-
-impl AggregateUDF {
-    /// Create a new AggregateUDF expression
-    pub fn new(
-        fun: Arc<udaf::AggregateUDF>,
-        args: Vec<Expr>,
-        filter: Option<Box<Expr>>,
-        order_by: Option<Vec<Expr>>,
-    ) -> Self {
-        Self {
-            fun,
-            args,
-            filter,
-            order_by,
-        }
     }
 }
 
@@ -1456,12 +1427,6 @@ impl Expr {
             Expr::Alias(Alias { relation, name, .. }) => (relation.clone(), name.clone()),
             _ => (None, self.schema_name().to_string()),
         }
-    }
-
-    /// Returns a full and complete string representation of this expression.
-    #[deprecated(since = "42.0.0", note = "use format! instead")]
-    pub fn canonical_name(&self) -> String {
-        format!("{self}")
     }
 
     /// Return String representation of the variant represented by `self`
@@ -2069,6 +2034,15 @@ impl Expr {
             _ => None,
         }
     }
+
+    /// Check if the Expr is literal and get the literal value if it is.
+    pub fn as_literal(&self) -> Option<&ScalarValue> {
+        if let Expr::Literal(lit, _) = self {
+            Some(lit)
+        } else {
+            None
+        }
+    }
 }
 
 impl Normalizeable for Expr {
@@ -2294,18 +2268,15 @@ impl NormalizeEq for Expr {
                         (None, None) => true,
                         _ => false,
                     }
-                    && match (self_order_by, other_order_by) {
-                        (Some(self_order_by), Some(other_order_by)) => self_order_by
-                            .iter()
-                            .zip(other_order_by.iter())
-                            .all(|(a, b)| {
-                                a.asc == b.asc
-                                    && a.nulls_first == b.nulls_first
-                                    && a.expr.normalize_eq(&b.expr)
-                            }),
-                        (None, None) => true,
-                        _ => false,
-                    }
+                    && self_order_by
+                        .iter()
+                        .zip(other_order_by.iter())
+                        .all(|(a, b)| {
+                            a.asc == b.asc
+                                && a.nulls_first == b.nulls_first
+                                && a.expr.normalize_eq(&b.expr)
+                        })
+                    && self_order_by.len() == other_order_by.len()
             }
             (Expr::WindowFunction(left), Expr::WindowFunction(other)) => {
                 let WindowFunction {
@@ -2317,6 +2288,7 @@ impl NormalizeEq for Expr {
                             partition_by: self_partition_by,
                             order_by: self_order_by,
                             null_treatment: self_null_treatment,
+                            distinct: self_distinct,
                         },
                 } = left.as_ref();
                 let WindowFunction {
@@ -2328,6 +2300,7 @@ impl NormalizeEq for Expr {
                             partition_by: other_partition_by,
                             order_by: other_order_by,
                             null_treatment: other_null_treatment,
+                            distinct: other_distinct,
                         },
                 } = other.as_ref();
 
@@ -2351,6 +2324,7 @@ impl NormalizeEq for Expr {
                                 && a.nulls_first == b.nulls_first
                                 && a.expr.normalize_eq(&b.expr)
                         })
+                    && self_distinct == other_distinct
             }
             (
                 Expr::Exists(Exists {
@@ -2584,11 +2558,13 @@ impl HashNode for Expr {
                             order_by: _,
                             window_frame,
                             null_treatment,
+                            distinct,
                         },
                 } = window_fun.as_ref();
                 fun.hash(state);
                 window_frame.hash(state);
                 null_treatment.hash(state);
+                distinct.hash(state);
             }
             Expr::InList(InList {
                 expr: _expr,
@@ -2891,14 +2867,26 @@ impl Display for SchemaDisplay<'_> {
                             order_by,
                             window_frame,
                             null_treatment,
+                            distinct,
                         } = params;
 
+                        // Write function name and open parenthesis
+                        write!(f, "{fun}(")?;
+
+                        // If DISTINCT, emit the keyword
+                        if *distinct {
+                            write!(f, "DISTINCT ")?;
+                        }
+
+                        // Write the comma‑separated argument list
                         write!(
                             f,
-                            "{}({})",
-                            fun,
+                            "{}",
                             schema_name_from_exprs_comma_separated_without_space(args)?
                         )?;
+
+                        // **Close the argument parenthesis**
+                        write!(f, ")")?;
 
                         if let Some(null_treatment) = null_treatment {
                             write!(f, " {null_treatment}")?;
@@ -3286,9 +3274,10 @@ impl Display for Expr {
                             order_by,
                             window_frame,
                             null_treatment,
+                            distinct,
                         } = params;
 
-                        fmt_function(f, &fun.to_string(), false, args, true)?;
+                        fmt_function(f, &fun.to_string(), *distinct, args, true)?;
 
                         if let Some(nt) = null_treatment {
                             write!(f, "{nt}")?;
@@ -3561,27 +3550,23 @@ mod test {
     }
 
     #[test]
-    #[allow(deprecated)]
     fn format_case_when() -> Result<()> {
         let expr = case(col("a"))
             .when(lit(1), lit(true))
             .when(lit(0), lit(false))
             .otherwise(lit(ScalarValue::Null))?;
         let expected = "CASE a WHEN Int32(1) THEN Boolean(true) WHEN Int32(0) THEN Boolean(false) ELSE NULL END";
-        assert_eq!(expected, expr.canonical_name());
         assert_eq!(expected, format!("{expr}"));
         Ok(())
     }
 
     #[test]
-    #[allow(deprecated)]
     fn format_cast() -> Result<()> {
         let expr = Expr::Cast(Cast {
             expr: Box::new(Expr::Literal(ScalarValue::Float32(Some(1.23)), None)),
             data_type: DataType::Utf8,
         });
         let expected_canonical = "CAST(Float32(1.23) AS Utf8)";
-        assert_eq!(expected_canonical, expr.canonical_name());
         assert_eq!(expected_canonical, format!("{expr}"));
         // Note that CAST intentionally has a name that is different from its `Display`
         // representation. CAST does not change the name of expressions.

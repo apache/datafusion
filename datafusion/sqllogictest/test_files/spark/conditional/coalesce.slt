@@ -25,4 +25,3 @@
 ## PySpark 3.5.5 Result: {'coalesce(NULL, 1, NULL)': 1, 'typeof(coalesce(NULL, 1, NULL))': 'int', 'typeof(NULL)': 'void', 'typeof(1)': 'int'}
 #query
 #SELECT coalesce(NULL::void, 1::int);
-

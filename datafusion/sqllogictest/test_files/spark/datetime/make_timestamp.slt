@@ -45,4 +45,3 @@
 ## PySpark 3.5.5 Result: {'make_timestamp(NULL, 7, 22, 15, 30, 0)': None, 'typeof(make_timestamp(NULL, 7, 22, 15, 30, 0))': 'timestamp', 'typeof(NULL)': 'void', 'typeof(7)': 'int', 'typeof(22)': 'int', 'typeof(15)': 'int', 'typeof(30)': 'int', 'typeof(0)': 'int'}
 #query
 #SELECT make_timestamp(NULL::void, 7::int, 22::int, 15::int, 30::int, 0::int);
-

@@ -17,6 +17,7 @@
 
 use std::sync::Arc;
 
+use arrow::datatypes::Schema;
 #[cfg(feature = "parquet")]
 use datafusion::datasource::file_format::parquet::ParquetSink;
 use datafusion::datasource::physical_plan::FileSink;
@@ -69,6 +70,7 @@ pub fn serialize_physical_aggr_expr(
                 distinct: aggr_expr.is_distinct(),
                 ignore_nulls: aggr_expr.ignore_nulls(),
                 fun_definition: (!buf.is_empty()).then_some(buf),
+                human_display: aggr_expr.human_display().to_string(),
             },
         )),
     })
@@ -351,6 +353,10 @@ pub fn serialize_physical_expr(
                     fun_definition: (!buf.is_empty()).then_some(buf),
                     return_type: Some(expr.return_type().try_into()?),
                     nullable: expr.nullable(),
+                    return_field_name: expr
+                        .return_field(&Schema::empty())?
+                        .name()
+                        .to_string(),
                 },
             )),
         })

@@ -17,6 +17,7 @@
 
 //! [`SqlToRel`]: SQL Query Planner (produces [`LogicalPlan`] from SQL AST)
 use std::collections::HashMap;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::vec;
 
@@ -54,6 +55,8 @@ pub struct ParserOptions {
     pub collect_spans: bool,
     /// Whether string types (VARCHAR, CHAR, Text, and String) are mapped to `Utf8View` during SQL planning.
     pub map_string_types_to_utf8view: bool,
+    /// Default null ordering for sorting expressions.
+    pub default_null_ordering: NullOrdering,
 }
 
 impl ParserOptions {
@@ -75,6 +78,9 @@ impl ParserOptions {
             map_string_types_to_utf8view: true,
             enable_options_value_normalization: false,
             collect_spans: false,
+            // By default, `nulls_max` is used to follow Postgres's behavior.
+            // postgres rule: https://www.postgresql.org/docs/current/queries-order.html
+            default_null_ordering: NullOrdering::NullsMax,
         }
     }
 
@@ -129,6 +135,12 @@ impl ParserOptions {
         self.collect_spans = value;
         self
     }
+
+    /// Sets the `default_null_ordering` option.
+    pub fn with_default_null_ordering(mut self, value: NullOrdering) -> Self {
+        self.default_null_ordering = value;
+        self
+    }
 }
 
 impl Default for ParserOptions {
@@ -147,7 +159,57 @@ impl From<&SqlParserOptions> for ParserOptions {
             enable_options_value_normalization: options
                 .enable_options_value_normalization,
             collect_spans: options.collect_spans,
+            default_null_ordering: options.default_null_ordering.as_str().into(),
         }
+    }
+}
+
+/// Represents the null ordering for sorting expressions.
+#[derive(Debug, Clone, Copy)]
+pub enum NullOrdering {
+    /// Nulls appear last in ascending order.
+    NullsMax,
+    /// Nulls appear first in descending order.
+    NullsMin,
+    /// Nulls appear first.
+    NullsFirst,
+    /// Nulls appear last.
+    NullsLast,
+}
+
+impl NullOrdering {
+    /// Evaluates the null ordering based on the given ascending flag.
+    ///
+    /// # Returns
+    /// * `true` if nulls should appear first.
+    /// * `false` if nulls should appear last.
+    pub fn nulls_first(&self, asc: bool) -> bool {
+        match self {
+            Self::NullsMax => !asc,
+            Self::NullsMin => asc,
+            Self::NullsFirst => true,
+            Self::NullsLast => false,
+        }
+    }
+}
+
+impl FromStr for NullOrdering {
+    type Err = DataFusionError;
+
+    fn from_str(s: &str) -> Result<Self> {
+        match s {
+            "nulls_max" => Ok(Self::NullsMax),
+            "nulls_min" => Ok(Self::NullsMin),
+            "nulls_first" => Ok(Self::NullsFirst),
+            "nulls_last" => Ok(Self::NullsLast),
+            _ => plan_err!("Unknown null ordering: Expected one of 'nulls_first', 'nulls_last', 'nulls_min' or 'nulls_max'. Got {s}"),
+        }
+    }
+}
+
+impl From<&str> for NullOrdering {
+    fn from(s: &str) -> Self {
+        Self::from_str(s).unwrap_or(Self::NullsMax)
     }
 }
 
@@ -391,7 +453,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // Default expressions are restricted, column references are not allowed
         let empty_schema = DFSchema::empty();
         let error_desc = |e: DataFusionError| match e {
-            DataFusionError::SchemaError(SchemaError::FieldNotFound { .. }, _) => {
+            DataFusionError::SchemaError(ref err, _)
+                if matches!(**err, SchemaError::FieldNotFound { .. }) =>
+            {
                 plan_datafusion_err!(
                     "Column reference is not allowed in the DEFAULT expression : {}",
                     e
@@ -483,13 +547,19 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     }
                 }
                 .map_err(|err: DataFusionError| match &err {
-                    DataFusionError::SchemaError(
-                        SchemaError::FieldNotFound {
+                    DataFusionError::SchemaError(inner, _)
+                        if matches!(
+                            inner.as_ref(),
+                            SchemaError::FieldNotFound { .. }
+                        ) =>
+                    {
+                        let SchemaError::FieldNotFound {
                             field,
                             valid_fields,
-                        },
-                        _,
-                    ) => {
+                        } = inner.as_ref()
+                        else {
+                            unreachable!()
+                        };
                         let mut diagnostic = if let Some(relation) = &col.relation {
                             Diagnostic::new_error(
                                 format!(
@@ -616,7 +686,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     // Timestamp With Time Zone
                     // INPUT : [SQLDataType]   TimestampTz + [Config] Time Zone
                     // OUTPUT: [ArrowDataType] Timestamp<TimeUnit, Some(Time Zone)>
-                    self.context_provider.options().execution.time_zone.clone()
+                    Some(self.context_provider.options().execution.time_zone.clone())
                 } else {
                     // Timestamp Without Time zone
                     None

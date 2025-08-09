@@ -30,4 +30,3 @@
 ## PySpark 3.5.5 Result: {'btrim(SSparkSQLS, SL)': 'parkSQ', 'typeof(btrim(SSparkSQLS, SL))': 'string', 'typeof(SSparkSQLS)': 'string', 'typeof(SL)': 'string'}
 #query
 #SELECT btrim('SSparkSQLS'::string, 'SL'::string);
-

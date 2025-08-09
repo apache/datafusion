@@ -15,5 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-mod infinite_cancel;
+mod coop;
+mod datasource_split;
 mod logical_plan;

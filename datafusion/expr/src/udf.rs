@@ -17,11 +17,14 @@
 
 //! [`ScalarUDF`]: Scalar User Defined Functions
 
+use crate::async_udf::AsyncScalarUDF;
 use crate::expr::schema_name_from_exprs_comma_separated_without_space;
 use crate::simplify::{ExprSimplifyResult, SimplifyInfo};
 use crate::sort_properties::{ExprProperties, SortProperties};
-use crate::{ColumnarValue, Documentation, Expr, Signature};
+use crate::udf_eq::UdfEq;
+use crate::{udf_equals_hash, ColumnarValue, Documentation, Expr, Signature};
 use arrow::datatypes::{DataType, Field, FieldRef};
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::{not_impl_err, ExprSchema, Result, ScalarValue};
 use datafusion_expr_common::interval_arithmetic::Interval;
 use std::any::Any;
@@ -196,8 +199,9 @@ impl ScalarUDF {
         self.inner.simplify(args, info)
     }
 
-    #[allow(deprecated)]
+    #[deprecated(since = "50.0.0", note = "Use `return_field_from_args` instead.")]
     pub fn is_nullable(&self, args: &[Expr], schema: &dyn ExprSchema) -> bool {
+        #[allow(deprecated)]
         self.inner.is_nullable(args, schema)
     }
 
@@ -280,6 +284,11 @@ impl ScalarUDF {
     pub fn documentation(&self) -> Option<&Documentation> {
         self.inner.documentation()
     }
+
+    /// Return true if this function is an async function
+    pub fn as_async(&self) -> Option<&AsyncScalarUDF> {
+        self.inner().as_any().downcast_ref::<AsyncScalarUDF>()
+    }
 }
 
 impl<F> From<F> for ScalarUDF
@@ -293,6 +302,7 @@ where
 
 /// Arguments passed to [`ScalarUDFImpl::invoke_with_args`] when invoking a
 /// scalar function.
+#[derive(Debug, Clone)]
 pub struct ScalarFunctionArgs {
     /// The evaluated arguments to the function
     pub args: Vec<ColumnarValue>,
@@ -304,6 +314,8 @@ pub struct ScalarFunctionArgs {
     /// or `return_field_from_args`) when creating the physical expression
     /// from the logical expression
     pub return_field: FieldRef,
+    /// The config options at execution time
+    pub config_options: Arc<ConfigOptions>,
 }
 
 impl ScalarFunctionArgs {
@@ -412,6 +424,19 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
 
     /// Returns this function's name
     fn name(&self) -> &str;
+
+    /// Returns any aliases (alternate names) for this function.
+    ///
+    /// Aliases can be used to invoke the same function using different names.
+    /// For example in some databases `now()` and `current_timestamp()` are
+    /// aliases for the same function. This behavior can be obtained by
+    /// returning `current_timestamp` as an alias for the `now` function.
+    ///
+    /// Note: `aliases` should only include names other than [`Self::name`].
+    /// Defaults to `[]` (no aliases)
+    fn aliases(&self) -> &[String] {
+        &[]
+    }
 
     /// Returns the user-defined display name of function, given the arguments
     ///
@@ -535,19 +560,6 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     /// [`ColumnarValue::values_to_arrays`] can be used to convert the arguments
     /// to arrays, which will likely be simpler code, but be slower.
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue>;
-
-    /// Returns any aliases (alternate names) for this function.
-    ///
-    /// Aliases can be used to invoke the same function using different names.
-    /// For example in some databases `now()` and `current_timestamp()` are
-    /// aliases for the same function. This behavior can be obtained by
-    /// returning `current_timestamp` as an alias for the `now` function.
-    ///
-    /// Note: `aliases` should only include names other than [`Self::name`].
-    /// Defaults to `[]` (no aliases)
-    fn aliases(&self) -> &[String] {
-        &[]
-    }
 
     /// Optionally apply per-UDF simplification / rewrite rules.
     ///
@@ -690,27 +702,35 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     /// Return true if this scalar UDF is equal to the other.
     ///
     /// Allows customizing the equality of scalar UDFs.
+    /// *Must* be implemented explicitly if the UDF type has internal state.
     /// Must be consistent with [`Self::hash_value`] and follow the same rules as [`Eq`]:
     ///
     /// - reflexive: `a.equals(a)`;
     /// - symmetric: `a.equals(b)` implies `b.equals(a)`;
     /// - transitive: `a.equals(b)` and `b.equals(c)` implies `a.equals(c)`.
     ///
-    /// By default, compares [`Self::name`] and [`Self::signature`].
+    /// By default, compares type, [`Self::name`], [`Self::aliases`] and [`Self::signature`].
     fn equals(&self, other: &dyn ScalarUDFImpl) -> bool {
-        self.name() == other.name() && self.signature() == other.signature()
+        self.as_any().type_id() == other.as_any().type_id()
+            && self.name() == other.name()
+            && self.aliases() == other.aliases()
+            && self.signature() == other.signature()
     }
 
     /// Returns a hash value for this scalar UDF.
     ///
-    /// Allows customizing the hash code of scalar UDFs. Similarly to [`Hash`] and [`Eq`],
-    /// if [`Self::equals`] returns true for two UDFs, their `hash_value`s must be the same.
+    /// Allows customizing the hash code of scalar UDFs.
+    /// *Must* be implemented explicitly whenever [`Self::equals`] is implemented.
     ///
-    /// By default, hashes [`Self::name`] and [`Self::signature`].
+    /// Similarly to [`Hash`] and [`Eq`], if [`Self::equals`] returns true for two UDFs,
+    /// their `hash_value`s must be the same.
+    ///
+    /// By default, it only hashes the type. The other fields are not hashed, as usually the
+    /// name, signature, and aliases are implied by the UDF type. Recall that UDFs with state
+    /// (and thus possibly changing fields) must override [`Self::equals`] and [`Self::hash_value`].
     fn hash_value(&self) -> u64 {
         let hasher = &mut DefaultHasher::new();
-        self.name().hash(hasher);
-        self.signature().hash(hasher);
+        self.as_any().type_id().hash(hasher);
         hasher.finish()
     }
 
@@ -725,9 +745,9 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
 
 /// ScalarUDF that adds an alias to the underlying function. It is better to
 /// implement [`ScalarUDFImpl`], which supports aliases, directly if possible.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 struct AliasedScalarUDFImpl {
-    inner: Arc<dyn ScalarUDFImpl>,
+    inner: UdfEq<Arc<dyn ScalarUDFImpl>>,
     aliases: Vec<String>,
 }
 
@@ -738,7 +758,10 @@ impl AliasedScalarUDFImpl {
     ) -> Self {
         let mut aliases = inner.aliases().to_vec();
         aliases.extend(new_aliases.into_iter().map(|s| s.to_string()));
-        Self { inner, aliases }
+        Self {
+            inner: inner.into(),
+            aliases,
+        }
     }
 }
 
@@ -815,20 +838,7 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
         self.inner.coerce_types(arg_types)
     }
 
-    fn equals(&self, other: &dyn ScalarUDFImpl) -> bool {
-        if let Some(other) = other.as_any().downcast_ref::<AliasedScalarUDFImpl>() {
-            self.inner.equals(other.inner.as_ref()) && self.aliases == other.aliases
-        } else {
-            false
-        }
-    }
-
-    fn hash_value(&self) -> u64 {
-        let hasher = &mut DefaultHasher::new();
-        self.inner.hash_value().hash(hasher);
-        self.aliases.hash(hasher);
-        hasher.finish()
-    }
+    udf_equals_hash!(ScalarUDFImpl);
 
     fn documentation(&self) -> Option<&Documentation> {
         self.inner.documentation()

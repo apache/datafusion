@@ -25,4 +25,3 @@
 ## PySpark 3.5.5 Result: {'repeat(123, 2)': '123123', 'typeof(repeat(123, 2))': 'string', 'typeof(123)': 'string', 'typeof(2)': 'int'}
 #query
 #SELECT repeat('123'::string, 2::int);
-

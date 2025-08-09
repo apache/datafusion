@@ -16,6 +16,7 @@
 // under the License.
 
 use std::any::Any;
+use std::hash::Hash;
 #[cfg(test)]
 use std::sync::Arc;
 use std::vec;
@@ -24,14 +25,14 @@ use arrow::datatypes::{TimeUnit::Nanosecond, *};
 use common::MockContextProvider;
 use datafusion_common::{assert_contains, DataFusionError, Result};
 use datafusion_expr::{
-    col, logical_plan::LogicalPlan, test::function_stub::sum_udaf, ColumnarValue,
-    CreateIndex, DdlStatement, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
-    Volatility,
+    col, logical_plan::LogicalPlan, test::function_stub::sum_udaf, udf_equals_hash,
+    ColumnarValue, CreateIndex, DdlStatement, ScalarFunctionArgs, ScalarUDF,
+    ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_functions::{string, unicode};
 use datafusion_sql::{
     parser::DFParser,
-    planner::{ParserOptions, SqlToRel},
+    planner::{NullOrdering, ParserOptions, SqlToRel},
 };
 
 use crate::common::{CustomExprPlanner, CustomTypePlanner, MockSessionState};
@@ -3311,7 +3312,7 @@ fn make_udf(name: &'static str, args: Vec<DataType>, return_type: DataType) -> S
 }
 
 /// Mocked UDF
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 struct DummyUDF {
     name: &'static str,
     signature: Signature,
@@ -3348,6 +3349,8 @@ impl ScalarUDFImpl for DummyUDF {
     fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         panic!("dummy - not implemented")
     }
+
+    udf_equals_hash!(ScalarUDFImpl);
 }
 
 fn parse_decimals_parser_options() -> ParserOptions {
@@ -3358,6 +3361,7 @@ fn parse_decimals_parser_options() -> ParserOptions {
         map_string_types_to_utf8view: true,
         enable_options_value_normalization: false,
         collect_spans: false,
+        default_null_ordering: NullOrdering::NullsMax,
     }
 }
 
@@ -3369,6 +3373,7 @@ fn ident_normalization_parser_options_no_ident_normalization() -> ParserOptions 
         map_string_types_to_utf8view: true,
         enable_options_value_normalization: false,
         collect_spans: false,
+        default_null_ordering: NullOrdering::NullsMax,
     }
 }
 
@@ -3380,6 +3385,7 @@ fn ident_normalization_parser_options_ident_normalization() -> ParserOptions {
         map_string_types_to_utf8view: true,
         enable_options_value_normalization: false,
         collect_spans: false,
+        default_null_ordering: NullOrdering::NullsMax,
     }
 }
 
@@ -4484,7 +4490,7 @@ fn assert_field_not_found(mut err: DataFusionError, name: &str) {
         }
     };
     match err {
-        DataFusionError::SchemaError { .. } => {
+        DataFusionError::SchemaError(_, _) => {
             let msg = format!("{err}");
             let expected = format!("Schema error: No field named {name}.");
             if !msg.starts_with(&expected) {

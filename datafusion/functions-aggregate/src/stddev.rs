@@ -19,6 +19,7 @@
 
 use std::any::Any;
 use std::fmt::{Debug, Formatter};
+use std::hash::Hash;
 use std::mem::align_of_val;
 use std::sync::Arc;
 
@@ -30,8 +31,8 @@ use datafusion_common::{plan_err, ScalarValue};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, Documentation, GroupsAccumulator, Signature,
-    Volatility,
+    udf_equals_hash, Accumulator, AggregateUDFImpl, Documentation, GroupsAccumulator,
+    Signature, Volatility,
 };
 use datafusion_functions_aggregate_common::stats::StatsType;
 use datafusion_macros::user_doc;
@@ -61,6 +62,7 @@ make_udaf_expr_and_func!(
     standard_argument(name = "expression",)
 )]
 /// STDDEV and STDDEV_SAMP (standard deviation) aggregate expression
+#[derive(PartialEq, Eq, Hash)]
 pub struct Stddev {
     signature: Signature,
     alias: Vec<String>,
@@ -153,6 +155,8 @@ impl AggregateUDFImpl for Stddev {
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }
+
+    udf_equals_hash!(AggregateUDFImpl);
 }
 
 make_udaf_expr_and_func!(

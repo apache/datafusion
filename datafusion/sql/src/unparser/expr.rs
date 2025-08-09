@@ -18,8 +18,9 @@
 use datafusion_expr::expr::{AggregateFunctionParams, Unnest, WindowFunctionParams};
 use sqlparser::ast::Value::SingleQuotedString;
 use sqlparser::ast::{
-    self, Array, BinaryOperator, CaseWhen, Expr as AstExpr, Function, Ident, Interval,
-    ObjectName, OrderByOptions, Subscript, TimezoneInfo, UnaryOperator, ValueWithSpan,
+    self, Array, BinaryOperator, CaseWhen, DuplicateTreatment, Expr as AstExpr, Function,
+    Ident, Interval, ObjectName, OrderByOptions, Subscript, TimezoneInfo, UnaryOperator,
+    ValueWithSpan,
 };
 use std::sync::Arc;
 use std::vec;
@@ -198,6 +199,7 @@ impl Unparser<'_> {
                             partition_by,
                             order_by,
                             window_frame,
+                            distinct,
                             ..
                         },
                 } = window_fun.as_ref();
@@ -256,7 +258,8 @@ impl Unparser<'_> {
                         span: Span::empty(),
                     }]),
                     args: ast::FunctionArguments::List(ast::FunctionArgumentList {
-                        duplicate_treatment: None,
+                        duplicate_treatment: distinct
+                            .then_some(DuplicateTreatment::Distinct),
                         args,
                         clauses: vec![],
                     }),
@@ -322,16 +325,15 @@ impl Unparser<'_> {
                     Some(filter) => Some(Box::new(self.expr_to_sql_inner(filter)?)),
                     None => None,
                 };
-                let within_group = if agg.func.is_ordered_set_aggregate() {
-                    order_by
-                        .as_ref()
-                        .unwrap_or(&Vec::new())
-                        .iter()
-                        .map(|sort_expr| self.sort_to_sql(sort_expr))
-                        .collect::<Result<Vec<_>>>()?
-                } else {
-                    Vec::new()
-                };
+                let within_group: Vec<ast::OrderByExpr> =
+                    if agg.func.is_ordered_set_aggregate() {
+                        order_by
+                            .iter()
+                            .map(|sort_expr| self.sort_to_sql(sort_expr))
+                            .collect::<Result<Vec<ast::OrderByExpr>>>()?
+                    } else {
+                        Vec::new()
+                    };
                 Ok(ast::Expr::Function(Function {
                     name: ObjectName::from(vec![Ident {
                         value: func_name.to_string(),
@@ -340,7 +342,7 @@ impl Unparser<'_> {
                     }]),
                     args: ast::FunctionArguments::List(ast::FunctionArgumentList {
                         duplicate_treatment: distinct
-                            .then_some(ast::DuplicateTreatment::Distinct),
+                            .then_some(DuplicateTreatment::Distinct),
                         args,
                         clauses: vec![],
                     }),
@@ -621,27 +623,43 @@ impl Unparser<'_> {
             return internal_err!("get_field must have exactly 2 arguments");
         }
 
-        let mut id = match &args[0] {
-            Expr::Column(col) => match self.col_to_sql(col)? {
-                ast::Expr::Identifier(ident) => vec![ident],
-                ast::Expr::CompoundIdentifier(idents) => idents,
-                other => return internal_err!("expected col_to_sql to return an Identifier or CompoundIdentifier, but received: {:?}", other),
-            },
-            _ => return internal_err!("get_field expects first argument to be column, but received: {:?}", &args[0]),
-        };
-
         let field = match &args[1] {
             Expr::Literal(lit, _) => self.new_ident_quoted_if_needs(lit.to_string()),
             _ => {
                 return internal_err!(
                 "get_field expects second argument to be a string, but received: {:?}",
-                &args[0]
+                &args[1]
             )
             }
         };
-        id.push(field);
 
-        Ok(ast::Expr::CompoundIdentifier(id))
+        match &args[0] {
+            Expr::Column(col) => {
+                let mut id = match self.col_to_sql(col)? {
+                    ast::Expr::Identifier(ident) => vec![ident],
+                    ast::Expr::CompoundIdentifier(idents) => idents,
+                    other => return internal_err!("expected col_to_sql to return an Identifier or CompoundIdentifier, but received: {:?}", other),
+                };
+                id.push(field);
+                Ok(ast::Expr::CompoundIdentifier(id))
+            }
+            Expr::ScalarFunction(struct_expr) => {
+                let root = self
+                    .scalar_function_to_sql(struct_expr.func.name(), &struct_expr.args)?;
+                Ok(ast::Expr::CompoundFieldAccess {
+                    root: Box::new(root),
+                    access_chain: vec![ast::AccessExpr::Dot(ast::Expr::Identifier(
+                        field,
+                    ))],
+                })
+            }
+            _ => {
+                internal_err!(
+                    "get_field expects first argument to be column or scalar function, but received: {:?}",
+                    &args[0]
+                )
+            }
+        }
     }
 
     fn map_to_sql(&self, args: &[Expr]) -> Result<ast::Expr> {
@@ -710,13 +728,21 @@ impl Unparser<'_> {
     }
 
     pub fn col_to_sql(&self, col: &Column) -> Result<ast::Expr> {
+        // Replace the column name if the dialect has an override
+        let col_name =
+            if let Some(rewritten_name) = self.dialect.col_alias_overrides(&col.name)? {
+                rewritten_name
+            } else {
+                col.name.to_string()
+            };
+
         if let Some(table_ref) = &col.relation {
             let mut id = if self.dialect.full_qualified_col() {
                 table_ref.to_vec()
             } else {
                 vec![table_ref.table().to_string()]
             };
-            id.push(col.name.to_string());
+            id.push(col_name);
             return Ok(ast::Expr::CompoundIdentifier(
                 id.iter()
                     .map(|i| self.new_ident_quoted_if_needs(i.to_string()))
@@ -724,7 +750,7 @@ impl Unparser<'_> {
             ));
         }
         Ok(ast::Expr::Identifier(
-            self.new_ident_quoted_if_needs(col.name.to_string()),
+            self.new_ident_quoted_if_needs(col_name),
         ))
     }
 
@@ -1692,6 +1718,12 @@ impl Unparser<'_> {
                 not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
             }
             DataType::Dictionary(_, val) => self.arrow_dtype_to_ast_dtype(val),
+            DataType::Decimal32(_precision, _scale) => {
+                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
+            }
+            DataType::Decimal64(_precision, _scale) => {
+                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
+            }
             DataType::Decimal128(precision, scale)
             | DataType::Decimal256(precision, scale) => {
                 let mut new_precision = *precision as u64;
@@ -2028,6 +2060,7 @@ mod tests {
                         order_by: vec![],
                         window_frame: WindowFrame::new(None),
                         null_treatment: None,
+                        distinct: false,
                     },
                 }),
                 r#"row_number(col) OVER (ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)"#,
@@ -2053,6 +2086,7 @@ mod tests {
                             ),
                         ),
                         null_treatment: None,
+                        distinct: false,
                     },
                 }),
                 r#"count(*) OVER (ORDER BY a DESC NULLS FIRST RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING)"#,

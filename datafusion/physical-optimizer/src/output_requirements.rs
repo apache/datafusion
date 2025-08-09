@@ -32,6 +32,7 @@ use datafusion_common::{Result, Statistics};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::Distribution;
 use datafusion_physical_expr_common::sort_expr::OrderingRequirements;
+use datafusion_physical_plan::execution_plan::Boundedness;
 use datafusion_physical_plan::projection::{
     make_with_child, update_expr, update_ordering_requirement, ProjectionExec,
 };
@@ -98,6 +99,7 @@ pub struct OutputRequirementExec {
     order_requirement: Option<OrderingRequirements>,
     dist_requirement: Distribution,
     cache: PlanProperties,
+    fetch: Option<usize>,
 }
 
 impl OutputRequirementExec {
@@ -105,13 +107,15 @@ impl OutputRequirementExec {
         input: Arc<dyn ExecutionPlan>,
         requirements: Option<OrderingRequirements>,
         dist_requirement: Distribution,
+        fetch: Option<usize>,
     ) -> Self {
-        let cache = Self::compute_properties(&input);
+        let cache = Self::compute_properties(&input, &fetch);
         Self {
             input,
             order_requirement: requirements,
             dist_requirement,
             cache,
+            fetch,
         }
     }
 
@@ -120,13 +124,27 @@ impl OutputRequirementExec {
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
-    fn compute_properties(input: &Arc<dyn ExecutionPlan>) -> PlanProperties {
+    fn compute_properties(
+        input: &Arc<dyn ExecutionPlan>,
+        fetch: &Option<usize>,
+    ) -> PlanProperties {
+        let boundedness = if fetch.is_some() {
+            Boundedness::Bounded
+        } else {
+            input.boundedness()
+        };
+
         PlanProperties::new(
             input.equivalence_properties().clone(), // Equivalence Properties
             input.output_partitioning().clone(),    // Output Partitioning
             input.pipeline_behavior(),              // Pipeline Behavior
-            input.boundedness(),                    // Boundedness
+            boundedness,                            // Boundedness
         )
+    }
+
+    /// Get fetch
+    pub fn fetch(&self) -> Option<usize> {
+        self.fetch
     }
 }
 
@@ -138,10 +156,35 @@ impl DisplayAs for OutputRequirementExec {
     ) -> std::fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(f, "OutputRequirementExec")
+                let order_cols = self
+                    .order_requirement
+                    .as_ref()
+                    .map(|reqs| reqs.first())
+                    .map(|lex| {
+                        let pairs: Vec<String> = lex
+                            .iter()
+                            .map(|req| {
+                                let direction = req
+                                    .options
+                                    .as_ref()
+                                    .map(
+                                        |opt| if opt.descending { "desc" } else { "asc" },
+                                    )
+                                    .unwrap_or("unspecified");
+                                format!("({}, {direction})", req.expr)
+                            })
+                            .collect();
+                        format!("[{}]", pairs.join(", "))
+                    })
+                    .unwrap_or_else(|| "[]".to_string());
+
+                write!(
+                    f,
+                    "OutputRequirementExec: order_by={}, dist_by={}",
+                    order_cols, self.dist_requirement
+                )
             }
             DisplayFormatType::TreeRender => {
-                // TODO: collect info
                 write!(f, "")
             }
         }
@@ -189,6 +232,7 @@ impl ExecutionPlan for OutputRequirementExec {
             children.remove(0), // has a single child
             self.order_requirement.clone(),
             self.dist_requirement.clone(),
+            self.fetch,
         )))
     }
 
@@ -248,9 +292,13 @@ impl ExecutionPlan for OutputRequirementExec {
         };
 
         make_with_child(projection, &self.input()).map(|input| {
-            let e = OutputRequirementExec::new(input, requirements, dist_req);
+            let e = OutputRequirementExec::new(input, requirements, dist_req, self.fetch);
             Some(Arc::new(e) as _)
         })
+    }
+
+    fn fetch(&self) -> Option<usize> {
+        self.fetch
     }
 }
 
@@ -298,6 +346,7 @@ fn require_top_ordering(plan: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn Executio
             // there is no ordering requirement
             None,
             Distribution::UnspecifiedDistribution,
+            None,
         )) as _)
     }
 }
@@ -316,20 +365,29 @@ fn require_top_ordering_helper(
         // In case of constant columns, output ordering of the `SortExec` would
         // be an empty set. Therefore; we check the sort expression field to
         // assign the requirements.
-        let req_ordering = sort_exec.expr();
         let req_dist = sort_exec.required_input_distribution().swap_remove(0);
+        let req_ordering = sort_exec.expr();
         let reqs = OrderingRequirements::from(req_ordering.clone());
+        let fetch = sort_exec.fetch();
+
         Ok((
-            Arc::new(OutputRequirementExec::new(plan, Some(reqs), req_dist)) as _,
+            Arc::new(OutputRequirementExec::new(
+                plan,
+                Some(reqs),
+                req_dist,
+                fetch,
+            )) as _,
             true,
         ))
     } else if let Some(spm) = plan.as_any().downcast_ref::<SortPreservingMergeExec>() {
         let reqs = OrderingRequirements::from(spm.expr().clone());
+        let fetch = spm.fetch();
         Ok((
             Arc::new(OutputRequirementExec::new(
                 plan,
                 Some(reqs),
                 Distribution::SinglePartition,
+                fetch,
             )) as _,
             true,
         ))

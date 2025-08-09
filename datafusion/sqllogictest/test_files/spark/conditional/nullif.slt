@@ -25,4 +25,3 @@
 ## PySpark 3.5.5 Result: {'nullif(2, 2)': None, 'typeof(nullif(2, 2))': 'int', 'typeof(2)': 'int'}
 #query
 #SELECT nullif(2::int);
-

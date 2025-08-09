@@ -306,6 +306,7 @@ mod tests {
     };
     use arrow::datatypes::{DataType, Field, TimeUnit};
     use chrono::{NaiveDateTime, Timelike};
+    use datafusion_common::config::ConfigOptions;
     use datafusion_common::ScalarValue;
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
     use std::sync::Arc;
@@ -395,6 +396,7 @@ mod tests {
                 arg_fields,
                 number_rows: 1,
                 return_field: Field::new("f", DataType::Utf8, true).into(),
+                config_options: Arc::new(ConfigOptions::default()),
             };
             let result = ToCharFunc::new()
                 .invoke_with_args(args)
@@ -483,6 +485,7 @@ mod tests {
                 arg_fields,
                 number_rows: batch_len,
                 return_field: Field::new("f", DataType::Utf8, true).into(),
+                config_options: Arc::new(ConfigOptions::default()),
             };
             let result = ToCharFunc::new()
                 .invoke_with_args(args)
@@ -619,6 +622,7 @@ mod tests {
                 arg_fields,
                 number_rows: batch_len,
                 return_field: Field::new("f", DataType::Utf8, true).into(),
+                config_options: Arc::new(ConfigOptions::default()),
             };
             let result = ToCharFunc::new()
                 .invoke_with_args(args)
@@ -646,6 +650,7 @@ mod tests {
                 arg_fields,
                 number_rows: batch_len,
                 return_field: Field::new("f", DataType::Utf8, true).into(),
+                config_options: Arc::new(ConfigOptions::default()),
             };
             let result = ToCharFunc::new()
                 .invoke_with_args(args)
@@ -670,6 +675,7 @@ mod tests {
             arg_fields: vec![arg_field],
             number_rows: 1,
             return_field: Field::new("f", DataType::Utf8, true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
         };
         let result = ToCharFunc::new().invoke_with_args(args);
         assert_eq!(
@@ -690,6 +696,7 @@ mod tests {
             arg_fields,
             number_rows: 1,
             return_field: Field::new("f", DataType::Utf8, true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
         };
         let result = ToCharFunc::new().invoke_with_args(args);
         assert_eq!(

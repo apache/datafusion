@@ -215,7 +215,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     ) -> Result<LogicalPlan> {
         match statement {
             Statement::ExplainTable {
-                describe_alias: DescribeAlias::Describe, // only parse 'DESCRIBE table_name' and not 'EXPLAIN table_name'
+                describe_alias: DescribeAlias::Describe | DescribeAlias::Desc, // only parse 'DESCRIBE table_name' or 'DESC table_name' and not 'EXPLAIN table_name'
                 table_name,
                 ..
             } => self.describe_table_to_plan(table_name),
@@ -1388,13 +1388,13 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             .map(|f| f.name().to_owned())
             .collect();
 
-        Ok(LogicalPlan::Copy(CopyTo {
-            input: Arc::new(input),
-            output_url: statement.target,
-            file_type,
+        Ok(LogicalPlan::Copy(CopyTo::new(
+            Arc::new(input),
+            statement.target,
             partition_by,
-            options: options_map,
-        }))
+            file_type,
+            options_map,
+        )))
     }
 
     fn build_order_by(
@@ -1421,7 +1421,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                                 .unwrap();
                             let asc = order_by_expr.options.asc.unwrap_or(true);
                             let nulls_first =
-                                order_by_expr.options.nulls_first.unwrap_or(!asc);
+                                order_by_expr.options.nulls_first.unwrap_or_else(|| {
+                                    self.options.default_null_ordering.nulls_first(asc)
+                                });
 
                             SortExpr::new(ordered_expr, asc, nulls_first)
                         })
