@@ -19,7 +19,7 @@
 
 use std::any::Any;
 use std::fmt::Debug;
-use std::hash::{DefaultHasher, Hash, Hasher};
+use std::hash::Hash;
 use std::mem::size_of_val;
 use std::sync::Arc;
 
@@ -45,8 +45,8 @@ use datafusion_common::{
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::{format_state_name, AggregateOrderSensitivity};
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, Documentation, EmitTo, Expr, ExprFunctionExt,
-    GroupsAccumulator, ReversedUDAF, Signature, SortExpr, Volatility,
+    udf_equals_hash, Accumulator, AggregateUDFImpl, Documentation, EmitTo, Expr,
+    ExprFunctionExt, GroupsAccumulator, ReversedUDAF, Signature, SortExpr, Volatility,
 };
 use datafusion_functions_aggregate_common::utils::get_sort_options;
 use datafusion_macros::user_doc;
@@ -89,6 +89,7 @@ pub fn last_value(expression: Expr, order_by: Vec<SortExpr>) -> Expr {
 ```"#,
     standard_argument(name = "expression",)
 )]
+#[derive(PartialEq, Eq, Hash)]
 pub struct FirstValue {
     signature: Signature,
     is_input_pre_ordered: bool,
@@ -294,29 +295,7 @@ impl AggregateUDFImpl for FirstValue {
         self.doc()
     }
 
-    fn equals(&self, other: &dyn AggregateUDFImpl) -> bool {
-        let Some(other) = other.as_any().downcast_ref::<Self>() else {
-            return false;
-        };
-        let Self {
-            signature,
-            is_input_pre_ordered,
-        } = self;
-        signature == &other.signature
-            && is_input_pre_ordered == &other.is_input_pre_ordered
-    }
-
-    fn hash_value(&self) -> u64 {
-        let Self {
-            signature,
-            is_input_pre_ordered,
-        } = self;
-        let mut hasher = DefaultHasher::new();
-        std::any::type_name::<Self>().hash(&mut hasher);
-        signature.hash(&mut hasher);
-        is_input_pre_ordered.hash(&mut hasher);
-        hasher.finish()
-    }
+    udf_equals_hash!(AggregateUDFImpl);
 }
 
 // TODO: rename to PrimitiveGroupsAccumulator
@@ -1029,6 +1008,7 @@ impl Accumulator for FirstValueAccumulator {
 ```"#,
     standard_argument(name = "expression",)
 )]
+#[derive(PartialEq, Eq, Hash)]
 pub struct LastValue {
     signature: Signature,
     is_input_pre_ordered: bool,
@@ -1238,29 +1218,7 @@ impl AggregateUDFImpl for LastValue {
         }
     }
 
-    fn equals(&self, other: &dyn AggregateUDFImpl) -> bool {
-        let Some(other) = other.as_any().downcast_ref::<Self>() else {
-            return false;
-        };
-        let Self {
-            signature,
-            is_input_pre_ordered,
-        } = self;
-        signature == &other.signature
-            && is_input_pre_ordered == &other.is_input_pre_ordered
-    }
-
-    fn hash_value(&self) -> u64 {
-        let Self {
-            signature,
-            is_input_pre_ordered,
-        } = self;
-        let mut hasher = DefaultHasher::new();
-        std::any::type_name::<Self>().hash(&mut hasher);
-        signature.hash(&mut hasher);
-        is_input_pre_ordered.hash(&mut hasher);
-        hasher.finish()
-    }
+    udf_equals_hash!(AggregateUDFImpl);
 }
 
 /// This accumulator is used when there is no ordering specified for the

@@ -27,7 +27,6 @@ use crate::{
 
 use arrow::datatypes::Schema;
 // TODO: handle once deprecated
-use crate::encryption::add_crypto_to_writer_properties;
 #[allow(deprecated)]
 use parquet::{
     arrow::ARROW_SCHEMA_META_KEY,
@@ -90,18 +89,18 @@ impl TryFrom<&TableParquetOptions> for WriterPropertiesBuilder {
     /// Convert the session's [`TableParquetOptions`] into a single write action's [`WriterPropertiesBuilder`].
     ///
     /// The returned [`WriterPropertiesBuilder`] includes customizations applicable per column.
+    /// Note that any encryption options are ignored as building the `FileEncryptionProperties`
+    /// might require other inputs besides the [`TableParquetOptions`].
     fn try_from(table_parquet_options: &TableParquetOptions) -> Result<Self> {
         // Table options include kv_metadata and col-specific options
         let TableParquetOptions {
             global,
             column_specific_options,
             key_value_metadata,
-            crypto,
+            crypto: _,
         } = table_parquet_options;
 
         let mut builder = global.into_writer_properties_builder()?;
-
-        builder = add_crypto_to_writer_properties(crypto, builder);
 
         // check that the arrow schema is present in the kv_metadata, if configured to do so
         if !global.skip_arrow_metadata
@@ -234,7 +233,6 @@ impl ParquetOptions {
             binary_as_string: _, // not used for writer props
             coerce_int96: _,     // not used for writer props
             skip_arrow_metadata: _,
-            cache_metadata: _,
         } = self;
 
         let mut builder = WriterProperties::builder()
@@ -502,7 +500,6 @@ mod tests {
             binary_as_string: defaults.binary_as_string,
             skip_arrow_metadata: defaults.skip_arrow_metadata,
             coerce_int96: None,
-            cache_metadata: defaults.cache_metadata,
         }
     }
 
@@ -613,13 +610,14 @@ mod tests {
                 binary_as_string: global_options_defaults.binary_as_string,
                 skip_arrow_metadata: global_options_defaults.skip_arrow_metadata,
                 coerce_int96: None,
-                cache_metadata: global_options_defaults.cache_metadata,
             },
             column_specific_options,
             key_value_metadata,
             crypto: ParquetEncryptionOptions {
                 file_encryption: fep,
                 file_decryption: None,
+                factory_id: None,
+                factory_options: Default::default(),
             },
         }
     }

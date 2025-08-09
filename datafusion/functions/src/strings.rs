@@ -18,46 +18,11 @@
 use std::mem::size_of;
 
 use arrow::array::{
-    make_view, Array, ArrayAccessor, ArrayDataBuilder, ArrayIter, ByteView,
-    GenericStringArray, LargeStringArray, NullBufferBuilder, OffsetSizeTrait,
-    StringArray, StringViewArray, StringViewBuilder,
+    make_view, Array, ArrayAccessor, ArrayDataBuilder, ByteView, LargeStringArray,
+    NullBufferBuilder, StringArray, StringViewArray, StringViewBuilder,
 };
 use arrow::buffer::{MutableBuffer, NullBuffer};
 use arrow::datatypes::DataType;
-
-/// Abstracts iteration over different types of string arrays.
-#[deprecated(since = "45.0.0", note = "Use arrow::array::StringArrayType instead")]
-pub trait StringArrayType<'a>: ArrayAccessor<Item = &'a str> + Sized {
-    /// Return an [`ArrayIter`]  over the values of the array.
-    ///
-    /// This iterator iterates returns `Option<&str>` for each item in the array.
-    fn iter(&self) -> ArrayIter<Self>;
-
-    /// Check if the array is ASCII only.
-    fn is_ascii(&self) -> bool;
-}
-
-#[allow(deprecated)]
-impl<'a, T: OffsetSizeTrait> StringArrayType<'a> for &'a GenericStringArray<T> {
-    fn iter(&self) -> ArrayIter<Self> {
-        GenericStringArray::<T>::iter(self)
-    }
-
-    fn is_ascii(&self) -> bool {
-        GenericStringArray::<T>::is_ascii(self)
-    }
-}
-
-#[allow(deprecated)]
-impl<'a> StringArrayType<'a> for &'a StringViewArray {
-    fn iter(&self) -> ArrayIter<Self> {
-        StringViewArray::iter(self)
-    }
-
-    fn is_ascii(&self) -> bool {
-        StringViewArray::is_ascii(self)
-    }
-}
 
 /// Optimized version of the StringBuilder in Arrow that:
 /// 1. Precalculating the expected length of the result, avoiding reallocations.

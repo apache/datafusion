@@ -2131,3 +2131,26 @@ query T
 select E'foo\t\tbar';
 ----
 foo		bar
+
+statement ok
+create table t (a float) as values (1), (null), (3);
+
+# https://github.com/apache/datafusion/issues/17055
+# is not null did not correctly infer as boolean in udf argument position
+query B
+select greatest(a is not null, false) from t;
+----
+true
+false
+true
+
+# same for is null
+query B
+select greatest(a is null, false) from t;
+----
+false
+true
+false
+
+statement ok
+drop table t;

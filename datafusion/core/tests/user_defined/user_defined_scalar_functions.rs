@@ -181,7 +181,7 @@ async fn scalar_udf() -> Result<()> {
     Ok(())
 }
 
-#[derive(PartialEq, Hash)]
+#[derive(PartialEq, Eq, Hash)]
 struct Simple0ArgsScalarUDF {
     name: String,
     signature: Signature,
@@ -492,7 +492,7 @@ async fn test_user_defined_functions_with_alias() -> Result<()> {
 }
 
 /// Volatile UDF that should append a different value to each row
-#[derive(Debug, PartialEq, Hash)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 struct AddIndexToStringVolatileScalarUDF {
     name: String,
     signature: Signature,
@@ -941,7 +941,7 @@ impl FunctionFactory for CustomFunctionFactory {
 //
 // it also defines custom [ScalarUDFImpl::simplify()]
 // to replace ScalarUDF expression with one instance contains.
-#[derive(Debug, PartialEq, Hash)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 struct ScalarFunctionWrapper {
     name: String,
     expr: Expr,
@@ -1221,6 +1221,7 @@ impl PartialEq for MyRegexUdf {
         signature == &other.signature && regex.as_str() == other.regex.as_str()
     }
 }
+impl Eq for MyRegexUdf {}
 
 impl Hash for MyRegexUdf {
     fn hash<H: Hasher>(&self, state: &mut H) {
@@ -1380,7 +1381,7 @@ async fn plan_and_collect(ctx: &SessionContext, sql: &str) -> Result<Vec<RecordB
     ctx.sql(sql).await?.collect().await
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq)]
 struct MetadataBasedUdf {
     name: String,
     signature: Signature,

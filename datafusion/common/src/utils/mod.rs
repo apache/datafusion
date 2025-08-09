@@ -444,94 +444,6 @@ impl SingleRowListArrayBuilder {
     }
 }
 
-/// Wrap an array into a single element `ListArray`.
-/// For example `[1, 2, 3]` would be converted into `[[1, 2, 3]]`
-/// The field in the list array is nullable.
-#[deprecated(
-    since = "44.0.0",
-    note = "please use `SingleRowListArrayBuilder` instead"
-)]
-pub fn array_into_list_array_nullable(arr: ArrayRef) -> ListArray {
-    SingleRowListArrayBuilder::new(arr)
-        .with_nullable(true)
-        .build_list_array()
-}
-
-/// Wrap an array into a single element `ListArray`.
-/// For example `[1, 2, 3]` would be converted into `[[1, 2, 3]]`
-#[deprecated(
-    since = "44.0.0",
-    note = "please use `SingleRowListArrayBuilder` instead"
-)]
-pub fn array_into_list_array(arr: ArrayRef, nullable: bool) -> ListArray {
-    SingleRowListArrayBuilder::new(arr)
-        .with_nullable(nullable)
-        .build_list_array()
-}
-
-#[deprecated(
-    since = "44.0.0",
-    note = "please use `SingleRowListArrayBuilder` instead"
-)]
-pub fn array_into_list_array_with_field_name(
-    arr: ArrayRef,
-    nullable: bool,
-    field_name: &str,
-) -> ListArray {
-    SingleRowListArrayBuilder::new(arr)
-        .with_nullable(nullable)
-        .with_field_name(Some(field_name.to_string()))
-        .build_list_array()
-}
-
-/// Wrap an array into a single element `LargeListArray`.
-/// For example `[1, 2, 3]` would be converted into `[[1, 2, 3]]`
-#[deprecated(
-    since = "44.0.0",
-    note = "please use `SingleRowListArrayBuilder` instead"
-)]
-pub fn array_into_large_list_array(arr: ArrayRef) -> LargeListArray {
-    SingleRowListArrayBuilder::new(arr).build_large_list_array()
-}
-
-#[deprecated(
-    since = "44.0.0",
-    note = "please use `SingleRowListArrayBuilder` instead"
-)]
-pub fn array_into_large_list_array_with_field_name(
-    arr: ArrayRef,
-    field_name: &str,
-) -> LargeListArray {
-    SingleRowListArrayBuilder::new(arr)
-        .with_field_name(Some(field_name.to_string()))
-        .build_large_list_array()
-}
-
-#[deprecated(
-    since = "44.0.0",
-    note = "please use `SingleRowListArrayBuilder` instead"
-)]
-pub fn array_into_fixed_size_list_array(
-    arr: ArrayRef,
-    list_size: usize,
-) -> FixedSizeListArray {
-    SingleRowListArrayBuilder::new(arr).build_fixed_size_list_array(list_size)
-}
-
-#[deprecated(
-    since = "44.0.0",
-    note = "please use `SingleRowListArrayBuilder` instead"
-)]
-pub fn array_into_fixed_size_list_array_with_field_name(
-    arr: ArrayRef,
-    list_size: usize,
-    field_name: &str,
-) -> FixedSizeListArray {
-    SingleRowListArrayBuilder::new(arr)
-        .with_field_name(Some(field_name.to_string()))
-        .build_fixed_size_list_array(list_size)
-}
-
 /// Wrap arrays into a single element `ListArray`.
 ///
 /// Example:
@@ -830,21 +742,6 @@ pub fn set_difference<T: Borrow<usize>, S: Borrow<usize>>(
         .map(|e| *e.borrow())
         .filter(|e| !set.contains(e))
         .collect()
-}
-
-/// Checks whether the given index sequence is monotonically non-decreasing.
-#[deprecated(since = "45.0.0", note = "Use std::Iterator::is_sorted instead")]
-pub fn is_sorted<T: Borrow<usize>>(sequence: impl IntoIterator<Item = T>) -> bool {
-    // TODO: Remove this function when `is_sorted` graduates from Rust nightly.
-    let mut previous = 0;
-    for item in sequence.into_iter() {
-        let current = *item.borrow();
-        if current < previous {
-            return false;
-        }
-        previous = current;
-    }
-    true
 }
 
 /// Find indices of each element in `targets` inside `items`. If one of the
@@ -1272,19 +1169,6 @@ mod tests {
         assert_eq!(set_difference([3, 4, 0], [1, 2, 4]), vec![3, 0]);
         assert_eq!(set_difference([0, 3, 4], [4, 1, 2]), vec![0, 3]);
         assert_eq!(set_difference([3, 4, 0], [4, 1, 2]), vec![3, 0]);
-    }
-
-    #[test]
-    #[expect(deprecated)]
-    fn test_is_sorted() {
-        assert!(is_sorted::<usize>([]));
-        assert!(is_sorted([0]));
-        assert!(is_sorted([0, 3, 4]));
-        assert!(is_sorted([0, 1, 2]));
-        assert!(is_sorted([0, 1, 4]));
-        assert!(is_sorted([0usize; 0]));
-        assert!(is_sorted([1, 2]));
-        assert!(!is_sorted([3, 2]));
     }
 
     #[test]

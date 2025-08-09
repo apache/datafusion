@@ -39,8 +39,8 @@ use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::type_coercion::aggregates::{INTEGERS, NUMERICS};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, ColumnarValue, Documentation, Expr, Signature,
-    TypeSignature, Volatility,
+    udf_equals_hash, Accumulator, AggregateUDFImpl, ColumnarValue, Documentation, Expr,
+    Signature, TypeSignature, Volatility,
 };
 use datafusion_functions_aggregate_common::tdigest::{
     TDigest, TryIntoF64, DEFAULT_MAX_SIZE,
@@ -102,6 +102,7 @@ pub fn approx_percentile_cont(
         description = "Number of centroids to use in the t-digest algorithm. _Default is 100_. A higher number results in more accurate approximation but requires more memory."
     )
 )]
+#[derive(PartialEq, Eq, Hash)]
 pub struct ApproxPercentileCont {
     signature: Signature,
 }
@@ -336,6 +337,8 @@ impl AggregateUDFImpl for ApproxPercentileCont {
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }
+
+    udf_equals_hash!(AggregateUDFImpl);
 }
 
 #[derive(Debug)]

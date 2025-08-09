@@ -1,0 +1,143 @@
+{
+    "extensionUris": [
+      {
+        "extensionUriAnchor": 1,
+        "uri": "https://github.com/substrait-io/substrait/blob/main/extensions/functions_comparison.yaml"
+      }
+    ],
+    "extensions": [
+      {
+        "extensionFunction": {
+          "extensionUriReference": 1,
+          "functionAnchor": 1,
+          "name": "between:any_any_any"
+        }
+      }
+    ],
+    "relations": [
+      {
+        "root": {
+          "input": {
+            "project": {
+              "common": {
+                "emit": {
+                  "outputMapping": [
+                    3
+                  ]
+                }
+              },
+              "expressions": [
+                {
+                  "scalarFunction": {
+                    "arguments": [{
+                      "value": {
+                        "selection": {
+                          "directReference": {
+                            "structField": {
+                              "field": 0
+                            }
+                          },
+                          "rootReference": {
+                          }
+                        }
+                      }
+                    }, {
+                      "value": {
+                        "selection": {
+                          "directReference": {
+                            "structField": {
+                              "field": 1
+                            }
+                          },
+                          "rootReference": {
+                          }
+                        }
+                      }
+                    }, {
+                      "value": {
+                        "selection": {
+                          "directReference": {
+                            "structField": {
+                              "field": 2
+                            }
+                          },
+                          "rootReference": {
+                          }
+                        }
+                      }
+                    }],
+                    "functionReference": 1,
+                    "outputType": {
+                      "bool": {
+                        "nullability": "NULLABILITY_REQUIRED"
+                      }
+                    }
+                  }
+                }
+              ],
+              "input": {
+                "read": {
+                  "baseSchema": {
+                    "names": [
+                      "expr", "low", "high"
+                    ],
+                    "struct": {
+                      "types": [
+                        {
+                          "i8": {
+                            "nullability": "NULLABILITY_REQUIRED"
+                          }
+                        },
+                        {
+                          "i8": {
+                            "nullability": "NULLABILITY_REQUIRED"
+                          }
+                        },
+                        {
+                          "i8": {
+                            "nullability": "NULLABILITY_REQUIRED"
+                          }
+                        }
+                      ],
+                      "nullability": "NULLABILITY_REQUIRED"
+                    }
+                  },
+                  "common": {
+                    "direct": {}
+                  },
+                  "virtualTable": {
+                    "values": [{
+                      "fields": [{
+                        "i8": 2,
+                        "nullable": false
+                      }, {
+                        "i8": 1,
+                        "nullable": false
+                      }, {
+                        "i8": 3,
+                        "nullable": false
+                      }]
+                    }, {
+                      "fields": [{
+                        "i8": 4,
+                        "nullable": false
+                      }, {
+                        "i8": 1,
+                        "nullable": false
+                      }, {
+                        "i8": 2,
+                        "nullable": false
+                      }]
+                    }]
+                  }
+                }
+              }
+            }
+          },
+          "names": [
+            "result"
+          ]
+        }
+      }
+    ]
+  }

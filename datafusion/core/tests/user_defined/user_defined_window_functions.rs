@@ -28,8 +28,10 @@ use datafusion::common::test_util::batches_to_string;
 use datafusion::common::{Result, ScalarValue};
 use datafusion::prelude::SessionContext;
 use datafusion_common::exec_datafusion_err;
+use datafusion_expr::ptr_eq::PtrEq;
 use datafusion_expr::{
-    PartitionEvaluator, Signature, TypeSignature, Volatility, WindowUDF, WindowUDFImpl,
+    udf_equals_hash, PartitionEvaluator, Signature, TypeSignature, Volatility, WindowUDF,
+    WindowUDFImpl,
 };
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 use datafusion_functions_window_common::{
@@ -523,10 +525,10 @@ impl OddCounter {
     }
 
     fn register(ctx: &mut SessionContext, test_state: Arc<TestState>) {
-        #[derive(Debug, Clone)]
+        #[derive(Debug, Clone, PartialEq, Eq, Hash)]
         struct SimpleWindowUDF {
             signature: Signature,
-            test_state: Arc<TestState>,
+            test_state: PtrEq<Arc<TestState>>,
             aliases: Vec<String>,
         }
 
@@ -536,7 +538,7 @@ impl OddCounter {
                     Signature::exact(vec![DataType::Float64], Volatility::Immutable);
                 Self {
                     signature,
-                    test_state,
+                    test_state: test_state.into(),
                     aliases: vec!["odd_counter_alias".to_string()],
                 }
             }
@@ -570,32 +572,7 @@ impl OddCounter {
                 Ok(Field::new(field_args.name(), DataType::Int64, true).into())
             }
 
-            fn equals(&self, other: &dyn WindowUDFImpl) -> bool {
-                let Some(other) = other.as_any().downcast_ref::<Self>() else {
-                    return false;
-                };
-                let Self {
-                    signature,
-                    test_state,
-                    aliases,
-                } = self;
-                signature == &other.signature
-                    && Arc::ptr_eq(test_state, &other.test_state)
-                    && aliases == &other.aliases
-            }
-
-            fn hash_value(&self) -> u64 {
-                let Self {
-                    signature,
-                    test_state,
-                    aliases,
-                } = self;
-                let mut hasher = DefaultHasher::new();
-                signature.hash(&mut hasher);
-                Arc::as_ptr(test_state).hash(&mut hasher);
-                aliases.hash(&mut hasher);
-                hasher.finish()
-            }
+            udf_equals_hash!(WindowUDFImpl);
         }
 
         ctx.register_udwf(WindowUDF::from(SimpleWindowUDF::new(test_state)))

@@ -766,10 +766,6 @@ OPTIONS (MAX_ROW_GROUP_SIZE 4096, DATA_PAGE_ROW_COUNT_LIMIT 2048);
 ----
 20000
 
-# Enable the cache
-statement ok
-set datafusion.execution.parquet.cache_metadata = true;
-
 statement ok
 CREATE EXTERNAL TABLE t
 STORED AS PARQUET
@@ -867,5 +863,3 @@ select part, k, v from t order by k
 statement ok
 DROP TABLE t;
 
-statement ok
-set datafusion.execution.parquet.cache_metadata = false;

@@ -17,6 +17,7 @@
 
 pub mod cache_manager;
 pub mod cache_unit;
+pub mod lru_queue;
 
 /// The cache accessor, users usually working on this interface while manipulating caches.
 /// This interface does not get `mut` references and thus has to handle its own

@@ -16,10 +16,19 @@
 // under the License.
 
 use datafusion_expr::ScalarUDF;
+use datafusion_functions::make_udf_function;
 use std::sync::Arc;
 
-pub mod expr_fn {}
+pub mod parse_url;
+
+make_udf_function!(parse_url::ParseUrl, parse_url);
+
+pub mod expr_fn {
+    use datafusion_functions::export_functions;
+
+    export_functions!((parse_url, "Extracts a part from a URL.", args));
+}
 
 pub fn functions() -> Vec<Arc<ScalarUDF>> {
-    vec![]
+    vec![parse_url()]
 }

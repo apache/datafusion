@@ -29,8 +29,10 @@ use std::{
 use arrow::datatypes::{DataType, FieldRef};
 
 use crate::expr::WindowFunction;
+use crate::udf_eq::UdfEq;
 use crate::{
-    function::WindowFunctionSimplification, Expr, PartitionEvaluator, Signature,
+    function::WindowFunctionSimplification, udf_equals_hash, Expr, PartitionEvaluator,
+    Signature,
 };
 use datafusion_common::{not_impl_err, Result};
 use datafusion_doc::Documentation;
@@ -304,9 +306,6 @@ where
 ///     .unwrap();
 /// ```
 pub trait WindowUDFImpl: Debug + Send + Sync {
-    // Note: When adding any methods (with default implementations), remember to add them also
-    // into the AliasedWindowUDFImpl below!
-
     /// Returns this object as an [`Any`] trait object
     fn as_any(&self) -> &dyn Any;
 
@@ -477,9 +476,9 @@ impl PartialOrd for dyn WindowUDFImpl {
 
 /// WindowUDF that adds an alias to the underlying function. It is better to
 /// implement [`WindowUDFImpl`], which supports aliases, directly if possible.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 struct AliasedWindowUDFImpl {
-    inner: Arc<dyn WindowUDFImpl>,
+    inner: UdfEq<Arc<dyn WindowUDFImpl>>,
     aliases: Vec<String>,
 }
 
@@ -491,10 +490,14 @@ impl AliasedWindowUDFImpl {
         let mut aliases = inner.aliases().to_vec();
         aliases.extend(new_aliases.into_iter().map(|s| s.to_string()));
 
-        Self { inner, aliases }
+        Self {
+            inner: inner.into(),
+            aliases,
+        }
     }
 }
 
+#[warn(clippy::missing_trait_methods)] // Delegates, so it should implement every single trait method
 impl WindowUDFImpl for AliasedWindowUDFImpl {
     fn as_any(&self) -> &dyn Any {
         self
@@ -530,20 +533,7 @@ impl WindowUDFImpl for AliasedWindowUDFImpl {
         self.inner.simplify()
     }
 
-    fn equals(&self, other: &dyn WindowUDFImpl) -> bool {
-        if let Some(other) = other.as_any().downcast_ref::<AliasedWindowUDFImpl>() {
-            self.inner.equals(other.inner.as_ref()) && self.aliases == other.aliases
-        } else {
-            false
-        }
-    }
-
-    fn hash_value(&self) -> u64 {
-        let hasher = &mut DefaultHasher::new();
-        self.inner.hash_value().hash(hasher);
-        self.aliases.hash(hasher);
-        hasher.finish()
-    }
+    udf_equals_hash!(WindowUDFImpl);
 
     fn field(&self, field_args: WindowUDFFieldArgs) -> Result<FieldRef> {
         self.inner.field(field_args)
@@ -555,6 +545,10 @@ impl WindowUDFImpl for AliasedWindowUDFImpl {
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         self.inner.coerce_types(arg_types)
+    }
+
+    fn reverse_expr(&self) -> ReversedUDWF {
+        self.inner.reverse_expr()
     }
 
     fn documentation(&self) -> Option<&Documentation> {

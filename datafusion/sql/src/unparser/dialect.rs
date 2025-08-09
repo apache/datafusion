@@ -603,17 +603,6 @@ impl Default for CustomDialect {
     }
 }
 
-impl CustomDialect {
-    // Create a CustomDialect
-    #[deprecated(since = "41.0.0", note = "please use `CustomDialectBuilder` instead")]
-    pub fn new(identifier_quote_style: Option<char>) -> Self {
-        Self {
-            identifier_quote_style,
-            ..Default::default()
-        }
-    }
-}
-
 impl Dialect for CustomDialect {
     fn identifier_quote_style(&self, _: &str) -> Option<char> {
         self.identifier_quote_style

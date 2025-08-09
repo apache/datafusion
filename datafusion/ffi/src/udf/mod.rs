@@ -304,6 +304,7 @@ impl PartialEq for ForeignScalarUDF {
             && signature == &other.signature
     }
 }
+impl Eq for ForeignScalarUDF {}
 
 impl Hash for ForeignScalarUDF {
     fn hash<H: Hasher>(&self, state: &mut H) {

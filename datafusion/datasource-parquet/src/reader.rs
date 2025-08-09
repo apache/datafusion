@@ -288,4 +288,8 @@ impl FileMetadata for CachedParquetMetaData {
     fn as_any(&self) -> &dyn Any {
         self
     }
+
+    fn memory_size(&self) -> usize {
+        self.0.memory_size()
+    }
 }

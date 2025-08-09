@@ -372,7 +372,7 @@ fn assign_work_table(
 }
 
 /// Some plans will change their internal states after execution, making them unable to be executed again.
-/// This function uses `ExecutionPlan::with_new_children` to fork a new plan with initial states.
+/// This function uses [`ExecutionPlan::reset_state`] to reset any internal state within the plan.
 ///
 /// An example is `CrossJoinExec`, which loads the left table into memory and stores it in the plan.
 /// However, if the data of the left table is derived from the work table, it will become outdated
@@ -383,8 +383,7 @@ fn reset_plan_states(plan: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPl
         if plan.as_any().is::<WorkTableExec>() {
             Ok(Transformed::no(plan))
         } else {
-            let new_plan = Arc::clone(&plan)
-                .with_new_children(plan.children().into_iter().cloned().collect())?;
+            let new_plan = Arc::clone(&plan).reset_state()?;
             Ok(Transformed::yes(new_plan))
         }
     })
