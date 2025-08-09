@@ -763,21 +763,21 @@ mod test {
 
     #[tokio::test]
     async fn test_statistic_by_partition_of_repartition() -> Result<()> {
-        let scan = create_scan_exec_with_statistics(None, Some(1)).await;
+        let scan = create_scan_exec_with_statistics(None, Some(2)).await;
 
         let repartition = Arc::new(RepartitionExec::try_new(
             scan.clone(),
-            Partitioning::RoundRobinBatch(2),
+            Partitioning::RoundRobinBatch(3),
         )?);
 
         let statistics = (0..repartition.partitioning().partition_count())
             .map(|idx| repartition.partition_statistics(Some(idx)))
             .collect::<Result<Vec<_>>>()?;
-        assert_eq!(statistics.len(), 2);
+        assert_eq!(statistics.len(), 3);
 
         let expected_stats = Statistics {
-            num_rows: Precision::Inexact(2),
-            total_byte_size: Precision::Inexact(110),
+            num_rows: Precision::Inexact(1),
+            total_byte_size: Precision::Inexact(73),
             column_statistics: vec![
                 ColumnStatistics {
                     null_count: Precision::Absent,
@@ -801,19 +801,24 @@ mod test {
             assert_eq!(stat, &expected_stats);
         }
 
-        // Verify that the result has exactly 2 partitions
+        // Verify that the result has exactly 3 partitions
         let partitions = execute_stream_partitioned(
             repartition.clone(),
             Arc::new(TaskContext::default()),
         )?;
-        assert_eq!(2, partitions.len());
+        assert_eq!(3, partitions.len());
 
-        // Verify each partition has exactly 2 records
+        // Collect row counts from each partition
+        let mut partition_row_counts = Vec::new();
         for partition_stream in partitions.into_iter() {
             let results: Vec<RecordBatch> = partition_stream.try_collect().await?;
             let total_rows: usize = results.iter().map(|batch| batch.num_rows()).sum();
-            assert_eq!(2, total_rows);
+            partition_row_counts.push(total_rows);
         }
+        assert_eq!(partition_row_counts.len(), 3);
+        assert_eq!(partition_row_counts[0], 2);
+        assert_eq!(partition_row_counts[1], 2);
+        assert_eq!(partition_row_counts[2], 0);
 
         Ok(())
     }
