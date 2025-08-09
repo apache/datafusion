@@ -22,8 +22,9 @@ use datafusion_common::tree_node::Transformed;
 use datafusion_common::DFSchema;
 use datafusion_common::Result;
 use datafusion_expr::utils::split_conjunction_owned;
-use datafusion_expr::utils::{can_hash, find_valid_equijoin_key_pair};
+use datafusion_expr::utils::{can_hash, find_valid_equijoin_key_pair, is_inferred_alias};
 use datafusion_expr::{BinaryExpr, Expr, ExprSchemable, Join, LogicalPlan, Operator};
+use std::collections::HashSet;
 // equijoin predicate
 type EquijoinPredicate = (Expr, Expr);
 
@@ -81,14 +82,17 @@ impl OptimizerRule for ExtractEquijoinPredicate {
                 let right_schema = right.schema();
                 let (equijoin_predicates, non_equijoin_expr) =
                     split_eq_and_noneq_join_predicate(expr, left_schema, right_schema)?;
+                let has_new_keys = !equijoin_predicates.is_empty();
 
-                if !equijoin_predicates.is_empty() {
-                    on.extend(equijoin_predicates);
+                on.extend(equijoin_predicates);
+                let filter = residual_minus_on(non_equijoin_expr, &on);
+
+                if has_new_keys {
                     Ok(Transformed::yes(LogicalPlan::Join(Join {
                         left,
                         right,
                         on,
-                        filter: non_equijoin_expr,
+                        filter,
                         join_type,
                         join_constraint,
                         schema,
@@ -99,7 +103,7 @@ impl OptimizerRule for ExtractEquijoinPredicate {
                         left,
                         right,
                         on,
-                        filter: non_equijoin_expr,
+                        filter,
                         join_type,
                         join_constraint,
                         schema,
@@ -122,6 +126,10 @@ fn split_eq_and_noneq_join_predicate(
     let mut accum_join_keys: Vec<(Expr, Expr)> = vec![];
     let mut accum_filters: Vec<Expr> = vec![];
     for expr in exprs {
+        if is_inferred_alias(&expr) {
+            accum_filters.push(expr);
+            continue;
+        }
         match expr {
             Expr::BinaryExpr(BinaryExpr {
                 ref left,
@@ -152,16 +160,76 @@ fn split_eq_and_noneq_join_predicate(
     Ok((accum_join_keys, result_filter))
 }
 
+fn residual_minus_on(filter: Option<Expr>, on: &[(Expr, Expr)]) -> Option<Expr> {
+    let filter = filter?;
+    let exprs = split_conjunction_owned(filter);
+
+    let mut on_set: HashSet<(String, String)> = HashSet::new();
+    for (l, r) in on {
+        let (a, b) = canonical_pair(l, r);
+        on_set.insert((a.clone(), b.clone()));
+    }
+
+    let remaining: Vec<Expr> = exprs
+        .into_iter()
+        .filter(|e| !is_self_equality(e))
+        .filter(|e| {
+            let inner = match e {
+                Expr::Alias(alias) => alias.expr.as_ref(),
+                _ => e,
+            };
+            if let Expr::BinaryExpr(BinaryExpr { left, op: Operator::Eq, right }) = inner {
+                let (a, b) = canonical_pair(left, right);
+                !on_set.contains(&(a, b))
+            } else {
+                true
+            }
+        })
+        .collect();
+
+    remaining.into_iter().reduce(Expr::and)
+}
+
+fn canonical_pair(left: &Expr, right: &Expr) -> (String, String) {
+    let l = canonical_str(left);
+    let r = canonical_str(right);
+    if l <= r { (l, r) } else { (r, l) }
+}
+
+fn canonical_str(expr: &Expr) -> String {
+    match expr {
+        Expr::Alias(alias) => canonical_str(&alias.expr),
+        _ => format!("{}", expr),
+    }
+}
+
+fn is_self_equality(expr: &Expr) -> bool {
+    let inner = match expr {
+        Expr::Alias(alias) => alias.expr.as_ref(),
+        _ => expr,
+    };
+    match inner {
+        Expr::BinaryExpr(BinaryExpr { left, op: Operator::Eq, right }) => left.as_ref() == right.as_ref(),
+        _ => false,
+    }
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::assert_optimized_plan_eq_display_indent_snapshot;
     use crate::test::*;
+    use crate::{Optimizer, OptimizerContext};
     use arrow::datatypes::DataType;
+    use datafusion_common::NullEquality;
     use datafusion_expr::{
         col, lit, logical_plan::builder::LogicalPlanBuilder, JoinType,
+        logical_plan::JoinConstraint,
     };
     use std::sync::Arc;
+
+    fn observe(_plan: &LogicalPlan, _rule: &dyn OptimizerRule) {}
 
     macro_rules! assert_optimized_plan_equal {
         (
@@ -217,6 +285,31 @@ mod tests {
           TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]
         "
         )
+    }
+
+    #[test]
+    fn residual_minus_on_removes_symmetric_dup() -> Result<()> {
+        let left = test_table_scan_with_name("l")?;
+        let right = test_table_scan_with_name("r")?;
+        let on = vec![(col("l.a"), col("r.a"))];
+        let filter = Some(col("r.a").eq(col("l.a")).and(col("l.a").eq(col("l.a"))));
+        let join = Join::try_new(
+            Arc::new(left),
+            Arc::new(right),
+            on,
+            filter,
+            JoinType::Inner,
+            JoinConstraint::On,
+            NullEquality::NullEqualsNull,
+        )?;
+        let optimizer = Optimizer::with_rules(vec![Arc::new(ExtractEquijoinPredicate::new())]);
+        let optimized = optimizer.optimize(LogicalPlan::Join(join), &OptimizerContext::new(), observe)?;
+        if let LogicalPlan::Join(j) = optimized {
+            assert!(j.filter.is_none());
+        } else {
+            panic!("expected join");
+        }
+        Ok(())
     }
 
     #[test]
