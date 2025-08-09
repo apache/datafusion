@@ -1,0 +1,24 @@
+---
+source: datafusion-cli/tests/cli_integration.rs
+info:
+  program: datafusion-cli
+  args:
+    - "-q"
+  stdin: "\\memory_profiling enable\nselect 1;\n\\memory_profiling show\n"
+---
+success: true
+exit_code: 0
+----- stdout -----
+Memory profiling enabled
++----------+
+| Int64(1) |
++----------+
+| 1        |
++----------+
+Peak memory usage: 8.0 B
+Cumulative allocations: 8.0 B
+Memory usage by operator:
+Other: 8.0 B
+\q
+
+----- stderr -----
