@@ -133,9 +133,12 @@ Available commands inside DataFusion CLI are:
 ```
 
 ```text
-ProjectionExec: 1024
-FilterExec: 2048
-HashJoinExec: 5120
+Peak memory usage: 10.0 MB
+Cumulative allocations: 101.6 MB
+Memory usage by operator:
+Aggregation: 762.2 KB
+Other: 887.1 KB
+Sorting: 100.0 MB
 ```
 
 ```bash
