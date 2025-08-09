@@ -41,7 +41,7 @@ use datafusion_common::{DataFusionError, Statistics};
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_physical_expr::conjunction;
-use datafusion_physical_expr::schema_rewriter::DefaultPhysicalExprAdapterFactory;
+use datafusion_physical_expr_adapter::DefaultPhysicalExprAdapterFactory;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_plan::filter_pushdown::PushedDown;

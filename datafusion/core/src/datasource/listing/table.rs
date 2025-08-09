@@ -48,7 +48,7 @@ use datafusion_execution::{
 use datafusion_expr::{
     dml::InsertOp, Expr, SortExpr, TableProviderFilterPushDown, TableType,
 };
-use datafusion_physical_expr::schema_rewriter::PhysicalExprAdapterFactory;
+use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::{empty::EmptyExec, ExecutionPlan, Statistics};
 use futures::{future, stream, Stream, StreamExt, TryStreamExt};

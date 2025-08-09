@@ -38,7 +38,6 @@ mod partitioning;
 mod physical_expr;
 pub mod planner;
 mod scalar_function;
-pub mod schema_rewriter;
 pub mod simplifier;
 pub mod statistics;
 pub mod utils;
@@ -70,7 +69,7 @@ pub use datafusion_physical_expr_common::sort_expr::{
 
 pub use planner::{create_physical_expr, create_physical_exprs};
 pub use scalar_function::ScalarFunctionExpr;
-pub use schema_rewriter::DefaultPhysicalExprAdapter;
+pub use simplifier::PhysicalExprSimplifier;
 pub use utils::{conjunction, conjunction_opt, split_conjunction};
 
 // For backwards compatibility
