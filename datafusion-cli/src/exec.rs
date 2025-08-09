@@ -26,8 +26,6 @@ use crate::{
     object_storage::get_object_store,
     print_options::{MaxRows, PrintOptions},
 };
-use datafusion_execution::memory_tracker::{set_global_memory_tracker, MemoryTracker};
-use std::sync::Arc;
 use datafusion::common::instant::Instant;
 use datafusion::common::{plan_datafusion_err, plan_err};
 use datafusion::config::ConfigFileType;
@@ -41,6 +39,9 @@ use datafusion::physical_plan::{execute_stream, ExecutionPlanProperties};
 use datafusion::sql::parser::{DFParser, Statement};
 use datafusion::sql::sqlparser;
 use datafusion::sql::sqlparser::dialect::dialect_from_str;
+use datafusion_execution::memory_pool::{
+    FairSpillPool, GreedyMemoryPool, TrackConsumersPool,
+};
 use futures::StreamExt;
 use log::warn;
 use object_store::Error::Generic;
@@ -229,21 +230,46 @@ pub(super) async fn exec_and_print(
 
     let statements = DFParser::parse_sql_with_dialect(&sql, dialect.as_ref())?;
     for statement in statements {
-        let tracker = if print_options.memory_profiling {
-            let tracker = Arc::new(MemoryTracker::new());
-            tracker.enable();
-            set_global_memory_tracker(Some(Arc::clone(&tracker)));
-            Some(tracker)
+        let pool_any = if print_options.memory_profiling {
+            print_options.tracked_memory_pool.clone()
         } else {
             None
         };
+        if let Some(pool_any) = &pool_any {
+            if let Ok(pool) = pool_any
+                .clone()
+                .downcast::<TrackConsumersPool<FairSpillPool>>()
+            {
+                pool.enable_tracking();
+            } else if let Ok(pool) = pool_any
+                .clone()
+                .downcast::<TrackConsumersPool<GreedyMemoryPool>>()
+            {
+                pool.enable_tracking();
+            }
+        }
         StatementExecutor::new(statement)
             .execute(ctx, print_options)
             .await?;
-        if let Some(tracker) = tracker {
-            print_options.last_memory_metrics = Some(tracker.metrics());
-            set_global_memory_tracker(None);
-            tracker.disable();
+        if let Some(pool_any) = pool_any {
+            let metrics = if let Ok(pool) = pool_any
+                .clone()
+                .downcast::<TrackConsumersPool<FairSpillPool>>()
+            {
+                let m = pool.consumer_metrics();
+                pool.disable_tracking();
+                m
+            } else if let Ok(pool) = pool_any
+                .clone()
+                .downcast::<TrackConsumersPool<GreedyMemoryPool>>()
+            {
+                let m = pool.consumer_metrics();
+                pool.disable_tracking();
+                m
+            } else {
+                Vec::new()
+            };
+            print_options.last_memory_metrics = Some(metrics);
             print_options.memory_profiling = false;
         }
     }

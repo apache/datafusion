@@ -91,6 +91,7 @@ pub async fn main() {
         color: true,
         memory_profiling: false,
         last_memory_metrics: None,
+        tracked_memory_pool: None,
     };
 
     exec_from_repl(&my_ctx, &mut print_options).await.unwrap();

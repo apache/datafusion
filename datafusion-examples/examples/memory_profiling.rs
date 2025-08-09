@@ -17,20 +17,26 @@
 //!
 //! Run with `cargo run --example memory_profiling`.
 
-use std::sync::Arc;
+use std::{num::NonZeroUsize, sync::Arc};
 
-use datafusion::execution::memory_tracker::{set_global_memory_tracker, MemoryTracker};
+use datafusion::execution::memory_pool::{
+    print_metrics, GreedyMemoryPool, TrackConsumersPool,
+};
+use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::prelude::*;
 
 #[tokio::main]
 async fn main() -> datafusion::error::Result<()> {
-    // Create normal session context
-    let ctx = SessionContext::new();
-
-    // Install a tracker as global so all operators report their allocations
-    let tracker = Arc::new(MemoryTracker::new());
-    tracker.enable();
-    set_global_memory_tracker(Some(tracker.clone()));
+    // Create a session context with a tracked memory pool
+    let pool = Arc::new(TrackConsumersPool::new(
+        GreedyMemoryPool::new(usize::MAX),
+        NonZeroUsize::new(5).unwrap(),
+    ));
+    pool.enable_tracking();
+    let runtime = RuntimeEnvBuilder::new()
+        .with_memory_pool(pool.clone() as Arc<_>)
+        .build_arc()?;
+    let ctx = SessionContext::new_with_config_rt(SessionConfig::new(), runtime);
 
     let sql = "SELECT v % 100 AS group_key, COUNT(*) AS cnt, SUM(v) AS sum_v \
                FROM generate_series(1,100000) AS t(v) \
@@ -42,16 +48,11 @@ async fn main() -> datafusion::error::Result<()> {
     df.collect().await?;
 
     // Gather metrics and disable tracking
-    let mut metrics: Vec<_> = tracker.metrics().into_iter().collect();
-    set_global_memory_tracker(None);
-    tracker.disable();
+    let metrics = pool.consumer_metrics();
+    pool.disable_tracking();
 
-    // Print memory usage per operator
-    metrics.sort_by(|a, b| a.0.cmp(&b.0));
-    println!("Memory usage by operator (bytes):");
-    for (op, bytes) in metrics {
-        println!("{op}: {bytes}");
-    }
+    // Print memory usage summary
+    print_metrics(&metrics);
 
     Ok(())
 }

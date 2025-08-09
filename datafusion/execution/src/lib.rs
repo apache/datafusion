@@ -30,7 +30,6 @@ pub mod cache;
 pub mod config;
 pub mod disk_manager;
 pub mod memory_pool;
-pub mod memory_tracker;
 pub mod object_store;
 #[cfg(feature = "parquet_encryption")]
 pub mod parquet_encryption;
@@ -45,7 +44,6 @@ pub mod registry {
 }
 
 pub use disk_manager::DiskManager;
-pub use memory_tracker::{MemoryMetrics, MemoryTracker};
 pub use registry::FunctionRegistry;
 pub use stream::{RecordBatchStream, SendableRecordBatchStream};
 pub use task::TaskContext;

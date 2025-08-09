@@ -18,7 +18,6 @@
 //! [`MemoryPool`] for memory management during query execution, [`proxy`] for
 //! help with allocation accounting.
 
-use crate::memory_tracker::{global_memory_tracker, MemoryTracker};
 use datafusion_common::{internal_err, Result};
 use std::{
     cmp::Ordering,
@@ -26,6 +25,7 @@ use std::{
     hash::{Hash, Hasher},
     sync::{atomic, Arc},
 };
+mod metrics;
 mod pool;
 pub mod proxy {
     pub use datafusion_common::utils::proxy::{
@@ -33,6 +33,7 @@ pub mod proxy {
     };
 }
 
+pub use metrics::{operator_category, print_metrics};
 pub use pool::*;
 
 /// Tracks and potentially limits memory use across operators during execution.
@@ -320,7 +321,6 @@ impl MemoryConsumer {
     /// a [`MemoryReservation`] that can be used to grow or shrink the memory reservation
     pub fn register(self, pool: &Arc<dyn MemoryPool>) -> MemoryReservation {
         pool.register(&self);
-        let tracker = global_memory_tracker();
         MemoryReservation {
             registration: Arc::new(SharedRegistration {
                 pool: Arc::clone(pool),
@@ -328,7 +328,6 @@ impl MemoryConsumer {
             }),
             size: 0,
             peak: 0,
-            tracker,
         }
     }
 }
@@ -359,7 +358,6 @@ pub struct MemoryReservation {
     registration: Arc<SharedRegistration>,
     size: usize,
     peak: usize,
-    tracker: Option<Arc<MemoryTracker>>,
 }
 
 impl MemoryReservation {
@@ -443,10 +441,6 @@ impl MemoryReservation {
         if self.size > self.peak {
             self.peak = self.size;
         }
-        // record incremental allocation if profiling enabled
-        if let Some(tracker) = &self.tracker {
-            tracker.record_memory(self.consumer().name(), capacity);
-        }
     }
 
     /// Try to increase the size of this reservation by `capacity`
@@ -457,10 +451,6 @@ impl MemoryReservation {
         self.size += capacity;
         if self.size > self.peak {
             self.peak = self.size;
-        }
-        // record incremental allocation if profiling enabled
-        if let Some(tracker) = &self.tracker {
-            tracker.record_memory(self.consumer().name(), capacity);
         }
         Ok(())
     }
@@ -481,7 +471,6 @@ impl MemoryReservation {
             size: capacity,
             registration: Arc::clone(&self.registration),
             peak: capacity,
-            tracker: self.tracker.clone(),
         }
     }
 
@@ -491,7 +480,6 @@ impl MemoryReservation {
             size: 0,
             registration: Arc::clone(&self.registration),
             peak: 0,
-            tracker: self.tracker.clone(),
         }
     }
 
@@ -504,9 +492,6 @@ impl MemoryReservation {
 
 impl Drop for MemoryReservation {
     fn drop(&mut self) {
-        if let Some(tracker) = &self.tracker {
-            tracker.record_memory(self.consumer().name(), self.peak);
-        }
         self.free();
     }
 }

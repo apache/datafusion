@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::any::Any;
 use std::collections::HashMap;
 use std::env;
 use std::num::NonZeroUsize;
@@ -174,28 +175,36 @@ async fn main_inner() -> Result<()> {
     let session_config = get_session_config(&args)?;
 
     let mut rt_builder = RuntimeEnvBuilder::new();
+    let mut tracked_pool: Option<Arc<dyn Any + Send + Sync>> = None;
     // set memory pool size
-    if let Some(memory_limit) = args.memory_limit {
-        // set memory pool type
-        let pool: Arc<dyn MemoryPool> = match args.mem_pool_type {
-            PoolType::Fair if args.top_memory_consumers == 0 => {
-                Arc::new(FairSpillPool::new(memory_limit))
-            }
-            PoolType::Fair => Arc::new(TrackConsumersPool::new(
+    let memory_limit = args.memory_limit.unwrap_or(usize::MAX);
+    // set memory pool type
+    let pool: Arc<dyn MemoryPool> = match args.mem_pool_type {
+        PoolType::Fair if args.top_memory_consumers == 0 => {
+            Arc::new(FairSpillPool::new(memory_limit))
+        }
+        PoolType::Fair => {
+            let p = Arc::new(TrackConsumersPool::new(
                 FairSpillPool::new(memory_limit),
                 NonZeroUsize::new(args.top_memory_consumers).unwrap(),
-            )),
-            PoolType::Greedy if args.top_memory_consumers == 0 => {
-                Arc::new(GreedyMemoryPool::new(memory_limit))
-            }
-            PoolType::Greedy => Arc::new(TrackConsumersPool::new(
+            ));
+            tracked_pool = Some(p.clone() as Arc<dyn Any + Send + Sync>);
+            p
+        }
+        PoolType::Greedy if args.top_memory_consumers == 0 => {
+            Arc::new(GreedyMemoryPool::new(memory_limit))
+        }
+        PoolType::Greedy => {
+            let p = Arc::new(TrackConsumersPool::new(
                 GreedyMemoryPool::new(memory_limit),
                 NonZeroUsize::new(args.top_memory_consumers).unwrap(),
-            )),
-        };
+            ));
+            tracked_pool = Some(p.clone() as Arc<dyn Any + Send + Sync>);
+            p
+        }
+    };
 
-        rt_builder = rt_builder.with_memory_pool(pool)
-    }
+    rt_builder = rt_builder.with_memory_pool(pool);
 
     // set disk limit
     if let Some(disk_limit) = args.disk_limit {
@@ -226,6 +235,7 @@ async fn main_inner() -> Result<()> {
         color: args.color,
         memory_profiling: false,
         last_memory_metrics: None,
+        tracked_memory_pool: tracked_pool.clone(),
     };
 
     let commands = args.command;

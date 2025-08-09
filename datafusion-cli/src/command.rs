@@ -29,6 +29,7 @@ use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::common::exec_err;
 use datafusion::common::instant::Instant;
 use datafusion::error::{DataFusionError, Result};
+use datafusion::execution::memory_pool::print_metrics;
 use std::fs::File;
 use std::io::BufReader;
 use std::str::FromStr;
@@ -133,11 +134,7 @@ impl Command {
                             if metrics.is_empty() {
                                 println!("no memory metrics recorded");
                             } else {
-                                let mut items: Vec<_> = metrics.iter().collect();
-                                items.sort_by(|a, b| b.1.cmp(a.1));
-                                for (op, bytes) in items {
-                                    println!("{op}: {bytes}");
-                                }
+                                print_metrics(metrics);
                             }
                         } else {
                             println!("no memory metrics recorded");
