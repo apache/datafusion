@@ -2868,7 +2868,6 @@ mod tests {
     #[test]
     fn parquet_table_parquet_options_config_entry() {
         let mut table_parquet_options = TableParquetOptions::new();
-        // 'format.crypto.file_encryption.column_key_as_hex::double_field' '31323334353637383930313233343530'
         table_parquet_options
             .set(
                 "crypto.file_encryption.column_key_as_hex::double_field",
