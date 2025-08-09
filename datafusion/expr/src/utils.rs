@@ -28,6 +28,15 @@ use crate::{
 };
 use datafusion_expr_common::signature::{Signature, TypeSignature};
 
+/// Alias used to mark inferred join predicates that should remain join filters
+/// and not be converted into additional equijoin keys during optimization.
+pub const INFERRED_PREDICATE_ALIAS: &str = "__datafusion_inferred_join_predicate";
+
+/// Returns true if expr is an alias used to mark inferred join predicates.
+pub fn is_inferred_alias(expr: &Expr) -> bool {
+    matches!(expr, Expr::Alias(Alias { name, .. }) if name == INFERRED_PREDICATE_ALIAS)
+}
+
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
@@ -946,7 +955,9 @@ fn split_conjunction_impl<'a>(expr: &'a Expr, mut exprs: Vec<&'a Expr>) -> Vec<&
             let exprs = split_conjunction_impl(left, exprs);
             split_conjunction_impl(right, exprs)
         }
-        Expr::Alias(Alias { expr, .. }) => split_conjunction_impl(expr, exprs),
+        Expr::Alias(alias) if !is_inferred_alias(expr) => {
+            split_conjunction_impl(&alias.expr, exprs)
+        }
         other => {
             exprs.push(other);
             exprs
@@ -970,7 +981,11 @@ pub fn iter_conjunction(expr: &Expr) -> impl Iterator<Item = &Expr> {
                     stack.push(right);
                     stack.push(left);
                 }
-                Expr::Alias(Alias { expr, .. }) => stack.push(expr),
+                Expr::Alias(Alias { expr, name, .. })
+                    if name != INFERRED_PREDICATE_ALIAS =>
+                {
+                    stack.push(expr);
+                }
                 other => return Some(other),
             }
         }
@@ -994,7 +1009,11 @@ pub fn iter_conjunction_owned(expr: Expr) -> impl Iterator<Item = Expr> {
                     stack.push(*right);
                     stack.push(*left);
                 }
-                Expr::Alias(Alias { expr, .. }) => stack.push(*expr),
+                Expr::Alias(Alias { expr, name, .. })
+                    if name != INFERRED_PREDICATE_ALIAS =>
+                {
+                    stack.push(*expr);
+                }
                 other => return Some(other),
             }
         }
@@ -1063,8 +1082,13 @@ fn split_binary_owned_impl(
             let exprs = split_binary_owned_impl(*left, operator, exprs);
             split_binary_owned_impl(*right, operator, exprs)
         }
-        Expr::Alias(Alias { expr, .. }) => {
-            split_binary_owned_impl(*expr, operator, exprs)
+        Expr::Alias(alias) => {
+            if is_inferred_alias(&Expr::Alias(alias.clone())) {
+                exprs.push(Expr::Alias(alias));
+                exprs
+            } else {
+                split_binary_owned_impl(*alias.expr, operator, exprs)
+            }
         }
         other => {
             exprs.push(other);
@@ -1090,7 +1114,9 @@ fn split_binary_impl<'a>(
             let exprs = split_binary_impl(left, operator, exprs);
             split_binary_impl(right, operator, exprs)
         }
-        Expr::Alias(Alias { expr, .. }) => split_binary_impl(expr, operator, exprs),
+        Expr::Alias(alias) if !is_inferred_alias(expr) => {
+            split_binary_impl(&alias.expr, operator, exprs)
+        }
         other => {
             exprs.push(other);
             exprs
@@ -1649,6 +1675,17 @@ mod tests {
     }
 
     #[test]
+    fn test_split_conjunction_inferred_alias() {
+        let expr = col("a").eq(col("b")).alias(INFERRED_PREDICATE_ALIAS);
+        let result = split_conjunction(&expr);
+        assert_eq!(result.len(), 1);
+        match result[0] {
+            Expr::Alias(alias) => assert_eq!(alias.name, INFERRED_PREDICATE_ALIAS),
+            _ => panic!("expected alias"),
+        }
+    }
+
+    #[test]
     fn test_split_conjunction_or() {
         let expr = col("a").eq(lit(5)).or(col("b"));
         let result = split_conjunction(&expr);
@@ -1703,6 +1740,17 @@ mod tests {
                 col("b"),
             ]
         );
+    }
+
+    #[test]
+    fn test_split_conjunction_owned_inferred_alias() {
+        let expr = col("a").eq(col("b")).alias(INFERRED_PREDICATE_ALIAS);
+        let result = split_conjunction_owned(expr);
+        assert_eq!(result.len(), 1);
+        match &result[0] {
+            Expr::Alias(alias) => assert_eq!(alias.name, INFERRED_PREDICATE_ALIAS),
+            _ => panic!("expected alias"),
+        }
     }
 
     #[test]
