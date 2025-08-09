@@ -315,10 +315,13 @@ pub mod test {
         for (value, scale, expected) in cases {
             match decimal128_to_i128(value, scale) {
                 Ok(actual) => {
-                    assert_eq!(actual, expected.expect("Expecting i128"),
-                               "{value} and {scale} vs {expected:?}");
+                    assert_eq!(
+                        actual,
+                        expected.expect("Expecting i128"),
+                        "{value} and {scale} vs {expected:?}"
+                    );
                 }
-                Err(_) => assert!(expected.is_none())
+                Err(_) => assert!(expected.is_none()),
             }
         }
     }
