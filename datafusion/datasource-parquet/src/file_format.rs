@@ -80,7 +80,7 @@ use parquet::arrow::arrow_writer::{
     compute_leaves, get_column_writers, ArrowColumnChunk, ArrowColumnWriter,
     ArrowLeafColumn, ArrowWriterOptions,
 };
-use parquet::arrow::async_reader::{MetadataFetch, ParquetObjectReader};
+use parquet::arrow::async_reader::MetadataFetch;
 use parquet::arrow::{parquet_to_arrow_schema, ArrowSchemaConverter, AsyncArrowWriter};
 use parquet::basic::Type;
 
@@ -1062,18 +1062,11 @@ pub async fn fetch_parquet_metadata<F: MetadataFetch>(
     #[cfg(feature = "parquet_encryption")]
     {
         reader = reader.with_decryption_properties(decryption_properties);
-        if file_metadata_cache.is_some() {
-            // Need to retrieve the entire metadata for the caching to be effective.
-            reader = reader.with_page_indexes(true);
-        }
     }
 
-    #[cfg(not(feature = "parquet_encryption"))]
-    {
-        if file_metadata_cache.is_some() {
-            // Need to retrieve the entire metadata for the caching to be effective.
-            reader = reader.with_page_indexes(true);
-        }
+    if file_metadata_cache.is_some() {
+        // Need to retrieve the entire metadata for the caching to be effective.
+        reader = reader.with_page_indexes(true);
     }
 
     let metadata = Arc::new(
