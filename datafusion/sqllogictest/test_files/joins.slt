@@ -2109,9 +2109,9 @@ RIGHT JOIN (select t2_id from join_t2 where join_t2.t2_id > 11) as join_t2
 ORDER BY 1, 2        
 ----
 33 44
-NULL 22
 33 55
 44 55
+NULL 22
 
 #####
 # Configuration teardown
