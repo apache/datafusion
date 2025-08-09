@@ -403,7 +403,7 @@ mod tests {
         .expect("error reading metadata with hint");
         assert_eq!(store.request_count(), 2);
 
-        // Increases by 2 because cache has no entries yet
+        // Increases by 3 because cache has no entries yet
         fetch_parquet_metadata(
             ObjectStoreFetch::new(store.as_ref() as &dyn ObjectStore, &meta[0]),
             &meta[0],
@@ -413,7 +413,7 @@ mod tests {
         )
         .await
         .expect("error reading metadata with hint");
-        assert_eq!(store.request_count(), 4);
+        assert_eq!(store.request_count(), 5);
 
         // No increase because cache has an entry
         fetch_parquet_metadata(
@@ -425,7 +425,7 @@ mod tests {
         )
         .await
         .expect("error reading metadata with hint");
-        assert_eq!(store.request_count(), 4);
+        assert_eq!(store.request_count(), 5);
 
         // Increase by 2  because `get_file_metadata_cache()` is None
         fetch_parquet_metadata(
@@ -437,7 +437,7 @@ mod tests {
         )
         .await
         .expect("error reading metadata with hint");
-        assert_eq!(store.request_count(), 6);
+        assert_eq!(store.request_count(), 7);
 
         let force_views = match force_views {
             ForceViews::Yes => true,
@@ -446,12 +446,12 @@ mod tests {
         let format = ParquetFormat::default()
             .with_metadata_size_hint(Some(9))
             .with_force_view_types(force_views);
-        // increase by 2, partial cache being used.
+        // Increase by 3, partial cache being used.
         let _schema = format.infer_schema(&ctx, &store.upcast(), &meta).await?;
-        assert_eq!(store.request_count(), 8);
-        // no increase, full cache being used.
+        assert_eq!(store.request_count(), 10);
+        // No increase, full cache being used.
         let schema = format.infer_schema(&ctx, &store.upcast(), &meta).await?;
-        assert_eq!(store.request_count(), 8);
+        assert_eq!(store.request_count(), 10);
 
         // No increase, cache being used
         let stats = fetch_statistics(
@@ -463,7 +463,7 @@ mod tests {
             Some(ctx.runtime_env().cache_manager.get_file_metadata_cache()),
         )
         .await?;
-        assert_eq!(store.request_count(), 8);
+        assert_eq!(store.request_count(), 10);
 
         assert_eq!(stats.num_rows, Precision::Exact(3));
         let c1_stats = &stats.column_statistics[0];
@@ -531,10 +531,10 @@ mod tests {
         let format = ParquetFormat::default()
             .with_metadata_size_hint(Some(size_hint))
             .with_force_view_types(force_views);
-        // increase by 1, partial cache being used.
+        // Increase by 1, partial cache being used.
         let _schema = format.infer_schema(&ctx, &store.upcast(), &meta).await?;
         assert_eq!(store.request_count(), 4);
-        // no increase, full cache being used.
+        // No increase, full cache being used.
         let schema = format.infer_schema(&ctx, &store.upcast(), &meta).await?;
         assert_eq!(store.request_count(), 4);
         // No increase, cache being used
@@ -616,10 +616,10 @@ mod tests {
         let state = SessionContext::new().state();
         let format = ParquetFormat::default();
         let _schema = format.infer_schema(&state, &store.upcast(), &files).await?;
-        assert_eq!(store.request_count(), 2);
+        assert_eq!(store.request_count(), 3);
         // No increase, cache being used.
         let schema = format.infer_schema(&state, &store.upcast(), &files).await?;
-        assert_eq!(store.request_count(), 2);
+        assert_eq!(store.request_count(), 3);
 
         // No increase in request count because cache is not empty
         let pq_meta = fetch_parquet_metadata(
@@ -630,7 +630,7 @@ mod tests {
             Some(state.runtime_env().cache_manager.get_file_metadata_cache()),
         )
         .await?;
-        assert_eq!(store.request_count(), 2);
+        assert_eq!(store.request_count(), 3);
         let stats = statistics_from_parquet_meta_calc(&pq_meta, schema.clone())?;
         assert_eq!(stats.num_rows, Precision::Exact(4));
 
@@ -681,7 +681,7 @@ mod tests {
         state = set_view_state(state, force_views);
         let format = ParquetFormat::default().with_force_view_types(force_views);
         let schema = format.infer_schema(&state, &store.upcast(), &files).await?;
-        assert_eq!(store.request_count(), 4);
+        assert_eq!(store.request_count(), 6);
 
         let null_i64 = ScalarValue::Int64(None);
         let null_utf8 = if force_views {
@@ -699,7 +699,7 @@ mod tests {
             Some(state.runtime_env().cache_manager.get_file_metadata_cache()),
         )
         .await?;
-        assert_eq!(store.request_count(), 4);
+        assert_eq!(store.request_count(), 6);
         let stats = statistics_from_parquet_meta_calc(&pq_meta, schema.clone())?;
         assert_eq!(stats.num_rows, Precision::Exact(3));
         // column c1
@@ -733,7 +733,7 @@ mod tests {
             Some(state.runtime_env().cache_manager.get_file_metadata_cache()),
         )
         .await?;
-        assert_eq!(store.request_count(), 4);
+        assert_eq!(store.request_count(), 6);
         let stats = statistics_from_parquet_meta_calc(&pq_meta, schema.clone())?;
         assert_eq!(stats.num_rows, Precision::Exact(3));
         // column c1: missing from the file so the table treats all 3 rows as null

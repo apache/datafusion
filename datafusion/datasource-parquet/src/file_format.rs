@@ -1045,42 +1045,52 @@ pub async fn fetch_parquet_metadata<F: MetadataFetch>(
     #[allow(unused)] decryption_properties: Option<&FileDecryptionProperties>,
     file_metadata_cache: Option<Arc<dyn FileMetadataCache>>,
 ) -> Result<Arc<ParquetMetaData>> {
-    if let Some(file_metadata_cache) = &file_metadata_cache {
-        if let Some(file_metadata) = file_metadata_cache.get(object_meta) {
-            if let Some(cached_parquet_metadata) = file_metadata
-                .as_any()
-                .downcast_ref::<CachedParquetMetaData>(
-            ) {
-                return Ok(Arc::clone(cached_parquet_metadata.parquet_metadata()));
-            }
+    let cache_metadata =
+        !cfg!(feature = "parquet_encryption") || decryption_properties.is_none();
+
+    if cache_metadata {
+        if let Some(parquet_metadata) = file_metadata_cache
+            .as_ref()
+            .and_then(|file_metadata_cache| file_metadata_cache.get(object_meta))
+            .and_then(|file_metadata| {
+                file_metadata
+                    .as_any()
+                    .downcast_ref::<CachedParquetMetaData>()
+                    .map(|cached_parquet_metadata| {
+                        Arc::clone(cached_parquet_metadata.parquet_metadata())
+                    })
+            })
+        {
+            return Ok(parquet_metadata);
         }
     }
 
-    let file_size = object_meta.size;
     let mut reader = ParquetMetaDataReader::new().with_prefetch_hint(size_hint);
 
     #[cfg(feature = "parquet_encryption")]
-    {
-        reader = reader.with_decryption_properties(decryption_properties);
+    if let Some(decryption_properties) = decryption_properties {
+        reader = reader.with_decryption_properties(Some(decryption_properties));
     }
 
-    if file_metadata_cache.is_some() {
+    if cache_metadata && file_metadata_cache.is_some() {
         // Need to retrieve the entire metadata for the caching to be effective.
         reader = reader.with_page_indexes(true);
     }
 
     let metadata = Arc::new(
         reader
-            .load_and_finish(fetch, file_size)
+            .load_and_finish(fetch, object_meta.size)
             .await
             .map_err(DataFusionError::from)?,
     );
 
-    if let Some(file_metadata_cache) = file_metadata_cache {
-        file_metadata_cache.put(
-            object_meta,
-            Arc::new(CachedParquetMetaData::new(Arc::clone(&metadata))),
-        );
+    if cache_metadata {
+        if let Some(file_metadata_cache) = file_metadata_cache {
+            file_metadata_cache.put(
+                object_meta,
+                Arc::new(CachedParquetMetaData::new(Arc::clone(&metadata))),
+            );
+        }
     }
 
     Ok(metadata)
