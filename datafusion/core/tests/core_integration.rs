@@ -33,8 +33,6 @@ mod expr_api;
 /// Run all tests that are found in the `fifo` directory
 mod fifo;
 
-/// Run memory profiling integration tests
-
 /// Run all tests that are found in the `custom_sources_cases` directory
 mod custom_sources_cases;
 /// Run all tests that are found in the `memory_limit` directory
