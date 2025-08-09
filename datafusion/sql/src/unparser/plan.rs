@@ -45,7 +45,7 @@ use datafusion_common::{
 };
 use datafusion_expr::expr::OUTER_REFERENCE_COLUMN_PREFIX;
 use datafusion_expr::{
-    expr::Alias, BinaryExpr, Distinct, Expr, JoinConstraint, JoinType, LogicalPlan,
+    BinaryExpr, Distinct, Expr, JoinConstraint, JoinType, LogicalPlan,
     LogicalPlanBuilder, Operator, Projection, SortExpr, TableScan, Unnest,
     UserDefinedLogicalNode,
 };
@@ -1002,8 +1002,8 @@ impl Unparser<'_> {
     ///
     /// `outer_ref` is the display result of [Expr::OuterReferenceColumn]
     fn check_unnest_placeholder_with_outer_ref(expr: &Expr) -> Option<UnnestInputType> {
-        if let Expr::Alias(Alias { expr, .. }) = expr {
-            if let Expr::Column(Column { name, .. }) = expr.as_ref() {
+        if let Expr::Alias(boxed_alias) = expr {
+            if let Expr::Column(Column { name, .. }) = boxed_alias.expr.as_ref() {
                 if let Some(prefix) = name.strip_prefix(UNNEST_PLACEHOLDER) {
                     if prefix.starts_with(&format!("({OUTER_REFERENCE_COLUMN_PREFIX}(")) {
                         return Some(UnnestInputType::OuterReference);
@@ -1210,16 +1210,16 @@ impl Unparser<'_> {
 
     fn select_item_to_sql(&self, expr: &Expr) -> Result<ast::SelectItem> {
         match expr {
-            Expr::Alias(Alias { expr, name, .. }) => {
+            Expr::Alias(boxed_alias) => {
                 let inner = self.expr_to_sql(expr)?;
 
                 // Determine the alias name to use
                 let col_name = if let Some(rewritten_name) =
-                    self.dialect.col_alias_overrides(name)?
+                    self.dialect.col_alias_overrides(&boxed_alias.name)?
                 {
                     rewritten_name.to_string()
                 } else {
-                    name.to_string()
+                    boxed_alias.name.to_string()
                 };
 
                 Ok(ast::SelectItem::ExprWithAlias {

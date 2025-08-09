@@ -19,7 +19,6 @@ use crate::logical_plan::producer::{
     from_aggregate_function, substrait_field_ref, SubstraitProducer,
 };
 use datafusion::common::{internal_err, not_impl_err, DFSchemaRef, DataFusionError};
-use datafusion::logical_expr::expr::Alias;
 use datafusion::logical_expr::{Aggregate, Distinct, Expr, GroupingSet};
 use substrait::proto::aggregate_rel::{Grouping, Measure};
 use substrait::proto::rel::RelType;
@@ -170,8 +169,8 @@ pub fn to_substrait_agg_measure(
 ) -> datafusion::common::Result<Measure> {
     match expr {
         Expr::AggregateFunction(agg_fn) => from_aggregate_function(producer, agg_fn, schema),
-        Expr::Alias(Alias { expr, .. }) => {
-            to_substrait_agg_measure(producer, expr, schema)
+        Expr::Alias(boxed_alias) => {
+            to_substrait_agg_measure(producer, boxed_alias.expr.as_ref(), schema)
         }
         _ => internal_err!(
             "Expression must be compatible with aggregation. Unsupported expression: {:?}. ExpressionType: {:?}",

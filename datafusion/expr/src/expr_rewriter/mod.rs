@@ -174,10 +174,14 @@ pub fn create_col_from_scalar_expr(
     subqry_alias: String,
 ) -> Result<Column> {
     match scalar_expr {
-        Expr::Alias(Alias { name, .. }) => Ok(Column::new(
-            Some::<TableReference>(subqry_alias.into()),
-            name,
-        )),
+        Expr::Alias(boxed_alias) => {
+            // boxed_alias: &Box<Alias> (if you’re matching on &expr) or Box<Alias>
+            let name = &boxed_alias.name;
+            Ok(Column::new(
+                Some::<TableReference>(subqry_alias.into()),
+                name,
+            ))
+        }
         Expr::Column(col) => Ok(col.with_relation(subqry_alias.into())),
         _ => {
             let scalar_column = scalar_expr.schema_name().to_string();
@@ -200,7 +204,9 @@ pub fn unnormalize_cols(exprs: impl IntoIterator<Item = Expr>) -> Vec<Expr> {
 pub fn strip_outer_reference(expr: Expr) -> Expr {
     expr.transform(|expr| {
         Ok({
-            if let Expr::OuterReferenceColumn(_, col) = expr {
+            // Match the boxed (DataType, Column) tuple and extract the Column
+            if let Expr::OuterReferenceColumn(boxed_pair) = expr {
+                let (_data_type, col) = *boxed_pair;
                 Transformed::yes(Expr::Column(col))
             } else {
                 Transformed::no(expr)
@@ -250,7 +256,9 @@ fn coerce_exprs_for_schema(
             let new_type = dst_schema.field(idx).data_type();
             if new_type != &expr.get_type(src_schema)? {
                 match expr {
-                    Expr::Alias(Alias { expr, name, .. }) => {
+                    Expr::Alias(boxed_alias) => {
+                        // boxed_alias: Box<Alias>
+                        let Alias { expr, name, .. } = *boxed_alias;
                         Ok(expr.cast_to(new_type, src_schema)?.alias(name))
                     }
                     #[expect(deprecated)]
@@ -264,12 +272,13 @@ fn coerce_exprs_for_schema(
         .collect::<Result<_>>()
 }
 
-/// Recursively un-alias an expressions
+/// Recursively un-alias an expression
 #[inline]
 pub fn unalias(expr: Expr) -> Expr {
     match expr {
-        Expr::Alias(Alias { expr, .. }) => unalias(*expr),
-        _ => expr,
+        // Unbox the Alias, then recurse on the inner Expr
+        Expr::Alias(boxed_alias) => unalias(*boxed_alias.expr),
+        other => other,
     }
 }
 

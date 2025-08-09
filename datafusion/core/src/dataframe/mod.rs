@@ -2291,7 +2291,7 @@ impl DataFrame {
                 if cols.contains(field) {
                     // Try to cast fill value to column type. If the cast fails, fallback to the original column.
                     match value.clone().cast_to(field.data_type()) {
-                        Ok(fill_value) => Expr::Alias(Alias {
+                        Ok(fill_value) => Expr::Alias(Box::new(Alias {
                             expr: Box::new(Expr::ScalarFunction(ScalarFunction {
                                 func: coalesce(),
                                 args: vec![col(field.name()), lit(fill_value)],
@@ -2299,7 +2299,7 @@ impl DataFrame {
                             relation: None,
                             name: field.name().to_string(),
                             metadata: None,
-                        }),
+                        })),
                         Err(_) => col(field.name()),
                     }
                 } else {

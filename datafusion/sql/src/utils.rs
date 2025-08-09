@@ -30,9 +30,7 @@ use datafusion_common::{
     HashMap, Result, ScalarValue,
 };
 use datafusion_expr::builder::get_struct_unnested_columns;
-use datafusion_expr::expr::{
-    Alias, GroupingSet, Unnest, WindowFunction, WindowFunctionParams,
-};
+use datafusion_expr::expr::{GroupingSet, Unnest, WindowFunction, WindowFunctionParams};
 use datafusion_expr::utils::{expr_as_column_expr, find_column_exprs};
 use datafusion_expr::{
     col, expr_vec_fmt, ColumnUnnestList, Expr, ExprSchemable, LogicalPlan,
@@ -181,7 +179,9 @@ pub(crate) fn extract_aliases(exprs: &[Expr]) -> HashMap<String, Expr> {
     exprs
         .iter()
         .filter_map(|expr| match expr {
-            Expr::Alias(Alias { expr, name, .. }) => Some((name.clone(), *expr.clone())),
+            Expr::Alias(boxed_alias) => {
+                Some((boxed_alias.name.clone(), *boxed_alias.expr.clone()))
+            }
             _ => None,
         })
         .collect::<HashMap<String, Expr>>()
@@ -204,7 +204,7 @@ pub(crate) fn resolve_positions_to_exprs(
             let index = (position - 1) as usize;
             let select_expr = &select_exprs[index];
             Ok(match select_expr {
-                Expr::Alias(Alias { expr, .. }) => *expr.clone(),
+                Expr::Alias(boxed_alias) => *boxed_alias.expr.clone(),
                 _ => select_expr.clone(),
             })
         }
@@ -248,7 +248,7 @@ pub fn window_expr_common_partition_keys(window_exprs: &[Expr]) -> Result<&[Expr
                 } = window_fun.as_ref();
                 Ok(partition_by)
             }
-            Expr::Alias(Alias { expr, .. }) => match expr.as_ref() {
+            Expr::Alias(boxed_alias) => match boxed_alias.expr.as_ref() {
                 Expr::WindowFunction(window_fun) => {
                     let WindowFunction {
                         params: WindowFunctionParams { partition_by, .. },

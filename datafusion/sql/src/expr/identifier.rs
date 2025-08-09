@@ -74,10 +74,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     outer.qualified_field_with_unqualified_name(normalize_ident.as_str())
                 {
                     // Found an exact match on a qualified name in the outer plan schema, so this is an outer reference column
-                    return Ok(Expr::OuterReferenceColumn(
+                    return Ok(Expr::OuterReferenceColumn(Box::new((
                         field.data_type().clone(),
                         Column::from((qualifier, field)),
-                    ));
+                    ))));
                 }
             }
 
@@ -181,10 +181,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                                 // Found matching field with no spare identifier(s)
                                 Some((field, qualifier, _nested_names)) => {
                                     // Found an exact match on a qualified name in the outer plan schema, so this is an outer reference column
-                                    Ok(Expr::OuterReferenceColumn(
+                                    Ok(Expr::OuterReferenceColumn(Box::new((
                                         field.data_type().clone(),
                                         Column::from((qualifier, field)),
-                                    ))
+                                    ))))
                                 }
                                 // Found no matching field, will return a default
                                 None => {

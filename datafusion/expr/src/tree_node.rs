@@ -44,8 +44,10 @@ impl TreeNode for Expr {
         f: F,
     ) -> Result<TreeNodeRecursion> {
         match self {
-            Expr::Alias(Alias { expr, .. })
-            | Expr::Unnest(Unnest { expr })
+            Expr::Alias(boxed_alias) => {
+                boxed_alias.expr.apply_elements(f)
+            }
+            Expr::Unnest(Unnest { expr })
             | Expr::Not(expr)
             | Expr::IsNotNull(expr)
             | Expr::IsTrue(expr)
@@ -71,7 +73,7 @@ impl TreeNode for Expr {
             #[expect(deprecated)]
             Expr::Column(_)
             // Treat OuterReferenceColumn as a leaf expression
-            | Expr::OuterReferenceColumn(_, _)
+            | Expr::OuterReferenceColumn(_)
             | Expr::ScalarVariable(_, _)
             | Expr::Literal(_, _)
             | Expr::Exists { .. }
@@ -122,7 +124,7 @@ impl TreeNode for Expr {
             Expr::Column(_)
             | Expr::Wildcard { .. }
             | Expr::Placeholder(Placeholder { .. })
-            | Expr::OuterReferenceColumn(_, _)
+            | Expr::OuterReferenceColumn(_)
             | Expr::Exists { .. }
             | Expr::ScalarSubquery(_)
             | Expr::ScalarVariable(_, _)
@@ -130,14 +132,19 @@ impl TreeNode for Expr {
             Expr::Unnest(Unnest { expr, .. }) => expr
                 .map_elements(f)?
                 .update_data(|expr| Expr::Unnest(Unnest { expr })),
-            Expr::Alias(Alias {
-                expr,
-                relation,
-                name,
-                metadata,
-            }) => f(*expr)?.update_data(|e| {
-                e.alias_qualified_with_metadata(relation, name, metadata)
-            }),
+            Expr::Alias(boxed_alias) => {
+                let Alias {
+                    expr,
+                    relation,
+                    name,
+                    metadata,
+                    ..
+                } = *boxed_alias;
+
+                f(*expr)?.update_data(|e| {
+                    e.alias_qualified_with_metadata(relation, name, metadata)
+                })
+            }
             Expr::InSubquery(InSubquery {
                 expr,
                 subquery,

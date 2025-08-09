@@ -24,7 +24,7 @@ use std::iter::once;
 use std::sync::Arc;
 
 use crate::dml::CopyTo;
-use crate::expr::{Alias, PlannedReplaceSelectItem, Sort as SortExpr};
+use crate::expr::{PlannedReplaceSelectItem, Sort as SortExpr};
 use crate::expr_rewriter::{
     coerce_plan_expr_for_schema, normalize_col,
     normalize_col_with_schemas_and_ambiguity_check, normalize_cols, normalize_sorts,
@@ -742,8 +742,8 @@ impl LogicalPlanBuilder {
         // As described in https://github.com/apache/datafusion/issues/5293
         let all_aliases = missing_exprs.iter().all(|e| {
             projection_exprs.iter().any(|proj_expr| {
-                if let Expr::Alias(Alias { expr, .. }) = proj_expr {
-                    e == expr.as_ref()
+                if let Expr::Alias(boxed_alias) = proj_expr {
+                    e == boxed_alias.expr.as_ref()
                 } else {
                     false
                 }
