@@ -18,6 +18,7 @@
 use arrow::array::{
     ArrayRef, GenericStringArray, OffsetSizeTrait, StringViewArray, UInt32Array,
 };
+use rand::distr::StandardUniform;
 use rand::rngs::StdRng;
 use rand::Rng;
 
@@ -47,11 +48,11 @@ impl StringArrayGenerator {
         // pick num_strings randomly from the distinct string table
         let indices: UInt32Array = (0..self.num_strings)
             .map(|_| {
-                if self.rng.gen::<f64>() < self.null_pct {
+                if self.rng.random::<f64>() < self.null_pct {
                     None
                 } else if self.num_distinct_strings > 1 {
                     let range = 1..(self.num_distinct_strings as u32);
-                    Some(self.rng.gen_range(range))
+                    Some(self.rng.random_range(range))
                 } else {
                     Some(0)
                 }
@@ -71,11 +72,11 @@ impl StringArrayGenerator {
         // pick num_strings randomly from the distinct string table
         let indices: UInt32Array = (0..self.num_strings)
             .map(|_| {
-                if self.rng.gen::<f64>() < self.null_pct {
+                if self.rng.random::<f64>() < self.null_pct {
                     None
                 } else if self.num_distinct_strings > 1 {
                     let range = 1..(self.num_distinct_strings as u32);
-                    Some(self.rng.gen_range(range))
+                    Some(self.rng.random_range(range))
                 } else {
                     Some(0)
                 }
@@ -92,10 +93,10 @@ fn random_string(rng: &mut StdRng, max_len: usize) -> String {
     // pick characters at random (not just ascii)
     match max_len {
         0 => "".to_string(),
-        1 => String::from(rng.gen::<char>()),
+        1 => String::from(rng.random::<char>()),
         _ => {
-            let len = rng.gen_range(1..=max_len);
-            rng.sample_iter::<char, _>(rand::distributions::Standard)
+            let len = rng.random_range(1..=max_len);
+            rng.sample_iter::<char, _>(StandardUniform)
                 .take(len)
                 .collect()
         }

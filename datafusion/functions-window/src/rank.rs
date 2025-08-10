@@ -18,13 +18,8 @@
 //! Implementation of `rank`, `dense_rank`, and `percent_rank` window functions,
 //! which can be evaluated at runtime during query execution.
 
-use std::any::Any;
-use std::fmt::Debug;
-use std::iter;
-use std::ops::Range;
-use std::sync::{Arc, LazyLock};
-
 use crate::define_udwf_and_expr;
+use arrow::datatypes::FieldRef;
 use datafusion_common::arrow::array::ArrayRef;
 use datafusion_common::arrow::array::{Float64Array, UInt64Array};
 use datafusion_common::arrow::compute::SortOptions;
@@ -34,11 +29,18 @@ use datafusion_common::utils::get_row_at_idx;
 use datafusion_common::{exec_err, Result, ScalarValue};
 use datafusion_expr::window_doc_sections::DOC_SECTION_RANKING;
 use datafusion_expr::{
-    Documentation, PartitionEvaluator, Signature, Volatility, WindowUDFImpl,
+    udf_equals_hash, Documentation, PartitionEvaluator, Signature, Volatility,
+    WindowUDFImpl,
 };
 use datafusion_functions_window_common::field;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 use field::WindowUDFFieldArgs;
+use std::any::Any;
+use std::fmt::Debug;
+use std::hash::Hash;
+use std::iter;
+use std::ops::Range;
+use std::sync::{Arc, LazyLock};
 
 define_udwf_and_expr!(
     Rank,
@@ -62,7 +64,7 @@ define_udwf_and_expr!(
 );
 
 /// Rank calculates the rank in the window function with order by
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct Rank {
     name: String,
     signature: Signature,
@@ -95,7 +97,7 @@ impl Rank {
     }
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub enum RankType {
     Basic,
     Dense,
@@ -110,6 +112,26 @@ static RANK_DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
             skips ranks for identical values.",
 
         "rank()")
+        .with_sql_example(r#"
+```sql
+-- Example usage of the rank window function:
+SELECT department,
+    salary,
+    rank() OVER (PARTITION BY department ORDER BY salary DESC) AS rank
+FROM employees;
+
++-------------+--------+------+
+| department  | salary | rank |
++-------------+--------+------+
+| Sales       | 70000  | 1    |
+| Sales       | 50000  | 2    |
+| Sales       | 50000  | 2    |
+| Sales       | 30000  | 4    |
+| Engineering | 90000  | 1    |
+| Engineering | 80000  | 2    |
++-------------+--------+------+
+```
+"#)
         .build()
 });
 
@@ -121,6 +143,25 @@ static DENSE_RANK_DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
     Documentation::builder(DOC_SECTION_RANKING, "Returns the rank of the current row without gaps. This function ranks \
             rows in a dense manner, meaning consecutive ranks are assigned even for identical \
             values.", "dense_rank()")
+        .with_sql_example(r#"
+```sql
+-- Example usage of the dense_rank window function:
+SELECT department,
+    salary,
+    dense_rank() OVER (PARTITION BY department ORDER BY salary DESC) AS dense_rank
+FROM employees;
+
++-------------+--------+------------+
+| department  | salary | dense_rank |
++-------------+--------+------------+
+| Sales       | 70000  | 1          |
+| Sales       | 50000  | 2          |
+| Sales       | 50000  | 2          |
+| Sales       | 30000  | 3          |
+| Engineering | 90000  | 1          |
+| Engineering | 80000  | 2          |
++-------------+--------+------------+
+```"#)
         .build()
 });
 
@@ -131,6 +172,21 @@ fn get_dense_rank_doc() -> &'static Documentation {
 static PERCENT_RANK_DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
     Documentation::builder(DOC_SECTION_RANKING, "Returns the percentage rank of the current row within its partition. \
             The value ranges from 0 to 1 and is computed as `(rank - 1) / (total_rows - 1)`.", "percent_rank()")
+        .with_sql_example(r#"```sql
+    -- Example usage of the percent_rank window function:
+SELECT employee_id,
+    salary,
+    percent_rank() OVER (ORDER BY salary) AS percent_rank
+FROM employees;
+
++-------------+--------+---------------+
+| employee_id | salary | percent_rank  |
++-------------+--------+---------------+
+| 1           | 30000  | 0.00          |
+| 2           | 50000  | 0.50          |
+| 3           | 70000  | 1.00          |
++-------------+--------+---------------+
+```"#)
         .build()
 });
 
@@ -161,14 +217,14 @@ impl WindowUDFImpl for Rank {
         }))
     }
 
-    fn field(&self, field_args: WindowUDFFieldArgs) -> Result<Field> {
+    fn field(&self, field_args: WindowUDFFieldArgs) -> Result<FieldRef> {
         let return_type = match self.rank_type {
             RankType::Basic | RankType::Dense => DataType::UInt64,
             RankType::Percent => DataType::Float64,
         };
 
         let nullable = false;
-        Ok(Field::new(field_args.name(), return_type, nullable))
+        Ok(Field::new(field_args.name(), return_type, nullable).into())
     }
 
     fn sort_options(&self) -> Option<SortOptions> {
@@ -185,6 +241,8 @@ impl WindowUDFImpl for Rank {
             RankType::Percent => Some(get_percent_rank_doc()),
         }
     }
+
+    udf_equals_hash!(WindowUDFImpl);
 }
 
 /// State for the RANK(rank) built-in window function.
@@ -261,7 +319,7 @@ impl PartitionEvaluator for RankEvaluator {
                     .iter()
                     .scan(1_u64, |acc, range| {
                         let len = range.end - range.start;
-                        let result = iter::repeat(*acc).take(len);
+                        let result = iter::repeat_n(*acc, len);
                         *acc += len as u64;
                         Some(result)
                     })
@@ -274,7 +332,7 @@ impl PartitionEvaluator for RankEvaluator {
                     .zip(1u64..)
                     .flat_map(|(range, rank)| {
                         let len = range.end - range.start;
-                        iter::repeat(rank).take(len)
+                        iter::repeat_n(rank, len)
                     }),
             )),
 
@@ -287,7 +345,7 @@ impl PartitionEvaluator for RankEvaluator {
                         .scan(0_u64, |acc, range| {
                             let len = range.end - range.start;
                             let value = (*acc as f64) / (denominator - 1.0).max(1.0);
-                            let result = iter::repeat(value).take(len);
+                            let result = iter::repeat_n(value, len);
                             *acc += len as u64;
                             Some(result)
                         })

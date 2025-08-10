@@ -884,7 +884,7 @@ SELECT extract(day from arrow_cast('14400 minutes', 'Interval(DayTime)'))
 query I
 SELECT extract(minute from arrow_cast('14400 minutes', 'Interval(DayTime)'))
 ----
-14400
+0
 
 query I
 SELECT extract(second from arrow_cast('5.1 seconds', 'Interval(DayTime)'))
@@ -894,7 +894,7 @@ SELECT extract(second from arrow_cast('5.1 seconds', 'Interval(DayTime)'))
 query I
 SELECT extract(second from arrow_cast('14400 minutes', 'Interval(DayTime)'))
 ----
-864000
+0
 
 query I
 SELECT extract(second from arrow_cast('2 months', 'Interval(MonthDayNano)'))
@@ -954,7 +954,7 @@ from t
 order by id;
 ----
 0 0 5
-1 0 15
+1 0 3
 2 0 0
 3 2 0
 4 0 8

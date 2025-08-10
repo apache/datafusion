@@ -115,6 +115,12 @@ p1
 p1e1
 p1m1e1
 
+query T rowsort
+SELECT s FROM test WHERE s ILIKE 'p1';
+----
+P1
+p1
+
 # NOT ILIKE
 query T rowsort
 SELECT s FROM test WHERE s NOT ILIKE 'p1%';

@@ -17,9 +17,10 @@
 
 extern crate criterion;
 
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field};
 use arrow::util::bench_util::create_string_array_with_len;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use datafusion_common::config::ConfigOptions;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::string;
 use std::sync::Arc;
@@ -35,6 +36,8 @@ fn create_args(size: usize, str_len: usize) -> Vec<ColumnarValue> {
 
 fn criterion_benchmark(c: &mut Criterion) {
     let upper = string::upper();
+    let config_options = Arc::new(ConfigOptions::default());
+
     for size in [1024, 4096, 8192] {
         let args = create_args(size, 32);
         c.bench_function("upper_all_values_are_ascii", |b| {
@@ -42,8 +45,10 @@ fn criterion_benchmark(c: &mut Criterion) {
                 let args_cloned = args.clone();
                 black_box(upper.invoke_with_args(ScalarFunctionArgs {
                     args: args_cloned,
+                    arg_fields: vec![Field::new("a", DataType::Utf8, true).into()],
                     number_rows: size,
-                    return_type: &DataType::Utf8,
+                    return_field: Field::new("f", DataType::Utf8, true).into(),
+                    config_options: Arc::clone(&config_options),
                 }))
             })
         });

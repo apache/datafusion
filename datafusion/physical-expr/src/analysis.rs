@@ -100,7 +100,7 @@ impl ExprBoundaries {
     ) -> Result<Self> {
         let field = schema.fields().get(col_index).ok_or_else(|| {
             internal_datafusion_err!(
-                "Could not create `ExprBoundaries`: in `try_from_column` `col_index` 
+                "Could not create `ExprBoundaries`: in `try_from_column` `col_index`
                 has gone out of bounds with a value of {col_index}, the schema has {} columns.",
                 schema.fields.len()
             )
@@ -112,7 +112,7 @@ impl ExprBoundaries {
                 .min_value
                 .get_value()
                 .cloned()
-                .unwrap_or(empty_field.clone()),
+                .unwrap_or_else(|| empty_field.clone()),
             col_stats
                 .max_value
                 .get_value()
@@ -425,7 +425,7 @@ mod tests {
     fn test_analyze_invalid_boundary_exprs() {
         let schema = Arc::new(Schema::new(vec![make_field("a", DataType::Int32)]));
         let expr = col("a").lt(lit(10)).or(col("a").gt(lit(20)));
-        let expected_error = "Interval arithmetic does not support the operator OR";
+        let expected_error = "OR operator cannot yet propagate true intervals";
         let boundaries = ExprBoundaries::try_new_unbounded(&schema).unwrap();
         let df_schema = DFSchema::try_from(Arc::clone(&schema)).unwrap();
         let physical_expr =

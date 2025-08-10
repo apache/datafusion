@@ -209,10 +209,10 @@ impl ListingTableUrl {
     /// assert_eq!(url.file_extension(), None);
     /// ```
     pub fn file_extension(&self) -> Option<&str> {
-        if let Some(segments) = self.url.path_segments() {
-            if let Some(last_segment) = segments.last() {
+        if let Some(mut segments) = self.url.path_segments() {
+            if let Some(last_segment) = segments.next_back() {
                 if last_segment.contains(".") && !last_segment.ends_with(".") {
-                    return last_segment.split('.').last();
+                    return last_segment.split('.').next_back();
                 }
             }
         }
@@ -268,7 +268,7 @@ impl ListingTableUrl {
                 let glob_match = self.contains(path, ignore_subdirectory);
                 futures::future::ready(extension_match && glob_match)
             })
-            .map_err(DataFusionError::ObjectStore)
+            .map_err(|e| DataFusionError::ObjectStore(Box::new(e)))
             .boxed())
     }
 
@@ -281,6 +281,28 @@ impl ListingTableUrl {
     pub fn object_store(&self) -> ObjectStoreUrl {
         let url = &self.url[url::Position::BeforeScheme..url::Position::BeforePath];
         ObjectStoreUrl::parse(url).unwrap()
+    }
+
+    /// Returns true if the [`ListingTableUrl`] points to the folder
+    pub fn is_folder(&self) -> bool {
+        self.url.scheme() == "file" && self.is_collection()
+    }
+
+    /// Return the `url` for [`ListingTableUrl`]
+    pub fn get_url(&self) -> &Url {
+        &self.url
+    }
+
+    /// Return the `glob` for [`ListingTableUrl`]
+    pub fn get_glob(&self) -> &Option<Pattern> {
+        &self.glob
+    }
+
+    /// Returns a copy of current [`ListingTableUrl`] with a specified `glob`
+    pub fn with_glob(self, glob: &str) -> Result<Self> {
+        let glob =
+            Pattern::new(glob).map_err(|e| DataFusionError::External(Box::new(e)))?;
+        Self::try_new(self.url, Some(glob))
     }
 }
 

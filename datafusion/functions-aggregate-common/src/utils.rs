@@ -15,22 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::Arc;
-
-use arrow::array::{ArrayRef, AsArray};
-use arrow::datatypes::ArrowNativeType;
-use arrow::{
-    array::ArrowNativeTypeOp,
-    compute::SortOptions,
-    datatypes::{
-        DataType, Decimal128Type, DecimalType, Field, TimeUnit, TimestampMicrosecondType,
-        TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
-        ToByteSlice,
-    },
+use arrow::array::{ArrayRef, ArrowNativeTypeOp};
+use arrow::compute::SortOptions;
+use arrow::datatypes::{
+    ArrowNativeType, DataType, DecimalType, Field, FieldRef, ToByteSlice,
 };
 use datafusion_common::{exec_err, DataFusionError, Result};
 use datafusion_expr_common::accumulator::Accumulator;
-use datafusion_physical_expr_common::sort_expr::LexOrdering;
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
+use std::sync::Arc;
 
 /// Convert scalar values from an accumulator into arrays.
 pub fn get_accum_scalar_values_as_arrays(
@@ -43,57 +36,13 @@ pub fn get_accum_scalar_values_as_arrays(
         .collect()
 }
 
-/// Adjust array type metadata if needed
-///
-/// Since `Decimal128Arrays` created from `Vec<NativeType>` have
-/// default precision and scale, this function adjusts the output to
-/// match `data_type`, if necessary
-#[deprecated(since = "44.0.0", note = "use PrimitiveArray::with_datatype")]
-pub fn adjust_output_array(data_type: &DataType, array: ArrayRef) -> Result<ArrayRef> {
-    let array = match data_type {
-        DataType::Decimal128(p, s) => Arc::new(
-            array
-                .as_primitive::<Decimal128Type>()
-                .clone()
-                .with_precision_and_scale(*p, *s)?,
-        ) as ArrayRef,
-        DataType::Timestamp(TimeUnit::Nanosecond, tz) => Arc::new(
-            array
-                .as_primitive::<TimestampNanosecondType>()
-                .clone()
-                .with_timezone_opt(tz.clone()),
-        ),
-        DataType::Timestamp(TimeUnit::Microsecond, tz) => Arc::new(
-            array
-                .as_primitive::<TimestampMicrosecondType>()
-                .clone()
-                .with_timezone_opt(tz.clone()),
-        ),
-        DataType::Timestamp(TimeUnit::Millisecond, tz) => Arc::new(
-            array
-                .as_primitive::<TimestampMillisecondType>()
-                .clone()
-                .with_timezone_opt(tz.clone()),
-        ),
-        DataType::Timestamp(TimeUnit::Second, tz) => Arc::new(
-            array
-                .as_primitive::<TimestampSecondType>()
-                .clone()
-                .with_timezone_opt(tz.clone()),
-        ),
-        // no adjustment needed for other arrays
-        _ => array,
-    };
-    Ok(array)
-}
-
-/// Construct corresponding fields for lexicographical ordering requirement expression
+/// Construct corresponding fields for the expressions in an ORDER BY clause.
 pub fn ordering_fields(
-    ordering_req: &LexOrdering,
+    order_bys: &[PhysicalSortExpr],
     // Data type of each expression in the ordering requirement
     data_types: &[DataType],
-) -> Vec<Field> {
-    ordering_req
+) -> Vec<FieldRef> {
+    order_bys
         .iter()
         .zip(data_types.iter())
         .map(|(sort_expr, dtype)| {
@@ -104,6 +53,7 @@ pub fn ordering_fields(
                 true,
             )
         })
+        .map(Arc::new)
         .collect()
 }
 

@@ -86,7 +86,7 @@ impl ScalarUDFImpl for UuidFunc {
         }
 
         // Generate random u128 values
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let mut randoms = vec![0u128; args.number_rows];
         rng.fill(&mut randoms[..]);
 

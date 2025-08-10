@@ -20,18 +20,18 @@ extern crate criterion;
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, Date32Array, StringArray};
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field};
 use chrono::prelude::*;
 use chrono::TimeDelta;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use rand::rngs::ThreadRng;
-use rand::seq::SliceRandom;
-use rand::Rng;
-
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::ScalarValue;
 use datafusion_common::ScalarValue::TimestampNanosecond;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::datetime::to_char;
+use rand::prelude::IndexedRandom;
+use rand::rngs::ThreadRng;
+use rand::Rng;
 
 fn pick_date_in_range(
     rng: &mut ThreadRng,
@@ -39,7 +39,7 @@ fn pick_date_in_range(
     end_date: NaiveDate,
 ) -> NaiveDate {
     let days_in_range = (end_date - start_date).num_days();
-    let random_days: i64 = rng.gen_range(0..days_in_range);
+    let random_days: i64 = rng.random_range(0..days_in_range);
     start_date + TimeDelta::try_days(random_days).unwrap()
 }
 
@@ -125,8 +125,10 @@ fn generate_mixed_pattern_array(rng: &mut ThreadRng) -> StringArray {
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
+    let config_options = Arc::new(ConfigOptions::default());
+
     c.bench_function("to_char_array_date_only_patterns_1000", |b| {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let data_arr = generate_date32_array(&mut rng);
         let batch_len = data_arr.len();
         let data = ColumnarValue::Array(Arc::new(data_arr) as ArrayRef);
@@ -139,8 +141,13 @@ fn criterion_benchmark(c: &mut Criterion) {
                 to_char()
                     .invoke_with_args(ScalarFunctionArgs {
                         args: vec![data.clone(), patterns.clone()],
+                        arg_fields: vec![
+                            Field::new("a", data.data_type(), true).into(),
+                            Field::new("b", patterns.data_type(), true).into(),
+                        ],
                         number_rows: batch_len,
-                        return_type: &DataType::Utf8,
+                        return_field: Field::new("f", DataType::Utf8, true).into(),
+                        config_options: Arc::clone(&config_options),
                     })
                     .expect("to_char should work on valid values"),
             )
@@ -148,7 +155,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     });
 
     c.bench_function("to_char_array_datetime_patterns_1000", |b| {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let data_arr = generate_date32_array(&mut rng);
         let batch_len = data_arr.len();
         let data = ColumnarValue::Array(Arc::new(data_arr) as ArrayRef);
@@ -226,8 +233,13 @@ fn criterion_benchmark(c: &mut Criterion) {
                 to_char()
                     .invoke_with_args(ScalarFunctionArgs {
                         args: vec![data.clone(), patterns.clone()],
+                        arg_fields: vec![
+                            Field::new("a", data.data_type(), true).into(),
+                            Field::new("b", patterns.data_type(), true).into(),
+                        ],
                         number_rows: batch_len,
-                        return_type: &DataType::Utf8,
+                        return_field: Field::new("f", DataType::Utf8, true).into(),
+                        config_options: Arc::clone(&config_options),
                     })
                     .expect("to_char should work on valid values"),
             )
@@ -253,8 +265,13 @@ fn criterion_benchmark(c: &mut Criterion) {
                 to_char()
                     .invoke_with_args(ScalarFunctionArgs {
                         args: vec![data.clone(), pattern.clone()],
+                        arg_fields: vec![
+                            Field::new("a", data.data_type(), true).into(),
+                            Field::new("b", pattern.data_type(), true).into(),
+                        ],
                         number_rows: 1,
-                        return_type: &DataType::Utf8,
+                        return_field: Field::new("f", DataType::Utf8, true).into(),
+                        config_options: Arc::clone(&config_options),
                     })
                     .expect("to_char should work on valid values"),
             )

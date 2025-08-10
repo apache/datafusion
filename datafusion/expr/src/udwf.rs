@@ -26,11 +26,13 @@ use std::{
     sync::Arc,
 };
 
-use arrow::datatypes::{DataType, Field};
+use arrow::datatypes::{DataType, FieldRef};
 
 use crate::expr::WindowFunction;
+use crate::udf_eq::UdfEq;
 use crate::{
-    function::WindowFunctionSimplification, Expr, PartitionEvaluator, Signature,
+    function::WindowFunctionSimplification, udf_equals_hash, Expr, PartitionEvaluator,
+    Signature,
 };
 use datafusion_common::{not_impl_err, Result};
 use datafusion_doc::Documentation;
@@ -133,7 +135,7 @@ impl WindowUDF {
     pub fn call(&self, args: Vec<Expr>) -> Expr {
         let fun = crate::WindowFunctionDefinition::WindowUDF(Arc::new(self.clone()));
 
-        Expr::WindowFunction(WindowFunction::new(fun, args))
+        Expr::from(WindowFunction::new(fun, args))
     }
 
     /// Returns this function's name
@@ -179,7 +181,7 @@ impl WindowUDF {
     /// Returns the field of the final result of evaluating this window function.
     ///
     /// See [`WindowUDFImpl::field`] for more details.
-    pub fn field(&self, field_args: WindowUDFFieldArgs) -> Result<Field> {
+    pub fn field(&self, field_args: WindowUDFFieldArgs) -> Result<FieldRef> {
         self.inner.field(field_args)
     }
 
@@ -236,7 +238,7 @@ where
 /// ```
 /// # use std::any::Any;
 /// # use std::sync::LazyLock;
-/// # use arrow::datatypes::{DataType, Field};
+/// # use arrow::datatypes::{DataType, Field, FieldRef};
 /// # use datafusion_common::{DataFusionError, plan_err, Result};
 /// # use datafusion_expr::{col, Signature, Volatility, PartitionEvaluator, WindowFrame, ExprFunctionExt, Documentation};
 /// # use datafusion_expr::{WindowUDFImpl, WindowUDF};
@@ -279,9 +281,9 @@ where
 ///    ) -> Result<Box<dyn PartitionEvaluator>> {
 ///        unimplemented!()
 ///    }
-///    fn field(&self, field_args: WindowUDFFieldArgs) -> Result<Field> {
-///      if let Some(DataType::Int32) = field_args.get_input_type(0) {
-///        Ok(Field::new(field_args.name(), DataType::Int32, false))
+///    fn field(&self, field_args: WindowUDFFieldArgs) -> Result<FieldRef> {
+///      if let Some(DataType::Int32) = field_args.get_input_field(0).map(|f| f.data_type().clone()) {
+///        Ok(Field::new(field_args.name(), DataType::Int32, false).into())
 ///      } else {
 ///        plan_err!("smooth_it only accepts Int32 arguments")
 ///      }
@@ -304,14 +306,19 @@ where
 ///     .unwrap();
 /// ```
 pub trait WindowUDFImpl: Debug + Send + Sync {
-    // Note: When adding any methods (with default implementations), remember to add them also
-    // into the AliasedWindowUDFImpl below!
-
     /// Returns this object as an [`Any`] trait object
     fn as_any(&self) -> &dyn Any;
 
     /// Returns this function's name
     fn name(&self) -> &str;
+
+    /// Returns any aliases (alternate names) for this function.
+    ///
+    /// Note: `aliases` should only include names other than [`Self::name`].
+    /// Defaults to `[]` (no aliases)
+    fn aliases(&self) -> &[String] {
+        &[]
+    }
 
     /// Returns the function's [`Signature`] for information about what input
     /// types are accepted and the function's Volatility.
@@ -327,14 +334,6 @@ pub trait WindowUDFImpl: Debug + Send + Sync {
         &self,
         partition_evaluator_args: PartitionEvaluatorArgs,
     ) -> Result<Box<dyn PartitionEvaluator>>;
-
-    /// Returns any aliases (alternate names) for this function.
-    ///
-    /// Note: `aliases` should only include names other than [`Self::name`].
-    /// Defaults to `[]` (no aliases)
-    fn aliases(&self) -> &[String] {
-        &[]
-    }
 
     /// Optionally apply per-UDWF simplification / rewrite rules.
     ///
@@ -362,36 +361,44 @@ pub trait WindowUDFImpl: Debug + Send + Sync {
     /// Return true if this window UDF is equal to the other.
     ///
     /// Allows customizing the equality of window UDFs.
+    /// *Must* be implemented explicitly if the UDF type has internal state.
     /// Must be consistent with [`Self::hash_value`] and follow the same rules as [`Eq`]:
     ///
     /// - reflexive: `a.equals(a)`;
     /// - symmetric: `a.equals(b)` implies `b.equals(a)`;
     /// - transitive: `a.equals(b)` and `b.equals(c)` implies `a.equals(c)`.
     ///
-    /// By default, compares [`Self::name`] and [`Self::signature`].
+    /// By default, compares type, [`Self::name`], [`Self::aliases`] and [`Self::signature`].
     fn equals(&self, other: &dyn WindowUDFImpl) -> bool {
-        self.name() == other.name() && self.signature() == other.signature()
+        self.as_any().type_id() == other.as_any().type_id()
+            && self.name() == other.name()
+            && self.aliases() == other.aliases()
+            && self.signature() == other.signature()
     }
 
     /// Returns a hash value for this window UDF.
     ///
-    /// Allows customizing the hash code of window UDFs. Similarly to [`Hash`] and [`Eq`],
-    /// if [`Self::equals`] returns true for two UDFs, their `hash_value`s must be the same.
+    /// Allows customizing the hash code of window UDFs.
+    /// *Must* be implemented explicitly whenever [`Self::equals`] is implemented.
     ///
-    /// By default, hashes [`Self::name`] and [`Self::signature`].
+    /// Similarly to [`Hash`] and [`Eq`], if [`Self::equals`] returns true for two UDFs,
+    /// their `hash_value`s must be the same.
+    ///
+    /// By default, it only hashes the type. The other fields are not hashed, as usually the
+    /// name, signature, and aliases are implied by the UDF type. Recall that UDFs with state
+    /// (and thus possibly changing fields) must override [`Self::equals`] and [`Self::hash_value`].
     fn hash_value(&self) -> u64 {
         let hasher = &mut DefaultHasher::new();
-        self.name().hash(hasher);
-        self.signature().hash(hasher);
+        self.as_any().type_id().hash(hasher);
         hasher.finish()
     }
 
-    /// The [`Field`] of the final result of evaluating this window function.
+    /// The [`FieldRef`] of the final result of evaluating this window function.
     ///
     /// Call `field_args.name()` to get the fully qualified name for defining
-    /// the [`Field`]. For a complete example see the implementation in the
+    /// the [`FieldRef`]. For a complete example see the implementation in the
     /// [Basic Example](WindowUDFImpl#basic-example) section.
-    fn field(&self, field_args: WindowUDFFieldArgs) -> Result<Field>;
+    fn field(&self, field_args: WindowUDFFieldArgs) -> Result<FieldRef>;
 
     /// Allows the window UDF to define a custom result ordering.
     ///
@@ -469,9 +476,9 @@ impl PartialOrd for dyn WindowUDFImpl {
 
 /// WindowUDF that adds an alias to the underlying function. It is better to
 /// implement [`WindowUDFImpl`], which supports aliases, directly if possible.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 struct AliasedWindowUDFImpl {
-    inner: Arc<dyn WindowUDFImpl>,
+    inner: UdfEq<Arc<dyn WindowUDFImpl>>,
     aliases: Vec<String>,
 }
 
@@ -483,10 +490,14 @@ impl AliasedWindowUDFImpl {
         let mut aliases = inner.aliases().to_vec();
         aliases.extend(new_aliases.into_iter().map(|s| s.to_string()));
 
-        Self { inner, aliases }
+        Self {
+            inner: inner.into(),
+            aliases,
+        }
     }
 }
 
+#[warn(clippy::missing_trait_methods)] // Delegates, so it should implement every single trait method
 impl WindowUDFImpl for AliasedWindowUDFImpl {
     fn as_any(&self) -> &dyn Any {
         self
@@ -522,22 +533,9 @@ impl WindowUDFImpl for AliasedWindowUDFImpl {
         self.inner.simplify()
     }
 
-    fn equals(&self, other: &dyn WindowUDFImpl) -> bool {
-        if let Some(other) = other.as_any().downcast_ref::<AliasedWindowUDFImpl>() {
-            self.inner.equals(other.inner.as_ref()) && self.aliases == other.aliases
-        } else {
-            false
-        }
-    }
+    udf_equals_hash!(WindowUDFImpl);
 
-    fn hash_value(&self) -> u64 {
-        let hasher = &mut DefaultHasher::new();
-        self.inner.hash_value().hash(hasher);
-        self.aliases.hash(hasher);
-        hasher.finish()
-    }
-
-    fn field(&self, field_args: WindowUDFFieldArgs) -> Result<Field> {
+    fn field(&self, field_args: WindowUDFFieldArgs) -> Result<FieldRef> {
         self.inner.field(field_args)
     }
 
@@ -547,6 +545,10 @@ impl WindowUDFImpl for AliasedWindowUDFImpl {
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         self.inner.coerce_types(arg_types)
+    }
+
+    fn reverse_expr(&self) -> ReversedUDWF {
+        self.inner.reverse_expr()
     }
 
     fn documentation(&self) -> Option<&Documentation> {
@@ -588,7 +590,7 @@ pub mod window_doc_sections {
 #[cfg(test)]
 mod test {
     use crate::{PartitionEvaluator, WindowUDF, WindowUDFImpl};
-    use arrow::datatypes::{DataType, Field};
+    use arrow::datatypes::{DataType, FieldRef};
     use datafusion_common::Result;
     use datafusion_expr_common::signature::{Signature, Volatility};
     use datafusion_functions_window_common::field::WindowUDFFieldArgs;
@@ -630,7 +632,7 @@ mod test {
         ) -> Result<Box<dyn PartitionEvaluator>> {
             unimplemented!()
         }
-        fn field(&self, _field_args: WindowUDFFieldArgs) -> Result<Field> {
+        fn field(&self, _field_args: WindowUDFFieldArgs) -> Result<FieldRef> {
             unimplemented!()
         }
     }
@@ -669,7 +671,7 @@ mod test {
         ) -> Result<Box<dyn PartitionEvaluator>> {
             unimplemented!()
         }
-        fn field(&self, _field_args: WindowUDFFieldArgs) -> Result<Field> {
+        fn field(&self, _field_args: WindowUDFFieldArgs) -> Result<FieldRef> {
             unimplemented!()
         }
     }

@@ -20,7 +20,7 @@ use arrow::array::{
     Scalar,
 };
 use arrow::compute::SortOptions;
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field, FieldRef};
 use arrow_buffer::NullBuffer;
 use datafusion_common::cast::{as_map_array, as_struct_array};
 use datafusion_common::{
@@ -28,7 +28,7 @@ use datafusion_common::{
     ScalarValue,
 };
 use datafusion_expr::{
-    ColumnarValue, Documentation, Expr, ReturnInfo, ReturnTypeArgs, ScalarFunctionArgs,
+    ColumnarValue, Documentation, Expr, ReturnFieldArgs, ScalarFunctionArgs,
 };
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
@@ -108,7 +108,7 @@ impl ScalarUDFImpl for GetFieldFunc {
         let [base, field_name] = take_function_args(self.name(), args)?;
 
         let name = match field_name {
-            Expr::Literal(name) => name,
+            Expr::Literal(name, _) => name,
             other => &ScalarValue::Utf8(Some(other.schema_name().to_string())),
         };
 
@@ -118,7 +118,7 @@ impl ScalarUDFImpl for GetFieldFunc {
     fn schema_name(&self, args: &[Expr]) -> Result<String> {
         let [base, field_name] = take_function_args(self.name(), args)?;
         let name = match field_name {
-            Expr::Literal(name) => name,
+            Expr::Literal(name, _) => name,
             other => &ScalarValue::Utf8(Some(other.schema_name().to_string())),
         };
 
@@ -130,14 +130,14 @@ impl ScalarUDFImpl for GetFieldFunc {
     }
 
     fn return_type(&self, _: &[DataType]) -> Result<DataType> {
-        internal_err!("return_type_from_args should be called instead")
+        internal_err!("return_field_from_args should be called instead")
     }
 
-    fn return_type_from_args(&self, args: ReturnTypeArgs) -> Result<ReturnInfo> {
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         // Length check handled in the signature
         debug_assert_eq!(args.scalar_arguments.len(), 2);
 
-        match (&args.arg_types[0], args.scalar_arguments[1].as_ref()) {
+        match (&args.arg_fields[0].data_type(), args.scalar_arguments[1].as_ref()) {
             (DataType::Map(fields, _), _) => {
                 match fields.data_type() {
                     DataType::Struct(fields) if fields.len() == 2 => {
@@ -146,7 +146,8 @@ impl ScalarUDFImpl for GetFieldFunc {
                         // instead, we assume that the second column is the "value" column both here and in
                         // execution.
                         let value_field = fields.get(1).expect("fields should have exactly two members");
-                        Ok(ReturnInfo::new_nullable(value_field.data_type().clone()))
+
+                        Ok(value_field.as_ref().clone().with_nullable(true).into())
                     },
                     _ => exec_err!("Map fields must contain a Struct with exactly 2 fields"),
                 }
@@ -158,10 +159,20 @@ impl ScalarUDFImpl for GetFieldFunc {
                     |field_name| {
                     fields.iter().find(|f| f.name() == field_name)
                     .ok_or(plan_datafusion_err!("Field {field_name} not found in struct"))
-                    .map(|f| ReturnInfo::new_nullable(f.data_type().to_owned()))
+                    .map(|f| {
+                        let mut child_field = f.as_ref().clone();
+
+                        // If the parent is nullable, then getting the child must be nullable,
+                        // so potentially override the return value
+
+                        if args.arg_fields[0].is_nullable() {
+                            child_field = child_field.with_nullable(true);
+                        }
+                        Arc::new(child_field)
+                    })
                 })
             },
-            (DataType::Null, _) => Ok(ReturnInfo::new_nullable(DataType::Null)),
+            (DataType::Null, _) => Ok(Field::new(self.name(), DataType::Null, true).into()),
             (other, _) => exec_err!("The expression to get an indexed field is only valid for `Struct`, `Map` or `Null` types, got {other}"),
         }
     }

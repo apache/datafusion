@@ -48,16 +48,19 @@ pub mod test_util;
 
 pub mod url;
 pub mod write;
+pub use self::file::as_file_source;
 pub use self::url::ListingTableUrl;
 use crate::file_groups::FileGroup;
 use chrono::TimeZone;
 use datafusion_common::stats::Precision;
-use datafusion_common::{ColumnStatistics, Result};
+use datafusion_common::{exec_datafusion_err, ColumnStatistics, Result};
 use datafusion_common::{ScalarValue, Statistics};
 use file_meta::FileMeta;
 use futures::{Stream, StreamExt};
 use object_store::{path::Path, ObjectMeta};
 use object_store::{GetOptions, GetRange, ObjectStore};
+// Remove when add_row_stats is remove
+#[allow(deprecated)]
 pub use statistics::add_row_stats;
 pub use statistics::compute_all_files_statistics;
 use std::ops::Range;
@@ -99,9 +102,9 @@ pub struct PartitionedFile {
     /// You may use [`wrap_partition_value_in_dict`] to wrap them if you have used [`wrap_partition_type_in_dict`] to wrap the column type.
     ///
     ///
-    /// [`wrap_partition_type_in_dict`]: https://github.com/apache/datafusion/blob/main/datafusion/core/src/datasource/physical_plan/file_scan_config.rs#L55
-    /// [`wrap_partition_value_in_dict`]: https://github.com/apache/datafusion/blob/main/datafusion/core/src/datasource/physical_plan/file_scan_config.rs#L62
-    /// [`table_partition_cols`]: https://github.com/apache/datafusion/blob/main/datafusion/core/src/datasource/file_format/options.rs#L190
+    /// [`wrap_partition_type_in_dict`]: crate::file_scan_config::wrap_partition_type_in_dict
+    /// [`wrap_partition_value_in_dict`]: crate::file_scan_config::wrap_partition_value_in_dict
+    /// [`table_partition_cols`]: https://github.com/apache/datafusion/blob/main/datafusion/core/src/datasource/file_format/options.rs#L87
     pub partition_values: Vec<ScalarValue>,
     /// An optional file range for a more fine-grained parallel execution
     pub range: Option<FileRange>,
@@ -123,7 +126,7 @@ impl PartitionedFile {
             object_meta: ObjectMeta {
                 location: Path::from(path.into()),
                 last_modified: chrono::Utc.timestamp_nanos(0),
-                size: size as usize,
+                size,
                 e_tag: None,
                 version: None,
             },
@@ -141,7 +144,7 @@ impl PartitionedFile {
             object_meta: ObjectMeta {
                 location: Path::from(path),
                 last_modified: chrono::Utc.timestamp_nanos(0),
-                size: size as usize,
+                size,
                 e_tag: None,
                 version: None,
             },
@@ -195,6 +198,23 @@ impl PartitionedFile {
         self.statistics = Some(statistics);
         self
     }
+
+    /// Check if this file has any statistics.
+    /// This returns `true` if the file has any Exact or Inexact statistics
+    /// and `false` if all statistics are `Precision::Absent`.
+    pub fn has_statistics(&self) -> bool {
+        if let Some(stats) = &self.statistics {
+            stats.column_statistics.iter().any(|col_stats| {
+                col_stats.null_count != Precision::Absent
+                    || col_stats.max_value != Precision::Absent
+                    || col_stats.min_value != Precision::Absent
+                    || col_stats.sum_value != Precision::Absent
+                    || col_stats.distinct_count != Precision::Absent
+            })
+        } else {
+            false
+        }
+    }
 }
 
 impl From<ObjectMeta> for PartitionedFile {
@@ -224,7 +244,7 @@ impl From<ObjectMeta> for PartitionedFile {
 ///   Indicates that the range calculation determined no further action is
 ///   necessary, possibly because the calculated range is empty or invalid.
 pub enum RangeCalculation {
-    Range(Option<Range<usize>>),
+    Range(Option<Range<u64>>),
     TerminateEarly,
 }
 
@@ -250,7 +270,12 @@ pub async fn calculate_range(
     match file_meta.range {
         None => Ok(RangeCalculation::Range(None)),
         Some(FileRange { start, end }) => {
-            let (start, end) = (start as usize, end as usize);
+            let start: u64 = start.try_into().map_err(|_| {
+                exec_datafusion_err!("Expect start range to fit in u64, got {start}")
+            })?;
+            let end: u64 = end.try_into().map_err(|_| {
+                exec_datafusion_err!("Expect end range to fit in u64, got {end}")
+            })?;
 
             let start_delta = if start != 0 {
                 find_first_newline(store, location, start - 1, file_size, newline).await?
@@ -289,10 +314,10 @@ pub async fn calculate_range(
 async fn find_first_newline(
     object_store: &Arc<dyn ObjectStore>,
     location: &Path,
-    start: usize,
-    end: usize,
+    start: u64,
+    end: u64,
     newline: u8,
-) -> Result<usize> {
+) -> Result<u64> {
     let options = GetOptions {
         range: Some(GetRange::Bounded(start..end)),
         ..Default::default()
@@ -305,10 +330,11 @@ async fn find_first_newline(
 
     while let Some(chunk) = result_stream.next().await.transpose()? {
         if let Some(position) = chunk.iter().position(|&byte| byte == newline) {
+            let position = position as u64;
             return Ok(index + position);
         }
 
-        index += chunk.len();
+        index += chunk.len() as u64;
     }
 
     Ok(index)
@@ -371,7 +397,7 @@ pub fn generate_test_files(num_files: usize, overlap_factor: f64) -> Vec<FileGro
 
         let file = PartitionedFile {
             object_meta: ObjectMeta {
-                location: Path::from(format!("file_{}.parquet", i)),
+                location: Path::from(format!("file_{i}.parquet")),
                 last_modified: chrono::Utc::now(),
                 size: 1000,
                 e_tag: None,

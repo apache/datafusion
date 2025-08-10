@@ -23,28 +23,166 @@ pub(crate) mod spill_manager;
 use std::fs::File;
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::ptr::NonNull;
+use std::sync::Arc;
+use std::task::{Context, Poll};
 
 use arrow::array::ArrayData;
 use arrow::datatypes::{Schema, SchemaRef};
-use arrow::ipc::{reader::StreamReader, writer::StreamWriter};
+use arrow::ipc::{
+    reader::StreamReader,
+    writer::{IpcWriteOptions, StreamWriter},
+    MetadataVersion,
+};
 use arrow::record_batch::RecordBatch;
-use tokio::sync::mpsc::Sender;
 
-use datafusion_common::{exec_datafusion_err, HashSet, Result};
+use datafusion_common::config::SpillCompression;
+use datafusion_common::{exec_datafusion_err, DataFusionError, HashSet, Result};
+use datafusion_common_runtime::SpawnedTask;
+use datafusion_execution::disk_manager::RefCountedTempFile;
+use datafusion_execution::RecordBatchStream;
+use futures::{FutureExt as _, Stream};
 
-fn read_spill(sender: Sender<Result<RecordBatch>>, path: &Path) -> Result<()> {
-    let file = BufReader::new(File::open(path)?);
-    // SAFETY: DataFusion's spill writer strictly follows Arrow IPC specifications
-    // with validated schemas and buffers. Skip redundant validation during read
-    // to speedup read operation. This is safe for DataFusion as input guaranteed to be correct when written.
-    let reader = unsafe { StreamReader::try_new(file, None)?.with_skip_validation(true) };
-    for batch in reader {
-        sender
-            .blocking_send(batch.map_err(Into::into))
-            .map_err(|e| exec_datafusion_err!("{e}"))?;
+/// Stream that reads spill files from disk where each batch is read in a spawned blocking task
+/// It will read one batch at a time and will not do any buffering, to buffer data use [`crate::common::spawn_buffered`]
+///
+/// A simpler solution would be spawning a long-running blocking task for each
+/// file read (instead of each batch). This approach does not work because when
+/// the number of concurrent reads exceeds the Tokio thread pool limit,
+/// deadlocks can occur and block progress.
+struct SpillReaderStream {
+    schema: SchemaRef,
+    state: SpillReaderStreamState,
+}
+
+/// When we poll for the next batch, we will get back both the batch and the reader,
+/// so we can call `next` again.
+type NextRecordBatchResult = Result<(StreamReader<BufReader<File>>, Option<RecordBatch>)>;
+
+enum SpillReaderStreamState {
+    /// Initial state: the stream was not initialized yet
+    /// and the file was not opened
+    Uninitialized(RefCountedTempFile),
+
+    /// A read is in progress in a spawned blocking task for which we hold the handle.
+    ReadInProgress(SpawnedTask<NextRecordBatchResult>),
+
+    /// A read has finished and we wait for being polled again in order to start reading the next batch.
+    Waiting(StreamReader<BufReader<File>>),
+
+    /// The stream has finished, successfully or not.
+    Done,
+}
+
+impl SpillReaderStream {
+    fn new(schema: SchemaRef, spill_file: RefCountedTempFile) -> Self {
+        Self {
+            schema,
+            state: SpillReaderStreamState::Uninitialized(spill_file),
+        }
     }
-    Ok(())
+
+    fn poll_next_inner(
+        &mut self,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<RecordBatch>>> {
+        match &mut self.state {
+            SpillReaderStreamState::Uninitialized(_) => {
+                // Temporarily replace with `Done` to be able to pass the file to the task.
+                let SpillReaderStreamState::Uninitialized(spill_file) =
+                    std::mem::replace(&mut self.state, SpillReaderStreamState::Done)
+                else {
+                    unreachable!()
+                };
+
+                let task = SpawnedTask::spawn_blocking(move || {
+                    let file = BufReader::new(File::open(spill_file.path())?);
+                    // SAFETY: DataFusion's spill writer strictly follows Arrow IPC specifications
+                    // with validated schemas and buffers. Skip redundant validation during read
+                    // to speedup read operation. This is safe for DataFusion as input guaranteed to be correct when written.
+                    let mut reader = unsafe {
+                        StreamReader::try_new(file, None)?.with_skip_validation(true)
+                    };
+
+                    let next_batch = reader.next().transpose()?;
+
+                    Ok((reader, next_batch))
+                });
+
+                self.state = SpillReaderStreamState::ReadInProgress(task);
+
+                // Poll again immediately so the inner task is polled and the waker is
+                // registered.
+                self.poll_next_inner(cx)
+            }
+
+            SpillReaderStreamState::ReadInProgress(task) => {
+                let result = futures::ready!(task.poll_unpin(cx))
+                    .unwrap_or_else(|err| Err(DataFusionError::External(Box::new(err))));
+
+                match result {
+                    Ok((reader, batch)) => {
+                        match batch {
+                            Some(batch) => {
+                                self.state = SpillReaderStreamState::Waiting(reader);
+
+                                Poll::Ready(Some(Ok(batch)))
+                            }
+                            None => {
+                                // Stream is done
+                                self.state = SpillReaderStreamState::Done;
+
+                                Poll::Ready(None)
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        self.state = SpillReaderStreamState::Done;
+
+                        Poll::Ready(Some(Err(err)))
+                    }
+                }
+            }
+
+            SpillReaderStreamState::Waiting(_) => {
+                // Temporarily replace with `Done` to be able to pass the file to the task.
+                let SpillReaderStreamState::Waiting(mut reader) =
+                    std::mem::replace(&mut self.state, SpillReaderStreamState::Done)
+                else {
+                    unreachable!()
+                };
+
+                let task = SpawnedTask::spawn_blocking(move || {
+                    let next_batch = reader.next().transpose()?;
+
+                    Ok((reader, next_batch))
+                });
+
+                self.state = SpillReaderStreamState::ReadInProgress(task);
+
+                // Poll again immediately so the inner task is polled and the waker is
+                // registered.
+                self.poll_next_inner(cx)
+            }
+
+            SpillReaderStreamState::Done => Poll::Ready(None),
+        }
+    }
+}
+
+impl Stream for SpillReaderStream {
+    type Item = Result<RecordBatch>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        self.get_mut().poll_next_inner(cx)
+    }
+}
+
+impl RecordBatchStream for SpillReaderStream {
+    fn schema(&self) -> SchemaRef {
+        Arc::clone(&self.schema)
+    }
 }
 
 /// Spill the `RecordBatch` to disk as smaller batches
@@ -61,7 +199,8 @@ pub fn spill_record_batch_by_size(
 ) -> Result<()> {
     let mut offset = 0;
     let total_rows = batch.num_rows();
-    let mut writer = IPCStreamWriter::new(&path, schema.as_ref())?;
+    let mut writer =
+        IPCStreamWriter::new(&path, schema.as_ref(), SpillCompression::Uncompressed)?;
 
     while offset < total_rows {
         let length = std::cmp::min(total_rows - offset, batch_size_rows);
@@ -159,15 +298,27 @@ struct IPCStreamWriter {
 
 impl IPCStreamWriter {
     /// Create new writer
-    pub fn new(path: &Path, schema: &Schema) -> Result<Self> {
+    pub fn new(
+        path: &Path,
+        schema: &Schema,
+        compression_type: SpillCompression,
+    ) -> Result<Self> {
         let file = File::create(path).map_err(|e| {
             exec_datafusion_err!("Failed to create partition file at {path:?}: {e:?}")
         })?;
+
+        let metadata_version = MetadataVersion::V5;
+        let alignment = 8;
+        let mut write_options =
+            IpcWriteOptions::try_new(alignment, false, metadata_version)?;
+        write_options = write_options.try_with_compression(compression_type.into())?;
+
+        let writer = StreamWriter::try_new_with_options(file, schema, write_options)?;
         Ok(Self {
             num_batches: 0,
             num_rows: 0,
             num_bytes: 0,
-            writer: StreamWriter::try_new(file, schema)?,
+            writer,
         })
     }
 
@@ -199,12 +350,13 @@ mod tests {
     use crate::metrics::SpillMetrics;
     use crate::spill::spill_manager::SpillManager;
     use crate::test::build_table_i32;
-    use arrow::array::{Float64Array, Int32Array, ListArray, StringArray};
+    use arrow::array::{ArrayRef, Float64Array, Int32Array, ListArray, StringArray};
     use arrow::compute::cast;
     use arrow::datatypes::{DataType, Field, Int32Type, Schema};
     use arrow::record_batch::RecordBatch;
     use datafusion_common::Result;
     use datafusion_execution::runtime_env::RuntimeEnv;
+    use futures::StreamExt as _;
 
     use std::sync::Arc;
 
@@ -322,10 +474,15 @@ mod tests {
         let metrics = SpillMetrics::new(&ExecutionPlanMetricsSet::new(), 0);
         let spill_manager = SpillManager::new(env, metrics, Arc::clone(&schema));
 
-        let spill_file = spill_manager
-            .spill_record_batch_by_size(&batch1, "Test Spill", 1)?
+        let (spill_file, max_batch_mem) = spill_manager
+            .spill_record_batch_by_size_and_return_max_batch_memory(
+                &batch1,
+                "Test Spill",
+                1,
+            )?
             .unwrap();
         assert!(spill_file.path().exists());
+        assert!(max_batch_mem > 0);
 
         let stream = spill_manager.read_spill_as_stream(spill_file)?;
         assert_eq!(stream.schema(), schema);
@@ -333,6 +490,113 @@ mod tests {
         let batches = collect(stream).await?;
         assert_eq!(batches.len(), 4);
 
+        Ok(())
+    }
+
+    fn build_compressible_batch() -> RecordBatch {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Utf8, false),
+            Field::new("b", DataType::Int32, false),
+            Field::new("c", DataType::Int32, true),
+        ]));
+
+        let a: ArrayRef = Arc::new(StringArray::from_iter_values(std::iter::repeat_n(
+            "repeated", 100,
+        )));
+        let b: ArrayRef = Arc::new(Int32Array::from(vec![1; 100]));
+        let c: ArrayRef = Arc::new(Int32Array::from(vec![2; 100]));
+
+        RecordBatch::try_new(schema, vec![a, b, c]).unwrap()
+    }
+
+    async fn validate(
+        spill_manager: &SpillManager,
+        spill_file: RefCountedTempFile,
+        num_rows: usize,
+        schema: SchemaRef,
+        batch_count: usize,
+    ) -> Result<()> {
+        let spilled_rows = spill_manager.metrics.spilled_rows.value();
+        assert_eq!(spilled_rows, num_rows);
+
+        let stream = spill_manager.read_spill_as_stream(spill_file)?;
+        assert_eq!(stream.schema(), schema);
+
+        let batches = collect(stream).await?;
+        assert_eq!(batches.len(), batch_count);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_spill_compression() -> Result<()> {
+        let batch = build_compressible_batch();
+        let num_rows = batch.num_rows();
+        let schema = batch.schema();
+        let batch_count = 1;
+        let batches = [batch];
+
+        // Construct SpillManager
+        let env = Arc::new(RuntimeEnv::default());
+        let uncompressed_metrics = SpillMetrics::new(&ExecutionPlanMetricsSet::new(), 0);
+        let lz4_metrics = SpillMetrics::new(&ExecutionPlanMetricsSet::new(), 0);
+        let zstd_metrics = SpillMetrics::new(&ExecutionPlanMetricsSet::new(), 0);
+        let uncompressed_spill_manager = SpillManager::new(
+            Arc::clone(&env),
+            uncompressed_metrics,
+            Arc::clone(&schema),
+        );
+        let lz4_spill_manager =
+            SpillManager::new(Arc::clone(&env), lz4_metrics, Arc::clone(&schema))
+                .with_compression_type(SpillCompression::Lz4Frame);
+        let zstd_spill_manager =
+            SpillManager::new(env, zstd_metrics, Arc::clone(&schema))
+                .with_compression_type(SpillCompression::Zstd);
+        let uncompressed_spill_file = uncompressed_spill_manager
+            .spill_record_batch_and_finish(&batches, "Test")?
+            .unwrap();
+        let lz4_spill_file = lz4_spill_manager
+            .spill_record_batch_and_finish(&batches, "Lz4_Test")?
+            .unwrap();
+        let zstd_spill_file = zstd_spill_manager
+            .spill_record_batch_and_finish(&batches, "ZSTD_Test")?
+            .unwrap();
+        assert!(uncompressed_spill_file.path().exists());
+        assert!(lz4_spill_file.path().exists());
+        assert!(zstd_spill_file.path().exists());
+
+        let lz4_spill_size = std::fs::metadata(lz4_spill_file.path())?.len();
+        let zstd_spill_size = std::fs::metadata(zstd_spill_file.path())?.len();
+        let uncompressed_spill_size =
+            std::fs::metadata(uncompressed_spill_file.path())?.len();
+
+        assert!(uncompressed_spill_size > lz4_spill_size);
+        assert!(uncompressed_spill_size > zstd_spill_size);
+
+        validate(
+            &lz4_spill_manager,
+            lz4_spill_file,
+            num_rows,
+            Arc::clone(&schema),
+            batch_count,
+        )
+        .await?;
+        validate(
+            &zstd_spill_manager,
+            zstd_spill_file,
+            num_rows,
+            Arc::clone(&schema),
+            batch_count,
+        )
+        .await?;
+        validate(
+            &uncompressed_spill_manager,
+            uncompressed_spill_file,
+            num_rows,
+            schema,
+            batch_count,
+        )
+        .await?;
         Ok(())
     }
 
@@ -550,12 +814,13 @@ mod tests {
                 Arc::new(StringArray::from(vec!["d", "e", "f"])),
             ],
         )?;
-
+        // After appending each batch, spilled_rows should increase, while spill_file_count and
+        // spilled_bytes remain the same (spilled_bytes is updated only after finish() is called)
         in_progress_file.append_batch(&batch1)?;
-        verify_metrics(&in_progress_file, 1, 356, 3)?;
+        verify_metrics(&in_progress_file, 1, 0, 3)?;
 
         in_progress_file.append_batch(&batch2)?;
-        verify_metrics(&in_progress_file, 1, 712, 6)?;
+        verify_metrics(&in_progress_file, 1, 0, 6)?;
 
         let completed_file = in_progress_file.finish()?;
         assert!(completed_file.is_some());
@@ -590,7 +855,7 @@ mod tests {
         let completed_file = spill_manager.spill_record_batch_and_finish(&[], "Test")?;
         assert!(completed_file.is_none());
 
-        // Test write empty batch with interface `spill_record_batch_by_size()`
+        // Test write empty batch with interface `spill_record_batch_by_size_and_return_max_batch_memory()`
         let empty_batch = RecordBatch::try_new(
             Arc::clone(&schema),
             vec![
@@ -598,10 +863,52 @@ mod tests {
                 Arc::new(StringArray::from(Vec::<Option<&str>>::new())),
             ],
         )?;
-        let completed_file =
-            spill_manager.spill_record_batch_by_size(&empty_batch, "Test", 1)?;
+        let completed_file = spill_manager
+            .spill_record_batch_by_size_and_return_max_batch_memory(
+                &empty_batch,
+                "Test",
+                1,
+            )?;
         assert!(completed_file.is_none());
 
         Ok(())
+    }
+
+    #[test]
+    fn test_reading_more_spills_than_tokio_blocking_threads() -> Result<()> {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .max_blocking_threads(1)
+            .build()
+            .unwrap()
+            .block_on(async {
+                let batch = build_table_i32(
+                    ("a2", &vec![0, 1, 2]),
+                    ("b2", &vec![3, 4, 5]),
+                    ("c2", &vec![4, 5, 6]),
+                );
+
+                let schema = batch.schema();
+
+                // Construct SpillManager
+                let env = Arc::new(RuntimeEnv::default());
+                let metrics = SpillMetrics::new(&ExecutionPlanMetricsSet::new(), 0);
+                let spill_manager = SpillManager::new(env, metrics, Arc::clone(&schema));
+                let batches: [_; 10] = std::array::from_fn(|_| batch.clone());
+
+                let spill_file_1 = spill_manager
+                    .spill_record_batch_and_finish(&batches, "Test1")?
+                    .unwrap();
+                let spill_file_2 = spill_manager
+                    .spill_record_batch_and_finish(&batches, "Test2")?
+                    .unwrap();
+
+                let mut stream_1 = spill_manager.read_spill_as_stream(spill_file_1)?;
+                let mut stream_2 = spill_manager.read_spill_as_stream(spill_file_2)?;
+                stream_1.next().await;
+                stream_2.next().await;
+
+                Ok(())
+            })
     }
 }

@@ -28,10 +28,7 @@ use arrow::array::{
 };
 use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::DataType;
-use arrow::datatypes::{
-    DataType::{List, Null},
-    Field,
-};
+use arrow::datatypes::{DataType::Null, Field};
 use datafusion_common::utils::SingleRowListArrayBuilder;
 use datafusion_common::{plan_err, Result};
 use datafusion_expr::binary::{
@@ -105,16 +102,14 @@ impl ScalarUDFImpl for MakeArray {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        match arg_types.len() {
-            0 => Ok(empty_array_type()),
-            _ => {
-                // At this point, all the type in array should be coerced to the same one
-                Ok(List(Arc::new(Field::new_list_field(
-                    arg_types[0].to_owned(),
-                    true,
-                ))))
-            }
-        }
+        let element_type = if arg_types.is_empty() {
+            Null
+        } else {
+            // At this point, all the type in array should be coerced to the same one.
+            arg_types[0].to_owned()
+        };
+
+        Ok(DataType::new_list(element_type, true))
     }
 
     fn invoke_with_args(
@@ -129,26 +124,16 @@ impl ScalarUDFImpl for MakeArray {
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        let mut errors = vec![];
-        match try_type_union_resolution_with_struct(arg_types) {
-            Ok(r) => return Ok(r),
-            Err(e) => {
-                errors.push(e);
-            }
+        if let Ok(unified) = try_type_union_resolution_with_struct(arg_types) {
+            return Ok(unified);
         }
 
-        if let Some(new_type) = type_union_resolution(arg_types) {
-            if new_type.is_null() {
-                Ok(vec![DataType::Int64; arg_types.len()])
-            } else {
-                Ok(vec![new_type; arg_types.len()])
-            }
+        if let Some(unified) = type_union_resolution(arg_types) {
+            Ok(vec![unified; arg_types.len()])
         } else {
             plan_err!(
-                "Fail to find the valid type between {:?} for {}, errors are {:?}",
-                arg_types,
-                self.name(),
-                errors
+                "Failed to unify argument types of {}: {arg_types:?}",
+                self.name()
             )
         }
     }
@@ -158,35 +143,25 @@ impl ScalarUDFImpl for MakeArray {
     }
 }
 
-// Empty array is a special case that is useful for many other array functions
-pub(super) fn empty_array_type() -> DataType {
-    List(Arc::new(Field::new_list_field(DataType::Int64, true)))
-}
-
 /// `make_array_inner` is the implementation of the `make_array` function.
 /// Constructs an array using the input `data` as `ArrayRef`.
 /// Returns a reference-counted `Array` instance result.
 pub(crate) fn make_array_inner(arrays: &[ArrayRef]) -> Result<ArrayRef> {
-    let mut data_type = Null;
-    for arg in arrays {
-        let arg_data_type = arg.data_type();
-        if !arg_data_type.equals_datatype(&Null) {
-            data_type = arg_data_type.clone();
-            break;
-        }
-    }
+    let data_type = arrays.iter().find_map(|arg| {
+        let arg_type = arg.data_type();
+        (!arg_type.is_null()).then_some(arg_type)
+    });
 
-    match data_type {
+    let data_type = data_type.unwrap_or(&Null);
+    if data_type.is_null() {
         // Either an empty array or all nulls:
-        Null => {
-            let length = arrays.iter().map(|a| a.len()).sum();
-            // By default Int64
-            let array = new_null_array(&DataType::Int64, length);
-            Ok(Arc::new(
-                SingleRowListArrayBuilder::new(array).build_list_array(),
-            ))
-        }
-        _ => array_array::<i32>(arrays, data_type),
+        let length = arrays.iter().map(|a| a.len()).sum();
+        let array = new_null_array(&Null, length);
+        Ok(Arc::new(
+            SingleRowListArrayBuilder::new(array).build_list_array(),
+        ))
+    } else {
+        array_array::<i32>(arrays, data_type.clone())
     }
 }
 

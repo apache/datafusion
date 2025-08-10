@@ -255,6 +255,13 @@ impl ExecutionPlan for MockExec {
 
     // Panics if one of the batches is an error
     fn statistics(&self) -> Result<Statistics> {
+        self.partition_statistics(None)
+    }
+
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        if partition.is_some() {
+            return Ok(Statistics::new_unknown(&self.schema));
+        }
         let data: Result<Vec<_>> = self
             .data
             .iter()
@@ -405,6 +412,13 @@ impl ExecutionPlan for BarrierExec {
     }
 
     fn statistics(&self) -> Result<Statistics> {
+        self.partition_statistics(None)
+    }
+
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        if partition.is_some() {
+            return Ok(Statistics::new_unknown(&self.schema));
+        }
         Ok(common::compute_record_batch_statistics(
             &self.data,
             &self.schema,
@@ -589,6 +603,14 @@ impl ExecutionPlan for StatisticsExec {
 
     fn statistics(&self) -> Result<Statistics> {
         Ok(self.stats.clone())
+    }
+
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        Ok(if partition.is_some() {
+            Statistics::new_unknown(&self.schema)
+        } else {
+            self.stats.clone()
+        })
     }
 }
 

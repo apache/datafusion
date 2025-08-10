@@ -38,8 +38,10 @@ jobs:
   security_audit:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
       - name: Install cargo-audit
         run: cargo install cargo-audit
       - name: Run audit check
-        run: cargo audit
+        # Ignored until https://github.com/apache/datafusion/issues/15571
+        # ignored py03 warning until arrow 55 upgrade
+        run: cargo audit --ignore RUSTSEC-2024-0370 --ignore RUSTSEC-2025-0020

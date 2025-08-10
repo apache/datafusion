@@ -91,12 +91,12 @@ select * from unnest(null);
 
 
 ## Unnest empty array in select list
-query I
+query ?
 select unnest([]);
 ----
 
 ## Unnest empty array in from clause
-query I
+query ?
 select * from unnest([]);
 ----
 
@@ -243,7 +243,7 @@ query error DataFusion error: This feature is not implemented: unnest\(\) does n
 select unnest(null) from unnest_table;
 
 ## Multiple unnest functions in selection
-query II
+query ?I
 select unnest([]), unnest(NULL::int[]);
 ----
 
@@ -263,10 +263,10 @@ NULL 10 NULL
 NULL NULL 17
 NULL NULL 18
 
-query IIIT
-select
-    unnest(column1), unnest(column2) + 2,
-    column3 * 10, unnest(array_remove(column1, '4'))
+query IIII
+select 
+    unnest(column1), unnest(column2) + 2, 
+    column3 * 10, unnest(array_remove(column1, 4))
 from unnest_table;
 ----
 1 9 10 1
@@ -316,7 +316,7 @@ select * from unnest(
 2 b NULL NULL
 NULL c NULL NULL
 
-query II
+query ?I
 select * from unnest([], NULL::int[]);
 ----
 

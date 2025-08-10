@@ -82,7 +82,7 @@ impl GroupValuesRows {
     pub fn try_new(schema: SchemaRef) -> Result<Self> {
         // Print a debugging message, so it is clear when the (slower) fallback
         // GroupValuesRows is used.
-        debug!("Creating GroupValuesRows for schema: {}", schema);
+        debug!("Creating GroupValuesRows for schema: {schema}");
         let row_converter = RowConverter::new(
             schema
                 .fields()
@@ -106,7 +106,7 @@ impl GroupValuesRows {
             group_values: None,
             hashes_buffer: Default::default(),
             rows_buffer,
-            random_state: Default::default(),
+            random_state: crate::aggregates::AGGREGATION_HASH_SEED,
         })
     }
 }
@@ -202,6 +202,7 @@ impl GroupValues for GroupValuesRows {
             EmitTo::All => {
                 let output = self.row_converter.convert_rows(&group_values)?;
                 group_values.clear();
+                self.map.clear();
                 output
             }
             EmitTo::First(n) => {

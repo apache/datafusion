@@ -17,7 +17,6 @@
 
 //! [`ScalarStructBuilder`] for building [`ScalarValue::Struct`]
 
-use crate::error::_internal_err;
 use crate::{Result, ScalarValue};
 use arrow::array::{ArrayRef, StructArray};
 use arrow::datatypes::{DataType, Field, FieldRef, Fields};
@@ -109,17 +108,8 @@ impl ScalarStructBuilder {
     pub fn build(self) -> Result<ScalarValue> {
         let Self { fields, arrays } = self;
 
-        for array in &arrays {
-            if array.len() != 1 {
-                return _internal_err!(
-                    "Error building ScalarValue::Struct. \
-                Expected array with exactly one element, found array with {} elements",
-                    array.len()
-                );
-            }
-        }
-
-        let struct_array = StructArray::try_new(Fields::from(fields), arrays, None)?;
+        let struct_array =
+            StructArray::try_new_with_length(Fields::from(fields), arrays, None, 1)?;
         Ok(ScalarValue::Struct(Arc::new(struct_array)))
     }
 }
@@ -179,5 +169,17 @@ impl IntoFields for &Fields {
 impl IntoFields for Vec<Field> {
     fn into(self) -> Fields {
         Fields::from(self)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Other cases are tested by doc tests
+    #[test]
+    fn test_empty_struct() {
+        let sv = ScalarStructBuilder::new().build().unwrap();
+        assert_eq!(format!("{sv}"), "{}");
     }
 }

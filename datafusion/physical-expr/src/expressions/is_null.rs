@@ -17,9 +17,6 @@
 
 //! IS NULL expression
 
-use std::hash::Hash;
-use std::{any::Any, sync::Arc};
-
 use crate::PhysicalExpr;
 use arrow::{
     datatypes::{DataType, Schema},
@@ -28,6 +25,8 @@ use arrow::{
 use datafusion_common::Result;
 use datafusion_common::ScalarValue;
 use datafusion_expr::ColumnarValue;
+use std::hash::Hash;
+use std::{any::Any, sync::Arc};
 
 /// IS NULL expression
 #[derive(Debug, Eq)]

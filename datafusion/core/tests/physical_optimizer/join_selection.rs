@@ -25,8 +25,8 @@ use std::{
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::JoinSide;
 use datafusion_common::{stats::Precision, ColumnStatistics, JoinType, ScalarValue};
+use datafusion_common::{JoinSide, NullEquality};
 use datafusion_common::{Result, Statistics};
 use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream, TaskContext};
 use datafusion_expr::Operator;
@@ -222,7 +222,7 @@ async fn test_join_with_swap() {
             &JoinType::Left,
             None,
             PartitionMode::CollectLeft,
-            false,
+            NullEquality::NullEqualsNothing,
         )
         .unwrap(),
     );
@@ -251,11 +251,19 @@ async fn test_join_with_swap() {
         .expect("The type of the plan should not be changed");
 
     assert_eq!(
-        swapped_join.left().statistics().unwrap().total_byte_size,
+        swapped_join
+            .left()
+            .partition_statistics(None)
+            .unwrap()
+            .total_byte_size,
         Precision::Inexact(8192)
     );
     assert_eq!(
-        swapped_join.right().statistics().unwrap().total_byte_size,
+        swapped_join
+            .right()
+            .partition_statistics(None)
+            .unwrap()
+            .total_byte_size,
         Precision::Inexact(2097152)
     );
 }
@@ -276,7 +284,7 @@ async fn test_left_join_no_swap() {
             &JoinType::Left,
             None,
             PartitionMode::CollectLeft,
-            false,
+            NullEquality::NullEqualsNothing,
         )
         .unwrap(),
     );
@@ -291,11 +299,19 @@ async fn test_left_join_no_swap() {
         .expect("The type of the plan should not be changed");
 
     assert_eq!(
-        swapped_join.left().statistics().unwrap().total_byte_size,
+        swapped_join
+            .left()
+            .partition_statistics(None)
+            .unwrap()
+            .total_byte_size,
         Precision::Inexact(8192)
     );
     assert_eq!(
-        swapped_join.right().statistics().unwrap().total_byte_size,
+        swapped_join
+            .right()
+            .partition_statistics(None)
+            .unwrap()
+            .total_byte_size,
         Precision::Inexact(2097152)
     );
 }
@@ -317,7 +333,7 @@ async fn test_join_with_swap_semi() {
             &join_type,
             None,
             PartitionMode::Partitioned,
-            false,
+            NullEquality::NullEqualsNothing,
         )
         .unwrap();
 
@@ -336,11 +352,19 @@ async fn test_join_with_swap_semi() {
 
         assert_eq!(swapped_join.schema().fields().len(), 1);
         assert_eq!(
-            swapped_join.left().statistics().unwrap().total_byte_size,
+            swapped_join
+                .left()
+                .partition_statistics(None)
+                .unwrap()
+                .total_byte_size,
             Precision::Inexact(8192)
         );
         assert_eq!(
-            swapped_join.right().statistics().unwrap().total_byte_size,
+            swapped_join
+                .right()
+                .partition_statistics(None)
+                .unwrap()
+                .total_byte_size,
             Precision::Inexact(2097152)
         );
         assert_eq!(original_schema, swapped_join.schema());
@@ -384,7 +408,7 @@ async fn test_nested_join_swap() {
         &JoinType::Inner,
         None,
         PartitionMode::CollectLeft,
-        false,
+        NullEquality::NullEqualsNothing,
     )
     .unwrap();
     let child_schema = child_join.schema();
@@ -401,7 +425,7 @@ async fn test_nested_join_swap() {
         &JoinType::Left,
         None,
         PartitionMode::CollectLeft,
-        false,
+        NullEquality::NullEqualsNothing,
     )
     .unwrap();
 
@@ -440,7 +464,7 @@ async fn test_join_no_swap() {
             &JoinType::Inner,
             None,
             PartitionMode::CollectLeft,
-            false,
+            NullEquality::NullEqualsNothing,
         )
         .unwrap(),
     );
@@ -455,11 +479,19 @@ async fn test_join_no_swap() {
         .expect("The type of the plan should not be changed");
 
     assert_eq!(
-        swapped_join.left().statistics().unwrap().total_byte_size,
+        swapped_join
+            .left()
+            .partition_statistics(None)
+            .unwrap()
+            .total_byte_size,
         Precision::Inexact(8192)
     );
     assert_eq!(
-        swapped_join.right().statistics().unwrap().total_byte_size,
+        swapped_join
+            .right()
+            .partition_statistics(None)
+            .unwrap()
+            .total_byte_size,
         Precision::Inexact(2097152)
     );
 }
@@ -524,11 +556,19 @@ async fn test_nl_join_with_swap(join_type: JoinType) {
     );
 
     assert_eq!(
-        swapped_join.left().statistics().unwrap().total_byte_size,
+        swapped_join
+            .left()
+            .partition_statistics(None)
+            .unwrap()
+            .total_byte_size,
         Precision::Inexact(8192)
     );
     assert_eq!(
-        swapped_join.right().statistics().unwrap().total_byte_size,
+        swapped_join
+            .right()
+            .partition_statistics(None)
+            .unwrap()
+            .total_byte_size,
         Precision::Inexact(2097152)
     );
 }
@@ -589,11 +629,19 @@ async fn test_nl_join_with_swap_no_proj(join_type: JoinType) {
     );
 
     assert_eq!(
-        swapped_join.left().statistics().unwrap().total_byte_size,
+        swapped_join
+            .left()
+            .partition_statistics(None)
+            .unwrap()
+            .total_byte_size,
         Precision::Inexact(8192)
     );
     assert_eq!(
-        swapped_join.right().statistics().unwrap().total_byte_size,
+        swapped_join
+            .right()
+            .partition_statistics(None)
+            .unwrap()
+            .total_byte_size,
         Precision::Inexact(2097152)
     );
 }
@@ -642,7 +690,7 @@ async fn test_hash_join_swap_on_joins_with_projections(
         &join_type,
         Some(projection),
         PartitionMode::Partitioned,
-        false,
+        NullEquality::NullEqualsNothing,
     )?);
 
     let swapped = join
@@ -803,7 +851,7 @@ fn check_join_partition_mode(
             &JoinType::Inner,
             None,
             PartitionMode::Auto,
-            false,
+            NullEquality::NullEqualsNothing,
         )
         .unwrap(),
     );
@@ -1066,6 +1114,14 @@ impl ExecutionPlan for StatisticsExec {
 
     fn statistics(&self) -> Result<Statistics> {
         Ok(self.stats.clone())
+    }
+
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        Ok(if partition.is_some() {
+            Statistics::new_unknown(&self.schema)
+        } else {
+            self.stats.clone()
+        })
     }
 }
 
@@ -1442,7 +1498,7 @@ async fn test_join_with_maybe_swap_unbounded_case(t: TestCase) -> Result<()> {
         &t.initial_join_type,
         None,
         t.initial_mode,
-        false,
+        NullEquality::NullEqualsNothing,
     )?) as _;
 
     let optimized_join_plan = hash_join_swap_subrule(join, &ConfigOptions::new())?;

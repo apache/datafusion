@@ -16,6 +16,10 @@
 // under the License.
 
 pub use crate::display::{DefaultDisplay, DisplayAs, DisplayFormatType, VerboseDisplay};
+use crate::filter_pushdown::{
+    ChildPushdownResult, FilterDescription, FilterPushdownPhase,
+    FilterPushdownPropagation,
+};
 pub use crate::metrics::Metric;
 pub use crate::ordering::InputOrderMode;
 pub use crate::stream::EmptyRecordBatchStream;
@@ -38,18 +42,16 @@ use crate::coalesce_partitions::CoalescePartitionsExec;
 use crate::display::DisplayableExecutionPlan;
 use crate::metrics::MetricsSet;
 use crate::projection::ProjectionExec;
-use crate::repartition::RepartitionExec;
-use crate::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use crate::stream::RecordBatchStreamAdapter;
 
 use arrow::array::{Array, RecordBatch};
 use arrow::datatypes::SchemaRef;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::{exec_err, Constraints, Result};
+use datafusion_common::{exec_err, Constraints, DataFusionError, Result};
 use datafusion_common_runtime::JoinSet;
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
-use datafusion_physical_expr_common::sort_expr::LexRequirement;
+use datafusion_physical_expr::EquivalenceProperties;
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, OrderingRequirements};
 
 use futures::stream::{StreamExt, TryStreamExt};
 
@@ -115,10 +117,11 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// Returns an error if this individual node does not conform to its invariants.
     /// These invariants are typically only checked in debug mode.
     ///
-    /// A default set of invariants is provided in the default implementation.
+    /// A default set of invariants is provided in the [check_default_invariants] function.
+    /// The default implementation of `check_invariants` calls this function.
     /// Extension nodes can provide their own invariants.
-    fn check_invariants(&self, _check: InvariantLevel) -> Result<()> {
-        Ok(())
+    fn check_invariants(&self, check: InvariantLevel) -> Result<()> {
+        check_default_invariants(self, check)
     }
 
     /// Specifies the data distribution requirements for all the
@@ -136,7 +139,7 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// NOTE that checking `!is_empty()` does **not** check for a
     /// required input ordering. Instead, the correct check is that at
     /// least one entry must be `Some`
-    fn required_input_ordering(&self) -> Vec<Option<LexRequirement>> {
+    fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
         vec![None; self.children().len()]
     }
 
@@ -191,6 +194,31 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>>;
+
+    /// Reset any internal state within this [`ExecutionPlan`].
+    ///
+    /// This method is called when an [`ExecutionPlan`] needs to be re-executed,
+    /// such as in recursive queries. Unlike [`ExecutionPlan::with_new_children`], this method
+    /// ensures that any stateful components (e.g., [`DynamicFilterPhysicalExpr`])
+    /// are reset to their initial state.
+    ///
+    /// The default implementation simply calls [`ExecutionPlan::with_new_children`] with the existing children,
+    /// effectively creating a new instance of the [`ExecutionPlan`] with the same children but without
+    /// necessarily resetting any internal state. Implementations that require resetting of some
+    /// internal state should override this method to provide the necessary logic.
+    ///
+    /// This method should *not* reset state recursively for children, as it is expected that
+    /// it will be called from within a walk of the execution plan tree so that it will be called on each child later
+    /// or was already called on each child.
+    ///
+    /// Note to implementers: unlike [`ExecutionPlan::with_new_children`] this method does not accept new children as an argument,
+    /// thus it is expected that any cached plan properties will remain valid after the reset.
+    ///
+    /// [`DynamicFilterPhysicalExpr`]: datafusion_physical_expr::expressions::DynamicFilterPhysicalExpr
+    fn reset_state(self: Arc<Self>) -> Result<Arc<dyn ExecutionPlan>> {
+        let children = self.children().into_iter().cloned().collect();
+        self.with_new_children(children)
+    }
 
     /// If supported, attempt to increase the partitioning of this `ExecutionPlan` to
     /// produce `target_partitions` partitions.
@@ -267,11 +295,13 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// batch is superlinear. See this [general guideline][async-guideline] for more context
     /// on this point, which explains why one should avoid spending a long time without
     /// reaching an `await`/yield point in asynchronous runtimes.
-    /// This can be achieved by manually returning [`Poll::Pending`] and setting up wakers
-    /// appropriately, or the use of [`tokio::task::yield_now()`] when appropriate.
+    /// This can be achieved by using the utilities from the [`coop`](crate::coop) module, by
+    /// manually returning [`Poll::Pending`] and setting up wakers appropriately, or by calling
+    /// [`tokio::task::yield_now()`] when appropriate.
     /// In special cases that warrant manual yielding, determination for "regularly" may be
-    /// made using a timer (being careful with the overhead-heavy system call needed to
-    /// take the time), or by counting rows or batches.
+    /// made using the [Tokio task budget](https://docs.rs/tokio/latest/tokio/task/coop/index.html),
+    /// a timer (being careful with the overhead-heavy system call needed to take the time), or by
+    /// counting rows or batches.
     ///
     /// The [cancellation benchmark] tracks some cases of how quickly queries can
     /// be cancelled.
@@ -423,7 +453,27 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     ///
     /// For TableScan executors, which supports filter pushdown, special attention
     /// needs to be paid to whether the stats returned by this method are exact or not
+    #[deprecated(since = "48.0.0", note = "Use `partition_statistics` method instead")]
     fn statistics(&self) -> Result<Statistics> {
+        Ok(Statistics::new_unknown(&self.schema()))
+    }
+
+    /// Returns statistics for a specific partition of this `ExecutionPlan` node.
+    /// If statistics are not available, should return [`Statistics::new_unknown`]
+    /// (the default), not an error.
+    /// If `partition` is `None`, it returns statistics for the entire plan.
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        if let Some(idx) = partition {
+            // Validate partition index
+            let partition_count = self.properties().partitioning.partition_count();
+            if idx >= partition_count {
+                return internal_err!(
+                    "Invalid partition index: {}, the partition count is {}",
+                    idx,
+                    partition_count
+                );
+            }
+        }
         Ok(Statistics::new_unknown(&self.schema()))
     }
 
@@ -466,6 +516,151 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
         _projection: &ProjectionExec,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         Ok(None)
+    }
+
+    /// Collect filters that this node can push down to its children.
+    /// Filters that are being pushed down from parents are passed in,
+    /// and the node may generate additional filters to push down.
+    /// For example, given the plan FilterExec -> HashJoinExec -> DataSourceExec,
+    /// what will happen is that we recurse down the plan calling `ExecutionPlan::gather_filters_for_pushdown`:
+    /// 1. `FilterExec::gather_filters_for_pushdown` is called with no parent
+    ///    filters so it only returns that `FilterExec` wants to push down its own predicate.
+    /// 2. `HashJoinExec::gather_filters_for_pushdown` is called with the filter from
+    ///    `FilterExec`, which it only allows to push down to one side of the join (unless it's on the join key)
+    ///    but it also adds its own filters (e.g. pushing down a bloom filter of the hash table to the scan side of the join).
+    /// 3. `DataSourceExec::gather_filters_for_pushdown` is called with both filters from `HashJoinExec`
+    ///    and `FilterExec`, however `DataSourceExec::gather_filters_for_pushdown` doesn't actually do anything
+    ///    since it has no children and no additional filters to push down.
+    ///    It's only once [`ExecutionPlan::handle_child_pushdown_result`] is called on `DataSourceExec` as we recurse
+    ///    up the plan that `DataSourceExec` can actually bind the filters.
+    ///
+    /// The default implementation bars all parent filters from being pushed down and adds no new filters.
+    /// This is the safest option, making filter pushdown opt-in on a per-node pasis.
+    ///
+    /// There are two different phases in filter pushdown, which some operators may handle the same and some differently.
+    /// Depending on the phase the operator may or may not be allowed to modify the plan.
+    /// See [`FilterPushdownPhase`] for more details.
+    fn gather_filters_for_pushdown(
+        &self,
+        _phase: FilterPushdownPhase,
+        parent_filters: Vec<Arc<dyn PhysicalExpr>>,
+        _config: &ConfigOptions,
+    ) -> Result<FilterDescription> {
+        Ok(FilterDescription::all_unsupported(
+            &parent_filters,
+            &self.children(),
+        ))
+    }
+
+    /// Handle the result of a child pushdown.
+    /// This method is called as we recurse back up the plan tree after pushing
+    /// filters down to child nodes via [`ExecutionPlan::gather_filters_for_pushdown`].
+    /// It allows the current node to process the results of filter pushdown from
+    /// its children, deciding whether to absorb filters, modify the plan, or pass
+    /// filters back up to its parent.
+    ///
+    /// **Purpose and Context:**
+    /// Filter pushdown is a critical optimization in DataFusion that aims to
+    /// reduce the amount of data processed by applying filters as early as
+    /// possible in the query plan. This method is part of the second phase of
+    /// filter pushdown, where results are propagated back up the tree after
+    /// being pushed down. Each node can inspect the pushdown results from its
+    /// children and decide how to handle any unapplied filters, potentially
+    /// optimizing the plan structure or filter application.
+    ///
+    /// **Behavior in Different Nodes:**
+    /// - For a `DataSourceExec`, this often means absorbing the filters to apply
+    ///   them during the scan phase (late materialization), reducing the data
+    ///   read from the source.
+    /// - A `FilterExec` may absorb any filters its children could not handle,
+    ///   combining them with its own predicate. If no filters remain (i.e., the
+    ///   predicate becomes trivially true), it may remove itself from the plan
+    ///   altogether. It typically marks parent filters as supported, indicating
+    ///   they have been handled.
+    /// - A `HashJoinExec` might ignore the pushdown result if filters need to
+    ///   be applied during the join operation. It passes the parent filters back
+    ///   up wrapped in [`FilterPushdownPropagation::if_any`], discarding
+    ///   any self-filters from children.
+    ///
+    /// **Example Walkthrough:**
+    /// Consider a query plan: `FilterExec (f1) -> HashJoinExec -> DataSourceExec`.
+    /// 1. **Downward Phase (`gather_filters_for_pushdown`):** Starting at
+    ///    `FilterExec`, the filter `f1` is gathered and pushed down to
+    ///    `HashJoinExec`. `HashJoinExec` may allow `f1` to pass to one side of
+    ///    the join or add its own filters (e.g., a min-max filter from the build side),
+    ///    then pushes filters to `DataSourceExec`. `DataSourceExec`, being a leaf node,
+    ///    has no children to push to, so it prepares to handle filters in the
+    ///    upward phase.
+    /// 2. **Upward Phase (`handle_child_pushdown_result`):** Starting at
+    ///    `DataSourceExec`, it absorbs applicable filters from `HashJoinExec`
+    ///    for late materialization during scanning, marking them as supported.
+    ///    `HashJoinExec` receives the result, decides whether to apply any
+    ///    remaining filters during the join, and passes unhandled filters back
+    ///    up to `FilterExec`. `FilterExec` absorbs any unhandled filters,
+    ///    updates its predicate if necessary, or removes itself if the predicate
+    ///    becomes trivial (e.g., `lit(true)`), and marks filters as supported
+    ///    for its parent.
+    ///
+    /// The default implementation is a no-op that passes the result of pushdown
+    /// from the children to its parent transparently, ensuring no filters are
+    /// lost if a node does not override this behavior.
+    ///
+    /// **Notes for Implementation:**
+    /// When returning filters via [`FilterPushdownPropagation`], the order of
+    /// filters need not match the order they were passed in via
+    /// `child_pushdown_result`. However, preserving the order is recommended for
+    /// debugging and ease of reasoning about the resulting plans.
+    ///
+    /// **Helper Methods for Customization:**
+    /// There are various helper methods to simplify implementing this method:
+    /// - [`FilterPushdownPropagation::if_any`]: Marks all parent filters as
+    ///   supported as long as at least one child supports them.
+    /// - [`FilterPushdownPropagation::if_all`]: Marks all parent filters as
+    ///   supported as long as all children support them.
+    /// - [`FilterPushdownPropagation::with_parent_pushdown_result`]: Allows adding filters
+    ///   to the propagation result, indicating which filters are supported by
+    ///   the current node.
+    /// - [`FilterPushdownPropagation::with_updated_node`]: Allows updating the
+    ///   current node in the propagation result, used if the node
+    ///   has modified its plan based on the pushdown results.
+    ///
+    /// **Filter Pushdown Phases:**
+    /// There are two different phases in filter pushdown (`Pre` and others),
+    /// which some operators may handle differently. Depending on the phase, the
+    /// operator may or may not be allowed to modify the plan. See
+    /// [`FilterPushdownPhase`] for more details on phase-specific behavior.
+    ///
+    /// [`PushedDownPredicate::supported`]: crate::filter_pushdown::PushedDownPredicate::supported
+    fn handle_child_pushdown_result(
+        &self,
+        _phase: FilterPushdownPhase,
+        child_pushdown_result: ChildPushdownResult,
+        _config: &ConfigOptions,
+    ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
+        Ok(FilterPushdownPropagation::if_all(child_pushdown_result))
+    }
+
+    /// Injects arbitrary run-time state into this execution plan, returning a new plan
+    /// instance that incorporates that state *if* it is relevant to the concrete
+    /// node implementation.
+    ///
+    /// This is a generic entry point: the `state` can be any type wrapped in
+    /// `Arc<dyn Any + Send + Sync>`.  A node that cares about the state should
+    /// down-cast it to the concrete type it expects and, if successful, return a
+    /// modified copy of itself that captures the provided value.  If the state is
+    /// not applicable, the default behaviour is to return `None` so that parent
+    /// nodes can continue propagating the attempt further down the plan tree.
+    ///
+    /// For example, [`WorkTableExec`](crate::work_table::WorkTableExec)
+    /// down-casts the supplied state to an `Arc<WorkTable>`
+    /// in order to wire up the working table used during recursive-CTE execution.
+    /// Similar patterns can be followed by custom nodes that need late-bound
+    /// dependencies or shared state.
+    fn with_new_state(
+        &self,
+        _state: Arc<dyn Any + Send + Sync>,
+    ) -> Option<Arc<dyn ExecutionPlan>> {
+        None
     }
 }
 
@@ -519,13 +714,15 @@ pub trait ExecutionPlanProperties {
     /// If this ExecutionPlan makes no changes to the schema of the rows flowing
     /// through it or how columns within each row relate to each other, it
     /// should return the equivalence properties of its input. For
-    /// example, since `FilterExec` may remove rows from its input, but does not
+    /// example, since [`FilterExec`] may remove rows from its input, but does not
     /// otherwise modify them, it preserves its input equivalence properties.
     /// However, since `ProjectionExec` may calculate derived expressions, it
     /// needs special handling.
     ///
     /// See also [`ExecutionPlan::maintains_input_order`] and [`Self::output_ordering`]
     /// for related concepts.
+    ///
+    /// [`FilterExec`]: crate::filter::FilterExec
     fn equivalence_properties(&self) -> &EquivalenceProperties;
 }
 
@@ -639,6 +836,49 @@ pub enum EmissionType {
     Both,
 }
 
+/// Represents whether an operator's `Stream` has been implemented to actively cooperate with the
+/// Tokio scheduler or not. Please refer to the [`coop`](crate::coop) module for more details.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SchedulingType {
+    /// The stream generated by [`execute`](ExecutionPlan::execute) does not actively participate in
+    /// cooperative scheduling. This means the implementation of the `Stream` returned by
+    /// [`ExecutionPlan::execute`] does not contain explicit task budget consumption such as
+    /// [`tokio::task::coop::consume_budget`].
+    ///
+    /// `NonCooperative` is the default value and is acceptable for most operators. Please refer to
+    /// the [`coop`](crate::coop) module for details on when it may be useful to use
+    /// `Cooperative` instead.
+    NonCooperative,
+    /// The stream generated by [`execute`](ExecutionPlan::execute) actively participates in
+    /// cooperative scheduling by consuming task budget when it was able to produce a
+    /// [`RecordBatch`].
+    Cooperative,
+}
+
+/// Represents how an operator's `Stream` implementation generates `RecordBatch`es.
+///
+/// Most operators in DataFusion generate `RecordBatch`es when asked to do so by a call to
+/// `Stream::poll_next`. This is known as demand-driven or lazy evaluation.
+///
+/// Some operators like `Repartition` need to drive `RecordBatch` generation themselves though. This
+/// is known as data-driven or eager evaluation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EvaluationType {
+    /// The stream generated by [`execute`](ExecutionPlan::execute) only generates `RecordBatch`
+    /// instances when it is demanded by invoking `Stream::poll_next`.
+    /// Filter, projection, and join are examples of such lazy operators.
+    ///
+    /// Lazy operators are also known as demand-driven operators.
+    Lazy,
+    /// The stream generated by [`execute`](ExecutionPlan::execute) eagerly generates `RecordBatch`
+    /// in one or more spawned Tokio tasks. Eager evaluation is only started the first time
+    /// `Stream::poll_next` is called.
+    /// Examples of eager operators are repartition, coalesce partitions, and sort preserving merge.
+    ///
+    /// Eager operators are also known as a data-driven operators.
+    Eager,
+}
+
 /// Utility to determine an operator's boundedness based on its children's boundedness.
 ///
 /// Assumes boundedness can be inferred from child operators:
@@ -727,6 +967,8 @@ pub struct PlanProperties {
     pub emission_type: EmissionType,
     /// See [ExecutionPlanProperties::boundedness]
     pub boundedness: Boundedness,
+    pub evaluation_type: EvaluationType,
+    pub scheduling_type: SchedulingType,
     /// See [ExecutionPlanProperties::output_ordering]
     output_ordering: Option<LexOrdering>,
 }
@@ -746,6 +988,8 @@ impl PlanProperties {
             partitioning,
             emission_type,
             boundedness,
+            evaluation_type: EvaluationType::Lazy,
+            scheduling_type: SchedulingType::NonCooperative,
             output_ordering,
         }
     }
@@ -777,6 +1021,22 @@ impl PlanProperties {
         self
     }
 
+    /// Set the [`SchedulingType`].
+    ///
+    /// Defaults to [`SchedulingType::NonCooperative`]
+    pub fn with_scheduling_type(mut self, scheduling_type: SchedulingType) -> Self {
+        self.scheduling_type = scheduling_type;
+        self
+    }
+
+    /// Set the [`EvaluationType`].
+    ///
+    /// Defaults to [`EvaluationType::Lazy`]
+    pub fn with_evaluation_type(mut self, drive_type: EvaluationType) -> Self {
+        self.evaluation_type = drive_type;
+        self
+    }
+
     /// Overwrite constraints with its new value.
     pub fn with_constraints(mut self, constraints: Constraints) -> Self {
         self.eq_properties = self.eq_properties.with_constraints(constraints);
@@ -801,32 +1061,45 @@ impl PlanProperties {
     }
 }
 
+macro_rules! check_len {
+    ($target:expr, $func_name:ident, $expected_len:expr) => {
+        let actual_len = $target.$func_name().len();
+        if actual_len != $expected_len {
+            return internal_err!(
+                "{}::{} returned Vec with incorrect size: {} != {}",
+                $target.name(),
+                stringify!($func_name),
+                actual_len,
+                $expected_len
+            );
+        }
+    };
+}
+
+/// Checks a set of invariants that apply to all ExecutionPlan implementations.
+/// Returns an error if the given node does not conform.
+pub fn check_default_invariants<P: ExecutionPlan + ?Sized>(
+    plan: &P,
+    _check: InvariantLevel,
+) -> Result<(), DataFusionError> {
+    let children_len = plan.children().len();
+
+    check_len!(plan, maintains_input_order, children_len);
+    check_len!(plan, required_input_ordering, children_len);
+    check_len!(plan, required_input_distribution, children_len);
+    check_len!(plan, benefits_from_input_partitioning, children_len);
+
+    Ok(())
+}
+
 /// Indicate whether a data exchange is needed for the input of `plan`, which will be very helpful
 /// especially for the distributed engine to judge whether need to deal with shuffling.
-/// Currently there are 3 kinds of execution plan which needs data exchange
+/// Currently, there are 3 kinds of execution plan which needs data exchange
 ///     1. RepartitionExec for changing the partition number between two `ExecutionPlan`s
 ///     2. CoalescePartitionsExec for collapsing all of the partitions into one without ordering guarantee
 ///     3. SortPreservingMergeExec for collapsing all of the sorted partitions into one with ordering guarantee
 pub fn need_data_exchange(plan: Arc<dyn ExecutionPlan>) -> bool {
-    if let Some(repartition) = plan.as_any().downcast_ref::<RepartitionExec>() {
-        !matches!(
-            repartition.properties().output_partitioning(),
-            Partitioning::RoundRobinBatch(_)
-        )
-    } else if let Some(coalesce) = plan.as_any().downcast_ref::<CoalescePartitionsExec>()
-    {
-        coalesce.input().output_partitioning().partition_count() > 1
-    } else if let Some(sort_preserving_merge) =
-        plan.as_any().downcast_ref::<SortPreservingMergeExec>()
-    {
-        sort_preserving_merge
-            .input()
-            .output_partitioning()
-            .partition_count()
-            > 1
-    } else {
-        false
-    }
+    plan.properties().evaluation_type == EvaluationType::Eager
 }
 
 /// Returns a copy of this plan if we change any child according to the pointer comparison.
@@ -1072,16 +1345,16 @@ pub enum CardinalityEffect {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use arrow::array::{DictionaryArray, Int32Array, NullArray, RunArray};
-    use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use std::any::Any;
     use std::sync::Arc;
 
+    use super::*;
+    use crate::{DisplayAs, DisplayFormatType, ExecutionPlan};
+
+    use arrow::array::{DictionaryArray, Int32Array, NullArray, RunArray};
+    use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use datafusion_common::{Result, Statistics};
     use datafusion_execution::{SendableRecordBatchStream, TaskContext};
-
-    use crate::{DisplayAs, DisplayFormatType, ExecutionPlan};
 
     #[derive(Debug)]
     pub struct EmptyExec;
@@ -1135,6 +1408,10 @@ mod tests {
         }
 
         fn statistics(&self) -> Result<Statistics> {
+            unimplemented!()
+        }
+
+        fn partition_statistics(&self, _partition: Option<usize>) -> Result<Statistics> {
             unimplemented!()
         }
     }
@@ -1198,6 +1475,10 @@ mod tests {
         }
 
         fn statistics(&self) -> Result<Statistics> {
+            unimplemented!()
+        }
+
+        fn partition_statistics(&self, _partition: Option<usize>) -> Result<Statistics> {
             unimplemented!()
         }
     }

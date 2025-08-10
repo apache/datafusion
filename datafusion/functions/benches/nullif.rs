@@ -17,9 +17,10 @@
 
 extern crate criterion;
 
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field};
 use arrow::util::bench_util::create_string_array_with_len;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::core::nullif;
@@ -33,14 +34,25 @@ fn criterion_benchmark(c: &mut Criterion) {
             ColumnarValue::Scalar(ScalarValue::Utf8(Some("abcd".to_string()))),
             ColumnarValue::Array(array),
         ];
-        c.bench_function(&format!("nullif scalar array: {}", size), |b| {
+        let arg_fields = args
+            .iter()
+            .enumerate()
+            .map(|(idx, arg)| {
+                Field::new(format!("arg_{idx}"), arg.data_type(), true).into()
+            })
+            .collect::<Vec<_>>();
+        let config_options = Arc::new(ConfigOptions::default());
+
+        c.bench_function(&format!("nullif scalar array: {size}"), |b| {
             b.iter(|| {
                 black_box(
                     nullif
                         .invoke_with_args(ScalarFunctionArgs {
                             args: args.clone(),
+                            arg_fields: arg_fields.clone(),
                             number_rows: size,
-                            return_type: &DataType::Utf8,
+                            return_field: Field::new("f", DataType::Utf8, true).into(),
+                            config_options: Arc::clone(&config_options),
                         })
                         .unwrap(),
                 )

@@ -29,7 +29,7 @@ use crate::utils::{
 
 use datafusion_common::error::DataFusionErrorBuilder;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
-use datafusion_common::{not_impl_err, plan_err, DataFusionError, Result};
+use datafusion_common::{not_impl_err, plan_err, Result};
 use datafusion_common::{RecursionUnnestOption, UnnestOptions};
 use datafusion_expr::expr::{Alias, PlannedReplaceSelectItem, WildcardOptions};
 use datafusion_expr::expr_rewriter::{
@@ -85,7 +85,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
         // Handle named windows before processing the projection expression
         check_conflicting_windows(&select.named_window)?;
-        match_window_definitions(&mut select.projection, &select.named_window)?;
+        self.match_window_definitions(&mut select.projection, &select.named_window)?;
         // Process the SELECT expressions
         let select_exprs = self.prepare_select_exprs(
             &base_plan,
@@ -94,12 +94,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             planner_context,
         )?;
 
-        let order_by =
-            to_order_by_exprs_with_select(query_order_by, Some(&select_exprs))?;
-
         // Having and group by clause may reference aliases defined in select projection
         let projected_plan = self.project(base_plan.clone(), select_exprs)?;
         let select_exprs = projected_plan.expressions();
+
+        let order_by =
+            to_order_by_exprs_with_select(query_order_by, Some(&select_exprs))?;
 
         // Place the fields of the base plan at the front so that when there are references
         // with the same name, the fields of the base plan will be searched first.
@@ -307,6 +307,15 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
         let mut intermediate_plan = input;
         let mut intermediate_select_exprs = select_exprs;
+        // Fast path: If there is are no unnests in the select_exprs, wrap the plan in a projection
+        if !intermediate_select_exprs
+            .iter()
+            .any(has_unnest_expr_recursively)
+        {
+            return LogicalPlanBuilder::from(intermediate_plan)
+                .project(intermediate_select_exprs)?
+                .build();
+        }
 
         // Each expr in select_exprs can contains multiple unnest stage
         // The transformation happen bottom up, one at a time for each iteration
@@ -374,6 +383,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
     fn try_process_aggregate_unnest(&self, input: LogicalPlan) -> Result<LogicalPlan> {
         match input {
+            // Fast path if there are no unnest in group by
+            LogicalPlan::Aggregate(ref agg)
+                if !&agg.group_expr.iter().any(has_unnest_expr_recursively) =>
+            {
+                Ok(input)
+            }
             LogicalPlan::Aggregate(agg) => {
                 let agg_expr = agg.aggr_expr.clone();
                 let (new_input, new_group_by_exprs) =
@@ -759,11 +774,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     /// # Arguments
     ///
     /// * `input`           - The input plan that will be aggregated. The grouping, aggregate, and
-    ///                       "having" expressions must all be resolvable from this plan.
+    ///   "having" expressions must all be resolvable from this plan.
     /// * `select_exprs`    - The projection expressions from the SELECT clause.
     /// * `having_expr_opt` - Optional HAVING clause.
     /// * `group_by_exprs`  - Grouping expressions from the GROUP BY clause. These can be column
-    ///                       references or more complex expressions.
+    ///   references or more complex expressions.
     /// * `aggr_exprs`      - Aggregate expressions, such as `SUM(a)` or `COUNT(1)`.
     ///
     /// # Return
@@ -772,9 +787,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     ///
     /// * `plan`                   - A [LogicalPlan::Aggregate] plan for the newly created aggregate.
     /// * `select_exprs_post_aggr` - The projection expressions rewritten to reference columns from
-    ///                              the aggregate
+    ///   the aggregate
     /// * `having_expr_post_aggr`  - The "having" expression rewritten to reference a column from
-    ///                              the aggregate
+    ///   the aggregate
     fn aggregate(
         &self,
         input: &LogicalPlan,
@@ -868,6 +883,61 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
         Ok((plan, select_exprs_post_aggr, having_expr_post_aggr))
     }
+
+    // If the projection is done over a named window, that window
+    // name must be defined. Otherwise, it gives an error.
+    fn match_window_definitions(
+        &self,
+        projection: &mut [SelectItem],
+        named_windows: &[NamedWindowDefinition],
+    ) -> Result<()> {
+        let named_windows: Vec<(&NamedWindowDefinition, String)> = named_windows
+            .iter()
+            .map(|w| (w, self.ident_normalizer.normalize(w.0.clone())))
+            .collect();
+        for proj in projection.iter_mut() {
+            if let SelectItem::ExprWithAlias { expr, alias: _ }
+            | SelectItem::UnnamedExpr(expr) = proj
+            {
+                let mut err = None;
+                let _ = visit_expressions_mut(expr, |expr| {
+                    if let SQLExpr::Function(f) = expr {
+                        if let Some(WindowType::NamedWindow(ident)) = &f.over {
+                            let normalized_ident =
+                                self.ident_normalizer.normalize(ident.clone());
+                            for (
+                                NamedWindowDefinition(_, window_expr),
+                                normalized_window_ident,
+                            ) in named_windows.iter()
+                            {
+                                if normalized_ident.eq(normalized_window_ident) {
+                                    f.over = Some(match window_expr {
+                                        NamedWindowExpr::NamedWindow(ident) => {
+                                            WindowType::NamedWindow(ident.clone())
+                                        }
+                                        NamedWindowExpr::WindowSpec(spec) => {
+                                            WindowType::WindowSpec(spec.clone())
+                                        }
+                                    })
+                                }
+                            }
+                            // All named windows must be defined with a WindowSpec.
+                            if let Some(WindowType::NamedWindow(ident)) = &f.over {
+                                err =
+                                    Some(plan_err!("The window {ident} is not defined!"));
+                                return ControlFlow::Break(());
+                            }
+                        }
+                    }
+                    ControlFlow::Continue(())
+                });
+                if let Some(err) = err {
+                    return err;
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 // If there are any multiple-defined windows, we raise an error.
@@ -885,51 +955,16 @@ fn check_conflicting_windows(window_defs: &[NamedWindowDefinition]) -> Result<()
     Ok(())
 }
 
-// If the projection is done over a named window, that window
-// name must be defined. Otherwise, it gives an error.
-fn match_window_definitions(
-    projection: &mut [SelectItem],
-    named_windows: &[NamedWindowDefinition],
-) -> Result<()> {
-    for proj in projection.iter_mut() {
-        if let SelectItem::ExprWithAlias { expr, alias: _ }
-        | SelectItem::UnnamedExpr(expr) = proj
-        {
-            let mut err = None;
-            visit_expressions_mut(expr, |expr| {
-                if let SQLExpr::Function(f) = expr {
-                    if let Some(WindowType::NamedWindow(_)) = &f.over {
-                        for NamedWindowDefinition(window_ident, window_expr) in
-                            named_windows
-                        {
-                            if let Some(WindowType::NamedWindow(ident)) = &f.over {
-                                if ident.eq(window_ident) {
-                                    f.over = Some(match window_expr {
-                                        NamedWindowExpr::NamedWindow(ident) => {
-                                            WindowType::NamedWindow(ident.clone())
-                                        }
-                                        NamedWindowExpr::WindowSpec(spec) => {
-                                            WindowType::WindowSpec(spec.clone())
-                                        }
-                                    })
-                                }
-                            }
-                        }
-                        // All named windows must be defined with a WindowSpec.
-                        if let Some(WindowType::NamedWindow(ident)) = &f.over {
-                            err = Some(DataFusionError::Plan(format!(
-                                "The window {ident} is not defined!"
-                            )));
-                            return ControlFlow::Break(());
-                        }
-                    }
-                }
-                ControlFlow::Continue(())
-            });
-            if let Some(err) = err {
-                return Err(err);
-            }
+/// Returns true if the expression recursively contains an `Expr::Unnest` expression
+fn has_unnest_expr_recursively(expr: &Expr) -> bool {
+    let mut has_unnest = false;
+    let _ = expr.apply(|e| {
+        if let Expr::Unnest(_) = e {
+            has_unnest = true;
+            Ok(TreeNodeRecursion::Stop)
+        } else {
+            Ok(TreeNodeRecursion::Continue)
         }
-    }
-    Ok(())
+    });
+    has_unnest
 }

@@ -84,7 +84,7 @@ SELECT a FROM table WHERE a > 10
 
 ## JOIN clause
 
-DataFusion supports `INNER JOIN`, `LEFT OUTER JOIN`, `RIGHT OUTER JOIN`, `FULL OUTER JOIN`, `NATURAL JOIN` and `CROSS JOIN`.
+DataFusion supports `INNER JOIN`, `LEFT OUTER JOIN`, `RIGHT OUTER JOIN`, `FULL OUTER JOIN`, `NATURAL JOIN`, `CROSS JOIN`, `LEFT SEMI JOIN`, `RIGHT SEMI JOIN`, `LEFT ANTI JOIN`, and `RIGHT ANTI JOIN`.
 
 The following examples are based on this table:
 
@@ -102,7 +102,7 @@ select * from x;
 The keywords `JOIN` or `INNER JOIN` define a join that only shows rows where there is a match in both tables.
 
 ```sql
-select * from x inner join x y ON x.column_1 = y.column_1;
+SELECT * FROM x INNER JOIN x y ON x.column_1 = y.column_1;
 +----------+----------+----------+----------+
 | column_1 | column_2 | column_1 | column_2 |
 +----------+----------+----------+----------+
@@ -116,7 +116,7 @@ The keywords `LEFT JOIN` or `LEFT OUTER JOIN` define a join that includes all ro
 is not a match in the right table. When there is no match, null values are produced for the right side of the join.
 
 ```sql
-select * from x left join x y ON x.column_1 = y.column_2;
+SELECT * FROM x LEFT JOIN x y ON x.column_1 = y.column_2;
 +----------+----------+----------+----------+
 | column_1 | column_2 | column_1 | column_2 |
 +----------+----------+----------+----------+
@@ -130,7 +130,7 @@ The keywords `RIGHT JOIN` or `RIGHT OUTER JOIN` define a join that includes all 
 is not a match in the left table. When there is no match, null values are produced for the left side of the join.
 
 ```sql
-select * from x right join x y ON x.column_1 = y.column_2;
+SELECT * FROM x RIGHT JOIN x y ON x.column_1 = y.column_2;
 +----------+----------+----------+----------+
 | column_1 | column_2 | column_1 | column_2 |
 +----------+----------+----------+----------+
@@ -145,7 +145,7 @@ The keywords `FULL JOIN` or `FULL OUTER JOIN` define a join that is effectively 
 either side of the join where there is not a match.
 
 ```sql
-select * from x full outer join x y ON x.column_1 = y.column_2;
+SELECT * FROM x FULL OUTER JOIN x y ON x.column_1 = y.column_2;
 +----------+----------+----------+----------+
 | column_1 | column_2 | column_1 | column_2 |
 +----------+----------+----------+----------+
@@ -156,11 +156,11 @@ select * from x full outer join x y ON x.column_1 = y.column_2;
 
 ### NATURAL JOIN
 
-A natural join defines an inner join based on common column names found between the input tables. When no common
-column names are found, it behaves like a cross join.
+A `NATURAL JOIN` defines an inner join based on common column names found between the input tables. When no common
+column names are found, it behaves like a `CROSS JOIN`.
 
 ```sql
-select * from x natural join x y;
+SELECT * FROM x NATURAL JOIN x y;
 +----------+----------+
 | column_1 | column_2 |
 +----------+----------+
@@ -170,16 +170,70 @@ select * from x natural join x y;
 
 ### CROSS JOIN
 
-A cross join produces a cartesian product that matches every row in the left side of the join with every row in the
+A `CROSS JOIN` produces a cartesian product that matches every row in the left side of the join with every row in the
 right side of the join.
 
 ```sql
-select * from x cross join x y;
+SELECT * FROM x CROSS JOIN x y;
 +----------+----------+----------+----------+
 | column_1 | column_2 | column_1 | column_2 |
 +----------+----------+----------+----------+
 | 1        | 2        | 1        | 2        |
 +----------+----------+----------+----------+
+```
+
+### LEFT SEMI JOIN
+
+The `LEFT SEMI JOIN` returns all rows from the left table that have at least one matching row in the right table, and
+projects only the columns from the left table.
+
+```sql
+SELECT * FROM x LEFT SEMI JOIN x y ON x.column_1 = y.column_1;
++----------+----------+
+| column_1 | column_2 |
++----------+----------+
+| 1        | 2        |
++----------+----------+
+```
+
+### RIGHT SEMI JOIN
+
+The `RIGHT SEMI JOIN` returns all rows from the right table that have at least one matching row in the left table, and
+only projects the columns from the right table.
+
+```sql
+SELECT * FROM x RIGHT SEMI JOIN x y ON x.column_1 = y.column_1;
++----------+----------+
+| column_1 | column_2 |
++----------+----------+
+| 1        | 2        |
++----------+----------+
+```
+
+### LEFT ANTI JOIN
+
+The `LEFT ANTI JOIN` returns all rows from the left table that do not have any matching row in the right table, projecting
+only the left table’s columns.
+
+```sql
+SELECT * FROM x LEFT ANTI JOIN x y ON x.column_1 = y.column_1;
++----------+----------+
+| column_1 | column_2 |
++----------+----------+
++----------+----------+
+```
+
+### RIGHT ANTI JOIN
+
+The `RIGHT ANTI JOIN` returns all rows from the right table that do not have any matching row in the left table, projecting
+only the right table’s columns.
+
+```sql
+SELECT * FROM x RIGHT ANTI JOIN x y ON x.column_1 = y.column_1;
++----------+----------+
+| column_1 | column_2 |
++----------+----------+
++----------+----------+
 ```
 
 ## GROUP BY clause

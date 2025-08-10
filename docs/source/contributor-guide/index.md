@@ -108,6 +108,26 @@ Features above) prior to acceptance include:
 [extensions list]: ../library-user-guide/extensions.md
 [design goal]: https://docs.rs/datafusion/latest/datafusion/index.html#design-goals
 
+### Design Build vs. Big Up Front Design
+
+Typically, the DataFusion community attacks large problems by solving them bit
+by bit and refining a solution iteratively on the `main` branch as a series of
+Pull Requests. This is different from projects which front-load the effort
+with a more comprehensive design process.
+
+By "advancing the front" the community always makes tangible progress, and the strategy is
+especially effective in a project that relies on individual contributors who may
+not have the time or resources to invest in a large upfront design effort.
+However, this "bit by bit approach" doesn't always succeed, and sometimes we get
+stuck or go down the wrong path and then change directions.
+
+Our process necessarily results in imperfect solutions being the "state of the
+code" in some cases, and larger visions are not yet fully realized. However, the
+community is good at driving things to completion in the long run. If you see
+something that needs improvement or an area that is not yet fully realized,
+please consider submitting an issue or PR to improve it. We are always looking
+for more contributions.
+
 # Developer's guide
 
 ## Pull Request Overview

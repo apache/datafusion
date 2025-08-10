@@ -31,6 +31,21 @@ impl SessionContext {
     /// [`read_table`](Self::read_table) with a [`super::ListingTable`].
     ///
     /// For an example, see [`read_csv`](Self::read_csv)
+    ///
+    /// # Note: Statistics
+    ///
+    /// NOTE: by default, statistics are collected when reading the Parquet
+    /// files This can slow down the initial DataFrame creation while
+    /// greatly accelerating queries with certain filters.
+    ///
+    /// To disable statistics collection, set the [config option]
+    /// `datafusion.execution.collect_statistics` to `false`. See
+    /// [`ConfigOptions`] and [`ExecutionOptions::collect_statistics`] for more
+    /// details.
+    ///
+    /// [config option]: https://datafusion.apache.org/user-guide/configs.html
+    /// [`ConfigOptions`]: crate::config::ConfigOptions
+    /// [`ExecutionOptions::collect_statistics`]: crate::config::ExecutionOptions::collect_statistics
     pub async fn read_parquet<P: DataFilePaths>(
         &self,
         table_paths: P,
@@ -41,6 +56,13 @@ impl SessionContext {
 
     /// Registers a Parquet file as a table that can be referenced from SQL
     /// statements executed against this context.
+    ///
+    /// # Note: Statistics
+    ///
+    /// Statistics are not collected by default. See  [`read_parquet`] for more
+    /// details and how to enable them.
+    ///
+    /// [`read_parquet`]: Self::read_parquet
     pub async fn register_parquet(
         &self,
         table_ref: impl Into<TableReference>,
@@ -84,10 +106,14 @@ mod tests {
     use crate::parquet::basic::Compression;
     use crate::test_util::parquet_test_data;
 
+    use arrow::util::pretty::pretty_format_batches;
     use datafusion_common::config::TableParquetOptions;
+    use datafusion_common::{
+        assert_batches_eq, assert_batches_sorted_eq, assert_contains,
+    };
     use datafusion_execution::config::SessionConfig;
 
-    use tempfile::tempdir;
+    use tempfile::{tempdir, TempDir};
 
     #[tokio::test]
     async fn read_with_glob_path() -> Result<()> {
@@ -126,6 +152,49 @@ mod tests {
         let total_rows: usize = results.iter().map(|rb| rb.num_rows()).sum();
         // alltypes_plain.parquet = 8 rows, alltypes_plain.snappy.parquet = 2 rows, alltypes_dictionary.parquet = 2 rows
         assert_eq!(total_rows, 10);
+        Ok(())
+    }
+
+    async fn explain_query_all_with_config(config: SessionConfig) -> Result<String> {
+        let ctx = SessionContext::new_with_config(config);
+
+        ctx.register_parquet(
+            "test",
+            &format!("{}/alltypes_plain*.parquet", parquet_test_data()),
+            ParquetReadOptions::default(),
+        )
+        .await?;
+        let df = ctx.sql("EXPLAIN SELECT * FROM test").await?;
+        let results = df.collect().await?;
+        let content = pretty_format_batches(&results).unwrap().to_string();
+        Ok(content)
+    }
+
+    #[tokio::test]
+    async fn register_parquet_respects_collect_statistics_config() -> Result<()> {
+        // The default is true
+        let mut config = SessionConfig::new();
+        config.options_mut().explain.physical_plan_only = true;
+        config.options_mut().explain.show_statistics = true;
+        let content = explain_query_all_with_config(config).await?;
+        assert_contains!(content, "statistics=[Rows=Exact(");
+
+        // Explicitly set to true
+        let mut config = SessionConfig::new();
+        config.options_mut().explain.physical_plan_only = true;
+        config.options_mut().explain.show_statistics = true;
+        config.options_mut().execution.collect_statistics = true;
+        let content = explain_query_all_with_config(config).await?;
+        assert_contains!(content, "statistics=[Rows=Exact(");
+
+        // Explicitly set to false
+        let mut config = SessionConfig::new();
+        config.options_mut().explain.physical_plan_only = true;
+        config.options_mut().explain.show_statistics = true;
+        config.options_mut().execution.collect_statistics = false;
+        let content = explain_query_all_with_config(config).await?;
+        assert_contains!(content, "statistics=[Rows=Absent,");
+
         Ok(())
     }
 
@@ -286,7 +355,7 @@ mod tests {
         let expected_path = binding[0].as_str();
         assert_eq!(
             read_df.unwrap_err().strip_backtrace(),
-            format!("Execution error: File path '{}' does not match the expected extension '.parquet'", expected_path)
+            format!("Execution error: File path '{expected_path}' does not match the expected extension '.parquet'")
         );
 
         // Read the dataframe from 'output3.parquet.snappy.parquet' with the correct file extension.
@@ -331,6 +400,126 @@ mod tests {
         let results = read_df.collect().await?;
         let total_rows: usize = results.iter().map(|rb| rb.num_rows()).sum();
         assert_eq!(total_rows, 5);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn read_from_parquet_folder() -> Result<()> {
+        let ctx = SessionContext::new();
+        let tmp_dir = TempDir::new()?;
+        let test_path = tmp_dir.path().to_str().unwrap().to_string();
+
+        ctx.sql("SELECT 1 a")
+            .await?
+            .write_parquet(&test_path, DataFrameWriteOptions::default(), None)
+            .await?;
+
+        ctx.sql("SELECT 2 a")
+            .await?
+            .write_parquet(&test_path, DataFrameWriteOptions::default(), None)
+            .await?;
+
+        // Adding CSV to check it is not read with Parquet reader
+        ctx.sql("SELECT 3 a")
+            .await?
+            .write_csv(&test_path, DataFrameWriteOptions::default(), None)
+            .await?;
+
+        let actual = ctx
+            .read_parquet(&test_path, ParquetReadOptions::default())
+            .await?
+            .collect()
+            .await?;
+
+        #[cfg_attr(any(), rustfmt::skip)]
+        assert_batches_sorted_eq!(&[
+            "+---+",
+            "| a |",
+            "+---+",
+            "| 2 |",
+            "| 1 |",
+            "+---+",
+        ], &actual);
+
+        let actual = ctx
+            .read_parquet(test_path, ParquetReadOptions::default())
+            .await?
+            .collect()
+            .await?;
+
+        #[cfg_attr(any(), rustfmt::skip)]
+        assert_batches_sorted_eq!(&[
+            "+---+",
+            "| a |",
+            "+---+",
+            "| 2 |",
+            "| 1 |",
+            "+---+",
+        ], &actual);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn read_from_parquet_folder_table() -> Result<()> {
+        let ctx = SessionContext::new();
+        let tmp_dir = TempDir::new()?;
+        let test_path = tmp_dir.path().to_str().unwrap().to_string();
+
+        ctx.sql("SELECT 1 a")
+            .await?
+            .write_parquet(&test_path, DataFrameWriteOptions::default(), None)
+            .await?;
+
+        ctx.sql("SELECT 2 a")
+            .await?
+            .write_parquet(&test_path, DataFrameWriteOptions::default(), None)
+            .await?;
+
+        // Adding CSV to check it is not read with Parquet reader
+        ctx.sql("SELECT 3 a")
+            .await?
+            .write_csv(&test_path, DataFrameWriteOptions::default(), None)
+            .await?;
+
+        ctx.sql(format!("CREATE EXTERNAL TABLE parquet_folder_t1 STORED AS PARQUET LOCATION '{test_path}'").as_ref())
+            .await?;
+
+        let actual = ctx
+            .sql("select * from parquet_folder_t1")
+            .await?
+            .collect()
+            .await?;
+        #[cfg_attr(any(), rustfmt::skip)]
+        assert_batches_sorted_eq!(&[
+            "+---+",
+            "| a |",
+            "+---+",
+            "| 2 |",
+            "| 1 |",
+            "+---+",
+        ], &actual);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn read_dummy_folder() -> Result<()> {
+        let ctx = SessionContext::new();
+        let test_path = "/foo/";
+
+        let actual = ctx
+            .read_parquet(test_path, ParquetReadOptions::default())
+            .await?
+            .collect()
+            .await?;
+
+        #[cfg_attr(any(), rustfmt::skip)]
+        assert_batches_eq!(&[
+            "++",
+            "++",
+        ], &actual);
+
         Ok(())
     }
 }

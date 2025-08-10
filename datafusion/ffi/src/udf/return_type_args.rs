@@ -19,33 +19,30 @@ use abi_stable::{
     std_types::{ROption, RVec},
     StableAbi,
 };
-use arrow::datatypes::DataType;
+use arrow_schema::FieldRef;
 use datafusion::{
-    common::exec_datafusion_err, error::DataFusionError, logical_expr::ReturnTypeArgs,
+    common::exec_datafusion_err, error::DataFusionError, logical_expr::ReturnFieldArgs,
     scalar::ScalarValue,
 };
 
-use crate::{
-    arrow_wrappers::WrappedSchema,
-    util::{rvec_wrapped_to_vec_datatype, vec_datatype_to_rvec_wrapped},
-};
+use crate::arrow_wrappers::WrappedSchema;
+use crate::util::{rvec_wrapped_to_vec_fieldref, vec_fieldref_to_rvec_wrapped};
 use prost::Message;
 
-/// A stable struct for sharing a [`ReturnTypeArgs`] across FFI boundaries.
+/// A stable struct for sharing a [`ReturnFieldArgs`] across FFI boundaries.
 #[repr(C)]
 #[derive(Debug, StableAbi)]
 #[allow(non_camel_case_types)]
-pub struct FFI_ReturnTypeArgs {
-    arg_types: RVec<WrappedSchema>,
+pub struct FFI_ReturnFieldArgs {
+    arg_fields: RVec<WrappedSchema>,
     scalar_arguments: RVec<ROption<RVec<u8>>>,
-    nullables: RVec<bool>,
 }
 
-impl TryFrom<ReturnTypeArgs<'_>> for FFI_ReturnTypeArgs {
+impl TryFrom<ReturnFieldArgs<'_>> for FFI_ReturnFieldArgs {
     type Error = DataFusionError;
 
-    fn try_from(value: ReturnTypeArgs) -> Result<Self, Self::Error> {
-        let arg_types = vec_datatype_to_rvec_wrapped(value.arg_types)?;
+    fn try_from(value: ReturnFieldArgs) -> Result<Self, Self::Error> {
+        let arg_fields = vec_fieldref_to_rvec_wrapped(value.arg_fields)?;
         let scalar_arguments: Result<Vec<_>, Self::Error> = value
             .scalar_arguments
             .iter()
@@ -62,35 +59,31 @@ impl TryFrom<ReturnTypeArgs<'_>> for FFI_ReturnTypeArgs {
             .collect();
         let scalar_arguments = scalar_arguments?.into_iter().map(ROption::from).collect();
 
-        let nullables = value.nullables.into();
         Ok(Self {
-            arg_types,
+            arg_fields,
             scalar_arguments,
-            nullables,
         })
     }
 }
 
 // TODO(tsaucer) It would be good to find a better way around this, but it
 // appears a restriction based on the need to have a borrowed ScalarValue
-// in the arguments when converted to ReturnTypeArgs
-pub struct ForeignReturnTypeArgsOwned {
-    arg_types: Vec<DataType>,
+// in the arguments when converted to ReturnFieldArgs
+pub struct ForeignReturnFieldArgsOwned {
+    arg_fields: Vec<FieldRef>,
     scalar_arguments: Vec<Option<ScalarValue>>,
-    nullables: Vec<bool>,
 }
 
-pub struct ForeignReturnTypeArgs<'a> {
-    arg_types: &'a [DataType],
+pub struct ForeignReturnFieldArgs<'a> {
+    arg_fields: &'a [FieldRef],
     scalar_arguments: Vec<Option<&'a ScalarValue>>,
-    nullables: &'a [bool],
 }
 
-impl TryFrom<&FFI_ReturnTypeArgs> for ForeignReturnTypeArgsOwned {
+impl TryFrom<&FFI_ReturnFieldArgs> for ForeignReturnFieldArgsOwned {
     type Error = DataFusionError;
 
-    fn try_from(value: &FFI_ReturnTypeArgs) -> Result<Self, Self::Error> {
-        let arg_types = rvec_wrapped_to_vec_datatype(&value.arg_types)?;
+    fn try_from(value: &FFI_ReturnFieldArgs) -> Result<Self, Self::Error> {
+        let arg_fields = rvec_wrapped_to_vec_fieldref(&value.arg_fields)?;
         let scalar_arguments: Result<Vec<_>, Self::Error> = value
             .scalar_arguments
             .iter()
@@ -107,36 +100,31 @@ impl TryFrom<&FFI_ReturnTypeArgs> for ForeignReturnTypeArgsOwned {
             .collect();
         let scalar_arguments = scalar_arguments?.into_iter().collect();
 
-        let nullables = value.nullables.iter().cloned().collect();
-
         Ok(Self {
-            arg_types,
+            arg_fields,
             scalar_arguments,
-            nullables,
         })
     }
 }
 
-impl<'a> From<&'a ForeignReturnTypeArgsOwned> for ForeignReturnTypeArgs<'a> {
-    fn from(value: &'a ForeignReturnTypeArgsOwned) -> Self {
+impl<'a> From<&'a ForeignReturnFieldArgsOwned> for ForeignReturnFieldArgs<'a> {
+    fn from(value: &'a ForeignReturnFieldArgsOwned) -> Self {
         Self {
-            arg_types: &value.arg_types,
+            arg_fields: &value.arg_fields,
             scalar_arguments: value
                 .scalar_arguments
                 .iter()
                 .map(|opt| opt.as_ref())
                 .collect(),
-            nullables: &value.nullables,
         }
     }
 }
 
-impl<'a> From<&'a ForeignReturnTypeArgs<'a>> for ReturnTypeArgs<'a> {
-    fn from(value: &'a ForeignReturnTypeArgs) -> Self {
-        ReturnTypeArgs {
-            arg_types: value.arg_types,
+impl<'a> From<&'a ForeignReturnFieldArgs<'a>> for ReturnFieldArgs<'a> {
+    fn from(value: &'a ForeignReturnFieldArgs) -> Self {
+        ReturnFieldArgs {
+            arg_fields: value.arg_fields,
             scalar_arguments: &value.scalar_arguments,
-            nullables: value.nullables,
         }
     }
 }

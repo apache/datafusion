@@ -17,7 +17,7 @@
 
 //! [`ArrowCastFunc`]: Implementation of the `arrow_cast`
 
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field, FieldRef};
 use arrow::error::ArrowError;
 use datafusion_common::{
     arrow_datafusion_err, exec_err, internal_err, Result, ScalarValue,
@@ -29,7 +29,7 @@ use std::any::Any;
 
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::{
-    ColumnarValue, Documentation, Expr, ReturnInfo, ReturnTypeArgs, ScalarFunctionArgs,
+    ColumnarValue, Documentation, Expr, ReturnFieldArgs, ScalarFunctionArgs,
     ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_macros::user_doc;
@@ -113,11 +113,11 @@ impl ScalarUDFImpl for ArrowCastFunc {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!("return_type_from_args should be called instead")
+        internal_err!("return_field_from_args should be called instead")
     }
 
-    fn return_type_from_args(&self, args: ReturnTypeArgs) -> Result<ReturnInfo> {
-        let nullable = args.nullables.iter().any(|&nullable| nullable);
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let nullable = args.arg_fields.iter().any(|f| f.is_nullable());
 
         let [_, type_arg] = take_function_args(self.name(), args.scalar_arguments)?;
 
@@ -131,7 +131,7 @@ impl ScalarUDFImpl for ArrowCastFunc {
                     )
                 },
                 |casted_type| match casted_type.parse::<DataType>() {
-                    Ok(data_type) => Ok(ReturnInfo::new(data_type, nullable)),
+                    Ok(data_type) => Ok(Field::new(self.name(), data_type, nullable).into()),
                     Err(ArrowError::ParseError(e)) => Err(exec_datafusion_err!("{e}")),
                     Err(e) => Err(arrow_datafusion_err!(e)),
                 },
@@ -177,7 +177,7 @@ impl ScalarUDFImpl for ArrowCastFunc {
 fn data_type_from_args(args: &[Expr]) -> Result<DataType> {
     let [_, type_arg] = take_function_args("arrow_cast", args)?;
 
-    let Expr::Literal(ScalarValue::Utf8(Some(val))) = type_arg else {
+    let Expr::Literal(ScalarValue::Utf8(Some(val)), _) = type_arg else {
         return exec_err!(
             "arrow_cast requires its second argument to be a constant string, got {:?}",
             type_arg

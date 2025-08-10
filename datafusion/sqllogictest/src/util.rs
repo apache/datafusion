@@ -106,3 +106,7 @@ pub fn df_value_validator(
 
     normalized_actual == normalized_expected
 }
+
+pub fn is_spark_path(relative_path: &Path) -> bool {
+    relative_path.starts_with("spark/")
+}

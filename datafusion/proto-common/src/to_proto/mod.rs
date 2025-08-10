@@ -97,7 +97,6 @@ impl TryFrom<&Field> for protobuf::Field {
             nullable: field.is_nullable(),
             children: Vec::new(),
             metadata: field.metadata().clone(),
-            dict_ordered: field.dict_is_ordered().unwrap_or(false),
         })
     }
 }
@@ -190,7 +189,15 @@ impl TryFrom<&DataType> for protobuf::arrow_type::ArrowTypeEnum {
                     value: Some(Box::new(value_type.as_ref().try_into()?)),
                 }))
             }
-            DataType::Decimal128(precision, scale) => Self::Decimal(protobuf::Decimal {
+            DataType::Decimal32(precision, scale) => Self::Decimal32(protobuf::Decimal32Type {
+                precision: *precision as u32,
+                scale: *scale as i32,
+            }),
+            DataType::Decimal64(precision, scale) => Self::Decimal64(protobuf::Decimal64Type {
+                precision: *precision as u32,
+                scale: *scale as i32,
+            }),
+            DataType::Decimal128(precision, scale) => Self::Decimal128(protobuf::Decimal128Type {
                 precision: *precision as u32,
                 scale: *scale as i32,
             }),
@@ -818,8 +825,6 @@ impl TryFrom<&ParquetOptions> for protobuf::ParquetOptions {
             dictionary_enabled_opt: value.dictionary_enabled.map(protobuf::parquet_options::DictionaryEnabledOpt::DictionaryEnabled),
             dictionary_page_size_limit: value.dictionary_page_size_limit as u64,
             statistics_enabled_opt: value.statistics_enabled.clone().map(protobuf::parquet_options::StatisticsEnabledOpt::StatisticsEnabled),
-            #[allow(deprecated)]
-            max_statistics_size_opt: value.max_statistics_size.map(|v| protobuf::parquet_options::MaxStatisticsSizeOpt::MaxStatisticsSize(v as u64)),
             max_row_group_size: value.max_row_group_size as u64,
             created_by: value.created_by.clone(),
             column_index_truncate_length_opt: value.column_index_truncate_length.map(|v| protobuf::parquet_options::ColumnIndexTruncateLengthOpt::ColumnIndexTruncateLength(v as u64)),
@@ -836,6 +841,7 @@ impl TryFrom<&ParquetOptions> for protobuf::ParquetOptions {
             schema_force_view_types: value.schema_force_view_types,
             binary_as_string: value.binary_as_string,
             skip_arrow_metadata: value.skip_arrow_metadata,
+            coerce_int96_opt: value.coerce_int96.clone().map(protobuf::parquet_options::CoerceInt96Opt::CoerceInt96),
         })
     }
 }
@@ -858,12 +864,6 @@ impl TryFrom<&ParquetColumnOptions> for protobuf::ParquetColumnOptions {
                 .statistics_enabled
                 .clone()
                 .map(protobuf::parquet_column_options::StatisticsEnabledOpt::StatisticsEnabled),
-            #[allow(deprecated)]
-            max_statistics_size_opt: value.max_statistics_size.map(|v| {
-                protobuf::parquet_column_options::MaxStatisticsSizeOpt::MaxStatisticsSize(
-                    v as u32,
-                )
-            }),
             encoding_opt: value
                 .encoding
                 .clone()

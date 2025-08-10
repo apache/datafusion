@@ -17,6 +17,8 @@
 
 //! This program demonstrates the DataFusion expression simplification API.
 
+use insta::assert_snapshot;
+
 use arrow::array::types::IntervalDayTime;
 use arrow::array::{ArrayRef, Int32Array};
 use arrow::datatypes::{DataType, Field, Schema};
@@ -237,11 +239,15 @@ fn to_timestamp_expr_folded() -> Result<()> {
         .project(proj)?
         .build()?;
 
-    let expected = "Projection: TimestampNanosecond(1599566400000000000, None) AS to_timestamp(Utf8(\"2020-09-08T12:00:00+00:00\"))\
-            \n  TableScan: test"
-        .to_string();
-    let actual = get_optimized_plan_formatted(plan, &Utc::now());
-    assert_eq!(expected, actual);
+    let formatted = get_optimized_plan_formatted(plan, &Utc::now());
+    let actual = formatted.trim();
+    assert_snapshot!(
+        actual,
+        @r###"
+    Projection: TimestampNanosecond(1599566400000000000, None) AS to_timestamp(Utf8("2020-09-08T12:00:00+00:00"))
+      TableScan: test
+    "###
+    );
     Ok(())
 }
 
@@ -262,11 +268,16 @@ fn now_less_than_timestamp() -> Result<()> {
 
     // Note that constant folder runs and folds the entire
     // expression down to a single constant (true)
-    let expected = "Filter: Boolean(true)\
-                        \n  TableScan: test";
-    let actual = get_optimized_plan_formatted(plan, &time);
+    let formatted = get_optimized_plan_formatted(plan, &time);
+    let actual = formatted.trim();
 
-    assert_eq!(expected, actual);
+    assert_snapshot!(
+        actual,
+        @r###"
+    Filter: Boolean(true)
+      TableScan: test
+    "###
+    );
     Ok(())
 }
 
@@ -282,10 +293,13 @@ fn select_date_plus_interval() -> Result<()> {
 
     let date_plus_interval_expr = to_timestamp_expr(ts_string)
         .cast_to(&DataType::Date32, schema)?
-        + Expr::Literal(ScalarValue::IntervalDayTime(Some(IntervalDayTime {
-            days: 123,
-            milliseconds: 0,
-        })));
+        + Expr::Literal(
+            ScalarValue::IntervalDayTime(Some(IntervalDayTime {
+                days: 123,
+                milliseconds: 0,
+            })),
+            None,
+        );
 
     let plan = LogicalPlanBuilder::from(table_scan.clone())
         .project(vec![date_plus_interval_expr])?
@@ -293,11 +307,16 @@ fn select_date_plus_interval() -> Result<()> {
 
     // Note that constant folder runs and folds the entire
     // expression down to a single constant (true)
-    let expected = r#"Projection: Date32("2021-01-09") AS to_timestamp(Utf8("2020-09-08T12:05:00+00:00")) + IntervalDayTime("IntervalDayTime { days: 123, milliseconds: 0 }")
-  TableScan: test"#;
-    let actual = get_optimized_plan_formatted(plan, &time);
+    let formatted = get_optimized_plan_formatted(plan, &time);
+    let actual = formatted.trim();
 
-    assert_eq!(expected, actual);
+    assert_snapshot!(
+        actual,
+        @r###"
+    Projection: Date32("2021-01-09") AS to_timestamp(Utf8("2020-09-08T12:05:00+00:00")) + IntervalDayTime("IntervalDayTime { days: 123, milliseconds: 0 }")
+      TableScan: test
+    "###
+    );
     Ok(())
 }
 
@@ -311,10 +330,15 @@ fn simplify_project_scalar_fn() -> Result<()> {
 
     // before simplify: power(t.f, 1.0)
     // after simplify:  t.f as "power(t.f, 1.0)"
-    let expected = "Projection: test.f AS power(test.f,Float64(1))\
-                      \n  TableScan: test";
-    let actual = get_optimized_plan_formatted(plan, &Utc::now());
-    assert_eq!(expected, actual);
+    let formatter = get_optimized_plan_formatted(plan, &Utc::now());
+    let actual = formatter.trim();
+    assert_snapshot!(
+        actual,
+        @r###"
+    Projection: test.f AS power(test.f,Float64(1))
+      TableScan: test
+    "###
+    );
     Ok(())
 }
 
@@ -334,9 +358,9 @@ fn simplify_scan_predicate() -> Result<()> {
 
     // before simplify: t.g = power(t.f, 1.0)
     // after simplify:  t.g = t.f"
-    let expected = "TableScan: test, full_filters=[g = f]";
-    let actual = get_optimized_plan_formatted(plan, &Utc::now());
-    assert_eq!(expected, actual);
+    let formatted = get_optimized_plan_formatted(plan, &Utc::now());
+    let actual = formatted.trim();
+    assert_snapshot!(actual, @"TableScan: test, full_filters=[g = f]");
     Ok(())
 }
 
@@ -547,9 +571,9 @@ fn test_simplify_with_cycle_count(
     };
     let simplifier = ExprSimplifier::new(info);
     let (simplified_expr, count) = simplifier
-        .simplify_with_cycle_count(input_expr.clone())
+        .simplify_with_cycle_count_transformed(input_expr.clone())
         .expect("successfully evaluated");
-
+    let simplified_expr = simplified_expr.data;
     assert_eq!(
         simplified_expr, expected_expr,
         "Mismatch evaluating {input_expr}\n  Expected:{expected_expr}\n  Got:{simplified_expr}"
