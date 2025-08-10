@@ -360,13 +360,21 @@ mod tests {
 
         for (value, format, expected) in array_array_data {
             let batch_len = value.len();
+            let value_data_type = value.data_type().clone();
+            let format_data_type = format.data_type().clone();
+
             let args = datafusion_expr::ScalarFunctionArgs {
                 args: vec![
                     ColumnarValue::Array(value),
                     ColumnarValue::Array(Arc::new(format) as ArrayRef),
                 ],
+                arg_fields: vec![
+                    Field::new("a", value_data_type, true).into(),
+                    Field::new("b", format_data_type, true).into(),
+                ],
                 number_rows: batch_len,
-                return_type: &DataType::Utf8,
+                return_field: Field::new("f", DataType::Utf8, true).into(),
+                config_options: Arc::clone(&Arc::new(ConfigOptions::default())),
             };
             let result = ToCharFunc::new()
                 .invoke_with_args(args)

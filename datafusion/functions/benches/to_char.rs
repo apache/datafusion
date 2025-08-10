@@ -93,7 +93,7 @@ fn pick_date_time_pattern(rng: &mut ThreadRng) -> String {
 }
 
 fn pick_date_and_date_time_mixed_pattern(rng: &mut ThreadRng) -> String {
-    match rng.gen_bool(0.5) {
+    match rng.random_bool(0.5) {
         true => pick_date_pattern(rng),
         false => pick_date_time_pattern(rng),
     }
@@ -168,8 +168,13 @@ fn criterion_benchmark(c: &mut Criterion) {
                 to_char()
                     .invoke_with_args(ScalarFunctionArgs {
                         args: vec![data.clone(), patterns.clone()],
+                        arg_fields: vec![
+                            Field::new("a", data.data_type(), true).into(),
+                            Field::new("b", patterns.data_type(), true).into(),
+                        ],
                         number_rows: batch_len,
-                        return_type: &DataType::Utf8,
+                        return_field: Field::new("f", DataType::Utf8, true).into(),
+                        config_options: Arc::clone(&config_options),
                     })
                     .expect("to_char should work on valid values"),
             )
@@ -177,7 +182,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     });
 
     c.bench_function("to_char_array_mixed_patterns_1000", |b| {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let data_arr = generate_date32_array(&mut rng);
         let batch_len = data_arr.len();
         let data = ColumnarValue::Array(Arc::new(data_arr) as ArrayRef);
@@ -190,8 +195,13 @@ fn criterion_benchmark(c: &mut Criterion) {
                 to_char()
                     .invoke_with_args(ScalarFunctionArgs {
                         args: vec![data.clone(), patterns.clone()],
+                        arg_fields: vec![
+                            Field::new("a", data.data_type(), true).into(),
+                            Field::new("b", patterns.data_type(), true).into(),
+                        ],
                         number_rows: batch_len,
-                        return_type: &DataType::Utf8,
+                        return_field: Field::new("f", DataType::Utf8, true).into(),
+                        config_options: Arc::clone(&config_options),
                     })
                     .expect("to_char should work on valid values"),
             )
@@ -199,7 +209,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     });
 
     c.bench_function("to_char_scalar_date_only_pattern_1000", |b| {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let data_arr = generate_date32_array(&mut rng);
         let batch_len = data_arr.len();
         let data = ColumnarValue::Array(Arc::new(data_arr) as ArrayRef);
@@ -211,8 +221,13 @@ fn criterion_benchmark(c: &mut Criterion) {
                 to_char()
                     .invoke_with_args(ScalarFunctionArgs {
                         args: vec![data.clone(), patterns.clone()],
+                        arg_fields: vec![
+                            Field::new("a", data.data_type(), true).into(),
+                            Field::new("b", patterns.data_type(), true).into(),
+                        ],
                         number_rows: batch_len,
-                        return_type: &DataType::Utf8,
+                        return_field: Field::new("f", DataType::Utf8, true).into(),
+                        config_options: Arc::clone(&config_options),
                     })
                     .expect("to_char should work on valid values"),
             )
@@ -220,7 +235,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     });
 
     c.bench_function("to_char_scalar_datetime_pattern_1000", |b| {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let data_arr = generate_date32_array(&mut rng);
         let batch_len = data_arr.len();
         let data = ColumnarValue::Array(Arc::new(data_arr) as ArrayRef);
@@ -247,7 +262,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     });
 
     c.bench_function("to_char_scalar_1000", |b| {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let timestamp = "2026-07-08T09:10:11"
             .parse::<NaiveDateTime>()
             .unwrap()
