@@ -19,6 +19,7 @@
 
 use std::any::Any;
 use std::fmt::Debug;
+use std::hash::Hash;
 use std::mem::size_of_val;
 use std::sync::Arc;
 
@@ -44,8 +45,8 @@ use datafusion_common::{
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::{format_state_name, AggregateOrderSensitivity};
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, Documentation, EmitTo, Expr, ExprFunctionExt,
-    GroupsAccumulator, ReversedUDAF, Signature, SortExpr, Volatility,
+    udf_equals_hash, Accumulator, AggregateUDFImpl, Documentation, EmitTo, Expr,
+    ExprFunctionExt, GroupsAccumulator, ReversedUDAF, Signature, SortExpr, Volatility,
 };
 use datafusion_functions_aggregate_common::utils::get_sort_options;
 use datafusion_macros::user_doc;
@@ -88,6 +89,7 @@ pub fn last_value(expression: Expr, order_by: Vec<SortExpr>) -> Expr {
 ```"#,
     standard_argument(name = "expression",)
 )]
+#[derive(PartialEq, Eq, Hash)]
 pub struct FirstValue {
     signature: Signature,
     is_input_pre_ordered: bool,
@@ -292,6 +294,8 @@ impl AggregateUDFImpl for FirstValue {
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }
+
+    udf_equals_hash!(AggregateUDFImpl);
 }
 
 // TODO: rename to PrimitiveGroupsAccumulator
@@ -1004,6 +1008,7 @@ impl Accumulator for FirstValueAccumulator {
 ```"#,
     standard_argument(name = "expression",)
 )]
+#[derive(PartialEq, Eq, Hash)]
 pub struct LastValue {
     signature: Signature,
     is_input_pre_ordered: bool,
@@ -1212,6 +1217,8 @@ impl AggregateUDFImpl for LastValue {
             }
         }
     }
+
+    udf_equals_hash!(AggregateUDFImpl);
 }
 
 /// This accumulator is used when there is no ordering specified for the

@@ -53,15 +53,14 @@ pub fn ntile(arg: Expr) -> Expr {
         name = "expression",
         description = "An integer describing the number groups the partition should be split into"
     ),
-    sql_example = r#"```sql
-    --Example usage of the ntile window function:
-    SELECT employee_id,
-           salary,
-           ntile(4) OVER (ORDER BY salary DESC) AS quartile
-    FROM employees;
-```
-
+    sql_example = r#"
 ```sql
+-- Example usage of the ntile window function:
+SELECT employee_id,
+    salary,
+    ntile(4) OVER (ORDER BY salary DESC) AS quartile
+FROM employees;
+
 +-------------+--------+----------+
 | employee_id | salary | quartile |
 +-------------+--------+----------+
@@ -74,7 +73,8 @@ pub fn ntile(arg: Expr) -> Expr {
 | 7           | 40000  | 4        |
 | 8           | 30000  | 4        |
 +-------------+--------+----------+
-```"#
+```
+"#
 )]
 #[derive(Debug)]
 pub struct Ntile {

@@ -23,8 +23,9 @@ pub mod test {
     /// $EXPECTED_TYPE is the expected value type
     /// $EXPECTED_DATA_TYPE is the expected result type
     /// $ARRAY_TYPE is the column type after function applied
+    /// $CONFIG_OPTIONS config options to pass to function
     macro_rules! test_scalar_function {
-        ($FUNC:expr, $ARGS:expr, $EXPECTED:expr, $EXPECTED_TYPE:ty, $EXPECTED_DATA_TYPE:expr, $ARRAY_TYPE:ident) => {
+        ($FUNC:expr, $ARGS:expr, $EXPECTED:expr, $EXPECTED_TYPE:ty, $EXPECTED_DATA_TYPE:expr, $ARRAY_TYPE:ident, $CONFIG_OPTIONS:expr) => {
             let expected: datafusion_common::Result<Option<$EXPECTED_TYPE>> = $EXPECTED;
             let func = $FUNC;
 
@@ -72,6 +73,7 @@ pub mod test {
                         number_rows: cardinality,
                         return_field,
                         arg_fields: arg_fields.clone(),
+                        config_options: $CONFIG_OPTIONS,
                     });
                     assert_eq!(result.is_ok(), true, "function returned an error: {}", result.unwrap_err());
 
@@ -101,6 +103,7 @@ pub mod test {
                             number_rows: cardinality,
                             return_field,
                             arg_fields,
+                            config_options: $CONFIG_OPTIONS,
                         }) {
                             Ok(_) => assert!(false, "expected error"),
                             Err(error) => {
@@ -110,6 +113,18 @@ pub mod test {
                     }
                 }
             };
+        };
+
+        ($FUNC:expr, $ARGS:expr, $EXPECTED:expr, $EXPECTED_TYPE:ty, $EXPECTED_DATA_TYPE:expr, $ARRAY_TYPE:ident) => {
+            test_scalar_function!(
+                $FUNC,
+                $ARGS,
+                $EXPECTED,
+                $EXPECTED_TYPE,
+                $EXPECTED_DATA_TYPE,
+                $ARRAY_TYPE,
+                std::sync::Arc::new(datafusion_common::config::ConfigOptions::default())
+            )
         };
     }
 

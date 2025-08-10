@@ -2181,6 +2181,7 @@ mod tests {
     };
     use datafusion_functions_window_common::field::WindowUDFFieldArgs;
     use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
+    use std::hash::Hash;
     use std::{
         collections::HashMap,
         ops::{BitAnd, BitOr, BitXor},
@@ -4346,7 +4347,7 @@ mod tests {
 
     /// A Mock UDAF which defines `simplify` to be used in tests
     /// related to UDAF simplification
-    #[derive(Debug, Clone)]
+    #[derive(Debug, Clone, PartialEq, Eq, Hash)]
     struct SimplifyMockUdaf {
         simplify: bool,
     }
@@ -4404,6 +4405,8 @@ mod tests {
                 None
             }
         }
+
+        udf_equals_hash!(AggregateUDFImpl);
     }
 
     #[test]
@@ -4427,7 +4430,7 @@ mod tests {
 
     /// A Mock UDWF which defines `simplify` to be used in tests
     /// related to UDWF simplification
-    #[derive(Debug, Clone)]
+    #[derive(Debug, Clone, PartialEq, Eq, Hash)]
     struct SimplifyMockUdwf {
         simplify: bool,
     }
@@ -4474,6 +4477,8 @@ mod tests {
         fn field(&self, _field_args: WindowUDFFieldArgs) -> Result<FieldRef> {
             unimplemented!("not needed for tests")
         }
+
+        udf_equals_hash!(WindowUDFImpl);
     }
     #[derive(Debug)]
     struct VolatileUdf {

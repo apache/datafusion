@@ -407,7 +407,10 @@ impl From<DataType> for NativeType {
             DataType::Union(union_fields, _) => {
                 Union(LogicalUnionFields::from(&union_fields))
             }
-            DataType::Decimal128(p, s) | DataType::Decimal256(p, s) => Decimal(p, s),
+            DataType::Decimal32(p, s)
+            | DataType::Decimal64(p, s)
+            | DataType::Decimal128(p, s)
+            | DataType::Decimal256(p, s) => Decimal(p, s),
             DataType::Map(field, _) => Map(Arc::new(field.as_ref().into())),
             DataType::Dictionary(_, data_type) => data_type.as_ref().clone().into(),
             DataType::RunEndEncoded(_, field) => field.data_type().clone().into(),
