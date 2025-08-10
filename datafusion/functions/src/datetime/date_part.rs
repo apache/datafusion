@@ -217,6 +217,7 @@ impl ScalarUDFImpl for DatePartFunc {
                 "qtr" | "quarter" => date_part(array.as_ref(), DatePart::Quarter)?,
                 "doy" => date_part(array.as_ref(), DatePart::DayOfYear)?,
                 "dow" => date_part(array.as_ref(), DatePart::DayOfWeekSunday0)?,
+                "isodow" => date_part(array.as_ref(), DatePart::DayOfWeekMonday0)?,
                 "epoch" => epoch(array.as_ref())?,
                 _ => return exec_err!("Date part '{part}' not supported"),
             }
