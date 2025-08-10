@@ -760,7 +760,9 @@ impl Options {
 /// be under a folder that is has the same name as the test file.
 /// e.g. In `join.slt`, temporary files must be created under `.../scratch/join/`
 ///
-/// This funciton searches for `scratch/[target]/...` patterns and verifies
+/// See: <https://github.com/apache/datafusion/tree/main/datafusion/sqllogictest#running-tests-scratchdir>
+///
+/// This function searches for `scratch/[target]/...` patterns and verifies
 /// that the target matches the file name.
 ///
 /// Returns a vector of error strings for incorrectly created scratch files.
@@ -792,22 +794,20 @@ fn scratch_file_check(test_files: &[TestFile]) -> Result<Vec<String>> {
 
         // Search for any scratch/[target]/... patterns and check if they match the file name
         let lines: Vec<&str> = content.lines().collect();
+        let scratch_pattern = regex::Regex::new(r"scratch/([^/]+)/").unwrap();
+
         for (line_num, line) in lines.iter().enumerate() {
-            if line.contains("scratch/") {
-                // Extract the target from the pattern
-                if let Some(target_start) = line.find("scratch/") {
-                    let after_scratch = &line[target_start + 8..]; // "scratch/" is 8 chars
-                    if let Some(target_end) = after_scratch.find('/') {
-                        let found_target = &after_scratch[..target_end];
-                        if found_target != expected_target {
-                            errors.push(format!(
-                                "File {}:{}: scratch target '{}' does not match file name '{}'",
-                                test_file.path.display(),
-                                line_num + 1,
-                                found_target,
-                                expected_target
-                            ));
-                        }
+            if let Some(captures) = scratch_pattern.captures(line) {
+                if let Some(found_target) = captures.get(1) {
+                    let found_target = found_target.as_str();
+                    if found_target != expected_target {
+                        errors.push(format!(
+                            "File {}:{}: scratch target '{}' does not match file name '{}'",
+                            test_file.path.display(),
+                            line_num + 1,
+                            found_target,
+                            expected_target
+                        ));
                     }
                 }
             }

@@ -2669,6 +2669,7 @@ dependencies = [
  "object_store",
  "postgres-protocol",
  "postgres-types",
+ "regex",
  "rust_decimal",
  "sqllogictest",
  "sqlparser",
