@@ -83,6 +83,7 @@ postgres = [
 env_logger = { workspace = true }
 regex = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread"] }
+
 [[test]]
 harness = false
 name = "sqllogictests"

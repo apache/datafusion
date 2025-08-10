@@ -1,2 +1,0 @@
-statement ok
-CREATE TABLE scratch/wrong_target/temp_table AS SELECT 1 as col1
