@@ -261,10 +261,11 @@ impl<'a> DefaultPhysicalExprAdapterRewriter<'a> {
         &self,
         expr: &Arc<dyn PhysicalExpr>,
     ) -> Result<Option<Arc<dyn PhysicalExpr>>> {
-        let get_field_expr = match ScalarFunctionExpr::try_downcast_func::<GetFieldFunc>(expr.as_ref()) {
-            Some(expr) => expr,
-            None => return Ok(None),
-        };
+        let get_field_expr =
+            match ScalarFunctionExpr::try_downcast_func::<GetFieldFunc>(expr.as_ref()) {
+                Some(expr) => expr,
+                None => return Ok(None),
+            };
 
         let source_expr = match get_field_expr.args().first() {
             Some(expr) => expr,
@@ -552,9 +553,7 @@ mod tests {
         let adapter = factory.create(Arc::new(logical_schema), Arc::new(physical_schema));
         let column_expr = Arc::new(Column::new("data", 0));
 
-        let result = adapter.rewrite(column_expr);
-        assert!(result.is_err());
-        let error_msg = result.unwrap_err().to_string();
+        let error_msg = adapter.rewrite(column_expr).unwrap_err().to_string();
         assert_contains!(error_msg, "Cannot cast column 'data'");
     }
 
@@ -637,9 +636,7 @@ mod tests {
         let adapter = factory.create(Arc::new(logical_schema), Arc::new(physical_schema));
         let column_expr = Arc::new(Column::new("b", 1));
 
-        let result = adapter.rewrite(column_expr);
-        assert!(result.is_err());
-        let error_msg = result.unwrap_err().to_string();
+        let error_msg = adapter.rewrite(column_expr).unwrap_err().to_string();
         assert_contains!(error_msg, "Non-nullable column 'b' is missing");
     }
 
