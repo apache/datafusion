@@ -189,11 +189,11 @@ fn is_log(func: &ScalarUDF) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use arrow::array::Float64Array;
     use arrow::datatypes::Field;
     use datafusion_common::cast::{as_float64_array, as_int64_array};
-
-    use super::*;
+    use datafusion_common::config::ConfigOptions;
 
     #[test]
     fn test_power_f64() {
@@ -213,6 +213,7 @@ mod tests {
             arg_fields,
             number_rows: 4,
             return_field: Field::new("f", DataType::Float64, true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
         };
         let result = PowerFunc::new()
             .invoke_with_args(args)
@@ -248,6 +249,7 @@ mod tests {
             arg_fields,
             number_rows: 4,
             return_field: Field::new("f", DataType::Int64, true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
         };
         let result = PowerFunc::new()
             .invoke_with_args(args)

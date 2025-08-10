@@ -19,10 +19,148 @@
 
 # Upgrade Guides
 
+## DataFusion `50.0.0`
+
+**Note:** DataFusion `50.0.0` has not been released yet. The information provided in this section pertains to features and changes that have already been merged to the main branch and are awaiting release in this version.
+You can see the current [status of the `50.0.0 `release here](https://github.com/apache/datafusion/issues/16799)
+
+### `AsyncScalarUDFImpl::invoke_async_with_args` returns `ColumnarValue`
+
+In order to enable single value optimizations and be consistent with other
+user defined function APIs, the `AsyncScalarUDFImpl::invoke_async_with_args` method now
+returns a `ColumnarValue` instead of a `ArrayRef`.
+
+To upgrade, change the return type of your implementation
+
+```rust
+# /* comment to avoid running
+impl AsyncScalarUDFImpl for AskLLM {
+    async fn invoke_async_with_args(
+        &self,
+        args: ScalarFunctionArgs,
+        _option: &ConfigOptions,
+    ) -> Result<ColumnarValue> {
+        ..
+      return array_ref; // old code
+    }
+}
+# */
+```
+
+To return a `ColumnarValue`
+
+```rust
+# /* comment to avoid running
+impl AsyncScalarUDFImpl for AskLLM {
+    async fn invoke_async_with_args(
+        &self,
+        args: ScalarFunctionArgs,
+        _option: &ConfigOptions,
+    ) -> Result<ColumnarValue> {
+        ..
+      return ColumnarValue::from(array_ref); // new code
+    }
+}
+# */
+```
+
+See [#16896](https://github.com/apache/datafusion/issues/16896) for more details.
+
+### `SessionState`, `SessionConfig`, and `OptimizerConfig` returns `&Arc<ConfigOptions>` instead of `&ConfigOptions`
+
+To provide broader access to `ConfigOptions` and reduce required clones, some
+APIs have been changed to return a `&Arc<ConfigOptions>` instead of a
+`&ConfigOptions`. This allows sharing the same `ConfigOptions` across multiple
+threads without needing to clone the entire `ConfigOptions` structure unless it
+is modified.
+
+Most users will not be impacted by this change since the Rust compiler typically
+automatically dereference the `Arc` when needed. However, in some cases you may
+have to change your code to explicitly call `as_ref()` for example, from
+
+```rust
+# /* comment to avoid running
+let optimizer_config: &ConfigOptions = state.options();
+#  */
+```
+
+To
+
+```rust
+# /* comment to avoid running
+let optimizer_config: &ConfigOptions = state.options().as_ref();
+#  */
+```
+
+See PR [#16970](https://github.com/apache/datafusion/pull/16970)
+
+### API Change to `AsyncScalarUDFImpl::invoke_async_with_args`
+
+The `invoke_async_with_args` method of the `AsyncScalarUDFImpl` trait has been
+updated to remove the `_option: &ConfigOptions` parameter to simplify the API
+now that the `ConfigOptions` can be accessed through the `ScalarFunctionArgs`
+parameter.
+
+You can change your code like this
+
+```rust
+# /* comment to avoid running
+impl AsyncScalarUDFImpl for AskLLM {
+    async fn invoke_async_with_args(
+        &self,
+        args: ScalarFunctionArgs,
+        _option: &ConfigOptions,
+    ) -> Result<ArrayRef> {
+        ..
+    }
+    ...
+}
+# */
+```
+
+To this:
+
+```rust
+# /* comment to avoid running
+
+impl AsyncScalarUDFImpl for AskLLM {
+    async fn invoke_async_with_args(
+        &self,
+        args: ScalarFunctionArgs,
+    ) -> Result<ArrayRef> {
+        let options = &args.config_options;
+        ..
+    }
+    ...
+}
+# */
+```
+
+### Upgrade to arrow `56.0.0` and parquet `56.0.0`
+
+This version of DataFusion upgrades the underlying Apache Arrow implementation
+to version `56.0.0`. See the [release notes](https://github.com/apache/arrow-rs/releases/tag/56.0.0)
+for more details.
+
+### Added `ExecutionPlan::reset_state`
+
+In order to fix a bug in DataFusion `49.0.0` where dynamic filters (currently only generated in the precense of a query such as `ORDER BY ... LIMIT ...`)
+produced incorrect results in recursive queries, a new method `reset_state` has been added to the `ExecutionPlan` trait.
+
+Any `ExecutionPlan` that needs to maintain internal state or references to other nodes in the execution plan tree should implement this method to reset that state.
+See [#17028] for more details and an example implementation for `SortExec`.
+
+[#17028]: https://github.com/apache/datafusion/pull/17028
+
 ## DataFusion `49.0.0`
 
-**Note:** DataFusion `49.0.0` has not been released yet. The information provided in this section pertains to features and changes that have already been merged to the main branch and are awaiting release in this version.
-You can see the current [status of the `49.0.0 `release here](https://github.com/apache/datafusion/issues/16235)
+### `MSRV` updated to 1.85.1
+
+The Minimum Supported Rust Version (MSRV) has been updated to [`1.85.1`]. See
+[#16728] for details.
+
+[`1.85.1`]: https://releases.rs/docs/1.85.1/
+[#16728]: https://github.com/apache/datafusion/pull/16728
 
 ### `DataFusionError` variants are now `Box`ed
 
@@ -119,6 +257,102 @@ SET datafusion.execution.spill_compression = 'zstd';
 ```
 
 For more details about this configuration option, including performance trade-offs between different compression codecs, see the [Configuration Settings](../user-guide/configs.md) documentation.
+
+### Deprecated `map_varchar_to_utf8view` configuration option
+
+See [issue #16290](https://github.com/apache/datafusion/pull/16290) for more information
+The old configuration
+
+```text
+datafusion.sql_parser.map_varchar_to_utf8view
+```
+
+is now **deprecated** in favor of the unified option below.\
+If you previously used this to control only `VARCHAR`→`Utf8View` mapping, please migrate to `map_string_types_to_utf8view`.
+
+---
+
+### New `map_string_types_to_utf8view` configuration option
+
+To unify **all** SQL string types (`CHAR`, `VARCHAR`, `TEXT`, `STRING`) to Arrow’s zero‑copy `Utf8View`, DataFusion 49.0.0 introduces:
+
+- **Key**: `datafusion.sql_parser.map_string_types_to_utf8view`
+- **Default**: `true`
+
+**Description:**
+
+- When **true** (default), **all** SQL string types are mapped to `Utf8View`, avoiding full‑copy UTF‑8 allocations and improving performance.
+- When **false**, DataFusion falls back to the legacy `Utf8` mapping for **all** string types.
+
+#### Examples
+
+```rust
+# /* comment to avoid running
+// Disable Utf8View mapping for all SQL string types
+let opts = datafusion::sql::planner::ParserOptions::new()
+    .with_map_string_types_to_utf8view(false);
+
+// Verify the setting is applied
+assert!(!opts.map_string_types_to_utf8view);
+# */
+```
+
+---
+
+```sql
+-- Disable Utf8View mapping globally
+SET datafusion.sql_parser.map_string_types_to_utf8view = false;
+
+-- Now VARCHAR, CHAR, TEXT, STRING all use Utf8 rather than Utf8View
+CREATE TABLE my_table (a VARCHAR, b TEXT, c STRING);
+DESCRIBE my_table;
+```
+
+### Deprecating `SchemaAdapterFactory` and `SchemaAdapter`
+
+We are moving away from converting data (using `SchemaAdapter`) to converting the expressions themselves (which is more efficient and flexible).
+
+See [issue #16800](https://github.com/apache/datafusion/issues/16800) for more information
+The first place this change has taken place is in predicate pushdown for Parquet.
+By default if you do not use a custom `SchemaAdapterFactory` we will use expression conversion instead.
+If you do set a custom `SchemaAdapterFactory` we will continue to use it but emit a warning about that code path being deprecated.
+
+To resolve this you need to implement a custom `PhysicalExprAdapterFactory` and use that instead of a `SchemaAdapterFactory`.
+See the [default values](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/default_column_values.rs) for an example of how to do this.
+Opting into the new APIs will set you up for future changes since we plan to expand use of `PhysicalExprAdapterFactory` to other areas of DataFusion.
+
+See [#16800] for details.
+
+[#16800]: https://github.com/apache/datafusion/issues/16800
+
+### `TableParquetOptions` Updated
+
+The `TableParquetOptions` struct has a new `crypto` field to specify encryption
+options for Parquet files. The `ParquetEncryptionOptions` implements `Default`
+so you can upgrade your existing code like this:
+
+```rust
+# /* comment to avoid running
+TableParquetOptions {
+  global,
+  column_specific_options,
+  key_value_metadata,
+}
+# */
+```
+
+To this:
+
+```rust
+# /* comment to avoid running
+TableParquetOptions {
+  global,
+  column_specific_options,
+  key_value_metadata,
+  crypto: Default::default(), // New crypto field
+}
+# */
+```
 
 ## DataFusion `48.0.1`
 

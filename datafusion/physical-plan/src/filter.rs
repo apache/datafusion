@@ -30,7 +30,7 @@ use crate::common::can_project;
 use crate::execution_plan::CardinalityEffect;
 use crate::filter_pushdown::{
     ChildFilterDescription, ChildPushdownResult, FilterDescription, FilterPushdownPhase,
-    FilterPushdownPropagation, PredicateSupport,
+    FilterPushdownPropagation, PushedDown, PushedDownPredicate,
 };
 use crate::projection::{
     make_with_child, try_embed_projection, update_expr, EmbeddedProjection,
@@ -455,7 +455,7 @@ impl ExecutionPlan for FilterExec {
             // For non-pre phase, filters pass through unchanged
             let filter_supports = parent_filters
                 .into_iter()
-                .map(PredicateSupport::Supported)
+                .map(PushedDownPredicate::supported)
                 .collect();
             return Ok(FilterDescription::new().with_child(ChildFilterDescription {
                 parent_filters: filter_supports,
@@ -481,32 +481,28 @@ impl ExecutionPlan for FilterExec {
         _config: &ConfigOptions,
     ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
         if !matches!(phase, FilterPushdownPhase::Pre) {
-            return Ok(FilterPushdownPropagation::transparent(
-                child_pushdown_result,
-            ));
+            return Ok(FilterPushdownPropagation::if_all(child_pushdown_result));
         }
         // We absorb any parent filters that were not handled by our children
-        let mut unhandled_filters = child_pushdown_result
-            .parent_filters
+        let unsupported_parent_filters =
+            child_pushdown_result.parent_filters.iter().filter_map(|f| {
+                matches!(f.all(), PushedDown::No).then_some(Arc::clone(&f.filter))
+            });
+        let unsupported_self_filters = child_pushdown_result
+            .self_filters
+            .first()
+            .expect("we have exactly one child")
             .iter()
-            .filter_map(|f| match f {
-                PredicateSupport::Unsupported(expr) => Some(Arc::clone(expr)),
-                PredicateSupport::Supported(_) => None,
+            .filter_map(|f| match f.discriminant {
+                PushedDown::Yes => None,
+                PushedDown::No => Some(&f.predicate),
             })
+            .cloned();
+
+        let unhandled_filters = unsupported_parent_filters
+            .into_iter()
+            .chain(unsupported_self_filters)
             .collect_vec();
-        assert_eq!(
-            child_pushdown_result.self_filters.len(),
-            1,
-            "FilterExec should only have one child"
-        );
-        let unsupported_self_filters = child_pushdown_result.self_filters[0]
-            .iter()
-            .filter_map(|f| match f {
-                PredicateSupport::Unsupported(expr) => Some(Arc::clone(expr)),
-                PredicateSupport::Supported(_) => None,
-            })
-            .collect_vec();
-        unhandled_filters.extend(unsupported_self_filters);
 
         // If we have unhandled filters, we need to create a new FilterExec
         let filter_input = Arc::clone(self.input());
@@ -555,15 +551,9 @@ impl ExecutionPlan for FilterExec {
             };
             Some(Arc::new(new) as _)
         };
-        // Mark all parent filters as supported since we absorbed them
-        let supported_filters = child_pushdown_result
-            .parent_filters
-            .into_iter()
-            .map(|f| PredicateSupport::Supported(f.into_inner()))
-            .collect();
 
         Ok(FilterPushdownPropagation {
-            filters: supported_filters,
+            filters: vec![PushedDown::Yes; child_pushdown_result.parent_filters.len()],
             updated_node,
         })
     }

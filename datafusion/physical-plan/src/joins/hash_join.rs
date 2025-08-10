@@ -34,6 +34,10 @@ use super::{
 };
 use super::{JoinOn, JoinOnRef};
 use crate::execution_plan::{boundedness_from_children, EmissionType};
+use crate::filter_pushdown::{
+    ChildPushdownResult, FilterDescription, FilterPushdownPhase,
+    FilterPushdownPropagation,
+};
 use crate::joins::join_hash_map::{JoinHashMapU32, JoinHashMapU64};
 use crate::projection::{
     try_embed_projection, try_pushdown_through_join, EmbeddedProjection, JoinData,
@@ -48,8 +52,8 @@ use crate::{
     joins::join_hash_map::JoinHashMapOffset,
     joins::utils::{
         adjust_indices_by_join_type, apply_join_filter_to_indices,
-        build_batch_from_indices, build_join_schema, check_join_is_valid,
-        estimate_join_statistics, need_produce_result_in_final,
+        build_batch_empty_build_side, build_batch_from_indices, build_join_schema,
+        check_join_is_valid, estimate_join_statistics, need_produce_result_in_final,
         symmetric_join_output_partitioning, BuildProbeJoinMetrics, ColumnIndex,
         JoinFilter, JoinHashMapType, StatefulStreamResult,
     },
@@ -68,10 +72,11 @@ use arrow::datatypes::{Schema, SchemaRef};
 use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
 use arrow::util::bit_util;
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::utils::memory::estimate_memory_size;
 use datafusion_common::{
-    internal_datafusion_err, internal_err, plan_err, project_schema, DataFusionError,
-    JoinSide, JoinType, NullEquality, Result,
+    internal_datafusion_err, internal_err, plan_err, project_schema, JoinSide, JoinType,
+    NullEquality, Result,
 };
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
@@ -79,7 +84,7 @@ use datafusion_expr::Operator;
 use datafusion_physical_expr::equivalence::{
     join_equivalence_properties, ProjectionMapping,
 };
-use datafusion_physical_expr::PhysicalExprRef;
+use datafusion_physical_expr::{PhysicalExpr, PhysicalExprRef};
 use datafusion_physical_expr_common::datum::compare_op_for_nested;
 
 use ahash::RandomState;
@@ -769,6 +774,26 @@ impl ExecutionPlan for HashJoinExec {
         )?))
     }
 
+    fn reset_state(self: Arc<Self>) -> Result<Arc<dyn ExecutionPlan>> {
+        // Reset the left_fut to allow re-execution
+        Ok(Arc::new(HashJoinExec {
+            left: Arc::clone(&self.left),
+            right: Arc::clone(&self.right),
+            on: self.on.clone(),
+            filter: self.filter.clone(),
+            join_type: self.join_type,
+            join_schema: Arc::clone(&self.join_schema),
+            left_fut: OnceAsync::default(),
+            random_state: self.random_state.clone(),
+            mode: self.mode,
+            metrics: ExecutionPlanMetricsSet::new(),
+            projection: self.projection.clone(),
+            column_indices: self.column_indices.clone(),
+            null_equality: self.null_equality,
+            cache: self.cache.clone(),
+        }))
+    }
+
     fn execute(
         &self,
         partition: usize,
@@ -943,6 +968,47 @@ impl ExecutionPlan for HashJoinExec {
         } else {
             try_embed_projection(projection, self)
         }
+    }
+
+    fn gather_filters_for_pushdown(
+        &self,
+        _phase: FilterPushdownPhase,
+        parent_filters: Vec<Arc<dyn PhysicalExpr>>,
+        _config: &ConfigOptions,
+    ) -> Result<FilterDescription> {
+        // Other types of joins can support *some* filters, but restrictions are complex and error prone.
+        // For now we don't support them.
+        // See the logical optimizer rules for more details: datafusion/optimizer/src/push_down_filter.rs
+        // See https://github.com/apache/datafusion/issues/16973 for tracking.
+        if self.join_type != JoinType::Inner {
+            return Ok(FilterDescription::all_unsupported(
+                &parent_filters,
+                &self.children(),
+            ));
+        }
+        FilterDescription::from_children(parent_filters, &self.children())
+        // TODO: push down our self filters to children in the post optimization phase
+    }
+
+    fn handle_child_pushdown_result(
+        &self,
+        _phase: FilterPushdownPhase,
+        child_pushdown_result: ChildPushdownResult,
+        _config: &ConfigOptions,
+    ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
+        // Note: this check shouldn't be necessary because we already marked all parent filters as unsupported for
+        // non-inner joins in `gather_filters_for_pushdown`.
+        // However it's a cheap check and serves to inform future devs touching this function that they need to be really
+        // careful pushing down filters through non-inner joins.
+        if self.join_type != JoinType::Inner {
+            // Other types of joins can support *some* filters, but restrictions are complex and error prone.
+            // For now we don't support them.
+            // See the logical optimizer rules for more details: datafusion/optimizer/src/push_down_filter.rs
+            return Ok(FilterPushdownPropagation::all_unsupported(
+                child_pushdown_result,
+            ));
+        }
+        Ok(FilterPushdownPropagation::if_any(child_pushdown_result))
     }
 }
 
@@ -1363,11 +1429,9 @@ pub fn equal_rows_arr(
 ) -> Result<(UInt64Array, UInt32Array)> {
     let mut iter = left_arrays.iter().zip(right_arrays.iter());
 
-    let (first_left, first_right) = iter.next().ok_or_else(|| {
-        DataFusionError::Internal(
-            "At least one array should be provided for both left and right".to_string(),
-        )
-    })?;
+    let Some((first_left, first_right)) = iter.next() else {
+        return Ok((Vec::<u64>::new().into(), Vec::<u32>::new().into()));
+    };
 
     let arr_left = take(first_left.as_ref(), indices_left, None)?;
     let arr_right = take(first_right.as_ref(), indices_right, None)?;
@@ -1498,6 +1562,23 @@ impl HashJoinStream {
 
         let timer = self.join_metrics.join_time.timer();
 
+        // if the left side is empty, we can skip the (potentially expensive) join operation
+        if build_side.left_data.hash_map.is_empty() && self.filter.is_none() {
+            let result = build_batch_empty_build_side(
+                &self.schema,
+                build_side.left_data.batch(),
+                &state.batch,
+                &self.column_indices,
+                self.join_type,
+            )?;
+            self.join_metrics.output_batches.add(1);
+            timer.done();
+
+            self.state = HashJoinStreamState::FetchProbeBatch;
+
+            return Ok(StatefulStreamResult::Ready(Some(result)));
+        }
+
         // get the matched by join keys indices
         let (left_indices, right_indices, next_offset) = lookup_join_hashmap(
             build_side.left_data.hash_map(),
@@ -1518,6 +1599,7 @@ impl HashJoinStream {
                 right_indices,
                 filter,
                 JoinSide::Left,
+                None,
             )?
         } else {
             (left_indices, right_indices)

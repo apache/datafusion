@@ -18,6 +18,7 @@
 //! [`StringAgg`] accumulator for the `string_agg` function
 
 use std::any::Any;
+use std::hash::Hash;
 use std::mem::size_of_val;
 
 use crate::array_agg::ArrayAgg;
@@ -28,7 +29,8 @@ use datafusion_common::cast::{as_generic_string_array, as_string_view_array};
 use datafusion_common::{internal_err, not_impl_err, Result, ScalarValue};
 use datafusion_expr::function::AccumulatorArgs;
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, Documentation, Signature, TypeSignature, Volatility,
+    udf_equals_hash, Accumulator, AggregateUDFImpl, Documentation, Signature,
+    TypeSignature, Volatility,
 };
 use datafusion_functions_aggregate_common::accumulator::StateFieldsArgs;
 use datafusion_macros::user_doc;
@@ -81,7 +83,7 @@ This aggregation function can only mix DISTINCT and ORDER BY if the ordering exp
     )
 )]
 /// STRING_AGG aggregate expression
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct StringAgg {
     signature: Signature,
     array_agg: ArrayAgg,
@@ -180,6 +182,8 @@ impl AggregateUDFImpl for StringAgg {
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }
+
+    udf_equals_hash!(AggregateUDFImpl);
 }
 
 #[derive(Debug)]

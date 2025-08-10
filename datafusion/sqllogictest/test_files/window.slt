@@ -4341,6 +4341,9 @@ LIMIT 5;
 24 31
 14 94
 
+statement ok
+set datafusion.execution.batch_size = 100;
+
 # Tests schema and data are in sync for mixed nulls and not nulls values for builtin window function
 query T
 select lag(a) over (order by a ASC NULLS FIRST) as x1
@@ -4938,11 +4941,11 @@ FROM (SELECT c1, c2, ROW_NUMBER() OVER() as rn
     FROM t
     LIMIT 5)
 GROUP BY rn
-ORDER BY rn;
+ORDER BY 1, 2, 3
 ----
 1 a 1
-2 b 2
 1 a 3
+2 b 2
 3 NULL 4
 NULL a4 5
 
@@ -5180,6 +5183,10 @@ order by c1;
 2 10 2
 3 1 1
 3 10 2
+
+
+statement ok
+set datafusion.execution.batch_size = 1;
 
 # push filter since it uses a partition column
 query TT
@@ -5507,6 +5514,7 @@ physical_plan
 02)--WindowAggExec: wdw=[sum(aggregate_test_100_ordered.c9) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "sum(aggregate_test_100_ordered.c9) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: UInt64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }]
 03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c9], file_type=csv, has_header=true
 
+
 query TT
 EXPLAIN SELECT c1, MIN(c5) OVER(PARTITION BY c1) as min_c5 FROM aggregate_test_100_ordered ORDER BY c1, min_c5 DESC NULLS LAST;
 ----
@@ -5642,3 +5650,147 @@ WINDOW
 3 7
 4 11
 5 16
+
+
+# window with distinct operation
+statement ok
+CREATE TABLE table_test_distinct_count (
+    k VARCHAR,
+    v Int,
+    time TIMESTAMP WITH TIME ZONE
+);
+
+statement ok
+INSERT INTO table_test_distinct_count (k, v, time) VALUES
+    ('a', 1, '1970-01-01T00:01:00.00Z'),
+    ('a', 1, '1970-01-01T00:02:00.00Z'),
+    ('a', 1, '1970-01-01T00:03:00.00Z'),
+    ('a', 2, '1970-01-01T00:03:00.00Z'),
+    ('a', 1, '1970-01-01T00:04:00.00Z'),
+    ('b', 3, '1970-01-01T00:01:00.00Z'),
+    ('b', 3, '1970-01-01T00:02:00.00Z'),
+    ('b', 4, '1970-01-01T00:03:00.00Z'),
+    ('b', 4, '1970-01-01T00:03:00.00Z');
+
+query TPII
+SELECT
+    k,
+    time,
+    COUNT(v) OVER (
+        PARTITION BY k
+        ORDER BY time
+        RANGE BETWEEN INTERVAL '2 minutes' PRECEDING AND CURRENT ROW
+    ) AS normal_count,
+    COUNT(DISTINCT v) OVER (
+        PARTITION BY k
+        ORDER BY time
+        RANGE BETWEEN INTERVAL '2 minutes' PRECEDING AND CURRENT ROW
+    ) AS distinct_count
+FROM table_test_distinct_count
+ORDER BY k, time;
+----
+a 1970-01-01T00:01:00Z 1 1
+a 1970-01-01T00:02:00Z 2 1
+a 1970-01-01T00:03:00Z 4 2
+a 1970-01-01T00:03:00Z 4 2
+a 1970-01-01T00:04:00Z 4 2
+b 1970-01-01T00:01:00Z 1 1
+b 1970-01-01T00:02:00Z 2 1
+b 1970-01-01T00:03:00Z 4 2
+b 1970-01-01T00:03:00Z 4 2
+
+
+query TT
+EXPLAIN SELECT
+    k,
+    time,
+    COUNT(v) OVER (
+        PARTITION BY k
+        ORDER BY time
+        RANGE BETWEEN INTERVAL '2 minutes' PRECEDING AND CURRENT ROW
+    ) AS normal_count,
+    COUNT(DISTINCT v) OVER (
+        PARTITION BY k
+        ORDER BY time
+        RANGE BETWEEN INTERVAL '2 minutes' PRECEDING AND CURRENT ROW
+    ) AS distinct_count
+FROM table_test_distinct_count
+ORDER BY k, time;
+----
+logical_plan
+01)Sort: table_test_distinct_count.k ASC NULLS LAST, table_test_distinct_count.time ASC NULLS LAST
+02)--Projection: table_test_distinct_count.k, table_test_distinct_count.time, count(table_test_distinct_count.v) PARTITION BY [table_test_distinct_count.k] ORDER BY [table_test_distinct_count.time ASC NULLS LAST] RANGE BETWEEN 2 minutes PRECEDING AND CURRENT ROW AS normal_count, count(DISTINCT table_test_distinct_count.v) PARTITION BY [table_test_distinct_count.k] ORDER BY [table_test_distinct_count.time ASC NULLS LAST] RANGE BETWEEN 2 minutes PRECEDING AND CURRENT ROW AS distinct_count
+03)----WindowAggr: windowExpr=[[count(table_test_distinct_count.v) PARTITION BY [table_test_distinct_count.k] ORDER BY [table_test_distinct_count.time ASC NULLS LAST] RANGE BETWEEN IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 120000000000 } PRECEDING AND CURRENT ROW AS count(table_test_distinct_count.v) PARTITION BY [table_test_distinct_count.k] ORDER BY [table_test_distinct_count.time ASC NULLS LAST] RANGE BETWEEN 2 minutes PRECEDING AND CURRENT ROW, count(DISTINCT table_test_distinct_count.v) PARTITION BY [table_test_distinct_count.k] ORDER BY [table_test_distinct_count.time ASC NULLS LAST] RANGE BETWEEN IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 120000000000 } PRECEDING AND CURRENT ROW AS count(DISTINCT table_test_distinct_count.v) PARTITION BY [table_test_distinct_count.k] ORDER BY [table_test_distinct_count.time ASC NULLS LAST] RANGE BETWEEN 2 minutes PRECEDING AND CURRENT ROW]]
+04)------TableScan: table_test_distinct_count projection=[k, v, time]
+physical_plan
+01)SortPreservingMergeExec: [k@0 ASC NULLS LAST, time@1 ASC NULLS LAST]
+02)--ProjectionExec: expr=[k@0 as k, time@2 as time, count(table_test_distinct_count.v) PARTITION BY [table_test_distinct_count.k] ORDER BY [table_test_distinct_count.time ASC NULLS LAST] RANGE BETWEEN 2 minutes PRECEDING AND CURRENT ROW@3 as normal_count, count(DISTINCT table_test_distinct_count.v) PARTITION BY [table_test_distinct_count.k] ORDER BY [table_test_distinct_count.time ASC NULLS LAST] RANGE BETWEEN 2 minutes PRECEDING AND CURRENT ROW@4 as distinct_count]
+03)----BoundedWindowAggExec: wdw=[count(table_test_distinct_count.v) PARTITION BY [table_test_distinct_count.k] ORDER BY [table_test_distinct_count.time ASC NULLS LAST] RANGE BETWEEN 2 minutes PRECEDING AND CURRENT ROW: Field { name: "count(table_test_distinct_count.v) PARTITION BY [table_test_distinct_count.k] ORDER BY [table_test_distinct_count.time ASC NULLS LAST] RANGE BETWEEN 2 minutes PRECEDING AND CURRENT ROW", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: RANGE BETWEEN IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 120000000000 } PRECEDING AND CURRENT ROW, count(DISTINCT table_test_distinct_count.v) PARTITION BY [table_test_distinct_count.k] ORDER BY [table_test_distinct_count.time ASC NULLS LAST] RANGE BETWEEN 2 minutes PRECEDING AND CURRENT ROW: Field { name: "count(DISTINCT table_test_distinct_count.v) PARTITION BY [table_test_distinct_count.k] ORDER BY [table_test_distinct_count.time ASC NULLS LAST] RANGE BETWEEN 2 minutes PRECEDING AND CURRENT ROW", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: RANGE BETWEEN IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 120000000000 } PRECEDING AND CURRENT ROW], mode=[Sorted]
+04)------SortExec: expr=[k@0 ASC NULLS LAST, time@2 ASC NULLS LAST], preserve_partitioning=[true]
+05)--------CoalesceBatchesExec: target_batch_size=1
+06)----------RepartitionExec: partitioning=Hash([k@0], 2), input_partitions=2
+07)------------DataSourceExec: partitions=2, partition_sizes=[5, 4]
+
+
+# Add testing for distinct sum
+query TPII
+SELECT
+  k,
+  time,
+  SUM(v) OVER (
+    PARTITION BY k
+    ORDER BY time
+    RANGE BETWEEN INTERVAL '2 minutes' PRECEDING AND CURRENT ROW
+  )               AS sum_v,
+  SUM(DISTINCT v) OVER (
+    PARTITION BY k
+    ORDER BY time
+    RANGE BETWEEN INTERVAL '2 minutes' PRECEDING AND CURRENT ROW
+  )       AS sum_distinct_v
+FROM table_test_distinct_count
+ORDER BY k, time;
+----
+a 1970-01-01T00:01:00Z 1 1
+a 1970-01-01T00:02:00Z 2 1
+a 1970-01-01T00:03:00Z 5 3
+a 1970-01-01T00:03:00Z 5 3
+a 1970-01-01T00:04:00Z 5 3
+b 1970-01-01T00:01:00Z 3 3
+b 1970-01-01T00:02:00Z 6 3
+b 1970-01-01T00:03:00Z 14 7
+b 1970-01-01T00:03:00Z 14 7
+
+
+
+query TT
+EXPLAIN SELECT
+  k,
+  time,
+  SUM(v) OVER (
+    PARTITION BY k
+    ORDER BY time
+    RANGE BETWEEN INTERVAL '2 minutes' PRECEDING AND CURRENT ROW
+  )               AS sum_v,
+  SUM(DISTINCT v) OVER (
+    PARTITION BY k
+    ORDER BY time
+    RANGE BETWEEN INTERVAL '2 minutes' PRECEDING AND CURRENT ROW
+  )       AS sum_distinct_v
+FROM table_test_distinct_count
+ORDER BY k, time;
+----
+logical_plan
+01)Sort: table_test_distinct_count.k ASC NULLS LAST, table_test_distinct_count.time ASC NULLS LAST
+02)--Projection: table_test_distinct_count.k, table_test_distinct_count.time, sum(table_test_distinct_count.v) PARTITION BY [table_test_distinct_count.k] ORDER BY [table_test_distinct_count.time ASC NULLS LAST] RANGE BETWEEN 2 minutes PRECEDING AND CURRENT ROW AS sum_v, sum(DISTINCT table_test_distinct_count.v) PARTITION BY [table_test_distinct_count.k] ORDER BY [table_test_distinct_count.time ASC NULLS LAST] RANGE BETWEEN 2 minutes PRECEDING AND CURRENT ROW AS sum_distinct_v
+03)----WindowAggr: windowExpr=[[sum(__common_expr_1) PARTITION BY [table_test_distinct_count.k] ORDER BY [table_test_distinct_count.time ASC NULLS LAST] RANGE BETWEEN IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 120000000000 } PRECEDING AND CURRENT ROW AS sum(table_test_distinct_count.v) PARTITION BY [table_test_distinct_count.k] ORDER BY [table_test_distinct_count.time ASC NULLS LAST] RANGE BETWEEN 2 minutes PRECEDING AND CURRENT ROW, sum(DISTINCT __common_expr_1) PARTITION BY [table_test_distinct_count.k] ORDER BY [table_test_distinct_count.time ASC NULLS LAST] RANGE BETWEEN IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 120000000000 } PRECEDING AND CURRENT ROW AS sum(DISTINCT table_test_distinct_count.v) PARTITION BY [table_test_distinct_count.k] ORDER BY [table_test_distinct_count.time ASC NULLS LAST] RANGE BETWEEN 2 minutes PRECEDING AND CURRENT ROW]]
+04)------Projection: CAST(table_test_distinct_count.v AS Int64) AS __common_expr_1, table_test_distinct_count.k, table_test_distinct_count.time
+05)--------TableScan: table_test_distinct_count projection=[k, v, time]
+physical_plan
+01)SortPreservingMergeExec: [k@0 ASC NULLS LAST, time@1 ASC NULLS LAST]
+02)--ProjectionExec: expr=[k@1 as k, time@2 as time, sum(table_test_distinct_count.v) PARTITION BY [table_test_distinct_count.k] ORDER BY [table_test_distinct_count.time ASC NULLS LAST] RANGE BETWEEN 2 minutes PRECEDING AND CURRENT ROW@3 as sum_v, sum(DISTINCT table_test_distinct_count.v) PARTITION BY [table_test_distinct_count.k] ORDER BY [table_test_distinct_count.time ASC NULLS LAST] RANGE BETWEEN 2 minutes PRECEDING AND CURRENT ROW@4 as sum_distinct_v]
+03)----BoundedWindowAggExec: wdw=[sum(table_test_distinct_count.v) PARTITION BY [table_test_distinct_count.k] ORDER BY [table_test_distinct_count.time ASC NULLS LAST] RANGE BETWEEN 2 minutes PRECEDING AND CURRENT ROW: Field { name: "sum(table_test_distinct_count.v) PARTITION BY [table_test_distinct_count.k] ORDER BY [table_test_distinct_count.time ASC NULLS LAST] RANGE BETWEEN 2 minutes PRECEDING AND CURRENT ROW", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: RANGE BETWEEN IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 120000000000 } PRECEDING AND CURRENT ROW, sum(DISTINCT table_test_distinct_count.v) PARTITION BY [table_test_distinct_count.k] ORDER BY [table_test_distinct_count.time ASC NULLS LAST] RANGE BETWEEN 2 minutes PRECEDING AND CURRENT ROW: Field { name: "sum(DISTINCT table_test_distinct_count.v) PARTITION BY [table_test_distinct_count.k] ORDER BY [table_test_distinct_count.time ASC NULLS LAST] RANGE BETWEEN 2 minutes PRECEDING AND CURRENT ROW", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: RANGE BETWEEN IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 120000000000 } PRECEDING AND CURRENT ROW], mode=[Sorted]
+04)------SortExec: expr=[k@1 ASC NULLS LAST, time@2 ASC NULLS LAST], preserve_partitioning=[true]
+05)--------CoalesceBatchesExec: target_batch_size=1
+06)----------RepartitionExec: partitioning=Hash([k@1], 2), input_partitions=2
+07)------------ProjectionExec: expr=[CAST(v@1 AS Int64) as __common_expr_1, k@0 as k, time@2 as time]
+08)--------------DataSourceExec: partitions=2, partition_sizes=[5, 4]

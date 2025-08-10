@@ -278,6 +278,7 @@ Verify that the Cargo.toml in the tarball contains the correct version
 (cd datafusion/optimizer && cargo publish)
 (cd datafusion/common-runtime && cargo publish)
 (cd datafusion/physical-plan && cargo publish)
+(cd datafusion/pruning && cargo publish)
 (cd datafusion/physical-optimizer && cargo publish)
 (cd datafusion/session && cargo publish)
 (cd datafusion/datasource && cargo publish)

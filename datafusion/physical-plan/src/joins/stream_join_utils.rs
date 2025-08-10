@@ -91,6 +91,10 @@ impl JoinHashMapType for PruningJoinHashMap {
             offset,
         )
     }
+
+    fn is_empty(&self) -> bool {
+        self.map.is_empty()
+    }
 }
 
 /// The `PruningJoinHashMap` is similar to a regular `JoinHashMap`, but with

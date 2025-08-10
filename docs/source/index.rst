@@ -49,8 +49,6 @@ The following related subprojects target end users and have separate documentati
 
 - `DataFusion Python <https://datafusion.apache.org/python/>`_ offers a Python interface for SQL and DataFrame
   queries.
-- `DataFusion Ray <https://github.com/apache/datafusion-ray/>`_ provides a distributed version of DataFusion
-  that scales out on `Ray <https://www.ray.io>`_ clusters.
 - `DataFusion Comet <https://datafusion.apache.org/comet/>`_ is an accelerator for Apache Spark based on
   DataFusion.
 

@@ -25,8 +25,10 @@ use std::sync::Arc;
 use datafusion_physical_plan::execution_plan::{
     Boundedness, EmissionType, SchedulingType,
 };
+use datafusion_physical_plan::metrics::SplitMetrics;
 use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use datafusion_physical_plan::projection::ProjectionExec;
+use datafusion_physical_plan::stream::BatchSplitStream;
 use datafusion_physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
 };
@@ -42,7 +44,7 @@ use datafusion_physical_expr::{
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::filter::collect_columns_from_predicate;
 use datafusion_physical_plan::filter_pushdown::{
-    ChildPushdownResult, FilterPushdownPhase, FilterPushdownPropagation, PredicateSupport,
+    ChildPushdownResult, FilterPushdownPhase, FilterPushdownPropagation, PushedDown,
 };
 
 /// A source of data, typically a list of files or memory
@@ -172,11 +174,8 @@ pub trait DataSource: Send + Sync + Debug {
         filters: Vec<Arc<dyn PhysicalExpr>>,
         _config: &ConfigOptions,
     ) -> Result<FilterPushdownPropagation<Arc<dyn DataSource>>> {
-        Ok(FilterPushdownPropagation::with_filters(
-            filters
-                .into_iter()
-                .map(PredicateSupport::Unsupported)
-                .collect(),
+        Ok(FilterPushdownPropagation::with_parent_pushdown_result(
+            vec![PushedDown::No; filters.len()],
         ))
     }
 }
@@ -270,15 +269,22 @@ impl ExecutionPlan for DataSourceExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        self.data_source.open(partition, Arc::clone(&context))
+        let stream = self.data_source.open(partition, Arc::clone(&context))?;
+        let batch_size = context.session_config().batch_size();
+        log::debug!(
+            "Batch splitting enabled for partition {partition}: batch_size={batch_size}"
+        );
+        let metrics = self.data_source.metrics();
+        let split_metrics = SplitMetrics::new(&metrics, partition);
+        Ok(Box::pin(BatchSplitStream::new(
+            stream,
+            batch_size,
+            split_metrics,
+        )))
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.data_source.metrics().clone_inner())
-    }
-
-    fn statistics(&self) -> Result<Statistics> {
-        self.data_source.statistics()
     }
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
@@ -324,17 +330,14 @@ impl ExecutionPlan for DataSourceExec {
         config: &ConfigOptions,
     ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
         // Push any remaining filters into our data source
-        let res = self.data_source.try_pushdown_filters(
-            child_pushdown_result
-                .parent_filters
-                .into_iter()
-                .map(|f| match f {
-                    PredicateSupport::Supported(expr) => expr,
-                    PredicateSupport::Unsupported(expr) => expr,
-                })
-                .collect(),
-            config,
-        )?;
+        let parent_filters = child_pushdown_result
+            .parent_filters
+            .into_iter()
+            .map(|f| f.filter)
+            .collect_vec();
+        let res = self
+            .data_source
+            .try_pushdown_filters(parent_filters.clone(), config)?;
         match res.updated_node {
             Some(data_source) => {
                 let mut new_node = self.clone();
@@ -346,9 +349,10 @@ impl ExecutionPlan for DataSourceExec {
                 let filter = conjunction(
                     res.filters
                         .iter()
-                        .filter_map(|f| match f {
-                            PredicateSupport::Supported(expr) => Some(Arc::clone(expr)),
-                            PredicateSupport::Unsupported(_) => None,
+                        .zip(parent_filters)
+                        .filter_map(|(s, f)| match s {
+                            PushedDown::Yes => Some(f),
+                            PushedDown::No => None,
                         })
                         .collect_vec(),
                 );

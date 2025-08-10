@@ -40,8 +40,9 @@ use std::sync::Arc;
 use datafusion_common::Result;
 use datafusion_physical_expr::utils::{collect_columns, reassign_predicate_columns};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+use itertools::Itertools;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FilterPushdownPhase {
     /// Pushdown that happens before most other optimizations.
     /// This pushdown allows static filters that do not reference any [`ExecutionPlan`]s to be pushed down.
@@ -86,25 +87,111 @@ impl std::fmt::Display for FilterPushdownPhase {
 /// The result of a plan for pushing down a filter into a child node.
 /// This contains references to filters so that nodes can mutate a filter
 /// before pushing it down to a child node (e.g. to adjust a projection)
-/// or can directly take ownership of `Unsupported` filters that their children
+/// or can directly take ownership of filters that their children
 /// could not handle.
 #[derive(Debug, Clone)]
-pub enum PredicateSupport {
-    Supported(Arc<dyn PhysicalExpr>),
-    Unsupported(Arc<dyn PhysicalExpr>),
+pub struct PushedDownPredicate {
+    pub discriminant: PushedDown,
+    pub predicate: Arc<dyn PhysicalExpr>,
 }
 
-impl PredicateSupport {
+impl PushedDownPredicate {
+    /// Return the wrapped [`PhysicalExpr`], discarding whether it is supported or unsupported.
     pub fn into_inner(self) -> Arc<dyn PhysicalExpr> {
-        match self {
-            PredicateSupport::Supported(expr) | PredicateSupport::Unsupported(expr) => {
-                expr
-            }
+        self.predicate
+    }
+
+    /// Create a new [`PushedDownPredicate`] with supported pushdown.
+    pub fn supported(predicate: Arc<dyn PhysicalExpr>) -> Self {
+        Self {
+            discriminant: PushedDown::Yes,
+            predicate,
+        }
+    }
+
+    /// Create a new [`PushedDownPredicate`] with unsupported pushdown.
+    pub fn unsupported(predicate: Arc<dyn PhysicalExpr>) -> Self {
+        Self {
+            discriminant: PushedDown::No,
+            predicate,
+        }
+    }
+}
+
+/// Discriminant for the result of pushing down a filter into a child node.
+#[derive(Debug, Clone, Copy)]
+pub enum PushedDown {
+    /// The predicate was successfully pushed down into the child node.
+    Yes,
+    /// The predicate could not be pushed down into the child node.
+    No,
+}
+
+impl PushedDown {
+    /// Logical AND operation: returns `Yes` only if both operands are `Yes`.
+    pub fn and(self, other: PushedDown) -> PushedDown {
+        match (self, other) {
+            (PushedDown::Yes, PushedDown::Yes) => PushedDown::Yes,
+            _ => PushedDown::No,
+        }
+    }
+
+    /// Logical OR operation: returns `Yes` if either operand is `Yes`.
+    pub fn or(self, other: PushedDown) -> PushedDown {
+        match (self, other) {
+            (PushedDown::Yes, _) | (_, PushedDown::Yes) => PushedDown::Yes,
+            (PushedDown::No, PushedDown::No) => PushedDown::No,
+        }
+    }
+
+    /// Wrap a [`PhysicalExpr`] with this pushdown result.
+    pub fn wrap_expression(self, expr: Arc<dyn PhysicalExpr>) -> PushedDownPredicate {
+        PushedDownPredicate {
+            discriminant: self,
+            predicate: expr,
+        }
+    }
+}
+
+/// The result of pushing down a single parent filter into all children.
+#[derive(Debug, Clone)]
+pub struct ChildFilterPushdownResult {
+    pub filter: Arc<dyn PhysicalExpr>,
+    pub child_results: Vec<PushedDown>,
+}
+
+impl ChildFilterPushdownResult {
+    /// Combine all child results using OR logic.
+    /// Returns `Yes` if **any** child supports the filter.
+    /// Returns `No` if **all** children reject the filter or if there are no children.
+    pub fn any(&self) -> PushedDown {
+        if self.child_results.is_empty() {
+            // If there are no children, filters cannot be supported
+            PushedDown::No
+        } else {
+            self.child_results
+                .iter()
+                .fold(PushedDown::No, |acc, result| acc.or(*result))
+        }
+    }
+
+    /// Combine all child results using AND logic.
+    /// Returns `Yes` if **all** children support the filter.
+    /// Returns `No` if **any** child rejects the filter or if there are no children.
+    pub fn all(&self) -> PushedDown {
+        if self.child_results.is_empty() {
+            // If there are no children, filters cannot be supported
+            PushedDown::No
+        } else {
+            self.child_results
+                .iter()
+                .fold(PushedDown::Yes, |acc, result| acc.and(*result))
         }
     }
 }
 
 /// The result of pushing down filters into a child node.
+///
 /// This is the result provided to nodes in [`ExecutionPlan::handle_child_pushdown_result`].
 /// Nodes process this result and convert it into a [`FilterPushdownPropagation`]
 /// that is returned to their parent.
@@ -112,51 +199,81 @@ impl PredicateSupport {
 /// [`ExecutionPlan::handle_child_pushdown_result`]: crate::ExecutionPlan::handle_child_pushdown_result
 #[derive(Debug, Clone)]
 pub struct ChildPushdownResult {
-    /// The combined result of pushing down each parent filter into each child.
-    /// For example, given the fitlers `[a, b]` and children `[1, 2, 3]` the matrix of responses:
-    ///
-    // | filter | child 1     | child 2   | child 3   | result      |
-    // |--------|-------------|-----------|-----------|-------------|
-    // | a      | Supported   | Supported | Supported | Supported   |
-    // | b      | Unsupported | Supported | Supported | Unsupported |
-    ///
-    /// That is: if any child marks a filter as unsupported or if the filter was not pushed
-    /// down into any child then the result is unsupported.
-    /// If at least one children and all children that received the filter mark it as supported
-    /// then the result is supported.
-    pub parent_filters: Vec<PredicateSupport>,
+    /// The parent filters that were pushed down as received by the current node when [`ExecutionPlan::gather_filters_for_pushdown`](crate::ExecutionPlan::handle_child_pushdown_result) was called.
+    /// Note that this may *not* be the same as the filters that were passed to the children as the current node may have modified them
+    /// (e.g. by reassigning column indices) when it returned them from [`ExecutionPlan::gather_filters_for_pushdown`](crate::ExecutionPlan::handle_child_pushdown_result) in a [`FilterDescription`].
+    /// Attached to each filter is a [`PushedDown`] *per child* that indicates whether the filter was supported or unsupported by each child.
+    /// To get combined results see [`ChildFilterPushdownResult::any`] and [`ChildFilterPushdownResult::all`].
+    pub parent_filters: Vec<ChildFilterPushdownResult>,
     /// The result of pushing down each filter this node provided into each of it's children.
-    /// This is not combined with the parent filters so that nodes can treat each child independently.
-    pub self_filters: Vec<Vec<PredicateSupport>>,
+    /// The outer vector corresponds to each child, and the inner vector corresponds to each filter.
+    /// Since this node may have generated a different filter for each child the inner vector may have different lengths or the expressions may not match at all.
+    /// It is up to each node to interpret this result based on the filters it provided for each child in [`ExecutionPlan::gather_filters_for_pushdown`](crate::ExecutionPlan::handle_child_pushdown_result).
+    pub self_filters: Vec<Vec<PushedDownPredicate>>,
 }
 
-/// The result of pushing down filters into a node that it returns to its parent.
-/// This is what nodes return from [`ExecutionPlan::handle_child_pushdown_result`] to communicate
+/// The result of pushing down filters into a node.
+///
+/// Returned from [`ExecutionPlan::handle_child_pushdown_result`] to communicate
 /// to the optimizer:
 ///
-/// 1. What to do with any parent filters that were not completely handled by the children.
+/// 1. What to do with any parent filters that were could not be pushed down into the children.
 /// 2. If the node needs to be replaced in the execution plan with a new node or not.
 ///
 /// [`ExecutionPlan::handle_child_pushdown_result`]: crate::ExecutionPlan::handle_child_pushdown_result
 #[derive(Debug, Clone)]
 pub struct FilterPushdownPropagation<T> {
-    pub filters: Vec<PredicateSupport>,
+    /// What filters were pushed into the parent node.
+    pub filters: Vec<PushedDown>,
+    /// The updated node, if it was updated during pushdown
     pub updated_node: Option<T>,
 }
 
 impl<T> FilterPushdownPropagation<T> {
-    /// Create a new [`FilterPushdownPropagation`] that tells the parent node
-    /// that echoes back up to the parent the result of pushing down the filters
-    /// into the children.
-    pub fn transparent(child_pushdown_result: ChildPushdownResult) -> Self {
+    /// Create a new [`FilterPushdownPropagation`] that tells the parent node that each parent filter
+    /// is supported if it was supported by *all* children.
+    pub fn if_all(child_pushdown_result: ChildPushdownResult) -> Self {
+        let filters = child_pushdown_result
+            .parent_filters
+            .into_iter()
+            .map(|result| result.all())
+            .collect();
         Self {
-            filters: child_pushdown_result.parent_filters,
+            filters,
+            updated_node: None,
+        }
+    }
+
+    /// Create a new [`FilterPushdownPropagation`] that tells the parent node that each parent filter
+    /// is supported if it was supported by *any* child.
+    pub fn if_any(child_pushdown_result: ChildPushdownResult) -> Self {
+        let filters = child_pushdown_result
+            .parent_filters
+            .into_iter()
+            .map(|result| result.any())
+            .collect();
+        Self {
+            filters,
+            updated_node: None,
+        }
+    }
+
+    /// Create a new [`FilterPushdownPropagation`] that tells the parent node that no filters were pushed down regardless of the child results.
+    pub fn all_unsupported(child_pushdown_result: ChildPushdownResult) -> Self {
+        let filters = child_pushdown_result
+            .parent_filters
+            .into_iter()
+            .map(|_| PushedDown::No)
+            .collect();
+        Self {
+            filters,
             updated_node: None,
         }
     }
 
     /// Create a new [`FilterPushdownPropagation`] with the specified filter support.
-    pub fn with_filters(filters: Vec<PredicateSupport>) -> Self {
+    /// This transmits up to our parent node what the result of pushing down the filters into our node and possibly our subtree was.
+    pub fn with_parent_pushdown_result(filters: Vec<PushedDown>) -> Self {
         Self {
             filters,
             updated_node: None,
@@ -164,19 +281,25 @@ impl<T> FilterPushdownPropagation<T> {
     }
 
     /// Bind an updated node to the [`FilterPushdownPropagation`].
+    /// Use this when the current node wants to update iself in the tree or replace itself with a new node (e.g. one of it's children).
+    /// You do not need to call this if one of the children of the current node may have updated itself, that is handled by the optimizer.
     pub fn with_updated_node(mut self, updated_node: T) -> Self {
         self.updated_node = Some(updated_node);
         self
     }
 }
 
+/// Describes filter pushdown for a single child node.
+///
+/// This structure contains two types of filters:
+/// - **Parent filters**: Filters received from the parent node, marked as supported or unsupported
+/// - **Self filters**: Filters generated by the current node to be pushed down to this child
 #[derive(Debug, Clone)]
 pub struct ChildFilterDescription {
     /// Description of which parent filters can be pushed down into this node.
     /// Since we need to transmit filter pushdown results back to this node's parent
     /// we need to track each parent filter for each child, even those that are unsupported / won't be pushed down.
-    /// We do this using a [`PredicateSupport`] which simplifies manipulating supported/unsupported filters.
-    pub(crate) parent_filters: Vec<PredicateSupport>,
+    pub(crate) parent_filters: Vec<PushedDownPredicate>,
     /// Description of which filters this node is pushing down to its children.
     /// Since this is not transmitted back to the parents we can have variable sized inner arrays
     /// instead of having to track supported/unsupported.
@@ -185,6 +308,10 @@ pub struct ChildFilterDescription {
 
 impl ChildFilterDescription {
     /// Build a child filter description by analyzing which parent filters can be pushed to a specific child.
+    ///
+    /// This method performs column analysis to determine which filters can be pushed down:
+    /// - If all columns referenced by a filter exist in the child's schema, it can be pushed down
+    /// - Otherwise, it cannot be pushed down to that child
     ///
     /// See [`FilterDescription::from_children`] for more details
     pub fn from_child(
@@ -217,11 +344,12 @@ impl ChildFilterDescription {
                 // Need to reassign column indices to match child schema
                 let reassigned_filter =
                     reassign_predicate_columns(Arc::clone(filter), &child_schema, false)?;
-                child_parent_filters.push(PredicateSupport::Supported(reassigned_filter));
+                child_parent_filters
+                    .push(PushedDownPredicate::supported(reassigned_filter));
             } else {
                 // Some columns don't exist in child - cannot push down
                 child_parent_filters
-                    .push(PredicateSupport::Unsupported(Arc::clone(filter)));
+                    .push(PushedDownPredicate::unsupported(Arc::clone(filter)));
             }
         }
 
@@ -244,6 +372,14 @@ impl ChildFilterDescription {
     }
 }
 
+/// Describes how filters should be pushed down to children.
+///
+/// This structure contains filter descriptions for each child node, specifying:
+/// - Which parent filters can be pushed down to each child
+/// - Which self-generated filters should be pushed down to each child
+///
+/// The filter routing is determined by column analysis - filters can only be pushed
+/// to children whose schemas contain all the referenced columns.
 #[derive(Debug, Clone)]
 pub struct FilterDescription {
     /// A filter description for each child.
@@ -291,7 +427,26 @@ impl FilterDescription {
         Ok(desc)
     }
 
-    pub fn parent_filters(&self) -> Vec<Vec<PredicateSupport>> {
+    /// Mark all parent filters as unsupported for all children.
+    pub fn all_unsupported(
+        parent_filters: &[Arc<dyn PhysicalExpr>],
+        children: &[&Arc<dyn crate::ExecutionPlan>],
+    ) -> Self {
+        let mut desc = Self::new();
+        let child_filters = parent_filters
+            .iter()
+            .map(|f| PushedDownPredicate::unsupported(Arc::clone(f)))
+            .collect_vec();
+        for _ in 0..children.len() {
+            desc = desc.with_child(ChildFilterDescription {
+                parent_filters: child_filters.clone(),
+                self_filters: vec![],
+            });
+        }
+        desc
+    }
+
+    pub fn parent_filters(&self) -> Vec<Vec<PushedDownPredicate>> {
         self.child_filter_descriptions
             .iter()
             .map(|d| &d.parent_filters)

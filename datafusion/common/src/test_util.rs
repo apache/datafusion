@@ -359,7 +359,7 @@ macro_rules! create_array {
 ///
 /// Example:
 /// ```
-/// use datafusion_common::{record_batch, create_array};
+/// use datafusion_common::record_batch;
 /// let batch = record_batch!(
 ///     ("a", Int32, vec![1, 2, 3]),
 ///     ("b", Float64, vec![Some(4.0), None, Some(5.0)]),

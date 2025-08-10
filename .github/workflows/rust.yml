@@ -46,11 +46,16 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
+      - name: Rust Dependency Cache
+        uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0  # v2.8.0
+        with:
+          shared-key: "amd-ci-check" # this job uses it's own cache becase check has a separate cache and we need it to be fast as it blocks other jobs
+          save-if: ${{ github.ref_name == 'main' }}
       - name: Prepare cargo build
         run: |
           # Adding `--locked` here to assert that the `Cargo.lock` file is up to
@@ -69,7 +74,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
@@ -94,11 +99,16 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
+      - name: Rust Dependency Cache
+        uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0  # v2.8.0
+        with:
+          save-if: false # set in linux-test
+          shared-key: "amd-ci"
       - name: Check datafusion-substrait (default features)
         run: cargo check --profile ci --all-targets -p datafusion-substrait
         #
@@ -126,7 +136,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
@@ -157,11 +167,16 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
+      - name: Rust Dependency Cache
+        uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0  # v2.8.0
+        with:
+          save-if: false # set in linux-test
+          shared-key: "amd-ci"
       - name: Check datafusion (default features)
         run: cargo check --profile ci --all-targets -p datafusion
       #
@@ -203,6 +218,8 @@ jobs:
         run: cargo check --profile ci --no-default-features -p datafusion --features=string_expressions
       - name: Check datafusion (unicode_expressions)
         run: cargo check --profile ci --no-default-features -p datafusion --features=unicode_expressions
+      - name: Check parquet encryption (parquet_encryption)
+        run: cargo check --profile ci --no-default-features -p datafusion --features=parquet_encryption
 
   # Check datafusion-functions crate features
   #
@@ -215,7 +232,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
@@ -247,15 +264,22 @@ jobs:
     name: cargo test (amd64)
     needs: linux-build-lib
     runs-on: ubuntu-latest
+    container:
+      image: amd64/rust
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
         with:
           submodules: true
           fetch-depth: 1
       - name: Setup Rust toolchain
-        run: rustup toolchain install stable
-      - name: Install Protobuf Compiler
-        run: sudo apt-get install -y protobuf-compiler
+        uses: ./.github/actions/setup-builder
+        with:
+          rust-version: stable
+      - name: Rust Dependency Cache
+        uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0  # v2.8.0
+        with:
+         save-if: ${{ github.ref_name == 'main' }}
+         shared-key: "amd-ci"
       - name: Run tests (excluding doctests and datafusion-cli)
         env:
           RUST_BACKTRACE: 1
@@ -279,25 +303,17 @@ jobs:
     name: cargo test datafusion-cli (amd64)
     needs: linux-build-lib
     runs-on: ubuntu-latest
+    # should be uncommented once https://github.com/apache/datafusion/pull/16644 is merged
+    # and cache should be added
+    # container:
+    #  image: amd64/rust
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
         with:
           submodules: true
           fetch-depth: 1
       - name: Setup Rust toolchain
         run: rustup toolchain install stable
-      - name: Setup Minio - S3-compatible storage
-        run: |
-          docker run -d --name minio-container \
-            -p 9000:9000 \
-            -e MINIO_ROOT_USER=TEST-DataFusionLogin -e MINIO_ROOT_PASSWORD=TEST-DataFusionPassword \
-            -v $(pwd)/datafusion/core/tests/data:/source quay.io/minio/minio \
-            server /data
-          docker exec minio-container /bin/sh -c "\
-            mc ready local
-            mc alias set localminio http://localhost:9000 TEST-DataFusionLogin TEST-DataFusionPassword && \
-            mc mb localminio/data && \
-            mc cp -r /source/* localminio/data"
       - name: Run tests (excluding doctests)
         env:
           RUST_BACKTRACE: 1
@@ -309,9 +325,6 @@ jobs:
         run: cargo test --profile ci -p datafusion-cli  --lib --tests --bins
       - name: Verify Working Directory Clean
         run: git diff --exit-code
-      - name: Minio Output
-        if: ${{ !cancelled() }}
-        run: docker logs minio-container
 
 
   linux-test-example:
@@ -321,7 +334,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
         with:
           submodules: true
           fetch-depth: 1
@@ -329,6 +342,11 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
+      - name: Rust Dependency Cache
+        uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0  # v2.8.0
+        with:
+          save-if: ${{ github.ref_name == 'main' }}
+          shared-key: "amd-ci-linux-test-example"
       - name: Run examples
         run: |
           # test datafusion-sql examples
@@ -346,7 +364,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
         with:
           submodules: true
           fetch-depth: 1
@@ -367,7 +385,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
@@ -379,7 +397,7 @@ jobs:
     name: build and run with wasm-pack
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
       - name: Setup for wasm32
         run: |
           rustup target add wasm32-unknown-unknown
@@ -404,7 +422,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
         with:
           submodules: true
           fetch-depth: 1
@@ -451,7 +469,7 @@ jobs:
           --health-timeout 5s
           --health-retries 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
         with:
           submodules: true
           fetch-depth: 1
@@ -475,7 +493,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
         with:
           submodules: true
           fetch-depth: 1
@@ -529,7 +547,7 @@ jobs:
     name: cargo test (macos-aarch64)
     runs-on: macos-14
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
         with:
           submodules: true
           fetch-depth: 1
@@ -546,7 +564,7 @@ jobs:
     container:
       image: amd64/rust:bullseye # Use the bullseye tag image which comes with python3.9
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
         with:
           submodules: true
           fetch-depth: 1
@@ -569,7 +587,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
@@ -586,7 +604,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
@@ -645,7 +663,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
         with:
           submodules: true
           fetch-depth: 1
@@ -655,6 +673,11 @@ jobs:
           rust-version: stable
       - name: Install Clippy
         run: rustup component add clippy
+      - name: Rust Dependency Cache
+        uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0  # v2.8.0
+        with:
+          save-if: ${{ github.ref_name == 'main' }}
+          shared-key: "amd-ci-clippy"
       - name: Run clippy
         run: ci/scripts/rust_clippy.sh
 
@@ -665,7 +688,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
         with:
           submodules: true
           fetch-depth: 1
@@ -686,7 +709,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
         with:
           submodules: true
           fetch-depth: 1
@@ -694,7 +717,7 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4.4.0
         with:
           node-version: "20"
       - name: Check if configs.md has been modified
@@ -719,7 +742,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
       - name: Install cargo-msrv
@@ -733,10 +756,15 @@ jobs:
           # `rust-version` key of `Cargo.toml`.
           #
           # To reproduce:
-          # 1. Install the version of Rust that is failing. Example:
-          #    rustup install 1.80.1
-          # 2. Run the command that failed with that version. Example:
-          #    cargo +1.80.1 check -p datafusion
+          # 1. Install the version of Rust that is failing.
+          # 2. Run the command that failed with that version.
+          #
+          # Example:
+          #    # MSRV looks like "1.80.0" and is specified in Cargo.toml. We can read the value with the following command:
+          #    msrv="$(cargo metadata --format-version=1 | jq '.packages[] | select( .name == "datafusion" ) | .rust_version' -r)"
+          #    echo "MSRV: ${msrv}"
+          #    rustup install "${msrv}"
+          #    cargo "+${msrv}" check
           #
           # To resolve, either:
           # 1. Change your code to use older Rust features,

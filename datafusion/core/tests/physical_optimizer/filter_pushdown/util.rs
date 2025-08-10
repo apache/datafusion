@@ -26,16 +26,15 @@ use datafusion_datasource::{
     file_stream::FileOpener, schema_adapter::DefaultSchemaAdapterFactory,
     schema_adapter::SchemaAdapterFactory, source::DataSourceExec, PartitionedFile,
 };
-use datafusion_physical_expr::conjunction;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
-use datafusion_physical_plan::filter_pushdown::FilterPushdownPhase;
+use datafusion_physical_plan::filter_pushdown::{FilterPushdownPhase, PushedDown};
 use datafusion_physical_plan::{
     displayable,
     filter::FilterExec,
     filter_pushdown::{
         ChildFilterDescription, ChildPushdownResult, FilterDescription,
-        FilterPushdownPropagation, PredicateSupport,
+        FilterPushdownPropagation,
     },
     metrics::ExecutionPlanMetricsSet,
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
@@ -224,22 +223,18 @@ impl FileSource for TestSource {
                 filters.push(Arc::clone(internal));
             }
             let new_node = Arc::new(TestSource {
-                predicate: Some(conjunction(filters.clone())),
+                predicate: datafusion_physical_expr::utils::conjunction_opt(
+                    filters.clone(),
+                ),
                 ..self.clone()
             });
-            Ok(FilterPushdownPropagation {
-                filters: filters
-                    .into_iter()
-                    .map(PredicateSupport::Supported)
-                    .collect(),
-                updated_node: Some(new_node),
-            })
+            Ok(FilterPushdownPropagation::with_parent_pushdown_result(
+                vec![PushedDown::Yes; filters.len()],
+            )
+            .with_updated_node(new_node))
         } else {
-            Ok(FilterPushdownPropagation::with_filters(
-                filters
-                    .into_iter()
-                    .map(PredicateSupport::Unsupported)
-                    .collect(),
+            Ok(FilterPushdownPropagation::with_parent_pushdown_result(
+                vec![PushedDown::No; filters.len()],
             ))
         }
     }
@@ -547,26 +542,29 @@ impl ExecutionPlan for TestNode {
             assert_eq!(self_pushdown_result.len(), 1);
             let self_pushdown_result: Vec<_> = self_pushdown_result.into_iter().collect();
 
-            match &self_pushdown_result[0] {
-                PredicateSupport::Unsupported(filter) => {
+            let first_pushdown_result = self_pushdown_result[0].clone();
+
+            match &first_pushdown_result.discriminant {
+                PushedDown::No => {
                     // We have a filter to push down
-                    let new_child =
-                        FilterExec::try_new(Arc::clone(filter), Arc::clone(&self.input))?;
+                    let new_child = FilterExec::try_new(
+                        Arc::clone(&first_pushdown_result.predicate),
+                        Arc::clone(&self.input),
+                    )?;
                     let new_self =
                         TestNode::new(false, Arc::new(new_child), self.predicate.clone());
                     let mut res =
-                        FilterPushdownPropagation::transparent(child_pushdown_result);
+                        FilterPushdownPropagation::if_all(child_pushdown_result);
                     res.updated_node = Some(Arc::new(new_self) as Arc<dyn ExecutionPlan>);
                     Ok(res)
                 }
-                PredicateSupport::Supported(_) => {
-                    let res =
-                        FilterPushdownPropagation::transparent(child_pushdown_result);
+                PushedDown::Yes => {
+                    let res = FilterPushdownPropagation::if_all(child_pushdown_result);
                     Ok(res)
                 }
             }
         } else {
-            let res = FilterPushdownPropagation::transparent(child_pushdown_result);
+            let res = FilterPushdownPropagation::if_all(child_pushdown_result);
             Ok(res)
         }
     }

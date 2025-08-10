@@ -16,4 +16,5 @@
 // under the License.
 
 mod coop;
+mod datasource_split;
 mod logical_plan;

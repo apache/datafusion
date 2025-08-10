@@ -28,10 +28,9 @@ pub(crate) mod stats {
     pub use datafusion_functions_aggregate_common::stats::StatsType;
 }
 pub mod utils {
-    #[allow(deprecated)] // allow adjust_output_array
     pub use datafusion_functions_aggregate_common::utils::{
-        adjust_output_array, get_accum_scalar_values_as_arrays, get_sort_options,
-        ordering_fields, DecimalAverager, Hashable,
+        get_accum_scalar_values_as_arrays, get_sort_options, ordering_fields,
+        DecimalAverager, Hashable,
     };
 }
 
@@ -616,10 +615,42 @@ impl AggregateFunctionExpr {
     /// Returns `Some(Arc<dyn AggregateExpr>)` if re-write is supported, otherwise returns `None`.
     pub fn with_new_expressions(
         &self,
-        _args: Vec<Arc<dyn PhysicalExpr>>,
-        _order_by_exprs: Vec<Arc<dyn PhysicalExpr>>,
+        args: Vec<Arc<dyn PhysicalExpr>>,
+        order_by_exprs: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Option<AggregateFunctionExpr> {
-        None
+        if args.len() != self.args.len()
+            || (self.order_sensitivity() != AggregateOrderSensitivity::Insensitive
+                && order_by_exprs.len() != self.order_bys.len())
+        {
+            return None;
+        }
+
+        let new_order_bys = self
+            .order_bys
+            .iter()
+            .zip(order_by_exprs)
+            .map(|(req, new_expr)| PhysicalSortExpr {
+                expr: new_expr,
+                options: req.options,
+            })
+            .collect();
+
+        Some(AggregateFunctionExpr {
+            fun: self.fun.clone(),
+            args,
+            return_field: Arc::clone(&self.return_field),
+            name: self.name.clone(),
+            // TODO: Human name should be updated after re-write to not mislead
+            human_display: self.human_display.clone(),
+            schema: self.schema.clone(),
+            order_bys: new_order_bys,
+            ignore_nulls: self.ignore_nulls,
+            ordering_fields: self.ordering_fields.clone(),
+            is_distinct: self.is_distinct,
+            is_reversed: false,
+            input_fields: self.input_fields.clone(),
+            is_nullable: self.is_nullable,
+        })
     }
 
     /// If this function is max, return (output_field, true)

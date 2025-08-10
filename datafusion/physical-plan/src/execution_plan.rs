@@ -17,8 +17,8 @@
 
 pub use crate::display::{DefaultDisplay, DisplayAs, DisplayFormatType, VerboseDisplay};
 use crate::filter_pushdown::{
-    ChildFilterDescription, ChildPushdownResult, FilterDescription, FilterPushdownPhase,
-    FilterPushdownPropagation, PredicateSupport,
+    ChildPushdownResult, FilterDescription, FilterPushdownPhase,
+    FilterPushdownPropagation,
 };
 pub use crate::metrics::Metric;
 pub use crate::ordering::InputOrderMode;
@@ -33,7 +33,6 @@ pub use datafusion_physical_expr::window::WindowExpr;
 pub use datafusion_physical_expr::{
     expressions, Distribution, Partitioning, PhysicalExpr,
 };
-use itertools::Itertools;
 
 use std::any::Any;
 use std::fmt::Debug;
@@ -48,7 +47,7 @@ use crate::stream::RecordBatchStreamAdapter;
 use arrow::array::{Array, RecordBatch};
 use arrow::datatypes::SchemaRef;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::{exec_err, Constraints, Result};
+use datafusion_common::{exec_err, Constraints, DataFusionError, Result};
 use datafusion_common_runtime::JoinSet;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::EquivalenceProperties;
@@ -118,10 +117,11 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// Returns an error if this individual node does not conform to its invariants.
     /// These invariants are typically only checked in debug mode.
     ///
-    /// A default set of invariants is provided in the default implementation.
+    /// A default set of invariants is provided in the [check_default_invariants] function.
+    /// The default implementation of `check_invariants` calls this function.
     /// Extension nodes can provide their own invariants.
-    fn check_invariants(&self, _check: InvariantLevel) -> Result<()> {
-        Ok(())
+    fn check_invariants(&self, check: InvariantLevel) -> Result<()> {
+        check_default_invariants(self, check)
     }
 
     /// Specifies the data distribution requirements for all the
@@ -194,6 +194,31 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>>;
+
+    /// Reset any internal state within this [`ExecutionPlan`].
+    ///
+    /// This method is called when an [`ExecutionPlan`] needs to be re-executed,
+    /// such as in recursive queries. Unlike [`ExecutionPlan::with_new_children`], this method
+    /// ensures that any stateful components (e.g., [`DynamicFilterPhysicalExpr`])
+    /// are reset to their initial state.
+    ///
+    /// The default implementation simply calls [`ExecutionPlan::with_new_children`] with the existing children,
+    /// effectively creating a new instance of the [`ExecutionPlan`] with the same children but without
+    /// necessarily resetting any internal state. Implementations that require resetting of some
+    /// internal state should override this method to provide the necessary logic.
+    ///
+    /// This method should *not* reset state recursively for children, as it is expected that
+    /// it will be called from within a walk of the execution plan tree so that it will be called on each child later
+    /// or was already called on each child.
+    ///
+    /// Note to implementers: unlike [`ExecutionPlan::with_new_children`] this method does not accept new children as an argument,
+    /// thus it is expected that any cached plan properties will remain valid after the reset.
+    ///
+    /// [`DynamicFilterPhysicalExpr`]: datafusion_physical_expr::expressions::DynamicFilterPhysicalExpr
+    fn reset_state(self: Arc<Self>) -> Result<Arc<dyn ExecutionPlan>> {
+        let children = self.children().into_iter().cloned().collect();
+        self.with_new_children(children)
+    }
 
     /// If supported, attempt to increase the partitioning of this `ExecutionPlan` to
     /// produce `target_partitions` partitions.
@@ -521,19 +546,10 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
         parent_filters: Vec<Arc<dyn PhysicalExpr>>,
         _config: &ConfigOptions,
     ) -> Result<FilterDescription> {
-        // Default implementation: mark all filters as unsupported for all children
-        let mut desc = FilterDescription::new();
-        let child_filters = parent_filters
-            .iter()
-            .map(|f| PredicateSupport::Unsupported(Arc::clone(f)))
-            .collect_vec();
-        for _ in 0..self.children().len() {
-            desc = desc.with_child(ChildFilterDescription {
-                parent_filters: child_filters.clone(),
-                self_filters: vec![],
-            });
-        }
-        Ok(desc)
+        Ok(FilterDescription::all_unsupported(
+            &parent_filters,
+            &self.children(),
+        ))
     }
 
     /// Handle the result of a child pushdown.
@@ -563,7 +579,7 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     ///   they have been handled.
     /// - A `HashJoinExec` might ignore the pushdown result if filters need to
     ///   be applied during the join operation. It passes the parent filters back
-    ///   up wrapped in [`FilterPushdownPropagation::transparent`], discarding
+    ///   up wrapped in [`FilterPushdownPropagation::if_any`], discarding
     ///   any self-filters from children.
     ///
     /// **Example Walkthrough:**
@@ -597,10 +613,11 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     ///
     /// **Helper Methods for Customization:**
     /// There are various helper methods to simplify implementing this method:
-    /// - [`FilterPushdownPropagation::transparent`]: Indicates that the node
-    ///   supports filter pushdown but does not modify it, simply transmitting
-    ///   the children's pushdown results back up to its parent.
-    /// - [`FilterPushdownPropagation::with_filters`]: Allows adding filters
+    /// - [`FilterPushdownPropagation::if_any`]: Marks all parent filters as
+    ///   supported as long as at least one child supports them.
+    /// - [`FilterPushdownPropagation::if_all`]: Marks all parent filters as
+    ///   supported as long as all children support them.
+    /// - [`FilterPushdownPropagation::with_parent_pushdown_result`]: Allows adding filters
     ///   to the propagation result, indicating which filters are supported by
     ///   the current node.
     /// - [`FilterPushdownPropagation::with_updated_node`]: Allows updating the
@@ -613,16 +630,14 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// operator may or may not be allowed to modify the plan. See
     /// [`FilterPushdownPhase`] for more details on phase-specific behavior.
     ///
-    /// [`PredicateSupport::Supported`]: crate::filter_pushdown::PredicateSupport::Supported
+    /// [`PushedDownPredicate::supported`]: crate::filter_pushdown::PushedDownPredicate::supported
     fn handle_child_pushdown_result(
         &self,
         _phase: FilterPushdownPhase,
         child_pushdown_result: ChildPushdownResult,
         _config: &ConfigOptions,
     ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
-        Ok(FilterPushdownPropagation::transparent(
-            child_pushdown_result,
-        ))
+        Ok(FilterPushdownPropagation::if_all(child_pushdown_result))
     }
 
     /// Injects arbitrary run-time state into this execution plan, returning a new plan
@@ -1044,6 +1059,37 @@ impl PlanProperties {
     pub(crate) fn schema(&self) -> &SchemaRef {
         self.eq_properties.schema()
     }
+}
+
+macro_rules! check_len {
+    ($target:expr, $func_name:ident, $expected_len:expr) => {
+        let actual_len = $target.$func_name().len();
+        if actual_len != $expected_len {
+            return internal_err!(
+                "{}::{} returned Vec with incorrect size: {} != {}",
+                $target.name(),
+                stringify!($func_name),
+                actual_len,
+                $expected_len
+            );
+        }
+    };
+}
+
+/// Checks a set of invariants that apply to all ExecutionPlan implementations.
+/// Returns an error if the given node does not conform.
+pub fn check_default_invariants<P: ExecutionPlan + ?Sized>(
+    plan: &P,
+    _check: InvariantLevel,
+) -> Result<(), DataFusionError> {
+    let children_len = plan.children().len();
+
+    check_len!(plan, maintains_input_order, children_len);
+    check_len!(plan, required_input_ordering, children_len);
+    check_len!(plan, required_input_distribution, children_len);
+    check_len!(plan, benefits_from_input_partitioning, children_len);
+
+    Ok(())
 }
 
 /// Indicate whether a data exchange is needed for the input of `plan`, which will be very helpful
