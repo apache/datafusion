@@ -769,6 +769,9 @@ impl Options {
 fn scratch_file_check(test_files: &[TestFile]) -> Result<Vec<String>> {
     let mut errors = Vec::new();
 
+    // Search for any scratch/[target]/... patterns and check if they match the file name
+    let scratch_pattern = regex::Regex::new(r"scratch/([^/]+)/").unwrap();
+
     for test_file in test_files {
         // Get the file content
         let content = match fs::read_to_string(&test_file.path) {
@@ -792,9 +795,7 @@ fn scratch_file_check(test_files: &[TestFile]) -> Result<Vec<String>> {
             }
         };
 
-        // Search for any scratch/[target]/... patterns and check if they match the file name
         let lines: Vec<&str> = content.lines().collect();
-        let scratch_pattern = regex::Regex::new(r"scratch/([^/]+)/").unwrap();
 
         for (line_num, line) in lines.iter().enumerate() {
             if let Some(captures) = scratch_pattern.captures(line) {
