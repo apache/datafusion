@@ -35,6 +35,17 @@ pub struct LimitedBatchCoalescer {
     finished: bool,
 }
 
+/// Status returned by [`LimitedBatchCoalescer::push_batch`]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PushBatchStatus {
+    /// The limit has **not** been reached, and more batches can be pushed
+    Continue,
+    /// The limit **has** been reached after processing this batch
+    /// The caller should call [`LimitedBatchCoalescer::finish`]
+    /// to flush any buffered rows and stop pushing more batches.
+    LimitReached,
+}
+
 impl LimitedBatchCoalescer {
     /// Create a new `BatchCoalescer`
     ///
@@ -61,11 +72,21 @@ impl LimitedBatchCoalescer {
         self.inner.schema()
     }
 
-    /// Push next batch, and returns [`true`] indicating if the limit is hit
+    /// Pushes the next [`RecordBatch`] into the coalescer and returns its status.
     ///
-    /// If the limit is reached, the caller must call [`Self::finish()`] to
-    /// complete the buffered results as a batch and finish the query.
-    pub fn push_batch(&mut self, batch: RecordBatch) -> Result<bool> {
+    /// # Arguments
+    /// * `batch` - The [`RecordBatch`] to append.
+    ///
+    /// # Returns
+    /// * [`PushBatchStatus::Continue`] - More batches can still be pushed.
+    /// * [`PushBatchStatus::LimitReached`] - The row limit was reached after processing
+    ///   this batch. The caller should call [`Self::finish`] before retrieving the
+    ///   remaining buffered batches.
+    ///
+    /// # Errors
+    /// Returns an error if called after [`Self::finish`] or if the internal push
+    /// operation fails.
+    pub fn push_batch(&mut self, batch: RecordBatch) -> Result<PushBatchStatus> {
         if self.finished {
             return internal_err!(
                 "LimitedBatchCoalescer: cannot push batch after finish"
@@ -76,7 +97,7 @@ impl LimitedBatchCoalescer {
         if let Some(fetch) = self.fetch {
             // limit previously reached
             if self.total_rows >= fetch {
-                return Ok(true);
+                return Ok(PushBatchStatus::LimitReached);
             }
 
             // limit now reached
@@ -88,14 +109,14 @@ impl LimitedBatchCoalescer {
                 let batch_head = batch.slice(0, remaining_rows);
                 self.total_rows += batch_head.num_rows();
                 self.inner.push_batch(batch_head)?;
-                return Ok(true);
+                return Ok(PushBatchStatus::LimitReached);
             }
         }
 
+        // Limit not reached, push the entire batch
         self.total_rows += batch.num_rows();
         self.inner.push_batch(batch)?;
-
-        Ok(false) // not at limit
+        Ok(PushBatchStatus::Continue)
     }
 
     /// Return true if there is no data buffered
@@ -276,9 +297,13 @@ mod tests {
 
             let mut output_batches = vec![];
             for batch in input_batches {
-                if coalescer.push_batch(batch).unwrap() {
-                    // at limit, finish the coalescer
-                    break;
+                match coalescer.push_batch(batch).unwrap() {
+                    PushBatchStatus::Continue => {
+                        // continue pushing batches
+                    }
+                    PushBatchStatus::LimitReached => {
+                        break;
+                    }
                 }
             }
             coalescer.finish().unwrap();

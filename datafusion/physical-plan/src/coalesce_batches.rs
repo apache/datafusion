@@ -34,7 +34,7 @@ use datafusion_common::Result;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::PhysicalExpr;
 
-use crate::coalesce::LimitedBatchCoalescer;
+use crate::coalesce::{LimitedBatchCoalescer, PushBatchStatus};
 use crate::execution_plan::CardinalityEffect;
 use crate::filter_pushdown::{
     ChildPushdownResult, FilterDescription, FilterPushdownPhase,
@@ -302,10 +302,15 @@ impl CoalesceBatchesStream {
                     self.coalescer.finish()?;
                 }
                 Some(Ok(batch)) => {
-                    if self.coalescer.push_batch(batch)? {
-                        // limit was reached, so stop early
-                        self.completed = true;
-                        self.coalescer.finish()?;
+                    match self.coalescer.push_batch(batch)? {
+                        PushBatchStatus::Continue => {
+                            // Keep pushing more batches
+                        }
+                        PushBatchStatus::LimitReached => {
+                            // limit was reached, so stop early
+                            self.completed = true;
+                            self.coalescer.finish()?;
+                        }
                     }
                 }
                 // Error case
