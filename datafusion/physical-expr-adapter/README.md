@@ -1,14 +1,8 @@
 # DataFusion Physical Expression Adapter
 
-This crate provides physical expression schema adaptation utilities for DataFusion that allow adapting a `PhysicalExpr` to different schema types.
-This handles cases such as `lit(ScalarValue::Int32(123)) = int64_column` by rewriting it to `lit(ScalarValue::Int32(123)) = cast(int64_column, 'Int32')`
-(note: this does not attempt to then simplify such expressions, that is done by shared simplifiers).
+This crate provides utilities for adapting physical expressions to different schemas in DataFusion.
 
-## Overview
+It handles schema differences in file scans by rewriting expressions to match the physical schema,
+including type casting, missing columns, and partition values.
 
-The `PhysicalExprSchemaRewriter` allows rewriting physical expressions to match different schemas, including:
-
-- Type casting when logical and physical schemas have different types
-- Handling missing columns by inserting null literals
-- Struct support: expressions such as `struct_column.field_that_is_missing_in_schema` get rewritten to `null`
-- Partition column replacement with literal values
+For detailed documentation, see the [`PhysicalExprAdapter`] trait documentation.

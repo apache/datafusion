@@ -39,7 +39,27 @@ use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 /// against the physical schema of the file being scanned. It allows for handling
 /// differences between logical and physical schemas, such as type mismatches or missing columns.
 ///
-/// You can create a custom implemention of this trait to handle specific rewriting logic.
+/// ## Overview
+///
+/// The `PhysicalExprAdapter` allows rewriting physical expressions to match different schemas, including:
+///
+/// - **Type casting**: When logical and physical schemas have different types, expressions are
+///   automatically wrapped with cast operations. For example, `lit(ScalarValue::Int32(123)) = int64_column`
+///   gets rewritten to `lit(ScalarValue::Int32(123)) = cast(int64_column, 'Int32')`.
+///   Note that this does not attempt to simplify such expressions - that is done by shared simplifiers.
+///
+/// - **Missing columns**: When a column exists in the logical schema but not in the physical schema,
+///   references to it are replaced with null literals.
+///
+/// - **Struct field access**: Expressions like `struct_column.field_that_is_missing_in_schema` are
+///   rewritten to `null` when the field doesn't exist in the physical schema.
+///
+/// - **Partition columns**: Partition column references can be replaced with their literal values
+///   when scanning specific partitions.
+///
+/// ## Custom Implementations
+///
+/// You can create a custom implementation of this trait to handle specific rewriting logic.
 /// For example, to fill in missing columns with default values instead of nulls:
 ///
 /// ```rust
@@ -238,24 +258,10 @@ impl<'a> DefaultPhysicalExprAdapterRewriter<'a> {
         &self,
         expr: &Arc<dyn PhysicalExpr>,
     ) -> Result<Option<Arc<dyn PhysicalExpr>>> {
-        let get_field_expr = match expr.as_any().downcast_ref::<ScalarFunctionExpr>() {
+        let get_field_expr = match ScalarFunctionExpr::try_downcast_func::<GetFieldFunc>(expr.as_ref()) {
             Some(expr) => expr,
             None => return Ok(None),
         };
-
-        if get_field_expr.name() != "get_field" {
-            return Ok(None);
-        }
-
-        if get_field_expr
-            .fun()
-            .inner()
-            .as_any()
-            .downcast_ref::<GetFieldFunc>()
-            .is_none()
-        {
-            return Ok(None);
-        }
 
         let source_expr = match get_field_expr.args().first() {
             Some(expr) => expr,
@@ -275,11 +281,9 @@ impl<'a> DefaultPhysicalExprAdapterRewriter<'a> {
             None => return Ok(None),
         };
 
-        let field_name = match lit.value() {
-            ScalarValue::Utf8(Some(name))
-            | ScalarValue::LargeUtf8(Some(name))
-            | ScalarValue::Utf8View(Some(name)) => name,
-            _ => return Ok(None),
+        let field_name = match lit.value().try_as_str().flatten() {
+            Some(name) => name,
+            None => return Ok(None),
         };
 
         let column = match source_expr.as_any().downcast_ref::<Column>() {
