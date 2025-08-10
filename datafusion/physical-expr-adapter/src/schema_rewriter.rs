@@ -254,6 +254,9 @@ impl<'a> DefaultPhysicalExprAdapterRewriter<'a> {
         Ok(Transformed::no(expr))
     }
 
+    /// Attempt to rewrite struct field access expressions to return null if the field does not exist in the physical schema.
+    /// Note that this does *not* handle nested struct fields, only top-level struct field access.
+    /// See https://github.com/apache/datafusion/issues/17114 for more details.
     fn try_rewrite_struct_field_access(
         &self,
         expr: &Arc<dyn PhysicalExpr>,

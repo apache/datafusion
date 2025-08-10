@@ -136,6 +136,35 @@ impl AsyncScalarUDFImpl for AskLLM {
 # */
 ```
 
+### Schema Rewriter Module Moved to New Crate
+
+The `schema_rewriter` module and its associated types have been moved from `datafusion_physical_expr` to a new crate `datafusion_physical_expr_adapter`. This affects the following types:
+
+- `DefaultPhysicalExprAdapter`
+- `DefaultPhysicalExprAdapterFactory`
+- `PhysicalExprAdapter`
+- `PhysicalExprAdapterFactory`
+
+To upgrade, change your imports from:
+
+```rust
+use datafusion_physical_expr::schema_rewriter::{
+    DefaultPhysicalExprAdapter, DefaultPhysicalExprAdapterFactory,
+    PhysicalExprAdapter, PhysicalExprAdapterFactory
+};
+```
+
+To:
+
+```rust
+use datafusion_physical_expr_adapter::{
+    DefaultPhysicalExprAdapter, DefaultPhysicalExprAdapterFactory,
+    PhysicalExprAdapter, PhysicalExprAdapterFactory
+};
+```
+
+Note: You may also need to add `datafusion-physical-expr-adapter` as a dependency in your `Cargo.toml`.
+
 ### Upgrade to arrow `56.0.0` and parquet `56.0.0`
 
 This version of DataFusion upgrades the underlying Apache Arrow implementation
