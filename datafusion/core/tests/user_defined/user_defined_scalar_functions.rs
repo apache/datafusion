@@ -28,7 +28,7 @@ use arrow::array::{
 use arrow::compute::kernels::numeric::add;
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow_schema::extension::{Bool8, CanonicalExtensionType, ExtensionType};
-use arrow_schema::{ArrowError, FieldRef};
+use arrow_schema::{ArrowError, FieldRef, SchemaRef};
 use datafusion::common::test_util::batches_to_string;
 use datafusion::execution::context::{FunctionFactory, RegisterFunction, SessionState};
 use datafusion::prelude::*;
@@ -181,7 +181,7 @@ async fn scalar_udf() -> Result<()> {
     Ok(())
 }
 
-#[derive(PartialEq, Hash)]
+#[derive(PartialEq, Eq, Hash)]
 struct Simple0ArgsScalarUDF {
     name: String,
     signature: Signature,
@@ -492,7 +492,7 @@ async fn test_user_defined_functions_with_alias() -> Result<()> {
 }
 
 /// Volatile UDF that should append a different value to each row
-#[derive(Debug, PartialEq, Hash)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 struct AddIndexToStringVolatileScalarUDF {
     name: String,
     signature: Signature,
@@ -941,7 +941,7 @@ impl FunctionFactory for CustomFunctionFactory {
 //
 // it also defines custom [ScalarUDFImpl::simplify()]
 // to replace ScalarUDF expression with one instance contains.
-#[derive(Debug, PartialEq, Hash)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 struct ScalarFunctionWrapper {
     name: String,
     expr: Expr,
@@ -1221,6 +1221,7 @@ impl PartialEq for MyRegexUdf {
         signature == &other.signature && regex.as_str() == other.regex.as_str()
     }
 }
+impl Eq for MyRegexUdf {}
 
 impl Hash for MyRegexUdf {
     fn hash<H: Hasher>(&self, state: &mut H) {
@@ -1380,7 +1381,7 @@ async fn plan_and_collect(ctx: &SessionContext, sql: &str) -> Result<Vec<RecordB
     ctx.sql(sql).await?.collect().await
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq)]
 struct MetadataBasedUdf {
     name: String,
     signature: Signature,
@@ -1784,5 +1785,60 @@ async fn test_extension_based_udf() -> Result<()> {
     assert_eq!(expected, actual[0]);
 
     ctx.deregister_table("t")?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_config_options_work_for_scalar_func() -> Result<()> {
+    #[derive(Debug)]
+    struct TestScalarUDF {
+        signature: Signature,
+    }
+
+    impl ScalarUDFImpl for TestScalarUDF {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+        fn name(&self) -> &str {
+            "TestScalarUDF"
+        }
+
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+
+        fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+            Ok(DataType::Utf8)
+        }
+
+        fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+            let tz = args.config_options.execution.time_zone.clone();
+            Ok(ColumnarValue::Scalar(ScalarValue::from(tz)))
+        }
+    }
+
+    let udf = ScalarUDF::from(TestScalarUDF {
+        signature: Signature::uniform(1, vec![DataType::Utf8], Volatility::Stable),
+    });
+
+    let mut config = SessionConfig::new();
+    config.options_mut().execution.time_zone = "AEST".into();
+
+    let ctx = SessionContext::new_with_config(config);
+
+    ctx.register_udf(udf.clone());
+
+    let df = ctx.read_empty()?;
+    let df = df.select(vec![udf.call(vec![lit("a")]).alias("a")])?;
+    let actual = df.collect().await?;
+
+    let expected_schema = Schema::new(vec![Field::new("a", DataType::Utf8, false)]);
+    let expected = RecordBatch::try_new(
+        SchemaRef::from(expected_schema),
+        vec![create_array!(Utf8, ["AEST"])],
+    )?;
+
+    assert_eq!(expected, actual[0]);
+
     Ok(())
 }
