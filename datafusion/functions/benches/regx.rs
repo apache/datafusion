@@ -27,6 +27,7 @@ use datafusion_functions::regex::regexpinstr::regexp_instr_func;
 use datafusion_functions::regex::regexplike::regexp_like;
 use datafusion_functions::regex::regexpmatch::regexp_match;
 use datafusion_functions::regex::regexpreplace::regexp_replace;
+use datafusion_functions::regex::regexpextract::regexp_extract;
 use rand::distr::Alphanumeric;
 use rand::prelude::IndexedRandom;
 use rand::rngs::ThreadRng;
@@ -252,6 +253,34 @@ fn criterion_benchmark(c: &mut Criterion) {
                     Arc::clone(&flags),
                 ])
                 .expect("regexp_match should work on valid values"),
+            )
+        })
+    });
+
+    c.bench_function("regexp_extract_1000", |b| {
+        let mut rng = rand::rng();
+        let data = Arc::new(data(&mut rng)) as ArrayRef;
+        let regex = Arc::new(regex(&mut rng)) as ArrayRef;
+        let groups = Arc::new(subexp(&mut rng)) as ArrayRef;
+
+        b.iter(|| {
+            black_box(
+                regexp_extract(&[Arc::clone(&data), Arc::clone(&regex), Arc::clone(&groups)])
+                    .expect("regexp_extract should work on valid values"),
+            )
+        })
+    });
+
+    c.bench_function("regexp_extract_1000 utf8view", |b| {
+        let mut rng = rand::rng();
+        let data = cast(&data(&mut rng), &DataType::Utf8View).unwrap();
+        let regex = cast(&regex(&mut rng), &DataType::Utf8View).unwrap();
+        let groups = Arc::new(subexp(&mut rng)) as ArrayRef;
+
+        b.iter(|| {
+            black_box(
+                regexp_extract(&[Arc::clone(&data), Arc::clone(&regex), Arc::clone(&groups)])
+                    .expect("regexp_extract should work on valid values"),
             )
         })
     });
