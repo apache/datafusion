@@ -25,7 +25,9 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use arrow::array::{Array, ArrayRef, AsArray, Int64Array};
+use arrow::array::{
+    Array, ArrayRef, AsArray, Int64Array, GenericStringArray, StringViewArray,
+};
 use arrow::datatypes::DataType;
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::{exec_err, plan_err, Result, ScalarValue};
@@ -179,19 +181,28 @@ pub fn regexp_extract(args: &[ArrayRef]) -> Result<ArrayRef> {
             let string_array = args[0].as_string::<i32>();
             let pattern_array = args[1].as_string::<i32>();
             let group_array = as_int64_array(&args[2])?;
-            regexp_extract_inner(string_array, pattern_array, group_array)
+            regexp_extract_inner(string_array, pattern_array, group_array, |values| {
+                let arr = GenericStringArray::<i32>::from(values);
+                Arc::new(arr) as ArrayRef
+            })
         }
         (DataType::LargeUtf8, DataType::LargeUtf8) => {
             let string_array = args[0].as_string::<i64>();
             let pattern_array = args[1].as_string::<i64>();
             let group_array = as_int64_array(&args[2])?;
-            regexp_extract_inner(string_array, pattern_array, group_array)
+            regexp_extract_inner(string_array, pattern_array, group_array, |values| {
+                let arr = GenericStringArray::<i64>::from(values);
+                Arc::new(arr) as ArrayRef
+            })
         }
         (DataType::Utf8View, DataType::Utf8View) => {
             let string_array = args[0].as_string_view();
             let pattern_array = args[1].as_string_view();
             let group_array = as_int64_array(&args[2])?;
-            regexp_extract_inner(string_array, pattern_array, group_array)
+            regexp_extract_inner(string_array, pattern_array, group_array, |values| {
+                let arr = StringViewArray::from(values);
+                Arc::new(arr) as ArrayRef
+            })
         }
         (string_type, pattern_type) => exec_err!(
             "regexp_extract requires string and pattern to have the same type, got {:?} and {:?}",
@@ -200,20 +211,23 @@ pub fn regexp_extract(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
-use arrow::array::{GenericStringArray, OffsetSizeTrait, StringViewArray};
+// moved to the top import block
 
-/// Shared core logic for regex extraction - returns computed string values
-fn compute_regexp_extract_values<S>(
+/// Single inner implementation. Computes values and uses the provided builder to
+/// create the appropriate result array type.
+fn regexp_extract_inner<S, F>(
     string_array: &S,
     pattern_array: &S,
     group_array: &Int64Array,
-) -> Result<Vec<Option<String>>>
+    build_array: F,
+) -> Result<ArrayRef>
 where
     S: Array,
     for<'a> &'a S: IntoIterator<Item = Option<&'a str>>,
+    F: FnOnce(Vec<Option<String>>) -> ArrayRef,
 {
     let mut patterns: HashMap<(&str, Option<&str>), Regex> = HashMap::new();
-    let mut results = Vec::with_capacity(string_array.len());
+    let mut results: Vec<Option<String>> = Vec::with_capacity(string_array.len());
 
     let string_iter = string_array.into_iter();
     let pattern_iter = pattern_array.into_iter();
@@ -222,79 +236,31 @@ where
         let result = match (string_value, pattern_value, group_value) {
             (Some(string), Some(pattern), Some(group)) => {
                 if group < 0 {
-                    Some("".to_string())
+                    Some(String::new())
                 } else {
                     let group_idx = group as usize;
-                    
-                    // Get or compile regex pattern
+
                     let regex = compile_and_cache_regex(pattern, None, &mut patterns)?;
-                    
-                    // Apply regex and extract group
+
                     match regex.captures(string) {
                         Some(captures) => {
                             if let Some(matched_group) = captures.get(group_idx) {
                                 Some(matched_group.as_str().to_string())
                             } else {
-                                // Group index is valid but group doesn't exist in this match
-                                Some("".to_string())
+                                Some(String::new())
                             }
                         }
-                        None => {
-                            // No match found
-                            Some("".to_string())
-                        }
+                        None => Some(String::new()),
                     }
                 }
             }
-            _ => {
-                // Any null input results in null output
-                None
-            }
+            _ => None,
         };
+
         results.push(result);
     }
 
-    Ok(results)
-}
-
-trait RegexpExtractArrayBuilder {
-    fn extract_regexp_group(
-        string_array: &Self,
-        pattern_array: &Self,
-        group_array: &Int64Array,
-    ) -> Result<ArrayRef>;
-}
-
-impl<T: OffsetSizeTrait> RegexpExtractArrayBuilder for GenericStringArray<T> {
-    fn extract_regexp_group(
-        string_array: &Self,
-        pattern_array: &Self,
-        group_array: &Int64Array,
-    ) -> Result<ArrayRef> {
-        let values = compute_regexp_extract_values(string_array, pattern_array, group_array)?;
-        let result_array = GenericStringArray::<T>::from(values);
-        Ok(Arc::new(result_array))
-    }
-}
-
-impl RegexpExtractArrayBuilder for StringViewArray {
-    fn extract_regexp_group(
-        string_array: &Self,
-        pattern_array: &Self,
-        group_array: &Int64Array,
-    ) -> Result<ArrayRef> {
-        let values = compute_regexp_extract_values(string_array, pattern_array, group_array)?;
-        let result_array = StringViewArray::from(values);
-        Ok(Arc::new(result_array))
-    }
-}
-
-fn regexp_extract_inner<T: RegexpExtractArrayBuilder>(
-    string_array: &T,
-    pattern_array: &T,
-    group_array: &Int64Array,
-) -> Result<ArrayRef> {
-    T::extract_regexp_group(string_array, pattern_array, group_array)
+    Ok(build_array(results))
 }
 
 #[cfg(test)]
