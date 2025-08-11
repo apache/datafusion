@@ -106,6 +106,12 @@ use crate::{
 /// all be larger values.
 ///
 /// ```text
+/// SQL statement:
+/// SELECT *
+/// FROM (VALUES (100), (200), (500)) AS streamed(a)
+/// LEFT JOIN (VALUES (100), (200), (200), (300), (400)) AS buffered(b)
+///   ON streamed.a < buffered.b;
+/// 
 /// Processing Row 1:
 ///
 ///            Sorted Streamed Side          Sorted Buffered Side  
@@ -146,13 +152,19 @@ use crate::{
 /// For Left Semi, Anti, and Mark joins we swap the inputs so that the marked side is on the buffered side.
 ///
 /// Here is an example:
-/// We perform a `JoinType::Left` with these two batches and the operator being `Operator::Lt`(<). Because
+/// We perform a `JoinType::LeftSemi` with these two batches and the operator being `Operator::Lt`(<). Because
 /// the operator is `Operator::Lt` we can find the minimum value in the streamed side; in this case it is 200.
 /// We can then advance a pointer from the start of the buffer side until we find the first value that satisfies
 /// the predicate. All rows after that first matched value satisfy the condition 200 < x so we can mark all of
 /// those rows as matched.
 ///
 /// ```text
+/// SQL statement:
+/// SELECT *
+/// FROM (VALUES (100), (200), (500)) AS streamed(a)
+/// LEFT SEMI JOIN (VALUES (100), (200), (200), (300), (400)) AS buffered(b)
+///   ON streamed.a < buffered.b;
+/// 
 ///           Unsorted Streamed Side         Sorted Buffered Side  
 ///            ┌──────────────────┐          ┌──────────────────┐
 ///          1 │       500        │        1 │       100        │
