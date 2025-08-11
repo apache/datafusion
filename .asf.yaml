@@ -51,6 +51,7 @@ github:
       required_pull_request_reviews:
         required_approving_review_count: 1
     # needs to be updated as part of the release process
+    # Github doesn't support wildcard branch protection rules, only exact branch names
     branch-50:
       required_pull_request_reviews:
         required_approving_review_count: 1
