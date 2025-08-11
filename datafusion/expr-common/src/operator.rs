@@ -370,10 +370,15 @@ impl Operator {
             | Operator::Question
             | Operator::QuestionAnd
             | Operator::QuestionPipe => true,
+
+            // E.g. `TRUE OR NULL` is `TRUE`
             Operator::Or
+            // E.g. `FALSE AND NULL` is `FALSE`
             | Operator::And
+            // IS DISTINCT FROM and IS NOT DISTINCT FROM always return a TRUE/FALSE value, never NULL
             | Operator::IsDistinctFrom
             | Operator::IsNotDistinctFrom
+            // DataFusion string concatenation operator treats NULL as an empty string
             | Operator::StringConcat => false,
         }
     }
