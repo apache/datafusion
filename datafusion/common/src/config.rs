@@ -2923,7 +2923,7 @@ mod tests {
     #[cfg(feature = "parquet_encryption")]
     #[test]
     fn parquet_encryption_factory_config() {
-        let mut parquet_options = crate::config::TableParquetOptions::default();
+        let mut parquet_options = TableParquetOptions::default();
 
         assert_eq!(parquet_options.crypto.factory_id, None);
         assert_eq!(parquet_options.crypto.factory_options.options.len(), 0);
