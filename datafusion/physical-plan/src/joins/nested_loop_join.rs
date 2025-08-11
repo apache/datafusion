@@ -737,7 +737,7 @@ pub(crate) struct NestedLoopJoinStream {
     pub(crate) join_metrics: BuildProbeJoinMetrics,
 
     /// `batch_size` from configuration
-    cfg_batch_size: usize,
+    batch_size: usize,
 
     /// See comments in [`need_produce_right_in_final`] for more detail
     should_track_unmatched_right: bool,
@@ -986,7 +986,7 @@ impl NestedLoopJoinStream {
         inner_table: OnceFut<JoinLeftData>,
         column_indices: Vec<ColumnIndex>,
         join_metrics: BuildProbeJoinMetrics,
-        cfg_batch_size: usize,
+        batch_size: usize,
     ) -> Self {
         Self {
             output_schema: Arc::clone(&schema),
@@ -997,8 +997,8 @@ impl NestedLoopJoinStream {
             left_data: inner_table,
             join_metrics,
             buffered_left_data: None,
-            output_buffer: Box::new(BatchCoalescer::new(schema, cfg_batch_size)),
-            cfg_batch_size,
+            output_buffer: Box::new(BatchCoalescer::new(schema, batch_size)),
+            batch_size,
             current_right_batch: None,
             current_right_batch_matched: None,
             state: NLJState::BufferingLeft,
@@ -1327,8 +1327,7 @@ impl NestedLoopJoinStream {
         // Each time, the number to process is up to batch size
         // ========
         let start_idx = self.left_emit_idx;
-        let end_idx =
-            std::cmp::min(start_idx + self.cfg_batch_size, left_batch.num_rows());
+        let end_idx = std::cmp::min(start_idx + self.batch_size, left_batch.num_rows());
 
         if let Some(batch) =
             self.process_left_unmatched_range(left_data, start_idx, end_idx)?
