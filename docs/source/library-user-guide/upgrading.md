@@ -28,7 +28,9 @@ You can see the current [status of the `50.0.0 `release here](https://github.com
 
 To address error-proneness of `WindowUDFImpl::equals` method and to make it easy to implement function
 equality correctly, the `WindowUDFImpl::equals` and `WindowUDFImpl::hash_value` methods have been replaced
-with the requirement to implement the `PartialEq`, `Eq`, and `Hash` traits on any type implementing `WindowUDFImpl`.
+with the requirement to implement the `PartialEq`, `Eq`, and `Hash` traits on any type implementing `WindowUDFImpl`. Please see [issue #16677] for more details
+
+[issue #16677]: https://github.com/apache/datafusion/issues/16677
 
 ### `AsyncScalarUDFImpl::invoke_async_with_args` returns `ColumnarValue`
 
