@@ -1253,16 +1253,6 @@ impl FileSink for ParquetSink {
         object_store: Arc<dyn ObjectStore>,
     ) -> Result<u64> {
         let parquet_opts = &self.parquet_options;
-        let mut allow_single_file_parallelism =
-            parquet_opts.global.allow_single_file_parallelism;
-
-        if parquet_opts.crypto.file_encryption.is_some()
-            || parquet_opts.crypto.factory_id.is_some()
-        {
-            // For now, arrow-rs does not support parallel writes with encryption
-            // See https://github.com/apache/arrow-rs/issues/7359
-            allow_single_file_parallelism = false;
-        }
 
         let mut file_write_tasks: JoinSet<
             std::result::Result<(Path, FileMetaData), DataFusionError>,
