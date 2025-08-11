@@ -69,7 +69,7 @@ pub fn chr(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 #[user_doc(
     doc_section(label = "String Functions"),
-    description = "Returns the character with the specified ASCII or Unicode code value.",
+    description = "Returns a string containing the character with the specified Unicode scalar value.",
     syntax_example = "chr(expression)",
     sql_example = r#"```sql
 > select chr(128640);
