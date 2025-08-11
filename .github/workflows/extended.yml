@@ -32,6 +32,8 @@ on:
   push:
     branches:
       - main
+      # release candidate branches
+      - 'branch-*'
   workflow_dispatch:
     inputs:
       pr_number:
