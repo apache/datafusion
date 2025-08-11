@@ -138,23 +138,14 @@ impl AsyncScalarUDFImpl for AskLLM {
 
 ### Schema Rewriter Module Moved to New Crate
 
-The `schema_rewriter` module and its associated types have been moved from `datafusion_physical_expr` to a new crate `datafusion_physical_expr_adapter`. This affects the following types:
+The `schema_rewriter` module and its associated symbols have been moved from `datafusion_physical_expr` to a new crate `datafusion_physical_expr_adapter`. This affects the following symbols:
 
 - `DefaultPhysicalExprAdapter`
 - `DefaultPhysicalExprAdapterFactory`
 - `PhysicalExprAdapter`
 - `PhysicalExprAdapterFactory`
 
-To upgrade, change your imports from:
-
-```rust
-use datafusion_physical_expr::schema_rewriter::{
-    DefaultPhysicalExprAdapter, DefaultPhysicalExprAdapterFactory,
-    PhysicalExprAdapter, PhysicalExprAdapterFactory
-};
-```
-
-To:
+To upgrade, change your imports to:
 
 ```rust
 use datafusion_physical_expr_adapter::{
