@@ -25,9 +25,9 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use arrow::array::{Array, ArrayRef, Int64Array, StringViewArray};
+use arrow::array::{Array, ArrayRef, AsArray, Int64Array};
 use arrow::datatypes::DataType;
-use datafusion_common::cast::{as_generic_string_array, as_int64_array, as_string_view_array};
+use datafusion_common::cast::as_int64_array;
 use datafusion_common::{exec_err, plan_err, Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, Documentation, TypeSignature};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
@@ -174,135 +174,127 @@ pub fn regexp_extract(args: &[ArrayRef]) -> Result<ArrayRef> {
         );
     }
 
-    match args[0].data_type() {
-        DataType::Utf8 => {
-            let string_array = as_generic_string_array::<i32>(&args[0])?;
-            let pattern_array = as_generic_string_array::<i32>(&args[1])?;
+    match (args[0].data_type(), args[1].data_type()) {
+        (DataType::Utf8, DataType::Utf8) => {
+            let string_array = args[0].as_string::<i32>();
+            let pattern_array = args[1].as_string::<i32>();
             let group_array = as_int64_array(&args[2])?;
-            regexp_extract_impl(string_array, pattern_array, group_array)
+            regexp_extract_inner(string_array, pattern_array, group_array)
         }
-        DataType::LargeUtf8 => {
-            let string_array = as_generic_string_array::<i64>(&args[0])?;
-            let pattern_array = as_generic_string_array::<i64>(&args[1])?;
+        (DataType::LargeUtf8, DataType::LargeUtf8) => {
+            let string_array = args[0].as_string::<i64>();
+            let pattern_array = args[1].as_string::<i64>();
             let group_array = as_int64_array(&args[2])?;
-            regexp_extract_impl(string_array, pattern_array, group_array)
+            regexp_extract_inner(string_array, pattern_array, group_array)
         }
-        DataType::Utf8View => {
-            let string_array = as_string_view_array(&args[0])?;
-            let pattern_array = as_string_view_array(&args[1])?;
+        (DataType::Utf8View, DataType::Utf8View) => {
+            let string_array = args[0].as_string_view();
+            let pattern_array = args[1].as_string_view();
             let group_array = as_int64_array(&args[2])?;
-            regexp_extract_string_view_impl(string_array, pattern_array, group_array)
+            regexp_extract_inner(string_array, pattern_array, group_array)
         }
-        other => exec_err!(
-            "regexp_extract was called with unexpected data type {:?}",
-            other
+        (string_type, pattern_type) => exec_err!(
+            "regexp_extract requires string and pattern to have the same type, got {:?} and {:?}",
+            string_type, pattern_type
         ),
     }
 }
 
-fn regexp_extract_impl<T>(
-    string_array: &arrow::array::GenericStringArray<T>,
-    pattern_array: &arrow::array::GenericStringArray<T>,
+use arrow::array::{GenericStringArray, OffsetSizeTrait, StringViewArray};
+
+/// Shared core logic for regex extraction - returns computed string values
+fn compute_regexp_extract_values<S>(
+    string_array: &S,
+    pattern_array: &S,
     group_array: &Int64Array,
-) -> Result<ArrayRef>
+) -> Result<Vec<Option<String>>>
 where
-    T: arrow::array::OffsetSizeTrait,
+    S: Array,
+    for<'a> &'a S: IntoIterator<Item = Option<&'a str>>,
 {
     let mut patterns: HashMap<(&str, Option<&str>), Regex> = HashMap::new();
-    let mut result_builder = arrow::array::GenericStringBuilder::<T>::new();
+    let mut results = Vec::with_capacity(string_array.len());
 
-    for i in 0..string_array.len() {
-        let string_value = if string_array.is_null(i) { None } else { Some(string_array.value(i)) };
-        let pattern_value = if pattern_array.is_null(i) { None } else { Some(pattern_array.value(i)) };
-        let group_value = if group_array.is_null(i) { None } else { Some(group_array.value(i)) };
+    let string_iter = string_array.into_iter();
+    let pattern_iter = pattern_array.into_iter();
 
-        match (string_value, pattern_value, group_value) {
+    for ((string_value, pattern_value), group_value) in string_iter.zip(pattern_iter).zip(group_array.iter()) {
+        let result = match (string_value, pattern_value, group_value) {
             (Some(string), Some(pattern), Some(group)) => {
                 if group < 0 {
-                    result_builder.append_value("");
-                    continue;
-                }
-
-                let group_idx = group as usize;
-                
-                // Get or compile regex pattern
-                let regex = compile_and_cache_regex(pattern, None, &mut patterns)?;
-                
-                // Apply regex and extract group
-                match regex.captures(string) {
-                    Some(captures) => {
-                        if let Some(matched_group) = captures.get(group_idx) {
-                            result_builder.append_value(matched_group.as_str());
-                        } else {
-                            // Group index is valid but group doesn't exist in this match
-                            result_builder.append_value("");
+                    Some("".to_string())
+                } else {
+                    let group_idx = group as usize;
+                    
+                    // Get or compile regex pattern
+                    let regex = compile_and_cache_regex(pattern, None, &mut patterns)?;
+                    
+                    // Apply regex and extract group
+                    match regex.captures(string) {
+                        Some(captures) => {
+                            if let Some(matched_group) = captures.get(group_idx) {
+                                Some(matched_group.as_str().to_string())
+                            } else {
+                                // Group index is valid but group doesn't exist in this match
+                                Some("".to_string())
+                            }
                         }
-                    }
-                    None => {
-                        // No match found
-                        result_builder.append_value("");
+                        None => {
+                            // No match found
+                            Some("".to_string())
+                        }
                     }
                 }
             }
             _ => {
                 // Any null input results in null output
-                result_builder.append_null();
+                None
             }
-        }
+        };
+        results.push(result);
     }
 
-    Ok(Arc::new(result_builder.finish()))
+    Ok(results)
 }
 
-fn regexp_extract_string_view_impl(
-    string_array: &StringViewArray,
-    pattern_array: &StringViewArray,
+trait RegexpExtractArrayBuilder {
+    fn extract_regexp_group(
+        string_array: &Self,
+        pattern_array: &Self,
+        group_array: &Int64Array,
+    ) -> Result<ArrayRef>;
+}
+
+impl<T: OffsetSizeTrait> RegexpExtractArrayBuilder for GenericStringArray<T> {
+    fn extract_regexp_group(
+        string_array: &Self,
+        pattern_array: &Self,
+        group_array: &Int64Array,
+    ) -> Result<ArrayRef> {
+        let values = compute_regexp_extract_values(string_array, pattern_array, group_array)?;
+        let result_array = GenericStringArray::<T>::from(values);
+        Ok(Arc::new(result_array))
+    }
+}
+
+impl RegexpExtractArrayBuilder for StringViewArray {
+    fn extract_regexp_group(
+        string_array: &Self,
+        pattern_array: &Self,
+        group_array: &Int64Array,
+    ) -> Result<ArrayRef> {
+        let values = compute_regexp_extract_values(string_array, pattern_array, group_array)?;
+        let result_array = StringViewArray::from(values);
+        Ok(Arc::new(result_array))
+    }
+}
+
+fn regexp_extract_inner<T: RegexpExtractArrayBuilder>(
+    string_array: &T,
+    pattern_array: &T,
     group_array: &Int64Array,
 ) -> Result<ArrayRef> {
-    let mut patterns: HashMap<(&str, Option<&str>), Regex> = HashMap::new();
-    let mut result_builder = arrow::array::StringViewBuilder::new();
-
-    for i in 0..string_array.len() {
-        let string_value = if string_array.is_null(i) { None } else { Some(string_array.value(i)) };
-        let pattern_value = if pattern_array.is_null(i) { None } else { Some(pattern_array.value(i)) };
-        let group_value = if group_array.is_null(i) { None } else { Some(group_array.value(i)) };
-
-        match (string_value, pattern_value, group_value) {
-            (Some(string), Some(pattern), Some(group)) => {
-                if group < 0 {
-                    result_builder.append_value("");
-                    continue;
-                }
-
-                let group_idx = group as usize;
-                
-                // Get or compile regex pattern
-                let regex = compile_and_cache_regex(pattern, None, &mut patterns)?;
-                
-                // Apply regex and extract group
-                match regex.captures(string) {
-                    Some(captures) => {
-                        if let Some(matched_group) = captures.get(group_idx) {
-                            result_builder.append_value(matched_group.as_str());
-                        } else {
-                            // Group index is valid but group doesn't exist in this match
-                            result_builder.append_value("");
-                        }
-                    }
-                    None => {
-                        // No match found
-                        result_builder.append_value("");
-                    }
-                }
-            }
-            _ => {
-                // Any null input results in null output
-                result_builder.append_null();
-            }
-        }
-    }
-
-    Ok(Arc::new(result_builder.finish()))
+    T::extract_regexp_group(string_array, pattern_array, group_array)
 }
 
 #[cfg(test)]
