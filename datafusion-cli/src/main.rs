@@ -566,18 +566,18 @@ mod tests {
             .await?;
 
         // initial state
-        let sql = "SELECT split_part(path, '/', -1) as filename, file_size_bytes, e_tag, metadata_size_bytes, hits, extra from metadata_cache() order by filename";
+        let sql = "SELECT split_part(path, '/', -1) as filename, file_size_bytes, metadata_size_bytes, hits, extra from metadata_cache() order by filename";
         let df = ctx.sql(sql).await?;
         let rbs = df.collect().await?;
 
         assert_snapshot!(batches_to_string(&rbs),@r#"
-        +-----------------------------------+-----------------+-----------------------+---------------------+------+------------------+
-        | filename                          | file_size_bytes | e_tag                 | metadata_size_bytes | hits | extra            |
-        +-----------------------------------+-----------------+-----------------------+---------------------+------+------------------+
-        | alltypes_plain.parquet            | 1851            | 0-63b0eaf04691f-73b   | 10181               | 2    | page_index=false |
-        | alltypes_tiny_pages.parquet       | 454233          | 0-63b0eaf0476cc-6ee59 | 881634              | 2    | page_index=true  |
-        | lz4_raw_compressed_larger.parquet | 380836          | 0-63b0eaf0595e8-5cfa4 | 2939                | 2    | page_index=false |
-        +-----------------------------------+-----------------+-----------------------+---------------------+------+------------------+
+        +-----------------------------------+-----------------+---------------------+------+------------------+
+        | filename                          | file_size_bytes | metadata_size_bytes | hits | extra            |
+        +-----------------------------------+-----------------+---------------------+------+------------------+
+        | alltypes_plain.parquet            | 1851            | 10181               | 2    | page_index=false |
+        | alltypes_tiny_pages.parquet       | 454233          | 881634              | 2    | page_index=true  |
+        | lz4_raw_compressed_larger.parquet | 380836          | 2939                | 2    | page_index=false |
+        +-----------------------------------+-----------------+---------------------+------+------------------+
         "#);
 
         // increase the number of hits
@@ -597,18 +597,18 @@ mod tests {
             .await?
             .collect()
             .await?;
-        let sql = "select split_part(path, '/', -1) as filename, file_size_bytes, e_tag, metadata_size_bytes, hits, extra from metadata_cache() order by filename";
+        let sql = "select split_part(path, '/', -1) as filename, file_size_bytes, metadata_size_bytes, hits, extra from metadata_cache() order by filename";
         let df = ctx.sql(sql).await?;
         let rbs = df.collect().await?;
 
         assert_snapshot!(batches_to_string(&rbs),@r#"
-        +-----------------------------------+-----------------+-----------------------+---------------------+------+------------------+
-        | filename                          | file_size_bytes | e_tag                 | metadata_size_bytes | hits | extra            |
-        +-----------------------------------+-----------------+-----------------------+---------------------+------+------------------+
-        | alltypes_plain.parquet            | 1851            | 0-63b0eaf04691f-73b   | 10181               | 5    | page_index=false |
-        | alltypes_tiny_pages.parquet       | 454233          | 0-63b0eaf0476cc-6ee59 | 881634              | 2    | page_index=true  |
-        | lz4_raw_compressed_larger.parquet | 380836          | 0-63b0eaf0595e8-5cfa4 | 2939                | 3    | page_index=false |
-        +-----------------------------------+-----------------+-----------------------+---------------------+------+------------------+
+        +-----------------------------------+-----------------+---------------------+------+------------------+
+        | filename                          | file_size_bytes | metadata_size_bytes | hits | extra            |
+        +-----------------------------------+-----------------+---------------------+------+------------------+
+        | alltypes_plain.parquet            | 1851            | 10181               | 5    | page_index=false |
+        | alltypes_tiny_pages.parquet       | 454233          | 881634              | 2    | page_index=true  |
+        | lz4_raw_compressed_larger.parquet | 380836          | 2939                | 3    | page_index=false |
+        +-----------------------------------+-----------------+---------------------+------+------------------+
         "#);
 
         Ok(())
