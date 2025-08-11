@@ -18,7 +18,7 @@
 //! Regex expressions - regexp_extract function
 
 //! This file was created by AI(Claude 3.5 Sonnet) and was reviewed by a human (@pikerpoler)
-//! all human-made changes have a comment explaining the change, and are marked with #HUMAN-MADE
+//! all design and implementation dilemas are accompanied by human-made comments and are marked with #HUMAN-MADE
 
 
 use std::any::Any;
@@ -92,8 +92,11 @@ impl RegexpExtractFunc {
         Self {
             signature: Signature::one_of(
                 vec![
-                    // #HUMAN-MADE: the initial solution tried to support group indexes of both Int32 and Int64, which resulted in code duplication.
-                    //              by coercing the group index to Int64, we can use the same code path for both Int32 and Int64.
+                    /* 
+                    #HUMAN-MADE:
+                    the initial solution tried to support group indexes of both Int32 and Int64, which resulted in code duplication.
+                    by coercing the group index to Int64, we can use the same code path for both Int32 and Int64.
+                    */
                     
                     // Planner attempts coercion to the target type starting with the most preferred candidate.
                     TypeSignature::Exact(vec![Utf8View, Utf8View, Int64]),
@@ -205,16 +208,18 @@ pub fn regexp_extract(args: &[ArrayRef]) -> Result<ArrayRef> {
             })
         }
         (string_type, pattern_type) => exec_err!(
-            "regexp_extract requires string and pattern to have the same type, got {:?} and {:?}",
-            string_type, pattern_type
+            "regexp_extract() expected the input arrays to be of type Utf8, LargeUtf8, or Utf8View and the data types of the string and pattern to match, but got {string_type:?} and {pattern_type:?}"
         ),
     }
 }
-
-// moved to the top import block
-
-/// Single inner implementation. Computes values and uses the provided builder to
-/// create the appropriate result array type.
+/*
+#HUMAN-MADE:
+This is the core logic for the regexp_extract function.
+originally the AI agent made two implementations, one for GenericStringArray and one for StringViewArray.
+both had the same logic, but different build_array functions.
+inspired by the implementation of the regexp_match function, I decided to create a single implementation that works with any string array type.
+this change took a significant amount of development time, but moving forward it should streamline future changes. so it should be worth it.
+*/
 fn regexp_extract_inner<S, F>(
     string_array: &S,
     pattern_array: &S,
@@ -267,9 +272,13 @@ where
 mod tests {
     use super::*;
     use arrow::array::{Int64Array, StringArray, LargeStringArray, StringViewArray};
-
-    // HUMAN-MADE: I opted to test all three string types.
-    // to avoid code duplication, I created a trait that abstracts over the different string array types.
+    /*
+    #HUMAN-MADE:
+    I opted to test all three string types.
+    to avoid code duplication, I created a trait that abstracts over the different string array types.
+    it isn't a common pattern in the codebase, but it is a good way to run the same test for all supported string array types.
+    I could also have added rstest to the project's dependencies and used it to run the tests, but for this excercise implementing it myself is fine.
+    */
 
     // Trait to abstract over different string array types for testing
     trait StringArrayTestType: 'static {
@@ -370,7 +379,7 @@ mod tests {
     }
 
     // Generic test functions
-    fn test_basic_extraction_generic<T: StringArrayTestType>() {
+    fn test_basic_extraction<T: StringArrayTestType>() {
         let strings = T::from_strings(vec!["100-200", "foo123bar", "no-match"]);
         let patterns = T::from_strings(vec![r"(\d+)-(\d+)", r"([a-z]+)(\d+)([a-z]+)", r"(\d+)"]);
         let groups = Int64Array::from(vec![1, 2, 1]);
@@ -388,7 +397,7 @@ mod tests {
         assert_eq!(T::get_value(result, 2), "");     // No match for pattern (\d+) in "no-match"
     }
 
-    fn test_group_zero_full_match_generic<T: StringArrayTestType>() {
+    fn test_group_zero_full_match<T: StringArrayTestType>() {
         let strings = T::from_strings(vec!["100-200", "abc123"]);
         let patterns = T::from_strings(vec![r"\d+-\d+", r"[a-z]+\d+"]);
         let groups = Int64Array::from(vec![0, 0]);
@@ -405,7 +414,7 @@ mod tests {
         assert_eq!(T::get_value(result, 1), "abc123");   // Full match
     }
 
-    fn test_invalid_group_index_generic<T: StringArrayTestType>() {
+    fn test_invalid_group_index<T: StringArrayTestType>() {
         let strings = T::from_strings(vec!["100-200", "abc123"]);
         let patterns = T::from_strings(vec![r"(\d+)-(\d+)", r"([a-z]+)(\d+)"]);
         let groups = Int64Array::from(vec![5, -1]);  // Group 5 doesn't exist, group -1 is negative
@@ -422,7 +431,7 @@ mod tests {
         assert_eq!(T::get_value(result, 1), "");  // Negative group index
     }
 
-    fn test_null_values_generic<T: StringArrayTestType>() {
+    fn test_null_values<T: StringArrayTestType>() {
         let strings = T::from_optional_strings(vec![Some("100-200"), None, Some("abc123")]);
         let patterns = T::from_optional_strings(vec![Some(r"(\d+)-(\d+)"), Some(r"(\d+)"), None]);
         let groups = Int64Array::from(vec![Some(1), Some(1), Some(1)]);
@@ -440,7 +449,7 @@ mod tests {
         assert!(T::is_null(result, 2));              // Null pattern input
     }
 
-    fn test_complex_regex_patterns_generic<T: StringArrayTestType>() {
+    fn test_complex_regex_patterns<T: StringArrayTestType>() {
         let strings = T::from_strings(vec![
             "user@example.com",
             "phone: (123) 456-7890",
@@ -466,7 +475,7 @@ mod tests {
         assert_eq!(T::get_value(result, 2), "99");       // Dollar amount
     }
 
-    fn test_empty_string_input_generic<T: StringArrayTestType>() {
+    fn test_empty_string_input<T: StringArrayTestType>() {
         let strings = T::from_strings(vec![""]);
         let patterns = T::from_strings(vec![r"(\d+)"]);
         let groups = Int64Array::from(vec![1]);
@@ -482,7 +491,7 @@ mod tests {
         assert_eq!(T::get_value(result, 0), "");  // No match in empty string
     }
 
-    fn test_invalid_regex_pattern_generic<T: StringArrayTestType>() {
+    fn test_invalid_regex_pattern<T: StringArrayTestType>() {
         let strings = T::from_strings(vec!["test"]);
         let patterns = T::from_strings(vec!["["]);  // Invalid regex - unclosed bracket
         let groups = Int64Array::from(vec![1]);
@@ -496,115 +505,31 @@ mod tests {
         assert!(result.is_err());  // Should return an error for invalid regex
     }
 
-    // Test all three string types - Basic extraction tests
-    #[test]
-    fn test_basic_extraction_utf8() {
-        test_basic_extraction_generic::<Utf8TestType>();
+    macro_rules! test_for_all_types {
+        ($modname:ident, $generic:ident) => {
+            mod $modname {
+                use super::*;
+                #[test]
+                fn utf8() { $generic::<Utf8TestType>(); }
+                #[test]
+                fn large_utf8() { $generic::<LargeUtf8TestType>(); }
+                #[test]
+                fn utf8_view() { $generic::<Utf8ViewTestType>(); }
+            }
+        };
     }
 
-    #[test]
-    fn test_basic_extraction_large_utf8() {
-        test_basic_extraction_generic::<LargeUtf8TestType>();
-    }
+    test_for_all_types!(basic_extraction, test_basic_extraction);
 
-    #[test]
-    fn test_basic_extraction_utf8_view() {
-        test_basic_extraction_generic::<Utf8ViewTestType>();
-    }
+    test_for_all_types!(group_zero_full_match, test_group_zero_full_match);
 
-    // Test all three string types - Group zero (full match) tests
-    #[test]
-    fn test_group_zero_full_match_utf8() {
-        test_group_zero_full_match_generic::<Utf8TestType>();
-    }
+    test_for_all_types!(invalid_group_index, test_invalid_group_index);
 
-    #[test]
-    fn test_group_zero_full_match_large_utf8() {
-        test_group_zero_full_match_generic::<LargeUtf8TestType>();
-    }
+    test_for_all_types!(null_values, test_null_values);
 
-    #[test]
-    fn test_group_zero_full_match_utf8_view() {
-        test_group_zero_full_match_generic::<Utf8ViewTestType>();
-    }
+    test_for_all_types!(complex_regex_patterns, test_complex_regex_patterns);
 
-    // Test all three string types - Invalid group index tests
-    #[test]
-    fn test_invalid_group_index_utf8() {
-        test_invalid_group_index_generic::<Utf8TestType>();
-    }
+    test_for_all_types!(empty_string_input, test_empty_string_input);
 
-    #[test]
-    fn test_invalid_group_index_large_utf8() {
-        test_invalid_group_index_generic::<LargeUtf8TestType>();
-    }
-
-    #[test]
-    fn test_invalid_group_index_utf8_view() {
-        test_invalid_group_index_generic::<Utf8ViewTestType>();
-    }
-
-    // Test all three string types - Null values tests
-    #[test]
-    fn test_null_values_utf8() {
-        test_null_values_generic::<Utf8TestType>();
-    }
-
-    #[test]
-    fn test_null_values_large_utf8() {
-        test_null_values_generic::<LargeUtf8TestType>();
-    }
-
-    #[test]
-    fn test_null_values_utf8_view() {
-        test_null_values_generic::<Utf8ViewTestType>();
-    }
-
-    // Test all three string types - Complex regex patterns tests
-    #[test]
-    fn test_complex_regex_patterns_utf8() {
-        test_complex_regex_patterns_generic::<Utf8TestType>();
-    }
-
-    #[test]
-    fn test_complex_regex_patterns_large_utf8() {
-        test_complex_regex_patterns_generic::<LargeUtf8TestType>();
-    }
-
-    #[test]
-    fn test_complex_regex_patterns_utf8_view() {
-        test_complex_regex_patterns_generic::<Utf8ViewTestType>();
-    }
-
-    // Test all three string types - Empty string input tests
-    #[test]
-    fn test_empty_string_input_utf8() {
-        test_empty_string_input_generic::<Utf8TestType>();
-    }
-
-    #[test]
-    fn test_empty_string_input_large_utf8() {
-        test_empty_string_input_generic::<LargeUtf8TestType>();
-    }
-
-    #[test]
-    fn test_empty_string_input_utf8_view() {
-        test_empty_string_input_generic::<Utf8ViewTestType>();
-    }
-
-    // Test all three string types - Invalid regex pattern tests
-    #[test]
-    fn test_invalid_regex_pattern_utf8() {
-        test_invalid_regex_pattern_generic::<Utf8TestType>();
-    }
-
-    #[test]
-    fn test_invalid_regex_pattern_large_utf8() {
-        test_invalid_regex_pattern_generic::<LargeUtf8TestType>();
-    }
-
-    #[test]
-    fn test_invalid_regex_pattern_utf8_view() {
-        test_invalid_regex_pattern_generic::<Utf8ViewTestType>();
-    }
+    test_for_all_types!(invalid_regex_pattern, test_invalid_regex_pattern);
 }
