@@ -249,7 +249,7 @@ impl ExecutionPlan for ProjectionExec {
         Ok(stats_projection(
             input_stats,
             self.expr.iter().map(|(e, _)| Arc::clone(e)),
-            Arc::clone(&self.schema),
+            Arc::clone(&self.input.schema()),
         ))
     }
 
