@@ -1662,20 +1662,20 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
             // expr IN () --> false
             // expr NOT IN () --> true
             Expr::InList(InList {
-                expr,
+                expr: _,
                 list,
                 negated,
-            }) if list.is_empty() && *expr != Expr::Literal(ScalarValue::Null, None) => {
-                Transformed::yes(lit(negated))
-            }
+            }) if list.is_empty() => Transformed::yes(lit(negated)),
 
             // null in (x, y, z) --> null
             // null not in (x, y, z) --> null
             Expr::InList(InList {
                 expr,
-                list: _,
+                list,
                 negated: _,
-            }) if is_null(expr.as_ref()) => Transformed::yes(lit_bool_null()),
+            }) if is_null(expr.as_ref()) && !list.is_empty() => {
+                Transformed::yes(lit_bool_null())
+            }
 
             // expr IN ((subquery)) -> expr IN (subquery), see ##5529
             Expr::InList(InList {
@@ -3946,6 +3946,56 @@ mod tests {
         // https://github.com/apache/datafusion/issues/8970
         // assert_eq!(simplify(expr.clone()), lit(true));
         assert_eq!(simplify(expr.clone()), expr);
+    }
+
+    #[test]
+    fn simplify_null_in_empty_inlist() {
+        // `NULL::boolean IN ()` == `NULL::boolean IN (SELECT foo FROM empty)` == false
+        let expr = in_list(lit_bool_null(), vec![], false);
+        assert_eq!(simplify(expr), lit(false));
+
+        // `NULL::boolean NOT IN ()` == `NULL::boolean NOT IN (SELECT foo FROM empty)` == true
+        let expr = in_list(lit_bool_null(), vec![], true);
+        assert_eq!(simplify(expr), lit(true));
+
+        // `NULL IN ()` == `NULL IN (SELECT foo FROM empty)` == false
+        let null_null = || Expr::Literal(ScalarValue::Null, None);
+        let expr = in_list(null_null(), vec![], false);
+        assert_eq!(simplify(expr), lit(false));
+
+        // `NULL NOT IN ()` == `NULL NOT IN (SELECT foo FROM empty)` == true
+        let expr = in_list(null_null(), vec![], true);
+        assert_eq!(simplify(expr), lit(true));
+    }
+
+    #[test]
+    fn just_simplifier_simplify_null_in_empty_inlist() {
+        let simplify = |expr: Expr| -> Expr {
+            let schema = expr_test_schema();
+            let execution_props = ExecutionProps::new();
+            let info = SimplifyContext::new(&execution_props).with_schema(schema);
+            let simplifier = &mut Simplifier::new(&info);
+            expr.rewrite(simplifier)
+                .expect("Failed to simplify expression")
+                .data
+        };
+
+        // `NULL::boolean IN ()` == `NULL::boolean IN (SELECT foo FROM empty)` == false
+        let expr = in_list(lit_bool_null(), vec![], false);
+        assert_eq!(simplify(expr), lit(false));
+
+        // `NULL::boolean NOT IN ()` == `NULL::boolean NOT IN (SELECT foo FROM empty)` == true
+        let expr = in_list(lit_bool_null(), vec![], true);
+        assert_eq!(simplify(expr), lit(true));
+
+        // `NULL IN ()` == `NULL IN (SELECT foo FROM empty)` == false
+        let null_null = || Expr::Literal(ScalarValue::Null, None);
+        let expr = in_list(null_null(), vec![], false);
+        assert_eq!(simplify(expr), lit(false));
+
+        // `NULL NOT IN ()` == `NULL NOT IN (SELECT foo FROM empty)` == true
+        let expr = in_list(null_null(), vec![], true);
+        assert_eq!(simplify(expr), lit(true));
     }
 
     #[test]
