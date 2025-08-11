@@ -379,39 +379,18 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + DynEq + DynHash {
     }
 }
 
-/// [`PhysicalExpr`] can't be constrained by [`Eq`] directly because it must remain object
-/// safe. To ease implementation, blanket implementation is provided for [`Eq`] types.
-pub trait DynEq {
-    fn dyn_eq(&self, other: &dyn Any) -> bool;
-}
-
-impl<T: Eq + Any> DynEq for T {
-    fn dyn_eq(&self, other: &dyn Any) -> bool {
-        other.downcast_ref::<Self>() == Some(self)
-    }
-}
+#[deprecated(
+    since = "50.0.0",
+    note = "Use `datafusion_expr_common::dyn_eq` instead"
+)]
+pub use datafusion_expr_common::dyn_eq::{DynEq, DynHash};
 
 impl PartialEq for dyn PhysicalExpr {
     fn eq(&self, other: &Self) -> bool {
         self.dyn_eq(other.as_any())
     }
 }
-
 impl Eq for dyn PhysicalExpr {}
-
-/// [`PhysicalExpr`] can't be constrained by [`Hash`] directly because it must remain
-/// object safe. To ease implementation blanket implementation is provided for [`Hash`]
-/// types.
-pub trait DynHash {
-    fn dyn_hash(&self, _state: &mut dyn Hasher);
-}
-
-impl<T: Hash + Any> DynHash for T {
-    fn dyn_hash(&self, mut state: &mut dyn Hasher) {
-        self.type_id().hash(&mut state);
-        self.hash(&mut state)
-    }
-}
 
 impl Hash for dyn PhysicalExpr {
     fn hash<H: Hasher>(&self, state: &mut H) {

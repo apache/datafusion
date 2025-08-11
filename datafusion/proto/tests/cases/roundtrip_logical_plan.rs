@@ -2496,7 +2496,7 @@ fn roundtrip_window() {
         }
     }
 
-    #[derive(Debug, Clone)]
+    #[derive(Debug, Clone, PartialEq, Eq, Hash)]
     struct SimpleWindowUDF {
         signature: Signature,
     }
