@@ -16,6 +16,11 @@
 // under the License.
 
 //! Regex expressions - regexp_extract function
+
+//! This file was created by AI(Claude 3.5 Sonnet) and was reviewed by a human (@pikerpoler)
+//! all human-made changes have a comment explaining the change, and are marked with #HUMAN-MADE
+
+
 use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -85,6 +90,9 @@ impl RegexpExtractFunc {
         Self {
             signature: Signature::one_of(
                 vec![
+                    // #HUMAN-MADE: the initial solution tried to support group indexes of both Int32 and Int64, which resulted in code duplication.
+                    //              by coercing the group index to Int64, we can use the same code path for both Int32 and Int64.
+                    
                     // Planner attempts coercion to the target type starting with the most preferred candidate.
                     TypeSignature::Exact(vec![Utf8View, Utf8View, Int64]),
                     TypeSignature::Exact(vec![Utf8, Utf8, Int64]),
