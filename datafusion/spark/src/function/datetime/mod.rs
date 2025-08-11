@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+pub mod date_add;
+pub mod date_sub;
 pub mod last_day;
 pub mod next_day;
 
@@ -22,12 +24,24 @@ use datafusion_expr::ScalarUDF;
 use datafusion_functions::make_udf_function;
 use std::sync::Arc;
 
+make_udf_function!(date_add::SparkDateAdd, date_add);
+make_udf_function!(date_sub::SparkDateSub, date_sub);
 make_udf_function!(last_day::SparkLastDay, last_day);
 make_udf_function!(next_day::SparkNextDay, next_day);
 
 pub mod expr_fn {
     use datafusion_functions::export_functions;
 
+    export_functions!((
+        date_add,
+        "Returns the date that is days days after start. The function returns NULL if at least one of the input parameters is NULL.",
+        arg1 arg2
+    ));
+    export_functions!((
+        date_sub,
+        "Returns the date that is days days before start. The function returns NULL if at least one of the input parameters is NULL.",
+        arg1 arg2
+    ));
     export_functions!((
         last_day,
         "Returns the last day of the month which the date belongs to.",
@@ -43,5 +57,5 @@ pub mod expr_fn {
 }
 
 pub fn functions() -> Vec<Arc<ScalarUDF>> {
-    vec![last_day(), next_day()]
+    vec![date_add(), date_sub(), last_day(), next_day()]
 }
