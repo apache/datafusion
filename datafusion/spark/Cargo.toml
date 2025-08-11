@@ -48,6 +48,9 @@ datafusion-functions = { workspace = true, features = ["crypto_expressions"] }
 datafusion-macros = { workspace = true }
 log = { workspace = true }
 sha1 = "0.10"
+# XXH3 and XXHash64 are two different algorithms. 
+# The xxhash-rust crate only implements XXH3, whose results differ from Spark. 
+# Therefore, twox-hash is introduced.
 twox-hash = "2.1.1"
 url = { workspace = true }
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
