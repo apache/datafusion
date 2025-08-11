@@ -308,12 +308,113 @@ fn regexp_extract_string_view_impl(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{Int64Array, StringArray};
+    use arrow::array::{Int64Array, StringArray, LargeStringArray, StringViewArray};
 
-    #[test]
-    fn test_basic_extraction() {
-        let strings = StringArray::from(vec!["100-200", "foo123bar", "no-match"]);
-        let patterns = StringArray::from(vec![r"(\d+)-(\d+)", r"([a-z]+)(\d+)([a-z]+)", r"(\d+)"]);
+    // HUMAN-MADE: I opted to test all three string types.
+    // to avoid code duplication, I created a trait that abstracts over the different string array types.
+
+    // Trait to abstract over different string array types for testing
+    trait StringArrayTestType: 'static {
+        type ArrayType: Array + 'static;
+        
+        // Create array from string slice
+        fn from_strings(values: Vec<&str>) -> Self::ArrayType;
+        
+        // Create array from optional string slice (supports nulls)
+        fn from_optional_strings(values: Vec<Option<&str>>) -> Self::ArrayType;
+        
+        // Downcast result to correct type for assertions
+        fn downcast_result(result: &ArrayRef) -> Option<&Self::ArrayType>;
+        
+        // Get string value at index
+        fn get_value(array: &Self::ArrayType, index: usize) -> &str;
+        
+        // Check if value at index is null
+        fn is_null(array: &Self::ArrayType, index: usize) -> bool;
+    }
+
+    // Implement for Utf8 (StringArray)
+    struct Utf8TestType;
+    impl StringArrayTestType for Utf8TestType {
+        type ArrayType = StringArray;
+        
+        fn from_strings(values: Vec<&str>) -> Self::ArrayType {
+            StringArray::from(values)
+        }
+        
+        fn from_optional_strings(values: Vec<Option<&str>>) -> Self::ArrayType {
+            StringArray::from(values)
+        }
+        
+        fn downcast_result(result: &ArrayRef) -> Option<&Self::ArrayType> {
+            result.as_any().downcast_ref::<StringArray>()
+        }
+        
+        fn get_value(array: &Self::ArrayType, index: usize) -> &str {
+            array.value(index)
+        }
+        
+        fn is_null(array: &Self::ArrayType, index: usize) -> bool {
+            array.is_null(index)
+        }
+    }
+
+    // Implement for LargeUtf8 (LargeStringArray)
+    struct LargeUtf8TestType;
+    impl StringArrayTestType for LargeUtf8TestType {
+        type ArrayType = LargeStringArray;
+        
+        fn from_strings(values: Vec<&str>) -> Self::ArrayType {
+            LargeStringArray::from(values)
+        }
+        
+        fn from_optional_strings(values: Vec<Option<&str>>) -> Self::ArrayType {
+            LargeStringArray::from(values)
+        }
+        
+        fn downcast_result(result: &ArrayRef) -> Option<&Self::ArrayType> {
+            result.as_any().downcast_ref::<LargeStringArray>()
+        }
+        
+        fn get_value(array: &Self::ArrayType, index: usize) -> &str {
+            array.value(index)
+        }
+        
+        fn is_null(array: &Self::ArrayType, index: usize) -> bool {
+            array.is_null(index)
+        }
+    }
+
+    // Implement for Utf8View (StringViewArray)
+    struct Utf8ViewTestType;
+    impl StringArrayTestType for Utf8ViewTestType {
+        type ArrayType = StringViewArray;
+        
+        fn from_strings(values: Vec<&str>) -> Self::ArrayType {
+            StringViewArray::from(values)
+        }
+        
+        fn from_optional_strings(values: Vec<Option<&str>>) -> Self::ArrayType {
+            StringViewArray::from(values)
+        }
+        
+        fn downcast_result(result: &ArrayRef) -> Option<&Self::ArrayType> {
+            result.as_any().downcast_ref::<StringViewArray>()
+        }
+        
+        fn get_value(array: &Self::ArrayType, index: usize) -> &str {
+            array.value(index)
+        }
+        
+        fn is_null(array: &Self::ArrayType, index: usize) -> bool {
+            array.is_null(index)
+        }
+    }
+
+    // Generic test functions
+    fn test_basic_extraction_generic<T: StringArrayTestType>() {
+        let strings = T::from_strings(vec!["100-200", "foo123bar", "no-match"]);
+        let patterns = T::from_strings(vec![r"(\d+)-(\d+)", r"([a-z]+)(\d+)([a-z]+)", r"(\d+)"]);
         let groups = Int64Array::from(vec![1, 2, 1]);
 
         let result = regexp_extract(&[
@@ -323,16 +424,15 @@ mod tests {
         ])
         .unwrap();
 
-        let result = result.as_any().downcast_ref::<StringArray>().unwrap();
-        assert_eq!(result.value(0), "100");  // First capture group from "100-200"
-        assert_eq!(result.value(1), "123");  // Second capture group from "foo123bar"
-        assert_eq!(result.value(2), "");     // No match for pattern (\d+) in "no-match"
+        let result = T::downcast_result(&result).expect("Failed to downcast result");
+        assert_eq!(T::get_value(result, 0), "100");  // First capture group from "100-200"
+        assert_eq!(T::get_value(result, 1), "123");  // Second capture group from "foo123bar"
+        assert_eq!(T::get_value(result, 2), "");     // No match for pattern (\d+) in "no-match"
     }
 
-    #[test]
-    fn test_group_zero_full_match() {
-        let strings = StringArray::from(vec!["100-200", "abc123"]);
-        let patterns = StringArray::from(vec![r"\d+-\d+", r"[a-z]+\d+"]);
+    fn test_group_zero_full_match_generic<T: StringArrayTestType>() {
+        let strings = T::from_strings(vec!["100-200", "abc123"]);
+        let patterns = T::from_strings(vec![r"\d+-\d+", r"[a-z]+\d+"]);
         let groups = Int64Array::from(vec![0, 0]);
 
         let result = regexp_extract(&[
@@ -342,15 +442,14 @@ mod tests {
         ])
         .unwrap();
 
-        let result = result.as_any().downcast_ref::<StringArray>().unwrap();
-        assert_eq!(result.value(0), "100-200");  // Full match
-        assert_eq!(result.value(1), "abc123");   // Full match
+        let result = T::downcast_result(&result).expect("Failed to downcast result");
+        assert_eq!(T::get_value(result, 0), "100-200");  // Full match
+        assert_eq!(T::get_value(result, 1), "abc123");   // Full match
     }
 
-    #[test]
-    fn test_invalid_group_index() {
-        let strings = StringArray::from(vec!["100-200", "abc123"]);
-        let patterns = StringArray::from(vec![r"(\d+)-(\d+)", r"([a-z]+)(\d+)"]);
+    fn test_invalid_group_index_generic<T: StringArrayTestType>() {
+        let strings = T::from_strings(vec!["100-200", "abc123"]);
+        let patterns = T::from_strings(vec![r"(\d+)-(\d+)", r"([a-z]+)(\d+)"]);
         let groups = Int64Array::from(vec![5, -1]);  // Group 5 doesn't exist, group -1 is negative
 
         let result = regexp_extract(&[
@@ -360,15 +459,14 @@ mod tests {
         ])
         .unwrap();
 
-        let result = result.as_any().downcast_ref::<StringArray>().unwrap();
-        assert_eq!(result.value(0), "");  // Group 5 doesn't exist
-        assert_eq!(result.value(1), "");  // Negative group index
+        let result = T::downcast_result(&result).expect("Failed to downcast result");
+        assert_eq!(T::get_value(result, 0), "");  // Group 5 doesn't exist
+        assert_eq!(T::get_value(result, 1), "");  // Negative group index
     }
 
-    #[test]
-    fn test_null_values() {
-        let strings = StringArray::from(vec![Some("100-200"), None, Some("abc123")]);
-        let patterns = StringArray::from(vec![Some(r"(\d+)-(\d+)"), Some(r"(\d+)"), None]);
+    fn test_null_values_generic<T: StringArrayTestType>() {
+        let strings = T::from_optional_strings(vec![Some("100-200"), None, Some("abc123")]);
+        let patterns = T::from_optional_strings(vec![Some(r"(\d+)-(\d+)"), Some(r"(\d+)"), None]);
         let groups = Int64Array::from(vec![Some(1), Some(1), Some(1)]);
 
         let result = regexp_extract(&[
@@ -378,20 +476,19 @@ mod tests {
         ])
         .unwrap();
 
-        let result = result.as_any().downcast_ref::<StringArray>().unwrap();
-        assert_eq!(result.value(0), "100");  // Valid extraction
-        assert!(result.is_null(1));          // Null string input
-        assert!(result.is_null(2));          // Null pattern input
+        let result = T::downcast_result(&result).expect("Failed to downcast result");
+        assert_eq!(T::get_value(result, 0), "100");  // Valid extraction
+        assert!(T::is_null(result, 1));              // Null string input
+        assert!(T::is_null(result, 2));              // Null pattern input
     }
 
-    #[test]
-    fn test_complex_regex_patterns() {
-        let strings = StringArray::from(vec![
+    fn test_complex_regex_patterns_generic<T: StringArrayTestType>() {
+        let strings = T::from_strings(vec![
             "user@example.com",
             "phone: (123) 456-7890",
             "Price: $99.99"
         ]);
-        let patterns = StringArray::from(vec![
+        let patterns = T::from_strings(vec![
             r"([^@]+)@([^.]+)\.(.+)",    // Email parts
             r"phone: \((\d+)\) (\d+)-(\d+)", // Phone number parts
             r"Price: \$(\d+)\.(\d+)"     // Price parts
@@ -405,16 +502,15 @@ mod tests {
         ])
         .unwrap();
 
-        let result = result.as_any().downcast_ref::<StringArray>().unwrap();
-        assert_eq!(result.value(0), "example");  // Domain name without TLD
-        assert_eq!(result.value(1), "456");      // Middle part of phone number
-        assert_eq!(result.value(2), "99");       // Dollar amount
+        let result = T::downcast_result(&result).expect("Failed to downcast result");
+        assert_eq!(T::get_value(result, 0), "example");  // Domain name without TLD
+        assert_eq!(T::get_value(result, 1), "456");      // Middle part of phone number
+        assert_eq!(T::get_value(result, 2), "99");       // Dollar amount
     }
 
-    #[test]
-    fn test_empty_string_input() {
-        let strings = StringArray::from(vec![""]);
-        let patterns = StringArray::from(vec![r"(\d+)"]);
+    fn test_empty_string_input_generic<T: StringArrayTestType>() {
+        let strings = T::from_strings(vec![""]);
+        let patterns = T::from_strings(vec![r"(\d+)"]);
         let groups = Int64Array::from(vec![1]);
 
         let result = regexp_extract(&[
@@ -424,14 +520,13 @@ mod tests {
         ])
         .unwrap();
 
-        let result = result.as_any().downcast_ref::<StringArray>().unwrap();
-        assert_eq!(result.value(0), "");  // No match in empty string
+        let result = T::downcast_result(&result).expect("Failed to downcast result");
+        assert_eq!(T::get_value(result, 0), "");  // No match in empty string
     }
 
-    #[test]
-    fn test_invalid_regex_pattern() {
-        let strings = StringArray::from(vec!["test"]);
-        let patterns = StringArray::from(vec!["["]);  // Invalid regex - unclosed bracket
+    fn test_invalid_regex_pattern_generic<T: StringArrayTestType>() {
+        let strings = T::from_strings(vec!["test"]);
+        let patterns = T::from_strings(vec!["["]);  // Invalid regex - unclosed bracket
         let groups = Int64Array::from(vec![1]);
 
         let result = regexp_extract(&[
@@ -441,5 +536,117 @@ mod tests {
         ]);
 
         assert!(result.is_err());  // Should return an error for invalid regex
+    }
+
+    // Test all three string types - Basic extraction tests
+    #[test]
+    fn test_basic_extraction_utf8() {
+        test_basic_extraction_generic::<Utf8TestType>();
+    }
+
+    #[test]
+    fn test_basic_extraction_large_utf8() {
+        test_basic_extraction_generic::<LargeUtf8TestType>();
+    }
+
+    #[test]
+    fn test_basic_extraction_utf8_view() {
+        test_basic_extraction_generic::<Utf8ViewTestType>();
+    }
+
+    // Test all three string types - Group zero (full match) tests
+    #[test]
+    fn test_group_zero_full_match_utf8() {
+        test_group_zero_full_match_generic::<Utf8TestType>();
+    }
+
+    #[test]
+    fn test_group_zero_full_match_large_utf8() {
+        test_group_zero_full_match_generic::<LargeUtf8TestType>();
+    }
+
+    #[test]
+    fn test_group_zero_full_match_utf8_view() {
+        test_group_zero_full_match_generic::<Utf8ViewTestType>();
+    }
+
+    // Test all three string types - Invalid group index tests
+    #[test]
+    fn test_invalid_group_index_utf8() {
+        test_invalid_group_index_generic::<Utf8TestType>();
+    }
+
+    #[test]
+    fn test_invalid_group_index_large_utf8() {
+        test_invalid_group_index_generic::<LargeUtf8TestType>();
+    }
+
+    #[test]
+    fn test_invalid_group_index_utf8_view() {
+        test_invalid_group_index_generic::<Utf8ViewTestType>();
+    }
+
+    // Test all three string types - Null values tests
+    #[test]
+    fn test_null_values_utf8() {
+        test_null_values_generic::<Utf8TestType>();
+    }
+
+    #[test]
+    fn test_null_values_large_utf8() {
+        test_null_values_generic::<LargeUtf8TestType>();
+    }
+
+    #[test]
+    fn test_null_values_utf8_view() {
+        test_null_values_generic::<Utf8ViewTestType>();
+    }
+
+    // Test all three string types - Complex regex patterns tests
+    #[test]
+    fn test_complex_regex_patterns_utf8() {
+        test_complex_regex_patterns_generic::<Utf8TestType>();
+    }
+
+    #[test]
+    fn test_complex_regex_patterns_large_utf8() {
+        test_complex_regex_patterns_generic::<LargeUtf8TestType>();
+    }
+
+    #[test]
+    fn test_complex_regex_patterns_utf8_view() {
+        test_complex_regex_patterns_generic::<Utf8ViewTestType>();
+    }
+
+    // Test all three string types - Empty string input tests
+    #[test]
+    fn test_empty_string_input_utf8() {
+        test_empty_string_input_generic::<Utf8TestType>();
+    }
+
+    #[test]
+    fn test_empty_string_input_large_utf8() {
+        test_empty_string_input_generic::<LargeUtf8TestType>();
+    }
+
+    #[test]
+    fn test_empty_string_input_utf8_view() {
+        test_empty_string_input_generic::<Utf8ViewTestType>();
+    }
+
+    // Test all three string types - Invalid regex pattern tests
+    #[test]
+    fn test_invalid_regex_pattern_utf8() {
+        test_invalid_regex_pattern_generic::<Utf8TestType>();
+    }
+
+    #[test]
+    fn test_invalid_regex_pattern_large_utf8() {
+        test_invalid_regex_pattern_generic::<LargeUtf8TestType>();
+    }
+
+    #[test]
+    fn test_invalid_regex_pattern_utf8_view() {
+        test_invalid_regex_pattern_generic::<Utf8ViewTestType>();
     }
 }
