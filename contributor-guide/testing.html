@@ -704,19 +704,16 @@ cargo<span class="w"> </span>insta<span class="w"> </span>review
 <section id="extended-tests">
 <h2>Extended Tests<a class="headerlink" href="#extended-tests" title="Link to this heading">¶</a></h2>
 <p>In addition to the standard CI test suite that is run on all PRs prior to merge,
-DataFusion has “extended” tests (defined in <a class="reference external" href="https://github.com/apache/datafusion/blob/main/.github/workflows/extended.yml">extended.yml</a>) that are run on each
+DataFusion has “extended” tests (defined in [extended.yml]) that are run on each
 commit to <code class="docutils literal notranslate"><span class="pre">main</span></code>. These tests rarely fail but take significantly longer to run
-than the standard test suite and add important test coverage such as that the
-code works when there are hash collisions as well as running the relevant
-portions of the entire <a class="reference external" href="https://www.sqlite.org/sqllogictest/dir?ci=tip">sqlite test suite</a>.</p>
-<p>You can run the extended tests on any PR by leaving the following comment (see <a class="reference external" href="https://github.com/apache/datafusion/pull/15427#issuecomment-2759160812">example here</a>):</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">Run</span> <span class="n">extended</span> <span class="n">tests</span>
-</pre></div>
-</div>
+than the standard test suite and add important test coverage such as ensuring
+correctness when there are hash collisions and running the relevant portions of
+the entire <a class="reference external" href="https://www.sqlite.org/sqllogictest/dir?ci=tip">sqlite test suite</a>. You can run the extended tests
+locally by following the <a class="reference external" href="https://github.com/apache/datafusion/tree/main/datafusion/sqllogictest#running-tests-sqlite">instructions in the documentation</a>.</p>
 </section>
 <section id="rust-integration-tests">
 <h2>Rust Integration Tests<a class="headerlink" href="#rust-integration-tests" title="Link to this heading">¶</a></h2>
-<p>There are several tests of the public interface of the DataFusion library in the <a class="reference external" href="https://github.com/apache/datafusion/tree/main/datafusion/core/tests">tests</a> directory.</p>
+<p>There are several public interface tests for the DataFusion library in the <a class="reference external" href="https://github.com/apache/datafusion/tree/main/datafusion/core/tests">tests</a> directory.</p>
 <p>You can run these tests individually using <code class="docutils literal notranslate"><span class="pre">cargo</span></code> as normal command such as</p>
 <div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>cargo<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-p<span class="w"> </span>datafusion<span class="w"> </span>--test<span class="w"> </span>parquet_exec
 </pre></div>
