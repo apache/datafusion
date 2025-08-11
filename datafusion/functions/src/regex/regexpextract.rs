@@ -239,7 +239,14 @@ where
             unique_patterns.insert(pattern);
         }
     }
-
+    /*
+    #HUMAN-MADE:
+    after a few tries for parallelization, which all increased the execution time, I went for a different approach.
+    analyzing benchmark results, I found that precompiling the patterns added only a small amount of time to the overall execution time. (600 µs -> 650 µs)
+    the precompilation took around 400 µs and the main loop took around 200 µs.
+    at this point, parallization was worth it even just for the precompilation. (650 µs -> 470 µs)
+    after some more tweaking, I managed to optimize the serial part even further and get an overall execution time of 300 µs.
+    */
     // Pre-compile all unique patterns (in parallel)
     let unique_patterns: Vec<&str> = unique_patterns.into_iter().collect();
     let mut compiled_patterns: HashMap<&str, Regex> = HashMap::with_capacity(unique_patterns.len());
@@ -248,13 +255,7 @@ where
         let available = thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
         let num_threads = available.min(unique_patterns.len());
         let chunk_size = (unique_patterns.len() + num_threads - 1) / num_threads;
-        /*
-        #HUMAN-MADE:
-        after a few tries for parallelization, which all increased the execution time, I went for a different approach.
-        analyzing benchmark results, I found that precompiling the patterns added only a small amount of time to the overall execution time. (600 us -> 650 us)
-        the precompilation took around 400 us and the main loop took around 200 us.
-        at this point, parallization was worth it even just for the precompilation. (650 us -> 470 us)
-         */
+
         // Collect compiled outputs from threads
         let mut compiled_pairs: Vec<(&str, Regex)> = Vec::with_capacity(unique_patterns.len());
         let mut thread_error: Option<datafusion_common::DataFusionError> = None;
@@ -300,11 +301,14 @@ where
         }
     }
 
-    let mut results: Vec<Option<String>> = Vec::with_capacity(string_array.len());
 
+    /*
+    #HUMAN-MADE:
+    this might be wrong for larger inputs, but at this point, I opted to not parallelize the main loop.
+     */
+    let mut results: Vec<Option<String>> = Vec::with_capacity(string_array.len());
     let string_iter = string_array.into_iter();
     let pattern_iter = pattern_array.into_iter();
-
     for ((string_value, pattern_value), group_value) in string_iter.zip(pattern_iter).zip(group_array.iter()) {
         let result = match (string_value, pattern_value, group_value) {
             (Some(string), Some(pattern), Some(group)) => {
@@ -312,29 +316,23 @@ where
                     Some(String::new())
                 } else {
                     let group_idx = group as usize;
-
-                    // Look up the pre-compiled regex
                     let regex = compiled_patterns.get(pattern).expect("Pattern should be pre-compiled");
-
-                    match regex.captures(string) {
-                        Some(captures) => {
-                            if let Some(matched_group) = captures.get(group_idx) {
-                                Some(matched_group.as_str().to_string())
-                            } else {
-                                Some(String::new())
-                            }
+                    if group_idx >= regex.captures_len() { Some(String::new()) } else {
+                        match regex.captures(string) {
+                            Some(captures) => captures.get(group_idx)
+                                .map(|m| m.as_str().to_string())
+                                .or_else(|| Some(String::new())),
+                            None => Some(String::new()),
                         }
-                        None => Some(String::new()),
                     }
                 }
             }
             _ => None,
         };
-
         results.push(result);
     }
-
-    Ok(build_array(results))
+    return Ok(build_array(results));
+    
 }
 
 #[cfg(test)]
