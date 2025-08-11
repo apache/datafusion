@@ -20,14 +20,13 @@
 //! This file was created by AI(Claude 3.5 Sonnet) and was reviewed by a human (@pikerpoler)
 //! all design and implementation dilemas are accompanied by human-made comments and are marked with #HUMAN-MADE
 
-
 use std::any::Any;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::thread;
 
 use arrow::array::{
-    Array, ArrayRef, AsArray, Int64Array, GenericStringArray, StringViewArray,
+    Array, ArrayRef, AsArray, GenericStringArray, Int64Array, StringViewArray,
 };
 use arrow::datatypes::DataType;
 use datafusion_common::cast::as_int64_array;
@@ -36,8 +35,6 @@ use datafusion_expr::{ColumnarValue, Documentation, TypeSignature};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
 use regex::Regex;
-
-
 
 #[user_doc(
     doc_section(label = "Regular Expression Functions"),
@@ -93,12 +90,11 @@ impl RegexpExtractFunc {
         Self {
             signature: Signature::one_of(
                 vec![
-                    /* 
+                    /*
                     #HUMAN-MADE:
                     the initial solution tried to support group indexes of both Int32 and Int64, which resulted in code duplication.
                     by coercing the group index to Int64, we can use the same code path for both Int32 and Int64.
                     */
-                    
                     // Planner attempts coercion to the target type starting with the most preferred candidate.
                     TypeSignature::Exact(vec![Utf8View, Utf8View, Int64]),
                     TypeSignature::Exact(vec![Utf8, Utf8, Int64]),
@@ -232,6 +228,59 @@ where
     for<'a> &'a S: IntoIterator<Item = Option<&'a str>>,
     F: FnOnce(Vec<Option<String>>) -> ArrayRef,
 {
+    /*
+    #HUMAN-MADE:
+    after a few tries for parallelization, which all increased the execution time, I went for a different approach.
+    analyzing benchmark results, I found that precompiling the patterns added only a small amount of time to the overall execution time. (600 µs -> 650 µs)
+    then I opted to paralelize only the precompilation, which sifnificantly improved performance (650 µs -> 470 µs)
+    after some more tweaking, I managed to optimize the serial part even further and get an overall execution time of 300 µs.
+    */
+    let compiled_patterns = precompile_patterns(pattern_array)?;
+
+    /*
+    #HUMAN-MADE:
+    this might be wrong for larger inputs, but at this point, I opted to not parallelize the main loop as any attempts to parallelize it resulted in regressions for the current benchmark size.
+     */
+    let mut results: Vec<Option<String>> = Vec::with_capacity(string_array.len());
+    let string_iter = string_array.into_iter();
+    let pattern_iter = pattern_array.into_iter();
+    for ((string_value, pattern_value), group_value) in
+        string_iter.zip(pattern_iter).zip(group_array.iter())
+    {
+        let result = match (string_value, pattern_value, group_value) {
+            (Some(string), Some(pattern), Some(group)) => {
+                if group < 0 {
+                    Some(String::new())
+                } else {
+                    let group_idx = group as usize;
+                    let regex = compiled_patterns
+                        .get(pattern)
+                        .expect("Pattern should be pre-compiled");
+                    if group_idx >= regex.captures_len() {
+                        Some(String::new())
+                    } else {
+                        match regex.captures(string) {
+                            Some(captures) => captures
+                                .get(group_idx)
+                                .map(|m| m.as_str().to_string())
+                                .or_else(|| Some(String::new())),
+                            None => Some(String::new()),
+                        }
+                    }
+                }
+            }
+            _ => None,
+        };
+        results.push(result);
+    }
+    return Ok(build_array(results));
+}
+
+fn precompile_patterns<'a, S>(pattern_array: &'a S) -> Result<HashMap<&'a str, Regex>>
+where
+    S: Array,
+    for<'b> &'b S: IntoIterator<Item = Option<&'b str>>,
+{
     // First pass: collect all unique patterns and pre-compile them
     let mut unique_patterns: HashSet<&str> = HashSet::new();
     for pattern_value in pattern_array.into_iter() {
@@ -239,25 +288,20 @@ where
             unique_patterns.insert(pattern);
         }
     }
-    /*
-    #HUMAN-MADE:
-    after a few tries for parallelization, which all increased the execution time, I went for a different approach.
-    analyzing benchmark results, I found that precompiling the patterns added only a small amount of time to the overall execution time. (600 µs -> 650 µs)
-    the precompilation took around 400 µs and the main loop took around 200 µs.
-    at this point, parallization was worth it even just for the precompilation. (650 µs -> 470 µs)
-    after some more tweaking, I managed to optimize the serial part even further and get an overall execution time of 300 µs.
-    */
-    // Pre-compile all unique patterns (in parallel)
     let unique_patterns: Vec<&str> = unique_patterns.into_iter().collect();
-    let mut compiled_patterns: HashMap<&str, Regex> = HashMap::with_capacity(unique_patterns.len());
+    let mut compiled_patterns: HashMap<&str, Regex> =
+        HashMap::with_capacity(unique_patterns.len());
 
     if !unique_patterns.is_empty() {
-        let available = thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
+        let available = thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1);
         let num_threads = available.min(unique_patterns.len());
         let chunk_size = (unique_patterns.len() + num_threads - 1) / num_threads;
 
         // Collect compiled outputs from threads
-        let mut compiled_pairs: Vec<(&str, Regex)> = Vec::with_capacity(unique_patterns.len());
+        let mut compiled_pairs: Vec<(&str, Regex)> =
+            Vec::with_capacity(unique_patterns.len());
         let mut thread_error: Option<datafusion_common::DataFusionError> = None;
 
         thread::scope(|scope| {
@@ -274,8 +318,12 @@ where
                 handles.push(scope.spawn(move || -> Result<Vec<(&str, Regex)>> {
                     let mut local: Vec<(&str, Regex)> = Vec::with_capacity(slice.len());
                     for &pattern in slice {
-                        let regex = super::compile_regex(pattern, None)
-                            .map_err(|e| datafusion_common::DataFusionError::ArrowError(Box::new(e), None))?;
+                        let regex = super::compile_regex(pattern, None).map_err(|e| {
+                            datafusion_common::DataFusionError::ArrowError(
+                                Box::new(e),
+                                None,
+                            )
+                        })?;
                         local.push((pattern, regex));
                     }
                     Ok(local)
@@ -301,44 +349,13 @@ where
         }
     }
 
-
-    /*
-    #HUMAN-MADE:
-    this might be wrong for larger inputs, but at this point, I opted to not parallelize the main loop.
-     */
-    let mut results: Vec<Option<String>> = Vec::with_capacity(string_array.len());
-    let string_iter = string_array.into_iter();
-    let pattern_iter = pattern_array.into_iter();
-    for ((string_value, pattern_value), group_value) in string_iter.zip(pattern_iter).zip(group_array.iter()) {
-        let result = match (string_value, pattern_value, group_value) {
-            (Some(string), Some(pattern), Some(group)) => {
-                if group < 0 {
-                    Some(String::new())
-                } else {
-                    let group_idx = group as usize;
-                    let regex = compiled_patterns.get(pattern).expect("Pattern should be pre-compiled");
-                    if group_idx >= regex.captures_len() { Some(String::new()) } else {
-                        match regex.captures(string) {
-                            Some(captures) => captures.get(group_idx)
-                                .map(|m| m.as_str().to_string())
-                                .or_else(|| Some(String::new())),
-                            None => Some(String::new()),
-                        }
-                    }
-                }
-            }
-            _ => None,
-        };
-        results.push(result);
-    }
-    return Ok(build_array(results));
-    
+    Ok(compiled_patterns)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{Int64Array, StringArray, LargeStringArray, StringViewArray};
+    use arrow::array::{Int64Array, LargeStringArray, StringArray, StringViewArray};
     /*
     #HUMAN-MADE:
     I opted to test all three string types.
@@ -350,19 +367,19 @@ mod tests {
     // Trait to abstract over different string array types for testing
     trait StringArrayTestType: 'static {
         type ArrayType: Array + 'static;
-        
+
         // Create array from string slice
         fn from_strings(values: Vec<&str>) -> Self::ArrayType;
-        
+
         // Create array from optional string slice (supports nulls)
         fn from_optional_strings(values: Vec<Option<&str>>) -> Self::ArrayType;
-        
+
         // Downcast result to correct type for assertions
         fn downcast_result(result: &ArrayRef) -> Option<&Self::ArrayType>;
-        
+
         // Get string value at index
         fn get_value(array: &Self::ArrayType, index: usize) -> &str;
-        
+
         // Check if value at index is null
         fn is_null(array: &Self::ArrayType, index: usize) -> bool;
     }
@@ -371,23 +388,23 @@ mod tests {
     struct Utf8TestType;
     impl StringArrayTestType for Utf8TestType {
         type ArrayType = StringArray;
-        
+
         fn from_strings(values: Vec<&str>) -> Self::ArrayType {
             StringArray::from(values)
         }
-        
+
         fn from_optional_strings(values: Vec<Option<&str>>) -> Self::ArrayType {
             StringArray::from(values)
         }
-        
+
         fn downcast_result(result: &ArrayRef) -> Option<&Self::ArrayType> {
             result.as_any().downcast_ref::<StringArray>()
         }
-        
+
         fn get_value(array: &Self::ArrayType, index: usize) -> &str {
             array.value(index)
         }
-        
+
         fn is_null(array: &Self::ArrayType, index: usize) -> bool {
             array.is_null(index)
         }
@@ -397,23 +414,23 @@ mod tests {
     struct LargeUtf8TestType;
     impl StringArrayTestType for LargeUtf8TestType {
         type ArrayType = LargeStringArray;
-        
+
         fn from_strings(values: Vec<&str>) -> Self::ArrayType {
             LargeStringArray::from(values)
         }
-        
+
         fn from_optional_strings(values: Vec<Option<&str>>) -> Self::ArrayType {
             LargeStringArray::from(values)
         }
-        
+
         fn downcast_result(result: &ArrayRef) -> Option<&Self::ArrayType> {
             result.as_any().downcast_ref::<LargeStringArray>()
         }
-        
+
         fn get_value(array: &Self::ArrayType, index: usize) -> &str {
             array.value(index)
         }
-        
+
         fn is_null(array: &Self::ArrayType, index: usize) -> bool {
             array.is_null(index)
         }
@@ -423,23 +440,23 @@ mod tests {
     struct Utf8ViewTestType;
     impl StringArrayTestType for Utf8ViewTestType {
         type ArrayType = StringViewArray;
-        
+
         fn from_strings(values: Vec<&str>) -> Self::ArrayType {
             StringViewArray::from(values)
         }
-        
+
         fn from_optional_strings(values: Vec<Option<&str>>) -> Self::ArrayType {
             StringViewArray::from(values)
         }
-        
+
         fn downcast_result(result: &ArrayRef) -> Option<&Self::ArrayType> {
             result.as_any().downcast_ref::<StringViewArray>()
         }
-        
+
         fn get_value(array: &Self::ArrayType, index: usize) -> &str {
             array.value(index)
         }
-        
+
         fn is_null(array: &Self::ArrayType, index: usize) -> bool {
             array.is_null(index)
         }
@@ -448,20 +465,18 @@ mod tests {
     // Generic test functions
     fn test_basic_extraction<T: StringArrayTestType>() {
         let strings = T::from_strings(vec!["100-200", "foo123bar", "no-match"]);
-        let patterns = T::from_strings(vec![r"(\d+)-(\d+)", r"([a-z]+)(\d+)([a-z]+)", r"(\d+)"]);
+        let patterns =
+            T::from_strings(vec![r"(\d+)-(\d+)", r"([a-z]+)(\d+)([a-z]+)", r"(\d+)"]);
         let groups = Int64Array::from(vec![1, 2, 1]);
 
-        let result = regexp_extract(&[
-            Arc::new(strings),
-            Arc::new(patterns),
-            Arc::new(groups),
-        ])
-        .unwrap();
+        let result =
+            regexp_extract(&[Arc::new(strings), Arc::new(patterns), Arc::new(groups)])
+                .unwrap();
 
         let result = T::downcast_result(&result).expect("Failed to downcast result");
-        assert_eq!(T::get_value(result, 0), "100");  // First capture group from "100-200"
-        assert_eq!(T::get_value(result, 1), "123");  // Second capture group from "foo123bar"
-        assert_eq!(T::get_value(result, 2), "");     // No match for pattern (\d+) in "no-match"
+        assert_eq!(T::get_value(result, 0), "100"); // First capture group from "100-200"
+        assert_eq!(T::get_value(result, 1), "123"); // Second capture group from "foo123bar"
+        assert_eq!(T::get_value(result, 2), ""); // No match for pattern (\d+) in "no-match"
     }
 
     fn test_group_zero_full_match<T: StringArrayTestType>() {
@@ -469,77 +484,67 @@ mod tests {
         let patterns = T::from_strings(vec![r"\d+-\d+", r"[a-z]+\d+"]);
         let groups = Int64Array::from(vec![0, 0]);
 
-        let result = regexp_extract(&[
-            Arc::new(strings),
-            Arc::new(patterns),
-            Arc::new(groups),
-        ])
-        .unwrap();
+        let result =
+            regexp_extract(&[Arc::new(strings), Arc::new(patterns), Arc::new(groups)])
+                .unwrap();
 
         let result = T::downcast_result(&result).expect("Failed to downcast result");
-        assert_eq!(T::get_value(result, 0), "100-200");  // Full match
-        assert_eq!(T::get_value(result, 1), "abc123");   // Full match
+        assert_eq!(T::get_value(result, 0), "100-200"); // Full match
+        assert_eq!(T::get_value(result, 1), "abc123"); // Full match
     }
 
     fn test_invalid_group_index<T: StringArrayTestType>() {
         let strings = T::from_strings(vec!["100-200", "abc123"]);
         let patterns = T::from_strings(vec![r"(\d+)-(\d+)", r"([a-z]+)(\d+)"]);
-        let groups = Int64Array::from(vec![5, -1]);  // Group 5 doesn't exist, group -1 is negative
+        let groups = Int64Array::from(vec![5, -1]); // Group 5 doesn't exist, group -1 is negative
 
-        let result = regexp_extract(&[
-            Arc::new(strings),
-            Arc::new(patterns),
-            Arc::new(groups),
-        ])
-        .unwrap();
+        let result =
+            regexp_extract(&[Arc::new(strings), Arc::new(patterns), Arc::new(groups)])
+                .unwrap();
 
         let result = T::downcast_result(&result).expect("Failed to downcast result");
-        assert_eq!(T::get_value(result, 0), "");  // Group 5 doesn't exist
-        assert_eq!(T::get_value(result, 1), "");  // Negative group index
+        assert_eq!(T::get_value(result, 0), ""); // Group 5 doesn't exist
+        assert_eq!(T::get_value(result, 1), ""); // Negative group index
     }
 
     fn test_null_values<T: StringArrayTestType>() {
-        let strings = T::from_optional_strings(vec![Some("100-200"), None, Some("abc123")]);
-        let patterns = T::from_optional_strings(vec![Some(r"(\d+)-(\d+)"), Some(r"(\d+)"), None]);
+        let strings =
+            T::from_optional_strings(vec![Some("100-200"), None, Some("abc123")]);
+        let patterns =
+            T::from_optional_strings(vec![Some(r"(\d+)-(\d+)"), Some(r"(\d+)"), None]);
         let groups = Int64Array::from(vec![Some(1), Some(1), Some(1)]);
 
-        let result = regexp_extract(&[
-            Arc::new(strings),
-            Arc::new(patterns),
-            Arc::new(groups),
-        ])
-        .unwrap();
+        let result =
+            regexp_extract(&[Arc::new(strings), Arc::new(patterns), Arc::new(groups)])
+                .unwrap();
 
         let result = T::downcast_result(&result).expect("Failed to downcast result");
-        assert_eq!(T::get_value(result, 0), "100");  // Valid extraction
-        assert!(T::is_null(result, 1));              // Null string input
-        assert!(T::is_null(result, 2));              // Null pattern input
+        assert_eq!(T::get_value(result, 0), "100"); // Valid extraction
+        assert!(T::is_null(result, 1)); // Null string input
+        assert!(T::is_null(result, 2)); // Null pattern input
     }
 
     fn test_complex_regex_patterns<T: StringArrayTestType>() {
         let strings = T::from_strings(vec![
             "user@example.com",
             "phone: (123) 456-7890",
-            "Price: $99.99"
+            "Price: $99.99",
         ]);
         let patterns = T::from_strings(vec![
-            r"([^@]+)@([^.]+)\.(.+)",    // Email parts
+            r"([^@]+)@([^.]+)\.(.+)",        // Email parts
             r"phone: \((\d+)\) (\d+)-(\d+)", // Phone number parts
-            r"Price: \$(\d+)\.(\d+)"     // Price parts
+            r"Price: \$(\d+)\.(\d+)",        // Price parts
         ]);
         let groups = Int64Array::from(vec![2, 2, 1]);
 
-        let result = regexp_extract(&[
-            Arc::new(strings),
-            Arc::new(patterns),
-            Arc::new(groups),
-        ])
-        .unwrap();
+        let result =
+            regexp_extract(&[Arc::new(strings), Arc::new(patterns), Arc::new(groups)])
+                .unwrap();
 
         let result = T::downcast_result(&result).expect("Failed to downcast result");
-        assert_eq!(T::get_value(result, 0), "example");  // Domain name without TLD
-        assert_eq!(T::get_value(result, 1), "456");      // Middle part of phone number
-        assert_eq!(T::get_value(result, 2), "99");       // Dollar amount
+        assert_eq!(T::get_value(result, 0), "example"); // Domain name without TLD
+        assert_eq!(T::get_value(result, 1), "456"); // Middle part of phone number
+        assert_eq!(T::get_value(result, 2), "99"); // Dollar amount
     }
 
     fn test_empty_string_input<T: StringArrayTestType>() {
@@ -547,29 +552,23 @@ mod tests {
         let patterns = T::from_strings(vec![r"(\d+)"]);
         let groups = Int64Array::from(vec![1]);
 
-        let result = regexp_extract(&[
-            Arc::new(strings),
-            Arc::new(patterns),
-            Arc::new(groups),
-        ])
-        .unwrap();
+        let result =
+            regexp_extract(&[Arc::new(strings), Arc::new(patterns), Arc::new(groups)])
+                .unwrap();
 
         let result = T::downcast_result(&result).expect("Failed to downcast result");
-        assert_eq!(T::get_value(result, 0), "");  // No match in empty string
+        assert_eq!(T::get_value(result, 0), ""); // No match in empty string
     }
 
     fn test_invalid_regex_pattern<T: StringArrayTestType>() {
         let strings = T::from_strings(vec!["test"]);
-        let patterns = T::from_strings(vec!["["]);  // Invalid regex - unclosed bracket
+        let patterns = T::from_strings(vec!["["]); // Invalid regex - unclosed bracket
         let groups = Int64Array::from(vec![1]);
 
-        let result = regexp_extract(&[
-            Arc::new(strings),
-            Arc::new(patterns),
-            Arc::new(groups),
-        ]);
+        let result =
+            regexp_extract(&[Arc::new(strings), Arc::new(patterns), Arc::new(groups)]);
 
-        assert!(result.is_err());  // Should return an error for invalid regex
+        assert!(result.is_err()); // Should return an error for invalid regex
     }
 
     macro_rules! test_for_all_types {
@@ -577,11 +576,17 @@ mod tests {
             mod $modname {
                 use super::*;
                 #[test]
-                fn utf8() { $generic::<Utf8TestType>(); }
+                fn utf8() {
+                    $generic::<Utf8TestType>();
+                }
                 #[test]
-                fn large_utf8() { $generic::<LargeUtf8TestType>(); }
+                fn large_utf8() {
+                    $generic::<LargeUtf8TestType>();
+                }
                 #[test]
-                fn utf8_view() { $generic::<Utf8ViewTestType>(); }
+                fn utf8_view() {
+                    $generic::<Utf8ViewTestType>();
+                }
             }
         };
     }

@@ -23,11 +23,11 @@ use arrow::compute::cast;
 use arrow::datatypes::DataType;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use datafusion_functions::regex::regexpcount::regexp_count_func;
+use datafusion_functions::regex::regexpextract::regexp_extract;
 use datafusion_functions::regex::regexpinstr::regexp_instr_func;
 use datafusion_functions::regex::regexplike::regexp_like;
 use datafusion_functions::regex::regexpmatch::regexp_match;
 use datafusion_functions::regex::regexpreplace::regexp_replace;
-use datafusion_functions::regex::regexpextract::regexp_extract;
 use rand::distr::Alphanumeric;
 use rand::prelude::IndexedRandom;
 use rand::rngs::ThreadRng;
@@ -265,8 +265,12 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         b.iter(|| {
             black_box(
-                regexp_extract(&[Arc::clone(&data), Arc::clone(&regex), Arc::clone(&groups)])
-                    .expect("regexp_extract should work on valid values"),
+                regexp_extract(&[
+                    Arc::clone(&data),
+                    Arc::clone(&regex),
+                    Arc::clone(&groups),
+                ])
+                .expect("regexp_extract should work on valid values"),
             )
         })
     });
@@ -279,8 +283,12 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         b.iter(|| {
             black_box(
-                regexp_extract(&[Arc::clone(&data), Arc::clone(&regex), Arc::clone(&groups)])
-                    .expect("regexp_extract should work on valid values"),
+                regexp_extract(&[
+                    Arc::clone(&data),
+                    Arc::clone(&regex),
+                    Arc::clone(&groups),
+                ])
+                .expect("regexp_extract should work on valid values"),
             )
         })
     });

@@ -119,11 +119,7 @@ pub mod expr_fn {
     }
 
     /// Extracts a substring that matches a regular expression from a string.
-    pub fn regexp_extract(
-        string: Expr,
-        pattern: Expr,
-        group: Expr,
-    ) -> Expr {
+    pub fn regexp_extract(string: Expr, pattern: Expr, group: Expr) -> Expr {
         super::regexp_extract().call(vec![string, pattern, group])
     }
 }
