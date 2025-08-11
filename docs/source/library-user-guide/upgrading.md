@@ -154,8 +154,6 @@ use datafusion_physical_expr_adapter::{
 };
 ```
 
-Note: You may also need to add `datafusion-physical-expr-adapter` as a dependency in your `Cargo.toml`.
-
 ### Upgrade to arrow `56.0.0` and parquet `56.0.0`
 
 This version of DataFusion upgrades the underlying Apache Arrow implementation
