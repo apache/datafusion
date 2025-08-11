@@ -328,6 +328,55 @@ impl Operator {
             Operator::Multiply | Operator::Divide | Operator::Modulo => 45,
         }
     }
+
+    /// Returns true if the `Expr::BinaryOperator` with this operator
+    /// is guaranteed to return null if either side is null.
+    pub fn returns_null_on_null(&self) -> bool {
+        match self {
+            Operator::Eq
+            | Operator::NotEq
+            | Operator::Lt
+            | Operator::LtEq
+            | Operator::Gt
+            | Operator::GtEq
+            | Operator::Plus
+            | Operator::Minus
+            | Operator::Multiply
+            | Operator::Divide
+            | Operator::Modulo
+            | Operator::RegexMatch
+            | Operator::RegexIMatch
+            | Operator::RegexNotMatch
+            | Operator::RegexNotIMatch
+            | Operator::LikeMatch
+            | Operator::ILikeMatch
+            | Operator::NotLikeMatch
+            | Operator::NotILikeMatch
+            | Operator::BitwiseAnd
+            | Operator::BitwiseOr
+            | Operator::BitwiseXor
+            | Operator::BitwiseShiftRight
+            | Operator::BitwiseShiftLeft
+            | Operator::AtArrow
+            | Operator::ArrowAt
+            | Operator::Arrow
+            | Operator::LongArrow
+            | Operator::HashArrow
+            | Operator::HashLongArrow
+            | Operator::AtAt
+            | Operator::IntegerDivide
+            | Operator::HashMinus
+            | Operator::AtQuestion
+            | Operator::Question
+            | Operator::QuestionAnd
+            | Operator::QuestionPipe => true,
+            Operator::Or
+            | Operator::And
+            | Operator::IsDistinctFrom
+            | Operator::IsNotDistinctFrom
+            | Operator::StringConcat => false,
+        }
+    }
 }
 
 impl fmt::Display for Operator {

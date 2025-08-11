@@ -780,7 +780,7 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
                 ref left,
                 ref op,
                 ref right,
-            }) if binary_op_null_on_null(*op)
+            }) if op.returns_null_on_null()
                 && (is_null(left.as_ref()) || is_null(right.as_ref())) =>
             {
                 Transformed::yes(Expr::Literal(
@@ -1856,53 +1856,6 @@ fn to_string_scalar(data_type: DataType, value: Option<String>) -> Expr {
 fn has_common_conjunction(lhs: &Expr, rhs: &Expr) -> bool {
     let lhs_set: HashSet<&Expr> = iter_conjunction(lhs).collect();
     iter_conjunction(rhs).any(|e| lhs_set.contains(&e) && !e.is_volatile())
-}
-
-fn binary_op_null_on_null(op: Operator) -> bool {
-    match op {
-        Operator::Eq
-        | Operator::NotEq
-        | Operator::Lt
-        | Operator::LtEq
-        | Operator::Gt
-        | Operator::GtEq
-        | Operator::Plus
-        | Operator::Minus
-        | Operator::Multiply
-        | Operator::Divide
-        | Operator::Modulo
-        | Operator::RegexMatch
-        | Operator::RegexIMatch
-        | Operator::RegexNotMatch
-        | Operator::RegexNotIMatch
-        | Operator::LikeMatch
-        | Operator::ILikeMatch
-        | Operator::NotLikeMatch
-        | Operator::NotILikeMatch
-        | Operator::BitwiseAnd
-        | Operator::BitwiseOr
-        | Operator::BitwiseXor
-        | Operator::BitwiseShiftRight
-        | Operator::BitwiseShiftLeft
-        | Operator::AtArrow
-        | Operator::ArrowAt
-        | Operator::Arrow
-        | Operator::LongArrow
-        | Operator::HashArrow
-        | Operator::HashLongArrow
-        | Operator::AtAt
-        | Operator::IntegerDivide
-        | Operator::HashMinus
-        | Operator::AtQuestion
-        | Operator::Question
-        | Operator::QuestionAnd
-        | Operator::QuestionPipe => true,
-        Operator::Or
-        | Operator::And
-        | Operator::IsDistinctFrom
-        | Operator::IsNotDistinctFrom
-        | Operator::StringConcat => false,
-    }
 }
 
 // TODO: We might not need this after defer pattern for Box is stabilized. https://github.com/rust-lang/rust/issues/87121
