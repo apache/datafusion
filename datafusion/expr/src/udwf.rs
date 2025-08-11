@@ -82,7 +82,7 @@ impl Display for WindowUDF {
 
 impl PartialEq for WindowUDF {
     fn eq(&self, other: &Self) -> bool {
-        self.inner.dyn_eq(&other.inner)
+        self.inner.dyn_eq(other.inner.as_any())
     }
 }
 
@@ -641,6 +641,15 @@ mod test {
         fn field(&self, _field_args: WindowUDFFieldArgs) -> Result<FieldRef> {
             unimplemented!()
         }
+    }
+
+    #[test]
+    fn test_partial_eq() {
+        let a1 = WindowUDF::from(AWindowUDF::new());
+        let a2 = WindowUDF::from(AWindowUDF::new());
+        let eq = a1 == a2;
+        assert!(eq);
+        assert_eq!(a1, a2);
     }
 
     #[test]
