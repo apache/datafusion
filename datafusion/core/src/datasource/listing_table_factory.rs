@@ -65,6 +65,10 @@ impl TableProviderFactory for ListingTableFactory {
 
         let mut table_path = ListingTableUrl::parse(&cmd.location)?;
         let file_extension = match table_path.is_collection() {
+            // Setting the extension to be empty instead of allowing the default extension seems
+            // odd, but was done to ensure existing behavior isn't modified. It seems like this
+            // could be refactored to either use the default extension or set the fully expected
+            // extension when compression is included (e.g. ".csv.gz")
             true => "",
             false => &get_extension(cmd.location.as_str()),
         };
@@ -444,7 +448,7 @@ mod tests {
 
         let cmd = CreateExternalTable {
             name,
-            location: dir.path().to_str().unwrap().to_string(),
+            location: String::from(path.to_str().unwrap()),
             file_type: "parquet".to_string(),
             schema: Arc::new(DFSchema::empty()),
             table_partition_cols: vec![],
