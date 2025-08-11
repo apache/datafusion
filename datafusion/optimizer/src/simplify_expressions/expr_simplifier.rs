@@ -4313,8 +4313,6 @@ mod tests {
                 None
             }
         }
-
-        udf_equals_hash!(AggregateUDFImpl);
     }
 
     #[test]
