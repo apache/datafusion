@@ -231,7 +231,7 @@ where
 ///
 /// While the trait depends on [`DynEq`] and [`DynHash`] traits, these should not be
 /// implemented directly. Instead, implement [`Eq`] and [`Hash`] and leverage the
-/// blanked implementations of [`DynEq`] and [`DynHash`].
+/// blanket implementations of [`DynEq`] and [`DynHash`].
 ///
 /// See [`advanced_udwf.rs`] for a full example with complete implementation and
 /// [`WindowUDF`] for other available options.
