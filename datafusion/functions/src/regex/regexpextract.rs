@@ -22,8 +22,9 @@
 
 
 use std::any::Any;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use std::thread;
 
 use arrow::array::{
     Array, ArrayRef, AsArray, Int64Array, GenericStringArray, StringViewArray,
@@ -36,7 +37,7 @@ use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
 use regex::Regex;
 
-use super::compile_and_cache_regex;
+
 
 #[user_doc(
     doc_section(label = "Regular Expression Functions"),
@@ -231,7 +232,74 @@ where
     for<'a> &'a S: IntoIterator<Item = Option<&'a str>>,
     F: FnOnce(Vec<Option<String>>) -> ArrayRef,
 {
-    let mut patterns: HashMap<(&str, Option<&str>), Regex> = HashMap::new();
+    // First pass: collect all unique patterns and pre-compile them
+    let mut unique_patterns: HashSet<&str> = HashSet::new();
+    for pattern_value in pattern_array.into_iter() {
+        if let Some(pattern) = pattern_value {
+            unique_patterns.insert(pattern);
+        }
+    }
+
+    // Pre-compile all unique patterns (in parallel)
+    let unique_patterns: Vec<&str> = unique_patterns.into_iter().collect();
+    let mut compiled_patterns: HashMap<&str, Regex> = HashMap::with_capacity(unique_patterns.len());
+
+    if !unique_patterns.is_empty() {
+        let available = thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
+        let num_threads = available.min(unique_patterns.len());
+        let chunk_size = (unique_patterns.len() + num_threads - 1) / num_threads;
+        /*
+        #HUMAN-MADE:
+        after a few tries for parallelization, which all increased the execution time, I went for a different approach.
+        analyzing benchmark results, I found that precompiling the patterns added only a small amount of time to the overall execution time. (600 us -> 650 us)
+        the precompilation took around 400 us and the main loop took around 200 us.
+        at this point, parallization was worth it even just for the precompilation. (650 us -> 470 us)
+         */
+        // Collect compiled outputs from threads
+        let mut compiled_pairs: Vec<(&str, Regex)> = Vec::with_capacity(unique_patterns.len());
+        let mut thread_error: Option<datafusion_common::DataFusionError> = None;
+
+        thread::scope(|scope| {
+            let mut handles = Vec::with_capacity(num_threads);
+
+            for chunk_idx in 0..num_threads {
+                let start = chunk_idx * chunk_size;
+                if start >= unique_patterns.len() {
+                    break;
+                }
+                let end = (start + chunk_size).min(unique_patterns.len());
+
+                let slice = &unique_patterns[start..end];
+                handles.push(scope.spawn(move || -> Result<Vec<(&str, Regex)>> {
+                    let mut local: Vec<(&str, Regex)> = Vec::with_capacity(slice.len());
+                    for &pattern in slice {
+                        let regex = super::compile_regex(pattern, None)
+                            .map_err(|e| datafusion_common::DataFusionError::ArrowError(Box::new(e), None))?;
+                        local.push((pattern, regex));
+                    }
+                    Ok(local)
+                }));
+            }
+
+            for handle in handles {
+                match handle.join().expect("thread panicked") {
+                    Ok(mut local) => compiled_pairs.append(&mut local),
+                    Err(e) => {
+                        thread_error = Some(e);
+                    }
+                }
+            }
+        });
+
+        if let Some(e) = thread_error {
+            return Err(e);
+        }
+
+        for (pattern, regex) in compiled_pairs {
+            compiled_patterns.insert(pattern, regex);
+        }
+    }
+
     let mut results: Vec<Option<String>> = Vec::with_capacity(string_array.len());
 
     let string_iter = string_array.into_iter();
@@ -245,7 +313,8 @@ where
                 } else {
                     let group_idx = group as usize;
 
-                    let regex = compile_and_cache_regex(pattern, None, &mut patterns)?;
+                    // Look up the pre-compiled regex
+                    let regex = compiled_patterns.get(pattern).expect("Pattern should be pre-compiled");
 
                     match regex.captures(string) {
                         Some(captures) => {
