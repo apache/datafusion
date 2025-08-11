@@ -765,12 +765,11 @@ impl DefaultPhysicalPlanner {
                     .iter()
                     .any(|(_, name)| name == Aggregate::INTERNAL_GROUPING_ID);
 
-                let can_repartition = !groups.is_empty()
-                    && (session_state.config().target_partitions() > 1
-                        || has_grouping_id)
+                let can_repartition = !groups.is_empty() 
+                    && session_state.config().target_partitions() > 1
                     && session_state.config().repartition_aggregations();
 
-                let next_partition_mode = if can_repartition {
+                let next_partition_mode = if can_repartition || has_grouping_id {
                     // construct a second aggregation with 'AggregateMode::FinalPartitioned'
                     AggregateMode::FinalPartitioned
                 } else {

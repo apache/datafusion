@@ -5592,28 +5592,30 @@ SELECT DISTINCT c3, c2 FROM aggregate_test_100 group by c3, c2 order by c3, c2 l
 -90 4
 
 query TT
-EXPLAIN SELECT c2, c3 FROM aggregate_test_100 group by rollup(c2, c3) limit 3;
+EXPLAIN SELECT c2, c3 FROM aggregate_test_100 group by rollup(c2, c3) ORDER BY c3 NULLS FIRST, c2 NULLS FIRST limit 3;
 ----
 logical_plan
-01)Projection: aggregate_test_100.c2, aggregate_test_100.c3
-02)--Limit: skip=0, fetch=3
+01)Sort: aggregate_test_100.c3 ASC NULLS FIRST, aggregate_test_100.c2 ASC NULLS FIRST, fetch=3
+02)--Projection: aggregate_test_100.c2, aggregate_test_100.c3
 03)----Aggregate: groupBy=[[ROLLUP (aggregate_test_100.c2, aggregate_test_100.c3)]], aggr=[[]]
 04)------TableScan: aggregate_test_100 projection=[c2, c3]
 physical_plan
-01)ProjectionExec: expr=[c2@0 as c2, c3@1 as c3]
-02)--GlobalLimitExec: skip=0, fetch=3
-03)----AggregateExec: mode=Final, gby=[c2@0 as c2, c3@1 as c3, __grouping_id@2 as __grouping_id], aggr=[], lim=[3]
-04)------CoalescePartitionsExec
-05)--------AggregateExec: mode=Partial, gby=[(NULL as c2, NULL as c3), (c2@0 as c2, NULL as c3), (c2@0 as c2, c3@1 as c3)], aggr=[]
-06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-07)------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c2, c3], file_type=csv, has_header=true
+01)SortPreservingMergeExec: [c3@1 ASC, c2@0 ASC], fetch=3
+02)--SortExec: TopK(fetch=3), expr=[c3@1 ASC, c2@0 ASC], preserve_partitioning=[true]
+03)----ProjectionExec: expr=[c2@0 as c2, c3@1 as c3]
+04)------AggregateExec: mode=FinalPartitioned, gby=[c2@0 as c2, c3@1 as c3, __grouping_id@2 as __grouping_id], aggr=[]
+05)--------CoalesceBatchesExec: target_batch_size=8192
+06)----------RepartitionExec: partitioning=Hash([c2@0, c3@1, __grouping_id@2], 4), input_partitions=4
+07)------------AggregateExec: mode=Partial, gby=[(NULL as c2, NULL as c3), (c2@0 as c2, NULL as c3), (c2@0 as c2, c3@1 as c3)], aggr=[]
+08)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+09)----------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c2, c3], file_type=csv, has_header=true
 
 query II
-SELECT c2, c3 FROM aggregate_test_100 group by rollup(c2, c3) limit 3;
+SELECT c2, c3 FROM aggregate_test_100 group by rollup(c2, c3) ORDER BY c3 NULLS FIRST, c2 NULLS FIRST limit 3;
 ----
 NULL NULL
+1 NULL
 2 NULL
-5 NULL
 
 
 statement ok
