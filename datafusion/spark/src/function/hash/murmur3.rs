@@ -114,7 +114,7 @@ pub fn murmur3_hash<T: AsRef<[u8]>>(data: T, seed: u32) -> u32 {
             let ints = data.as_ptr().add(i) as *const i32;
             let mut half_word = ints.read_unaligned();
             if cfg!(target_endian = "big") {
-                half_word = half_word.reverse_bits();
+                half_word = half_word.swap_bytes();
             }
             h1 = mix_h1(h1, mix_k1(half_word));
         }
