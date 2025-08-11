@@ -28,20 +28,16 @@ use std::hash::{Hash, Hasher};
 ///
 /// Note: This trait should not be implemented directly. Implement `Eq` and `Any` and use
 /// the blanket implementation.
-pub trait DynEq {
+#[allow(private_bounds)]
+pub trait DynEq: private::EqSealed {
     fn dyn_eq(&self, other: &dyn Any) -> bool;
-
-    fn i_did_not_implement_the_trait_directly_but_using_the_blanked_impl_instead()
-    where
-        Self: Sized;
 }
 
+impl<T: Eq + Any> private::EqSealed for T {}
 impl<T: Eq + Any> DynEq for T {
     fn dyn_eq(&self, other: &dyn Any) -> bool {
         other.downcast_ref::<Self>() == Some(self)
     }
-
-    fn i_did_not_implement_the_trait_directly_but_using_the_blanked_impl_instead() {}
 }
 
 /// A dyn-compatible version of [`Hash`] trait.
@@ -49,19 +45,20 @@ impl<T: Eq + Any> DynEq for T {
 ///
 /// Note: This trait should not be implemented directly. Implement `Hash` and `Any` and use
 /// the blanket implementation.
-pub trait DynHash {
+#[allow(private_bounds)]
+pub trait DynHash: private::HashSealed {
     fn dyn_hash(&self, _state: &mut dyn Hasher);
-
-    fn i_did_not_implement_the_trait_directly_but_using_the_blanked_impl_instead()
-    where
-        Self: Sized;
 }
 
+impl<T: Hash + Any> private::HashSealed for T {}
 impl<T: Hash + Any> DynHash for T {
     fn dyn_hash(&self, mut state: &mut dyn Hasher) {
         self.type_id().hash(&mut state);
         self.hash(&mut state)
     }
+}
 
-    fn i_did_not_implement_the_trait_directly_but_using_the_blanked_impl_instead() {}
+mod private {
+    pub(super) trait EqSealed {}
+    pub(super) trait HashSealed {}
 }
