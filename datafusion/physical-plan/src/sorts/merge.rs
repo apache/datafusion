@@ -49,7 +49,8 @@ pub(crate) struct SortPreservingMergeStream<C: CursorValues> {
     /// used to record execution metrics
     metrics: BaselineMetrics,
 
-    /// If the stream has encountered an error
+    /// If the stream has encountered an error or reaches the
+    /// `fetch` limit.
     aborted: bool,
 
     /// A loser tree that always produces the minimum cursor
