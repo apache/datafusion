@@ -38,7 +38,6 @@ use datafusion_common::tree_node::{
 use datafusion_common::{
     Column, DFSchema, HashMap, Result, ScalarValue, Spans, TableReference,
 };
-use crate::utils::INFERRED_PREDICATE_ALIAS;
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use sqlparser::ast::{
     display_comma_separated, ExceptSelectItem, ExcludeSelectItem, IlikeSelectItem,
@@ -3184,13 +3183,7 @@ pub const UNNEST_COLUMN_PREFIX: &str = "UNNEST";
 impl Display for Expr {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match self {
-            Expr::Alias(Alias { expr, name, .. }) => {
-                if name == INFERRED_PREDICATE_ALIAS {
-                    write!(f, "{expr}")
-                } else {
-                    write!(f, "{expr} AS {name}")
-                }
-            }
+            Expr::Alias(Alias { expr, name, .. }) => write!(f, "{expr} AS {name}"),
             Expr::Column(c) => write!(f, "{c}"),
             Expr::OuterReferenceColumn(_, c) => {
                 write!(f, "{OUTER_REFERENCE_COLUMN_PREFIX}({c})")

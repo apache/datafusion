@@ -21,7 +21,6 @@
 //! according to the configuration), this rule increases partition counts in
 //! the physical plan.
 
-use std::collections::HashSet;
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -897,16 +896,7 @@ fn add_hash_on_top(
         return Ok(input);
     }
 
-    let mut seen = HashSet::new();
-    let mut exprs = Vec::new();
-    for e in hash_exprs.into_iter() {
-        let key = format!("{}", e);
-        if seen.insert(key) {
-            exprs.push(e);
-        }
-    }
-
-    let dist = Distribution::HashPartitioned(exprs.clone());
+    let dist = Distribution::HashPartitioned(hash_exprs);
     let satisfied = input
         .plan
         .output_partitioning()
