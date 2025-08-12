@@ -600,8 +600,6 @@ impl AggregateUDFImpl for SimpleAggregateUDF {
     fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         Ok(self.state_fields.clone())
     }
-
-    udf_equals_hash!(AggregateUDFImpl);
 }
 
 /// Creates a new UDWF with a specific signature, state type and return type.
