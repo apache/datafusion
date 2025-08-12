@@ -1453,9 +1453,8 @@ logical_plan
 01)LeftSemi Join: 
 02)--TableScan: t1 projection=[a]
 03)--SubqueryAlias: __correlated_sq_1
-04)----Projection:
-05)------Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
-06)--------TableScan: t2 projection=[]
+04)----Aggregate: groupBy=[[]], aggr=[[]]
+05)------TableScan: t2 projection=[]
 
 statement count 0
 drop table t1;

@@ -3520,11 +3520,6 @@ impl Aggregate {
         aggr_expr: Vec<Expr>,
         schema: DFSchemaRef,
     ) -> Result<Self> {
-        if group_expr.is_empty() && aggr_expr.is_empty() {
-            return plan_err!(
-                "Aggregate requires at least one grouping or aggregate expression"
-            );
-        }
         let group_expr_count = grouping_set_expr_count(&group_expr)?;
         if schema.fields().len() != group_expr_count + aggr_expr.len() {
             return plan_err!(

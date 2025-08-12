@@ -2744,23 +2744,21 @@ async fn test_count_wildcard_on_where_exist() -> Result<()> {
 
     assert_snapshot!(
         pretty_format_batches(&sql_results).unwrap(),
-        @r###"
-    +---------------+---------------------------------------------------------+
-    | plan_type     | plan                                                    |
-    +---------------+---------------------------------------------------------+
-    | logical_plan  | LeftSemi Join:                                          |
-    |               |   TableScan: t1 projection=[a, b]                       |
-    |               |   SubqueryAlias: __correlated_sq_1                      |
-    |               |     Projection:                                         |
-    |               |       Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]] |
-    |               |         TableScan: t2 projection=[]                     |
-    | physical_plan | NestedLoopJoinExec: join_type=RightSemi                 |
-    |               |   ProjectionExec: expr=[]                               |
-    |               |     PlaceholderRowExec                                  |
-    |               |   DataSourceExec: partitions=1, partition_sizes=[1]     |
-    |               |                                                         |
-    +---------------+---------------------------------------------------------+
-    "###
+        @r"
+    +---------------+-----------------------------------------------------+
+    | plan_type     | plan                                                |
+    +---------------+-----------------------------------------------------+
+    | logical_plan  | LeftSemi Join:                                      |
+    |               |   TableScan: t1 projection=[a, b]                   |
+    |               |   SubqueryAlias: __correlated_sq_1                  |
+    |               |     Aggregate: groupBy=[[]], aggr=[[]]              |
+    |               |       TableScan: t2 projection=[]                   |
+    | physical_plan | NestedLoopJoinExec: join_type=RightSemi             |
+    |               |   PlaceholderRowExec                                |
+    |               |   DataSourceExec: partitions=1, partition_sizes=[1] |
+    |               |                                                     |
+    +---------------+-----------------------------------------------------+
+    "
     );
 
     let df_results = ctx
@@ -2783,23 +2781,21 @@ async fn test_count_wildcard_on_where_exist() -> Result<()> {
 
     assert_snapshot!(
         pretty_format_batches(&df_results).unwrap(),
-        @r###"
-    +---------------+---------------------------------------------------------------------+
-    | plan_type     | plan                                                                |
-    +---------------+---------------------------------------------------------------------+
-    | logical_plan  | LeftSemi Join:                                                      |
-    |               |   TableScan: t1 projection=[a, b]                                   |
-    |               |   SubqueryAlias: __correlated_sq_1                                  |
-    |               |     Projection:                                                     |
-    |               |       Aggregate: groupBy=[[]], aggr=[[count(Int64(1)) AS count(*)]] |
-    |               |         TableScan: t2 projection=[]                                 |
-    | physical_plan | NestedLoopJoinExec: join_type=RightSemi                             |
-    |               |   ProjectionExec: expr=[]                                           |
-    |               |     PlaceholderRowExec                                              |
-    |               |   DataSourceExec: partitions=1, partition_sizes=[1]                 |
-    |               |                                                                     |
-    +---------------+---------------------------------------------------------------------+
-    "###
+        @r"
+    +---------------+-----------------------------------------------------+
+    | plan_type     | plan                                                |
+    +---------------+-----------------------------------------------------+
+    | logical_plan  | LeftSemi Join:                                      |
+    |               |   TableScan: t1 projection=[a, b]                   |
+    |               |   SubqueryAlias: __correlated_sq_1                  |
+    |               |     Aggregate: groupBy=[[]], aggr=[[]]              |
+    |               |       TableScan: t2 projection=[]                   |
+    | physical_plan | NestedLoopJoinExec: join_type=RightSemi             |
+    |               |   PlaceholderRowExec                                |
+    |               |   DataSourceExec: partitions=1, partition_sizes=[1] |
+    |               |                                                     |
+    +---------------+-----------------------------------------------------+
+    "
     );
 
     Ok(())
