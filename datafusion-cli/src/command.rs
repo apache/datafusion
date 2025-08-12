@@ -126,15 +126,15 @@ impl Command {
             Self::MemoryProfiling(subcmd) => {
                 match subcmd {
                     Some(MemoryProfilingCommand::Enable) => {
-                        ctx.set_memory_profiling(true);
+                        print_options.memory_profiling = true;
                         println!("Memory profiling enabled");
                     }
                     Some(MemoryProfilingCommand::Disable) => {
-                        ctx.set_memory_profiling(false);
+                        print_options.memory_profiling = false;
                         println!("Memory profiling disabled");
                     }
                     Some(MemoryProfilingCommand::Show) => {
-                        if let Some(pool_any) = ctx.tracked_memory_pool() {
+                        if let Some(pool_any) = &print_options.tracked_memory_pool {
                             // try downcasting to known pool types
                             let metrics = if let Ok(pool) =
                                 pool_any

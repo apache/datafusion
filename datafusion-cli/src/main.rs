@@ -31,7 +31,6 @@ use datafusion::execution::memory_pool::{
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::prelude::SessionContext;
 use datafusion_cli::catalog::DynamicObjectStoreCatalog;
-use datafusion_cli::cli_context::ReplSessionContext;
 use datafusion_cli::functions::ParquetMetadataFunc;
 use datafusion_cli::{
     exec,
@@ -218,23 +217,24 @@ async fn main_inner() -> Result<()> {
     let runtime_env = rt_builder.build_arc()?;
 
     // enable dynamic file query
-    let session_ctx = SessionContext::new_with_config_rt(session_config, runtime_env)
+    let ctx = SessionContext::new_with_config_rt(session_config, runtime_env)
         .enable_url_table();
-    session_ctx.refresh_catalogs().await?;
+    ctx.refresh_catalogs().await?;
     // install dynamic catalog provider that can register required object stores
-    session_ctx.register_catalog_list(Arc::new(DynamicObjectStoreCatalog::new(
-        session_ctx.state().catalog_list().clone(),
-        session_ctx.state_weak_ref(),
+    ctx.register_catalog_list(Arc::new(DynamicObjectStoreCatalog::new(
+        ctx.state().catalog_list().clone(),
+        ctx.state_weak_ref(),
     )));
     // register `parquet_metadata` table function to get metadata from parquet files
-    session_ctx.register_udtf("parquet_metadata", Arc::new(ParquetMetadataFunc {}));
-    let ctx = ReplSessionContext::new(session_ctx, tracked_pool.clone());
+    ctx.register_udtf("parquet_metadata", Arc::new(ParquetMetadataFunc {}));
 
     let mut print_options = PrintOptions {
         format: args.format,
         quiet: args.quiet,
         maxrows: args.maxrows,
         color: args.color,
+        memory_profiling: false,
+        tracked_memory_pool: tracked_pool.clone(),
     };
 
     let commands = args.command;

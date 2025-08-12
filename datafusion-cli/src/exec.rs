@@ -230,8 +230,8 @@ pub(super) async fn exec_and_print(
 
     let statements = DFParser::parse_sql_with_dialect(&sql, dialect.as_ref())?;
     for statement in statements {
-        let pool_any = if ctx.memory_profiling() {
-            ctx.tracked_memory_pool()
+        let pool_any = if print_options.memory_profiling {
+            print_options.tracked_memory_pool.clone()
         } else {
             None
         };
