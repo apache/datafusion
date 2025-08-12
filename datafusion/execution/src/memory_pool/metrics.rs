@@ -17,12 +17,8 @@
 
 //! Memory usage metrics for query execution.
 
-use std::collections::BTreeMap;
-
-use std::fmt::Write;
-
 use super::{human_readable_size, ConsumerMemoryMetrics};
-
+use std::{collections::BTreeMap, fmt::Write};
 /// Format summary of memory usage metrics.
 ///
 /// Returns a string with peak usage, cumulative allocations, and totals per
