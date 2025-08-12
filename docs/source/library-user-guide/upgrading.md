@@ -38,6 +38,26 @@ In order to enable single value optimizations and be consistent with other
 user defined function APIs, the `AsyncScalarUDFImpl::invoke_async_with_args` method now
 returns a `ColumnarValue` instead of a `ArrayRef`.
 
+### Dynamic filter pushdown for joins
+
+Dynamic filter pushdown now applies to left, right, semi and anti joins,
+allowing DataFusion to prune the probe side as join keys are discovered at
+runtime. Full joins are not supported. This behavior is controlled by the
+`datafusion.optimizer.enable_dynamic_filter_pushdown` configuration option (on by
+default).
+
+For example:
+
+```sql
+SELECT *
+FROM fact LEFT JOIN dim
+  ON fact.id = dim.id
+WHERE dim.region = 'US';
+```
+
+As rows from `dim` with `region = 'US'` are processed, a dynamic filter is
+generated that skips `fact` partitions without matching `id` values.
+
 To upgrade, change the return type of your implementation
 
 ```rust

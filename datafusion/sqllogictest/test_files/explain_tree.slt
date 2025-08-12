@@ -1241,7 +1241,7 @@ physical_plan
 31)│    --------------------   ││    --------------------   │
 32)│          files: 1         ││ partition_count(in->out): │
 33)│      format: parquet      ││           1 -> 4          │
-34)│                           ││                           │
+34)│      predicate: true      ││                           │
 35)│                           ││    partitioning_scheme:   │
 36)│                           ││     RoundRobinBatch(4)    │
 37)└───────────────────────────┘└─────────────┬─────────────┘
