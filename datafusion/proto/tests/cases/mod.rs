@@ -126,8 +126,6 @@ impl AggregateUDFImpl for MyAggregateUDF {
     ) -> datafusion_common::Result<Box<dyn Accumulator>> {
         unimplemented!()
     }
-
-    udf_equals_hash!(AggregateUDFImpl);
 }
 
 #[derive(Clone, PartialEq, ::prost::Message)]

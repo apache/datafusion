@@ -1982,7 +1982,7 @@ mod tests {
             );
             let result = FileScanConfig::split_groups_by_statistics(
                 &table_schema,
-                &[partitioned_files.clone()],
+                std::slice::from_ref(&partitioned_files),
                 &sort_order,
             );
             let results_by_name = result
