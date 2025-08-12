@@ -378,13 +378,19 @@ impl AggregateFunctionExpr {
     }
 
     /// Returns a schema containing the fields corresponding to this
-    /// aggregate's input expressions.
+    /// aggregate's input expressions in the same order as `input_fields`/`exprs`.
     ///
-    /// When an aggregate is invoked with only literal values, the
-    /// physical input schema is empty. In this case a schema is
-    /// synthesized from the literal expressions so that field metadata
-    /// (such as Arrow extension types) remains available to the
-    /// [`Accumulator`].
+    /// If the physical input schema is empty (literal-only inputs),
+    /// synthesizes a new schema from the literal expressions to preserve
+    /// field-level metadata (such as Arrow extension types).
+    /// Field order is guaranteed to match the order of input expressions.
+    /// In mixed column and literal inputs, existing physical schema fields
+    /// win; synthesized metadata is only applied when the physical schema
+    /// has no fields.
+    ///
+    /// Uses [`std::borrow::Cow`] to avoid allocation when the existing
+    /// schema is non-empty. For micro-optimizations, implementers may
+    /// cache the owned schema if multiple calls are made per instance.
     fn args_schema(&self) -> Cow<'_, Schema> {
         if self.schema.fields().is_empty() {
             Cow::Owned(Schema::new(
@@ -401,6 +407,7 @@ impl AggregateFunctionExpr {
     /// the accumulator used to accumulate values from the expressions.
     /// the accumulator expects the same number of arguments as `expressions` and must
     /// return states with the same description as `state_fields`
+    // TODO: factor AccumulatorArgs construction into a private helper to avoid duplication
     pub fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
         let schema = self.args_schema();
         let acc_args = AccumulatorArgs {

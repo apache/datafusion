@@ -752,7 +752,19 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     ///
     /// acc_args: [`AccumulatorArgs`] contains information about how the
     /// aggregate function was called. Use `acc_args.exprs` together with
-    /// `acc_args.schema` to inspect the [`FieldRef`] of each input. When an
+    /// `acc_args.schema` to inspect the [`FieldRef`] of each input.
+    ///
+    /// Example: retrieving metadata and return field for input `i`:
+    /// ```rust
+    /// let metadata = acc_args.schema.field(i).metadata();
+    /// let field = acc_args.exprs[i].return_field(&acc_args.schema)?;
+    /// ```
+    /// Multi-argument functions: `exprs[i]` corresponds to `schema.field(i)`.
+    /// Mixed inputs (columns and literals): the physical input schema is used
+    /// when not empty; `acc_args.schema` is only synthesized from literals when
+    /// the physical schema is empty.
+    ///
+    /// When an
     /// aggregate is invoked with literal values only, `acc_args.schema` is
     /// synthesized from those literals so that any field metadata (for
     /// example Arrow extension types) is available to the accumulator

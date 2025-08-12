@@ -32,11 +32,12 @@ pub struct AccumulatorArgs<'a> {
 
     /// The schema of the input arguments.
     ///
-    /// This schema contains the fields corresponding to [`Self::exprs`]. When
-    /// an aggregate is invoked with only literal values, this schema is
-    /// synthesized from those literals so that field-level metadata (such as
-    /// Arrow extension types) remains available to accumulator
-    /// implementations.
+    /// This schema contains the fields corresponding to the function’s input
+    /// expressions (`exprs`). When an aggregate is invoked with only literal
+    /// values, this schema is synthesized from those literals to preserve
+    /// field-level metadata (such as Arrow extension types). In mixed column
+    /// and literal inputs, metadata from the physical schema takes precedence;
+    /// synthesized metadata is only used when the physical schema is empty.
     pub schema: &'a Schema,
 
     /// Whether to ignore nulls.
@@ -74,6 +75,12 @@ pub struct AccumulatorArgs<'a> {
     /// The physical expressions for the aggregate function's arguments.
     /// Use these expressions together with [`Self::schema`] to obtain the
     /// [`FieldRef`] of each input via `expr.return_field(schema)`.
+    ///
+    /// Example:
+    /// ```rust
+    /// let input_field = exprs[i].return_field(&schema)?;
+    /// ```
+    /// Note: physical schema metadata takes precedence in mixed inputs.
     pub exprs: &'a [Arc<dyn PhysicalExpr>],
 }
 
