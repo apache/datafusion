@@ -60,7 +60,7 @@ impl LimitedBatchCoalescer {
         fetch: Option<usize>,
     ) -> Self {
         Self {
-            inner: BatchCoalescer::new(schema, target_batch_size),
+            inner: BatchCoalescer::new(schema, target_batch_size).with_exact_size(false),
             total_rows: 0,
             fetch,
             finished: false,
@@ -156,7 +156,7 @@ mod tests {
             .with_batches(std::iter::repeat_n(batch, 10))
             // expected output is batches of exactly 21 rows (except for the final batch)
             .with_target_batch_size(21)
-            .with_expected_output_sizes(vec![21, 21, 21, 17])
+            .with_expected_output_sizes(vec![24, 24, 24, 8])
             .run()
     }
 
@@ -169,7 +169,7 @@ mod tests {
             // expected to behave the same as `test_concat_batches`
             .with_target_batch_size(21)
             .with_fetch(Some(100))
-            .with_expected_output_sizes(vec![21, 21, 21, 17])
+            .with_expected_output_sizes(vec![24, 24, 24, 8])
             .run();
     }
 
@@ -181,7 +181,7 @@ mod tests {
             // input is 10 batches x 8 rows (80 rows) with fetch limit of 50
             .with_target_batch_size(21)
             .with_fetch(Some(50))
-            .with_expected_output_sizes(vec![21, 21, 8])
+            .with_expected_output_sizes(vec![24, 24, 2])
             .run();
     }
 
@@ -191,7 +191,7 @@ mod tests {
         Test::new()
             .with_batches(std::iter::repeat_n(batch, 10))
             // input is 10 batches x 8 rows (80 rows) with fetch limit of 48
-            .with_target_batch_size(24)
+            .with_target_batch_size(21)
             .with_fetch(Some(48))
             .with_expected_output_sizes(vec![24, 24])
             .run();
