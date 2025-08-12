@@ -37,7 +37,7 @@ Enable memory tracking for the next query and display the report afterwards:
 
 ```text
 > \memory_profiling enable
-Memory profiling enabled for next query
+Memory profiling enabled
 > SELECT v % 100 AS group_key, COUNT(*) AS cnt, SUM(v) AS sum_v FROM generate_series(1,100000) AS t(v) GROUP BY group_key ORDER BY group_key;
 
 +-----------+------+----------+
