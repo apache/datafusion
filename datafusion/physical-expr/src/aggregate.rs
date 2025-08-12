@@ -24,6 +24,93 @@ pub(crate) mod groups_accumulator {
         accumulate::NullState, GroupsAccumulatorAdapter,
     };
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::expressions::Literal;
+    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::ScalarValue;
+    use datafusion_expr::{AggregateUDF, AggregateUDFImpl, Signature, Volatility};
+    use std::any::Any;
+    use std::sync::Arc;
+
+    #[derive(Debug)]
+    struct DummyUdf {
+        signature: Signature,
+    }
+
+    impl DummyUdf {
+        fn new() -> Self {
+            Self {
+                signature: Signature::any(1, Volatility::Immutable),
+            }
+        }
+    }
+
+    impl AggregateUDFImpl for DummyUdf {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+        fn name(&self) -> &str {
+            "dummy"
+        }
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+        fn return_type(&self, _args: &[DataType]) -> Result<DataType> {
+            Ok(DataType::UInt64)
+        }
+        fn accumulator(&self, _args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+            unimplemented!()
+        }
+        fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
+            unimplemented!()
+        }
+        fn groups_accumulator_supported(&self, _args: AccumulatorArgs) -> bool {
+            true
+        }
+        fn create_groups_accumulator(
+            &self,
+            _args: AccumulatorArgs,
+        ) -> Result<Box<dyn GroupsAccumulator>> {
+            unimplemented!()
+        }
+    }
+
+    #[test]
+    fn test_args_schema_and_groups_path() {
+        // literal-only: empty physical schema synthesizes schema from literal expr
+        let udf = Arc::new(AggregateUDF::from(DummyUdf::new()));
+        let lit_expr =
+            Arc::new(Literal::new(ScalarValue::UInt32(Some(1)))) as Arc<dyn PhysicalExpr>;
+        let agg = AggregateExprBuilder::new(udf.clone(), vec![lit_expr.clone()])
+            .alias("x")
+            .schema(Arc::new(Schema::empty()))
+            .build()
+            .unwrap();
+        match agg.args_schema() {
+            Cow::Owned(s) => assert_eq!(s.field(0).name(), "lit"),
+            _ => panic!("expected owned schema"),
+        }
+        assert!(agg.groups_accumulator_supported());
+
+        // non-empty physical schema should be borrowed
+        let f = Field::new("b", DataType::Int32, false);
+        let phys_schema = Schema::new(vec![f.clone()]);
+        let col_expr = Arc::new(Column::new("b", 0)) as Arc<dyn PhysicalExpr>;
+        let agg2 = AggregateExprBuilder::new(udf, vec![col_expr])
+            .alias("x")
+            .schema(Arc::new(phys_schema.clone()))
+            .build()
+            .unwrap();
+        match agg2.args_schema() {
+            Cow::Borrowed(s) => assert_eq!(s.field(0).name(), "b"),
+            _ => panic!("expected borrowed schema"),
+        }
+        assert!(agg2.groups_accumulator_supported());
+    }
+}
 pub(crate) mod stats {
     pub use datafusion_functions_aggregate_common::stats::StatsType;
 }
@@ -404,7 +491,7 @@ impl AggregateFunctionExpr {
         }
     }
     /// Construct AccumulatorArgs for this aggregate using a given schema slice.
-    fn make_acc_args(&self, schema: &Schema) -> AccumulatorArgs<'_> {
+    fn make_acc_args<'a>(&'a self, schema: &'a Schema) -> AccumulatorArgs<'a> {
         AccumulatorArgs {
             return_field: Arc::clone(&self.return_field),
             schema,
