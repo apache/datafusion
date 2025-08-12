@@ -1247,3 +1247,112 @@ fn col_lit_predicate(
         Arc::new(Literal::new(scalar_value)),
     ))
 }
+
+#[tokio::test]
+async fn test_left_semi_join_dynamic_filter_pushdown() {
+    use datafusion_common::JoinType;
+    use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
+
+    // Create build side (left side) with limited values
+    let build_batches = vec![record_batch!(
+        ("id", Int32, [1, 2]),
+        ("name", Utf8, ["Alice", "Bob"]),
+        ("score", Float64, [95.0, 87.0])
+    )
+    .unwrap()];
+    let build_side_schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int32, false),
+        Field::new("name", DataType::Utf8, false),
+        Field::new("score", DataType::Float64, false),
+    ]));
+    let build_scan = TestScanBuilder::new(Arc::clone(&build_side_schema))
+        .with_support(true)
+        .with_batches(build_batches)
+        .build();
+
+    // Create probe side (right side) with more values
+    let probe_batches = vec![record_batch!(
+        ("id", Int32, [1, 2, 3, 4]),
+        (
+            "department",
+            Utf8,
+            ["Engineering", "Sales", "Marketing", "HR"]
+        ),
+        ("budget", Float64, [100000.0, 80000.0, 60000.0, 50000.0])
+    )
+    .unwrap()];
+    let probe_side_schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int32, false),
+        Field::new("department", DataType::Utf8, false),
+        Field::new("budget", DataType::Float64, false),
+    ]));
+    let probe_scan = TestScanBuilder::new(Arc::clone(&probe_side_schema))
+        .with_support(true)
+        .with_batches(probe_batches)
+        .build();
+
+    // Create HashJoinExec with LeftSemi join type
+    let on = vec![(
+        col("id", &build_side_schema).unwrap(),
+        col("id", &probe_side_schema).unwrap(),
+    )];
+    let plan = Arc::new(
+        HashJoinExec::try_new(
+            build_scan,
+            probe_scan,
+            on,
+            None,
+            &JoinType::LeftSemi,
+            None,
+            PartitionMode::Partitioned,
+            datafusion_common::NullEquality::NullEqualsNothing,
+        )
+        .unwrap(),
+    ) as Arc<dyn ExecutionPlan>;
+
+    // Verify that dynamic filter pushdown creates the expected plan structure
+    insta::assert_snapshot!(
+        OptimizationTest::new(Arc::clone(&plan), FilterPushdown::new_post_optimization(), true),
+        @r"
+    OptimizationTest:
+      input:
+        - HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(id@0, id@0)]
+        -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[id, name, score], file_type=test, pushdown_supported=true
+        -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[id, department, budget], file_type=test, pushdown_supported=true
+      output:
+        Ok:
+          - HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(id@0, id@0)]
+          -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[id, name, score], file_type=test, pushdown_supported=true
+          -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[id, department, budget], file_type=test, pushdown_supported=true, predicate=DynamicFilterPhysicalExpr [ true ]
+    ",
+    );
+
+    // Apply the optimization and execute to see the actual filter bounds
+    let mut config = ConfigOptions::default();
+    config.execution.parquet.pushdown_filters = true;
+    config.optimizer.enable_dynamic_filter_pushdown = true;
+    let plan = FilterPushdown::new_post_optimization()
+        .optimize(plan, &config)
+        .unwrap();
+    let config = SessionConfig::new().with_batch_size(10);
+    let session_ctx = SessionContext::new_with_config(config);
+    session_ctx.register_object_store(
+        ObjectStoreUrl::parse("test://").unwrap().as_ref(),
+        Arc::new(InMemory::new()),
+    );
+    let state = session_ctx.state();
+    let task_ctx = state.task_ctx();
+    let mut stream = plan.execute(0, Arc::clone(&task_ctx)).unwrap();
+    // Execute one batch to populate the dynamic filter
+    stream.next().await.unwrap().unwrap();
+
+    // Verify that the dynamic filter shows the expected bounds for left semi join
+    insta::assert_snapshot!(
+        format!("{}", format_plan_for_test(&plan)),
+        @r"
+    - HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(id@0, id@0)], filter=[id@0 >= 1 AND id@0 <= 2]
+    -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[id, name, score], file_type=test, pushdown_supported=true
+    -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[id, department, budget], file_type=test, pushdown_supported=true, predicate=DynamicFilterPhysicalExpr [ id@0 >= 1 AND id@0 <= 2 ]
+    "
+    );
+}

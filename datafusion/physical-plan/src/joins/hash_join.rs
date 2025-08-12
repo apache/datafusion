@@ -370,27 +370,6 @@ pub struct HashJoinExec {
     dynamic_filter: Arc<DynamicFilterPhysicalExpr>,
 }
 
-/// Helper function copied from logical optimizer: For a given JOIN type, determine whether each input of the join is preserved
-/// for WHERE clause filters (predicates above the join).
-///
-/// It is only correct to push filters below a join for preserved inputs.
-///
-/// For left semi joins: (true, false) - meaning left side is preserved, right side is not
-fn lr_is_preserved(join_type: JoinType) -> (bool, bool) {
-    match join_type {
-        JoinType::Inner => (true, true),
-        JoinType::Left => (true, false),
-        JoinType::Right => (false, true),
-        JoinType::Full => (false, false),
-        // No columns from the right side of the join can be referenced in output
-        // predicates for semi/anti joins, so whether we specify t/f doesn't matter.
-        JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark => (true, false),
-        // No columns from the left side of the join can be referenced in output
-        // predicates for semi/anti joins, so whether we specify t/f doesn't matter.
-        JoinType::RightSemi | JoinType::RightAnti | JoinType::RightMark => (false, true),
-    }
-}
-
 /// Check if a physical expression only references columns from the left child
 fn is_left_only_predicate(
     predicate: &Arc<dyn PhysicalExpr>,
@@ -399,6 +378,92 @@ fn is_left_only_predicate(
     let columns = collect_columns(predicate);
     // All column indices must be less than left_schema_len
     columns.iter().all(|col| col.index() < left_schema_len)
+}
+
+/// Create child filter descriptions that respect join semantics
+///
+/// This function analyzes parent filters and determines which ones can be pushed
+/// to each child based on the join type's preservation properties and column analysis.
+fn create_join_aware_child_descriptions(
+    parent_filters: &[Arc<dyn PhysicalExpr>],
+    left_child: &Arc<dyn ExecutionPlan>,
+    right_child: &Arc<dyn ExecutionPlan>,
+    join_type: JoinType,
+) -> Result<(
+    crate::filter_pushdown::ChildFilterDescription,
+    crate::filter_pushdown::ChildFilterDescription,
+)> {
+    let (left_preserved, right_preserved) = join_type.lr_is_preserved();
+    let left_schema_len = left_child.schema().fields().len();
+
+    // For left child: apply schema analysis + join-specific rules
+    let mut left_parent_filters = Vec::new();
+    // For right child: apply schema analysis + join-specific rules
+    let mut right_parent_filters = Vec::new();
+
+    for filter in parent_filters {
+        // Left child analysis
+        if left_preserved && is_left_only_predicate(filter, left_schema_len) {
+            // Check if the filter can actually be pushed based on schema
+            let temp_left_desc =
+                crate::filter_pushdown::ChildFilterDescription::from_child(
+                    &[filter.clone()],
+                    left_child,
+                )?;
+
+            if let Some(first_filter) = temp_left_desc.parent_filters.first() {
+                left_parent_filters.push(first_filter.clone());
+            } else {
+                left_parent_filters.push(
+                    crate::filter_pushdown::PushedDownPredicate::unsupported(
+                        filter.clone(),
+                    ),
+                );
+            }
+        } else {
+            left_parent_filters.push(
+                crate::filter_pushdown::PushedDownPredicate::unsupported(filter.clone()),
+            );
+        }
+
+        // Right child analysis
+        if right_preserved && !is_left_only_predicate(filter, left_schema_len) {
+            // For right side, we need filters that DON'T reference only left columns
+            // Check if the filter can actually be pushed based on schema
+            let temp_right_desc =
+                crate::filter_pushdown::ChildFilterDescription::from_child(
+                    &[filter.clone()],
+                    right_child,
+                )?;
+
+            if let Some(first_filter) = temp_right_desc.parent_filters.first() {
+                right_parent_filters.push(first_filter.clone());
+            } else {
+                right_parent_filters.push(
+                    crate::filter_pushdown::PushedDownPredicate::unsupported(
+                        filter.clone(),
+                    ),
+                );
+            }
+        } else {
+            right_parent_filters.push(
+                crate::filter_pushdown::PushedDownPredicate::unsupported(filter.clone()),
+            );
+        }
+    }
+
+    // Create the child descriptions with the analyzed filters
+    let left_desc = crate::filter_pushdown::ChildFilterDescription {
+        parent_filters: left_parent_filters,
+        self_filters: vec![],
+    };
+
+    let right_desc = crate::filter_pushdown::ChildFilterDescription {
+        parent_filters: right_parent_filters,
+        self_filters: vec![],
+    };
+
+    Ok((left_desc, right_desc))
 }
 
 impl HashJoinExec {
@@ -1049,12 +1114,9 @@ impl ExecutionPlan for HashJoinExec {
         parent_filters: Vec<Arc<dyn PhysicalExpr>>,
         config: &ConfigOptions,
     ) -> Result<FilterDescription> {
-        // Check if this join type supports filter pushdown
-        let (_left_preserved, _right_preserved) = lr_is_preserved(self.join_type);
-
         // For now, only support Inner and LeftSemi joins
-        // Other types of joins can support *some* filters, but restrictions are complex and error prone.
-        // See the logical optimizer rules for more details: datafusion/optimizer/src/push_down_filter.rs
+        // Even though other join types like Left have one preserved side, the implementation
+        // is more complex and error prone. See the logical optimizer rules for more details.
         // See https://github.com/apache/datafusion/issues/16973 for tracking.
         if !matches!(self.join_type, JoinType::Inner | JoinType::LeftSemi) {
             return Ok(FilterDescription::all_unsupported(
@@ -1063,58 +1125,13 @@ impl ExecutionPlan for HashJoinExec {
             ));
         }
 
-        // Get basic filter descriptions for both children (for Inner joins, this works as before)
-        let mut left_child = crate::filter_pushdown::ChildFilterDescription::from_child(
+        // Create join-aware child descriptions that respect join semantics from the start
+        let (left_child, mut right_child) = create_join_aware_child_descriptions(
             &parent_filters,
             self.left(),
-        )?;
-        let mut right_child = crate::filter_pushdown::ChildFilterDescription::from_child(
-            &parent_filters,
             self.right(),
+            self.join_type,
         )?;
-
-        // For left semi joins, override the analysis to only allow left-side filters to go to left child
-        if self.join_type == JoinType::LeftSemi {
-            let left_schema_len = self.left().schema().fields().len();
-
-            // Create new parent filters list with modified support based on column analysis
-            let mut new_left_parent_filters = Vec::new();
-            let mut new_right_parent_filters = Vec::new();
-
-            for (i, filter) in parent_filters.iter().enumerate() {
-                // For left child: can only push filters that reference only left-side columns
-                if is_left_only_predicate(filter, left_schema_len) {
-                    // Check if original analysis said it was supported
-                    if let Some(orig_filter) = left_child.parent_filters.get(i) {
-                        new_left_parent_filters.push(orig_filter.clone());
-                    } else {
-                        new_left_parent_filters.push(
-                            crate::filter_pushdown::PushedDownPredicate::unsupported(
-                                filter.clone(),
-                            ),
-                        );
-                    }
-                } else {
-                    // Cannot push this filter to left child for left semi join
-                    new_left_parent_filters.push(
-                        crate::filter_pushdown::PushedDownPredicate::unsupported(
-                            filter.clone(),
-                        ),
-                    );
-                }
-
-                // For right child: left semi joins cannot push any parent filters to right child
-                new_right_parent_filters.push(
-                    crate::filter_pushdown::PushedDownPredicate::unsupported(
-                        filter.clone(),
-                    ),
-                );
-            }
-
-            // Update the child descriptions
-            left_child.parent_filters = new_left_parent_filters;
-            right_child.parent_filters = new_right_parent_filters;
-        }
 
         // Add dynamic filters in Post phase if enabled
         if matches!(phase, FilterPushdownPhase::Post)
