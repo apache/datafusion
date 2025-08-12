@@ -31,7 +31,10 @@ use crate::filter_pushdown::{
     ChildFilterDescription, FilterDescription, FilterPushdownPhase,
 };
 use crate::limit::LimitStream;
-use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet, SpillMetrics, Time};
+use crate::metrics::{
+    BaselineMetrics, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet, SpillMetrics,
+    Time,
+};
 use crate::projection::{make_with_child, update_ordering, ProjectionExec};
 use crate::sorts::streaming_merge::{SortedSpillFile, StreamingMergeBuilder};
 use crate::spill::get_record_batch_memory_size;
@@ -71,12 +74,15 @@ pub struct LexSortMetrics {
 
 impl LexSortMetrics {
     pub fn new(metrics: &ExecutionPlanMetricsSet, partition: usize) -> Self {
-            Self {
-                time_evaluating_sort_columns: MetricBuilder::new(metrics).subset_time("time_evaluating_sort_columns", partition),
-                time_calculating_lexsort_indices: MetricBuilder::new(metrics).subset_time("time_calculating_lexsort_indices", partition),
-                time_taking_indices_in_lexsort: MetricBuilder::new(metrics).subset_time("time_taking_indices_in_lexsort", partition),
-            }
+        Self {
+            time_evaluating_sort_columns: MetricBuilder::new(metrics)
+                .subset_time("time_evaluating_sort_columns", partition),
+            time_calculating_lexsort_indices: MetricBuilder::new(metrics)
+                .subset_time("time_calculating_lexsort_indices", partition),
+            time_taking_indices_in_lexsort: MetricBuilder::new(metrics)
+                .subset_time("time_taking_indices_in_lexsort", partition),
         }
+    }
 }
 
 struct ExternalSorterMetrics {
@@ -93,7 +99,7 @@ impl ExternalSorterMetrics {
         Self {
             baseline: BaselineMetrics::new(metrics, partition),
             spill_metrics: SpillMetrics::new(metrics, partition),
-            lexsort_metrics: LexSortMetrics::new(metrics, partition)
+            lexsort_metrics: LexSortMetrics::new(metrics, partition),
         }
     }
 }
@@ -844,11 +850,13 @@ pub fn sort_batch(
     };
 
     let indices = {
-        let _timer = metrics.map(|metrics| metrics.time_calculating_lexsort_indices.timer());
+        let _timer =
+            metrics.map(|metrics| metrics.time_calculating_lexsort_indices.timer());
         lexsort_to_indices(&sort_columns, fetch)?
     };
     let mut columns = {
-        let _timer = metrics.map(|metrics| metrics.time_taking_indices_in_lexsort.timer());
+        let _timer =
+            metrics.map(|metrics| metrics.time_taking_indices_in_lexsort.timer());
         take_arrays(batch.columns(), &indices, None)?
     };
 

@@ -1001,7 +1001,12 @@ impl GroupedHashAggregateStream {
         let Some(emit) = self.emit(EmitTo::All, true)? else {
             return Ok(());
         };
-        let sorted = sort_batch(&emit, &self.spill_state.spill_expr, Some(&self.lexsort_metrics), None)?;
+        let sorted = sort_batch(
+            &emit,
+            &self.spill_state.spill_expr,
+            Some(&self.lexsort_metrics),
+            None,
+        )?;
 
         // Spill sorted state to disk
         let spillfile = self
