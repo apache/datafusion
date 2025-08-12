@@ -19,10 +19,148 @@
 
 # Upgrade Guides
 
-## DataFusion `49.0.0`
+## DataFusion `50.0.0`
 
-**Note:** DataFusion `49.0.0` has not been released yet. The information provided in this section pertains to features and changes that have already been merged to the main branch and are awaiting release in this version.
-You can see the current [status of the `49.0.0 `release here](https://github.com/apache/datafusion/issues/16235)
+**Note:** DataFusion `50.0.0` has not been released yet. The information provided in this section pertains to features and changes that have already been merged to the main branch and are awaiting release in this version.
+You can see the current [status of the `50.0.0 `release here](https://github.com/apache/datafusion/issues/16799)
+
+### `WindowUDFImpl` trait now requires `PartialEq`, `Eq`, and `Hash` traits
+
+To address error-proneness of `WindowUDFImpl::equals` method and to make it easy to implement function
+equality correctly, the `WindowUDFImpl::equals` and `WindowUDFImpl::hash_value` methods have been replaced
+with the requirement to implement the `PartialEq`, `Eq`, and `Hash` traits on any type implementing `WindowUDFImpl`. Please see [issue #16677] for more details
+
+[issue #16677]: https://github.com/apache/datafusion/issues/16677
+
+### `AsyncScalarUDFImpl::invoke_async_with_args` returns `ColumnarValue`
+
+In order to enable single value optimizations and be consistent with other
+user defined function APIs, the `AsyncScalarUDFImpl::invoke_async_with_args` method now
+returns a `ColumnarValue` instead of a `ArrayRef`.
+
+To upgrade, change the return type of your implementation
+
+```rust
+# /* comment to avoid running
+impl AsyncScalarUDFImpl for AskLLM {
+    async fn invoke_async_with_args(
+        &self,
+        args: ScalarFunctionArgs,
+        _option: &ConfigOptions,
+    ) -> Result<ColumnarValue> {
+        ..
+      return array_ref; // old code
+    }
+}
+# */
+```
+
+To return a `ColumnarValue`
+
+```rust
+# /* comment to avoid running
+impl AsyncScalarUDFImpl for AskLLM {
+    async fn invoke_async_with_args(
+        &self,
+        args: ScalarFunctionArgs,
+        _option: &ConfigOptions,
+    ) -> Result<ColumnarValue> {
+        ..
+      return ColumnarValue::from(array_ref); // new code
+    }
+}
+# */
+```
+
+See [#16896](https://github.com/apache/datafusion/issues/16896) for more details.
+
+### `SessionState`, `SessionConfig`, and `OptimizerConfig` returns `&Arc<ConfigOptions>` instead of `&ConfigOptions`
+
+To provide broader access to `ConfigOptions` and reduce required clones, some
+APIs have been changed to return a `&Arc<ConfigOptions>` instead of a
+`&ConfigOptions`. This allows sharing the same `ConfigOptions` across multiple
+threads without needing to clone the entire `ConfigOptions` structure unless it
+is modified.
+
+Most users will not be impacted by this change since the Rust compiler typically
+automatically dereference the `Arc` when needed. However, in some cases you may
+have to change your code to explicitly call `as_ref()` for example, from
+
+```rust
+# /* comment to avoid running
+let optimizer_config: &ConfigOptions = state.options();
+#  */
+```
+
+To
+
+```rust
+# /* comment to avoid running
+let optimizer_config: &ConfigOptions = state.options().as_ref();
+#  */
+```
+
+See PR [#16970](https://github.com/apache/datafusion/pull/16970)
+
+### API Change to `AsyncScalarUDFImpl::invoke_async_with_args`
+
+The `invoke_async_with_args` method of the `AsyncScalarUDFImpl` trait has been
+updated to remove the `_option: &ConfigOptions` parameter to simplify the API
+now that the `ConfigOptions` can be accessed through the `ScalarFunctionArgs`
+parameter.
+
+You can change your code like this
+
+```rust
+# /* comment to avoid running
+impl AsyncScalarUDFImpl for AskLLM {
+    async fn invoke_async_with_args(
+        &self,
+        args: ScalarFunctionArgs,
+        _option: &ConfigOptions,
+    ) -> Result<ArrayRef> {
+        ..
+    }
+    ...
+}
+# */
+```
+
+To this:
+
+```rust
+# /* comment to avoid running
+
+impl AsyncScalarUDFImpl for AskLLM {
+    async fn invoke_async_with_args(
+        &self,
+        args: ScalarFunctionArgs,
+    ) -> Result<ArrayRef> {
+        let options = &args.config_options;
+        ..
+    }
+    ...
+}
+# */
+```
+
+### Upgrade to arrow `56.0.0` and parquet `56.0.0`
+
+This version of DataFusion upgrades the underlying Apache Arrow implementation
+to version `56.0.0`. See the [release notes](https://github.com/apache/arrow-rs/releases/tag/56.0.0)
+for more details.
+
+### Added `ExecutionPlan::reset_state`
+
+In order to fix a bug in DataFusion `49.0.0` where dynamic filters (currently only generated in the precense of a query such as `ORDER BY ... LIMIT ...`)
+produced incorrect results in recursive queries, a new method `reset_state` has been added to the `ExecutionPlan` trait.
+
+Any `ExecutionPlan` that needs to maintain internal state or references to other nodes in the execution plan tree should implement this method to reset that state.
+See [#17028] for more details and an example implementation for `SortExec`.
+
+[#17028]: https://github.com/apache/datafusion/pull/17028
+
+## DataFusion `49.0.0`
 
 ### `MSRV` updated to 1.85.1
 
@@ -194,6 +332,35 @@ Opting into the new APIs will set you up for future changes since we plan to exp
 See [#16800] for details.
 
 [#16800]: https://github.com/apache/datafusion/issues/16800
+
+### `TableParquetOptions` Updated
+
+The `TableParquetOptions` struct has a new `crypto` field to specify encryption
+options for Parquet files. The `ParquetEncryptionOptions` implements `Default`
+so you can upgrade your existing code like this:
+
+```rust
+# /* comment to avoid running
+TableParquetOptions {
+  global,
+  column_specific_options,
+  key_value_metadata,
+}
+# */
+```
+
+To this:
+
+```rust
+# /* comment to avoid running
+TableParquetOptions {
+  global,
+  column_specific_options,
+  key_value_metadata,
+  crypto: Default::default(), // New crypto field
+}
+# */
+```
 
 ## DataFusion `48.0.1`
 

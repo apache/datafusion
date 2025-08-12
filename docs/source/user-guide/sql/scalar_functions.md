@@ -2114,9 +2114,10 @@ date_part(part, expression)
   - millisecond
   - microsecond
   - nanosecond
-  - dow (day of the week)
+  - dow (day of the week where Sunday is 0)
   - doy (day of the year)
   - epoch (seconds since Unix epoch)
+  - isodow (day of the week where Monday is 0)
 
 - **expression**: Time expression to operate on. Can be a constant, column, or function.
 
@@ -2150,6 +2151,8 @@ date_trunc(precision, expression)
   - hour / HOUR
   - minute / MINUTE
   - second / SECOND
+  - millisecond / MILLISECOND
+  - microsecond / MICROSECOND
 
 - **expression**: Time expression to operate on. Can be a constant, column, or function.
 

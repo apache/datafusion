@@ -15,27 +15,29 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! non trivial integration testing for parquet predicate pushdown
-//!
-//! Testing hints: If you run this test with --nocapture it will tell you where
-//! the generated parquet file went. You can then test it and try out various queries
-//! datafusion-cli like:
-//!
-//! ```sql
-//! create external table data stored as parquet location 'data.parquet';
-//! select * from data limit 10;
-//! ```
+//! Tests for reading and writing Parquet files that use Parquet modular encryption
 
+use arrow::array::{ArrayRef, Int32Array, StringArray};
 use arrow::record_batch::RecordBatch;
+use arrow_schema::{DataType, SchemaRef};
+use datafusion::dataframe::DataFrameWriteOptions;
+use datafusion::datasource::listing::ListingOptions;
 use datafusion::prelude::{ParquetReadOptions, SessionContext};
-use std::fs::File;
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
-
+use datafusion_common::config::{EncryptionFactoryOptions, TableParquetOptions};
+use datafusion_common::{assert_batches_sorted_eq, DataFusionError};
+use datafusion_datasource_parquet::ParquetFormat;
+use datafusion_execution::parquet_encryption::EncryptionFactory;
+use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
 use parquet::arrow::ArrowWriter;
 use parquet::encryption::decrypt::FileDecryptionProperties;
 use parquet::encryption::encrypt::FileEncryptionProperties;
+use parquet::file::column_crypto_metadata::ColumnCryptoMetaData;
 use parquet::file::properties::WriterProperties;
+use std::collections::HashMap;
+use std::fs::File;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::{Arc, Mutex};
 use tempfile::TempDir;
 
 async fn read_parquet_test_data<'a, T: Into<String>>(
@@ -74,7 +76,6 @@ pub fn write_batches(
     Ok(num_rows)
 }
 
-#[cfg(feature = "parquet_encryption")]
 #[tokio::test]
 async fn round_trip_encryption() {
     let ctx: SessionContext = SessionContext::new();
@@ -127,4 +128,227 @@ async fn round_trip_encryption() {
         .fold(0, |acc, x| acc + x.num_rows());
 
     assert_eq!(num_rows_written, num_rows_read);
+}
+
+#[tokio::test]
+async fn round_trip_parquet_with_encryption_factory() {
+    let ctx = SessionContext::new();
+    let encryption_factory = Arc::new(MockEncryptionFactory::default());
+    ctx.runtime_env().register_parquet_encryption_factory(
+        "test_encryption_factory",
+        Arc::clone(&encryption_factory) as Arc<dyn EncryptionFactory>,
+    );
+
+    let tmpdir = TempDir::new().unwrap();
+
+    // Register some simple test data
+    let strings: ArrayRef =
+        Arc::new(StringArray::from(vec!["a", "b", "c", "a", "b", "c"]));
+    let x1: ArrayRef = Arc::new(Int32Array::from(vec![1, 10, 11, 100, 101, 111]));
+    let x2: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6]));
+    let batch =
+        RecordBatch::try_from_iter(vec![("string", strings), ("x1", x1), ("x2", x2)])
+            .unwrap();
+    let test_data_schema = batch.schema();
+    ctx.register_batch("test_data", batch).unwrap();
+    let df = ctx.table("test_data").await.unwrap();
+
+    // Write encrypted Parquet, partitioned by string column into separate files
+    let mut parquet_options = TableParquetOptions::new();
+    parquet_options.crypto.factory_id = Some("test_encryption_factory".to_string());
+    parquet_options
+        .crypto
+        .factory_options
+        .options
+        .insert("test_key".to_string(), "test value".to_string());
+
+    let df_write_options =
+        DataFrameWriteOptions::default().with_partition_by(vec!["string".to_string()]);
+    df.write_parquet(
+        tmpdir.path().to_str().unwrap(),
+        df_write_options,
+        Some(parquet_options.clone()),
+    )
+    .await
+    .unwrap();
+
+    // Crypto factory should have generated one key per partition file
+    assert_eq!(encryption_factory.encryption_keys.lock().unwrap().len(), 3);
+
+    verify_table_encrypted(tmpdir.path(), &encryption_factory).unwrap();
+
+    // Registering table without decryption properties should fail
+    let table_path = format!("file://{}/", tmpdir.path().to_str().unwrap());
+    let without_decryption_register = ctx
+        .register_listing_table(
+            "parquet_missing_decryption",
+            &table_path,
+            ListingOptions::new(Arc::new(ParquetFormat::default())),
+            None,
+            None,
+        )
+        .await;
+    assert!(matches!(
+        without_decryption_register.unwrap_err(),
+        DataFusionError::ParquetError(_)
+    ));
+
+    // Registering table succeeds if schema is provided
+    ctx.register_listing_table(
+        "parquet_missing_decryption",
+        &table_path,
+        ListingOptions::new(Arc::new(ParquetFormat::default())),
+        Some(test_data_schema),
+        None,
+    )
+    .await
+    .unwrap();
+
+    // But trying to read from the table should fail
+    let without_decryption_read = ctx
+        .table("parquet_missing_decryption")
+        .await
+        .unwrap()
+        .collect()
+        .await;
+    assert!(matches!(
+        without_decryption_read.unwrap_err(),
+        DataFusionError::ParquetError(_)
+    ));
+
+    // Register table with encryption factory specified
+    let listing_options = ListingOptions::new(Arc::new(
+        ParquetFormat::default().with_options(parquet_options),
+    ))
+    .with_table_partition_cols(vec![("string".to_string(), DataType::Utf8)]);
+    ctx.register_listing_table(
+        "parquet_with_decryption",
+        &table_path,
+        listing_options,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+
+    // Can read correct data when encryption factory has been specified
+    let table = ctx
+        .table("parquet_with_decryption")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+
+    let expected = [
+        "+-----+----+--------+",
+        "| x1  | x2 | string |",
+        "+-----+----+--------+",
+        "| 1   | 1  | a      |",
+        "| 100 | 4  | a      |",
+        "| 10  | 2  | b      |",
+        "| 101 | 5  | b      |",
+        "| 11  | 3  | c      |",
+        "| 111 | 6  | c      |",
+        "+-----+----+--------+",
+    ];
+    assert_batches_sorted_eq!(expected, &table);
+}
+
+fn verify_table_encrypted(
+    table_path: &Path,
+    encryption_factory: &Arc<MockEncryptionFactory>,
+) -> datafusion_common::Result<()> {
+    let mut directories = vec![table_path.to_path_buf()];
+    let mut files_visited = 0;
+    while let Some(directory) = directories.pop() {
+        for entry in std::fs::read_dir(&directory)? {
+            let path = entry?.path();
+            if path.is_dir() {
+                directories.push(path);
+            } else {
+                verify_file_encrypted(&path, encryption_factory)?;
+                files_visited += 1;
+            }
+        }
+    }
+    assert!(files_visited > 0);
+    Ok(())
+}
+
+fn verify_file_encrypted(
+    file_path: &Path,
+    encryption_factory: &Arc<MockEncryptionFactory>,
+) -> datafusion_common::Result<()> {
+    let mut options = EncryptionFactoryOptions::default();
+    options
+        .options
+        .insert("test_key".to_string(), "test value".to_string());
+    let object_path = object_store::path::Path::from(file_path.to_str().unwrap());
+    let decryption_properties = encryption_factory
+        .get_file_decryption_properties(&options, &object_path)?
+        .unwrap();
+
+    let reader_options =
+        ArrowReaderOptions::new().with_file_decryption_properties(decryption_properties);
+    let file = File::open(file_path)?;
+    let reader_metadata = ArrowReaderMetadata::load(&file, reader_options)?;
+    let metadata = reader_metadata.metadata();
+    assert!(metadata.num_row_groups() > 0);
+    for row_group in metadata.row_groups() {
+        assert!(row_group.num_columns() > 0);
+        for col in row_group.columns() {
+            assert!(matches!(
+                col.crypto_metadata(),
+                Some(ColumnCryptoMetaData::EncryptionWithFooterKey)
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Encryption factory implementation for use in tests,
+/// which generates encryption keys in a sequence
+#[derive(Debug, Default)]
+struct MockEncryptionFactory {
+    pub encryption_keys: Mutex<HashMap<object_store::path::Path, Vec<u8>>>,
+    pub counter: AtomicU8,
+}
+
+impl EncryptionFactory for MockEncryptionFactory {
+    fn get_file_encryption_properties(
+        &self,
+        config: &EncryptionFactoryOptions,
+        _schema: &SchemaRef,
+        file_path: &object_store::path::Path,
+    ) -> datafusion_common::Result<Option<FileEncryptionProperties>> {
+        assert_eq!(
+            config.options.get("test_key"),
+            Some(&"test value".to_string())
+        );
+        let file_idx = self.counter.fetch_add(1, Ordering::Relaxed);
+        let key = vec![file_idx, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        let mut keys = self.encryption_keys.lock().unwrap();
+        keys.insert(file_path.clone(), key.clone());
+        let encryption_properties = FileEncryptionProperties::builder(key).build()?;
+        Ok(Some(encryption_properties))
+    }
+
+    fn get_file_decryption_properties(
+        &self,
+        config: &EncryptionFactoryOptions,
+        file_path: &object_store::path::Path,
+    ) -> datafusion_common::Result<Option<FileDecryptionProperties>> {
+        assert_eq!(
+            config.options.get("test_key"),
+            Some(&"test value".to_string())
+        );
+        let keys = self.encryption_keys.lock().unwrap();
+        let key = keys.get(file_path).ok_or_else(|| {
+            DataFusionError::Execution(format!("No key for file {file_path:?}"))
+        })?;
+        let decryption_properties =
+            FileDecryptionProperties::builder(key.clone()).build()?;
+        Ok(Some(decryption_properties))
+    }
 }

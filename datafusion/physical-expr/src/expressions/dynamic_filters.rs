@@ -32,6 +32,10 @@ use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr_common::physical_expr::{DynEq, DynHash};
 
 /// A dynamic [`PhysicalExpr`] that can be updated by anyone with a reference to it.
+///
+/// Any `ExecutionPlan` that uses this expression and holds a reference to it internally should probably also
+/// implement `ExecutionPlan::reset_state` to remain compatible with recursive queries and other situations where
+/// the same `ExecutionPlan` is reused with different data.
 #[derive(Debug)]
 pub struct DynamicFilterPhysicalExpr {
     /// The original children of this PhysicalExpr, if any.
@@ -121,8 +125,11 @@ impl DynamicFilterPhysicalExpr {
     /// do not change* since those will be used to determine what columns need to read or projected
     /// when evaluating the expression.
     ///
+    /// Any `ExecutionPlan` that uses this expression and holds a reference to it internally should probably also
+    /// implement `ExecutionPlan::reset_state` to remain compatible with recursive queries and other situations where
+    /// the same `ExecutionPlan` is reused with different data.
+    ///
     /// [`collect_columns`]: crate::utils::collect_columns
-    #[allow(dead_code)] // Only used in tests for now
     pub fn new(
         children: Vec<Arc<dyn PhysicalExpr>>,
         inner: Arc<dyn PhysicalExpr>,
@@ -191,7 +198,6 @@ impl DynamicFilterPhysicalExpr {
     /// This should be called e.g.:
     /// - When we've computed the probe side's hash table in a HashJoinExec
     /// - After every batch is processed if we update the TopK heap in a SortExec using a TopK approach.
-    #[allow(dead_code)] // Only used in tests for now
     pub fn update(&self, new_expr: Arc<dyn PhysicalExpr>) -> Result<()> {
         let mut current = self.inner.write().map_err(|_| {
             datafusion_common::DataFusionError::Execution(

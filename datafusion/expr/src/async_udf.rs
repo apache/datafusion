@@ -15,18 +15,19 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::{ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl};
-use arrow::array::ArrayRef;
+use crate::ptr_eq::{arc_ptr_eq, arc_ptr_hash};
+use crate::{
+    udf_equals_hash, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl,
+};
 use arrow::datatypes::{DataType, FieldRef};
 use async_trait::async_trait;
-use datafusion_common::config::ConfigOptions;
 use datafusion_common::error::Result;
 use datafusion_common::internal_err;
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::signature::Signature;
 use std::any::Any;
 use std::fmt::{Debug, Display};
-use std::hash::{DefaultHasher, Hash, Hasher};
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 /// A scalar UDF that can invoke using async methods
@@ -49,8 +50,7 @@ pub trait AsyncScalarUDFImpl: ScalarUDFImpl {
     async fn invoke_async_with_args(
         &self,
         args: ScalarFunctionArgs,
-        option: &ConfigOptions,
-    ) -> Result<ArrayRef>;
+    ) -> Result<ColumnarValue>;
 }
 
 /// A scalar UDF that must be invoked using async methods
@@ -60,6 +60,22 @@ pub trait AsyncScalarUDFImpl: ScalarUDFImpl {
 #[derive(Debug)]
 pub struct AsyncScalarUDF {
     inner: Arc<dyn AsyncScalarUDFImpl>,
+}
+
+impl PartialEq for AsyncScalarUDF {
+    fn eq(&self, other: &Self) -> bool {
+        let Self { inner } = self;
+        // TODO when MSRV >= 1.86.0, switch to `inner.equals(other.inner.as_ref())` leveraging trait upcasting.
+        arc_ptr_eq(inner, &other.inner)
+    }
+}
+impl Eq for AsyncScalarUDF {}
+
+impl Hash for AsyncScalarUDF {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        let Self { inner } = self;
+        arc_ptr_hash(inner, state);
+    }
 }
 
 impl AsyncScalarUDF {
@@ -82,9 +98,8 @@ impl AsyncScalarUDF {
     pub async fn invoke_async_with_args(
         &self,
         args: ScalarFunctionArgs,
-        option: &ConfigOptions,
-    ) -> Result<ArrayRef> {
-        self.inner.invoke_async_with_args(args, option).await
+    ) -> Result<ColumnarValue> {
+        self.inner.invoke_async_with_args(args).await
     }
 }
 
@@ -113,21 +128,7 @@ impl ScalarUDFImpl for AsyncScalarUDF {
         internal_err!("async functions should not be called directly")
     }
 
-    fn equals(&self, other: &dyn ScalarUDFImpl) -> bool {
-        let Some(other) = other.as_any().downcast_ref::<Self>() else {
-            return false;
-        };
-        let Self { inner } = self;
-        // TODO when MSRV >= 1.86.0, switch to `inner.equals(other.inner.as_ref())` leveraging trait upcasting
-        Arc::ptr_eq(inner, &other.inner)
-    }
-
-    fn hash_value(&self) -> u64 {
-        let Self { inner } = self;
-        let mut hasher = DefaultHasher::new();
-        Arc::as_ptr(inner).hash(&mut hasher);
-        hasher.finish()
-    }
+    udf_equals_hash!(ScalarUDFImpl);
 }
 
 impl Display for AsyncScalarUDF {
