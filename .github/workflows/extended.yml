@@ -32,6 +32,10 @@ on:
   push:
     branches:
       - main
+      # support extended test suite for release candidate branches,
+      # it is not expected to have many changes in these branches,
+      # so running extended tests is not a burden
+      - 'branch-*'
   workflow_dispatch:
     inputs:
       pr_number:
