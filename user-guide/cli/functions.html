@@ -1,0 +1,885 @@
+<!DOCTYPE html>
+
+<html lang="en" data-content_root="../../">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>CLI Specific Functions &#8212; Apache DataFusion  documentation</title>
+    
+    <link href="../../_static/styles/theme.css?digest=1999514e3f237ded88cf" rel="stylesheet">
+<link href="../../_static/styles/pydata-sphinx-theme.css?digest=1999514e3f237ded88cf" rel="stylesheet">
+  
+    
+    <link rel="stylesheet"
+      href="../../_static/vendor/fontawesome/5.13.0/css/all.min.css">
+    <link rel="preload" as="font" type="font/woff2" crossorigin
+      href="../../_static/vendor/fontawesome/5.13.0/webfonts/fa-solid-900.woff2">
+    <link rel="preload" as="font" type="font/woff2" crossorigin
+      href="../../_static/vendor/fontawesome/5.13.0/webfonts/fa-brands-400.woff2">
+  
+    
+      
+  
+    
+    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=8f2a1f02" />
+    <link rel="stylesheet" type="text/css" href="../../_static/styles/pydata-sphinx-theme.css?v=1140d252" />
+    <link rel="stylesheet" type="text/css" href="../../_static/theme_overrides.css?v=c6d785ac" />
+    
+    <link rel="preload" as="script" href="../../_static/scripts/pydata-sphinx-theme.js?digest=1999514e3f237ded88cf">
+  
+    <script src="../../_static/documentation_options.js?v=8a448e45"></script>
+    <script src="../../_static/doctools.js?v=9bcbadda"></script>
+    <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+    <link rel="next" title="DataFrame API" href="../dataframe.html" />
+    <link rel="prev" title="Local Files / Directories" href="datasources.html" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="docsearch:language" content="en">
+    
+
+    <!-- Google Analytics -->
+    
+  </head>
+  <body data-spy="scroll" data-target="#bd-toc-nav" data-offset="80">
+    
+    <div class="container-fluid" id="banner"></div>
+
+    
+
+
+    <div class="container-xl">
+      <div class="row">
+          
+            
+            <!-- Only show if we have sidebars configured, else just a small margin  -->
+            <div class="col-12 col-md-3 bd-sidebar">
+              <div class="sidebar-start-items">
+
+<form class="bd-search d-flex align-items-center" action="../../search.html" method="get">
+  <i class="icon fas fa-search"></i>
+  <input type="search" class="form-control" name="q" id="search-input" placeholder="Search the docs ..." aria-label="Search the docs ..." autocomplete="off" >
+</form>
+
+<nav class="bd-links" id="bd-docs-nav" aria-label="Main navigation">
+  <div class="bd-toc-item active">
+    
+    <p aria-level="2" class="caption" role="heading">
+ <span class="caption-text">
+  ASF Links
+ </span>
+</p>
+<ul class="nav bd-sidenav">
+ <li class="toctree-l1">
+  <a class="reference external" href="https://apache.org">
+   Apache Software Foundation
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference external" href="https://www.apache.org/licenses/">
+   License
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference external" href="https://www.apache.org/foundation/sponsorship.html">
+   Donate
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference external" href="https://www.apache.org/foundation/thanks.html">
+   Thanks
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference external" href="https://www.apache.org/security/">
+   Security
+  </a>
+ </li>
+</ul>
+<p aria-level="2" class="caption" role="heading">
+ <span class="caption-text">
+  Links
+ </span>
+</p>
+<ul class="nav bd-sidenav">
+ <li class="toctree-l1">
+  <a class="reference external" href="https://github.com/apache/datafusion">
+   GitHub and Issue Tracker
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference external" href="https://crates.io/crates/datafusion">
+   crates.io
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/">
+   API Docs
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference external" href="https://datafusion.apache.org/blog/">
+   Blog
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference external" href="https://github.com/apache/datafusion/blob/main/CODE_OF_CONDUCT.md">
+   Code of conduct
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../download.html">
+   Download
+  </a>
+ </li>
+</ul>
+<p aria-level="2" class="caption" role="heading">
+ <span class="caption-text">
+  User Guide
+ </span>
+</p>
+<ul class="current nav bd-sidenav">
+ <li class="toctree-l1">
+  <a class="reference internal" href="../introduction.html">
+   Introduction
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../example-usage.html">
+   Example Usage
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../features.html">
+   Features
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../concepts-readings-events.html">
+   Concepts, Readings, Events
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../crate-configuration.html">
+   Crate Configuration
+  </a>
+ </li>
+ <li class="toctree-l1 current active has-children">
+  <a class="reference internal" href="index.html">
+   DataFusion CLI
+  </a>
+  <input checked="" class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" type="checkbox"/>
+  <label for="toctree-checkbox-1">
+   <i class="fas fa-chevron-down">
+   </i>
+  </label>
+  <ul class="current">
+   <li class="toctree-l2">
+    <a class="reference internal" href="overview.html">
+     Overview
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="installation.html">
+     Installation
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="usage.html">
+     Usage
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="datasources.html">
+     Local Files / Directories
+    </a>
+   </li>
+   <li class="toctree-l2 current active">
+    <a class="current reference internal" href="#">
+     CLI Specific Functions
+    </a>
+   </li>
+  </ul>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../dataframe.html">
+   DataFrame API
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../expressions.html">
+   Expression API
+  </a>
+ </li>
+ <li class="toctree-l1 has-children">
+  <a class="reference internal" href="../sql/index.html">
+   SQL Reference
+  </a>
+  <input class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" type="checkbox"/>
+  <label for="toctree-checkbox-2">
+   <i class="fas fa-chevron-down">
+   </i>
+  </label>
+  <ul>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../sql/data_types.html">
+     Data Types
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../sql/select.html">
+     SELECT syntax
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../sql/subqueries.html">
+     Subqueries
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../sql/ddl.html">
+     DDL
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../sql/dml.html">
+     DML
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../sql/explain.html">
+     EXPLAIN
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../sql/information_schema.html">
+     Information Schema
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../sql/operators.html">
+     Operators and Literals
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../sql/aggregate_functions.html">
+     Aggregate Functions
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../sql/window_functions.html">
+     Window Functions
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../sql/scalar_functions.html">
+     Scalar Functions
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../sql/special_functions.html">
+     Special Functions
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../sql/format_options.html">
+     Format Options
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../sql/prepared_statements.html">
+     Prepared Statements
+    </a>
+   </li>
+  </ul>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../configs.html">
+   Configuration Settings
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../explain-usage.html">
+   Reading Explain Plans
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../faq.html">
+   Frequently Asked Questions
+  </a>
+ </li>
+</ul>
+<p aria-level="2" class="caption" role="heading">
+ <span class="caption-text">
+  Library User Guide
+ </span>
+</p>
+<ul class="nav bd-sidenav">
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../library-user-guide/index.html">
+   Introduction
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../library-user-guide/upgrading.html">
+   Upgrade Guides
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../library-user-guide/extensions.html">
+   Extensions List
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../library-user-guide/using-the-sql-api.html">
+   Using the SQL API
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../library-user-guide/working-with-exprs.html">
+   Working with
+   <code class="docutils literal notranslate">
+    <span class="pre">
+     Expr
+    </span>
+   </code>
+   s
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../library-user-guide/using-the-dataframe-api.html">
+   Using the DataFrame API
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../library-user-guide/building-logical-plans.html">
+   Building Logical Plans
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../library-user-guide/catalogs.html">
+   Catalogs, Schemas, and Tables
+  </a>
+ </li>
+ <li class="toctree-l1 has-children">
+  <a class="reference internal" href="../../library-user-guide/functions/index.html">
+   Functions
+  </a>
+  <input class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" type="checkbox"/>
+  <label for="toctree-checkbox-3">
+   <i class="fas fa-chevron-down">
+   </i>
+  </label>
+  <ul>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../library-user-guide/functions/adding-udfs.html">
+     Adding User Defined Functions: Scalar/Window/Aggregate/Table Functions
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../library-user-guide/functions/spark.html">
+     Spark Compatible Functions
+    </a>
+   </li>
+  </ul>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../library-user-guide/custom-table-providers.html">
+   Custom Table Provider
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../library-user-guide/table-constraints.html">
+   Table Constraint Enforcement
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../library-user-guide/extending-operators.html">
+   Extending DataFusion’s operators: custom LogicalPlan and Execution Plans
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../library-user-guide/profiling.html">
+   Profiling Cookbook
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../library-user-guide/query-optimizer.html">
+   DataFusion Query Optimizer
+  </a>
+ </li>
+</ul>
+<p aria-level="2" class="caption" role="heading">
+ <span class="caption-text">
+  Contributor Guide
+ </span>
+</p>
+<ul class="nav bd-sidenav">
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../contributor-guide/index.html">
+   Introduction
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../contributor-guide/communication.html">
+   Communication
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../contributor-guide/development_environment.html">
+   Development Environment
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../contributor-guide/architecture.html">
+   Architecture
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../contributor-guide/testing.html">
+   Testing
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../contributor-guide/api-health.html">
+   API health policy
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../contributor-guide/howtos.html">
+   HOWTOs
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../contributor-guide/roadmap.html">
+   Roadmap
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../contributor-guide/governance.html">
+   Governance
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../contributor-guide/inviting.html">
+   Inviting New Committers and PMC Members
+  </a>
+ </li>
+ <li class="toctree-l1 has-children">
+  <a class="reference internal" href="../../contributor-guide/specification/index.html">
+   Specifications
+  </a>
+  <input class="toctree-checkbox" id="toctree-checkbox-4" name="toctree-checkbox-4" type="checkbox"/>
+  <label for="toctree-checkbox-4">
+   <i class="fas fa-chevron-down">
+   </i>
+  </label>
+  <ul>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../contributor-guide/specification/invariants.html">
+     Invariants
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../contributor-guide/specification/output-field-name-semantic.html">
+     Output field name semantics
+    </a>
+   </li>
+  </ul>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../contributor-guide/gsoc_application_guidelines.html">
+   GSoC Application Guidelines
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../contributor-guide/gsoc_project_ideas.html">
+   GSoC Project Ideas
+  </a>
+ </li>
+</ul>
+<p aria-level="2" class="caption" role="heading">
+ <span class="caption-text">
+  DataFusion Subprojects
+ </span>
+</p>
+<ul class="nav bd-sidenav">
+ <li class="toctree-l1">
+  <a class="reference external" href="https://arrow.apache.org/ballista/">
+   DataFusion Ballista
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference external" href="https://datafusion.apache.org/comet/">
+   DataFusion Comet
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference external" href="https://datafusion.apache.org/python/">
+   DataFusion Python
+  </a>
+ </li>
+</ul>
+
+    
+  </div>
+
+  <a class="navbar-brand" href="../../index.html">
+    <img src="../../_static/images/2x_bgwhite_original.png" class="logo" alt="logo">
+  </a>
+</nav>
+
+              </div>
+              <div class="sidebar-end-items">
+              </div>
+            </div>
+            
+          
+
+          
+          <div class="d-none d-xl-block col-xl-2 bd-toc">
+            
+              
+              <div class="toc-item">
+                
+<div class="tocsection onthispage pt-5 pb-3">
+    <i class="fas fa-list"></i> On this page
+</div>
+
+<nav id="bd-toc-nav">
+    <ul class="visible nav section-nav flex-column">
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#parquet-metadata">
+   <code class="docutils literal notranslate">
+    <span class="pre">
+     parquet_metadata
+    </span>
+   </code>
+  </a>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#metadata-cache">
+   <code class="docutils literal notranslate">
+    <span class="pre">
+     metadata_cache
+    </span>
+   </code>
+  </a>
+ </li>
+</ul>
+
+</nav>
+              </div>
+              
+              <div class="toc-item">
+                
+
+<div class="tocsection editthispage">
+    <a href="https://github.com/apache/arrow-datafusion/edit/main/docs/source/user-guide/cli/functions.md">
+        <i class="fas fa-pencil-alt"></i> Edit this page
+    </a>
+</div>
+
+              </div>
+              
+            
+          </div>
+          
+
+          
+          
+            
+          
+          <main class="col-12 col-md-9 col-xl-7 py-md-5 pl-md-5 pr-md-4 bd-content" role="main">
+              
+              <div>
+                
+  <!---
+  Licensed to the Apache Software Foundation (ASF) under one
+  or more contributor license agreements.  See the NOTICE file
+  distributed with this work for additional information
+  regarding copyright ownership.  The ASF licenses this file
+  to you under the Apache License, Version 2.0 (the
+  "License"); you may not use this file except in compliance
+  with the License.  You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+  Unless required by applicable law or agreed to in writing,
+  software distributed under the License is distributed on an
+  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+  KIND, either express or implied.  See the License for the
+  specific language governing permissions and limitations
+  under the License.
+-->
+<section id="cli-specific-functions">
+<h1>CLI Specific Functions<a class="headerlink" href="#cli-specific-functions" title="Link to this heading">¶</a></h1>
+<p><code class="docutils literal notranslate"><span class="pre">datafusion-cli</span></code> comes with build-in functions that are not included in the
+DataFusion SQL engine by default. These functions are:</p>
+<section id="parquet-metadata">
+<h2><code class="docutils literal notranslate"><span class="pre">parquet_metadata</span></code><a class="headerlink" href="#parquet-metadata" title="Link to this heading">¶</a></h2>
+<p>The <code class="docutils literal notranslate"><span class="pre">parquet_metadata</span></code> table function can be used to inspect detailed metadata
+about a parquet file such as statistics, sizes, and other information. This can
+be helpful to understand how parquet files are structured.</p>
+<p>For example, to see information about the <code class="docutils literal notranslate"><span class="pre">&quot;WatchID&quot;</span></code> column in the
+<code class="docutils literal notranslate"><span class="pre">hits.parquet</span></code> file, you can use:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">path_in_schema</span><span class="p">,</span><span class="w"> </span><span class="n">row_group_id</span><span class="p">,</span><span class="w"> </span><span class="n">row_group_num_rows</span><span class="p">,</span><span class="w"> </span><span class="n">stats_min</span><span class="p">,</span><span class="w"> </span><span class="n">stats_max</span><span class="p">,</span><span class="w"> </span><span class="n">total_compressed_size</span>
+<span class="k">FROM</span><span class="w"> </span><span class="n">parquet_metadata</span><span class="p">(</span><span class="s1">&#39;hits.parquet&#39;</span><span class="p">)</span>
+<span class="k">WHERE</span><span class="w"> </span><span class="n">path_in_schema</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;&quot;WatchID&quot;&#39;</span>
+<span class="k">LIMIT</span><span class="w"> </span><span class="mi">3</span><span class="p">;</span>
+
+<span class="o">+</span><span class="c1">----------------+--------------+--------------------+---------------------+---------------------+-----------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">path_in_schema</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">row_group_id</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">row_group_num_rows</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">stats_min</span><span class="w">           </span><span class="o">|</span><span class="w"> </span><span class="n">stats_max</span><span class="w">           </span><span class="o">|</span><span class="w"> </span><span class="n">total_compressed_size</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------------+--------------+--------------------+---------------------+---------------------+-----------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="ss">&quot;WatchID&quot;</span><span class="w">      </span><span class="o">|</span><span class="w"> </span><span class="mi">0</span><span class="w">            </span><span class="o">|</span><span class="w"> </span><span class="mi">450560</span><span class="w">             </span><span class="o">|</span><span class="w"> </span><span class="mi">4611687214012840539</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="mi">9223369186199968220</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="mi">3883759</span><span class="w">               </span><span class="o">|</span>
+<span class="o">|</span><span class="w"> </span><span class="ss">&quot;WatchID&quot;</span><span class="w">      </span><span class="o">|</span><span class="w"> </span><span class="mi">1</span><span class="w">            </span><span class="o">|</span><span class="w"> </span><span class="mi">612174</span><span class="w">             </span><span class="o">|</span><span class="w"> </span><span class="mi">4611689135232456464</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="mi">9223371478009085789</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="mi">5176803</span><span class="w">               </span><span class="o">|</span>
+<span class="o">|</span><span class="w"> </span><span class="ss">&quot;WatchID&quot;</span><span class="w">      </span><span class="o">|</span><span class="w"> </span><span class="mi">2</span><span class="w">            </span><span class="o">|</span><span class="w"> </span><span class="mi">344064</span><span class="w">             </span><span class="o">|</span><span class="w"> </span><span class="mi">4611692774829951781</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="mi">9223363791697310021</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="mi">3031680</span><span class="w">               </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------------+--------------+--------------------+---------------------+---------------------+-----------------------+</span>
+<span class="mi">3</span><span class="w"> </span><span class="k">rows</span><span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="k">set</span><span class="p">.</span><span class="w"> </span><span class="n">Query</span><span class="w"> </span><span class="n">took</span><span class="w"> </span><span class="mi">0</span><span class="p">.</span><span class="mi">053</span><span class="w"> </span><span class="n">seconds</span><span class="p">.</span>
+</pre></div>
+</div>
+<p>The returned table has the following columns for each row for each column chunk
+in the file. Please refer to the <a class="reference external" href="https://parquet.apache.org/">Parquet Documentation</a> for more information in
+the meaning of these fields.</p>
+<table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>column_name</p></th>
+<th class="head"><p>data_type</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>filename</p></td>
+<td><p>Utf8</p></td>
+<td><p>Name of the file</p></td>
+</tr>
+<tr class="row-odd"><td><p>row_group_id</p></td>
+<td><p>Int64</p></td>
+<td><p>Row group index the column chunk belongs to</p></td>
+</tr>
+<tr class="row-even"><td><p>row_group_num_rows</p></td>
+<td><p>Int64</p></td>
+<td><p>Count of rows stored in the row group</p></td>
+</tr>
+<tr class="row-odd"><td><p>row_group_num_columns</p></td>
+<td><p>Int64</p></td>
+<td><p>Total number of columns in the row group (same for all row groups)</p></td>
+</tr>
+<tr class="row-even"><td><p>row_group_bytes</p></td>
+<td><p>Int64</p></td>
+<td><p>Number of bytes used to store the row group (not including metadata)</p></td>
+</tr>
+<tr class="row-odd"><td><p>column_id</p></td>
+<td><p>Int64</p></td>
+<td><p>ID of the column</p></td>
+</tr>
+<tr class="row-even"><td><p>file_offset</p></td>
+<td><p>Int64</p></td>
+<td><p>Offset within the file that this column chunk’s data begins</p></td>
+</tr>
+<tr class="row-odd"><td><p>num_values</p></td>
+<td><p>Int64</p></td>
+<td><p>Total number of values in this column chunk</p></td>
+</tr>
+<tr class="row-even"><td><p>path_in_schema</p></td>
+<td><p>Utf8</p></td>
+<td><p>“Path” (column name) of the column chunk in the schema</p></td>
+</tr>
+<tr class="row-odd"><td><p>type</p></td>
+<td><p>Utf8</p></td>
+<td><p>Parquet data type of the column chunk</p></td>
+</tr>
+<tr class="row-even"><td><p>stats_min</p></td>
+<td><p>Utf8</p></td>
+<td><p>The minimum value for this column chunk, if stored in the statistics, cast to a string</p></td>
+</tr>
+<tr class="row-odd"><td><p>stats_max</p></td>
+<td><p>Utf8</p></td>
+<td><p>The maximum value for this column chunk, if stored in the statistics, cast to a string</p></td>
+</tr>
+<tr class="row-even"><td><p>stats_null_count</p></td>
+<td><p>Int64</p></td>
+<td><p>Number of null values in this column chunk, if stored in the statistics</p></td>
+</tr>
+<tr class="row-odd"><td><p>stats_distinct_count</p></td>
+<td><p>Int64</p></td>
+<td><p>Number of distinct values in this column chunk, if stored in the statistics</p></td>
+</tr>
+<tr class="row-even"><td><p>stats_min_value</p></td>
+<td><p>Utf8</p></td>
+<td><p>Same as <code class="docutils literal notranslate"><span class="pre">stats_min</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p>stats_max_value</p></td>
+<td><p>Utf8</p></td>
+<td><p>Same as <code class="docutils literal notranslate"><span class="pre">stats_max</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p>compression</p></td>
+<td><p>Utf8</p></td>
+<td><p>Block level compression (e.g. <code class="docutils literal notranslate"><span class="pre">SNAPPY</span></code>) used for this column chunk</p></td>
+</tr>
+<tr class="row-odd"><td><p>encodings</p></td>
+<td><p>Utf8</p></td>
+<td><p>All block level encodings (e.g. <code class="docutils literal notranslate"><span class="pre">[PLAIN_DICTIONARY,</span> <span class="pre">PLAIN,</span> <span class="pre">RLE]</span></code>) used for this column chunk</p></td>
+</tr>
+<tr class="row-even"><td><p>index_page_offset</p></td>
+<td><p>Int64</p></td>
+<td><p>Offset in the file of the <a class="reference external" href="https://github.com/apache/parquet-format/blob/master/PageIndex.md"><code class="docutils literal notranslate"><span class="pre">page</span> <span class="pre">index</span></code></a>, if any</p></td>
+</tr>
+<tr class="row-odd"><td><p>dictionary_page_offset</p></td>
+<td><p>Int64</p></td>
+<td><p>Offset in the file of the dictionary page, if any</p></td>
+</tr>
+<tr class="row-even"><td><p>data_page_offset</p></td>
+<td><p>Int64</p></td>
+<td><p>Offset in the file of the first data page, if any</p></td>
+</tr>
+<tr class="row-odd"><td><p>total_compressed_size</p></td>
+<td><p>Int64</p></td>
+<td><p>Number of bytes the column chunk’s data after encoding and compression (what is stored in the file)</p></td>
+</tr>
+<tr class="row-even"><td><p>total_uncompressed_size</p></td>
+<td><p>Int64</p></td>
+<td><p>Number of bytes the column chunk’s data after encoding</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="metadata-cache">
+<h2><code class="docutils literal notranslate"><span class="pre">metadata_cache</span></code><a class="headerlink" href="#metadata-cache" title="Link to this heading">¶</a></h2>
+<p>The <code class="docutils literal notranslate"><span class="pre">metadata_cache</span></code> function shows information about the default File Metadata Cache that is used by the
+<a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/datasource/listing/struct.ListingTable.html"><code class="docutils literal notranslate"><span class="pre">ListingTable</span></code></a> implementation in DataFusion. This cache is used to speed up
+reading metadata from files when scanning directories with many files.</p>
+<p>For example, after creating a table with the <a class="reference internal" href="../sql/ddl.html#create-external-table"><span class="std std-ref">CREATE EXTERNAL TABLE</span></a>
+command:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">create</span><span class="w"> </span><span class="k">external</span><span class="w"> </span><span class="k">table</span><span class="w"> </span><span class="n">hits</span>
+<span class="w">  </span><span class="n">stored</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">parquet</span>
+<span class="w">  </span><span class="k">location</span><span class="w"> </span><span class="s1">&#39;s3://clickhouse-public-datasets/hits_compatible/athena_partitioned/&#39;</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>You can inspect the metadata cache by querying the <code class="docutils literal notranslate"><span class="pre">metadata_cache</span></code> function:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">from</span><span class="w"> </span><span class="n">metadata_cache</span><span class="p">();</span>
+<span class="o">+</span><span class="c1">----------------------------------------------------+---------------------+-----------------+---------------------------------------+---------+---------------------+------+------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">path</span><span class="w">                                               </span><span class="o">|</span><span class="w"> </span><span class="n">file_modified</span><span class="w">       </span><span class="o">|</span><span class="w"> </span><span class="n">file_size_bytes</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">e_tag</span><span class="w">                                 </span><span class="o">|</span><span class="w"> </span><span class="k">version</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">metadata_size_bytes</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">hits</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">extra</span><span class="w">            </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------------------------------------------------+---------------------+-----------------+---------------------------------------+---------+---------------------+------+------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">hits_compatible</span><span class="o">/</span><span class="n">athena_partitioned</span><span class="o">/</span><span class="n">hits_61</span><span class="p">.</span><span class="n">parquet</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="mi">2022</span><span class="o">-</span><span class="mi">07</span><span class="o">-</span><span class="mi">03</span><span class="n">T15</span><span class="p">:</span><span class="mi">40</span><span class="p">:</span><span class="mi">34</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="mi">117270944</span><span class="w">       </span><span class="o">|</span><span class="w"> </span><span class="ss">&quot;5db11cad1ca0d80d748fc92c914b010a-6&quot;</span><span class="w">  </span><span class="o">|</span><span class="w"> </span><span class="k">NULL</span><span class="w">    </span><span class="o">|</span><span class="w"> </span><span class="mi">212949</span><span class="w">              </span><span class="o">|</span><span class="w"> </span><span class="mi">0</span><span class="w">    </span><span class="o">|</span><span class="w"> </span><span class="n">page_index</span><span class="o">=</span><span class="k">false</span><span class="w"> </span><span class="o">|</span>
+<span class="o">|</span><span class="w"> </span><span class="n">hits_compatible</span><span class="o">/</span><span class="n">athena_partitioned</span><span class="o">/</span><span class="n">hits_32</span><span class="p">.</span><span class="n">parquet</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="mi">2022</span><span class="o">-</span><span class="mi">07</span><span class="o">-</span><span class="mi">03</span><span class="n">T15</span><span class="p">:</span><span class="mi">37</span><span class="p">:</span><span class="mi">17</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="mi">94506004</span><span class="w">        </span><span class="o">|</span><span class="w"> </span><span class="ss">&quot;2f7db49a9fe242179590b615b94a39d2-5&quot;</span><span class="w">  </span><span class="o">|</span><span class="w"> </span><span class="k">NULL</span><span class="w">    </span><span class="o">|</span><span class="w"> </span><span class="mi">278157</span><span class="w">              </span><span class="o">|</span><span class="w"> </span><span class="mi">0</span><span class="w">    </span><span class="o">|</span><span class="w"> </span><span class="n">page_index</span><span class="o">=</span><span class="k">false</span><span class="w"> </span><span class="o">|</span>
+<span class="o">|</span><span class="w"> </span><span class="n">hits_compatible</span><span class="o">/</span><span class="n">athena_partitioned</span><span class="o">/</span><span class="n">hits_40</span><span class="p">.</span><span class="n">parquet</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="mi">2022</span><span class="o">-</span><span class="mi">07</span><span class="o">-</span><span class="mi">03</span><span class="n">T15</span><span class="p">:</span><span class="mi">38</span><span class="p">:</span><span class="mi">07</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="mi">142508647</span><span class="w">       </span><span class="o">|</span><span class="w"> </span><span class="ss">&quot;9e5852b45a469d5a05bf270a286eab8a-8&quot;</span><span class="w">  </span><span class="o">|</span><span class="w"> </span><span class="k">NULL</span><span class="w">    </span><span class="o">|</span><span class="w"> </span><span class="mi">212917</span><span class="w">              </span><span class="o">|</span><span class="w"> </span><span class="mi">0</span><span class="w">    </span><span class="o">|</span><span class="w"> </span><span class="n">page_index</span><span class="o">=</span><span class="k">false</span><span class="w"> </span><span class="o">|</span>
+<span class="o">|</span><span class="w"> </span><span class="n">hits_compatible</span><span class="o">/</span><span class="n">athena_partitioned</span><span class="o">/</span><span class="n">hits_93</span><span class="p">.</span><span class="n">parquet</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="mi">2022</span><span class="o">-</span><span class="mi">07</span><span class="o">-</span><span class="mi">03</span><span class="n">T15</span><span class="p">:</span><span class="mi">44</span><span class="p">:</span><span class="mi">07</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="mi">127987774</span><span class="w">       </span><span class="o">|</span><span class="w"> </span><span class="ss">&quot;751100bf0dac7d489b9836abf3108b99-7&quot;</span><span class="w">  </span><span class="o">|</span><span class="w"> </span><span class="k">NULL</span><span class="w">    </span><span class="o">|</span><span class="w"> </span><span class="mi">278318</span><span class="w">              </span><span class="o">|</span><span class="w"> </span><span class="mi">0</span><span class="w">    </span><span class="o">|</span><span class="w"> </span><span class="n">page_index</span><span class="o">=</span><span class="k">false</span><span class="w"> </span><span class="o">|</span>
+<span class="o">|</span><span class="w"> </span><span class="p">.</span><span class="w">                                                                                                                                                                                            </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------------------------------------------------+---------------------+-----------------+---------------------------------------+---------+---------------------+------+------------------+</span>
+</pre></div>
+</div>
+<p>Since <code class="docutils literal notranslate"><span class="pre">metadata_cache</span></code> is a normal table function, you can use it in most places you can use
+a table reference.</p>
+<p>For example, to get the total size consumed by the cached entries:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="k">sum</span><span class="p">(</span><span class="n">metadata_size_bytes</span><span class="p">)</span><span class="w"> </span><span class="k">from</span><span class="w"> </span><span class="n">metadata_cache</span><span class="p">();</span>
+<span class="o">+</span><span class="c1">-------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="k">sum</span><span class="p">(</span><span class="n">metadata_cache</span><span class="p">().</span><span class="n">metadata_size_bytes</span><span class="p">)</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">22972345</span><span class="w">                                  </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-------------------------------------------+</span>
+</pre></div>
+</div>
+<p>The columns of the returned table are:</p>
+<table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>column_name</p></th>
+<th class="head"><p>data_type</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>path</p></td>
+<td><p>Utf8</p></td>
+<td><p>File path relative to the object store / filesystem root</p></td>
+</tr>
+<tr class="row-odd"><td><p>file_modified</p></td>
+<td><p>Timestamp</p></td>
+<td><p>Last modified time of the file</p></td>
+</tr>
+<tr class="row-even"><td><p>file_size_bytes</p></td>
+<td><p>UInt64</p></td>
+<td><p>Size of the file in bytes</p></td>
+</tr>
+<tr class="row-odd"><td><p>e_tag</p></td>
+<td><p>Utf8</p></td>
+<td><p><a class="reference external" href="https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/ETag">Entity Tag</a> (ETag) of the file if available</p></td>
+</tr>
+<tr class="row-even"><td><p>version</p></td>
+<td><p>Utf8</p></td>
+<td><p>Version of the file if available (for object stores that support versioning)</p></td>
+</tr>
+<tr class="row-odd"><td><p>metadata_size_bytes</p></td>
+<td><p>UInt64</p></td>
+<td><p>Size of the cached metadata in memory (not its thrift encoded form)</p></td>
+</tr>
+<tr class="row-even"><td><p>hits</p></td>
+<td><p>UInt64</p></td>
+<td><p>Number of times the cached metadata has been accessed</p></td>
+</tr>
+<tr class="row-odd"><td><p>extra</p></td>
+<td><p>Utf8</p></td>
+<td><p>Extra information about the cached metadata (e.g., if page index information is included)</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+</section>
+
+
+              </div>
+              
+              
+              <!-- Previous / next buttons -->
+<div class='prev-next-area'>
+    <a class='left-prev' id="prev-link" href="datasources.html" title="previous page">
+        <i class="fas fa-angle-left"></i>
+        <div class="prev-next-info">
+            <p class="prev-next-subtitle">previous</p>
+            <p class="prev-next-title">Local Files / Directories</p>
+        </div>
+    </a>
+    <a class='right-next' id="next-link" href="../dataframe.html" title="next page">
+    <div class="prev-next-info">
+        <p class="prev-next-subtitle">next</p>
+        <p class="prev-next-title">DataFrame API</p>
+    </div>
+    <i class="fas fa-angle-right"></i>
+    </a>
+</div>
+              
+          </main>
+          
+
+      </div>
+    </div>
+  
+    <script src="../../_static/scripts/pydata-sphinx-theme.js?digest=1999514e3f237ded88cf"></script>
+  
+<!-- Based on pydata_sphinx_theme/footer.html -->
+<footer class="footer mt-5 mt-md-0">
+  <div class="container">
+    
+    <div class="footer-item">
+      <p class="copyright">
+    &copy; Copyright 2019-2025, Apache Software Foundation.<br>
+</p>
+    </div>
+    
+    <div class="footer-item">
+      <p class="sphinx-version">
+Created using <a href="http://sphinx-doc.org/">Sphinx</a> 8.2.3.<br>
+</p>
+    </div>
+    
+    <div class="footer-item">
+      <p>Apache DataFusion, Apache, the Apache feather logo, and the Apache DataFusion project logo</p>
+      <p>are either registered trademarks or trademarks of The Apache Software Foundation in the United States and other countries.</p>
+    </div>
+  </div>
+</footer>
+
+
+  </body>
+</html>
