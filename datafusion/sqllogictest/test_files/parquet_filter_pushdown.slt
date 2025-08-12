@@ -543,3 +543,35 @@ query TT
 select val, part from t_pushdown where part = val AND part = 'a';
 ----
 a a
+
+statement ok
+COPY (
+    SELECT
+        '00000000000000000000000000000001' AS trace_id,
+        '2023-10-01 00:00:00'::timestamptz AS start_timestamp,
+        'prod' as deployment_environment
+)
+TO 'data/1.parquet';
+
+statement ok
+COPY (
+    SELECT
+        '00000000000000000000000000000002' AS trace_id,
+        '2024-10-01 00:00:00'::timestamptz AS start_timestamp,
+        'staging' as deployment_environment
+)
+TO 'data/2.parquet';
+
+statement ok
+CREATE EXTERNAL TABLE t1 STORED AS PARQUET LOCATION 'data/';
+
+statement ok
+SET datafusion.execution.parquet.pushdown_filters = true;
+
+query T
+SELECT deployment_environment
+FROM t1
+WHERE trace_id = '00000000000000000000000000000002'
+ORDER BY start_timestamp, trace_id;
+----
+staging

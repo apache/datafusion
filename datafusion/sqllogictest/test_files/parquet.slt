@@ -766,10 +766,6 @@ OPTIONS (MAX_ROW_GROUP_SIZE 4096, DATA_PAGE_ROW_COUNT_LIMIT 2048);
 ----
 20000
 
-# Enable the cache
-statement ok
-set datafusion.execution.parquet.cache_metadata = true;
-
 statement ok
 CREATE EXTERNAL TABLE t
 STORED AS PARQUET
@@ -789,7 +785,7 @@ select v, k from t where (v between 1 and 2) or (v between 9999 and 10000) order
 9999 k-9999
 10000 k-10000
 
-# Updating the file should invalidate the cache. Otherwise, the following queries would fail 
+# Updating the file should invalidate the cache. Otherwise, the following queries would fail
 # (e.g., with "Arrow: Parquet argument error: External: incomplete frame").
 query I
 COPY (
@@ -866,6 +862,3 @@ select part, k, v from t order by k
 
 statement ok
 DROP TABLE t;
-
-statement ok
-set datafusion.execution.parquet.cache_metadata = false;

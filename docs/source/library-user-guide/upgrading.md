@@ -24,6 +24,14 @@
 **Note:** DataFusion `50.0.0` has not been released yet. The information provided in this section pertains to features and changes that have already been merged to the main branch and are awaiting release in this version.
 You can see the current [status of the `50.0.0 `release here](https://github.com/apache/datafusion/issues/16799)
 
+### `WindowUDFImpl` trait now requires `PartialEq`, `Eq`, and `Hash` traits
+
+To address error-proneness of `WindowUDFImpl::equals` method and to make it easy to implement function
+equality correctly, the `WindowUDFImpl::equals` and `WindowUDFImpl::hash_value` methods have been replaced
+with the requirement to implement the `PartialEq`, `Eq`, and `Hash` traits on any type implementing `WindowUDFImpl`. Please see [issue #16677] for more details
+
+[issue #16677]: https://github.com/apache/datafusion/issues/16677
+
 ### `AsyncScalarUDFImpl::invoke_async_with_args` returns `ColumnarValue`
 
 In order to enable single value optimizations and be consistent with other
@@ -141,6 +149,16 @@ impl AsyncScalarUDFImpl for AskLLM {
 This version of DataFusion upgrades the underlying Apache Arrow implementation
 to version `56.0.0`. See the [release notes](https://github.com/apache/arrow-rs/releases/tag/56.0.0)
 for more details.
+
+### Added `ExecutionPlan::reset_state`
+
+In order to fix a bug in DataFusion `49.0.0` where dynamic filters (currently only generated in the precense of a query such as `ORDER BY ... LIMIT ...`)
+produced incorrect results in recursive queries, a new method `reset_state` has been added to the `ExecutionPlan` trait.
+
+Any `ExecutionPlan` that needs to maintain internal state or references to other nodes in the execution plan tree should implement this method to reset that state.
+See [#17028] for more details and an example implementation for `SortExec`.
+
+[#17028]: https://github.com/apache/datafusion/pull/17028
 
 ## DataFusion `49.0.0`
 
