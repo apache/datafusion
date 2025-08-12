@@ -32,9 +32,7 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::ScalarValue;
     use datafusion_expr::{AggregateUDF, AggregateUDFImpl, Signature, Volatility};
-    use std::any::Any;
-    use std::sync::Arc;
-
+    use std::{any::Any, sync::Arc};
     #[derive(Debug)]
     struct DummyUdf {
         signature: Signature,
@@ -120,26 +118,25 @@ pub mod utils {
         DecimalAverager, Hashable,
     };
 }
-
-use std::borrow::Cow;
-use std::fmt::Debug;
-use std::sync::Arc;
-
 use crate::expressions::Column;
-
-use arrow::compute::SortOptions;
-use arrow::datatypes::{DataType, FieldRef, Schema, SchemaRef};
+use arrow::{
+    compute::SortOptions,
+    datatypes::{DataType, FieldRef, Schema, SchemaRef},
+};
 use datafusion_common::{internal_err, not_impl_err, Result, ScalarValue};
 use datafusion_expr::{AggregateUDF, ReversedUDAF, SetMonotonicity};
-use datafusion_expr_common::accumulator::Accumulator;
-use datafusion_expr_common::groups_accumulator::GroupsAccumulator;
-use datafusion_expr_common::type_coercion::aggregates::check_arg_count;
-use datafusion_functions_aggregate_common::accumulator::{
-    AccumulatorArgs, StateFieldsArgs,
+use datafusion_expr_common::{
+    accumulator::Accumulator, groups_accumulator::GroupsAccumulator,
+    type_coercion::aggregates::check_arg_count,
 };
-use datafusion_functions_aggregate_common::order::AggregateOrderSensitivity;
-use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
-use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
+use datafusion_functions_aggregate_common::{
+    accumulator::{AccumulatorArgs, StateFieldsArgs},
+    order::AggregateOrderSensitivity,
+};
+use datafusion_physical_expr_common::{
+    physical_expr::PhysicalExpr, sort_expr::PhysicalSortExpr,
+};
+use std::{borrow::Cow, fmt::Debug, sync::Arc};
 
 /// Builder for physical [`AggregateFunctionExpr`]
 ///
