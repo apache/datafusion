@@ -45,6 +45,7 @@ parquet_encryption = [
 [dependencies]
 arrow = { workspace = true }
 async-trait = { workspace = true }
+chrono = { workspace = true }
 dashmap = { workspace = true }
 datafusion-common = { workspace = true, default-features = true }
 datafusion-expr = { workspace = true }
@@ -58,6 +59,5 @@ tempfile = { workspace = true }
 url = { workspace = true }
 
 [dev-dependencies]
-chrono = { workspace = true }
 insta = { workspace = true }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt", "sync"] }
