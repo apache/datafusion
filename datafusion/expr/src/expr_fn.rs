@@ -695,8 +695,6 @@ impl WindowUDFImpl for SimpleWindowUDF {
             true,
         )))
     }
-
-    udf_equals_hash!(WindowUDFImpl);
 }
 
 pub fn interval_year_month_lit(value: &str) -> Expr {

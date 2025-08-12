@@ -52,7 +52,9 @@ pub fn join_equivalence_properties(
         [true, false] => {
             // In this special case, right side ordering can be prefixed with
             // the left side ordering.
-            if let (Some(JoinSide::Left), JoinType::Inner) = (probe_side, join_type) {
+            if matches!(join_type, JoinType::Inner | JoinType::Left)
+                && probe_side == Some(JoinSide::Left)
+            {
                 updated_right_ordering_equivalence_class(
                     &mut right_oeq_class,
                     join_type,
@@ -81,7 +83,9 @@ pub fn join_equivalence_properties(
             )?;
             // In this special case, left side ordering can be prefixed with
             // the right side ordering.
-            if let (Some(JoinSide::Right), JoinType::Inner) = (probe_side, join_type) {
+            if matches!(join_type, JoinType::Inner | JoinType::Right)
+                && probe_side == Some(JoinSide::Right)
+            {
                 // Left side ordering equivalence properties should be prepended
                 // with those of the right side while constructing output ordering
                 // equivalence properties since stream side is the right side.
