@@ -145,17 +145,15 @@ impl ScalarUDFImpl for ToCharFunc {
 
         match format {
             ColumnarValue::Scalar(ScalarValue::Utf8(None))
-            | ColumnarValue::Scalar(ScalarValue::Null) => {
-                to_char_scalar(date_time, None)
-            }
+            | ColumnarValue::Scalar(ScalarValue::Null) => to_char_scalar(date_time, None),
             // constant format
             ColumnarValue::Scalar(ScalarValue::Utf8(Some(format))) => {
                 // invoke to_char_scalar with the known string, without converting to array
                 to_char_scalar(date_time, Some(&format))
             }
-            ColumnarValue::Array(_) => to_char_array(
-                date_time, format.to_array(num_rows)?
-            ),
+            ColumnarValue::Array(_) => {
+                to_char_array(date_time, format.to_array(num_rows)?)
+            }
             _ => {
                 exec_err!(
                     "Format for `to_char` must be non-null Utf8, received {:?}",
@@ -263,7 +261,10 @@ fn to_char_scalar(
     }
 }
 
-fn to_char_array(date_time: ColumnarValue, format_array: ArrayRef) -> Result<ColumnarValue> {
+fn to_char_array(
+    date_time: ColumnarValue,
+    format_array: ArrayRef,
+) -> Result<ColumnarValue> {
     let mut results: Vec<Option<String>> = vec![];
     let format_array = format_array.as_string::<i32>();
     let num_rows = format_array.len();
@@ -286,7 +287,8 @@ fn to_char_array(date_time: ColumnarValue, format_array: ArrayRef) -> Result<Col
         };
         // this isn't ideal but this can't use ValueFormatter as it isn't independent
         // from ArrayFormatter
-        let formatter = ArrayFormatter::try_new(date_time_array.as_ref(), &format_options)?;
+        let formatter =
+            ArrayFormatter::try_new(date_time_array.as_ref(), &format_options)?;
         let result = formatter.value(idx).try_to_string();
         match result {
             Ok(value) => results.push(Some(value)),
