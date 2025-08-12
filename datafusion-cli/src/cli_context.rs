@@ -15,7 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::Arc;
+use std::{
+    any::Any,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+};
 
 use datafusion::{
     dataframe::DataFrame,
@@ -52,6 +58,19 @@ pub trait CliSessionContext {
         &self,
         plan: LogicalPlan,
     ) -> Result<DataFrame, DataFusionError>;
+
+    /// Return true if memory profiling is enabled.
+    fn memory_profiling(&self) -> bool {
+        false
+    }
+
+    /// Enable or disable memory profiling.
+    fn set_memory_profiling(&self, _enable: bool) {}
+
+    /// Return the tracked memory pool used for profiling, if any.
+    fn tracked_memory_pool(&self) -> Option<Arc<dyn Any + Send + Sync>> {
+        None
+    }
 }
 
 #[async_trait::async_trait]
@@ -94,5 +113,78 @@ impl CliSessionContext for SessionContext {
         plan: LogicalPlan,
     ) -> Result<DataFrame, DataFusionError> {
         SessionContext::execute_logical_plan(self, plan).await
+    }
+}
+
+/// Session context used by the CLI with memory profiling support.
+pub struct ReplSessionContext {
+    ctx: SessionContext,
+    memory_profiling: AtomicBool,
+    tracked_memory_pool: Option<Arc<dyn Any + Send + Sync>>,
+}
+
+impl ReplSessionContext {
+    pub fn new(
+        ctx: SessionContext,
+        tracked_memory_pool: Option<Arc<dyn Any + Send + Sync>>,
+    ) -> Self {
+        Self {
+            ctx,
+            memory_profiling: AtomicBool::new(false),
+            tracked_memory_pool,
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl CliSessionContext for ReplSessionContext {
+    fn task_ctx(&self) -> Arc<TaskContext> {
+        self.ctx.task_ctx()
+    }
+
+    fn session_state(&self) -> SessionState {
+        self.ctx.state()
+    }
+
+    fn register_object_store(
+        &self,
+        url: &url::Url,
+        object_store: Arc<dyn ObjectStore>,
+    ) -> Option<Arc<dyn ObjectStore + 'static>> {
+        self.ctx.register_object_store(url, object_store)
+    }
+
+    fn register_table_options_extension_from_scheme(&self, scheme: &str) {
+        match scheme {
+            // For Amazon S3 or Alibaba Cloud OSS
+            "s3" | "oss" | "cos" => self
+                .ctx
+                .register_table_options_extension(AwsOptions::default()),
+            // For Google Cloud Storage
+            "gs" | "gcs" => self
+                .ctx
+                .register_table_options_extension(GcpOptions::default()),
+            // For unsupported schemes, do nothing:
+            _ => {}
+        }
+    }
+
+    async fn execute_logical_plan(
+        &self,
+        plan: LogicalPlan,
+    ) -> Result<DataFrame, DataFusionError> {
+        self.ctx.execute_logical_plan(plan).await
+    }
+
+    fn memory_profiling(&self) -> bool {
+        self.memory_profiling.load(Ordering::Relaxed)
+    }
+
+    fn set_memory_profiling(&self, enable: bool) {
+        self.memory_profiling.store(enable, Ordering::Relaxed)
+    }
+
+    fn tracked_memory_pool(&self) -> Option<Arc<dyn Any + Send + Sync>> {
+        self.tracked_memory_pool.clone()
     }
 }
