@@ -58,7 +58,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
-use crate::sorts::sort::sort_batch;
+use crate::sorts::sort::{sort_batch, LexSortMetrics};
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
     Partitioning, PlanProperties, SendableRecordBatchStream, Statistics,
@@ -309,6 +309,7 @@ impl ExecutionPlan for PartialSortExec {
             fetch: self.fetch,
             is_closed: false,
             baseline_metrics: BaselineMetrics::new(&self.metrics_set, partition),
+            lexsort_metrics: LexSortMetrics::new(&self.metrics_set, partition)
         }))
     }
 
@@ -341,6 +342,8 @@ struct PartialSortStream {
     is_closed: bool,
     /// Execution metrics
     baseline_metrics: BaselineMetrics,
+    /// Metrics for performing the actual sort
+    lexsort_metrics: LexSortMetrics,
 }
 
 impl Stream for PartialSortStream {
@@ -398,7 +401,7 @@ impl PartialSortStream {
                             slice_point,
                             self.in_mem_batch.num_rows() - slice_point,
                         );
-                        let sorted_batch = sort_batch(&sorted, &self.expr, self.fetch)?;
+                        let sorted_batch = sort_batch(&sorted, &self.expr, Some(&self.lexsort_metrics), self.fetch)?;
                         if let Some(fetch) = self.fetch.as_mut() {
                             *fetch -= sorted_batch.num_rows();
                         }
@@ -430,7 +433,7 @@ impl PartialSortStream {
     fn sort_in_mem_batch(self: &mut Pin<&mut Self>) -> Result<RecordBatch> {
         let input_batch = self.in_mem_batch.clone();
         self.in_mem_batch = RecordBatch::new_empty(self.schema());
-        let result = sort_batch(&input_batch, &self.expr, self.fetch)?;
+        let result = sort_batch(&input_batch, &self.expr, Some(&self.lexsort_metrics), self.fetch)?;
         if let Some(remaining_fetch) = self.fetch {
             // remaining_fetch - result.num_rows() is always be >= 0
             // because result length of sort_batch with limit cannot be

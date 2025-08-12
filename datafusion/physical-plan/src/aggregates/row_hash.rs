@@ -30,7 +30,7 @@ use crate::aggregates::{
     PhysicalGroupBy,
 };
 use crate::metrics::{BaselineMetrics, MetricBuilder, RecordOutput};
-use crate::sorts::sort::sort_batch;
+use crate::sorts::sort::{sort_batch, LexSortMetrics};
 use crate::sorts::streaming_merge::{SortedSpillFile, StreamingMergeBuilder};
 use crate::spill::spill_manager::SpillManager;
 use crate::stream::RecordBatchStreamAdapter;
@@ -430,6 +430,9 @@ pub(crate) struct GroupedHashAggregateStream {
 
     /// Execution metrics
     baseline_metrics: BaselineMetrics,
+
+    /// Metrics for sorting in the spill manager
+    lexsort_metrics: LexSortMetrics,
 }
 
 impl GroupedHashAggregateStream {
@@ -447,6 +450,7 @@ impl GroupedHashAggregateStream {
         let batch_size = context.session_config().batch_size();
         let input = agg.input.execute(partition, Arc::clone(&context))?;
         let baseline_metrics = BaselineMetrics::new(&agg.metrics, partition);
+        let lexsort_metrics = LexSortMetrics::new(&agg.metrics, partition);
 
         let timer = baseline_metrics.elapsed_compute().timer();
 
@@ -609,6 +613,7 @@ impl GroupedHashAggregateStream {
             current_group_indices: Default::default(),
             exec_state,
             baseline_metrics,
+            lexsort_metrics,
             batch_size,
             group_ordering,
             input_done: false,
@@ -996,7 +1001,7 @@ impl GroupedHashAggregateStream {
         let Some(emit) = self.emit(EmitTo::All, true)? else {
             return Ok(());
         };
-        let sorted = sort_batch(&emit, &self.spill_state.spill_expr, None)?;
+        let sorted = sort_batch(&emit, &self.spill_state.spill_expr, Some(&self.lexsort_metrics), None)?;
 
         // Spill sorted state to disk
         let spillfile = self
@@ -1068,10 +1073,11 @@ impl GroupedHashAggregateStream {
         let mut streams: Vec<SendableRecordBatchStream> = vec![];
         let expr = self.spill_state.spill_expr.clone();
         let schema = batch.schema();
+        let lexsort_metrics = self.lexsort_metrics.clone();
         streams.push(Box::pin(RecordBatchStreamAdapter::new(
             Arc::clone(&schema),
             futures::stream::once(futures::future::lazy(move |_| {
-                sort_batch(&batch, &expr, None)
+                sort_batch(&batch, &expr, Some(&lexsort_metrics), None)
             })),
         )));
 
