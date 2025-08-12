@@ -27,7 +27,7 @@ use super::{human_readable_size, ConsumerMemoryMetrics};
 /// category.
 pub fn print_metrics(metrics: &[ConsumerMemoryMetrics]) {
     if metrics.is_empty() {
-        println!("No memory usage recorded");
+        println!("No memory metrics recorded");
         return;
     }
 
