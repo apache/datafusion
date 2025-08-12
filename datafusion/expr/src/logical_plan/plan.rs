@@ -2040,7 +2040,7 @@ impl ToStringifiedPlan for LogicalPlan {
     }
 }
 
-/// Produces no rows: An empty relation with an empty schema
+/// Relationship produces 0 or 1 placeholder rows with specified output schema
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct EmptyRelation {
     /// Whether to produce a placeholder row
