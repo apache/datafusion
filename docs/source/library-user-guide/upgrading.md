@@ -152,7 +152,7 @@ for more details.
 
 ### Added `ExecutionPlan::reset_state`
 
-In order to fix a bug in DataFusion `49.0.0` where dynamic filters (currently only generated in the precense of a query such as `ORDER BY ... LIMIT ...`)
+In order to fix a bug in DataFusion `49.0.0` where dynamic filters (currently only generated in the presence of a query such as `ORDER BY ... LIMIT ...`)
 produced incorrect results in recursive queries, a new method `reset_state` has been added to the `ExecutionPlan` trait.
 
 Any `ExecutionPlan` that needs to maintain internal state or references to other nodes in the execution plan tree should implement this method to reset that state.
