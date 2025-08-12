@@ -32,7 +32,7 @@ use datafusion::{
     },
     common::{exec_err, instant::Instant},
     error::{DataFusionError, Result},
-    execution::memory_pool::print_metrics,
+    execution::memory_pool::format_metrics,
 };
 use std::{fs::File, io::BufReader, str::FromStr, sync::Arc};
 
@@ -134,13 +134,9 @@ impl Command {
                         if let Some(pool) = ctx.tracked_memory_pool() {
                             let metrics = pool.consumer_metrics();
                             pool.disable_tracking();
-                            if metrics.is_empty() {
-                                println!("no memory metrics recorded");
-                            } else {
-                                print_metrics(&metrics);
-                            }
+                            println!("{}", format_metrics(&metrics));
                         } else {
-                            println!("no memory metrics recorded");
+                            println!("{}", format_metrics(&[]));
                         }
                     }
                     None => println!("Usage: MEMORY_PROFILING [enable|disable|show]"),

@@ -19,23 +19,27 @@
 
 use std::collections::BTreeMap;
 
+use std::fmt::Write;
+
 use super::{human_readable_size, ConsumerMemoryMetrics};
 
-/// Print summary of memory usage metrics.
+/// Format summary of memory usage metrics.
 ///
-/// Displays peak usage, cumulative allocations, and totals per operator
-/// category.
-pub fn print_metrics(metrics: &[ConsumerMemoryMetrics]) {
+/// Returns a string with peak usage, cumulative allocations, and totals per
+/// operator category. The caller is responsible for printing the returned
+/// string if desired.
+pub fn format_metrics(metrics: &[ConsumerMemoryMetrics]) -> String {
     if metrics.is_empty() {
-        println!("No memory metrics recorded");
-        return;
+        return "no memory metrics recorded".to_string();
     }
 
     let peak = metrics.iter().map(|m| m.peak).max().unwrap_or(0);
     let cumulative: usize = metrics.iter().map(|m| m.cumulative).sum();
 
-    println!("Peak memory usage: {}", human_readable_size(peak));
-    println!(
+    let mut s = String::new();
+    let _ = writeln!(s, "Peak memory usage: {}", human_readable_size(peak));
+    let _ = writeln!(
+        s,
         "Cumulative allocations: {}",
         human_readable_size(cumulative)
     );
@@ -46,16 +50,29 @@ pub fn print_metrics(metrics: &[ConsumerMemoryMetrics]) {
         *by_op.entry(category).or_default() += m.cumulative;
     }
 
-    println!("Memory usage by operator:");
+    let _ = writeln!(s, "Memory usage by operator:");
     for (op, bytes) in by_op {
-        println!("{op}: {}", human_readable_size(bytes));
+        let _ = writeln!(s, "{op}: {}", human_readable_size(bytes));
     }
+    s
 }
 
 /// Categorize operator names into high-level groups for reporting.
 pub fn operator_category(name: &str) -> &'static str {
     let name = name.to_lowercase();
-    if name.contains("scan") {
+    if name.contains("parquet") {
+        "Parquet"
+    } else if name.contains("csv") {
+        "CSV"
+    } else if name.contains("json") {
+        "JSON"
+    } else if name.contains("coalesce") {
+        "Coalesce"
+    } else if name.contains("repart") {
+        "Repartition"
+    } else if name.contains("shuffle") {
+        "Shuffle"
+    } else if name.contains("scan") {
         "Data Input"
     } else if name.contains("filter") {
         "Filtering"
