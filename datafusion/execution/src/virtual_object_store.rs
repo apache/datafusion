@@ -78,23 +78,33 @@ impl VirtualObjectStore {
     }
 
     /// Resolve the given [`Path`] to the underlying store and the remaining path
-    fn resolve(&self, location: &Path) -> Result<(&Arc<dyn ObjectStore>, Path)> {
+    ///
+    /// Errors are boxed to keep the `Err` variant small and satisfy
+    /// `clippy::result_large_err` as `object_store::Error` is ~72 bytes.
+    fn resolve(
+        &self,
+        location: &Path,
+    ) -> std::result::Result<(&Arc<dyn ObjectStore>, Path), Box<Error>> {
         let mut parts = location.parts();
         let key = parts
             .next()
-            .ok_or_else(|| Error::Generic {
-                store: "VirtualObjectStore",
-                source: format!("empty path in location '{location}'").into(),
+            .ok_or_else(|| {
+                Box::new(Error::Generic {
+                    store: "VirtualObjectStore",
+                    source: format!("empty path in location '{location}'").into(),
+                })
             })?
             .as_ref()
             .to_string();
         let path: Path = parts.collect();
-        let store = self.stores.get(&key).ok_or_else(|| Error::Generic {
-            store: "VirtualObjectStore",
-            source: format!(
-                "ObjectStore not found for prefix '{key}' in location '{location}'"
-            )
-            .into(),
+        let store = self.stores.get(&key).ok_or_else(|| {
+            Box::new(Error::Generic {
+                store: "VirtualObjectStore",
+                source: format!(
+                    "ObjectStore not found for prefix '{key}' in location '{location}'",
+                )
+                .into(),
+            })
         })?;
         Ok((store, path))
     }
@@ -144,7 +154,7 @@ impl ObjectStore for VirtualObjectStore {
     }
 
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
-        let (store, path) = self.resolve(location)?;
+        let (store, path) = self.resolve(location).map_err(|e| *e)?;
         store.get_opts(&path, options).await
     }
 
