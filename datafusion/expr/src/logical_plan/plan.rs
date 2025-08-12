@@ -2040,7 +2040,9 @@ impl ToStringifiedPlan for LogicalPlan {
     }
 }
 
-/// Produces no rows: An empty relation with an empty schema
+/// Relationship produces 0 or 1 placeholder rows with specified output schema
+/// In most cases the output schema for `EmptyRelation` would be empty,
+/// however, it can be non-empty typically for optimizer rules
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct EmptyRelation {
     /// Whether to produce a placeholder row
@@ -3522,7 +3524,10 @@ impl Aggregate {
     ) -> Result<Self> {
         if group_expr.is_empty() && aggr_expr.is_empty() {
             return plan_err!(
-                "Aggregate requires at least one grouping or aggregate expression"
+                "Aggregate requires at least one grouping or aggregate expression. \
+                Aggregate without grouping expressions nor aggregate expressions is \
+                logically equivalent to, but less efficient than, VALUES producing \
+                single row. Please use VALUES instead."
             );
         }
         let group_expr_count = grouping_set_expr_count(&group_expr)?;
