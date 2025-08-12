@@ -285,7 +285,7 @@ impl DefaultFilesMetadataCacheState {
 ///
 /// Collected file embedded metadata cache.
 ///
-/// The metadata for each file is invalided when the file size or last
+/// The metadata for each file is invalidated when the file size or last
 /// modification time have been changed.
 ///
 /// # Internal details

@@ -884,9 +884,9 @@ impl ListingOptions {
 /// # Caching Metadata
 ///
 /// Some formats, such as Parquet, use the `FileMetadataCache` to cache file
-/// metadata that is needed to execute but expensive to read,  such as row
+/// metadata that is needed to execute but expensive to read, such as row
 /// groups and statistics. The cache is scoped to the [`SessionContext`] and can
-/// be configured via the [runtime config options]
+/// be configured via the [runtime config options].
 ///
 /// [`SessionContext`]: crate::prelude::SessionContext
 /// [runtime config options]: https://datafusion.apache.org/user-guide/configs.html#runtime-configuration-settings

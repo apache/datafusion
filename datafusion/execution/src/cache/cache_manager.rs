@@ -36,7 +36,7 @@ pub type FileStatisticsCache =
 
 /// Cache for storing the [`ObjectMeta`]s that result from listing a path
 ///
-/// Listing a path means  doing an object store "list" operation or `ls`
+/// Listing a path means doing an object store "list" operation or `ls`
 /// command on the local filesystem. This operation can be expensive,
 /// especially when done over remote object stores.
 ///
@@ -70,7 +70,7 @@ pub trait FileMetadata: Any + Send + Sync {
 /// and users can also provide their own implementations to implement custom
 /// caching strategies.
 ///
-/// See [`crate::runtime_env::RuntimeEnv`] for more details
+/// See [`crate::runtime_env::RuntimeEnv`] for more details.
 ///
 /// [`ListingTable`]: https://docs.rs/datafusion/latest/datafusion/datasource/listing/struct.ListingTable.html
 pub trait FileMetadataCache:
@@ -145,7 +145,7 @@ impl CacheManager {
         self.file_statistic_cache.clone()
     }
 
-    /// Get the cache for storing the result of listing ObjectMetas under the same path.
+    /// Get the cache for storing the result of listing [`ObjectMeta`]s under the same path.
     pub fn get_list_files_cache(&self) -> Option<ListFilesCache> {
         self.list_files_cache.clone()
     }
@@ -210,7 +210,6 @@ impl CacheManagerConfig {
     /// Set the cache for listing files.
     ///     
     /// Default is `None` (disabled).
-
     pub fn with_list_files_cache(mut self, cache: Option<ListFilesCache>) -> Self {
         self.list_files_cache = cache;
         self
