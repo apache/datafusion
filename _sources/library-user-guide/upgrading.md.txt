@@ -24,11 +24,13 @@
 **Note:** DataFusion `50.0.0` has not been released yet. The information provided in this section pertains to features and changes that have already been merged to the main branch and are awaiting release in this version.
 You can see the current [status of the `50.0.0 `release here](https://github.com/apache/datafusion/issues/16799)
 
-### `WindowUDFImpl` trait now requires `PartialEq`, `Eq`, and `Hash` traits
+### `AggregateUDFImpl` and `WindowUDFImpl` traits now require `PartialEq`, `Eq`, and `Hash` traits
 
-To address error-proneness of `WindowUDFImpl::equals` method and to make it easy to implement function
-equality correctly, the `WindowUDFImpl::equals` and `WindowUDFImpl::hash_value` methods have been replaced
-with the requirement to implement the `PartialEq`, `Eq`, and `Hash` traits on any type implementing `WindowUDFImpl`. Please see [issue #16677] for more details
+To address error-proneness of `AggregateUDFImpl::equals` and `WindowUDFImpl::equals` methods and
+to make it easy to implement function equality correctly, the `equals` and `hash_value` methods have
+been removed from `AggregateUDFImpl` and `WindowUDFImpl` traits. They are replaced the requirement to
+implement the `PartialEq`, `Eq`, and `Hash` traits on any type implementing `AggregateUDFImpl`
+or `WindowUDFImpl`. Please see [issue #16677] for more details.
 
 [issue #16677]: https://github.com/apache/datafusion/issues/16677
 
