@@ -122,7 +122,6 @@ impl ObjectStore for VirtualObjectStore {
         _payload: PutPayload,
         _opts: PutOptions,
     ) -> Result<PutResult> {
-        // TODO: Implement write operations if needed
         Err(Error::NotSupported {
             source: std::io::Error::other(
                 "VirtualObjectStore does not support write operations",
@@ -136,7 +135,6 @@ impl ObjectStore for VirtualObjectStore {
         _location: &Path,
         _opts: PutMultipartOptions,
     ) -> Result<Box<dyn MultipartUpload>> {
-        // TODO: Implement write operations if needed
         Err(Error::NotSupported {
             source: std::io::Error::other(
                 "VirtualObjectStore does not support write operations",
@@ -151,7 +149,6 @@ impl ObjectStore for VirtualObjectStore {
     }
 
     async fn delete(&self, _location: &Path) -> Result<()> {
-        // TODO: Implement write operations if needed
         Err(Error::NotSupported {
             source: std::io::Error::other(
                 "VirtualObjectStore does not support write operations",
@@ -242,7 +239,6 @@ impl ObjectStore for VirtualObjectStore {
     }
 
     async fn copy(&self, _from: &Path, _to: &Path) -> Result<()> {
-        // TODO: Implement write operations if needed
         Err(Error::NotSupported {
             source: std::io::Error::other(
                 "VirtualObjectStore does not support write operations",
@@ -252,7 +248,6 @@ impl ObjectStore for VirtualObjectStore {
     }
 
     async fn copy_if_not_exists(&self, _from: &Path, _to: &Path) -> Result<()> {
-        // TODO: Implement write operations if needed
         Err(Error::NotSupported {
             source: std::io::Error::other(
                 "VirtualObjectStore does not support write operations",
