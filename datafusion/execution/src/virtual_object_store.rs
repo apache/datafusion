@@ -84,7 +84,7 @@ impl VirtualObjectStore {
     fn resolve(
         &self,
         location: &Path,
-    ) -> std::result::Result<(&Arc<dyn ObjectStore>, Path), Box<Error>> {
+    ) -> Result<(&Arc<dyn ObjectStore>, Path), Box<Error>> {
         let mut parts = location.parts();
         let key = parts
             .next()
