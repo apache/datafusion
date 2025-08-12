@@ -415,14 +415,16 @@ fn create_join_aware_child_descriptions(
                 left_parent_filters.push(first_filter.clone());
             } else {
                 left_parent_filters.push(
-                    crate::filter_pushdown::PushedDownPredicate::unsupported(
-                        Arc::clone(filter),
-                    ),
+                    crate::filter_pushdown::PushedDownPredicate::unsupported(Arc::clone(
+                        filter,
+                    )),
                 );
             }
         } else {
             left_parent_filters.push(
-                crate::filter_pushdown::PushedDownPredicate::unsupported(Arc::clone(filter)),
+                crate::filter_pushdown::PushedDownPredicate::unsupported(Arc::clone(
+                    filter,
+                )),
             );
         }
 
@@ -440,14 +442,16 @@ fn create_join_aware_child_descriptions(
                 right_parent_filters.push(first_filter.clone());
             } else {
                 right_parent_filters.push(
-                    crate::filter_pushdown::PushedDownPredicate::unsupported(
-                        Arc::clone(filter),
-                    ),
+                    crate::filter_pushdown::PushedDownPredicate::unsupported(Arc::clone(
+                        filter,
+                    )),
                 );
             }
         } else {
             right_parent_filters.push(
-                crate::filter_pushdown::PushedDownPredicate::unsupported(Arc::clone(filter)),
+                crate::filter_pushdown::PushedDownPredicate::unsupported(Arc::clone(
+                    filter,
+                )),
             );
         }
     }
