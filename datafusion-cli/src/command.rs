@@ -201,7 +201,7 @@ impl Command {
             }
             Self::MemoryProfiling(_) => (
                 "\\memory_profiling [enable|disable|show]",
-                "enable profiling for the next query, disable it, or display the last report",
+                "enable profiling, disable it, or display the last report",
             ),
         }
     }
