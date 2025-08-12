@@ -1217,7 +1217,7 @@ async fn test_metadata_based_aggregate_as_window() -> Result<()> {
 }
 
 #[tokio::test]
-async fn test_scalar_udaf_schema_metadata() -> Result<()> {
+async fn test_schema_based_aggregate_udf_metadata() -> Result<()> {
     use datafusion_expr::{expr::FieldMetadata, lit_with_metadata};
     use std::collections::BTreeMap;
 
