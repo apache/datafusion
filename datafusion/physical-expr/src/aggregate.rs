@@ -82,11 +82,12 @@ mod tests {
         let udf = Arc::new(AggregateUDF::from(DummyUdf::new()));
         let lit_expr =
             Arc::new(Literal::new(ScalarValue::UInt32(Some(1)))) as Arc<dyn PhysicalExpr>;
-        let agg = AggregateExprBuilder::new(udf.clone(), vec![lit_expr.clone()])
-            .alias("x")
-            .schema(Arc::new(Schema::empty()))
-            .build()
-            .unwrap();
+        let agg =
+            AggregateExprBuilder::new(Arc::clone(&udf), vec![Arc::clone(&lit_expr)])
+                .alias("x")
+                .schema(Arc::new(Schema::empty()))
+                .build()
+                .unwrap();
         match agg.args_schema() {
             Cow::Owned(s) => assert_eq!(s.field(0).name(), "lit"),
             _ => panic!("expected owned schema"),
@@ -99,7 +100,7 @@ mod tests {
         let col_expr = Arc::new(Column::new("b", 0)) as Arc<dyn PhysicalExpr>;
         let agg2 = AggregateExprBuilder::new(udf, vec![col_expr])
             .alias("x")
-            .schema(Arc::new(phys_schema.clone()))
+            .schema(Arc::new(phys_schema))
             .build()
             .unwrap();
         match agg2.args_schema() {
