@@ -5,6 +5,13 @@ flate = "flate"
 nd = "nd"
 Nd = "Nd"
 YOUY = "YOUY"
+typ = "typ"
+ba = "ba"
+lits = "lits"
+ECT = "ECT"
+Ue = "Ue"
+Iy = "Iy"
+hte = "hte"
 
 
 [files]
