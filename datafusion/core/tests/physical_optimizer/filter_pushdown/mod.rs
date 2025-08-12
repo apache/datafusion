@@ -32,7 +32,7 @@ use datafusion::{
     prelude::{ParquetReadOptions, SessionConfig, SessionContext},
     scalar::ScalarValue,
 };
-use datafusion_common::config::ConfigOptions;
+use datafusion_common::{assert_contains, assert_not_contains, config::ConfigOptions, JoinType};
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_expr::ScalarUDF;
 use datafusion_functions::math::random::RandomFunc;
@@ -48,6 +48,7 @@ use datafusion_physical_plan::{
     aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy},
     coalesce_batches::CoalesceBatchesExec,
     filter::FilterExec,
+    joins::{HashJoinExec, PartitionMode},
     repartition::RepartitionExec,
     sorts::sort::SortExec,
     ExecutionPlan,
@@ -1094,6 +1095,169 @@ async fn test_hashjoin_parent_filter_pushdown() {
           -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[d, e, f], file_type=test, pushdown_supported=true, predicate=e@1 = ba
     "
     );
+}
+
+fn build_join_with_dynamic_filter(
+    join_type: JoinType,
+    left_support: bool,
+    right_support: bool,
+) -> Arc<dyn ExecutionPlan> {
+    let left_batches = vec![record_batch!(
+        ("a", Utf8, ["aa", "ab"]),
+        ("b", Utf8, ["ba", "bb"]),
+        ("c", Float64, [1.0, 2.0])
+    )
+    .unwrap()];
+    let left_schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Utf8, false),
+        Field::new("b", DataType::Utf8, false),
+        Field::new("c", DataType::Float64, false),
+    ]));
+    let left_scan = TestScanBuilder::new(Arc::clone(&left_schema))
+        .with_support(left_support)
+        .with_batches(left_batches)
+        .build();
+
+    let right_batches = vec![record_batch!(
+        ("a", Utf8, ["aa", "ab", "ac", "ad"]),
+        ("b", Utf8, ["ba", "bb", "bc", "bd"]),
+        ("e", Float64, [1.0, 2.0, 3.0, 4.0])
+    )
+    .unwrap()];
+    let right_schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Utf8, false),
+        Field::new("b", DataType::Utf8, false),
+        Field::new("e", DataType::Float64, false),
+    ]));
+    let right_scan = TestScanBuilder::new(Arc::clone(&right_schema))
+        .with_support(right_support)
+        .with_batches(right_batches)
+        .build();
+
+    let on = vec![
+        (col("a", &left_schema).unwrap(), col("a", &right_schema).unwrap()),
+        (col("b", &left_schema).unwrap(), col("b", &right_schema).unwrap()),
+    ];
+
+    Arc::new(
+        HashJoinExec::try_new(
+            left_scan,
+            right_scan,
+            on,
+            None,
+            &join_type,
+            None,
+            PartitionMode::Partitioned,
+            datafusion_common::NullEquality::NullEqualsNothing,
+        )
+        .unwrap(),
+    ) as Arc<dyn ExecutionPlan>
+}
+
+#[tokio::test]
+async fn test_hashjoin_left_dynamic_filter_pushdown() {
+    let plan = build_join_with_dynamic_filter(JoinType::Left, true, true);
+    let mut config = ConfigOptions::default();
+    config.execution.parquet.pushdown_filters = true;
+    config.optimizer.enable_dynamic_filter_pushdown = true;
+    let plan = FilterPushdown::new_post_optimization()
+        .optimize(plan, &config)
+        .unwrap();
+    let formatted = format_plan_for_test(&plan);
+    assert_contains!(
+        &formatted,
+        "DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilterPhysicalExpr"
+    );
+    assert_not_contains!(
+        &formatted,
+        "DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate"
+    );
+}
+
+#[tokio::test]
+async fn test_hashjoin_right_dynamic_filter_pushdown() {
+    let plan = build_join_with_dynamic_filter(JoinType::Right, true, true);
+    let mut config = ConfigOptions::default();
+    config.execution.parquet.pushdown_filters = true;
+    config.optimizer.enable_dynamic_filter_pushdown = true;
+    let plan = FilterPushdown::new_post_optimization()
+        .optimize(plan, &config)
+        .unwrap();
+    let formatted = format_plan_for_test(&plan);
+    assert_contains!(
+        &formatted,
+        "DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=DynamicFilterPhysicalExpr"
+    );
+    assert_not_contains!(
+        &formatted,
+        "DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate"
+    );
+}
+
+#[tokio::test]
+async fn test_hashjoin_left_semi_dynamic_filter_pushdown() {
+    let plan = build_join_with_dynamic_filter(JoinType::LeftSemi, true, true);
+    let mut config = ConfigOptions::default();
+    config.execution.parquet.pushdown_filters = true;
+    config.optimizer.enable_dynamic_filter_pushdown = true;
+    let plan = FilterPushdown::new_post_optimization()
+        .optimize(plan, &config)
+        .unwrap();
+    let formatted = format_plan_for_test(&plan);
+    assert_contains!(
+        &formatted,
+        "DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilterPhysicalExpr"
+    );
+    assert_not_contains!(
+        &formatted,
+        "DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate"
+    );
+}
+
+#[tokio::test]
+async fn test_hashjoin_left_anti_dynamic_filter_pushdown() {
+    let plan = build_join_with_dynamic_filter(JoinType::LeftAnti, true, true);
+    let mut config = ConfigOptions::default();
+    config.execution.parquet.pushdown_filters = true;
+    config.optimizer.enable_dynamic_filter_pushdown = true;
+    let plan = FilterPushdown::new_post_optimization()
+        .optimize(plan, &config)
+        .unwrap();
+    let formatted = format_plan_for_test(&plan);
+    assert_contains!(
+        &formatted,
+        "DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilterPhysicalExpr"
+    );
+    assert_not_contains!(
+        &formatted,
+        "DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate"
+    );
+}
+
+#[tokio::test]
+async fn test_hashjoin_full_dynamic_filter_no_pushdown() {
+    let plan = build_join_with_dynamic_filter(JoinType::Full, true, true);
+    let mut config = ConfigOptions::default();
+    config.execution.parquet.pushdown_filters = true;
+    config.optimizer.enable_dynamic_filter_pushdown = true;
+    let plan = FilterPushdown::new_post_optimization()
+        .optimize(plan, &config)
+        .unwrap();
+    let formatted = format_plan_for_test(&plan);
+    assert_not_contains!(formatted, "DynamicFilterPhysicalExpr");
+}
+
+#[tokio::test]
+async fn test_hashjoin_dynamic_filter_pushdown_unsupported() {
+    let plan = build_join_with_dynamic_filter(JoinType::Left, true, false);
+    let mut config = ConfigOptions::default();
+    config.execution.parquet.pushdown_filters = true;
+    config.optimizer.enable_dynamic_filter_pushdown = true;
+    let plan = FilterPushdown::new_post_optimization()
+        .optimize(plan, &config)
+        .unwrap();
+    let formatted = format_plan_for_test(&plan);
+    assert_not_contains!(formatted, "DynamicFilterPhysicalExpr");
 }
 
 /// Integration test for dynamic filter pushdown with TopK.
