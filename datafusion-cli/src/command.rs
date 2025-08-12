@@ -200,7 +200,7 @@ impl Command {
                 ("\\pset [NAME [VALUE]]", "set table output option\n(format)")
             }
             Self::MemoryProfiling(_) => (
-                "MEMORY_PROFILING [enable|disable|show]",
+                "\\memory_profiling [enable|disable|show]",
                 "enable profiling for the next query, disable it, or display the last report",
             ),
         }
