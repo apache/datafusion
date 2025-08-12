@@ -1032,9 +1032,9 @@ mod tests {
     use crate::test;
     use crate::test::exec::StatisticsExec;
 
-    use arrow::datatypes::{Field, Schema, DataType};
-    use datafusion_common::ScalarValue;
+    use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::stats::{ColumnStatistics, Precision, Statistics};
+    use datafusion_common::ScalarValue;
 
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal};
@@ -1233,7 +1233,6 @@ mod tests {
         assert_eq!(result, expected);
     }
 
-
     #[test]
     fn test_projection_statistics_uses_input_schema() {
         let input_schema = Schema::new(vec![
@@ -1308,7 +1307,11 @@ mod tests {
         let stats = projection.partition_statistics(None).unwrap();
 
         assert_eq!(stats.num_rows, Precision::Exact(10));
-        assert_eq!(stats.column_statistics.len(), 2, "Expected 2 columns in projection statistics");
+        assert_eq!(
+            stats.column_statistics.len(),
+            2,
+            "Expected 2 columns in projection statistics"
+        );
         assert_eq!(stats.total_byte_size.is_exact().unwrap_or(false), true);
     }
 }
