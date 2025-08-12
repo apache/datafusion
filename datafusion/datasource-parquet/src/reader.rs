@@ -18,10 +18,11 @@
 //! [`ParquetFileReaderFactory`] and [`DefaultParquetFileReaderFactory`] for
 //! low level control of parquet file readers
 
-use crate::{fetch_parquet_metadata, ParquetFileMetrics};
+use crate::metadata::DFParquetMetadata;
+use crate::ParquetFileMetrics;
 use bytes::Bytes;
 use datafusion_datasource::file_meta::FileMeta;
-use datafusion_execution::cache::cache_manager::{FileMetadata, FileMetadataCache};
+use datafusion_execution::cache::cache_manager::FileMetadataCache;
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use futures::future::BoxFuture;
 use futures::FutureExt;
@@ -29,7 +30,6 @@ use object_store::ObjectStore;
 use parquet::arrow::arrow_reader::ArrowReaderOptions;
 use parquet::arrow::async_reader::{AsyncFileReader, ParquetObjectReader};
 use parquet::file::metadata::ParquetMetaData;
-use std::any::Any;
 use std::fmt::Debug;
 use std::ops::Range;
 use std::sync::Arc;
@@ -201,6 +201,7 @@ impl ParquetFileReaderFactory for CachedParquetFileReaderFactory {
         };
 
         Ok(Box::new(CachedParquetFileReader {
+            store: Arc::clone(&self.store),
             inner,
             file_metrics,
             file_meta,
@@ -214,6 +215,7 @@ impl ParquetFileReaderFactory for CachedParquetFileReaderFactory {
 /// updates the cache.
 pub struct CachedParquetFileReader {
     pub file_metrics: ParquetFileMetrics,
+    store: Arc<dyn ObjectStore>,
     pub inner: ParquetObjectReader,
     file_meta: FileMeta,
     metadata_cache: Arc<dyn FileMetadataCache>,
@@ -256,44 +258,19 @@ impl AsyncFileReader for CachedParquetFileReader {
             #[cfg(not(feature = "parquet_encryption"))]
             let file_decryption_properties = None;
 
-            fetch_parquet_metadata(
-                &mut self.inner,
-                &file_meta.object_meta,
-                None,
-                file_decryption_properties,
-                Some(metadata_cache),
-            )
-            .await
-            .map_err(|e| {
-                parquet::errors::ParquetError::General(format!(
-                    "Failed to fetch metadata for file {}: {e}",
-                    file_meta.object_meta.location,
-                ))
-            })
+            // TODO should there be metadata prefetch hint here?
+            DFParquetMetadata::new(&self.store, &file_meta.object_meta)
+                .with_decryption_properties(file_decryption_properties)
+                .with_file_metadata_cache(Some(Arc::clone(&metadata_cache)))
+                .fetch_metadata()
+                .await
+                .map_err(|e| {
+                    parquet::errors::ParquetError::General(format!(
+                        "Failed to fetch metadata for file {}: {e}",
+                        file_meta.object_meta.location,
+                    ))
+                })
         }
         .boxed()
-    }
-}
-
-/// Wrapper to implement [`FileMetadata`] for [`ParquetMetaData`].
-pub struct CachedParquetMetaData(Arc<ParquetMetaData>);
-
-impl CachedParquetMetaData {
-    pub fn new(metadata: Arc<ParquetMetaData>) -> Self {
-        Self(metadata)
-    }
-
-    pub fn parquet_metadata(&self) -> &Arc<ParquetMetaData> {
-        &self.0
-    }
-}
-
-impl FileMetadata for CachedParquetMetaData {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn memory_size(&self) -> usize {
-        self.0.memory_size()
     }
 }

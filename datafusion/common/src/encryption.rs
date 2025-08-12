@@ -24,8 +24,10 @@ pub use parquet::encryption::decrypt::FileDecryptionProperties;
 pub use parquet::encryption::encrypt::FileEncryptionProperties;
 
 #[cfg(not(feature = "parquet_encryption"))]
+#[derive(Default, Debug)]
 pub struct FileDecryptionProperties;
 #[cfg(not(feature = "parquet_encryption"))]
+#[derive(Default, Debug)]
 pub struct FileEncryptionProperties;
 
 pub use crate::config::{ConfigFileDecryptionProperties, ConfigFileEncryptionProperties};
