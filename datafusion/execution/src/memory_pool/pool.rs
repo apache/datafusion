@@ -309,6 +309,18 @@ pub struct ConsumerMemoryMetrics {
     pub peak: usize,
 }
 
+/// Trait for memory pools that support tracking memory consumers
+pub trait TrackedPool: Send + Sync {
+    /// Enable tracking and reset any existing metrics
+    fn enable_tracking(&self);
+
+    /// Disable tracking of consumers
+    fn disable_tracking(&self);
+
+    /// Returns a snapshot of the metrics for all tracked consumers
+    fn consumer_metrics(&self) -> Vec<ConsumerMemoryMetrics>;
+}
+
 /// A [`MemoryPool`] that tracks the consumers that have
 /// reserved memory within the inner memory pool.
 ///
@@ -400,6 +412,20 @@ impl<I: MemoryPool> TrackConsumersPool<I> {
             .collect::<Vec<_>>()
             .join(",\n")
             + "."
+    }
+}
+
+impl<I: MemoryPool> TrackedPool for TrackConsumersPool<I> {
+    fn enable_tracking(&self) {
+        TrackConsumersPool::enable_tracking(self);
+    }
+
+    fn disable_tracking(&self) {
+        TrackConsumersPool::disable_tracking(self);
+    }
+
+    fn consumer_metrics(&self) -> Vec<ConsumerMemoryMetrics> {
+        TrackConsumersPool::consumer_metrics(self)
     }
 }
 

@@ -34,9 +34,6 @@ use datafusion::{
     error::{DataFusionError, Result},
     execution::memory_pool::print_metrics,
 };
-use datafusion_execution::memory_pool::{
-    FairSpillPool, GreedyMemoryPool, TrackConsumersPool,
-};
 use std::{fs::File, io::BufReader, str::FromStr, sync::Arc};
 
 #[derive(Debug, Clone, Copy)]
@@ -126,34 +123,17 @@ impl Command {
             Self::MemoryProfiling(subcmd) => {
                 match subcmd {
                     Some(MemoryProfilingCommand::Enable) => {
-                        print_options.memory_profiling = true;
+                        ctx.set_memory_profiling(true);
                         println!("Memory profiling enabled");
                     }
                     Some(MemoryProfilingCommand::Disable) => {
-                        print_options.memory_profiling = false;
+                        ctx.set_memory_profiling(false);
                         println!("Memory profiling disabled");
                     }
                     Some(MemoryProfilingCommand::Show) => {
-                        if let Some(pool_any) = &print_options.tracked_memory_pool {
-                            // try downcasting to known pool types
-                            let metrics = if let Ok(pool) =
-                                pool_any
-                                    .clone()
-                                    .downcast::<TrackConsumersPool<FairSpillPool>>()
-                            {
-                                let m = pool.consumer_metrics();
-                                pool.disable_tracking();
-                                m
-                            } else if let Ok(pool) = pool_any
-                                .clone()
-                                .downcast::<TrackConsumersPool<GreedyMemoryPool>>()
-                            {
-                                let m = pool.consumer_metrics();
-                                pool.disable_tracking();
-                                m
-                            } else {
-                                Vec::new()
-                            };
+                        if let Some(pool) = ctx.tracked_memory_pool() {
+                            let metrics = pool.consumer_metrics();
+                            pool.disable_tracking();
                             if metrics.is_empty() {
                                 println!("no memory metrics recorded");
                             } else {

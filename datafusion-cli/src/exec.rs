@@ -39,9 +39,6 @@ use datafusion::physical_plan::{execute_stream, ExecutionPlanProperties};
 use datafusion::sql::parser::{DFParser, Statement};
 use datafusion::sql::sqlparser;
 use datafusion::sql::sqlparser::dialect::dialect_from_str;
-use datafusion_execution::memory_pool::{
-    FairSpillPool, GreedyMemoryPool, TrackConsumersPool,
-};
 use futures::StreamExt;
 use log::warn;
 use object_store::Error::Generic;
@@ -230,23 +227,13 @@ pub(super) async fn exec_and_print(
 
     let statements = DFParser::parse_sql_with_dialect(&sql, dialect.as_ref())?;
     for statement in statements {
-        let pool_any = if print_options.memory_profiling {
-            print_options.tracked_memory_pool.clone()
+        let pool = if ctx.memory_profiling() {
+            ctx.tracked_memory_pool()
         } else {
             None
         };
-        if let Some(pool_any) = &pool_any {
-            if let Ok(pool) = pool_any
-                .clone()
-                .downcast::<TrackConsumersPool<FairSpillPool>>()
-            {
-                pool.enable_tracking();
-            } else if let Ok(pool) = pool_any
-                .clone()
-                .downcast::<TrackConsumersPool<GreedyMemoryPool>>()
-            {
-                pool.enable_tracking();
-            }
+        if let Some(pool) = &pool {
+            pool.enable_tracking();
         }
         StatementExecutor::new(statement)
             .execute(ctx, print_options)

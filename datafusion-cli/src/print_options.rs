@@ -16,12 +16,10 @@
 // under the License.
 
 use std::{
-    any::Any,
     fmt::{Display, Formatter},
     io::Write,
     pin::Pin,
     str::FromStr,
-    sync::Arc,
 };
 
 use crate::print_format::PrintFormat;
@@ -77,8 +75,6 @@ pub struct PrintOptions {
     pub quiet: bool,
     pub maxrows: MaxRows,
     pub color: bool,
-    pub memory_profiling: bool,
-    pub tracked_memory_pool: Option<Arc<dyn Any + Send + Sync>>,
 }
 
 // Returns the query execution details formatted

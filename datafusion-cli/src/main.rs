@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use std::collections::HashMap;
 use std::env;
 use std::num::NonZeroUsize;
@@ -26,11 +25,12 @@ use std::sync::{Arc, LazyLock};
 use datafusion::error::{DataFusionError, Result};
 use datafusion::execution::context::SessionConfig;
 use datafusion::execution::memory_pool::{
-    FairSpillPool, GreedyMemoryPool, MemoryPool, TrackConsumersPool,
+    FairSpillPool, GreedyMemoryPool, MemoryPool, TrackConsumersPool, TrackedPool,
 };
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::prelude::SessionContext;
 use datafusion_cli::catalog::DynamicObjectStoreCatalog;
+use datafusion_cli::cli_context::ReplSessionContext;
 use datafusion_cli::functions::ParquetMetadataFunc;
 use datafusion_cli::{
     exec,
@@ -175,7 +175,7 @@ async fn main_inner() -> Result<()> {
     let session_config = get_session_config(&args)?;
 
     let mut rt_builder = RuntimeEnvBuilder::new();
-    let mut tracked_pool: Option<Arc<dyn Any + Send + Sync>> = None;
+    let mut tracked_pool: Option<Arc<dyn TrackedPool>> = None;
     // set memory pool size
     let memory_limit = args.memory_limit.unwrap_or(usize::MAX);
     // set memory pool type
@@ -188,7 +188,7 @@ async fn main_inner() -> Result<()> {
                 FairSpillPool::new(memory_limit),
                 NonZeroUsize::new(args.top_memory_consumers).unwrap(),
             ));
-            tracked_pool = Some(p.clone() as Arc<dyn Any + Send + Sync>);
+            tracked_pool = Some(p.clone() as Arc<dyn TrackedPool>);
             p
         }
         PoolType::Greedy if args.top_memory_consumers == 0 => {
@@ -199,7 +199,7 @@ async fn main_inner() -> Result<()> {
                 GreedyMemoryPool::new(memory_limit),
                 NonZeroUsize::new(args.top_memory_consumers).unwrap(),
             ));
-            tracked_pool = Some(p.clone() as Arc<dyn Any + Send + Sync>);
+            tracked_pool = Some(p.clone() as Arc<dyn TrackedPool>);
             p
         }
     };
@@ -217,24 +217,23 @@ async fn main_inner() -> Result<()> {
     let runtime_env = rt_builder.build_arc()?;
 
     // enable dynamic file query
-    let ctx = SessionContext::new_with_config_rt(session_config, runtime_env)
+    let session_ctx = SessionContext::new_with_config_rt(session_config, runtime_env)
         .enable_url_table();
-    ctx.refresh_catalogs().await?;
+    session_ctx.refresh_catalogs().await?;
     // install dynamic catalog provider that can register required object stores
-    ctx.register_catalog_list(Arc::new(DynamicObjectStoreCatalog::new(
-        ctx.state().catalog_list().clone(),
-        ctx.state_weak_ref(),
+    session_ctx.register_catalog_list(Arc::new(DynamicObjectStoreCatalog::new(
+        session_ctx.state().catalog_list().clone(),
+        session_ctx.state_weak_ref(),
     )));
     // register `parquet_metadata` table function to get metadata from parquet files
-    ctx.register_udtf("parquet_metadata", Arc::new(ParquetMetadataFunc {}));
+    session_ctx.register_udtf("parquet_metadata", Arc::new(ParquetMetadataFunc {}));
+    let ctx = ReplSessionContext::new(session_ctx, tracked_pool.clone());
 
     let mut print_options = PrintOptions {
         format: args.format,
         quiet: args.quiet,
         maxrows: args.maxrows,
         color: args.color,
-        memory_profiling: false,
-        tracked_memory_pool: tracked_pool.clone(),
     };
 
     let commands = args.command;
