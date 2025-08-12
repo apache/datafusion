@@ -123,8 +123,7 @@ Available commands inside DataFusion CLI are:
 ```
 
 - Memory profiling
->
-> **Tip:** Memory profiling requires the tracked pool. Start the CLI with `--top-memory-consumers N` (N≥1), or profiling will report no metrics. By default CLI starts with --top-memory-consumers 5.
+  > **Tip:** Memory profiling requires the tracked pool. Start the CLI with `--top-memory-consumers N` (N≥1), or profiling will report no metrics. By default CLI starts with --top-memory-consumers 5.
 
 ```bash
 > \memory_profiling enable
