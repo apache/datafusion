@@ -403,24 +403,26 @@ impl AggregateFunctionExpr {
             Cow::Borrowed(&self.schema)
         }
     }
-
-    /// the accumulator used to accumulate values from the expressions.
-    /// the accumulator expects the same number of arguments as `expressions` and must
-    /// return states with the same description as `state_fields`
-    // TODO: factor AccumulatorArgs construction into a private helper to avoid duplication
-    pub fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        let schema = self.args_schema();
-        let acc_args = AccumulatorArgs {
+    /// Construct AccumulatorArgs for this aggregate using a given schema slice.
+    fn make_acc_args(&self, schema: &Schema) -> AccumulatorArgs<'_> {
+        AccumulatorArgs {
             return_field: Arc::clone(&self.return_field),
-            schema: schema.as_ref(),
+            schema,
             ignore_nulls: self.ignore_nulls,
             order_bys: self.order_bys.as_ref(),
             is_distinct: self.is_distinct,
             name: &self.name,
             is_reversed: self.is_reversed,
             exprs: &self.args,
-        };
+        }
+    }
 
+    /// the accumulator used to accumulate values from the expressions.
+    /// the accumulator expects the same number of arguments as `expressions` and must
+    /// return states with the same description as `state_fields`
+    pub fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
+        let schema = self.args_schema();
+        let acc_args = self.make_acc_args(schema.as_ref());
         self.fun.accumulator(acc_args)
     }
 
@@ -495,17 +497,7 @@ impl AggregateFunctionExpr {
     /// Creates accumulator implementation that supports retract
     pub fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
         let schema = self.args_schema();
-        let args = AccumulatorArgs {
-            return_field: Arc::clone(&self.return_field),
-            schema: schema.as_ref(),
-            ignore_nulls: self.ignore_nulls,
-            order_bys: self.order_bys.as_ref(),
-            is_distinct: self.is_distinct,
-            name: &self.name,
-            is_reversed: self.is_reversed,
-            exprs: &self.args,
-        };
-
+        let args = self.make_acc_args(schema.as_ref());
         let accumulator = self.fun.create_sliding_accumulator(args)?;
 
         // Accumulators that have window frame startings different
@@ -565,16 +557,7 @@ impl AggregateFunctionExpr {
     /// `[Self::create_groups_accumulator`] will be called.
     pub fn groups_accumulator_supported(&self) -> bool {
         let schema = self.args_schema();
-        let args = AccumulatorArgs {
-            return_field: Arc::clone(&self.return_field),
-            schema: schema.as_ref(),
-            ignore_nulls: self.ignore_nulls,
-            order_bys: self.order_bys.as_ref(),
-            is_distinct: self.is_distinct,
-            name: &self.name,
-            is_reversed: self.is_reversed,
-            exprs: &self.args,
-        };
+        let args = self.make_acc_args(schema.as_ref());
         self.fun.groups_accumulator_supported(args)
     }
 
@@ -585,16 +568,7 @@ impl AggregateFunctionExpr {
     /// implemented in addition to [`Accumulator`].
     pub fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
         let schema = self.args_schema();
-        let args = AccumulatorArgs {
-            return_field: Arc::clone(&self.return_field),
-            schema: schema.as_ref(),
-            ignore_nulls: self.ignore_nulls,
-            order_bys: self.order_bys.as_ref(),
-            is_distinct: self.is_distinct,
-            name: &self.name,
-            is_reversed: self.is_reversed,
-            exprs: &self.args,
-        };
+        let args = self.make_acc_args(schema.as_ref());
         self.fun.create_groups_accumulator(args)
     }
 
