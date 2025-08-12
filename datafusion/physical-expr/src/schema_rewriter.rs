@@ -248,7 +248,7 @@ impl<'a> DefaultPhysicalExprAdapterRewriter<'a> {
                     self.physical_file_schema.field_with_name(column.name())
                 {
                     // If the column exists in the physical schema, we can use it in place of the logical column.
-                    // This is nice to users because if they do a rewrite that results in something like `phyiscal_int32_col = 123u64`
+                    // This is nice to users because if they do a rewrite that results in something like `physical_int32_col = 123u64`
                     // we'll at least handle the casts for them.
                     physical_field
                 } else {
@@ -374,7 +374,7 @@ mod tests {
     }
 
     #[test]
-    fn test_rewrite_mulit_column_expr_with_type_cast() {
+    fn test_rewrite_multi_column_expr_with_type_cast() {
         let (physical_schema, logical_schema) = create_test_schema();
         let factory = DefaultPhysicalExprAdapterFactory;
         let adapter = factory.create(Arc::new(logical_schema), Arc::new(physical_schema));

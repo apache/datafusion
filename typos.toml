@@ -12,7 +12,7 @@ ECT = "ECT"
 Ue = "Ue"
 Iy = "Iy"
 hte = "hte"
-row_numer = "row_numer"
+numer = "numer"
 abd = "abd"
 aroun = "aroun"
 carefull = "carefull"
@@ -21,7 +21,11 @@ Ois = "Ois"
 alo = "alo"
 precentage = "precentage"
 datas = "datas"
-
+hom = "hom"
+alph = "alph"
+wih = "wih"
+Ded = "Ded"
+Serializeable = "Serializeable"
 
 [files]
 extend-exclude = [

@@ -804,7 +804,7 @@ mod tests {
     }
 
     #[test]
-    fn to_timestamp_with_unparseable_data() -> Result<()> {
+    fn to_timestamp_with_unparsable_data() -> Result<()> {
         let mut date_string_builder = StringBuilder::with_capacity(2, 1024);
 
         date_string_builder.append_null();
