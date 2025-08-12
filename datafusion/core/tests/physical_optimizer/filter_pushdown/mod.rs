@@ -740,16 +740,19 @@ async fn test_topk_dynamic_filter_pushdown() {
 #[tokio::test]
 async fn test_topk_dynamic_filter_pushdown_multi_column_sort() {
     let batches = vec![
-        record_batch!(
-            ("a", Utf8, ["aa", "ab"]),
-            ("b", Utf8, ["bc", "bd"]),
-            ("c", Float64, [1.0, 2.0])
-        )
-        .unwrap(),
+        // We are going to do ORDER BY b ASC NULLS LAST, a DESC
+        // And we put the values in such a way that the first batch will fill the TopK
+        // and we skip the second batch.
         record_batch!(
             ("a", Utf8, ["ac", "ad"]),
             ("b", Utf8, ["bb", "ba"]),
             ("c", Float64, [2.0, 1.0])
+        )
+        .unwrap(),
+        record_batch!(
+            ("a", Utf8, ["aa", "ab"]),
+            ("b", Utf8, ["bc", "bd"]),
+            ("c", Float64, [1.0, 2.0])
         )
         .unwrap(),
     ];
