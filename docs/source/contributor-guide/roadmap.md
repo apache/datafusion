@@ -23,7 +23,7 @@ The [project introduction](../user-guide/introduction) explains the
 overview and goals of DataFusion, and our development efforts largely
 align to that vision.
 
-# Planning `EPIC`s
+## Planning `EPIC`s
 
 DataFusion uses [GitHub
 issues](https://github.com/apache/datafusion/issues) to track
@@ -44,7 +44,7 @@ make review efficient and avoid surprises.
 
 [The current list of `EPIC`s can be found here](https://github.com/apache/datafusion/issues?q=is%3Aissue+is%3Aopen+epic).
 
-# Quarterly Roadmap
+## Quarterly Roadmap
 
 The DataFusion roadmap is driven by the priorities of contributors rather than
 any single organization or coordinating committee. We typically discuss our
@@ -57,9 +57,9 @@ For more information:
 2. [DataFusion Road Map: Q3-Q4 2025](https://github.com/apache/datafusion/issues/15878)
 3. [2024 Q4 / 2025 Q1 Roadmap](https://github.com/apache/datafusion/issues/13274)
 
-# Improvement Proposals
+## Improvement Proposals
 
-## Discussing New Features
+### Discussing New Features
 
 If you plan to work on a new feature that doesn't have an existing ticket, it is
 a good idea to open a ticket to discuss the feature. Advanced discussion often
@@ -71,7 +71,7 @@ line PR.
 If you open a ticket and it doesn't get any response, you can try `@`-mentioning
 recently active community members in the ticket to get their attention.
 
-## What Contributions are Good Fits?
+### What Contributions are Good Fits?
 
 DataFusion is designed to be highly extensible, and many features can be
 implemented as extensions without changes or additions to the core. Support for
@@ -105,7 +105,7 @@ Features above) prior to acceptance include:
 [extensions list]: ../library-user-guide/extensions.md
 [design goal]: https://docs.rs/datafusion/latest/datafusion/index.html#design-goals
 
-## Design Build vs. Big Up Front Design
+### Design Build vs. Big Up Front Design
 
 Typically, the DataFusion community attacks large problems by solving them bit
 by bit and refining a solution iteratively on the `main` branch as a series of
