@@ -3522,7 +3522,10 @@ impl Aggregate {
     ) -> Result<Self> {
         if group_expr.is_empty() && aggr_expr.is_empty() {
             return plan_err!(
-                "Aggregate requires at least one grouping or aggregate expression"
+                "Aggregate requires at least one grouping or aggregate expression. \
+                Aggregate without grouping expressions nor aggregate expressions is \
+                logically equivalent to, but less efficient than, VALUES producing \
+                single row. Please use VALUES instead."
             );
         }
         let group_expr_count = grouping_set_expr_count(&group_expr)?;
