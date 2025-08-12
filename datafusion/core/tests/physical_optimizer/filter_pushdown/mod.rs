@@ -33,6 +33,7 @@ use datafusion::{
     scalar::ScalarValue,
 };
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::JoinType;
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_expr::ScalarUDF;
 use datafusion_functions::math::random::RandomFunc;
@@ -53,7 +54,6 @@ use datafusion_physical_plan::{
     sorts::sort::SortExec,
     ExecutionPlan,
 };
-use datafusion_common::{JoinType};
 
 use futures::StreamExt;
 use object_store::{memory::InMemory, ObjectStore};

@@ -372,9 +372,9 @@ pub struct HashJoinExec {
 
 /// Helper function copied from logical optimizer: For a given JOIN type, determine whether each input of the join is preserved
 /// for WHERE clause filters (predicates above the join).
-/// 
+///
 /// It is only correct to push filters below a join for preserved inputs.
-/// 
+///
 /// For left semi joins: (true, false) - meaning left side is preserved, right side is not
 fn lr_is_preserved(join_type: JoinType) -> (bool, bool) {
     match join_type {
@@ -392,7 +392,10 @@ fn lr_is_preserved(join_type: JoinType) -> (bool, bool) {
 }
 
 /// Check if a physical expression only references columns from the left child
-fn is_left_only_predicate(predicate: &Arc<dyn PhysicalExpr>, left_schema_len: usize) -> bool {
+fn is_left_only_predicate(
+    predicate: &Arc<dyn PhysicalExpr>,
+    left_schema_len: usize,
+) -> bool {
     let columns = collect_columns(predicate);
     // All column indices must be less than left_schema_len
     columns.iter().all(|col| col.index() < left_schema_len)
@@ -1040,7 +1043,6 @@ impl ExecutionPlan for HashJoinExec {
         }
     }
 
-
     fn gather_filters_for_pushdown(
         &self,
         phase: FilterPushdownPhase,
@@ -1049,7 +1051,7 @@ impl ExecutionPlan for HashJoinExec {
     ) -> Result<FilterDescription> {
         // Check if this join type supports filter pushdown
         let (_left_preserved, _right_preserved) = lr_is_preserved(self.join_type);
-        
+
         // For now, only support Inner and LeftSemi joins
         // Other types of joins can support *some* filters, but restrictions are complex and error prone.
         // See the logical optimizer rules for more details: datafusion/optimizer/src/push_down_filter.rs
@@ -1074,11 +1076,11 @@ impl ExecutionPlan for HashJoinExec {
         // For left semi joins, override the analysis to only allow left-side filters to go to left child
         if self.join_type == JoinType::LeftSemi {
             let left_schema_len = self.left().schema().fields().len();
-            
+
             // Create new parent filters list with modified support based on column analysis
             let mut new_left_parent_filters = Vec::new();
             let mut new_right_parent_filters = Vec::new();
-            
+
             for (i, filter) in parent_filters.iter().enumerate() {
                 // For left child: can only push filters that reference only left-side columns
                 if is_left_only_predicate(filter, left_schema_len) {
@@ -1086,17 +1088,29 @@ impl ExecutionPlan for HashJoinExec {
                     if let Some(orig_filter) = left_child.parent_filters.get(i) {
                         new_left_parent_filters.push(orig_filter.clone());
                     } else {
-                        new_left_parent_filters.push(crate::filter_pushdown::PushedDownPredicate::unsupported(filter.clone()));
+                        new_left_parent_filters.push(
+                            crate::filter_pushdown::PushedDownPredicate::unsupported(
+                                filter.clone(),
+                            ),
+                        );
                     }
                 } else {
                     // Cannot push this filter to left child for left semi join
-                    new_left_parent_filters.push(crate::filter_pushdown::PushedDownPredicate::unsupported(filter.clone()));
+                    new_left_parent_filters.push(
+                        crate::filter_pushdown::PushedDownPredicate::unsupported(
+                            filter.clone(),
+                        ),
+                    );
                 }
-                
+
                 // For right child: left semi joins cannot push any parent filters to right child
-                new_right_parent_filters.push(crate::filter_pushdown::PushedDownPredicate::unsupported(filter.clone()));
+                new_right_parent_filters.push(
+                    crate::filter_pushdown::PushedDownPredicate::unsupported(
+                        filter.clone(),
+                    ),
+                );
             }
-            
+
             // Update the child descriptions
             left_child.parent_filters = new_left_parent_filters;
             right_child.parent_filters = new_right_parent_filters;
