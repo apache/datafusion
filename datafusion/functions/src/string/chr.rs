@@ -47,8 +47,8 @@ pub fn chr(args: &[ArrayRef]) -> Result<ArrayRef> {
     for integer in integer_array {
         match integer {
             Some(integer) => {
-                if integer >= 0 && integer <= u32::MAX as i64 {
-                    if let Some(c) = core::char::from_u32(integer as u32) {
+                if let Ok(u) = u32::try_from(integer) {
+                    if let Some(c) = core::char::from_u32(u) {
                         builder.append_value(c.encode_utf8(&mut buf));
                         continue;
                     }
