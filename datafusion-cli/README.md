@@ -33,6 +33,8 @@ See the [`datafusion-cli` documentation](https://datafusion.apache.org/user-guid
 
 ## Memory Profiling
 
+> **Tip:** Memory profiling requires the tracked pool. Start the CLI with `--top-memory-consumers N` (N≥1), or profiling will report no metrics. By default, CLI starts with --top-memory-consumers 5.
+
 Enable memory tracking for the next query and display the report afterwards:
 
 ```text
