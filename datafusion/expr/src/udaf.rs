@@ -755,7 +755,7 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     /// `acc_args.schema` to inspect the [`FieldRef`] of each input.
     ///
     /// Example: retrieving metadata and return field for input `i`:
-    /// ```rust
+    /// ```ignore
     /// let metadata = acc_args.schema.field(i).metadata();
     /// let field = acc_args.exprs[i].return_field(&acc_args.schema)?;
     /// ```

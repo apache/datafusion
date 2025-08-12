@@ -77,7 +77,7 @@ pub struct AccumulatorArgs<'a> {
     /// [`FieldRef`] of each input via `expr.return_field(schema)`.
     ///
     /// Example:
-    /// ```rust
+    /// ```ignore
     /// let input_field = exprs[i].return_field(&schema)?;
     /// ```
     /// Note: physical schema metadata takes precedence in mixed inputs.
