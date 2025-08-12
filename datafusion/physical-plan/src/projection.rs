@@ -1312,6 +1312,6 @@ mod tests {
             2,
             "Expected 2 columns in projection statistics"
         );
-        assert_eq!(stats.total_byte_size.is_exact().unwrap_or(false), true);
+        assert!(stats.total_byte_size.is_exact().unwrap_or(false));
     }
 }
