@@ -159,44 +159,6 @@ jobs:
           cargo test --features backtrace --profile release-nonlto --test sqllogictests -- --include-sqlite
           cargo clean
 
-  # If the workflow was triggered by the PR comment (through pr_comment_commands.yml action) we need to manually update check status to display in UI
-  update-check-status:
-    needs: [linux-build-lib, linux-test-extended, hash-collisions, sqllogictest-sqlite]
-    runs-on: ubuntu-latest
-    if: ${{ always() && github.event_name == 'workflow_dispatch' }}
-    steps:
-      - name: Determine workflow status
-        id: status
-        run: |
-          if [[ "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}" == "true" ]]; then
-            echo "workflow_status=failure" >> $GITHUB_OUTPUT
-            echo "conclusion=failure" >> $GITHUB_OUTPUT
-          else
-            echo "workflow_status=completed" >> $GITHUB_OUTPUT
-            echo "conclusion=success" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Update check run
-        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea  # v7.0.1
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            const workflowRunUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
-
-            await github.rest.checks.update({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              check_run_id: ${{ github.event.inputs.check_run_id }},
-              status: 'completed',
-              conclusion: '${{ steps.status.outputs.conclusion }}',
-              output: {
-                title: '${{ steps.status.outputs.conclusion == 'success' && 'Extended Tests Passed' || 'Extended Tests Failed' }}',
-                summary: `Extended tests have completed with status: ${{ steps.status.outputs.conclusion }}.\n\n[View workflow run](${workflowRunUrl})`
-              },
-              details_url: workflowRunUrl
-            });
-
-
 
 
 

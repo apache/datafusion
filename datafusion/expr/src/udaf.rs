@@ -427,9 +427,6 @@ where
 /// let expr = geometric_mean.call(vec![col("a")]);
 /// ```
 pub trait AggregateUDFImpl: Debug + Send + Sync {
-    // Note: When adding any methods (with default implementations), remember to add them also
-    // into the AliasedAggregateUDFImpl below!
-
     /// Returns this object as an [`Any`] trait object
     fn as_any(&self) -> &dyn Any;
 
@@ -1059,6 +1056,7 @@ impl AliasedAggregateUDFImpl {
     }
 }
 
+#[warn(clippy::missing_trait_methods)] // Delegates, so it should implement every single trait method
 impl AggregateUDFImpl for AliasedAggregateUDFImpl {
     fn as_any(&self) -> &dyn Any {
         self
@@ -1082,6 +1080,32 @@ impl AggregateUDFImpl for AliasedAggregateUDFImpl {
 
     fn aliases(&self) -> &[String] {
         &self.aliases
+    }
+
+    fn schema_name(&self, params: &AggregateFunctionParams) -> Result<String> {
+        self.inner.schema_name(params)
+    }
+
+    fn human_display(&self, params: &AggregateFunctionParams) -> Result<String> {
+        self.inner.human_display(params)
+    }
+
+    fn window_function_schema_name(
+        &self,
+        params: &WindowFunctionParams,
+    ) -> Result<String> {
+        self.inner.window_function_schema_name(params)
+    }
+
+    fn display_name(&self, params: &AggregateFunctionParams) -> Result<String> {
+        self.inner.display_name(params)
+    }
+
+    fn window_function_display_name(
+        &self,
+        params: &WindowFunctionParams,
+    ) -> Result<String> {
+        self.inner.window_function_display_name(params)
     }
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
@@ -1138,11 +1162,39 @@ impl AggregateUDFImpl for AliasedAggregateUDFImpl {
         self.inner.coerce_types(arg_types)
     }
 
-    udf_equals_hash!(AggregateUDFImpl);
+    fn return_field(&self, arg_fields: &[FieldRef]) -> Result<FieldRef> {
+        self.inner.return_field(arg_fields)
+    }
+
+    fn is_nullable(&self) -> bool {
+        self.inner.is_nullable()
+    }
 
     fn is_descending(&self) -> Option<bool> {
         self.inner.is_descending()
     }
+
+    fn value_from_stats(&self, statistics_args: &StatisticsArgs) -> Option<ScalarValue> {
+        self.inner.value_from_stats(statistics_args)
+    }
+
+    fn default_value(&self, data_type: &DataType) -> Result<ScalarValue> {
+        self.inner.default_value(data_type)
+    }
+
+    fn supports_null_handling_clause(&self) -> bool {
+        self.inner.supports_null_handling_clause()
+    }
+
+    fn is_ordered_set_aggregate(&self) -> bool {
+        self.inner.is_ordered_set_aggregate()
+    }
+
+    fn set_monotonicity(&self, data_type: &DataType) -> SetMonotonicity {
+        self.inner.set_monotonicity(data_type)
+    }
+
+    udf_equals_hash!(AggregateUDFImpl);
 
     fn documentation(&self) -> Option<&Documentation> {
         self.inner.documentation()
