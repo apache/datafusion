@@ -48,10 +48,12 @@ use datafusion_physical_plan::{
     aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy},
     coalesce_batches::CoalesceBatchesExec,
     filter::FilterExec,
+    joins::{HashJoinExec, PartitionMode},
     repartition::RepartitionExec,
     sorts::sort::SortExec,
     ExecutionPlan,
 };
+use datafusion_common::{JoinType};
 
 use futures::StreamExt;
 use object_store::{memory::InMemory, ObjectStore};
@@ -420,6 +422,69 @@ async fn test_static_filter_pushdown_through_hash_join() {
           -   HashJoinExec: mode=Partitioned, join_type=Left, on=[(a@0, d@0)]
           -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
           -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[d, e, f], file_type=test, pushdown_supported=true
+    "
+    );
+}
+
+#[test]
+fn test_filter_pushdown_left_semi_join() {
+    // Create schemas for left and right sides
+    let left_side_schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Utf8, false),
+        Field::new("b", DataType::Utf8, false),
+        Field::new("c", DataType::Float64, false),
+    ]));
+    let right_side_schema = Arc::new(Schema::new(vec![
+        Field::new("d", DataType::Utf8, false),
+        Field::new("e", DataType::Utf8, false),
+        Field::new("f", DataType::Float64, false),
+    ]));
+
+    let left_scan = TestScanBuilder::new(Arc::clone(&left_side_schema))
+        .with_support(true)
+        .build();
+    let right_scan = TestScanBuilder::new(Arc::clone(&right_side_schema))
+        .with_support(true)
+        .build();
+
+    let on = vec![(
+        col("a", &left_side_schema).unwrap(),
+        col("d", &right_side_schema).unwrap(),
+    )];
+    let join = Arc::new(
+        HashJoinExec::try_new(
+            left_scan,
+            right_scan,
+            on,
+            None,
+            &JoinType::LeftSemi,
+            None,
+            PartitionMode::Partitioned,
+            datafusion_common::NullEquality::NullEqualsNothing,
+        )
+        .unwrap(),
+    );
+
+    let join_schema = join.schema();
+    let filter = col_lit_predicate("a", "aa", &join_schema);
+    let plan =
+        Arc::new(FilterExec::try_new(filter, join).unwrap()) as Arc<dyn ExecutionPlan>;
+
+    // Test that filters ARE pushed down for left semi join when they reference only left side
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, FilterPushdown::new(), true),
+        @r"
+    OptimizationTest:
+      input:
+        - FilterExec: a@0 = aa
+        -   HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(a@0, d@0)]
+        -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+        -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[d, e, f], file_type=test, pushdown_supported=true
+      output:
+        Ok:
+          - HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(a@0, d@0)]
+          -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@0 = aa
+          -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[d, e, f], file_type=test, pushdown_supported=true
     "
     );
 }

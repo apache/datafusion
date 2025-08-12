@@ -86,6 +86,7 @@ use datafusion_physical_expr::equivalence::{
     join_equivalence_properties, ProjectionMapping,
 };
 use datafusion_physical_expr::expressions::{lit, BinaryExpr, DynamicFilterPhysicalExpr};
+use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{PhysicalExpr, PhysicalExprRef};
 use datafusion_physical_expr_common::datum::compare_op_for_nested;
 
@@ -367,6 +368,34 @@ pub struct HashJoinExec {
     cache: PlanProperties,
     /// Dynamic filter for pushing down to the probe side
     dynamic_filter: Arc<DynamicFilterPhysicalExpr>,
+}
+
+/// Helper function copied from logical optimizer: For a given JOIN type, determine whether each input of the join is preserved
+/// for WHERE clause filters (predicates above the join).
+/// 
+/// It is only correct to push filters below a join for preserved inputs.
+/// 
+/// For left semi joins: (true, false) - meaning left side is preserved, right side is not
+fn lr_is_preserved(join_type: JoinType) -> (bool, bool) {
+    match join_type {
+        JoinType::Inner => (true, true),
+        JoinType::Left => (true, false),
+        JoinType::Right => (false, true),
+        JoinType::Full => (false, false),
+        // No columns from the right side of the join can be referenced in output
+        // predicates for semi/anti joins, so whether we specify t/f doesn't matter.
+        JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark => (true, false),
+        // No columns from the left side of the join can be referenced in output
+        // predicates for semi/anti joins, so whether we specify t/f doesn't matter.
+        JoinType::RightSemi | JoinType::RightAnti | JoinType::RightMark => (false, true),
+    }
+}
+
+/// Check if a physical expression only references columns from the left child
+fn is_left_only_predicate(predicate: &Arc<dyn PhysicalExpr>, left_schema_len: usize) -> bool {
+    let columns = collect_columns(predicate);
+    // All column indices must be less than left_schema_len
+    columns.iter().all(|col| col.index() < left_schema_len)
 }
 
 impl HashJoinExec {
@@ -1011,25 +1040,29 @@ impl ExecutionPlan for HashJoinExec {
         }
     }
 
+
     fn gather_filters_for_pushdown(
         &self,
         phase: FilterPushdownPhase,
         parent_filters: Vec<Arc<dyn PhysicalExpr>>,
         config: &ConfigOptions,
     ) -> Result<FilterDescription> {
+        // Check if this join type supports filter pushdown
+        let (_left_preserved, _right_preserved) = lr_is_preserved(self.join_type);
+        
+        // For now, only support Inner and LeftSemi joins
         // Other types of joins can support *some* filters, but restrictions are complex and error prone.
-        // For now we don't support them.
         // See the logical optimizer rules for more details: datafusion/optimizer/src/push_down_filter.rs
         // See https://github.com/apache/datafusion/issues/16973 for tracking.
-        if self.join_type != JoinType::Inner {
+        if !matches!(self.join_type, JoinType::Inner | JoinType::LeftSemi) {
             return Ok(FilterDescription::all_unsupported(
                 &parent_filters,
                 &self.children(),
             ));
         }
 
-        // Get basic filter descriptions for both children
-        let left_child = crate::filter_pushdown::ChildFilterDescription::from_child(
+        // Get basic filter descriptions for both children (for Inner joins, this works as before)
+        let mut left_child = crate::filter_pushdown::ChildFilterDescription::from_child(
             &parent_filters,
             self.left(),
         )?;
@@ -1037,6 +1070,37 @@ impl ExecutionPlan for HashJoinExec {
             &parent_filters,
             self.right(),
         )?;
+
+        // For left semi joins, override the analysis to only allow left-side filters to go to left child
+        if self.join_type == JoinType::LeftSemi {
+            let left_schema_len = self.left().schema().fields().len();
+            
+            // Create new parent filters list with modified support based on column analysis
+            let mut new_left_parent_filters = Vec::new();
+            let mut new_right_parent_filters = Vec::new();
+            
+            for (i, filter) in parent_filters.iter().enumerate() {
+                // For left child: can only push filters that reference only left-side columns
+                if is_left_only_predicate(filter, left_schema_len) {
+                    // Check if original analysis said it was supported
+                    if let Some(orig_filter) = left_child.parent_filters.get(i) {
+                        new_left_parent_filters.push(orig_filter.clone());
+                    } else {
+                        new_left_parent_filters.push(crate::filter_pushdown::PushedDownPredicate::unsupported(filter.clone()));
+                    }
+                } else {
+                    // Cannot push this filter to left child for left semi join
+                    new_left_parent_filters.push(crate::filter_pushdown::PushedDownPredicate::unsupported(filter.clone()));
+                }
+                
+                // For right child: left semi joins cannot push any parent filters to right child
+                new_right_parent_filters.push(crate::filter_pushdown::PushedDownPredicate::unsupported(filter.clone()));
+            }
+            
+            // Update the child descriptions
+            left_child.parent_filters = new_left_parent_filters;
+            right_child.parent_filters = new_right_parent_filters;
+        }
 
         // Add dynamic filters in Post phase if enabled
         if matches!(phase, FilterPushdownPhase::Post)
@@ -1059,11 +1123,12 @@ impl ExecutionPlan for HashJoinExec {
         child_pushdown_result: ChildPushdownResult,
         _config: &ConfigOptions,
     ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
+        // For now, only support Inner and LeftSemi joins
         // Note: this check shouldn't be necessary because we already marked all parent filters as unsupported for
-        // non-inner joins in `gather_filters_for_pushdown`.
+        // unsupported join types in `gather_filters_for_pushdown`.
         // However it's a cheap check and serves to inform future devs touching this function that they need to be really
         // careful pushing down filters through non-inner joins.
-        if self.join_type != JoinType::Inner {
+        if !matches!(self.join_type, JoinType::Inner | JoinType::LeftSemi) {
             // Other types of joins can support *some* filters, but restrictions are complex and error prone.
             // For now we don't support them.
             // See the logical optimizer rules for more details: datafusion/optimizer/src/push_down_filter.rs
