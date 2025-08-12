@@ -203,7 +203,7 @@ pub(crate) fn unproject_agg_exprs(
                     windows.and_then(|w| find_window_expr(w, &c.name).cloned())
                 {
                     // Window function can contain an aggregation columns, e.g., 'avg(sum(ss_sales_price)) over ...' that needs to be unprojected
-                    return Ok(Transformed::yes(unproject_agg_exprs(unprojected_expr, agg, None)?));
+                    Ok(Transformed::yes(unproject_agg_exprs(unprojected_expr, agg, None)?))
                 } else {
                     internal_err!(
                         "Tried to unproject agg expr for column '{}' that was not found in the provided Aggregate!", &c.name

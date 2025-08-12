@@ -49,8 +49,9 @@ pub(crate) struct SortPreservingMergeStream<C: CursorValues> {
     /// used to record execution metrics
     metrics: BaselineMetrics,
 
-    /// If the stream has encountered an error
-    aborted: bool,
+    /// If the stream has encountered an error or reaches the
+    /// `fetch` limit.
+    done: bool,
 
     /// A loser tree that always produces the minimum cursor
     ///
@@ -162,7 +163,7 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
             in_progress: BatchBuilder::new(schema, stream_count, batch_size, reservation),
             streams,
             metrics,
-            aborted: false,
+            done: false,
             cursors: (0..stream_count).map(|_| None).collect(),
             prev_cursors: (0..stream_count).map(|_| None).collect(),
             round_robin_tie_breaker_mode: false,
@@ -206,7 +207,7 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
         &mut self,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Result<RecordBatch>>> {
-        if self.aborted {
+        if self.done {
             return Poll::Ready(None);
         }
         // Once all partitions have set their corresponding cursors for the loser tree,
@@ -220,7 +221,7 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
                 let partition_idx = self.uninitiated_partitions[idx];
                 match self.maybe_poll_stream(cx, partition_idx) {
                     Poll::Ready(Err(e)) => {
-                        self.aborted = true;
+                        self.done = true;
                         return Poll::Ready(Some(Err(e)));
                     }
                     Poll::Pending => {
@@ -268,7 +269,7 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
             if !self.loser_tree_adjusted {
                 let winner = self.loser_tree[0];
                 if let Err(e) = ready!(self.maybe_poll_stream(cx, winner)) {
-                    self.aborted = true;
+                    self.done = true;
                     return Poll::Ready(Some(Err(e)));
                 }
                 self.update_loser_tree();
@@ -281,7 +282,7 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
 
                 // stop sorting if fetch has been reached
                 if self.fetch_reached() {
-                    self.aborted = true;
+                    self.done = true;
                 } else if self.in_progress.len() < self.batch_size {
                     continue;
                 }

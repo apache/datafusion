@@ -372,7 +372,7 @@ impl ScalarUDFImpl for ToLocalTimeFunc {
     ) -> Result<ColumnarValue> {
         let [time_value] = take_function_args(self.name(), args.args)?;
 
-        self.to_local_time(&[time_value.clone()])
+        self.to_local_time(std::slice::from_ref(&time_value))
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
