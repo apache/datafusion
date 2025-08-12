@@ -55,7 +55,7 @@ Peak memory usage: 10.0 MB
 Cumulative allocations: 101.6 MB
 Memory usage by operator:
 Aggregation: 762.2 KB
-Other: 887.1 KB
+Repartition: 884.8 KB
 Sorting: 100.0 MB
 
 \memory_profiling disable   # optional
