@@ -1213,7 +1213,7 @@ async fn join_on_filter_datatype() -> Result<()> {
         JoinType::Inner,
         Some(Expr::Literal(ScalarValue::Null, None)),
     )?;
-    assert_snapshot!(join.into_optimized_plan().unwrap(), @"EmptyRelation");
+    assert_snapshot!(join.into_optimized_plan().unwrap(), @"EmptyRelation: rows=0");
 
     // JOIN ON expression must be boolean type
     let join = left.join_on(right, JoinType::Inner, Some(lit("TRUE")))?;
@@ -2751,7 +2751,7 @@ async fn test_count_wildcard_on_where_exist() -> Result<()> {
     | logical_plan  | LeftSemi Join:                                      |
     |               |   TableScan: t1 projection=[a, b]                   |
     |               |   SubqueryAlias: __correlated_sq_1                  |
-    |               |     EmptyRelation                                   |
+    |               |     EmptyRelation: rows=1                           |
     | physical_plan | NestedLoopJoinExec: join_type=RightSemi             |
     |               |   PlaceholderRowExec                                |
     |               |   DataSourceExec: partitions=1, partition_sizes=[1] |
@@ -2787,7 +2787,7 @@ async fn test_count_wildcard_on_where_exist() -> Result<()> {
     | logical_plan  | LeftSemi Join:                                      |
     |               |   TableScan: t1 projection=[a, b]                   |
     |               |   SubqueryAlias: __correlated_sq_1                  |
-    |               |     EmptyRelation                                   |
+    |               |     EmptyRelation: rows=1                           |
     | physical_plan | NestedLoopJoinExec: join_type=RightSemi             |
     |               |   PlaceholderRowExec                                |
     |               |   DataSourceExec: partitions=1, partition_sizes=[1] |
@@ -4934,11 +4934,11 @@ async fn test_dataframe_placeholder_missing_param_values() -> Result<()> {
 
     assert_snapshot!(
         actual,
-        @r###"
+        @r"
     Filter: a = $0 [a:Int32]
       Projection: Int32(1) AS a [a:Int32]
-        EmptyRelation []
-    "###
+        EmptyRelation: rows=1 []
+    "
     );
 
     // Executing LogicalPlans with placeholders that don't have bound values
@@ -4967,11 +4967,11 @@ async fn test_dataframe_placeholder_missing_param_values() -> Result<()> {
 
     assert_snapshot!(
         actual,
-        @r###"
+        @r"
     Filter: a = Int32(3) [a:Int32]
       Projection: Int32(1) AS a [a:Int32]
-        EmptyRelation []
-    "###
+        EmptyRelation: rows=1 []
+    "
     );
 
     // N.B., the test is basically `SELECT 1 as a WHERE a = 3;` which returns no results.
@@ -4998,10 +4998,10 @@ async fn test_dataframe_placeholder_column_parameter() -> Result<()> {
 
     assert_snapshot!(
         actual,
-        @r###"
+        @r"
     Projection: $1 [$1:Null;N]
-      EmptyRelation []
-    "###
+      EmptyRelation: rows=1 []
+    "
     );
 
     // Executing LogicalPlans with placeholders that don't have bound values
@@ -5028,10 +5028,10 @@ async fn test_dataframe_placeholder_column_parameter() -> Result<()> {
 
     assert_snapshot!(
         actual,
-        @r###"
+        @r"
     Projection: Int32(3) AS $1 [$1:Null;N]
-      EmptyRelation []
-    "###
+      EmptyRelation: rows=1 []
+    "
     );
 
     assert_snapshot!(
@@ -5067,11 +5067,11 @@ async fn test_dataframe_placeholder_like_expression() -> Result<()> {
 
     assert_snapshot!(
         actual,
-        @r###"
+        @r#"
     Filter: a LIKE $1 [a:Utf8]
       Projection: Utf8("foo") AS a [a:Utf8]
-        EmptyRelation []
-    "###
+        EmptyRelation: rows=1 []
+    "#
     );
 
     // Executing LogicalPlans with placeholders that don't have bound values
@@ -5100,11 +5100,11 @@ async fn test_dataframe_placeholder_like_expression() -> Result<()> {
 
     assert_snapshot!(
         actual,
-        @r###"
+        @r#"
     Filter: a LIKE Utf8("f%") [a:Utf8]
       Projection: Utf8("foo") AS a [a:Utf8]
-        EmptyRelation []
-    "###
+        EmptyRelation: rows=1 []
+    "#
     );
 
     assert_snapshot!(
