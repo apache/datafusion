@@ -32,7 +32,9 @@ use datafusion::{
     prelude::{ParquetReadOptions, SessionConfig, SessionContext},
     scalar::ScalarValue,
 };
-use datafusion_common::{assert_contains, assert_not_contains, config::ConfigOptions, JoinType};
+use datafusion_common::{
+    assert_contains, assert_not_contains, config::ConfigOptions, JoinType,
+};
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_expr::ScalarUDF;
 use datafusion_functions::math::random::RandomFunc;
@@ -1134,8 +1136,14 @@ fn build_join_with_dynamic_filter(
         .build();
 
     let on = vec![
-        (col("a", &left_schema).unwrap(), col("a", &right_schema).unwrap()),
-        (col("b", &left_schema).unwrap(), col("b", &right_schema).unwrap()),
+        (
+            col("a", &left_schema).unwrap(),
+            col("a", &right_schema).unwrap(),
+        ),
+        (
+            col("b", &left_schema).unwrap(),
+            col("b", &right_schema).unwrap(),
+        ),
     ];
 
     Arc::new(
