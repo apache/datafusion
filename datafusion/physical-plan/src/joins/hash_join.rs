@@ -407,7 +407,7 @@ fn create_join_aware_child_descriptions(
             // Check if the filter can actually be pushed based on schema
             let temp_left_desc =
                 crate::filter_pushdown::ChildFilterDescription::from_child(
-                    &[filter.clone()],
+                    &[Arc::clone(filter)],
                     left_child,
                 )?;
 
@@ -416,13 +416,13 @@ fn create_join_aware_child_descriptions(
             } else {
                 left_parent_filters.push(
                     crate::filter_pushdown::PushedDownPredicate::unsupported(
-                        filter.clone(),
+                        Arc::clone(filter),
                     ),
                 );
             }
         } else {
             left_parent_filters.push(
-                crate::filter_pushdown::PushedDownPredicate::unsupported(filter.clone()),
+                crate::filter_pushdown::PushedDownPredicate::unsupported(Arc::clone(filter)),
             );
         }
 
@@ -432,7 +432,7 @@ fn create_join_aware_child_descriptions(
             // Check if the filter can actually be pushed based on schema
             let temp_right_desc =
                 crate::filter_pushdown::ChildFilterDescription::from_child(
-                    &[filter.clone()],
+                    &[Arc::clone(filter)],
                     right_child,
                 )?;
 
@@ -441,13 +441,13 @@ fn create_join_aware_child_descriptions(
             } else {
                 right_parent_filters.push(
                     crate::filter_pushdown::PushedDownPredicate::unsupported(
-                        filter.clone(),
+                        Arc::clone(filter),
                     ),
                 );
             }
         } else {
             right_parent_filters.push(
-                crate::filter_pushdown::PushedDownPredicate::unsupported(filter.clone()),
+                crate::filter_pushdown::PushedDownPredicate::unsupported(Arc::clone(filter)),
             );
         }
     }

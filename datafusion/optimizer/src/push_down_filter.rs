@@ -143,7 +143,7 @@ pub struct PushDownFilter {}
 /// # Return Value
 /// A tuple of booleans - (left_preserved, right_preserved).
 ///
-/// See [`lr_is_preserved`] for a definition of "preserved".
+/// See [`JoinType::lr_is_preserved`] for a definition of "preserved".
 pub(crate) fn on_lr_is_preserved(join_type: JoinType) -> (bool, bool) {
     match join_type {
         JoinType::Inner => (true, true),
