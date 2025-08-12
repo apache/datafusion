@@ -2751,8 +2751,7 @@ async fn test_count_wildcard_on_where_exist() -> Result<()> {
     | logical_plan  | LeftSemi Join:                                      |
     |               |   TableScan: t1 projection=[a, b]                   |
     |               |   SubqueryAlias: __correlated_sq_1                  |
-    |               |     Aggregate: groupBy=[[]], aggr=[[]]              |
-    |               |       TableScan: t2 projection=[]                   |
+    |               |     EmptyRelation                                   |
     | physical_plan | NestedLoopJoinExec: join_type=RightSemi             |
     |               |   PlaceholderRowExec                                |
     |               |   DataSourceExec: partitions=1, partition_sizes=[1] |
@@ -2788,8 +2787,7 @@ async fn test_count_wildcard_on_where_exist() -> Result<()> {
     | logical_plan  | LeftSemi Join:                                      |
     |               |   TableScan: t1 projection=[a, b]                   |
     |               |   SubqueryAlias: __correlated_sq_1                  |
-    |               |     Aggregate: groupBy=[[]], aggr=[[]]              |
-    |               |       TableScan: t2 projection=[]                   |
+    |               |     EmptyRelation                                   |
     | physical_plan | NestedLoopJoinExec: join_type=RightSemi             |
     |               |   PlaceholderRowExec                                |
     |               |   DataSourceExec: partitions=1, partition_sizes=[1] |
