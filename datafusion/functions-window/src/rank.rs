@@ -29,8 +29,7 @@ use datafusion_common::utils::get_row_at_idx;
 use datafusion_common::{exec_err, Result, ScalarValue};
 use datafusion_expr::window_doc_sections::DOC_SECTION_RANKING;
 use datafusion_expr::{
-    udf_equals_hash, Documentation, PartitionEvaluator, Signature, Volatility,
-    WindowUDFImpl,
+    Documentation, PartitionEvaluator, Signature, Volatility, WindowUDFImpl,
 };
 use datafusion_functions_window_common::field;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
@@ -64,7 +63,7 @@ define_udwf_and_expr!(
 );
 
 /// Rank calculates the rank in the window function with order by
-#[derive(Debug, PartialEq, Hash)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct Rank {
     name: String,
     signature: Signature,
@@ -241,8 +240,6 @@ impl WindowUDFImpl for Rank {
             RankType::Percent => Some(get_percent_rank_doc()),
         }
     }
-
-    udf_equals_hash!(WindowUDFImpl);
 }
 
 /// State for the RANK(rank) built-in window function.

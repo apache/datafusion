@@ -417,12 +417,14 @@ pub fn build_sides_record_batches(
     key_cardinality: (i32, i32),
 ) -> Result<(RecordBatch, RecordBatch)> {
     let null_ratio: f64 = 0.4;
+    let duplicate_ratio = 0.4;
     let initial_range = 0..table_size;
     let index = (table_size as f64 * null_ratio).round() as i32;
     let rest_of = index..table_size;
     let ordered: ArrayRef = Arc::new(Int32Array::from_iter(
         initial_range.clone().collect::<Vec<i32>>(),
     ));
+    let random_ordered = generate_ordered_array(table_size, duplicate_ratio);
     let ordered_des = Arc::new(Int32Array::from_iter(
         initial_range.clone().rev().collect::<Vec<i32>>(),
     ));
@@ -501,6 +503,7 @@ pub fn build_sides_record_batches(
         ),
         ("li1", Arc::clone(&interval_time)),
         ("l_float", Arc::clone(&float_asc) as ArrayRef),
+        ("l_random_ordered", Arc::clone(&random_ordered) as ArrayRef),
     ])?;
     let right = RecordBatch::try_from_iter(vec![
         ("ra1", Arc::clone(&ordered)),
@@ -514,6 +517,7 @@ pub fn build_sides_record_batches(
         ("r_desc_null_first", ordered_desc_null_first),
         ("ri1", interval_time),
         ("r_float", float_asc),
+        ("r_random_ordered", random_ordered),
     ])?;
     Ok((left, right))
 }
@@ -582,4 +586,25 @@ pub(crate) fn complicated_filter(
         filter_schema,
     )?;
     binary(left_expr, Operator::And, right_expr, filter_schema)
+}
+
+fn generate_ordered_array(size: i32, duplicate_ratio: f32) -> Arc<Int32Array> {
+    let mut rng = StdRng::seed_from_u64(42);
+    let unique_count = (size as f32 * (1.0 - duplicate_ratio)) as i32;
+
+    // Generate unique random values
+    let mut values: Vec<i32> = (0..unique_count)
+        .map(|_| rng.random_range(1..500)) // Modify as per your range
+        .collect();
+
+    // Duplicate the values according to the duplicate ratio
+    for _ in 0..(size - unique_count) {
+        let index = rng.random_range(0..unique_count);
+        values.push(values[index as usize]);
+    }
+
+    // Sort the values to ensure they are ordered
+    values.sort();
+
+    Arc::new(Int32Array::from_iter(values))
 }

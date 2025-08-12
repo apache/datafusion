@@ -348,7 +348,7 @@ async fn decimal_literal() -> Result<()> {
 
 #[tokio::test]
 async fn null_decimal_literal() -> Result<()> {
-    roundtrip("SELECT * FROM data WHERE b = NULL").await
+    roundtrip("SELECT *, CAST(NULL AS decimal(10, 2)) FROM data").await
 }
 
 #[tokio::test]

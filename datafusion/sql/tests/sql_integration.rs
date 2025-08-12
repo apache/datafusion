@@ -3312,7 +3312,7 @@ fn make_udf(name: &'static str, args: Vec<DataType>, return_type: DataType) -> S
 }
 
 /// Mocked UDF
-#[derive(Debug, PartialEq, Hash)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 struct DummyUDF {
     name: &'static str,
     signature: Signature,

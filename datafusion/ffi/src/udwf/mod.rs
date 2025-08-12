@@ -25,7 +25,6 @@ use arrow::{
     datatypes::{DataType, SchemaRef},
 };
 use arrow_schema::{Field, FieldRef};
-use datafusion::logical_expr::udf_equals_hash;
 use datafusion::{
     error::DataFusionError,
     logical_expr::{
@@ -261,6 +260,7 @@ impl PartialEq for ForeignWindowUDF {
         std::ptr::eq(self, other)
     }
 }
+impl Eq for ForeignWindowUDF {}
 impl Hash for ForeignWindowUDF {
     fn hash<H: Hasher>(&self, state: &mut H) {
         std::ptr::hash(self, state)
@@ -348,8 +348,6 @@ impl WindowUDFImpl for ForeignWindowUDF {
         let options: Option<&FFI_SortOptions> = self.udf.sort_options.as_ref().into();
         options.map(|s| s.into())
     }
-
-    udf_equals_hash!(WindowUDFImpl);
 }
 
 #[repr(C)]

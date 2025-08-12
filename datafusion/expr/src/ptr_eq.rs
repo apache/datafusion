@@ -34,8 +34,10 @@ pub fn arc_ptr_hash<T: ?Sized>(a: &Arc<T>, hasher: &mut impl Hasher) {
     std::ptr::hash(Arc::as_ptr(a), hasher)
 }
 
-/// A wrapper around a pointer that implements `PartialEq` and `Hash` comparing
+/// A wrapper around a pointer that implements `Eq` and `Hash` comparing
 /// the underlying pointer address.
+///
+/// If you have pointers to a `dyn UDF impl` consider using [`super::udf_eq::UdfEq`].
 #[derive(Clone)]
 #[allow(private_bounds)] // This is so that PtrEq can only be used with allowed pointer types (e.g. Arc), without allowing misuse.
 pub struct PtrEq<Ptr: PointerType>(Ptr);
@@ -48,6 +50,7 @@ where
         arc_ptr_eq(&self.0, &other.0)
     }
 }
+impl<T> Eq for PtrEq<Arc<T>> where T: ?Sized {}
 
 impl<T> Hash for PtrEq<Arc<T>>
 where
