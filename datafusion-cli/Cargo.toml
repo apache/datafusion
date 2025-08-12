@@ -47,6 +47,7 @@ datafusion = { workspace = true, features = [
     "encoding_expressions",
     "nested_expressions",
     "parquet",
+    "parquet_encryption",
     "recursive_protection",
     "regex_expressions",
     "unicode_expressions",
