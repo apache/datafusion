@@ -904,7 +904,7 @@ async fn without_pushdown_filter() {
     .unwrap();
 
     // Same amount of bytes are scanned when defaulting to cache parquet metadata
-    assert!(bytes_scanned_with_filter == bytes_scanned_without_filter);
+    assert_eq!(bytes_scanned_with_filter, bytes_scanned_without_filter);
 }
 
 #[tokio::test]

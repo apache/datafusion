@@ -2505,6 +2505,7 @@ dependencies = [
  "datafusion-execution",
  "datafusion-expr",
  "datafusion-functions-aggregate",
+ "datafusion-functions-aggregate-common",
  "datafusion-functions-window",
  "datafusion-functions-window-common",
  "datafusion-physical-expr",
@@ -3976,9 +3977,9 @@ checksum = "775bf80d5878ab7c2b1080b5351a48b2f737d9f6f8b383574eebcc22be0dfccb"
 
 [[package]]
 name = "libc"
-version = "0.2.174"
+version = "0.2.175"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1171693293099992e19cddea4e8b849964e9846f4acee11b3948bcc337be8776"
+checksum = "6a82ae493e598baaea5209805c49bbf2ea7de956d50d7da0da1164f9c6d28543"
 
 [[package]]
 name = "libflate"
@@ -5661,9 +5662,9 @@ checksum = "8a0d197bd2c9dc6e53b84da9556a69ba4cdfab8619eb41a8bd1cc2027a0f6b1d"
 
 [[package]]
 name = "rustyline"
-version = "16.0.0"
+version = "17.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "62fd9ca5ebc709e8535e8ef7c658eb51457987e48c98ead2be482172accc408d"
+checksum = "ed34fbd08950d17f8297e738d5b76acd4baab50c8d45008d498b4327feb43ea1"
 dependencies = [
  "bitflags 2.9.1",
  "cfg-if",
@@ -5678,7 +5679,7 @@ dependencies = [
  "unicode-segmentation",
  "unicode-width 0.2.1",
  "utf8parse",
- "windows-sys 0.59.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -6296,9 +6297,9 @@ dependencies = [
 
 [[package]]
 name = "sysinfo"
-version = "0.36.1"
+version = "0.37.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "252800745060e7b9ffb7b2badbd8b31cfa4aa2e61af879d0a3bf2a317c20217d"
+checksum = "07cec4dc2d2e357ca1e610cfb07de2fa7a10fc3e9fe89f72545f3d244ea87753"
 dependencies = [
  "libc",
  "memchr",
