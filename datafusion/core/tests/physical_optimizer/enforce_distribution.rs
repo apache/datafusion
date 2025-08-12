@@ -441,7 +441,7 @@ impl TestConfig {
 
     /// Perform a series of runs using the current [`TestConfig`],
     /// assert the expected plan result,
-    /// and return the result plan (for potentional subsequent runs).
+    /// and return the result plan (for potential subsequent runs).
     fn run(
         &self,
         expected_lines: &[&str],

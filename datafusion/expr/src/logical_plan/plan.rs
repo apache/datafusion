@@ -3797,7 +3797,7 @@ impl Join {
         })
     }
 
-    /// Create Join with input which wrapped with projection, this method is used in physcial planning only to help
+    /// Create Join with input which wrapped with projection, this method is used in physical planning only to help
     /// create the physical join.
     pub fn try_new_with_project_input(
         original: &LogicalPlan,

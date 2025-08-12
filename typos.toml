@@ -12,13 +12,24 @@ ECT = "ECT"
 Ue = "Ue"
 Iy = "Iy"
 hte = "hte"
+row_numer = "row_numer"
+abd = "abd"
+aroun = "aroun"
+carefull = "carefull"
+abov = "abov"
+Ois = "Ois"
+alo = "alo"
+precentage = "precentage"
+datas = "datas"
 
 
 [files]
 extend-exclude = [
     "*.slt",
+    "*.slt.part",
     "*.svg",
     "*.sql",
     "dev/changelog/**",
     "benchmarks/**",
+    "*.csv"
 ]

@@ -5666,7 +5666,7 @@ async fn test_alias() -> Result<()> {
         .await?
         .select(vec![col("a"), col("test.b"), lit(1).alias("one")])?
         .alias("table_alias")?;
-    // All ouput column qualifiers are changed to "table_alias"
+    // All output column qualifiers are changed to "table_alias"
     df.schema().columns().iter().for_each(|c| {
         assert_eq!(c.relation, Some("table_alias".into()));
     });

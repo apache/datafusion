@@ -403,7 +403,7 @@ async fn run_aggregate_test(input1: Vec<RecordBatch>, group_by_columns: Vec<&str
              Left Plan:\n{}\n\
              Right Plan:\n{}\n\
              schema:\n{schema}\n\
-             Left Ouptut:\n{}\n\
+             Left Output:\n{}\n\
              Right Output:\n{}\n\
              input:\n{}\n\
              ",

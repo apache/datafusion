@@ -223,12 +223,12 @@ impl RunQueryResult {
         format!("{}", pretty_format_batches(&self.expected).unwrap())
     }
 
-    fn result_formated(&self) -> String {
+    fn result_formatted(&self) -> String {
         format!("{}", pretty_format_batches(&self.result).unwrap())
     }
 
     fn is_ok(&self) -> bool {
-        self.expected_formated() == self.result_formated()
+        self.expected_formated() == self.result_formatted()
     }
 }
 
@@ -375,7 +375,7 @@ async fn test_fuzz_topk_filter_pushdown() {
         println!("Failure:");
         println!("Query:\n{}", failure.query);
         println!("\nExpected:\n{}", failure.expected_formated());
-        println!("\nResult:\n{}", failure.result_formated());
+        println!("\nResult:\n{}", failure.result_formatted());
         println!("\n\n");
     }
 

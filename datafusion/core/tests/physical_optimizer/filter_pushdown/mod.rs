@@ -233,7 +233,7 @@ async fn test_dynamic_filter_pushdown_through_hash_join_with_topk() {
     config.optimizer.enable_dynamic_filter_pushdown = true;
     config.execution.parquet.pushdown_filters = true;
 
-    // Appy the FilterPushdown optimizer rule
+    // Apply the FilterPushdown optimizer rule
     let plan = FilterPushdown::new_post_optimization()
         .optimize(Arc::clone(&plan), &config)
         .unwrap();
@@ -600,7 +600,7 @@ fn test_no_pushdown_through_aggregates() {
 }
 
 /// Test various combinations of handling of child pushdown results
-/// in an ExectionPlan in combination with support/not support in a DataSource.
+/// in an ExecutionPlan in combination with support/not support in a DataSource.
 #[test]
 fn test_node_handles_child_pushdown_result() {
     // If we set `with_support(true)` + `inject_filter = true` then the filter is pushed down to the DataSource
