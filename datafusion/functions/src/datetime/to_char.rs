@@ -139,20 +139,23 @@ impl ScalarUDFImpl for ToCharFunc {
         &self,
         args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
+        let num_rows = args.number_rows;
         let args = args.args;
-        let [date_time, format] = take_function_args(self.name(), &args)?;
+        let [date_time, format] = take_function_args(self.name(), args)?;
 
         match format {
             ColumnarValue::Scalar(ScalarValue::Utf8(None))
             | ColumnarValue::Scalar(ScalarValue::Null) => {
-                to_char_scalar(date_time.clone(), None)
+                to_char_scalar(date_time, None)
             }
             // constant format
             ColumnarValue::Scalar(ScalarValue::Utf8(Some(format))) => {
                 // invoke to_char_scalar with the known string, without converting to array
-                to_char_scalar(date_time.clone(), Some(format))
+                to_char_scalar(date_time, Some(&format))
             }
-            ColumnarValue::Array(_) => to_char_array(&args),
+            ColumnarValue::Array(_) => to_char_array(
+                date_time, format.to_array(num_rows)?
+            ),
             _ => {
                 exec_err!(
                     "Format for `to_char` must be non-null Utf8, received {:?}",
@@ -253,20 +256,21 @@ fn to_char_scalar(
         // if the data type was a Date32, formatting could have failed because the format string
         // contained datetime specifiers, so we'll retry by casting the date array as a timestamp array
         if data_type == &Date32 {
-            return to_char_scalar(expression.clone().cast_to(&Date64, None)?, format);
+            return to_char_scalar(expression.cast_to(&Date64, None)?, format);
         }
 
         exec_err!("{}", formatted.unwrap_err())
     }
 }
 
-fn to_char_array(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-    let arrays = ColumnarValue::values_to_arrays(args)?;
+fn to_char_array(date_time: ColumnarValue, format_array: ArrayRef) -> Result<ColumnarValue> {
     let mut results: Vec<Option<String>> = vec![];
-    let format_array = arrays[1].as_string::<i32>();
-    let data_type = arrays[0].data_type();
+    let format_array = format_array.as_string::<i32>();
+    let num_rows = format_array.len();
+    let date_time_array = date_time.to_array(num_rows)?;
+    let data_type = date_time_array.data_type();
 
-    for idx in 0..arrays[0].len() {
+    for idx in 0..num_rows {
         let format = if format_array.is_null(idx) {
             None
         } else {
@@ -282,7 +286,7 @@ fn to_char_array(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         };
         // this isn't ideal but this can't use ValueFormatter as it isn't independent
         // from ArrayFormatter
-        let formatter = ArrayFormatter::try_new(arrays[0].as_ref(), &format_options)?;
+        let formatter = ArrayFormatter::try_new(date_time_array.as_ref(), &format_options)?;
         let result = formatter.value(idx).try_to_string();
         match result {
             Ok(value) => results.push(Some(value)),
@@ -290,7 +294,7 @@ fn to_char_array(args: &[ColumnarValue]) -> Result<ColumnarValue> {
                 // if the data type was a Date32, formatting could have failed because the format string
                 // contained datetime specifiers, so we'll treat this specific date element as a timestamp
                 if data_type == &Date32 {
-                    let failed_date_value = arrays[0].slice(idx, 1);
+                    let failed_date_value = date_time_array.slice(idx, 1);
 
                     match retry_date_as_timestamp(failed_date_value, &format_options) {
                         Ok(value) => {
@@ -308,7 +312,7 @@ fn to_char_array(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         }
     }
 
-    match args[0] {
+    match date_time {
         ColumnarValue::Array(_) => Ok(ColumnarValue::Array(Arc::new(StringArray::from(
             results,
         )) as ArrayRef)),
