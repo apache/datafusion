@@ -32,7 +32,9 @@ on:
   push:
     branches:
       - main
-      # release candidate branches
+      # support extended test suite for release candidate branches,
+      # it is not expected to have many changes in these branches,
+      # so running extended tests is not a burden
       - 'branch-*'
   workflow_dispatch:
     inputs:
