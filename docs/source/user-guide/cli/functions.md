@@ -127,16 +127,16 @@ For example, to get the total size consumed by the cached entries:
 
 The columns of the returned table are:
 
-| column_name         | data_type | Description                                                                               |
-| ------------------- | --------- | ----------------------------------------------------------------------------------------- |
-| path                | Utf8      | File path relative to the object store / filesystem root                                  |
-| file_modified       | Timestamp | Last modified time of the file                                                            |
-| file_size_bytes     | Int64     | Size of the file in bytes                                                                 |
-| e_tag               | Utf8      | [Entity Tag] (ETag) of the file if available                                              |
-| version             | Utf8      | Version of the file if available (for object stores that support versioning)              |
-| metadata_size_bytes | Int64     | Size of the cached metadata in memory (not its thrift encoded form)                       |
-| hits                | Int64     | Number of times the cached metadata has been accessed                                     |
-| extra               | Utf8      | Extra information about the cached metadata (e.g., if page index information is included) |
+| column_name         | data_type  | Description                                                                               |
+| ------------------- | ---------- | ----------------------------------------------------------------------------------------- |
+| path                | Utf8       | File path relative to the object store / filesystem root                                  |
+| file_modified       | Timestamp  | Last modified time of the file                                                            |
+| file_size_bytes     | UInt64     | Size of the file in bytes                                                                 |
+| e_tag               | Utf8       | [Entity Tag] (ETag) of the file if available                                              |
+| version             | Utf8       | Version of the file if available (for object stores that support versioning)              |
+| metadata_size_bytes | UInt64     | Size of the cached metadata in memory (not its thrift encoded form)                       |
+| hits                | UInt64     | Number of times the cached metadata has been accessed                                     |
+| extra               | Utf8       | Extra information about the cached metadata (e.g., if page index information is included) |
 
 [`listingtable`]: https://docs.rs/datafusion/latest/datafusion/datasource/listing/struct.ListingTable.html
 [entity tag]: https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/ETag
