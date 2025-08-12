@@ -64,7 +64,7 @@ make_udf_expr_and_func!(
     ),
     argument(name = "dimension", description = "Array dimension.")
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ArrayLength {
     signature: Signature,
     aliases: Vec<String>,

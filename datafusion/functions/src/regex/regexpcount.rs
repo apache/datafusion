@@ -61,7 +61,7 @@ use std::sync::Arc;
   - **U**: swap the meaning of x* and x*?"#
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct RegexpCountFunc {
     signature: Signature,
 }

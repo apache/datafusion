@@ -3648,7 +3648,7 @@ mod test {
     #[test]
     fn test_is_volatile_scalar_func() {
         // UDF
-        #[derive(Debug)]
+        #[derive(Debug, PartialEq, Eq, Hash)]
         struct TestScalarUDF {
             signature: Signature,
         }

@@ -282,7 +282,7 @@ impl TableProvider for ExampleTableProvider {
 }
 
 /// Scalar UDF that uses serde_json to access json fields
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct JsonGetStr {
     signature: Signature,
 }
