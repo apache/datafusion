@@ -781,7 +781,7 @@ For production code, you may want to check, for example, that <code class="docut
 <span class="cp">    description = </span><span class="s">&quot;Add one udf&quot;</span><span class="cp">,</span>
 <span class="cp">    syntax_example = </span><span class="s">&quot;add_one(1)&quot;</span>
 <span class="cp">)]</span>
-<span class="cp">#[derive(Debug)]</span>
+<span class="cp">#[derive(Debug, PartialEq, Eq, Hash)]</span>
 <span class="k">struct</span><span class="w"> </span><span class="nc">AddOne</span><span class="w"> </span><span class="p">{</span>
 <span class="w">  </span><span class="n">signature</span><span class="p">:</span><span class="w"> </span><span class="nc">Signature</span><span class="p">,</span>
 <span class="p">}</span>
@@ -946,7 +946,7 @@ UDF.</p>
 </ol>
 <section id="adding-by-impl-asyncscalarudfimpl">
 <h3>Adding by <code class="docutils literal notranslate"><span class="pre">impl</span> <span class="pre">AsyncScalarUDFImpl</span></code><a class="headerlink" href="#adding-by-impl-asyncscalarudfimpl" title="Link to this heading">¶</a></h3>
-<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="cp">#[derive(Debug)]</span>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="cp">#[derive(Debug, PartialEq, Eq, Hash)]</span>
 <span class="k">pub</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">AsyncUpper</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="n">signature</span><span class="p">:</span><span class="w"> </span><span class="nc">Signature</span><span class="p">,</span>
 <span class="p">}</span>

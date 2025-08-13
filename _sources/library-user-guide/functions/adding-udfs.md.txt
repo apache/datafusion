@@ -83,7 +83,7 @@ use datafusion_doc::Documentation;
     description = "Add one udf",
     syntax_example = "add_one(1)"
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 struct AddOne {
   signature: Signature,
 }
@@ -257,7 +257,7 @@ To add a Scalar Async UDF, you need to:
 
 ```rust
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct AsyncUpper {
     signature: Signature,
 }

@@ -560,7 +560,13 @@
   </a>
   <ul class="nav section-nav flex-column">
    <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#aggregateudfimpl-and-windowudfimpl-traits-now-require-partialeq-eq-and-hash-traits">
+    <a class="reference internal nav-link" href="#scalarudfimpl-aggregateudfimpl-and-windowudfimpl-traits-now-require-partialeq-eq-and-hash-traits">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       ScalarUDFImpl
+      </span>
+     </code>
+     ,
      <code class="docutils literal notranslate">
       <span class="pre">
        AggregateUDFImpl
@@ -1201,13 +1207,21 @@
 <h2>DataFusion <code class="docutils literal notranslate"><span class="pre">50.0.0</span></code><a class="headerlink" href="#datafusion-50-0-0" title="Link to this heading">¶</a></h2>
 <p><strong>Note:</strong> DataFusion <code class="docutils literal notranslate"><span class="pre">50.0.0</span></code> has not been released yet. The information provided in this section pertains to features and changes that have already been merged to the main branch and are awaiting release in this version.
 You can see the current <a class="reference external" href="https://github.com/apache/datafusion/issues/16799">status of the <code class="docutils literal notranslate"><span class="pre">50.0.0</span> </code>release here</a></p>
-<section id="aggregateudfimpl-and-windowudfimpl-traits-now-require-partialeq-eq-and-hash-traits">
-<h3><code class="docutils literal notranslate"><span class="pre">AggregateUDFImpl</span></code> and <code class="docutils literal notranslate"><span class="pre">WindowUDFImpl</span></code> traits now require <code class="docutils literal notranslate"><span class="pre">PartialEq</span></code>, <code class="docutils literal notranslate"><span class="pre">Eq</span></code>, and <code class="docutils literal notranslate"><span class="pre">Hash</span></code> traits<a class="headerlink" href="#aggregateudfimpl-and-windowudfimpl-traits-now-require-partialeq-eq-and-hash-traits" title="Link to this heading">¶</a></h3>
-<p>To address error-proneness of <code class="docutils literal notranslate"><span class="pre">AggregateUDFImpl::equals</span></code> and <code class="docutils literal notranslate"><span class="pre">WindowUDFImpl::equals</span></code> methods and
-to make it easy to implement function equality correctly, the <code class="docutils literal notranslate"><span class="pre">equals</span></code> and <code class="docutils literal notranslate"><span class="pre">hash_value</span></code> methods have
-been removed from <code class="docutils literal notranslate"><span class="pre">AggregateUDFImpl</span></code> and <code class="docutils literal notranslate"><span class="pre">WindowUDFImpl</span></code> traits. They are replaced the requirement to
-implement the <code class="docutils literal notranslate"><span class="pre">PartialEq</span></code>, <code class="docutils literal notranslate"><span class="pre">Eq</span></code>, and <code class="docutils literal notranslate"><span class="pre">Hash</span></code> traits on any type implementing <code class="docutils literal notranslate"><span class="pre">AggregateUDFImpl</span></code>
-or <code class="docutils literal notranslate"><span class="pre">WindowUDFImpl</span></code>. Please see <a class="reference external" href="https://github.com/apache/datafusion/issues/16677">issue #16677</a> for more details.</p>
+<section id="scalarudfimpl-aggregateudfimpl-and-windowudfimpl-traits-now-require-partialeq-eq-and-hash-traits">
+<h3><code class="docutils literal notranslate"><span class="pre">ScalarUDFImpl</span></code>, <code class="docutils literal notranslate"><span class="pre">AggregateUDFImpl</span></code> and <code class="docutils literal notranslate"><span class="pre">WindowUDFImpl</span></code> traits now require <code class="docutils literal notranslate"><span class="pre">PartialEq</span></code>, <code class="docutils literal notranslate"><span class="pre">Eq</span></code>, and <code class="docutils literal notranslate"><span class="pre">Hash</span></code> traits<a class="headerlink" href="#scalarudfimpl-aggregateudfimpl-and-windowudfimpl-traits-now-require-partialeq-eq-and-hash-traits" title="Link to this heading">¶</a></h3>
+<p>To address error-proneness of <code class="docutils literal notranslate"><span class="pre">ScalarUDFImpl::equals</span></code>, <code class="docutils literal notranslate"><span class="pre">AggregateUDFImpl::equals</span></code>and
+<code class="docutils literal notranslate"><span class="pre">WindowUDFImpl::equals</span></code> methods and to make it easy to implement function equality correctly,
+the <code class="docutils literal notranslate"><span class="pre">equals</span></code> and <code class="docutils literal notranslate"><span class="pre">hash_value</span></code> methods have been removed from <code class="docutils literal notranslate"><span class="pre">ScalarUDFImpl</span></code>, <code class="docutils literal notranslate"><span class="pre">AggregateUDFImpl</span></code>
+and <code class="docutils literal notranslate"><span class="pre">WindowUDFImpl</span></code> traits. They are replaced the requirement to implement the <code class="docutils literal notranslate"><span class="pre">PartialEq</span></code>, <code class="docutils literal notranslate"><span class="pre">Eq</span></code>,
+and <code class="docutils literal notranslate"><span class="pre">Hash</span></code> traits on any type implementing <code class="docutils literal notranslate"><span class="pre">ScalarUDFImpl</span></code>, <code class="docutils literal notranslate"><span class="pre">AggregateUDFImpl</span></code> or <code class="docutils literal notranslate"><span class="pre">WindowUDFImpl</span></code>.
+Please see <a class="reference external" href="https://github.com/apache/datafusion/issues/16677">issue #16677</a> for more details.</p>
+<p>Most of the scalar functions are stateless and have a <code class="docutils literal notranslate"><span class="pre">signature</span></code> field. These can be migrated
+using regular expressions</p>
+<ul class="simple">
+<li><p>search for <code class="docutils literal notranslate"><span class="pre">\#\[derive\(Debug\)\](\n</span> <span class="pre">*(pub</span> <span class="pre">)?struct</span> <span class="pre">\w+</span> <span class="pre">\{\n</span> <span class="pre">*signature\:</span> <span class="pre">Signature\,\n</span> <span class="pre">*\})</span></code>,</p></li>
+<li><p>replace with <code class="docutils literal notranslate"><span class="pre">#[derive(Debug,</span> <span class="pre">PartialEq,</span> <span class="pre">Eq,</span> <span class="pre">Hash)]$1</span></code>,</p></li>
+<li><p>review all the changes and make sure only function structs were changed.</p></li>
+</ul>
 </section>
 <section id="asyncscalarudfimpl-invoke-async-with-args-returns-columnarvalue">
 <h3><code class="docutils literal notranslate"><span class="pre">AsyncScalarUDFImpl::invoke_async_with_args</span></code> returns <code class="docutils literal notranslate"><span class="pre">ColumnarValue</span></code><a class="headerlink" href="#asyncscalarudfimpl-invoke-async-with-args-returns-columnarvalue" title="Link to this heading">¶</a></h3>
