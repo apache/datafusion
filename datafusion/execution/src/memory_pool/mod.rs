@@ -365,6 +365,10 @@ impl MemoryReservation {
     pub fn size(&self) -> usize {
         self.size
     }
+    /// Returns the peak size of this reservation in bytes
+    pub fn peak(&self) -> usize {
+        self.peak
+    }
 
     /// Returns [MemoryConsumer] for this [MemoryReservation]
     pub fn consumer(&self) -> &MemoryConsumer {
@@ -500,10 +504,11 @@ impl fmt::Display for MemoryReservation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "{}#{} reserved {}",
+            "{}#{} reserved {} (peak {})",
             self.consumer().name(),
             self.consumer().id(),
-            human_readable_size(self.size())
+            human_readable_size(self.size()),
+            human_readable_size(self.peak())
         )
     }
 }
