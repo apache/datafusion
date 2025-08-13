@@ -37,6 +37,7 @@ use datafusion_physical_plan::{get_plan_string, ExecutionPlanProperties};
 use crate::PhysicalOptimizerRule;
 use datafusion_physical_expr_common::sort_expr::format_physical_sort_requirement_list;
 use itertools::izip;
+use log::warn;
 
 /// The SanityCheckPlan rule rejects the following query plans:
 /// 1. Invalid plans containing nodes whose order and/or distribution requirements
@@ -59,8 +60,16 @@ impl PhysicalOptimizerRule for SanityCheckPlan {
         plan: Arc<dyn ExecutionPlan>,
         config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        plan.transform_up(|p| check_plan_sanity(p, &config.optimizer))
-            .data()
+        plan.transform_up(|p| {
+            match check_plan_sanity(Arc::clone(&p), &config.optimizer) {
+                Ok(v) => Ok(v),
+                Err(err) => {
+                    warn!("Error during SanityCheckPlan: {err}");
+                    Ok(Transformed::no(p))
+                }
+            }
+        })
+        .data()
     }
 
     fn name(&self) -> &str {
