@@ -274,6 +274,9 @@ async fn test_dynamic_filter_pushdown_through_hash_join_with_topk() {
     -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[d, e, f], file_type=test, pushdown_supported=true, predicate=DynamicFilterPhysicalExpr [ d@0 >= aa AND d@0 <= ab ] AND DynamicFilterPhysicalExpr [ e@1 IS NULL OR e@1 < bb ]
     "
     );
+    let formatted = format_plan_for_test(&plan);
+    assert_contains!(&formatted, "probe_keys=");
+    assert_not_contains!(&formatted, "probe_keys=0");
 }
 
 // Test both static and dynamic filter pushdown in HashJoinExec.
@@ -848,6 +851,10 @@ async fn test_hashjoin_dynamic_filter_pushdown() {
     "
     );
 
+    let formatted = format_plan_for_test(&plan);
+    assert_contains!(&formatted, "probe_keys=");
+    assert_not_contains!(&formatted, "probe_keys=0");
+
     let join = plan.as_any().downcast_ref::<HashJoinExec>().unwrap();
     assert_projection(&join.left, &["a", "b", "c"]);
     assert_projection(&join.right, &["a", "b", "e"]);
@@ -934,10 +941,15 @@ async fn test_hashjoin_dynamic_filter_pushdown_null_keys() {
     stream.next().await.unwrap().unwrap();
     let formatted = format_plan_for_test(&plan);
     assert_contains!(
-        formatted,
+        &formatted,
         "DynamicFilterPhysicalExpr [ a@0 >= NULL AND a@0 <= NULL AND b@1 >= NULL AND b@1 <= NULL ]"
     );
 
+    assert_contains!(&formatted, "probe_keys=");
+    assert_not_contains!(&formatted, "probe_keys=0");
+
+    // TODO: NullEqualsNothing yields no matching keys, so the dynamic filter
+    // becomes a tautology.
     let join = plan.as_any().downcast_ref::<HashJoinExec>().unwrap();
     assert_projection(&join.left, &["a", "b", "c"]);
     assert_projection(&join.right, &["a", "b", "e"]);
@@ -949,6 +961,7 @@ async fn test_hashjoin_dynamic_filter_pushdown_high_cardinality() {
     use arrow::record_batch::RecordBatch;
     use datafusion_common::JoinType;
     use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
+    use tokio::time::{timeout, Duration};
 
     // Generate large key sets to watch for planning regressions
     let size = 10_000;
@@ -1014,11 +1027,17 @@ async fn test_hashjoin_dynamic_filter_pushdown_high_cardinality() {
     let mut config = ConfigOptions::default();
     config.execution.parquet.pushdown_filters = true;
     config.optimizer.enable_dynamic_filter_pushdown = true;
-    let plan = FilterPushdown::new_post_optimization()
-        .optimize(plan, &config)
-        .unwrap();
+    let plan = timeout(Duration::from_secs(10), async {
+        FilterPushdown::new_post_optimization().optimize(plan, &config)
+    })
+    .await
+    .expect("optimizer should finish in time")
+    .unwrap();
     let formatted = format_plan_for_test(&plan);
-    assert_contains!(formatted, "DynamicFilterPhysicalExpr");
+    assert_contains!(&formatted, "DynamicFilterPhysicalExpr");
+
+    assert_contains!(&formatted, "probe_keys=");
+    assert_not_contains!(&formatted, "probe_keys=0");
 
     let join = plan.as_any().downcast_ref::<HashJoinExec>().unwrap();
     assert_projection(&join.left, &["a", "x"]);
@@ -1171,6 +1190,10 @@ async fn test_nested_hashjoin_dynamic_filter_pushdown() {
     -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[d, z], file_type=test, pushdown_supported=true, predicate=DynamicFilterPhysicalExpr [ d@0 >= ca AND d@0 <= ce ]
     "
     );
+
+    let formatted = format_plan_for_test(&plan);
+    assert_contains!(&formatted, "probe_keys=");
+    assert_not_contains!(formatted, "probe_keys=0");
 
     let outer = plan.as_any().downcast_ref::<HashJoinExec>().unwrap();
     assert_projection(&outer.left, &["a", "x"]);
@@ -1385,7 +1408,8 @@ async fn test_hashjoin_non_equi_predicate_no_dynamic_filter() {
         PartitionMode::Partitioned,
         datafusion_common::NullEquality::NullEqualsNothing,
     );
-    assert!(res.is_err(), "non-equi joins should be rejected");
+    let err = res.expect_err("non-equi joins should be rejected");
+    assert_contains!(err.to_string(), "non-equi");
 }
 
 #[tokio::test]
@@ -1411,6 +1435,8 @@ async fn test_hashjoin_left_dynamic_filter_pushdown() {
         &formatted,
         "DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=<none>"
     );
+    assert_contains!(&formatted, "probe_keys=");
+    assert_not_contains!(&formatted, "probe_keys=0");
 }
 
 #[tokio::test]
@@ -1454,6 +1480,8 @@ async fn test_hashjoin_right_dynamic_filter_pushdown() {
         &formatted,
         "DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=<none>"
     );
+    assert_contains!(&formatted, "probe_keys=");
+    assert_not_contains!(&formatted, "probe_keys=0");
 }
 
 #[tokio::test]
@@ -1497,6 +1525,8 @@ async fn test_hashjoin_left_dynamic_filter_pushdown_collect_left() {
         &formatted,
         "DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=<none>"
     );
+    assert_contains!(&formatted, "probe_keys=");
+    assert_not_contains!(&formatted, "probe_keys=0");
 }
 
 #[tokio::test]
@@ -1522,6 +1552,8 @@ async fn test_hashjoin_left_semi_dynamic_filter_pushdown() {
         &formatted,
         "DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=<none>"
     );
+    assert_contains!(&formatted, "probe_keys=");
+    assert_not_contains!(&formatted, "probe_keys=0");
 }
 
 #[tokio::test]
@@ -1547,6 +1579,8 @@ async fn test_hashjoin_left_anti_dynamic_filter_pushdown() {
         &formatted,
         "DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=<none>"
     );
+    assert_contains!(&formatted, "probe_keys=");
+    assert_not_contains!(&formatted, "probe_keys=0");
 }
 
 #[tokio::test]
@@ -1572,6 +1606,8 @@ async fn test_hashjoin_right_semi_dynamic_filter_pushdown() {
         &formatted,
         "DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=<none>"
     );
+    assert_contains!(&formatted, "probe_keys=");
+    assert_not_contains!(&formatted, "probe_keys=0");
 }
 
 #[tokio::test]
@@ -1597,6 +1633,8 @@ async fn test_hashjoin_right_anti_dynamic_filter_pushdown() {
         &formatted,
         "DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=<none>"
     );
+    assert_contains!(&formatted, "probe_keys=");
+    assert_not_contains!(&formatted, "probe_keys=0");
 }
 
 #[tokio::test]
@@ -1616,12 +1654,14 @@ async fn test_hashjoin_left_mark_dynamic_filter_pushdown() {
     let formatted = format_plan_for_test(&plan);
     assert_contains!(
         &formatted,
-        "DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilterPhysicalExpr",
+        "DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilterPhysicalExpr"
     );
     assert_contains!(
         &formatted,
-        "DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=<none>",
+        "DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=<none>"
     );
+    assert_contains!(&formatted, "probe_keys=");
+    assert_not_contains!(&formatted, "probe_keys=0");
 }
 
 #[tokio::test]
@@ -1641,12 +1681,14 @@ async fn test_hashjoin_right_mark_dynamic_filter_pushdown() {
     let formatted = format_plan_for_test(&plan);
     assert_contains!(
         &formatted,
-        "DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=DynamicFilterPhysicalExpr",
+        "DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=DynamicFilterPhysicalExpr"
     );
     assert_contains!(
         &formatted,
-        "DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=<none>",
+        "DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=<none>"
     );
+    assert_contains!(&formatted, "probe_keys=");
+    assert_not_contains!(&formatted, "probe_keys=0");
 }
 
 #[tokio::test]

@@ -771,7 +771,18 @@ impl DisplayAs for HashJoinExec {
                 if !matches!(self.join_type(), JoinType::Inner) {
                     writeln!(f, "join_type={:?}", self.join_type)?;
                 }
-                writeln!(f, "on={on}")
+                writeln!(f, "on={on}")?;
+                if let Some(df) = &self.dynamic_filter {
+                    if let Ok(current) = df.current() {
+                        if current != lit(true) {
+                            writeln!(f, "probe_filter={}", fmt_sql(current.as_ref()))?;
+                        }
+                    }
+                    let probe_side = dynamic_filter_side(self.join_type);
+                    writeln!(f, "probe_side={probe_side:?}")?;
+                    writeln!(f, "probe_keys={}", df.key_count())?;
+                }
+                Ok(())
             }
         }
     }
@@ -1074,6 +1085,7 @@ impl ExecutionPlan for HashJoinExec {
         }
     }
 
+    #[inline]
     fn gather_filters_for_pushdown(
         &self,
         phase: FilterPushdownPhase,
@@ -1084,23 +1096,29 @@ impl ExecutionPlan for HashJoinExec {
             preservation_for_output_filters(self.join_type);
         let dynamic_target = dynamic_filter_side(self.join_type);
 
-        let unsupported: Vec<_> = parent_filters
-            .iter()
-            .map(|f| {
-                crate::filter_pushdown::PushedDownPredicate::unsupported(Arc::clone(f))
-            })
-            .collect();
+        // Prepare a single vector of unsupported predicates to avoid
+        // rebuilding it for each child. It will be cloned only when both
+        // sides require it.
+        let unsupported = if !left_preserved || !right_preserved {
+            parent_filters
+                .iter()
+                .map(|f| {
+                    crate::filter_pushdown::PushedDownPredicate::unsupported(Arc::clone(f))
+                })
+                .collect::<Vec<_>>()
+        } else {
+            vec![]
+        };
 
-        let mut left_child = if left_preserved || matches!(dynamic_target, JoinSide::Left)
-        {
+        let mut left_child = if left_preserved || matches!(dynamic_target, JoinSide::Left) {
             let mut desc = crate::filter_pushdown::ChildFilterDescription::from_child(
                 &parent_filters,
                 self.left(),
             )?;
             if !left_preserved {
-                // For joins like `RightAnti`, the left input is not preserved and
-                // parent filters can't be enforced. Mark them as unsupported so
-                // they will not be propagated further down.
+                // For semi/anti joins the left (non-driving) side cannot
+                // contribute columns to the output filters, so parent filters
+                // referencing it are marked unsupported.
                 desc.parent_filters = unsupported.clone();
             }
             desc
@@ -1111,23 +1129,20 @@ impl ExecutionPlan for HashJoinExec {
             }
         };
 
-        let mut right_child = if right_preserved
-            || matches!(dynamic_target, JoinSide::Right)
-        {
+        let mut right_child = if right_preserved || matches!(dynamic_target, JoinSide::Right) {
             let mut desc = crate::filter_pushdown::ChildFilterDescription::from_child(
                 &parent_filters,
                 self.right(),
             )?;
             if !right_preserved {
-                // A `LeftAnti` join discards all rows from the right side, so
-                // any parent filter referencing it would be meaningless. Mark
-                // such filters unsupported to avoid incorrect pushdown.
+                // Semi/anti joins discard the right side; parent filters on
+                // this non-driving side are therefore marked unsupported.
                 desc.parent_filters = unsupported.clone();
             }
             desc
         } else {
             crate::filter_pushdown::ChildFilterDescription {
-                parent_filters: unsupported.clone(),
+                parent_filters: unsupported,
                 self_filters: vec![],
             }
         };
