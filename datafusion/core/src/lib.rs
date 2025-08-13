@@ -25,10 +25,7 @@
 // https://github.com/apache/datafusion/issues/15802
 #![cfg_attr(
     not(test),
-    deny(
-        clippy::or_fun_call,
-        clippy::unnecessary_lazy_evaluations
-    )
+    deny(clippy::or_fun_call, clippy::unnecessary_lazy_evaluations)
 )]
 #![warn(missing_docs, clippy::needless_borrow)]
 
