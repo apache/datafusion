@@ -3247,10 +3247,6 @@ impl Display for Expr {
             Expr::ScalarFunction(fun) => {
                 fmt_function(f, fun.name(), false, &fun.args, true)
             }
-            // TODO: use udf's display_name, need to fix the separator issue, <https://github.com/apache/datafusion/issues/10364>
-            // Expr::ScalarFunction(ScalarFunction { func, args }) => {
-            //     write!(f, "{}", func.display_name(args).unwrap())
-            // }
             Expr::WindowFunction(window_fun) => {
                 let WindowFunction { fun, params } = window_fun.as_ref();
                 match fun {
