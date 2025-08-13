@@ -765,11 +765,11 @@ async fn test_topk_dynamic_filter_pushdown_multi_column_sort() {
             LexOrdering::new(vec![
                 PhysicalSortExpr::new(
                     col("b", &schema()).unwrap(),
-                    SortOptions::default().asc().nulls_first(),
+                    SortOptions::default().asc().nulls_last(),
                 ),
                 PhysicalSortExpr::new(
                     col("a", &schema()).unwrap(),
-                    SortOptions::new(true, true), // ascending, nulls_last
+                    SortOptions::default().desc().nulls_first(),
                 ),
             ])
             .unwrap(),
