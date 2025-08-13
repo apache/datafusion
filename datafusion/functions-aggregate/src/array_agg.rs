@@ -17,7 +17,6 @@
 
 //! `ARRAY_AGG` aggregate implementation: [`ArrayAgg`]
 
-use std::any::Any;
 use std::cmp::Ordering;
 use std::collections::{HashSet, VecDeque};
 use std::mem::{size_of, size_of_val};
@@ -90,7 +89,7 @@ impl Default for ArrayAgg {
 }
 
 impl AggregateUDFImpl for ArrayAgg {
-    fn as_any(&self) -> &dyn Any {
+    fn as_any(&self) -> &dyn std::any::Any {
         self
     }
 
