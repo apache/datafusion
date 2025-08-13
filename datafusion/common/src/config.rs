@@ -733,7 +733,11 @@ config_namespace! {
         /// year 2025 any files that only have timestamps in the year 2024 can be skipped /
         /// pruned at various stages in the scan. Dynamic filters are also produced by
         /// left, right, semi, and anti joins, allowing DataFusion to prune the probe side
-        /// during execution. Full joins are not supported. For example,
+        /// during execution. For hash joins, dynamic filters are applied to the **probe**
+        /// side (the stream that is scanned), which is the right input for `Inner` and
+        /// `Left` joins and the left input for `Right` joins; semi and anti joins prune the
+        /// left/probe input. Full joins are not supported and non-equi join predicates do
+        /// **not** generate dynamic filters. For example,
         /// `SELECT * FROM fact LEFT JOIN dim ON fact.id = dim.id WHERE dim.region = 'US'`
         /// will only read `fact` rows whose `id` values match `dim` rows where
         /// `region = 'US'`.
