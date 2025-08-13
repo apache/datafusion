@@ -6102,6 +6102,28 @@ from t;
 ----
 a,c,d,b
 
+query TT
+explain select string_agg(k, ',' order by v) from t;
+----
+logical_plan
+01)Aggregate: groupBy=[[]], aggr=[[string_agg(t.k, Utf8(",")) ORDER BY [t.v ASC NULLS LAST]]]     
+02)--TableScan: t projection=[k, v]
+physical_plan
+01)AggregateExec: mode=Single, gby=[], aggr=[string_agg(t.k,Utf8(",")) ORDER BY [t.v ASC NULLS LAST]]
+02)--SortExec: expr=[v@1 ASC NULLS LAST], preserve_partitioning=[false]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+query TT
+explain select string_agg(k, ',' order by v desc) from t;
+----
+logical_plan
+01)Aggregate: groupBy=[[]], aggr=[[string_agg(t.k, Utf8(",")) ORDER BY [t.v DESC NULLS FIRST]]]   
+02)--TableScan: t projection=[k, v]
+physical_plan
+01)AggregateExec: mode=Single, gby=[], aggr=[string_agg(t.k,Utf8(",")) ORDER BY [t.v DESC NULLS FIRST]]
+02)--SortExec: expr=[v@1 DESC], preserve_partitioning=[false]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+
 statement ok
 drop table t;
 
