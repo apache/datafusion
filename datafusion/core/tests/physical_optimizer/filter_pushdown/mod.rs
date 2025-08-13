@@ -1182,6 +1182,19 @@ async fn test_hashjoin_left_dynamic_filter_pushdown() {
 }
 
 #[tokio::test]
+async fn test_hashjoin_left_dynamic_filter_pushdown_disabled() {
+    let plan = build_join_with_dynamic_filter(JoinType::Left, true, true);
+    let mut config = ConfigOptions::default();
+    config.execution.parquet.pushdown_filters = false;
+    config.optimizer.enable_dynamic_filter_pushdown = false;
+    let plan = FilterPushdown::new_post_optimization()
+        .optimize(plan, &config)
+        .unwrap();
+    let formatted = format_plan_for_test(&plan);
+    assert_not_contains!(formatted, "DynamicFilterPhysicalExpr");
+}
+
+#[tokio::test]
 async fn test_hashjoin_right_dynamic_filter_pushdown() {
     let plan = build_join_with_dynamic_filter(JoinType::Right, true, true);
     let mut config = ConfigOptions::default();
@@ -1199,6 +1212,19 @@ async fn test_hashjoin_right_dynamic_filter_pushdown() {
         &formatted,
         "DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate"
     );
+}
+
+#[tokio::test]
+async fn test_hashjoin_right_dynamic_filter_pushdown_disabled() {
+    let plan = build_join_with_dynamic_filter(JoinType::Right, true, true);
+    let mut config = ConfigOptions::default();
+    config.execution.parquet.pushdown_filters = false;
+    config.optimizer.enable_dynamic_filter_pushdown = false;
+    let plan = FilterPushdown::new_post_optimization()
+        .optimize(plan, &config)
+        .unwrap();
+    let formatted = format_plan_for_test(&plan);
+    assert_not_contains!(formatted, "DynamicFilterPhysicalExpr");
 }
 
 #[tokio::test]
@@ -1242,6 +1268,46 @@ async fn test_hashjoin_left_anti_dynamic_filter_pushdown() {
 }
 
 #[tokio::test]
+async fn test_hashjoin_right_semi_dynamic_filter_pushdown() {
+    let plan = build_join_with_dynamic_filter(JoinType::RightSemi, true, true);
+    let mut config = ConfigOptions::default();
+    config.execution.parquet.pushdown_filters = true;
+    config.optimizer.enable_dynamic_filter_pushdown = true;
+    let plan = FilterPushdown::new_post_optimization()
+        .optimize(plan, &config)
+        .unwrap();
+    let formatted = format_plan_for_test(&plan);
+    assert_contains!(
+        &formatted,
+        "DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=DynamicFilterPhysicalExpr"
+    );
+    assert_not_contains!(
+        &formatted,
+        "DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate"
+    );
+}
+
+#[tokio::test]
+async fn test_hashjoin_right_anti_dynamic_filter_pushdown() {
+    let plan = build_join_with_dynamic_filter(JoinType::RightAnti, true, true);
+    let mut config = ConfigOptions::default();
+    config.execution.parquet.pushdown_filters = true;
+    config.optimizer.enable_dynamic_filter_pushdown = true;
+    let plan = FilterPushdown::new_post_optimization()
+        .optimize(plan, &config)
+        .unwrap();
+    let formatted = format_plan_for_test(&plan);
+    assert_contains!(
+        &formatted,
+        "DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=DynamicFilterPhysicalExpr"
+    );
+    assert_not_contains!(
+        &formatted,
+        "DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate"
+    );
+}
+
+#[tokio::test]
 async fn test_hashjoin_full_dynamic_filter_no_pushdown() {
     let plan = build_join_with_dynamic_filter(JoinType::Full, true, true);
     let mut config = ConfigOptions::default();
@@ -1257,6 +1323,19 @@ async fn test_hashjoin_full_dynamic_filter_no_pushdown() {
 #[tokio::test]
 async fn test_hashjoin_dynamic_filter_pushdown_unsupported() {
     let plan = build_join_with_dynamic_filter(JoinType::Left, true, false);
+    let mut config = ConfigOptions::default();
+    config.execution.parquet.pushdown_filters = true;
+    config.optimizer.enable_dynamic_filter_pushdown = true;
+    let plan = FilterPushdown::new_post_optimization()
+        .optimize(plan, &config)
+        .unwrap();
+    let formatted = format_plan_for_test(&plan);
+    assert_not_contains!(formatted, "DynamicFilterPhysicalExpr");
+}
+
+#[tokio::test]
+async fn test_hashjoin_dynamic_filter_pushdown_unsupported_left() {
+    let plan = build_join_with_dynamic_filter(JoinType::Right, false, true);
     let mut config = ConfigOptions::default();
     config.execution.parquet.pushdown_filters = true;
     config.optimizer.enable_dynamic_filter_pushdown = true;
