@@ -209,19 +209,19 @@ async fn main_inner() -> Result<()> {
     )));
     // register `parquet_metadata` table function to get metadata from parquet files
     session_ctx.register_udtf("parquet_metadata", Arc::new(ParquetMetadataFunc {}));
+    // register `metadata_cache` table function to get the contents of the file metadata cache
+    session_ctx.register_udtf(
+        "metadata_cache",
+        Arc::new(MetadataCacheFunc::new(
+            session_ctx.task_ctx().runtime_env().cache_manager.clone(),
+        )),
+    );
+    // wrap the SessionContext in a REPL context (adds profiling, top consumers, etc.)
     let ctx =
         ReplSessionContext::new(session_ctx, pool.clone(), args.top_memory_consumers);
     if args.top_memory_consumers > 0 {
         ctx.set_memory_profiling(true);
     }
-
-    // register `metadata_cache` table function to get the contents of the file metadata cache
-    ctx.register_udtf(
-        "metadata_cache",
-        Arc::new(MetadataCacheFunc::new(
-            ctx.task_ctx().runtime_env().cache_manager.clone(),
-        )),
-    );
 
     let mut print_options = PrintOptions {
         format: args.format,
