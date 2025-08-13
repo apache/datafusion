@@ -79,7 +79,7 @@ const OPERATOR_CATEGORIES: &[(&str, &str)] = &[
     ("spill", "Memory Management"),
 ];
 
-pub(crate) fn operator_category(name: &str) -> &'static str {
+pub fn operator_category(name: &str) -> &'static str {
     let name = name.to_lowercase();
     for (pat, cat) in OPERATOR_CATEGORIES {
         if name.contains(pat) {
