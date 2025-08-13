@@ -26,7 +26,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 /// <https://spark.apache.org/docs/latest/api/sql/index.html#ascii>
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkAscii {
     signature: Signature,
     aliases: Vec<String>,
