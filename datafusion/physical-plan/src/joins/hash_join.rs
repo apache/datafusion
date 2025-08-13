@@ -719,7 +719,7 @@ impl DisplayAs for HashJoinExec {
                     .map(|(c1, c2)| format!("({c1}, {c2})"))
                     .collect::<Vec<String>>()
                     .join(", ");
-                let dynamic_filter_display = match &self.dynamic_filter {
+                let probe_filter_display = match &self.dynamic_filter {
                     Some(df) => {
                         let probe_side = dynamic_filter_side(self.join_type);
                         let keys = df.key_count();
@@ -746,7 +746,7 @@ impl DisplayAs for HashJoinExec {
                     on,
                     display_filter,
                     display_projections,
-                    dynamic_filter_display
+                    probe_filter_display
                 )
             }
             DisplayFormatType::TreeRender => {
@@ -759,7 +759,7 @@ impl DisplayAs for HashJoinExec {
                     .collect::<Vec<String>>()
                     .join(", ");
 
-                if *self.join_type() != JoinType::Inner {
+                if !matches!(self.join_type(), JoinType::Inner) {
                     writeln!(f, "join_type={:?}", self.join_type)?;
                 }
                 writeln!(f, "on={on}")
@@ -1866,7 +1866,7 @@ impl HashJoinStream {
             self.right_side_ordered,
         )?;
 
-        let result = if self.join_type == JoinType::RightMark {
+        let result = if matches!(self.join_type, JoinType::RightMark) {
             build_batch_from_indices(
                 &self.schema,
                 &state.batch,

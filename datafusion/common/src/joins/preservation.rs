@@ -23,17 +23,26 @@ use crate::JoinType;
 /// For a given [`JoinType`], determine whether each input of the join is
 /// preserved for filters applied *after* the join.
 ///
-/// A preserved side guarantees that each row in the join output maps back to a
-/// row from the preserved input table. If a table is not preserved, it can
-/// produce additional rows containing NULL values. For example:
+/// Row preservation means every output row can be traced back to a row from
+/// that input. Non‑preserved sides may introduce additional NULL padded rows.
+/// The table below visualises the behaviour (`✓` preserved, `✗` not preserved):
 ///
-/// * In an [`JoinType::Inner`] join, both sides are preserved because every
-///   output row originates from a matching row on each side.
-/// * In a [`JoinType::Left`] join, the left side is preserved but the right side
-///   is not because the join may output extra rows with NULLs for the right
-///   columns when there is no match.
+/// ```text
+///                 left right
+/// INNER             ✓     ✓
+/// LEFT              ✓     ✗
+/// RIGHT             ✗     ✓
+/// FULL              ✗     ✗
+/// LEFT SEMI         ✓     ✗
+/// LEFT ANTI         ✓     ✗
+/// LEFT MARK         ✓     ✗
+/// RIGHT SEMI        ✗     ✓
+/// RIGHT ANTI        ✗     ✓
+/// RIGHT MARK        ✗     ✓
+/// ```
 ///
-/// The returned tuple is `(left_preserved, right_preserved)`.
+/// The returned tuple `(left_preserved, right_preserved)` reports whether each
+/// side of the join preserves its input rows under post‑join filtering.
 pub fn lr_is_preserved(join_type: JoinType) -> (bool, bool) {
     match join_type {
         JoinType::Inner => (true, true),
@@ -47,11 +56,28 @@ pub fn lr_is_preserved(join_type: JoinType) -> (bool, bool) {
 }
 
 /// For a given [`JoinType`], determine whether each input of the join is
-/// preserved for filters in the join condition (ON-clause filters).
+/// preserved for filters in the join condition (ON‑clause filters).
 ///
-/// Only preserved sides may safely have filters pushed below the join.
+/// Filters on ON‑clause expressions may only reference sides that are
+/// preserved; otherwise pushing the filter below the join could drop rows.
+/// This table shows preservation for ON‑clause evaluation (`✓` preserved):
 ///
-/// The returned tuple is `(left_preserved, right_preserved)`.
+/// ```text
+///                 left right
+/// INNER             ✓     ✓
+/// LEFT              ✗     ✓
+/// RIGHT             ✓     ✗
+/// FULL              ✗     ✗
+/// LEFT SEMI         ✓     ✓
+/// RIGHT SEMI        ✓     ✓
+/// LEFT ANTI         ✗     ✓
+/// RIGHT ANTI        ✓     ✗
+/// LEFT MARK         ✗     ✓
+/// RIGHT MARK        ✓     ✗
+/// ```
+///
+/// The returned tuple `(left_preserved, right_preserved)` reports which sides
+/// may safely participate in ON‑clause filtering.
 pub fn on_lr_is_preserved(join_type: JoinType) -> (bool, bool) {
     match join_type {
         JoinType::Inner => (true, true),
