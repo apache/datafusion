@@ -26,10 +26,10 @@ use arrow::{
     util::bit_util,
 };
 use arrow_schema::{ArrowError, Schema, SchemaRef, SortOptions};
-use datafusion_common::NullEquality;
 use datafusion_common::{
     exec_err, internal_err, plan_err, utils::compare_rows, JoinSide, Result, ScalarValue,
 };
+use datafusion_common::{not_impl_err, NullEquality};
 use datafusion_execution::{
     memory_pool::{MemoryConsumer, MemoryReservation},
     RecordBatchStream, SendableRecordBatchStream,
@@ -111,7 +111,7 @@ use crate::{
 /// FROM (VALUES (100), (200), (500)) AS streamed(a)
 /// LEFT JOIN (VALUES (100), (200), (200), (300), (400)) AS buffered(b)
 ///   ON streamed.a < buffered.b;
-/// 
+///
 /// Processing Row 1:
 ///
 ///            Sorted Streamed Side          Sorted Buffered Side  
@@ -164,7 +164,7 @@ use crate::{
 /// FROM (VALUES (100), (200), (500)) AS streamed(a)
 /// LEFT SEMI JOIN (VALUES (100), (200), (200), (300), (400)) AS buffered(b)
 ///   ON streamed.a < buffered.b;
-/// 
+///
 ///           Unsorted Streamed Side         Sorted Buffered Side  
 ///            ┌──────────────────┐          ┌──────────────────┐
 ///          1 │       500        │        1 │       100        │
@@ -198,6 +198,7 @@ pub struct PiecewiseMergeJoinExec {
     pub join_type: JoinType,
     /// The schema once the join is applied
     schema: SchemaRef,
+    /// Buffered data
     buffered_fut: OnceAsync<BufferedSideData>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
