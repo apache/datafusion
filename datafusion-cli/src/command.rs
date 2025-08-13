@@ -138,7 +138,7 @@ impl Command {
                             println!("{}", format_metrics(&[]));
                         }
                     }
-                    None => println!("Usage: \\memory_profiling [enable|disable|show]"),
+                    None => println!("Usage: \\memory_profiling [enable|disable|show] (aliases: on|off)"),
                 }
                 Ok(())
             }
@@ -175,8 +175,8 @@ impl Command {
                 ("\\pset [NAME [VALUE]]", "set table output option\n(format)")
             }
             Self::MemoryProfiling(_) => (
-                "\\memory_profiling [enable|disable|show]",
-                "enable profiling, disable it, or display the last report",
+                "\\memory_profiling [enable|disable|show] (aliases: on|off)",
+                "enable profiling, disable it, or display the last report (requires --top-memory-consumers N at startup for metrics)",
             ),
         }
     }
