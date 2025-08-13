@@ -52,6 +52,7 @@ pub struct DynamicFilterPhysicalExpr {
     /// The source of dynamic filters.
     inner: Arc<RwLock<Inner>>,
     /// Number of keys currently contained in this dynamic filter.
+    /// Uses relaxed atomics as this counter is for diagnostics only.
     key_count: Arc<AtomicUsize>,
     /// For testing purposes track the data type and nullability to make sure they don't change.
     /// If they do, there's a bug in the implementation.
@@ -149,6 +150,7 @@ impl DynamicFilterPhysicalExpr {
         }
     }
 
+    #[inline]
     fn remap_children(
         children: &[Arc<dyn PhysicalExpr>],
         remapped_children: Option<&Vec<Arc<dyn PhysicalExpr>>>,
@@ -181,14 +183,15 @@ impl DynamicFilterPhysicalExpr {
     /// Get the current expression.
     /// This will return the current expression with any children
     /// remapped to match calls to [`PhysicalExpr::with_new_children`].
+    #[inline]
     pub fn current(&self) -> Result<Arc<dyn PhysicalExpr>> {
         let inner = Arc::clone(
             &self
                 .inner
                 .read()
-                .map_err(|_| {
+                .map_err(|e| {
                     datafusion_common::DataFusionError::Execution(
-                        "Failed to acquire read lock for inner".to_string(),
+                        format!("Failed to acquire read lock for inner: {e}"),
                     )
                 })?
                 .expr,
@@ -204,16 +207,22 @@ impl DynamicFilterPhysicalExpr {
     /// This should be called e.g.:
     /// - When we've computed the probe side's hash table in a HashJoinExec
     /// - After every batch is processed if we update the TopK heap in a SortExec using a TopK approach.
+    /// `key_count` specifies the number of keys currently tracked by the filter
+    /// and is used for observability.
+    #[inline]
     pub fn update(
         &self,
         new_expr: Arc<dyn PhysicalExpr>,
         key_count: usize,
     ) -> Result<()> {
-        let mut current = self.inner.write().map_err(|_| {
-            datafusion_common::DataFusionError::Execution(
-                "Failed to acquire write lock for inner".to_string(),
-            )
-        })?;
+        let mut current = self
+            .inner
+            .write()
+            .map_err(|e| {
+                datafusion_common::DataFusionError::Execution(
+                    format!("Failed to acquire write lock for inner: {e}"),
+                )
+            })?;
         // Remap the children of the new expression to match the original children
         // We still do this again in `current()` but doing it preventively here
         // reduces the work needed in some cases if `current()` is called multiple times
@@ -227,13 +236,24 @@ impl DynamicFilterPhysicalExpr {
         current.expr = new_expr;
         // Increment the generation to indicate that the expression has changed.
         current.generation += 1;
-        self.key_count.store(key_count, Ordering::SeqCst);
+        // Relaxed ordering is sufficient as `key_count` is only used for
+        // observability and does not synchronize with other data.
+        self.key_count.store(key_count, Ordering::Relaxed);
         Ok(())
     }
 
+    /// Update the inner expression without changing the key count.
+    #[deprecated(note = "use `update` with an explicit key count instead")]
+    #[inline]
+    pub fn update_expr(&self, expr: Arc<dyn PhysicalExpr>) -> Result<()> {
+        self.update(expr, 0)
+    }
+
     /// Return the current number of keys represented by this dynamic filter.
+    #[inline]
     pub fn key_count(&self) -> usize {
-        self.key_count.load(Ordering::SeqCst)
+        // See note in `update`; relaxed ordering is sufficient.
+        self.key_count.load(Ordering::Relaxed)
     }
 }
 

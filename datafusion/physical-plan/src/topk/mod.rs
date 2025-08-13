@@ -406,7 +406,8 @@ impl TopK {
         if let Some(predicate) = dynamic_predicate {
             filter.update(predicate, self.heap.len())?;
         } else {
-            // even if predicate is true, record current key count
+            // Even when the dynamic predicate is a tautology we still update
+            // `key_count` for observability.
             filter.update(lit(true), self.heap.len())?;
         }
 

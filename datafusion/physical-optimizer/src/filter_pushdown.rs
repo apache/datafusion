@@ -501,6 +501,9 @@ fn push_down_filters(
         let mut all_predicates = self_filtered.items().to_vec();
 
         // Apply second filter pass: collect indices of parent filters that can be pushed down
+        // Invariant: predicates marked as unsupported by `gather_filters_for_pushdown`
+        // must remain so downstream. We only forward predicates explicitly marked
+        // as `PushedDown::Yes` here and never re-enable previously rejected ones.
         let parent_filters_for_child = parent_filtered
             .chain_filter_slice(&parent_filters, |filter| {
                 matches!(filter.discriminant, PushedDown::Yes)
@@ -708,6 +711,7 @@ impl<T: Clone> FilteredVec<T> {
     }
 }
 
+#[inline]
 fn allow_pushdown_for_expr(expr: &Arc<dyn PhysicalExpr>) -> bool {
     let mut allow_pushdown = true;
     expr.apply(|e| {
@@ -722,6 +726,7 @@ fn allow_pushdown_for_expr(expr: &Arc<dyn PhysicalExpr>) -> bool {
     allow_pushdown
 }
 
+#[inline]
 fn allow_pushdown_for_expr_inner(expr: &Arc<dyn PhysicalExpr>) -> bool {
     if let Some(scalar_function) =
         expr.as_any()

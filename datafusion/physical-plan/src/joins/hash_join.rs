@@ -99,8 +99,10 @@ use parking_lot::Mutex;
 
 /// Returns which side of the join should receive a dynamic filter.
 ///
+// Inner joins choose the right (probe) side for determinism.
 /// Mark joins apply filters to the *opposite* side of the preserved input so
 /// that only rows capable of satisfying the ON clause are evaluated.
+#[inline]
 fn dynamic_filter_side(join_type: JoinType) -> JoinSide {
     let (left_preserved, right_preserved) =
         preservation_for_output_filters(join_type);
@@ -187,6 +189,7 @@ impl JoinLeftData {
 
     /// Decrements the counter of running threads, and returns `true`
     /// if caller is the last running thread
+    #[inline]
     fn report_probe_completed(&self) -> bool {
         self.probe_threads_counter.fetch_sub(1, Ordering::Relaxed) == 1
     }
@@ -414,10 +417,11 @@ impl HashJoinExec {
     ) -> Result<Self> {
         let left_schema = left.schema();
         let right_schema = right.schema();
-        assert!(
-            !on.is_empty(),
-            "HashJoinExec requires a non-empty ON clause; empty lists are unsupported"
-        );
+        if on.is_empty() {
+            return plan_err!(
+                "HashJoinExec requires a non-empty ON clause; empty lists are unsupported"
+            );
+        }
 
         check_join_is_valid(&left_schema, &right_schema, &on)?;
 
@@ -462,6 +466,7 @@ impl HashJoinExec {
         })
     }
 
+    #[inline]
     fn create_dynamic_filter(
         on: &JoinOn,
         join_type: JoinType,
@@ -847,10 +852,11 @@ impl ExecutionPlan for HashJoinExec {
             self.mode,
             self.null_equality,
         )?;
-        // Preserve the dynamic filter if it exists.
-        // The `on` clause is unchanged so the filter keys remain valid; if the
-        // `on` clause changes, `try_new` recomputes the keys via
-        // `create_dynamic_filter` to avoid stale filters.
+        // Preserve the dynamic filter if it exists. Cloning the `Option<Arc<_>>`
+        // is safe because the `on` clause is unchanged and thus the filter keys
+        // remain valid. If the `on` clause were to change, `try_new` would
+        // recompute a fresh filter via `create_dynamic_filter` to avoid
+        // carrying stale keys.
         new_join.dynamic_filter = self.dynamic_filter.clone();
         Ok(Arc::new(new_join))
     }
