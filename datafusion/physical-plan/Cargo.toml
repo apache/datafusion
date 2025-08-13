@@ -66,6 +66,7 @@ log = { workspace = true }
 parking_lot = { workspace = true }
 pin-project-lite = "^0.2.7"
 tokio = { workspace = true }
+arc-swap = "1.7.1"
 
 [dev-dependencies]
 criterion = { workspace = true, features = ["async_futures"] }

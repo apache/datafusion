@@ -23,7 +23,7 @@ use arrow::{
     row::{RowConverter, Rows, SortField},
 };
 use datafusion_expr::{ColumnarValue, Operator};
-use parking_lot::RwLock;
+use arc_swap::ArcSwapOption;
 use std::mem::size_of;
 use std::{cmp::Ordering, collections::BinaryHeap, sync::Arc};
 
@@ -134,7 +134,7 @@ pub struct TopKDynamicFilters {
     /// The current *global* threshold for the dynamic filter.
     /// This is shared across all partitions and is updated by any of them.
     /// Stored as row bytes for efficient comparison.
-    threshold_row: Arc<RwLock<Option<Vec<u8>>>>,
+    threshold_row: Arc<ArcSwapOption<Vec<u8>>>,
     /// The expression used to evaluate the dynamic filter
     expr: Arc<DynamicFilterPhysicalExpr>,
 }
@@ -143,7 +143,7 @@ impl TopKDynamicFilters {
     /// Create a new `TopKDynamicFilters` with the given expression
     pub fn new(expr: Arc<DynamicFilterPhysicalExpr>) -> Self {
         Self {
-            threshold_row: Arc::new(RwLock::new(None)),
+            threshold_row: Arc::new(ArcSwapOption::from(None)),
             expr,
         }
     }
@@ -349,62 +349,67 @@ impl TopK {
 
         let new_threshold_row = &max_row.row;
 
+        // Extract scalar values BEFORE acquiring lock to reduce critical section
+        let thresholds = match self.heap.get_threshold_values(&self.expr)? {
+            Some(t) => t,
+            None => return Ok(()),
+        };
+
         // Extract filter expression reference before entering critical section
         let filter_expr = Arc::clone(&self.filter.expr);
 
-        // Check if we need to update and do both threshold and filter update atomically
-        {
-            let mut threshold_guard = self.filter.threshold_row.write();
-            if let Some(current_row) = threshold_guard.as_ref() {
-                match current_row.as_slice().cmp(new_threshold_row) {
-                    Ordering::Greater => {
-                        // new < current, so new threshold is more selective
-                        // Update threshold and filter atomically to prevent race conditions
-                        *threshold_guard = Some(new_threshold_row.to_vec());
+        // Check if we need to update the threshold (lock-free read)
+        let current_threshold = self.filter.threshold_row.load();
+        let needs_update = match current_threshold.as_ref() {
+            Some(current_row) => {
+                // new < current means new threshold is more selective
+                current_row.as_slice().cmp(new_threshold_row) == Ordering::Greater
+            }
+            None => true, // No current threshold, so we need to set one
+        };
 
-                        // Extract scalar values for filter expression creation
-                        let thresholds =
-                            match self.heap.get_threshold_values(&self.expr)? {
-                                Some(t) => t,
-                                None => return Ok(()),
-                            };
+        // Only proceed if we need to update
+        if needs_update {
+            // Build the filter expression OUTSIDE any synchronization
+            let predicate = Self::build_filter_expression(&self.expr, thresholds)?;
+            let new_threshold_arc = Arc::new(new_threshold_row.to_vec());
 
-                        // Update the filter expression while still holding the lock
-                        Self::update_filter_expression(
-                            &filter_expr,
-                            &self.expr,
-                            thresholds,
-                        )?;
-                    }
-                    _ => {
-                        // Same threshold or current is more selective, no need to update
+            // Atomically update the threshold using compare-and-swap
+            let old_threshold = self.filter.threshold_row.compare_and_swap(&current_threshold, Some(Arc::clone(&new_threshold_arc)));
+            
+            // Only update filter if we successfully updated the threshold
+            // (or if there was no previous threshold and we're the first)
+            let should_update_filter = match (old_threshold.as_ref(), current_threshold.as_ref()) {
+                // We successfully swapped
+                (Some(old), Some(expected)) if Arc::ptr_eq(old, expected) => true,
+                // We were the first to set it
+                (None, None) => true,
+                // Another thread updated before us, check if our threshold is still better
+                (Some(actual_old), _) => {
+                    actual_old.as_slice().cmp(new_threshold_row) == Ordering::Greater
+                }
+                _ => false,
+            };
+
+            if should_update_filter {
+                // Update the filter expression 
+                if let Some(pred) = predicate {
+                    if !pred.eq(&lit(true)) {
+                        filter_expr.update(pred)?;
                     }
                 }
-            } else {
-                // No current thresholds, so update with the new ones
-                *threshold_guard = Some(new_threshold_row.to_vec());
-
-                // Extract scalar values for filter expression creation
-                let thresholds = match self.heap.get_threshold_values(&self.expr)? {
-                    Some(t) => t,
-                    None => return Ok(()),
-                };
-
-                // Update the filter expression while still holding the lock
-                Self::update_filter_expression(&filter_expr, &self.expr, thresholds)?;
             }
-        };
+        }
 
         Ok(())
     }
 
-    /// Update the filter expression with the given thresholds.
-    /// This should only be called while holding the threshold lock.
-    fn update_filter_expression(
-        filter_expr: &DynamicFilterPhysicalExpr,
+    /// Build the filter expression with the given thresholds.
+    /// This is now called outside of any locks to reduce critical section time.
+    fn build_filter_expression(
         sort_exprs: &[PhysicalSortExpr],
         thresholds: Vec<ScalarValue>,
-    ) -> Result<()> {
+    ) -> Result<Option<Arc<dyn PhysicalExpr>>> {
         // Create filter expressions for each threshold
         let mut filters: Vec<Arc<dyn PhysicalExpr>> =
             Vec::with_capacity(thresholds.len());
@@ -482,13 +487,7 @@ impl TopK {
             .into_iter()
             .reduce(|a, b| Arc::new(BinaryExpr::new(a, Operator::Or, b)));
 
-        if let Some(predicate) = dynamic_predicate {
-            if !predicate.eq(&lit(true)) {
-                filter_expr.update(predicate)?;
-            }
-        }
-
-        Ok(())
+        Ok(dynamic_predicate)
     }
 
     /// If input ordering shares a common sort prefix with the TopK, and if the TopK's heap is full,
