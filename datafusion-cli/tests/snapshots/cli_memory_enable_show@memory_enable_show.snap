@@ -15,10 +15,10 @@ Memory profiling enabled
 +----------+
 | 1        |
 +----------+
-Peak memory usage: 8.0 B
-Cumulative allocations: 8.0 B
+Peak memory usage: XB
+Cumulative allocations: XB
 Memory usage by operator:
-Other: 8.0 B
+Category: XB
 
 \q
 

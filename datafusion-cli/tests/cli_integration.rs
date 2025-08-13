@@ -245,6 +245,13 @@ fn test_cli_top_memory_consumers<'a>(
 fn cli_memory_enable_show() {
     let mut settings = make_settings();
     settings.set_snapshot_suffix("memory_enable_show");
+    // Loosen memory profiling output: replace dynamic byte counts and categories with placeholders
+    settings.add_filter(r"Peak memory usage: .*?B", "Peak memory usage: XB");
+    settings.add_filter(
+        r"Cumulative allocations: .*?B",
+        "Cumulative allocations: XB",
+    );
+    settings.add_filter(r".*: .*?B", "Category: XB");
     let _bound = settings.bind_to_scope();
 
     let input = "\\memory_profiling enable\nselect 1;\n\\memory_profiling show\n";
