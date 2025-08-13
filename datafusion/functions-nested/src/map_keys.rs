@@ -56,7 +56,7 @@ SELECT map_keys(map([100, 5], [42, 43]));
         description = "Map expression. Can be a constant, column, or function, and any combination of map operators."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct MapKeysFunc {
     signature: Signature,
 }

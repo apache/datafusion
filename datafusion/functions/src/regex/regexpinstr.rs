@@ -72,7 +72,7 @@ use crate::regex::compile_and_cache_regex;
         description = "Optional Specifies which capture group (subexpression) to return the position for. Defaults to 0, which returns the position of the entire match."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct RegexpInstrFunc {
     signature: Signature,
 }

@@ -58,7 +58,7 @@ pub fn spark_pmod(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 }
 
 /// SparkMod implements the Spark-compatible modulo function
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkMod {
     signature: Signature,
 }
@@ -108,7 +108,7 @@ impl ScalarUDFImpl for SparkMod {
 }
 
 /// SparkMod implements the Spark-compatible modulo function
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkPmod {
     signature: Signature,
 }
