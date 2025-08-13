@@ -122,7 +122,9 @@ fn on_lr_is_preserved(join_type: JoinType) -> (bool, bool) {
     }
 }
 
-// Determine which side should receive the dynamic filter
+// Determine which side should receive the dynamic filter.
+// Mark joins filter the opposite side of the preserved input to
+// restrict rows feeding the ON clause evaluation.
 fn dynamic_filter_side(join_type: JoinType) -> JoinSide {
     let (left_preserved, right_preserved) = lr_is_preserved(join_type);
     let (on_left_preserved, on_right_preserved) = on_lr_is_preserved(join_type);
@@ -413,7 +415,7 @@ pub struct HashJoinExec {
     /// Cache holding plan properties like equivalences, output partitioning etc.
     cache: PlanProperties,
     /// Dynamic filter for pushing down to the probe side
-    dynamic_filter: Arc<DynamicFilterPhysicalExpr>,
+    dynamic_filter: Option<Arc<DynamicFilterPhysicalExpr>>,
 }
 
 impl HashJoinExec {
@@ -484,17 +486,17 @@ impl HashJoinExec {
     fn create_dynamic_filter(
         on: &JoinOn,
         join_type: JoinType,
-    ) -> Arc<DynamicFilterPhysicalExpr> {
+    ) -> Option<Arc<DynamicFilterPhysicalExpr>> {
         // Determine which side of the join the dynamic filter should target
         let filter_side = dynamic_filter_side(join_type);
         // Extract the corresponding join keys from the `on` clauses
         let keys: Vec<_> = match filter_side {
             JoinSide::Left => on.iter().map(|(l, _)| Arc::clone(l)).collect(),
             JoinSide::Right => on.iter().map(|(_, r)| Arc::clone(r)).collect(),
-            JoinSide::None => Vec::new(),
+            JoinSide::None => return None,
         };
         // Initialize with a placeholder expression (true) that will be updated when the hash table is built
-        Arc::new(DynamicFilterPhysicalExpr::new(keys, lit(true)))
+        Some(Arc::new(DynamicFilterPhysicalExpr::new(keys, lit(true))))
     }
 
     /// left (build) side which gets hashed
@@ -742,11 +744,14 @@ impl DisplayAs for HashJoinExec {
                     .map(|(c1, c2)| format!("({c1}, {c2})"))
                     .collect::<Vec<String>>()
                     .join(", ");
-                let dynamic_filter_display = match self.dynamic_filter.current() {
-                    Ok(current) if current != lit(true) => {
-                        format!(", filter=[{current}]")
-                    }
-                    _ => "".to_string(),
+                let dynamic_filter_display = match &self.dynamic_filter {
+                    Some(df) => match df.current() {
+                        Ok(current) if current != lit(true) => {
+                            format!(", filter=[{current}]")
+                        }
+                        _ => "".to_string(),
+                    },
+                    None => "".to_string(),
                 };
                 write!(
                     f,
@@ -854,7 +859,7 @@ impl ExecutionPlan for HashJoinExec {
             self.null_equality,
         )?;
         // Preserve the dynamic filter if it exists
-        new_join.dynamic_filter = Arc::clone(&self.dynamic_filter);
+        new_join.dynamic_filter = self.dynamic_filter.clone();
         Ok(Arc::new(new_join))
     }
 
@@ -935,7 +940,8 @@ impl ExecutionPlan for HashJoinExec {
                     need_produce_result_in_final(self.join_type),
                     self.right().output_partitioning().partition_count(),
                     enable_dynamic_filter_pushdown
-                        .then_some(Arc::clone(&self.dynamic_filter)),
+                        .then(|| self.dynamic_filter.as_ref().map(Arc::clone))
+                        .flatten(),
                     on_right.clone(),
                 ))
             })?,
@@ -955,7 +961,8 @@ impl ExecutionPlan for HashJoinExec {
                     need_produce_result_in_final(self.join_type),
                     1,
                     enable_dynamic_filter_pushdown
-                        .then_some(Arc::clone(&self.dynamic_filter)),
+                        .then(|| self.dynamic_filter.as_ref().map(Arc::clone))
+                        .flatten(),
                     on_right.clone(),
                 ))
             }
@@ -1106,20 +1113,23 @@ impl ExecutionPlan for HashJoinExec {
             }
         };
 
+        // We only install dynamic filters after optimization to avoid planning scans
+        // before the hash table provides join key bounds
         if matches!(phase, FilterPushdownPhase::Post)
             && config.optimizer.enable_dynamic_filter_pushdown
         {
-            let target_side = dynamic_filter_side(self.join_type);
-            let dynamic_filter =
-                Arc::clone(&self.dynamic_filter) as Arc<dyn PhysicalExpr>;
-            match target_side {
-                JoinSide::Left => {
-                    left_child = left_child.with_self_filter(dynamic_filter);
+            if let Some(df) = &self.dynamic_filter {
+                let target_side = dynamic_filter_side(self.join_type);
+                let dynamic_filter = Arc::clone(df) as Arc<dyn PhysicalExpr>;
+                match target_side {
+                    JoinSide::Left => {
+                        left_child = left_child.with_self_filter(dynamic_filter);
+                    }
+                    JoinSide::Right => {
+                        right_child = right_child.with_self_filter(dynamic_filter);
+                    }
+                    JoinSide::None => {}
                 }
-                JoinSide::Right => {
-                    right_child = right_child.with_self_filter(dynamic_filter);
-                }
-                JoinSide::None => {}
             }
         }
 
@@ -1979,6 +1989,27 @@ mod tests {
 
     fn div_ceil(a: usize, b: usize) -> usize {
         a.div_ceil(b)
+    }
+
+    #[test]
+    fn dynamic_filter_side_truth_table() {
+        use JoinSide::{Left as SideLeft, None as SideNone, Right as SideRight};
+        use JoinType::*;
+        let cases = [
+            (Inner, SideRight),
+            (Left, SideRight),
+            (Right, SideLeft),
+            (Full, SideNone),
+            (LeftSemi, SideRight),
+            (LeftAnti, SideRight),
+            (RightSemi, SideLeft),
+            (RightAnti, SideLeft),
+            (LeftMark, SideRight),
+            (RightMark, SideLeft),
+        ];
+        for (join_type, expected) in cases {
+            assert_eq!(dynamic_filter_side(join_type), expected, "{join_type:?}");
+        }
     }
 
     #[template]
