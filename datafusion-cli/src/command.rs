@@ -133,13 +133,12 @@ impl Command {
                     Some(MemoryProfilingCommand::Show) => {
                         if let Some(pool) = ctx.tracked_memory_pool() {
                             let metrics = pool.consumer_metrics();
-                            pool.disable_tracking();
                             println!("{}", format_metrics(&metrics));
                         } else {
                             println!("{}", format_metrics(&[]));
                         }
                     }
-                    None => println!("Usage: MEMORY_PROFILING [enable|disable|show]"),
+                    None => println!("Usage: \\memory_profiling [enable|disable|show]"),
                 }
                 Ok(())
             }
