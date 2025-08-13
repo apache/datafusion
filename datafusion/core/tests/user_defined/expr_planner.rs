@@ -55,11 +55,11 @@ impl ExprPlanner for MyCustomPlanner {
                 })))
             }
             BinaryOperator::Question => {
-                Ok(PlannerResult::Planned(Expr::Alias(Alias::new(
+                Ok(PlannerResult::Planned(Expr::Alias(Box::new(Alias::new(
                     Expr::Literal(ScalarValue::Boolean(Some(true)), None),
                     None::<&str>,
                     format!("{} ? {}", expr.left, expr.right),
-                ))))
+                )))))
             }
             _ => Ok(PlannerResult::Original(expr)),
         }

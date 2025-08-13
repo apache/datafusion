@@ -30,7 +30,7 @@ use datafusion_common::alias::AliasGenerator;
 use datafusion_common::cse::{CSEController, FoundCommonNodes, CSE};
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{qualified_name, Column, DFSchema, DFSchemaRef, Result};
-use datafusion_expr::expr::{Alias, ScalarFunction};
+use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::logical_plan::{
     Aggregate, Filter, LogicalPlan, Projection, Sort, Window,
 };
@@ -330,12 +330,12 @@ impl CommonSubexprEliminate {
                             rewritten_aggr_expr.into_iter().zip(new_aggr_expr)
                         {
                             if expr_rewritten == expr_orig {
-                                if let Expr::Alias(Alias { expr, name, .. }) =
-                                    expr_rewritten
-                                {
-                                    agg_exprs.push(expr.alias(&name));
-                                    proj_exprs
-                                        .push(Expr::Column(Column::from_name(name)));
+                                if let Expr::Alias(boxed_alias) = expr_rewritten {
+                                    agg_exprs
+                                        .push(boxed_alias.expr.alias(&boxed_alias.name));
+                                    proj_exprs.push(Expr::Column(Column::from_name(
+                                        boxed_alias.name,
+                                    )));
                                 } else {
                                     let expr_alias =
                                         config.alias_generator().next(CSE_PREFIX);

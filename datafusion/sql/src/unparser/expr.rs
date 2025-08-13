@@ -42,7 +42,7 @@ use datafusion_common::{
     ScalarValue,
 };
 use datafusion_expr::{
-    expr::{Alias, Exists, InList, ScalarFunction, Sort, WindowFunction},
+    expr::{Exists, InList, ScalarFunction, Sort, WindowFunction},
     Between, BinaryExpr, Case, Cast, Expr, GroupingSet, Like, Operator, TryCast,
 };
 use sqlparser::ast::helpers::attached_token::AttachedToken;
@@ -189,7 +189,7 @@ impl Unparser<'_> {
                 Ok(self.cast_to_sql(expr, data_type)?)
             }
             Expr::Literal(value, _) => Ok(self.scalar_to_sql(value)?),
-            Expr::Alias(Alias { expr, name: _, .. }) => self.expr_to_sql_inner(expr),
+            Expr::Alias(boxed_alias) => self.expr_to_sql_inner(boxed_alias.expr.as_ref()),
             Expr::WindowFunction(window_fun) => {
                 let WindowFunction {
                     fun,
@@ -515,7 +515,9 @@ impl Unparser<'_> {
             Expr::Placeholder(p) => {
                 Ok(ast::Expr::value(ast::Value::Placeholder(p.id.to_string())))
             }
-            Expr::OuterReferenceColumn(_, col) => self.col_to_sql(col),
+            Expr::OuterReferenceColumn(boxed_orc) => {
+                self.col_to_sql(&boxed_orc.as_ref().1)
+            }
             Expr::Unnest(unnest) => self.unnest_to_sql(unnest),
         }
     }

@@ -415,11 +415,11 @@ async fn test_fn_approx_percentile_cont() -> Result<()> {
     ");
 
     // the arg2 parameter is a complex expr, but it can be evaluated to the literal value
-    let alias_expr = Expr::Alias(Alias::new(
+    let alias_expr = Expr::Alias(Box::new(Alias::new(
         cast(lit(0.5), DataType::Float32),
         None::<&str>,
         "arg_2".to_string(),
-    ));
+    )));
     let expr = approx_percentile_cont(col("b").sort(true, false), alias_expr, None);
     let df = create_test_table().await?;
     let batches = df.aggregate(vec![], vec![expr]).unwrap().collect().await?;
@@ -435,11 +435,11 @@ async fn test_fn_approx_percentile_cont() -> Result<()> {
     "
     );
 
-    let alias_expr = Expr::Alias(Alias::new(
+    let alias_expr = Expr::Alias(Box::new(Alias::new(
         cast(lit(0.1), DataType::Float32),
         None::<&str>,
         "arg_2".to_string(),
-    ));
+    )));
     let expr = approx_percentile_cont(col("b").sort(false, false), alias_expr, None);
     let df = create_test_table().await?;
     let batches = df.aggregate(vec![], vec![expr]).unwrap().collect().await?;

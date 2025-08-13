@@ -27,7 +27,6 @@ use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
 };
 use datafusion_common::{plan_err, Column, DFSchemaRef, HashMap, Result, ScalarValue};
-use datafusion_expr::expr::Alias;
 use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::utils::{
     collect_subquery_cols, conjunction, find_join_exprs, split_conjunction,
@@ -548,7 +547,7 @@ fn proj_exprs_evaluation_result_on_empty_batch(
             let simplifier = ExprSimplifier::new(info);
             let result_expr = simplifier.simplify(result_expr)?;
             let expr_name = match expr {
-                Expr::Alias(Alias { name, .. }) => name.to_string(),
+                Expr::Alias(boxed_alias) => boxed_alias.name.to_string(),
                 Expr::Column(Column {
                     relation: _,
                     name,
