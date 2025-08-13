@@ -745,12 +745,19 @@ impl DisplayAs for HashJoinExec {
                     .collect::<Vec<String>>()
                     .join(", ");
                 let dynamic_filter_display = match &self.dynamic_filter {
-                    Some(df) => match df.current() {
-                        Ok(current) if current != lit(true) => {
-                            format!(", filter=[{current}]")
+                    Some(df) => {
+                        let target = dynamic_filter_side(self.join_type);
+                        let keys = df.key_count();
+                        match df.current() {
+                            Ok(current) if current != lit(true) => {
+                                format!(", filter=[{current}], filter_target={:?}, filter_keys={}", target, keys)
+                            }
+                            _ => format!(
+                                ", filter_target={:?}, filter_keys={}",
+                                target, keys
+                            ),
                         }
-                        _ => "".to_string(),
-                    },
+                    }
                     None => "".to_string(),
                 };
                 write!(
@@ -1318,7 +1325,7 @@ async fn collect_left_input(
                 })
                 .unwrap_or_else(|| lit(true));
 
-            dynamic_filter.update(combined_predicate)?;
+            dynamic_filter.update(combined_predicate, num_rows)?;
         }
     }
 

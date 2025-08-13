@@ -1051,10 +1051,18 @@ impl DisplayAs for SortExec {
                     Some(fetch) => {
                         write!(f, "SortExec: TopK(fetch={fetch}), expr=[{}], preserve_partitioning=[{preserve_partitioning}]", self.expr)?;
                         if let Some(filter) = &self.filter {
+                            let keys = filter.key_count();
                             if let Ok(current) = filter.current() {
                                 if !current.eq(&lit(true)) {
-                                    write!(f, ", filter=[{current}]")?;
+                                    write!(
+                                        f,
+                                        ", filter=[{current}], filter_keys={keys}"
+                                    )?;
+                                } else {
+                                    write!(f, ", filter_keys={keys}")?;
                                 }
+                            } else {
+                                write!(f, ", filter_keys={keys}")?;
                             }
                         }
                         if !self.common_sort_prefix.is_empty() {
@@ -1073,7 +1081,25 @@ impl DisplayAs for SortExec {
                             Ok(())
                         }
                     }
-                    None => write!(f, "SortExec: expr=[{}], preserve_partitioning=[{preserve_partitioning}]", self.expr),
+                    None => {
+                        write!(f, "SortExec: expr=[{}], preserve_partitioning=[{preserve_partitioning}]", self.expr)?;
+                        if let Some(filter) = &self.filter {
+                            let keys = filter.key_count();
+                            if let Ok(current) = filter.current() {
+                                if !current.eq(&lit(true)) {
+                                    write!(
+                                        f,
+                                        ", filter=[{current}], filter_keys={keys}"
+                                    )?;
+                                } else {
+                                    write!(f, ", filter_keys={keys}")?;
+                                }
+                            } else {
+                                write!(f, ", filter_keys={keys}")?;
+                            }
+                        }
+                        Ok(())
+                    }
                 }
             }
             DisplayFormatType::TreeRender => match self.fetch {

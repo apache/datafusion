@@ -19,7 +19,10 @@ use std::{
     any::Any,
     fmt::Display,
     hash::Hash,
-    sync::{Arc, RwLock},
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, RwLock,
+    },
 };
 
 use crate::PhysicalExpr;
@@ -48,6 +51,8 @@ pub struct DynamicFilterPhysicalExpr {
     remapped_children: Option<Vec<Arc<dyn PhysicalExpr>>>,
     /// The source of dynamic filters.
     inner: Arc<RwLock<Inner>>,
+    /// Number of keys currently contained in this dynamic filter.
+    key_count: Arc<AtomicUsize>,
     /// For testing purposes track the data type and nullability to make sure they don't change.
     /// If they do, there's a bug in the implementation.
     /// But this can have overhead in production, so it's only included in our tests.
@@ -138,6 +143,7 @@ impl DynamicFilterPhysicalExpr {
             children,
             remapped_children: None, // Initially no remapped children
             inner: Arc::new(RwLock::new(Inner::new(inner))),
+            key_count: Arc::new(AtomicUsize::new(0)),
             data_type: Arc::new(RwLock::new(None)),
             nullable: Arc::new(RwLock::new(None)),
         }
@@ -198,7 +204,11 @@ impl DynamicFilterPhysicalExpr {
     /// This should be called e.g.:
     /// - When we've computed the probe side's hash table in a HashJoinExec
     /// - After every batch is processed if we update the TopK heap in a SortExec using a TopK approach.
-    pub fn update(&self, new_expr: Arc<dyn PhysicalExpr>) -> Result<()> {
+    pub fn update(
+        &self,
+        new_expr: Arc<dyn PhysicalExpr>,
+        key_count: usize,
+    ) -> Result<()> {
         let mut current = self.inner.write().map_err(|_| {
             datafusion_common::DataFusionError::Execution(
                 "Failed to acquire write lock for inner".to_string(),
@@ -217,7 +227,13 @@ impl DynamicFilterPhysicalExpr {
         current.expr = new_expr;
         // Increment the generation to indicate that the expression has changed.
         current.generation += 1;
+        self.key_count.store(key_count, Ordering::SeqCst);
         Ok(())
+    }
+
+    /// Return the current number of keys represented by this dynamic filter.
+    pub fn key_count(&self) -> usize {
+        self.key_count.load(Ordering::SeqCst)
     }
 }
 
@@ -242,6 +258,7 @@ impl PhysicalExpr for DynamicFilterPhysicalExpr {
             children: self.children.clone(),
             remapped_children: Some(children),
             inner: Arc::clone(&self.inner),
+            key_count: Arc::clone(&self.key_count),
             data_type: Arc::clone(&self.data_type),
             nullable: Arc::clone(&self.nullable),
         }))
@@ -433,7 +450,7 @@ mod test {
             lit(43) as Arc<dyn PhysicalExpr>,
         ));
         dynamic_filter
-            .update(Arc::clone(&new_expr) as Arc<dyn PhysicalExpr>)
+            .update(Arc::clone(&new_expr) as Arc<dyn PhysicalExpr>, 0)
             .expect("Failed to update expression");
         // Now we should be able to evaluate the new expression on both batches
         let result_1 = dynamic_filter_1.evaluate(&batch_1).unwrap();
@@ -463,7 +480,7 @@ mod test {
 
         // Update the current expression
         let new_expr = lit(100) as Arc<dyn PhysicalExpr>;
-        dynamic_filter.update(Arc::clone(&new_expr)).unwrap();
+        dynamic_filter.update(Arc::clone(&new_expr), 0).unwrap();
         // Take another snapshot
         let snapshot = dynamic_filter.snapshot().unwrap();
         assert_eq!(snapshot, Some(new_expr));
@@ -492,7 +509,7 @@ mod test {
 
         // Now change the current expression to something else.
         dynamic_filter
-            .update(lit(ScalarValue::Utf8(None)) as Arc<dyn PhysicalExpr>)
+            .update(lit(ScalarValue::Utf8(None)) as Arc<dyn PhysicalExpr>, 0)
             .expect("Failed to update expression");
         // Check that we error if we call data_type, nullable or evaluate after changing the expression.
         assert!(

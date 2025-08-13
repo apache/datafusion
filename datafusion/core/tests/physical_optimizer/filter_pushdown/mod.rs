@@ -245,8 +245,8 @@ async fn test_dynamic_filter_pushdown_through_hash_join_with_topk() {
     insta::assert_snapshot!(
         format_plan_for_test(&plan),
         @r"
-    - SortExec: TopK(fetch=2), expr=[e@4 ASC], preserve_partitioning=[false]
-    -   HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, d@0)]
+    - SortExec: TopK(fetch=2), expr=[e@4 ASC], preserve_partitioning=[false], filter_keys=0
+    -   HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, d@0)], filter_target=Right, filter_keys=0
     -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
     -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[d, e, f], file_type=test, pushdown_supported=true, predicate=DynamicFilterPhysicalExpr [ true ] AND DynamicFilterPhysicalExpr [ true ]
     "
@@ -268,8 +268,8 @@ async fn test_dynamic_filter_pushdown_through_hash_join_with_topk() {
     insta::assert_snapshot!(
         format_plan_for_test(&plan),
         @r"
-    - SortExec: TopK(fetch=2), expr=[e@4 ASC], preserve_partitioning=[false], filter=[e@4 IS NULL OR e@4 < bb]
-    -   HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, d@0)], filter=[d@0 >= aa AND d@0 <= ab]
+    - SortExec: TopK(fetch=2), expr=[e@4 ASC], preserve_partitioning=[false], filter=[e@4 IS NULL OR e@4 < bb], filter_keys=2
+    -   HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, d@0)], filter=[d@0 >= aa AND d@0 <= ab], filter_target=Right, filter_keys=2
     -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
     -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[d, e, f], file_type=test, pushdown_supported=true, predicate=DynamicFilterPhysicalExpr [ d@0 >= aa AND d@0 <= ab ] AND DynamicFilterPhysicalExpr [ e@1 IS NULL OR e@1 < bb ]
     "
@@ -732,7 +732,7 @@ async fn test_topk_dynamic_filter_pushdown() {
     insta::assert_snapshot!(
         format!("{}", format_plan_for_test(&plan)),
         @r"
-    - SortExec: TopK(fetch=1), expr=[b@1 DESC NULLS LAST], preserve_partitioning=[false], filter=[b@1 > bd]
+    - SortExec: TopK(fetch=1), expr=[b@1 DESC NULLS LAST], preserve_partitioning=[false], filter=[b@1 > bd], filter_keys=1
     -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=DynamicFilterPhysicalExpr [ b@1 > bd ]
     "
     );
@@ -842,7 +842,7 @@ async fn test_hashjoin_dynamic_filter_pushdown() {
     insta::assert_snapshot!(
         format!("{}", format_plan_for_test(&plan)),
         @r"
-    - HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, a@0), (b@1, b@1)], filter=[a@0 >= aa AND a@0 <= ab AND b@1 >= ba AND b@1 <= bb]
+    - HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, a@0), (b@1, b@1)], filter=[a@0 >= aa AND a@0 <= ab AND b@1 >= ba AND b@1 <= bb], filter_target=Right, filter_keys=2
     -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=<none>
     -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilterPhysicalExpr [ a@0 >= aa AND a@0 <= ab AND b@1 >= ba AND b@1 <= bb ]
     "
@@ -859,14 +859,12 @@ async fn test_hashjoin_dynamic_filter_pushdown_null_keys() {
     use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
 
     // Build side containing only null join keys
-    let build_batches = vec![
-        record_batch!(
-            ("a", Utf8, [None::<&str>, None]),
-            ("b", Utf8, [None::<&str>, None]),
-            ("c", Float64, [Some(1.0), Some(2.0)])
-        )
-        .unwrap(),
-    ];
+    let build_batches = vec![record_batch!(
+        ("a", Utf8, [None::<&str>, None]),
+        ("b", Utf8, [None::<&str>, None]),
+        ("c", Float64, [Some(1.0), Some(2.0)])
+    )
+    .unwrap()];
     let build_schema = Arc::new(Schema::new(vec![
         Field::new("a", DataType::Utf8, true),
         Field::new("b", DataType::Utf8, true),
@@ -878,10 +876,12 @@ async fn test_hashjoin_dynamic_filter_pushdown_null_keys() {
         .build();
 
     // Probe side with regular values
-    let probe_batches = vec![
-        record_batch!(("a", Utf8, ["aa", "ab", "ac"]), ("b", Utf8, ["ba", "bb", "bc"]), ("e", Float64, [1.0, 2.0, 3.0]))
-            .unwrap(),
-    ];
+    let probe_batches = vec![record_batch!(
+        ("a", Utf8, ["aa", "ab", "ac"]),
+        ("b", Utf8, ["ba", "bb", "bc"]),
+        ("e", Float64, [1.0, 2.0, 3.0])
+    )
+    .unwrap()];
     let probe_schema = Arc::new(Schema::new(vec![
         Field::new("a", DataType::Utf8, false),
         Field::new("b", DataType::Utf8, false),
@@ -945,10 +945,10 @@ async fn test_hashjoin_dynamic_filter_pushdown_null_keys() {
 
 #[tokio::test]
 async fn test_hashjoin_dynamic_filter_pushdown_high_cardinality() {
-    use datafusion_common::JoinType;
-    use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
     use arrow::array::{ArrayRef, Float64Array, Int32Array};
     use arrow::record_batch::RecordBatch;
+    use datafusion_common::JoinType;
+    use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
 
     // Generate large key sets to watch for planning regressions
     let size = 10_000;
@@ -1164,9 +1164,9 @@ async fn test_nested_hashjoin_dynamic_filter_pushdown() {
     insta::assert_snapshot!(
         format!("{}", format_plan_for_test(&plan)),
         @r"
-    - HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, b@0)], filter=[b@0 >= aa AND b@0 <= ab]
+    - HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, b@0)], filter=[b@0 >= aa AND b@0 <= ab], filter_target=Right, filter_keys=2
     -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, x], file_type=test, pushdown_supported=true
-    -   HashJoinExec: mode=Partitioned, join_type=Inner, on=[(c@1, d@0)], filter=[d@0 >= ca AND d@0 <= ce]
+    -   HashJoinExec: mode=Partitioned, join_type=Inner, on=[(c@1, d@0)], filter=[d@0 >= ca AND d@0 <= ce], filter_target=Right, filter_keys=2
     -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[b, c, y], file_type=test, pushdown_supported=true, predicate=DynamicFilterPhysicalExpr [ b@0 >= aa AND b@0 <= ab ]
     -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[d, z], file_type=test, pushdown_supported=true, predicate=DynamicFilterPhysicalExpr [ d@0 >= ca AND d@0 <= ce ]
     "
@@ -1707,11 +1707,7 @@ STORED AS PARQUET;
 
 fn assert_projection(plan: &Arc<dyn ExecutionPlan>, expected: &[&str]) {
     let schema = plan.schema();
-    let actual: Vec<_> = schema
-        .fields()
-        .iter()
-        .map(|f| f.name().as_str())
-        .collect();
+    let actual: Vec<_> = schema.fields().iter().map(|f| f.name().as_str()).collect();
     assert_eq!(actual, expected);
 }
 
