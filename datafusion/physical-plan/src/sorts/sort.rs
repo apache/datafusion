@@ -40,7 +40,7 @@ use crate::spill::get_record_batch_memory_size;
 use crate::spill::in_progress_spill_file::InProgressSpillFile;
 use crate::spill::spill_manager::{GetSlicedSize, SpillManager};
 use crate::stream::RecordBatchStreamAdapter;
-use crate::topk::TopK;
+use crate::topk::{TopK, TopKDynamicFilters};
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, EmptyRecordBatchStream, ExecutionPlan,
     ExecutionPlanProperties, Partitioning, PlanProperties, SendableRecordBatchStream,
@@ -858,8 +858,10 @@ pub struct SortExec {
     common_sort_prefix: Vec<PhysicalSortExpr>,
     /// Cache holding plan properties like equivalences, output partitioning etc.
     cache: PlanProperties,
-    /// Filter matching the state of the sort for dynamic filter pushdown
-    filter: Option<Arc<DynamicFilterPhysicalExpr>>,
+    /// Filter matching the state of the sort for dynamic filter pushdown.
+    /// If `fetch` is `Some`, this will also be set and a TopK operator may be used.
+    /// If `fetch` is `None`, this will be `None`.
+    filter: Option<TopKDynamicFilters>,
 }
 
 impl SortExec {
@@ -905,14 +907,14 @@ impl SortExec {
         self
     }
 
-    /// Add or reset `self.filter` to a new `DynamicFilterPhysicalExpr`.
-    fn create_filter(&self) -> Arc<DynamicFilterPhysicalExpr> {
+    /// Add or reset `self.filter` to a new `TopKDynamicFilters`.
+    fn create_filter(&self) -> TopKDynamicFilters {
         let children = self
             .expr
             .iter()
             .map(|sort_expr| Arc::clone(&sort_expr.expr))
             .collect::<Vec<_>>();
-        Arc::new(DynamicFilterPhysicalExpr::new(children, lit(true)))
+        TopKDynamicFilters::new(Arc::new(DynamicFilterPhysicalExpr::new(children, lit(true))))
     }
 
     fn cloned(&self) -> Self {
@@ -1051,7 +1053,7 @@ impl DisplayAs for SortExec {
                     Some(fetch) => {
                         write!(f, "SortExec: TopK(fetch={fetch}), expr=[{}], preserve_partitioning=[{preserve_partitioning}]", self.expr)?;
                         if let Some(filter) = &self.filter {
-                            if let Ok(current) = filter.current() {
+                            if let Ok(current) = filter.expr().current() {
                                 if !current.eq(&lit(true)) {
                                     write!(f, ", filter=[{current}]")?;
                                 }
@@ -1196,7 +1198,10 @@ impl ExecutionPlan for SortExec {
                     context.session_config().batch_size(),
                     context.runtime_env(),
                     &self.metrics_set,
-                    self.filter.clone(),
+                    self.filter
+                        .as_ref()
+                        .expect("Filter should be set when fetch is Some")
+                        .clone(),
                 )?;
                 Ok(Box::pin(RecordBatchStreamAdapter::new(
                     self.schema(),
@@ -1320,8 +1325,7 @@ impl ExecutionPlan for SortExec {
 
         if let Some(filter) = &self.filter {
             if config.optimizer.enable_dynamic_filter_pushdown {
-                child =
-                    child.with_self_filter(Arc::clone(filter) as Arc<dyn PhysicalExpr>);
+                child = child.with_self_filter(filter.expr());
             }
         }
 
