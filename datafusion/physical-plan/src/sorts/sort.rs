@@ -914,7 +914,10 @@ impl SortExec {
             .iter()
             .map(|sort_expr| Arc::clone(&sort_expr.expr))
             .collect::<Vec<_>>();
-        TopKDynamicFilters::new(Arc::new(DynamicFilterPhysicalExpr::new(children, lit(true))))
+        TopKDynamicFilters::new(Arc::new(DynamicFilterPhysicalExpr::new(
+            children,
+            lit(true),
+        )))
     }
 
     fn cloned(&self) -> Self {
