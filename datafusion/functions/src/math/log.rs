@@ -648,7 +648,7 @@ mod tests {
 
         // Test log(num)
         for order in orders.iter().cloned() {
-            let result = log.output_ordering(&[order.clone()]).unwrap();
+            let result = log.output_ordering(std::slice::from_ref(&order)).unwrap();
             assert_eq!(result, order.sort_properties);
         }
 

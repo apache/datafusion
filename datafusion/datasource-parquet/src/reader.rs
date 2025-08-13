@@ -30,6 +30,7 @@ use parquet::arrow::arrow_reader::ArrowReaderOptions;
 use parquet::arrow::async_reader::{AsyncFileReader, ParquetObjectReader};
 use parquet::file::metadata::ParquetMetaData;
 use std::any::Any;
+use std::collections::HashMap;
 use std::fmt::Debug;
 use std::ops::Range;
 use std::sync::Arc;
@@ -295,5 +296,11 @@ impl FileMetadata for CachedParquetMetaData {
 
     fn memory_size(&self) -> usize {
         self.0.memory_size()
+    }
+
+    fn extra_info(&self) -> HashMap<String, String> {
+        let page_index =
+            self.0.column_index().is_some() && self.0.offset_index().is_some();
+        HashMap::from([("page_index".to_owned(), page_index.to_string())])
     }
 }

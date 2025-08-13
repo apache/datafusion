@@ -66,6 +66,7 @@ impl PartialEq for ScalarUDF {
     }
 }
 
+// TODO (https://github.com/apache/datafusion/issues/17064) PartialOrd is not consistent with PartialEq for `ScalarUDF` and it should be
 // Manual implementation based on `ScalarUDFImpl::equals`
 impl PartialOrd for ScalarUDF {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {

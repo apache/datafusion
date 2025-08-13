@@ -434,6 +434,7 @@ impl PartialEq for dyn WindowUDFImpl {
     }
 }
 
+// TODO (https://github.com/apache/datafusion/issues/17064) PartialOrd is not consistent with PartialEq for `dyn WindowUDFImpl` and it should be
 impl PartialOrd for dyn WindowUDFImpl {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         match self.name().partial_cmp(other.name()) {
