@@ -227,14 +227,6 @@ pub(super) async fn exec_and_print(
 
     let statements = DFParser::parse_sql_with_dialect(&sql, dialect.as_ref())?;
     for statement in statements {
-        let pool = if ctx.memory_profiling() {
-            ctx.tracked_memory_pool()
-        } else {
-            None
-        };
-        if let Some(pool) = &pool {
-            pool.enable_tracking();
-        }
         StatementExecutor::new(statement)
             .execute(ctx, print_options)
             .await?;
