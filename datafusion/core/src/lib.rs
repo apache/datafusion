@@ -1117,8 +1117,7 @@ doc_comment::doctest!(
     library_user_guide_dataframe_api
 );
 
-// Only run the Avro example when the Avro feature is enabled
-#[cfg(all(doctest, feature = "avro"))]
+#[cfg(doctest)]
 doc_comment::doctest!(
     "../../../docs/source/library-user-guide/using-the-sql-api.md",
     library_user_guide_sql_api
