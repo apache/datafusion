@@ -17,7 +17,6 @@
 
 //! [`StringAgg`] accumulator for the `string_agg` function
 
-use std::any::Any;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::mem::size_of_val;
 
@@ -121,7 +120,7 @@ impl Default for StringAgg {
 }
 
 impl AggregateUDFImpl for StringAgg {
-    fn as_any(&self) -> &dyn Any {
+    fn as_any(&self) -> &dyn std::any::Any {
         self
     }
 
