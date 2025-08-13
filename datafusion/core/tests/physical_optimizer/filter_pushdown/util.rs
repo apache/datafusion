@@ -199,7 +199,7 @@ impl FileSource for TestSource {
                     .predicate
                     .as_ref()
                     .map(|p| format!(", predicate={p}"))
-                    .unwrap_or_default();
+                    .unwrap_or_else(|| ", predicate=<none>".to_string());
 
                 write!(f, "{support}{predicate_string}")
             }
