@@ -180,8 +180,8 @@ pub struct NestedLoopJoinExec {
     /// This structure is *shared* across all output streams.
     ///
     /// Each output stream waits on the `OnceAsync` to signal the completion of
-    /// the hash table creation.
-    inner_table: OnceAsync<JoinLeftData>,
+    /// the build(left) side data, and buffer them all for later joining.
+    build_side_data: OnceAsync<JoinLeftData>,
     /// Information of index and left / right placement of columns
     column_indices: Vec<ColumnIndex>,
     /// Projection to apply to the output of the join
@@ -222,7 +222,7 @@ impl NestedLoopJoinExec {
             filter,
             join_type: *join_type,
             join_schema,
-            inner_table: Default::default(),
+            build_side_data: Default::default(),
             column_indices,
             projection,
             metrics: Default::default(),
@@ -490,7 +490,7 @@ impl ExecutionPlan for NestedLoopJoinExec {
             MemoryConsumer::new(format!("NestedLoopJoinLoad[{partition}]"))
                 .register(context.memory_pool());
 
-        let inner_table = self.inner_table.try_once(|| {
+        let build_side_data = self.build_side_data.try_once(|| {
             let stream = self.left.execute(0, Arc::clone(&context))?;
 
             Ok(collect_left_input(
@@ -504,7 +504,7 @@ impl ExecutionPlan for NestedLoopJoinExec {
 
         let batch_size = context.session_config().batch_size();
 
-        let outer_table = self.right.execute(partition, context)?;
+        let probe_side_data = self.right.execute(partition, context)?;
 
         // update column indices to reflect the projection
         let column_indices_after_projection = match &self.projection {
@@ -519,8 +519,8 @@ impl ExecutionPlan for NestedLoopJoinExec {
             self.schema(),
             self.filter.clone(),
             self.join_type,
-            outer_table,
-            inner_table,
+            probe_side_data,
+            build_side_data,
             column_indices_after_projection,
             join_metrics,
             batch_size,
@@ -707,8 +707,10 @@ pub(crate) struct NestedLoopJoinStream {
     // PROPERTIES:
     // Operator's properties that remain constant
     //
-    // Note: The implementation uses the terms left/inner/build-side table and
-    // right/outer/probe-side table interchangeably.
+    // Note: The implementation uses the terms left/build-side table and
+    // right/probe-side table interchangeably. Treating the left side as the
+    // build side is a convention in DataFusion: the planner always tries to
+    // swap the smaller table to the left side.
     // ========================================================================
     /// Output schema
     pub(crate) output_schema: Arc<Schema>,
@@ -716,9 +718,9 @@ pub(crate) struct NestedLoopJoinStream {
     pub(crate) join_filter: Option<JoinFilter>,
     /// type of the join
     pub(crate) join_type: JoinType,
-    /// the outer(right) table data of the nested loop join
+    /// the probe-side(right) table data of the nested loop join
     pub(crate) right_data: SendableRecordBatchStream,
-    /// the inner(left) table data of the nested loop join
+    /// the build-side table data of the nested loop join
     pub(crate) left_data: OnceFut<JoinLeftData>,
     /// Projection to construct the output schema from the left and right tables.
     /// Example:
@@ -982,8 +984,8 @@ impl NestedLoopJoinStream {
         schema: Arc<Schema>,
         filter: Option<JoinFilter>,
         join_type: JoinType,
-        outer_table: SendableRecordBatchStream,
-        inner_table: OnceFut<JoinLeftData>,
+        right_data: SendableRecordBatchStream,
+        left_data: OnceFut<JoinLeftData>,
         column_indices: Vec<ColumnIndex>,
         join_metrics: BuildProbeJoinMetrics,
         batch_size: usize,
@@ -992,9 +994,9 @@ impl NestedLoopJoinStream {
             output_schema: Arc::clone(&schema),
             join_filter: filter,
             join_type,
-            right_data: outer_table,
+            right_data,
             column_indices,
-            left_data: inner_table,
+            left_data,
             join_metrics,
             buffered_left_data: None,
             output_buffer: Box::new(BatchCoalescer::new(schema, batch_size)),
@@ -1426,7 +1428,7 @@ impl NestedLoopJoinStream {
 
     // ==== Utilities ====
 
-    /// Get the inner data of left data, errors if it's None
+    /// Get the build-side data of the left input, errors if it's None
     fn get_left_data(&self) -> Result<&Arc<JoinLeftData>> {
         self.buffered_left_data
             .as_ref()
