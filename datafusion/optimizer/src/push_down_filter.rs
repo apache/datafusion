@@ -24,7 +24,11 @@ use arrow::datatypes::DataType;
 use indexmap::IndexSet;
 use itertools::Itertools;
 
-use datafusion_common::joins::preservation::{lr_is_preserved, on_lr_is_preserved};
+// `preservation_for_output_filters` determines output-filter safety; `preservation_for_on_filters`
+// governs ON-clause pushdown.
+use datafusion_common::joins::{
+    preservation_for_on_filters, preservation_for_output_filters,
+};
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
@@ -384,7 +388,8 @@ fn push_down_all_join(
 ) -> Result<Transformed<LogicalPlan>> {
     let is_inner_join = join.join_type == JoinType::Inner;
     // Get pushable predicates from current optimizer state
-    let (left_preserved, right_preserved) = lr_is_preserved(join.join_type);
+    let (left_preserved, right_preserved) =
+        preservation_for_output_filters(join.join_type);
 
     // The predicates can be divided to three categories:
     // 1) can push through join to its children(left or right)
@@ -421,7 +426,8 @@ fn push_down_all_join(
     }
 
     let mut on_filter_join_conditions = vec![];
-    let (on_left_preserved, on_right_preserved) = on_lr_is_preserved(join.join_type);
+    let (on_left_preserved, on_right_preserved) =
+        preservation_for_on_filters(join.join_type);
 
     if !on_filter.is_empty() {
         for on in on_filter {

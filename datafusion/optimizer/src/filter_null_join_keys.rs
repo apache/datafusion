@@ -19,7 +19,7 @@
 
 use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
-use datafusion_common::joins::preservation::on_lr_is_preserved;
+use datafusion_common::joins::preservation_for_on_filters;
 use datafusion_common::tree_node::Transformed;
 use datafusion_common::{NullEquality, Result};
 use datafusion_expr::utils::conjunction;
@@ -55,7 +55,7 @@ impl OptimizerRule for FilterNullJoinKeys {
                     && join.null_equality == NullEquality::NullEqualsNothing =>
             {
                 let (left_preserved, right_preserved) =
-                    on_lr_is_preserved(join.join_type);
+                    preservation_for_on_filters(join.join_type);
 
                 let left_schema = join.left.schema();
                 let right_schema = join.right.schema();

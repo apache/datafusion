@@ -76,7 +76,9 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::utils::memory::estimate_memory_size;
 use datafusion_common::{
     internal_datafusion_err, internal_err,
-    joins::preservation::{lr_is_preserved, on_lr_is_preserved},
+    joins::{
+        preservation_for_on_filters, preservation_for_output_filters,
+    },
     plan_err, project_schema, JoinSide, JoinType, NullEquality, Result, ScalarValue,
 };
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
@@ -100,8 +102,10 @@ use parking_lot::Mutex;
 /// Mark joins apply filters to the *opposite* side of the preserved input so
 /// that only rows capable of satisfying the ON clause are evaluated.
 fn dynamic_filter_side(join_type: JoinType) -> JoinSide {
-    let (left_preserved, right_preserved) = lr_is_preserved(join_type);
-    let (on_left_preserved, on_right_preserved) = on_lr_is_preserved(join_type);
+    let (left_preserved, right_preserved) =
+        preservation_for_output_filters(join_type);
+    let (on_left_preserved, on_right_preserved) =
+        preservation_for_on_filters(join_type);
     match (
         left_preserved,
         right_preserved,
@@ -1070,7 +1074,8 @@ impl ExecutionPlan for HashJoinExec {
         parent_filters: Vec<Arc<dyn PhysicalExpr>>,
         config: &ConfigOptions,
     ) -> Result<FilterDescription> {
-        let (left_preserved, right_preserved) = lr_is_preserved(self.join_type);
+        let (left_preserved, right_preserved) =
+            preservation_for_output_filters(self.join_type);
         let dynamic_target = dynamic_filter_side(self.join_type);
 
         let unsupported: Vec<_> = parent_filters
@@ -2034,8 +2039,8 @@ mod tests {
         let table: Vec<String> = cases
             .iter()
             .map(|jt| {
-                let lr = lr_is_preserved(*jt);
-                let on = on_lr_is_preserved(*jt);
+                let lr = preservation_for_output_filters(*jt);
+                let on = preservation_for_on_filters(*jt);
                 format!("{jt:?}: lr={lr:?}, on_lr={on:?}")
             })
             .collect();

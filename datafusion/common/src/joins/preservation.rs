@@ -17,6 +17,7 @@
 
 //! Helpers for reasoning about which sides of a [`JoinType`] preserve
 //! their input rows.
+//! **`preservation_for_output_filters` answers post‑join output filtering, whereas `preservation_for_on_filters` addresses ON‑clause feasibility.**
 
 use crate::JoinType;
 
@@ -43,7 +44,8 @@ use crate::JoinType;
 ///
 /// The returned tuple `(left_preserved, right_preserved)` reports whether each
 /// side of the join preserves its input rows under post‑join filtering.
-pub fn lr_is_preserved(join_type: JoinType) -> (bool, bool) {
+#[inline]
+pub const fn preservation_for_output_filters(join_type: JoinType) -> (bool, bool) {
     match join_type {
         JoinType::Inner => (true, true),
         JoinType::Left => (true, false),
@@ -78,7 +80,8 @@ pub fn lr_is_preserved(join_type: JoinType) -> (bool, bool) {
 ///
 /// The returned tuple `(left_preserved, right_preserved)` reports which sides
 /// may safely participate in ON‑clause filtering.
-pub fn on_lr_is_preserved(join_type: JoinType) -> (bool, bool) {
+#[inline]
+pub const fn preservation_for_on_filters(join_type: JoinType) -> (bool, bool) {
     match join_type {
         JoinType::Inner => (true, true),
         JoinType::Left => (false, true),
@@ -91,3 +94,8 @@ pub fn on_lr_is_preserved(join_type: JoinType) -> (bool, bool) {
         JoinType::RightMark => (true, false),
     }
 }
+
+#[allow(unused_imports)]
+pub(crate) use preservation_for_output_filters as lr_is_preserved;
+#[allow(unused_imports)]
+pub(crate) use preservation_for_on_filters as on_lr_is_preserved;

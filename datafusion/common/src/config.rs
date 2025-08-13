@@ -733,28 +733,32 @@ config_namespace! {
         /// year 2025 any files that only have timestamps in the year 2024 can be skipped /
         /// pruned at various stages in the scan.
         ///
-        /// Dynamic filters are also produced by left, right, semi, and anti joins,
-        /// allowing DataFusion to prune the probe side during execution. The *probe
-        /// side* is the stream that is scanned in a hash join. For hash joins the
-        /// mapping is:
+        /// Dynamic filters are also produced by joins, allowing DataFusion to prune
+        /// the *probe* side during execution. `HashJoinExec` builds from its left
+        /// input and probes with its right input. Legend: Left = left child, Right =
+        /// right child.
         ///
         /// | Join type                | Probe side |
-        /// |-------------------------|-----------|
+        /// |-------------------------|------------|
         /// | `Inner`, `Left`         | Right input |
-        /// | `Right`                 | Left input |
-        /// | `LeftSemi`, `LeftAnti`  | Left input |
+        /// | `Right`                 | Left input  |
+        /// | `LeftSemi`, `LeftAnti`  | Left input  |
         /// | `RightSemi`, `RightAnti`| Right input |
         ///
         /// Full joins are not supported.
         ///
-        /// Non-equi join predicates do **not** generate dynamic filters as they require
-        /// range or conjunctive analysis; composite predicates only derive filters from
-        /// their equi-conjuncts.
+        /// Non-equi join predicates do **not** generate dynamic filters; they require
+        /// range analysis and cross-conjunct reasoning (future work). Composite
+        /// predicates only derive filters from their equi-conjuncts, and rows with
+        /// `NULL` join keys (see [`crate::NullEquality::NullEqualsNothing`]) do not contribute
+        /// filter values. Enabling `optimizer.filter_null_join_keys` can remove such
+        /// rows up front.
         ///
         /// Pushdown is effective only when the file source supports predicate pushdown
-        /// (e.g. Parquet) and `execution.parquet.pushdown_filters` is enabled.
-        /// See the upgrade guide for additional details and examples.
-        /// For example, `SELECT * FROM fact LEFT JOIN dim ON fact.id = dim.id WHERE dim.region = 'US'`
+        /// (e.g. Parquet) and `execution.parquet.pushdown_filters` is `true`; formats
+        /// without predicate pushdown (CSV/JSON) see no benefit. See the upgrade guide
+        /// for additional details and examples. For example,
+        /// `SELECT * FROM fact LEFT JOIN dim ON fact.id = dim.id WHERE dim.region = 'US'`
         /// will only read `fact` rows whose `id` values match `dim` rows where
         /// `region = 'US'`.
         pub enable_dynamic_filter_pushdown: bool, default = true
