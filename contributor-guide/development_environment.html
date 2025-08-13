@@ -666,18 +666,23 @@ libprotoc<span class="w"> </span><span class="m">3</span>.15.0
 <h2>Bootstrap environment<a class="headerlink" href="#bootstrap-environment" title="Link to this heading">¶</a></h2>
 <p>DataFusion is written in Rust and it uses a standard rust toolkit:</p>
 <ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">rustup</span> <span class="pre">update</span> <span class="pre">stable</span></code> DataFusion generally uses the latest stable release of Rust, though it may lag when new Rust toolchains release</p>
+<ul>
+<li><p>See which toolchain is currently pinned in the <a class="reference external" href="https://github.com/apache/datafusion/blob/main/rust-toolchain.toml"><code class="docutils literal notranslate"><span class="pre">rust-toolchain.toml</span></code></a> file</p></li>
+<li><p>This can cause issues such as not having the rust-analyzer component installed for the specified toolchain, in which case just install it manually, e.g. <code class="docutils literal notranslate"><span class="pre">rustup</span> <span class="pre">component</span> <span class="pre">add</span> <span class="pre">--toolchain</span> <span class="pre">1.88</span> <span class="pre">rust-analyzer</span></code></p></li>
+</ul>
+</li>
 <li><p><code class="docutils literal notranslate"><span class="pre">cargo</span> <span class="pre">build</span></code></p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">cargo</span> <span class="pre">fmt</span></code> to format the code</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">cargo</span> <span class="pre">test</span></code> to test</p></li>
 <li><p>etc.</p></li>
 </ul>
-<p>Note that running <code class="docutils literal notranslate"><span class="pre">cargo</span> <span class="pre">test</span></code> requires significant memory resources, due to cargo running many tests in parallel by default. If you run into issues with slow tests or system lock ups, you can significantly reduce the memory required by instead running <code class="docutils literal notranslate"><span class="pre">cargo</span> <span class="pre">test</span> <span class="pre">--</span> <span class="pre">--test-threads=1</span></code>. For more information see <a class="reference external" href="https://github.com/apache/datafusion/issues/5347">this issue</a>.</p>
 <p>Testing setup:</p>
 <ul class="simple">
-<li><p><code class="docutils literal notranslate"><span class="pre">rustup</span> <span class="pre">update</span> <span class="pre">stable</span></code> DataFusion uses the latest stable release of rust</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">git</span> <span class="pre">submodule</span> <span class="pre">init</span></code></p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">git</span> <span class="pre">submodule</span> <span class="pre">update</span> <span class="pre">--init</span> <span class="pre">--remote</span> <span class="pre">--recursive</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">cargo</span> <span class="pre">test</span></code> to run tests</p></li>
 </ul>
+<p>Note that running <code class="docutils literal notranslate"><span class="pre">cargo</span> <span class="pre">test</span></code> requires significant memory resources, due to cargo running many tests in parallel by default. If you run into issues with slow tests or system lock ups, you can significantly reduce the memory required by instead running <code class="docutils literal notranslate"><span class="pre">cargo</span> <span class="pre">test</span> <span class="pre">--</span> <span class="pre">--test-threads=1</span></code>. For more information see <a class="reference external" href="https://github.com/apache/datafusion/issues/5347">this issue</a>.</p>
 <p>Formatting instructions:</p>
 <ul class="simple">
 <li><p><a class="reference download internal" download="" href="../_downloads/4a91b8629bd17ce8ae200ee0b5345f19/rust_fmt.sh"><span class="xref download myst">ci/scripts/rust_fmt.sh</span></a></p></li>
