@@ -17,20 +17,17 @@
 
 use std::collections::HashMap;
 use std::env;
-use std::num::NonZeroUsize;
 use std::path::Path;
 use std::process::ExitCode;
 use std::sync::{Arc, LazyLock};
 
 use datafusion::error::{DataFusionError, Result};
 use datafusion::execution::context::SessionConfig;
-use datafusion::execution::memory_pool::{
-    FairSpillPool, GreedyMemoryPool, MemoryPool, TrackConsumersPool, TrackedPool,
-};
+use datafusion::execution::memory_pool::{FairSpillPool, GreedyMemoryPool, MemoryPool};
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::prelude::SessionContext;
 use datafusion_cli::catalog::DynamicObjectStoreCatalog;
-use datafusion_cli::cli_context::ReplSessionContext;
+use datafusion_cli::cli_context::{CliSessionContext, ReplSessionContext};
 use datafusion_cli::functions::ParquetMetadataFunc;
 use datafusion_cli::{
     exec,
@@ -175,36 +172,16 @@ async fn main_inner() -> Result<()> {
     let session_config = get_session_config(&args)?;
 
     let mut rt_builder = RuntimeEnvBuilder::new();
-    let mut tracked_pool: Option<Arc<dyn TrackedPool>> = None;
-    // set memory pool size
-    let memory_limit = args.memory_limit.unwrap_or(usize::MAX);
-    // set memory pool type
-    let pool: Arc<dyn MemoryPool> = match args.mem_pool_type {
-        PoolType::Fair if args.top_memory_consumers == 0 => {
-            Arc::new(FairSpillPool::new(memory_limit))
-        }
-        PoolType::Fair => {
-            let p = Arc::new(TrackConsumersPool::new(
-                FairSpillPool::new(memory_limit),
-                NonZeroUsize::new(args.top_memory_consumers).unwrap(),
-            ));
-            tracked_pool = Some(p.clone() as Arc<dyn TrackedPool>);
-            p
-        }
-        PoolType::Greedy if args.top_memory_consumers == 0 => {
-            Arc::new(GreedyMemoryPool::new(memory_limit))
-        }
-        PoolType::Greedy => {
-            let p = Arc::new(TrackConsumersPool::new(
-                GreedyMemoryPool::new(memory_limit),
-                NonZeroUsize::new(args.top_memory_consumers).unwrap(),
-            ));
-            tracked_pool = Some(p.clone() as Arc<dyn TrackedPool>);
-            p
-        }
-    };
-
-    rt_builder = rt_builder.with_memory_pool(pool);
+    let mut base_pool: Option<Arc<dyn MemoryPool>> = None;
+    if let Some(memory_limit) = args.memory_limit {
+        // set memory pool type
+        let pool: Arc<dyn MemoryPool> = match args.mem_pool_type {
+            PoolType::Fair => Arc::new(FairSpillPool::new(memory_limit)),
+            PoolType::Greedy => Arc::new(GreedyMemoryPool::new(memory_limit)),
+        };
+        rt_builder = rt_builder.with_memory_pool(pool.clone());
+        base_pool = Some(pool);
+    }
 
     // set disk limit
     if let Some(disk_limit) = args.disk_limit {
@@ -215,6 +192,7 @@ async fn main_inner() -> Result<()> {
     }
 
     let runtime_env = rt_builder.build_arc()?;
+    let pool = base_pool.unwrap_or_else(|| runtime_env.memory_pool.clone());
 
     // enable dynamic file query
     let session_ctx = SessionContext::new_with_config_rt(session_config, runtime_env)
@@ -227,7 +205,11 @@ async fn main_inner() -> Result<()> {
     )));
     // register `parquet_metadata` table function to get metadata from parquet files
     session_ctx.register_udtf("parquet_metadata", Arc::new(ParquetMetadataFunc {}));
-    let ctx = ReplSessionContext::new(session_ctx, tracked_pool.clone());
+    let ctx =
+        ReplSessionContext::new(session_ctx, pool.clone(), args.top_memory_consumers);
+    if args.top_memory_consumers > 0 {
+        ctx.set_memory_profiling(true);
+    }
 
     let mut print_options = PrintOptions {
         format: args.format,
