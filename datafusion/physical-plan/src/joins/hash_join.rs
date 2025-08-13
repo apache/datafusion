@@ -75,8 +75,9 @@ use arrow::util::bit_util;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::utils::memory::estimate_memory_size;
 use datafusion_common::{
-    internal_datafusion_err, internal_err, plan_err, project_schema, JoinSide, JoinType,
-    NullEquality, Result, ScalarValue,
+    internal_datafusion_err, internal_err,
+    joins::preservation::{lr_is_preserved, on_lr_is_preserved},
+    plan_err, project_schema, JoinSide, JoinType, NullEquality, Result, ScalarValue,
 };
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
@@ -93,35 +94,6 @@ use ahash::RandomState;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use futures::{ready, Stream, StreamExt, TryStreamExt};
 use parking_lot::Mutex;
-
-// Helper functions mirrored from the optimizer's push_down_filter module.
-// KEEP IN SYNC WITH datafusion/optimizer/src/push_down_filter.rs
-// Determine which sides of a JOIN preserve rows for join output filters
-fn lr_is_preserved(join_type: JoinType) -> (bool, bool) {
-    match join_type {
-        JoinType::Inner => (true, true),
-        JoinType::Left => (true, false),
-        JoinType::Right => (false, true),
-        JoinType::Full => (false, false),
-        JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark => (true, false),
-        JoinType::RightSemi | JoinType::RightAnti | JoinType::RightMark => (false, true),
-    }
-}
-
-// Determine which sides of a JOIN are preserved for ON-clause filters
-fn on_lr_is_preserved(join_type: JoinType) -> (bool, bool) {
-    match join_type {
-        JoinType::Inner => (true, true),
-        JoinType::Left => (false, true),
-        JoinType::Right => (true, false),
-        JoinType::Full => (false, false),
-        JoinType::LeftSemi | JoinType::RightSemi => (true, true),
-        JoinType::LeftAnti => (false, true),
-        JoinType::RightAnti => (true, false),
-        JoinType::LeftMark => (false, true),
-        JoinType::RightMark => (true, false),
-    }
-}
 
 /// Returns which side of the join should receive a dynamic filter.
 ///

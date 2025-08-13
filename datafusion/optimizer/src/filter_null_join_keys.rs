@@ -18,8 +18,8 @@
 //! [`FilterNullJoinKeys`] adds filters to join inputs when input isn't nullable
 
 use crate::optimizer::ApplyOrder;
-use crate::push_down_filter::on_lr_is_preserved;
 use crate::{OptimizerConfig, OptimizerRule};
+use datafusion_common::joins::preservation::on_lr_is_preserved;
 use datafusion_common::tree_node::Transformed;
 use datafusion_common::{NullEquality, Result};
 use datafusion_expr::utils::conjunction;
