@@ -251,7 +251,8 @@ fn cli_memory_enable_show() {
         r"Cumulative allocations: .*?B",
         "Cumulative allocations: XB",
     );
-    settings.add_filter(r".*: .*?B", "Category: XB");
+    // Replace 'Other' memory usage line with placeholder
+    settings.add_filter(r"Other: .*?B", "Other: XB");
     let _bound = settings.bind_to_scope();
 
     let input = "\\memory_profiling enable\nselect 1;\n\\memory_profiling show\n";
