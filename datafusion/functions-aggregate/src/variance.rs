@@ -61,6 +61,7 @@ make_udaf_expr_and_func!(
     syntax_example = "var(expression)",
     standard_argument(name = "expression", prefix = "Numeric")
 )]
+#[derive(PartialEq, Eq, Hash)]
 pub struct VarianceSample {
     signature: Signature,
     aliases: Vec<String>,
@@ -153,6 +154,7 @@ impl AggregateUDFImpl for VarianceSample {
     syntax_example = "var_pop(expression)",
     standard_argument(name = "expression", prefix = "Numeric")
 )]
+#[derive(PartialEq, Eq, Hash)]
 pub struct VariancePopulation {
     signature: Signature,
     aliases: Vec<String>,

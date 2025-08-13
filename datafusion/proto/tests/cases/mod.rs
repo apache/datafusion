@@ -126,8 +126,6 @@ impl AggregateUDFImpl for MyAggregateUDF {
     ) -> datafusion_common::Result<Box<dyn Accumulator>> {
         unimplemented!()
     }
-
-    udf_equals_hash!(AggregateUDFImpl);
 }
 
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -177,8 +175,6 @@ impl WindowUDFImpl for CustomUDWF {
     ) -> datafusion_common::Result<FieldRef> {
         Ok(Field::new(field_args.name(), DataType::UInt64, false).into())
     }
-
-    udf_equals_hash!(WindowUDFImpl);
 }
 
 #[derive(Debug)]

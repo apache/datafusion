@@ -26,12 +26,12 @@ use std::sync::Arc;
 
 use datafusion_common::{
     get_required_group_by_exprs_indices, internal_datafusion_err, internal_err, Column,
-    HashMap, JoinType, Result,
+    DFSchema, HashMap, JoinType, Result,
 };
 use datafusion_expr::expr::Alias;
 use datafusion_expr::{
-    logical_plan::LogicalPlan, Aggregate, Distinct, Expr, Projection, TableScan, Unnest,
-    Window,
+    logical_plan::LogicalPlan, Aggregate, Distinct, EmptyRelation, Expr, Projection,
+    TableScan, Unnest, Window,
 };
 
 use crate::optimize_projections::required_indices::RequiredIndices;
@@ -153,23 +153,16 @@ fn optimize_projections(
 
             // Only use the absolutely necessary aggregate expressions required
             // by the parent:
-            let mut new_aggr_expr = aggregate_reqs.get_at_indices(&aggregate.aggr_expr);
+            let new_aggr_expr = aggregate_reqs.get_at_indices(&aggregate.aggr_expr);
 
-            // Aggregations always need at least one aggregate expression.
-            // With a nested count, we don't require any column as input, but
-            // still need to create a correct aggregate, which may be optimized
-            // out later. As an example, consider the following query:
-            //
-            // SELECT count(*) FROM (SELECT count(*) FROM [...])
-            //
-            // which always returns 1.
-            if new_aggr_expr.is_empty()
-                && new_group_bys.is_empty()
-                && !aggregate.aggr_expr.is_empty()
-            {
-                // take the old, first aggregate expression
-                new_aggr_expr = aggregate.aggr_expr;
-                new_aggr_expr.resize_with(1, || unreachable!());
+            if new_group_bys.is_empty() && new_aggr_expr.is_empty() {
+                // Global aggregation with no aggregate functions always produces 1 row and no columns.
+                return Ok(Transformed::yes(LogicalPlan::EmptyRelation(
+                    EmptyRelation {
+                        produce_one_row: true,
+                        schema: Arc::new(DFSchema::empty()),
+                    },
+                )));
             }
 
             let all_exprs_iter = new_group_bys.iter().chain(new_aggr_expr.iter());
@@ -1146,9 +1139,7 @@ mod tests {
             plan,
             @r"
         Aggregate: groupBy=[[]], aggr=[[count(Int32(1))]]
-          Projection:
-            Aggregate: groupBy=[[]], aggr=[[count(Int32(1))]]
-              TableScan: ?table? projection=[]
+          EmptyRelation: rows=1
         "
         )
     }
