@@ -194,6 +194,7 @@ macro_rules! config_namespace {
         }
     }
 }
+
 config_namespace! {
     /// Options related to catalog and directory scanning
     ///
@@ -559,12 +560,6 @@ config_namespace! {
         /// (reading) Use any available bloom filters when reading parquet files
         pub bloom_filter_on_read: bool, default = true
 
-        /// (reading) Whether or not to enable the caching of embedded metadata of Parquet files
-        /// (footer and page metadata). Enabling it can offer substantial performance improvements
-        /// for repeated queries over large files. By default, the cache is automatically
-        /// invalidated when the underlying file is modified.
-        pub cache_metadata: bool, default = false
-
         // The following options affect writing to parquet files
         // and map to parquet::file::properties::WriterProperties
 
@@ -607,13 +602,6 @@ config_namespace! {
         /// default parquet writer setting
         pub statistics_enabled: Option<String>, transform = str::to_lowercase, default = Some("page".into())
 
-        /// (writing) Sets max statistics size for any column. If NULL, uses
-        /// default parquet writer setting
-        /// max_statistics_size is deprecated, currently it is not being used
-        // TODO: remove once deprecated
-        #[deprecated(since = "45.0.0", note = "Setting does not do anything")]
-        pub max_statistics_size: Option<usize>, default = Some(4096)
-
         /// (writing) Target maximum number of rows in each row group (defaults to 1M
         /// rows). Writing larger row groups requires more memory to write, but
         /// can get better compression and be faster to read.
@@ -625,9 +613,9 @@ config_namespace! {
         /// (writing) Sets column index truncate length
         pub column_index_truncate_length: Option<usize>, default = Some(64)
 
-        /// (writing) Sets statictics truncate length. If NULL, uses
+        /// (writing) Sets statistics truncate length. If NULL, uses
         /// default parquet writer setting
-        pub statistics_truncate_length: Option<usize>, default = None
+        pub statistics_truncate_length: Option<usize>, default = Some(64)
 
         /// (writing) Sets best effort maximum number of rows in data page
         pub data_page_row_count_limit: usize, default = 20_000
@@ -689,6 +677,31 @@ config_namespace! {
 
         /// Optional file encryption properties
         pub file_encryption: Option<ConfigFileEncryptionProperties>, default = None
+
+        /// Identifier for the encryption factory to use to create file encryption and decryption properties.
+        /// Encryption factories can be registered in the runtime environment with
+        /// `RuntimeEnv::register_parquet_encryption_factory`.
+        pub factory_id: Option<String>, default = None
+
+        /// Any encryption factory specific options
+        pub factory_options: EncryptionFactoryOptions, default = EncryptionFactoryOptions::default()
+    }
+}
+
+impl ParquetEncryptionOptions {
+    /// Specify the encryption factory to use for Parquet modular encryption, along with its configuration
+    pub fn configure_factory(
+        &mut self,
+        factory_id: &str,
+        config: &impl ExtensionOptions,
+    ) {
+        self.factory_id = Some(factory_id.to_owned());
+        self.factory_options.options.clear();
+        for entry in config.entries() {
+            if let Some(value) = entry.value {
+                self.factory_options.options.insert(entry.key, value);
+            }
+        }
     }
 }
 
@@ -930,7 +943,7 @@ impl<'a> TryInto<arrow::util::display::FormatOptions<'a>> for &'a FormatOptions 
 }
 
 /// A key value pair, with a corresponding description
-#[derive(Debug)]
+#[derive(Debug, Hash, PartialEq, Eq)]
 pub struct ConfigEntry {
     /// A unique string to identify this config value
     pub key: String,
@@ -1015,11 +1028,23 @@ impl ConfigOptions {
         e.0.set(key, value)
     }
 
-    /// Create new ConfigOptions struct, taking values from
-    /// environment variables where possible.
+    /// Create new [`ConfigOptions`], taking values from environment variables
+    /// where possible.
     ///
-    /// For example, setting `DATAFUSION_EXECUTION_BATCH_SIZE` will
-    /// control `datafusion.execution.batch_size`.
+    /// For example, to configure `datafusion.execution.batch_size`
+    /// ([`ExecutionOptions::batch_size`]) you would set the
+    /// `DATAFUSION_EXECUTION_BATCH_SIZE` environment variable.
+    ///
+    /// The name of the environment variable is the option's key, transformed to
+    /// uppercase and with periods replaced with underscores.
+    ///
+    /// Values are parsed according to the [same rules used in casts from
+    /// Utf8](https://docs.rs/arrow/latest/arrow/compute/kernels/cast/fn.cast.html).
+    ///
+    /// If the value in the environment variable cannot be cast to the type of
+    /// the configuration option, the default value will be used instead and a
+    /// warning emitted. Environment variables are read when this method is
+    /// called, and are not re-read later.
     pub fn from_env() -> Result<Self> {
         struct Visitor(Vec<String>);
 
@@ -1893,6 +1918,43 @@ impl TableParquetOptions {
             ..self
         }
     }
+
+    /// Retrieves all configuration entries from this `TableParquetOptions`.
+    ///
+    /// # Returns
+    ///
+    /// A vector of `ConfigEntry` instances, representing all the configuration options within this
+    pub fn entries(self: &TableParquetOptions) -> Vec<ConfigEntry> {
+        struct Visitor(Vec<ConfigEntry>);
+
+        impl Visit for Visitor {
+            fn some<V: Display>(
+                &mut self,
+                key: &str,
+                value: V,
+                description: &'static str,
+            ) {
+                self.0.push(ConfigEntry {
+                    key: key[1..].to_string(),
+                    value: Some(value.to_string()),
+                    description,
+                })
+            }
+
+            fn none(&mut self, key: &str, description: &'static str) {
+                self.0.push(ConfigEntry {
+                    key: key[1..].to_string(),
+                    value: None,
+                    description,
+                })
+            }
+        }
+
+        let mut v = Visitor(vec![]);
+        self.visit(&mut v, "", "");
+
+        v.0
+    }
 }
 
 impl ConfigField for TableParquetOptions {
@@ -2064,13 +2126,6 @@ config_namespace_with_hashmap! {
         /// Sets bloom filter number of distinct values. If NULL, uses
         /// default parquet options
         pub bloom_filter_ndv: Option<u64>, default = None
-
-        /// Sets max statistics size for the column path. If NULL, uses
-        /// default parquet options
-        /// max_statistics_size is deprecated, currently it is not being used
-        // TODO: remove once deprecated
-        #[deprecated(since = "45.0.0", note = "Setting does not do anything")]
-        pub max_statistics_size: Option<usize>, default = None
     }
 }
 
@@ -2128,6 +2183,8 @@ impl ConfigField for ConfigFileEncryptionProperties {
         let key = format!("{key_prefix}.footer_key_metadata_as_hex");
         let desc = "Metadata to use for the parquet footer";
         self.footer_key_metadata_as_hex.visit(v, key.as_str(), desc);
+
+        self.column_encryption_properties.visit(v, key_prefix, desc);
 
         let key = format!("{key_prefix}.aad_prefix_as_hex");
         let desc = "AAD prefix to use";
@@ -2390,6 +2447,40 @@ impl From<&FileDecryptionProperties> for ConfigFileDecryptionProperties {
     }
 }
 
+/// Holds implementation-specific options for an encryption factory
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct EncryptionFactoryOptions {
+    pub options: HashMap<String, String>,
+}
+
+impl ConfigField for EncryptionFactoryOptions {
+    fn visit<V: Visit>(&self, v: &mut V, key: &str, _description: &'static str) {
+        for (option_key, option_value) in &self.options {
+            v.some(
+                &format!("{key}.{option_key}"),
+                option_value,
+                "Encryption factory specific option",
+            );
+        }
+    }
+
+    fn set(&mut self, key: &str, value: &str) -> Result<()> {
+        self.options.insert(key.to_owned(), value.to_owned());
+        Ok(())
+    }
+}
+
+impl EncryptionFactoryOptions {
+    /// Convert these encryption factory options to an [`ExtensionOptions`] instance.
+    pub fn to_extension_options<T: ExtensionOptions + Default>(&self) -> Result<T> {
+        let mut options = T::default();
+        for (key, value) in &self.options {
+            options.set(key, value)?;
+        }
+        Ok(options)
+    }
+}
+
 config_namespace! {
     /// Options controlling CSV format
     pub struct CsvOptions {
@@ -2574,7 +2665,7 @@ impl Display for OutputFormat {
 mod tests {
     use crate::config::{
         ConfigEntry, ConfigExtension, ConfigField, ConfigFileType, ExtensionOptions,
-        Extensions, TableOptions,
+        Extensions, TableOptions, TableParquetOptions,
     };
     use std::any::Any;
     use std::collections::HashMap;
@@ -2829,6 +2920,36 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "parquet_encryption")]
+    #[test]
+    fn parquet_encryption_factory_config() {
+        let mut parquet_options = TableParquetOptions::default();
+
+        assert_eq!(parquet_options.crypto.factory_id, None);
+        assert_eq!(parquet_options.crypto.factory_options.options.len(), 0);
+
+        let mut input_config = TestExtensionConfig::default();
+        input_config
+            .properties
+            .insert("key1".to_string(), "value 1".to_string());
+        input_config
+            .properties
+            .insert("key2".to_string(), "value 2".to_string());
+
+        parquet_options
+            .crypto
+            .configure_factory("example_factory", &input_config);
+
+        assert_eq!(
+            parquet_options.crypto.factory_id,
+            Some("example_factory".to_string())
+        );
+        let factory_options = &parquet_options.crypto.factory_options.options;
+        assert_eq!(factory_options.len(), 2);
+        assert_eq!(factory_options.get("key1"), Some(&"value 1".to_string()));
+        assert_eq!(factory_options.get("key2"), Some(&"value 2".to_string()));
+    }
+
     #[cfg(feature = "parquet")]
     #[test]
     fn parquet_table_options_config_entry() {
@@ -2841,6 +2962,23 @@ mod tests {
         assert!(entries
             .iter()
             .any(|item| item.key == "format.bloom_filter_enabled::col1"))
+    }
+
+    #[cfg(feature = "parquet")]
+    #[test]
+    fn parquet_table_parquet_options_config_entry() {
+        let mut table_parquet_options = TableParquetOptions::new();
+        table_parquet_options
+            .set(
+                "crypto.file_encryption.column_key_as_hex::double_field",
+                "31323334353637383930313233343530",
+            )
+            .unwrap();
+        let entries = table_parquet_options.entries();
+        assert!(entries
+            .iter()
+            .any(|item| item.key
+                == "crypto.file_encryption.column_key_as_hex::double_field"))
     }
 
     #[cfg(feature = "parquet")]

@@ -23,5 +23,205 @@
 
 ## Original Query: SELECT bit_count(0);
 ## PySpark 3.5.5 Result: {'bit_count(0)': 0, 'typeof(bit_count(0))': 'int', 'typeof(0)': 'int'}
-#query
-#SELECT bit_count(0::int);
+
+# Basic tests with different integer types
+query I
+SELECT bit_count(0::int);
+----
+0
+
+query I
+SELECT bit_count(1::int);
+----
+1
+
+query I
+SELECT bit_count(7::int);
+----
+3
+
+query I
+SELECT bit_count(15::int);
+----
+4
+
+query I
+SELECT bit_count(255::int);
+----
+8
+
+query I
+SELECT bit_count(1023::int);
+----
+10
+
+# Tests with negative numbers (two's complement)
+query I
+SELECT bit_count(-1::int);
+----
+32
+
+query I
+SELECT bit_count(-2::int);
+----
+31
+
+query I
+SELECT bit_count(-3::int);
+----
+31
+
+# Tests with different integer types
+query I
+SELECT bit_count(arrow_cast(0, 'Int8'));
+----
+0
+
+query I
+SELECT bit_count(arrow_cast(15, 'Int8'));
+----
+4
+
+query I
+SELECT bit_count(arrow_cast(-1, 'Int8'));
+----
+8
+
+query I
+SELECT bit_count(arrow_cast(0, 'Int16'));
+----
+0
+
+query I
+SELECT bit_count(arrow_cast(255, 'Int16'));
+----
+8
+
+query I
+SELECT bit_count(arrow_cast(-1, 'Int16'));
+----
+16
+
+query I
+SELECT bit_count(arrow_cast(0, 'Int64'));
+----
+0
+
+query I
+SELECT bit_count(arrow_cast(255, 'Int64'));
+----
+8
+
+query I
+SELECT bit_count(arrow_cast(-1, 'Int64'));
+----
+64
+
+# Tests with unsigned integer types
+query I
+SELECT bit_count(arrow_cast(0, 'UInt8'));
+----
+0
+
+query I
+SELECT bit_count(arrow_cast(255, 'UInt8'));
+----
+8
+
+query I
+SELECT bit_count(arrow_cast(0, 'UInt16'));
+----
+0
+
+query I
+SELECT bit_count(arrow_cast(65535, 'UInt16'));
+----
+16
+
+query I
+SELECT bit_count(arrow_cast(0, 'UInt32'));
+----
+0
+
+query I
+SELECT bit_count(arrow_cast(4294967295, 'UInt32'));
+----
+32
+
+query I
+SELECT bit_count(arrow_cast(0, 'UInt64'));
+----
+0
+
+query I
+SELECT bit_count(arrow_cast(18446744073709551615, 'UInt64'));
+----
+64
+
+# Tests with NULL values
+query I
+SELECT bit_count(arrow_cast(NULL, 'Int32'));
+----
+NULL
+
+query I
+SELECT bit_count(arrow_cast(NULL, 'Int8'));
+----
+NULL
+
+query I
+SELECT bit_count(arrow_cast(NULL, 'UInt64'));
+----
+NULL
+
+# Tests with edge cases
+query I
+SELECT bit_count(arrow_cast(0, 'Int32')) as zero_count;
+----
+0
+
+query I
+SELECT bit_count(arrow_cast(1, 'Int32')) as one_count;
+----
+1
+
+query I
+SELECT bit_count(arrow_cast(2, 'Int32')) as two_count;
+----
+1
+
+query I
+SELECT bit_count(arrow_cast(3, 'Int32')) as three_count;
+----
+2
+
+query I
+SELECT bit_count(arrow_cast(4, 'Int32')) as four_count;
+----
+1
+
+query I
+SELECT bit_count(arrow_cast(5, 'Int32')) as five_count;
+----
+2
+
+# Tests with large numbers
+query I
+SELECT bit_count(arrow_cast(2147483647, 'Int32'));
+----
+31
+
+query I
+SELECT bit_count(arrow_cast(-2147483648, 'Int32'));
+----
+1
+
+query I
+SELECT bit_count(arrow_cast(9223372036854775807, 'Int64'));
+----
+63
+
+query I
+SELECT bit_count(arrow_cast(-9223372036854775808, 'Int64'));
+----
+1

@@ -1562,7 +1562,7 @@ impl BatchTransformer for BatchSplitter {
 /// Joins output columns from their left input followed by their right input.
 /// Thus if the inputs are reordered, the output columns must be reordered to
 /// match the original order.
-pub(crate) fn reorder_output_after_swap(
+pub fn reorder_output_after_swap(
     plan: Arc<dyn ExecutionPlan>,
     left_schema: &Schema,
     right_schema: &Schema,
@@ -1601,7 +1601,7 @@ fn swap_reverting_projection(
 }
 
 /// This function swaps the given join's projection.
-pub(super) fn swap_join_projection(
+pub fn swap_join_projection(
     left_schema_len: usize,
     right_schema_len: usize,
     projection: Option<&Vec<usize>>,

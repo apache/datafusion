@@ -382,9 +382,6 @@ impl TableParquetOptionsProto {
                 statistics_enabled_opt: global_options.global.statistics_enabled.map(|enabled| {
                     parquet_options::StatisticsEnabledOpt::StatisticsEnabled(enabled)
                 }),
-                max_statistics_size_opt: global_options.global.max_statistics_size.map(|size| {
-                    parquet_options::MaxStatisticsSizeOpt::MaxStatisticsSize(size as u64)
-                }),
                 max_row_group_size: global_options.global.max_row_group_size as u64,
                 created_by: global_options.global.created_by.clone(),
                 column_index_truncate_length_opt: global_options.global.column_index_truncate_length.map(|length| {
@@ -414,7 +411,6 @@ impl TableParquetOptionsProto {
                 coerce_int96_opt: global_options.global.coerce_int96.map(|compression| {
                     parquet_options::CoerceInt96Opt::CoerceInt96(compression)
                 }),
-                cache_metadata: global_options.global.cache_metadata,
             }),
             column_specific_options: column_specific_options.into_iter().map(|(column_name, options)| {
                 ParquetColumnSpecificOptions {
@@ -440,9 +436,6 @@ impl TableParquetOptionsProto {
                         }),
                         bloom_filter_ndv_opt: options.bloom_filter_ndv.map(|ndv| {
                             parquet_column_options::BloomFilterNdvOpt::BloomFilterNdv(ndv)
-                        }),
-                        max_statistics_size_opt: options.max_statistics_size.map(|size| {
-                            parquet_column_options::MaxStatisticsSizeOpt::MaxStatisticsSize(size as u32)
                         }),
                     })
                 }
@@ -482,9 +475,6 @@ impl From<&ParquetOptionsProto> for ParquetOptions {
             statistics_enabled: proto.statistics_enabled_opt.as_ref().map(|opt| match opt {
                 parquet_options::StatisticsEnabledOpt::StatisticsEnabled(statistics) => statistics.clone(),
             }),
-            max_statistics_size: proto.max_statistics_size_opt.as_ref().map(|opt| match opt {
-                parquet_options::MaxStatisticsSizeOpt::MaxStatisticsSize(size) => *size as usize,
-            }),
             max_row_group_size: proto.max_row_group_size as usize,
             created_by: proto.created_by.clone(),
             column_index_truncate_length: proto.column_index_truncate_length_opt.as_ref().map(|opt| match opt {
@@ -514,7 +504,6 @@ impl From<&ParquetOptionsProto> for ParquetOptions {
             coerce_int96: proto.coerce_int96_opt.as_ref().map(|opt| match opt {
                 parquet_options::CoerceInt96Opt::CoerceInt96(coerce_int96) => coerce_int96.clone(),
             }),
-            cache_metadata: proto.cache_metadata,
         }
     }
 }
@@ -544,11 +533,6 @@ impl From<ParquetColumnOptionsProto> for ParquetColumnOptions {
             bloom_filter_ndv: proto
                 .bloom_filter_ndv_opt
                 .map(|parquet_column_options::BloomFilterNdvOpt::BloomFilterNdv(v)| v),
-            max_statistics_size: proto.max_statistics_size_opt.map(
-                |parquet_column_options::MaxStatisticsSizeOpt::MaxStatisticsSize(v)| {
-                    v as usize
-                },
-            ),
         }
     }
 }

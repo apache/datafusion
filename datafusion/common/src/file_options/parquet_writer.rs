@@ -27,7 +27,6 @@ use crate::{
 
 use arrow::datatypes::Schema;
 // TODO: handle once deprecated
-use crate::encryption::add_crypto_to_writer_properties;
 #[allow(deprecated)]
 use parquet::{
     arrow::ARROW_SCHEMA_META_KEY,
@@ -36,7 +35,7 @@ use parquet::{
         metadata::KeyValue,
         properties::{
             EnabledStatistics, WriterProperties, WriterPropertiesBuilder, WriterVersion,
-            DEFAULT_MAX_STATISTICS_SIZE, DEFAULT_STATISTICS_ENABLED,
+            DEFAULT_STATISTICS_ENABLED,
         },
     },
     schema::types::ColumnPath,
@@ -90,18 +89,18 @@ impl TryFrom<&TableParquetOptions> for WriterPropertiesBuilder {
     /// Convert the session's [`TableParquetOptions`] into a single write action's [`WriterPropertiesBuilder`].
     ///
     /// The returned [`WriterPropertiesBuilder`] includes customizations applicable per column.
+    /// Note that any encryption options are ignored as building the `FileEncryptionProperties`
+    /// might require other inputs besides the [`TableParquetOptions`].
     fn try_from(table_parquet_options: &TableParquetOptions) -> Result<Self> {
         // Table options include kv_metadata and col-specific options
         let TableParquetOptions {
             global,
             column_specific_options,
             key_value_metadata,
-            crypto,
+            crypto: _,
         } = table_parquet_options;
 
         let mut builder = global.into_writer_properties_builder()?;
-
-        builder = add_crypto_to_writer_properties(crypto, builder);
 
         // check that the arrow schema is present in the kv_metadata, if configured to do so
         if !global.skip_arrow_metadata
@@ -161,16 +160,6 @@ impl TryFrom<&TableParquetOptions> for WriterPropertiesBuilder {
                 builder =
                     builder.set_column_bloom_filter_ndv(path.clone(), bloom_filter_ndv);
             }
-
-            // max_statistics_size is deprecated, currently it is not being used
-            // TODO: remove once deprecated
-            #[allow(deprecated)]
-            if let Some(max_statistics_size) = options.max_statistics_size {
-                builder = {
-                    #[allow(deprecated)]
-                    builder.set_column_max_statistics_size(path, max_statistics_size)
-                }
-            }
         }
 
         Ok(builder)
@@ -219,7 +208,6 @@ impl ParquetOptions {
             dictionary_enabled,
             dictionary_page_size_limit,
             statistics_enabled,
-            max_statistics_size,
             max_row_group_size,
             created_by,
             column_index_truncate_length,
@@ -245,7 +233,6 @@ impl ParquetOptions {
             binary_as_string: _, // not used for writer props
             coerce_int96: _,     // not used for writer props
             skip_arrow_metadata: _,
-            cache_metadata: _,
         } = self;
 
         let mut builder = WriterProperties::builder()
@@ -265,13 +252,6 @@ impl ParquetOptions {
             .set_statistics_truncate_length(*statistics_truncate_length)
             .set_data_page_row_count_limit(*data_page_row_count_limit)
             .set_bloom_filter_enabled(*bloom_filter_on_write);
-
-        builder = {
-            #[allow(deprecated)]
-            builder.set_max_statistics_size(
-                max_statistics_size.unwrap_or(DEFAULT_MAX_STATISTICS_SIZE),
-            )
-        };
 
         if let Some(bloom_filter_fpp) = bloom_filter_fpp {
             builder = builder.set_bloom_filter_fpp(*bloom_filter_fpp);
@@ -465,12 +445,10 @@ mod tests {
     fn column_options_with_non_defaults(
         src_col_defaults: &ParquetOptions,
     ) -> ParquetColumnOptions {
-        #[allow(deprecated)] // max_statistics_size
         ParquetColumnOptions {
             compression: Some("zstd(22)".into()),
             dictionary_enabled: src_col_defaults.dictionary_enabled.map(|v| !v),
             statistics_enabled: Some("none".into()),
-            max_statistics_size: Some(72),
             encoding: Some("RLE".into()),
             bloom_filter_enabled: Some(true),
             bloom_filter_fpp: Some(0.72),
@@ -495,7 +473,6 @@ mod tests {
             dictionary_enabled: Some(!defaults.dictionary_enabled.unwrap_or(false)),
             dictionary_page_size_limit: 42,
             statistics_enabled: Some("chunk".into()),
-            max_statistics_size: Some(42),
             max_row_group_size: 42,
             created_by: "wordy".into(),
             column_index_truncate_length: Some(42),
@@ -523,7 +500,6 @@ mod tests {
             binary_as_string: defaults.binary_as_string,
             skip_arrow_metadata: defaults.skip_arrow_metadata,
             coerce_int96: None,
-            cache_metadata: defaults.cache_metadata,
         }
     }
 
@@ -554,7 +530,6 @@ mod tests {
             ),
             bloom_filter_fpp: bloom_filter_default_props.map(|p| p.fpp),
             bloom_filter_ndv: bloom_filter_default_props.map(|p| p.ndv),
-            max_statistics_size: Some(props.max_statistics_size(&col)),
         }
     }
 
@@ -611,7 +586,6 @@ mod tests {
                 compression: default_col_props.compression,
                 dictionary_enabled: default_col_props.dictionary_enabled,
                 statistics_enabled: default_col_props.statistics_enabled,
-                max_statistics_size: default_col_props.max_statistics_size,
                 bloom_filter_on_write: default_col_props
                     .bloom_filter_enabled
                     .unwrap_or_default(),
@@ -636,13 +610,14 @@ mod tests {
                 binary_as_string: global_options_defaults.binary_as_string,
                 skip_arrow_metadata: global_options_defaults.skip_arrow_metadata,
                 coerce_int96: None,
-                cache_metadata: global_options_defaults.cache_metadata,
             },
             column_specific_options,
             key_value_metadata,
             crypto: ParquetEncryptionOptions {
                 file_encryption: fep,
                 file_decryption: None,
+                factory_id: None,
+                factory_options: Default::default(),
             },
         }
     }

@@ -21,8 +21,10 @@ use crate::async_udf::AsyncScalarUDF;
 use crate::expr::schema_name_from_exprs_comma_separated_without_space;
 use crate::simplify::{ExprSimplifyResult, SimplifyInfo};
 use crate::sort_properties::{ExprProperties, SortProperties};
+use crate::udf_eq::UdfEq;
 use crate::{udf_equals_hash, ColumnarValue, Documentation, Expr, Signature};
 use arrow::datatypes::{DataType, Field, FieldRef};
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::{not_impl_err, ExprSchema, Result, ScalarValue};
 use datafusion_expr_common::interval_arithmetic::Interval;
 use std::any::Any;
@@ -64,6 +66,7 @@ impl PartialEq for ScalarUDF {
     }
 }
 
+// TODO (https://github.com/apache/datafusion/issues/17064) PartialOrd is not consistent with PartialEq for `ScalarUDF` and it should be
 // Manual implementation based on `ScalarUDFImpl::equals`
 impl PartialOrd for ScalarUDF {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
@@ -197,8 +200,9 @@ impl ScalarUDF {
         self.inner.simplify(args, info)
     }
 
-    #[allow(deprecated)]
+    #[deprecated(since = "50.0.0", note = "Use `return_field_from_args` instead.")]
     pub fn is_nullable(&self, args: &[Expr], schema: &dyn ExprSchema) -> bool {
+        #[allow(deprecated)]
         self.inner.is_nullable(args, schema)
     }
 
@@ -311,6 +315,8 @@ pub struct ScalarFunctionArgs {
     /// or `return_field_from_args`) when creating the physical expression
     /// from the logical expression
     pub return_field: FieldRef,
+    /// The config options at execution time
+    pub config_options: Arc<ConfigOptions>,
 }
 
 impl ScalarFunctionArgs {
@@ -411,9 +417,6 @@ pub struct ReturnFieldArgs<'a> {
 /// let expr = add_one.call(vec![col("a")]);
 /// ```
 pub trait ScalarUDFImpl: Debug + Send + Sync {
-    // Note: When adding any methods (with default implementations), remember to add them also
-    // into the AliasedScalarUDFImpl below!
-
     /// Returns this object as an [`Any`] trait object
     fn as_any(&self) -> &dyn Any;
 
@@ -740,25 +743,10 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
 
 /// ScalarUDF that adds an alias to the underlying function. It is better to
 /// implement [`ScalarUDFImpl`], which supports aliases, directly if possible.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 struct AliasedScalarUDFImpl {
-    inner: Arc<dyn ScalarUDFImpl>,
+    inner: UdfEq<Arc<dyn ScalarUDFImpl>>,
     aliases: Vec<String>,
-}
-
-impl PartialEq for AliasedScalarUDFImpl {
-    fn eq(&self, other: &Self) -> bool {
-        let Self { inner, aliases } = self;
-        inner.equals(other.inner.as_ref()) && aliases == &other.aliases
-    }
-}
-
-impl Hash for AliasedScalarUDFImpl {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        let Self { inner, aliases } = self;
-        inner.hash_value().hash(state);
-        aliases.hash(state);
-    }
 }
 
 impl AliasedScalarUDFImpl {
@@ -768,10 +756,14 @@ impl AliasedScalarUDFImpl {
     ) -> Self {
         let mut aliases = inner.aliases().to_vec();
         aliases.extend(new_aliases.into_iter().map(|s| s.to_string()));
-        Self { inner, aliases }
+        Self {
+            inner: inner.into(),
+            aliases,
+        }
     }
 }
 
+#[warn(clippy::missing_trait_methods)] // Delegates, so it should implement every single trait method
 impl ScalarUDFImpl for AliasedScalarUDFImpl {
     fn as_any(&self) -> &dyn Any {
         self
@@ -799,6 +791,11 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         self.inner.return_field_from_args(args)
+    }
+
+    fn is_nullable(&self, args: &[Expr], schema: &dyn ExprSchema) -> bool {
+        #[allow(deprecated)]
+        self.inner.is_nullable(args, schema)
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

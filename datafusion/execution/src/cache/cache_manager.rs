@@ -21,6 +21,7 @@ use datafusion_common::{Result, Statistics};
 use object_store::path::Path;
 use object_store::ObjectMeta;
 use std::any::Any;
+use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
@@ -39,12 +40,39 @@ pub trait FileMetadata: Any + Send + Sync {
     /// Returns the file metadata as [`Any`] so that it can be downcasted to a specific
     /// implementation.
     fn as_any(&self) -> &dyn Any;
+
+    /// Returns the size of the metadata in bytes.
+    fn memory_size(&self) -> usize;
+
+    /// Returns extra information about this entry (used by [`FileMetadataCache::list_entries`]).
+    fn extra_info(&self) -> HashMap<String, String>;
 }
 
 /// Cache to store file-embedded metadata.
 pub trait FileMetadataCache:
     CacheAccessor<ObjectMeta, Arc<dyn FileMetadata>, Extra = ObjectMeta>
 {
+    /// Returns the cache's memory limit in bytes.
+    fn cache_limit(&self) -> usize;
+
+    /// Updates the cache with a new memory limit in bytes.
+    fn update_cache_limit(&self, limit: usize);
+
+    /// Retrieves the information about the entries currently cached.
+    fn list_entries(&self) -> HashMap<Path, FileMetadataCacheEntry>;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// Represents information about a cached metadata entry.
+/// This is used to expose the metadata cache contents to outside modules.
+pub struct FileMetadataCacheEntry {
+    pub object_meta: ObjectMeta,
+    /// Size of the cached metadata, in bytes.
+    pub size_bytes: usize,
+    /// Number of times this entry was retrieved.
+    pub hits: usize,
+    /// Additional object-specific information.
+    pub extra: HashMap<String, String>,
 }
 
 impl Debug for dyn CacheAccessor<Path, Arc<Statistics>, Extra = ObjectMeta> {
@@ -65,30 +93,36 @@ impl Debug for dyn FileMetadataCache {
     }
 }
 
-#[derive(Default, Debug)]
+#[derive(Debug)]
 pub struct CacheManager {
     file_statistic_cache: Option<FileStatisticsCache>,
     list_files_cache: Option<ListFilesCache>,
-    file_metadata_cache: Option<Arc<dyn FileMetadataCache>>,
+    file_metadata_cache: Arc<dyn FileMetadataCache>,
 }
 
 impl CacheManager {
     pub fn try_new(config: &CacheManagerConfig) -> Result<Arc<Self>> {
-        let mut manager = CacheManager::default();
-        if let Some(cc) = &config.table_files_statistics_cache {
-            manager.file_statistic_cache = Some(Arc::clone(cc))
-        }
-        if let Some(lc) = &config.list_files_cache {
-            manager.list_files_cache = Some(Arc::clone(lc))
-        }
-        if let Some(mc) = &config.file_metadata_cache {
-            manager.file_metadata_cache = Some(Arc::clone(mc));
-        } else {
-            manager.file_metadata_cache =
-                Some(Arc::new(DefaultFilesMetadataCache::default()));
-        }
+        let file_statistic_cache =
+            config.table_files_statistics_cache.as_ref().map(Arc::clone);
 
-        Ok(Arc::new(manager))
+        let list_files_cache = config.list_files_cache.as_ref().map(Arc::clone);
+
+        let file_metadata_cache = config
+            .file_metadata_cache
+            .as_ref()
+            .map(Arc::clone)
+            .unwrap_or_else(|| {
+                Arc::new(DefaultFilesMetadataCache::new(config.metadata_cache_limit))
+            });
+
+        // the cache memory limit might have changed, ensure the limit is updated
+        file_metadata_cache.update_cache_limit(config.metadata_cache_limit);
+
+        Ok(Arc::new(CacheManager {
+            file_statistic_cache,
+            list_files_cache,
+            file_metadata_cache,
+        }))
     }
 
     /// Get the cache of listing files statistics.
@@ -102,12 +136,19 @@ impl CacheManager {
     }
 
     /// Get the file embedded metadata cache.
-    pub fn get_file_metadata_cache(&self) -> Option<Arc<dyn FileMetadataCache>> {
-        self.file_metadata_cache.clone()
+    pub fn get_file_metadata_cache(&self) -> Arc<dyn FileMetadataCache> {
+        Arc::clone(&self.file_metadata_cache)
+    }
+
+    /// Get the limit of the file embedded metadata cache.
+    pub fn get_metadata_cache_limit(&self) -> usize {
+        self.file_metadata_cache.cache_limit()
     }
 }
 
-#[derive(Clone, Default)]
+const DEFAULT_METADATA_CACHE_LIMIT: usize = 50 * 1024 * 1024; // 50M
+
+#[derive(Clone)]
 pub struct CacheManagerConfig {
     /// Enable cache of files statistics when listing files.
     /// Avoid get same file statistics repeatedly in same datafusion session.
@@ -124,6 +165,19 @@ pub struct CacheManagerConfig {
     /// data file (e.g., Parquet footer and page metadata).
     /// If not provided, the [`CacheManager`] will create a [`DefaultFilesMetadataCache`].
     pub file_metadata_cache: Option<Arc<dyn FileMetadataCache>>,
+    /// Limit of the file-embedded metadata cache, in bytes.
+    pub metadata_cache_limit: usize,
+}
+
+impl Default for CacheManagerConfig {
+    fn default() -> Self {
+        Self {
+            table_files_statistics_cache: Default::default(),
+            list_files_cache: Default::default(),
+            file_metadata_cache: Default::default(),
+            metadata_cache_limit: DEFAULT_METADATA_CACHE_LIMIT,
+        }
+    }
 }
 
 impl CacheManagerConfig {
@@ -145,6 +199,11 @@ impl CacheManagerConfig {
         cache: Option<Arc<dyn FileMetadataCache>>,
     ) -> Self {
         self.file_metadata_cache = cache;
+        self
+    }
+
+    pub fn with_metadata_cache_limit(mut self, limit: usize) -> Self {
+        self.metadata_cache_limit = limit;
         self
     }
 }
