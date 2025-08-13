@@ -847,6 +847,182 @@ async fn test_hashjoin_dynamic_filter_pushdown() {
     -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilterPhysicalExpr [ a@0 >= aa AND a@0 <= ab AND b@1 >= ba AND b@1 <= bb ]
     "
     );
+
+    let join = plan.as_any().downcast_ref::<HashJoinExec>().unwrap();
+    assert_projection(&join.left, &["a", "b", "c"]);
+    assert_projection(&join.right, &["a", "b", "e"]);
+}
+
+#[tokio::test]
+async fn test_hashjoin_dynamic_filter_pushdown_null_keys() {
+    use datafusion_common::JoinType;
+    use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
+
+    // Build side containing only null join keys
+    let build_batches = vec![
+        record_batch!(
+            ("a", Utf8, [None::<&str>, None]),
+            ("b", Utf8, [None::<&str>, None]),
+            ("c", Float64, [Some(1.0), Some(2.0)])
+        )
+        .unwrap(),
+    ];
+    let build_schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Utf8, true),
+        Field::new("b", DataType::Utf8, true),
+        Field::new("c", DataType::Float64, true),
+    ]));
+    let build_scan = TestScanBuilder::new(Arc::clone(&build_schema))
+        .with_support(true)
+        .with_batches(build_batches)
+        .build();
+
+    // Probe side with regular values
+    let probe_batches = vec![
+        record_batch!(("a", Utf8, ["aa", "ab", "ac"]), ("b", Utf8, ["ba", "bb", "bc"]), ("e", Float64, [1.0, 2.0, 3.0]))
+            .unwrap(),
+    ];
+    let probe_schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Utf8, false),
+        Field::new("b", DataType::Utf8, false),
+        Field::new("e", DataType::Float64, false),
+    ]));
+    let probe_scan = TestScanBuilder::new(Arc::clone(&probe_schema))
+        .with_support(true)
+        .with_batches(probe_batches)
+        .build();
+
+    let on = vec![
+        (
+            col("a", &build_schema).unwrap(),
+            col("a", &probe_schema).unwrap(),
+        ),
+        (
+            col("b", &build_schema).unwrap(),
+            col("b", &probe_schema).unwrap(),
+        ),
+    ];
+    let plan = Arc::new(
+        HashJoinExec::try_new(
+            build_scan,
+            probe_scan,
+            on,
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::Partitioned,
+            datafusion_common::NullEquality::NullEqualsNothing,
+        )
+        .unwrap(),
+    ) as Arc<dyn ExecutionPlan>;
+
+    let mut config = ConfigOptions::default();
+    config.execution.parquet.pushdown_filters = true;
+    config.optimizer.enable_dynamic_filter_pushdown = true;
+    let plan = FilterPushdown::new_post_optimization()
+        .optimize(plan, &config)
+        .unwrap();
+    let session_cfg = SessionConfig::new().with_batch_size(10);
+    let session_ctx = SessionContext::new_with_config(session_cfg);
+    session_ctx.register_object_store(
+        ObjectStoreUrl::parse("test://").unwrap().as_ref(),
+        Arc::new(InMemory::new()),
+    );
+    let state = session_ctx.state();
+    let task_ctx = state.task_ctx();
+    let mut stream = plan.execute(0, Arc::clone(&task_ctx)).unwrap();
+    stream.next().await.unwrap().unwrap();
+    let formatted = format_plan_for_test(&plan);
+    assert_contains!(
+        formatted,
+        "DynamicFilterPhysicalExpr [ a@0 >= NULL AND a@0 <= NULL AND b@1 >= NULL AND b@1 <= NULL ]"
+    );
+
+    let join = plan.as_any().downcast_ref::<HashJoinExec>().unwrap();
+    assert_projection(&join.left, &["a", "b", "c"]);
+    assert_projection(&join.right, &["a", "b", "e"]);
+}
+
+#[tokio::test]
+async fn test_hashjoin_dynamic_filter_pushdown_high_cardinality() {
+    use datafusion_common::JoinType;
+    use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
+    use arrow::array::{ArrayRef, Float64Array, Int32Array};
+    use arrow::record_batch::RecordBatch;
+
+    // Generate large key sets to watch for planning regressions
+    let size = 10_000;
+    let build_schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Int32, false),
+        Field::new("x", DataType::Float64, false),
+    ]));
+    let build_a: Vec<Option<i32>> = (0..size).map(Some).collect();
+    let build_x: Vec<Option<f64>> = (0..size).map(|v| Some(v as f64)).collect();
+    let build_batch = RecordBatch::try_new(
+        Arc::clone(&build_schema),
+        vec![
+            Arc::new(Int32Array::from(build_a.clone())) as ArrayRef,
+            Arc::new(Float64Array::from(build_x.clone())) as ArrayRef,
+        ],
+    )
+    .unwrap();
+    let build_batches = vec![build_batch];
+    let build_scan = TestScanBuilder::new(Arc::clone(&build_schema))
+        .with_support(true)
+        .with_batches(build_batches)
+        .build();
+
+    let probe_schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Int32, false),
+        Field::new("y", DataType::Float64, false),
+    ]));
+    let probe_a: Vec<Option<i32>> = (0..size).map(Some).collect();
+    let probe_y: Vec<Option<f64>> = (0..size).map(|v| Some(v as f64)).collect();
+    let probe_batch = RecordBatch::try_new(
+        Arc::clone(&probe_schema),
+        vec![
+            Arc::new(Int32Array::from(probe_a.clone())) as ArrayRef,
+            Arc::new(Float64Array::from(probe_y.clone())) as ArrayRef,
+        ],
+    )
+    .unwrap();
+    let probe_batches = vec![probe_batch];
+    let probe_scan = TestScanBuilder::new(Arc::clone(&probe_schema))
+        .with_support(true)
+        .with_batches(probe_batches)
+        .build();
+
+    // High-cardinality join keys may increase planning time but should still allow dynamic filter pushdown
+    let on = vec![(
+        col("a", &build_schema).unwrap(),
+        col("a", &probe_schema).unwrap(),
+    )];
+    let plan = Arc::new(
+        HashJoinExec::try_new(
+            build_scan,
+            probe_scan,
+            on,
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::Partitioned,
+            datafusion_common::NullEquality::NullEqualsNothing,
+        )
+        .unwrap(),
+    ) as Arc<dyn ExecutionPlan>;
+
+    let mut config = ConfigOptions::default();
+    config.execution.parquet.pushdown_filters = true;
+    config.optimizer.enable_dynamic_filter_pushdown = true;
+    let plan = FilterPushdown::new_post_optimization()
+        .optimize(plan, &config)
+        .unwrap();
+    let formatted = format_plan_for_test(&plan);
+    assert_contains!(formatted, "DynamicFilterPhysicalExpr");
+
+    let join = plan.as_any().downcast_ref::<HashJoinExec>().unwrap();
+    assert_projection(&join.left, &["a", "x"]);
+    assert_projection(&join.right, &["a", "y"]);
 }
 
 #[tokio::test]
@@ -995,6 +1171,12 @@ async fn test_nested_hashjoin_dynamic_filter_pushdown() {
     -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[d, z], file_type=test, pushdown_supported=true, predicate=DynamicFilterPhysicalExpr [ d@0 >= ca AND d@0 <= ce ]
     "
     );
+
+    let outer = plan.as_any().downcast_ref::<HashJoinExec>().unwrap();
+    assert_projection(&outer.left, &["a", "x"]);
+    let inner = outer.right.as_any().downcast_ref::<HashJoinExec>().unwrap();
+    assert_projection(&inner.left, &["b", "c", "y"]);
+    assert_projection(&inner.right, &["d", "z"]);
 }
 
 #[tokio::test]
@@ -1521,6 +1703,16 @@ STORED AS PARQUET;
         "{explain}"
     );
     // Pushdown pruned most rows
+}
+
+fn assert_projection(plan: &Arc<dyn ExecutionPlan>, expected: &[&str]) {
+    let schema = plan.schema();
+    let actual: Vec<_> = schema
+        .fields()
+        .iter()
+        .map(|f| f.name().as_str())
+        .collect();
+    assert_eq!(actual, expected);
 }
 
 /// Schema:
