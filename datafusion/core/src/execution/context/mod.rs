@@ -281,22 +281,6 @@ pub struct SessionContext {
     state: Arc<RwLock<SessionState>>,
 }
 
-/// A handle for enabling and managing memory profiling during query execution.
-///
-/// This struct provides a way to enable memory profiling for a specific session context
-/// and retrieve memory usage reports after query execution. It is designed to be
-/// used with the DataFusion CLI and other tools that need to track memory consumption
-/// during query processing.
-///
-/// # Example
-///
-/// ```rust
-/// use datafusion::prelude::*;
-/// use std::collections::HashMap;
-///
-/// // Enable memory profiling for a session context
-/// let ctx = SessionContext::new();
-///
 impl Default for SessionContext {
     fn default() -> Self {
         Self::new()
