@@ -301,7 +301,7 @@ impl RunOpt {
 
         let mut row_count = 0;
 
-        let mut stream = execute_stream(physical_plan.clone(), state.task_ctx())?;
+        let mut stream = execute_stream(Arc::clone(&physical_plan), state.task_ctx())?;
         while let Some(batch) = stream.next().await {
             row_count += batch?.num_rows();
         }
