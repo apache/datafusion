@@ -45,16 +45,22 @@ returns a `ColumnarValue` instead of a `ArrayRef`.
 Dynamic filter pushdown now applies to left, right, semi and anti joins,
 allowing DataFusion to prune the probe side as join keys are discovered at
 runtime. Full joins are not supported and only equi-join keys contribute to the
-filters. This behavior is controlled by the
-`datafusion.optimizer.enable_dynamic_filter_pushdown` configuration option (on by
-default).
+filters. Dynamic filters obey `NullEqualsNothing` semantics, so rows with null
+join keys never match and generate no filter values. This behavior is controlled
+by the `datafusion.optimizer.enable_dynamic_filter_pushdown` configuration
+option (on by default). Dynamic filter pushdown requires file formats that
+support predicate pushdown; for Parquet this means enabling
+`datafusion.execution.parquet.pushdown_filters`.
 
-| JoinType                     | Probe side pruned |
-|-----------------------------|------------------|
-| `Inner`, `Left`             | Right input      |
-| `Right`                     | Left input       |
-| `LeftSemi`, `LeftAnti`      | Left input       |
-| `RightSemi`, `RightAnti`    | Right input      |
+In a hash join, the probe side is the input whose rows are scanned to find
+matches against the hashed build side.
+
+| JoinType                 | Probe side pruned |
+| ------------------------ | ----------------- |
+| `Inner`, `Left`          | Right input       |
+| `Right`                  | Left input        |
+| `LeftSemi`, `LeftAnti`   | Left input        |
+| `RightSemi`, `RightAnti` | Right input       |
 
 Dynamic filters are most effective when the join keys are highly selective.
 You can disable the feature by setting
@@ -71,6 +77,7 @@ WHERE dim.region = 'US';
 
 As rows from `dim` with `region = 'US'` are processed, a dynamic filter is
 generated that skips `fact` partitions without matching `id` values.
+Plan effect: the `fact` scan receives `DynamicFilter{fact.id}`.
 
 To upgrade, change the return type of your implementation
 
