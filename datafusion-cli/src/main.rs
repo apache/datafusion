@@ -121,7 +121,7 @@ struct Args {
     #[clap(
         long,
         help = "The number of top memory consumers to display when query fails due to memory exhaustion. To disable memory consumer tracking, set this value to 0",
-        default_value = "3"
+        default_value = "5"
     )]
     top_memory_consumers: usize,
 
