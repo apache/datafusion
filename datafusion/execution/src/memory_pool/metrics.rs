@@ -54,41 +54,34 @@ pub fn format_metrics(metrics: &[ConsumerMemoryMetrics]) -> String {
 }
 
 /// Categorize operator names into high-level groups for reporting.
+const OPERATOR_CATEGORIES: &[(&str, &str)] = &[
+    ("parquet", "Parquet"),
+    ("csv", "CSV"),
+    ("json", "JSON"),
+    ("coalesce", "Coalesce"),
+    ("repart", "Repartition"),
+    ("shuffle", "Shuffle"),
+    ("exchange", "Network Shuffle"),
+    ("scan", "Data Input"),
+    ("filter", "Filtering"),
+    ("join", "Join Operation"),
+    ("aggregate", "Aggregation"),
+    ("sort", "Sorting"),
+    ("project", "Projection"),
+    ("union", "Set Operation"),
+    ("window", "Window Function"),
+    ("limit", "Limit/TopK"),
+    ("top", "Limit/TopK"),
+    ("distinct", "Distinct"),
+    ("spill", "Memory Management"),
+];
+
 pub fn operator_category(name: &str) -> &'static str {
     let name = name.to_lowercase();
-    if name.contains("parquet") {
-        "Parquet"
-    } else if name.contains("csv") {
-        "CSV"
-    } else if name.contains("json") {
-        "JSON"
-    } else if name.contains("coalesce") {
-        "Coalesce"
-    } else if name.contains("repart") {
-        "Repartition"
-    } else if name.contains("shuffle") {
-        "Shuffle"
-    } else if name.contains("scan") {
-        "Data Input"
-    } else if name.contains("filter") {
-        "Filtering"
-    } else if name.contains("join") {
-        "Join Operation"
-    } else if name.contains("aggregate") {
-        "Aggregation"
-    } else if name.contains("sort") {
-        "Sorting"
-    } else if name.contains("project") {
-        "Projection"
-    } else if name.contains("union") {
-        "Set Operation"
-    } else if name.contains("window") {
-        "Window Function"
-    } else if name.contains("limit") {
-        "Limit/TopK"
-    } else if name.contains("spill") {
-        "Memory Management"
-    } else {
-        "Other"
+    for (pat, cat) in OPERATOR_CATEGORIES {
+        if name.contains(pat) {
+            return cat;
+        }
     }
+    "Other"
 }
