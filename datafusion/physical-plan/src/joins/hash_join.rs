@@ -438,9 +438,10 @@ impl HashJoinExec {
     ) -> Result<Self> {
         let left_schema = left.schema();
         let right_schema = right.schema();
-        if on.is_empty() {
-            return plan_err!("On constraints in HashJoinExec should be non-empty");
-        }
+        assert!(
+            !on.is_empty(),
+            "HashJoinExec requires a non-empty ON clause; empty lists are unsupported"
+        );
 
         check_join_is_valid(&left_schema, &right_schema, &on)?;
 
@@ -1098,6 +1099,7 @@ impl ExecutionPlan for HashJoinExec {
         config: &ConfigOptions,
     ) -> Result<FilterDescription> {
         let (left_preserved, right_preserved) = lr_is_preserved(self.join_type);
+        let dynamic_target = dynamic_filter_side(self.join_type);
 
         let unsupported: Vec<_> = parent_filters
             .iter()
@@ -1106,11 +1108,19 @@ impl ExecutionPlan for HashJoinExec {
             })
             .collect();
 
-        let mut left_child = if left_preserved {
-            crate::filter_pushdown::ChildFilterDescription::from_child(
+        let mut left_child = if left_preserved || matches!(dynamic_target, JoinSide::Left)
+        {
+            let mut desc = crate::filter_pushdown::ChildFilterDescription::from_child(
                 &parent_filters,
                 self.left(),
-            )?
+            )?;
+            if !left_preserved {
+                // For joins like `RightAnti`, the left input is not preserved and
+                // parent filters can't be enforced. Mark them as unsupported so
+                // they will not be propagated further down.
+                desc.parent_filters = unsupported.clone();
+            }
+            desc
         } else {
             crate::filter_pushdown::ChildFilterDescription {
                 parent_filters: unsupported.clone(),
@@ -1118,11 +1128,20 @@ impl ExecutionPlan for HashJoinExec {
             }
         };
 
-        let mut right_child = if right_preserved {
-            crate::filter_pushdown::ChildFilterDescription::from_child(
+        let mut right_child = if right_preserved
+            || matches!(dynamic_target, JoinSide::Right)
+        {
+            let mut desc = crate::filter_pushdown::ChildFilterDescription::from_child(
                 &parent_filters,
                 self.right(),
-            )?
+            )?;
+            if !right_preserved {
+                // A `LeftAnti` join discards all rows from the right side, so
+                // any parent filter referencing it would be meaningless. Mark
+                // such filters unsupported to avoid incorrect pushdown.
+                desc.parent_filters = unsupported.clone();
+            }
+            desc
         } else {
             crate::filter_pushdown::ChildFilterDescription {
                 parent_filters: unsupported.clone(),
@@ -1131,14 +1150,14 @@ impl ExecutionPlan for HashJoinExec {
         };
 
         // We only install dynamic filters after optimization to avoid planning scans
-        // before the hash table provides join key bounds
+        // before the hash table provides join key bounds. The chosen child was
+        // analyzed above via `from_child`, meaning it advertises filter pushdown.
         if matches!(phase, FilterPushdownPhase::Post)
             && config.optimizer.enable_dynamic_filter_pushdown
         {
             if let Some(df) = &self.dynamic_filter {
-                let target_side = dynamic_filter_side(self.join_type);
                 let dynamic_filter = Arc::clone(df) as Arc<dyn PhysicalExpr>;
-                match target_side {
+                match dynamic_target {
                     JoinSide::Left => {
                         left_child = left_child.with_self_filter(dynamic_filter);
                     }
@@ -1161,6 +1180,10 @@ impl ExecutionPlan for HashJoinExec {
         child_pushdown_result: ChildPushdownResult,
         _config: &ConfigOptions,
     ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
+        // `gather_filters_for_pushdown` above marks predicates on non-preserved
+        // inputs as unsupported. Therefore it is safe to propagate any
+        // pushdown results returned by the children without re-checking the
+        // join semantics here.
         Ok(FilterPushdownPropagation::if_any(child_pushdown_result))
     }
 }
@@ -2027,6 +2050,35 @@ mod tests {
         for (join_type, expected) in cases {
             assert_eq!(dynamic_filter_side(join_type), expected, "{join_type:?}");
         }
+    }
+
+    #[test]
+    fn preservation_truth_table() {
+        use JoinType::*;
+        let cases = [
+            Inner, Left, Right, Full, LeftSemi, LeftAnti, RightSemi, RightAnti, LeftMark,
+            RightMark,
+        ];
+        let table: Vec<String> = cases
+            .iter()
+            .map(|jt| {
+                let lr = lr_is_preserved(*jt);
+                let on = on_lr_is_preserved(*jt);
+                format!("{jt:?}: lr={lr:?}, on_lr={on:?}")
+            })
+            .collect();
+        assert_snapshot!(table.join("\n"), @r#"
+Inner: lr=(true, true), on_lr=(true, true)
+Left: lr=(true, false), on_lr=(false, true)
+Right: lr=(false, true), on_lr=(true, false)
+Full: lr=(false, false), on_lr=(false, false)
+LeftSemi: lr=(true, false), on_lr=(true, true)
+LeftAnti: lr=(true, false), on_lr=(false, true)
+RightSemi: lr=(false, true), on_lr=(true, true)
+RightAnti: lr=(false, true), on_lr=(true, false)
+LeftMark: lr=(true, false), on_lr=(false, true)
+RightMark: lr=(false, true), on_lr=(true, false)
+"#);
     }
 
     #[template]
