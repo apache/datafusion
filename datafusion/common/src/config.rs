@@ -731,14 +731,30 @@ config_namespace! {
         /// to push down the current top 10 timestamps that the TopK operator references
         /// into the file scans. This means that if we already have 10 timestamps in the
         /// year 2025 any files that only have timestamps in the year 2024 can be skipped /
-        /// pruned at various stages in the scan. Dynamic filters are also produced by
-        /// left, right, semi, and anti joins, allowing DataFusion to prune the probe side
-        /// during execution. For hash joins, dynamic filters are applied to the **probe**
-        /// side (the stream that is scanned), which is the right input for `Inner` and
-        /// `Left` joins and the left input for `Right` joins; semi and anti joins prune the
-        /// left/probe input. Full joins are not supported and non-equi join predicates do
-        /// **not** generate dynamic filters. For example,
-        /// `SELECT * FROM fact LEFT JOIN dim ON fact.id = dim.id WHERE dim.region = 'US'`
+        /// pruned at various stages in the scan.
+        ///
+        /// Dynamic filters are also produced by left, right, semi, and anti joins,
+        /// allowing DataFusion to prune the probe side during execution. The *probe
+        /// side* is the stream that is scanned in a hash join. For hash joins the
+        /// mapping is:
+        ///
+        /// | Join type                | Probe side |
+        /// |-------------------------|-----------|
+        /// | `Inner`, `Left`         | Right input |
+        /// | `Right`                 | Left input |
+        /// | `LeftSemi`, `LeftAnti`  | Left input |
+        /// | `RightSemi`, `RightAnti`| Right input |
+        ///
+        /// Full joins are not supported.
+        ///
+        /// Non-equi join predicates do **not** generate dynamic filters as they require
+        /// range or conjunctive analysis; composite predicates only derive filters from
+        /// their equi-conjuncts.
+        ///
+        /// Pushdown is effective only when the file source supports predicate pushdown
+        /// (e.g. Parquet) and `execution.parquet.pushdown_filters` is enabled.
+        /// See the upgrade guide for additional details and examples.
+        /// For example, `SELECT * FROM fact LEFT JOIN dim ON fact.id = dim.id WHERE dim.region = 'US'`
         /// will only read `fact` rows whose `id` values match `dim` rows where
         /// `region = 'US'`.
         pub enable_dynamic_filter_pushdown: bool, default = true
