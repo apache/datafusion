@@ -144,7 +144,12 @@ impl ScalarUDF {
     /// Returns this function's display_name.
     ///
     /// See [`ScalarUDFImpl::display_name`] for more details
+    #[deprecated(
+        since = "50.0.0",
+        note = "This method is unused and will be removed in a future release"
+    )]
     pub fn display_name(&self, args: &[Expr]) -> Result<String> {
+        #[expect(deprecated)]
         self.inner.display_name(args)
     }
 
@@ -442,6 +447,10 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     /// function.
     ///
     /// Defaults to `name(args[0], args[1], ...)`
+    #[deprecated(
+        since = "50.0.0",
+        note = "This method is unused and will be removed in a future release"
+    )]
     fn display_name(&self, args: &[Expr]) -> Result<String> {
         let names: Vec<String> = args.iter().map(ToString::to_string).collect();
         // TODO: join with ", " to standardize the formatting of Vec<Expr>, <https://github.com/apache/datafusion/issues/10364>
@@ -774,6 +783,7 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
     }
 
     fn display_name(&self, args: &[Expr]) -> Result<String> {
+        #[expect(deprecated)]
         self.inner.display_name(args)
     }
 
