@@ -221,7 +221,7 @@ impl PiecewiseMergeJoinExec {
     ) -> Result<Self> {
         // TODO: Implement mark joins for PiecewiseMergeJoin
         if matches!(join_type, JoinType::LeftMark | JoinType::RightMark) {
-            return plan_err!(
+            return not_impl_err!(
                 "Mark Joins are currently not supported for PiecewiseMergeJoin"
             );
         }
