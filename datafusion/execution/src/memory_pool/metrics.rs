@@ -65,6 +65,9 @@ const OPERATOR_CATEGORIES: &[(&str, &str)] = &[
     ("scan", "Data Input"),
     ("filter", "Filtering"),
     ("join", "Join Operation"),
+    ("nested_loop", "Nested Loop Join"),
+    ("sort_merge", "Sort Merge Join"),
+    ("hash", "Hash Aggregate"),
     ("aggregate", "Aggregation"),
     ("sort", "Sorting"),
     ("project", "Projection"),
@@ -76,7 +79,7 @@ const OPERATOR_CATEGORIES: &[(&str, &str)] = &[
     ("spill", "Memory Management"),
 ];
 
-pub fn operator_category(name: &str) -> &'static str {
+pub(crate) fn operator_category(name: &str) -> &'static str {
     let name = name.to_lowercase();
     for (pat, cat) in OPERATOR_CATEGORIES {
         if name.contains(pat) {
