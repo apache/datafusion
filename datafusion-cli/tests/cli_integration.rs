@@ -253,13 +253,15 @@ fn cli_memory_enable_show() {
     );
     // Replace 'Other' memory usage line with placeholder
     settings.add_filter(r"Other: .*?B", "Other: XB");
+    // Replace 'Sorting' memory usage line with placeholder
+    settings.add_filter(r"Sorting: .*?B", "Sorting: XB");
     let _bound = settings.bind_to_scope();
 
     let input = "\
 \\memory_profiling enable
-select * from generate_series(1,10000) as t1(v1) order by v1;
-\\memory_profiling show
 select 1;
+\\memory_profiling show
+select * from generate_series(1,10000) as t1(v1) order by v1;
 \\memory_profiling show
 ";
 

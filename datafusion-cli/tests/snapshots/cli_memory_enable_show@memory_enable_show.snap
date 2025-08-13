@@ -4,7 +4,7 @@ info:
   program: datafusion-cli
   args:
     - "-q"
-  stdin: "\\memory_profiling enable\nselect 1;\n\\memory_profiling show\n"
+  stdin: "\\memory_profiling enable\nselect 1;\n\\memory_profiling show\nselect * from generate_series(1,10000) as t1(v1) order by v1;\n\\memory_profiling show\n"
 ---
 success: true
 exit_code: 0
@@ -19,6 +19,59 @@ Peak memory usage: XB
 Cumulative allocations: XB
 Memory usage by operator:
 Other: XB
+
++----+
+| v1 |
++----+
+| 1  |
+| 2  |
+| 3  |
+| 4  |
+| 5  |
+| 6  |
+| 7  |
+| 8  |
+| 9  |
+| 10 |
+| 11 |
+| 12 |
+| 13 |
+| 14 |
+| 15 |
+| 16 |
+| 17 |
+| 18 |
+| 19 |
+| 20 |
+| 21 |
+| 22 |
+| 23 |
+| 24 |
+| 25 |
+| 26 |
+| 27 |
+| 28 |
+| 29 |
+| 30 |
+| 31 |
+| 32 |
+| 33 |
+| 34 |
+| 35 |
+| 36 |
+| 37 |
+| 38 |
+| 39 |
+| 40 |
+| .  |
+| .  |
+| .  |
++----+
+Peak memory usage: XB
+Cumulative allocations: XB
+Memory usage by operator:
+Other: XB
+Sorting: XB
 
 \q
 
