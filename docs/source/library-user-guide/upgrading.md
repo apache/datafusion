@@ -44,9 +44,21 @@ returns a `ColumnarValue` instead of a `ArrayRef`.
 
 Dynamic filter pushdown now applies to left, right, semi and anti joins,
 allowing DataFusion to prune the probe side as join keys are discovered at
-runtime. Full joins are not supported. This behavior is controlled by the
+runtime. Full joins are not supported and only equi-join keys contribute to the
+filters. This behavior is controlled by the
 `datafusion.optimizer.enable_dynamic_filter_pushdown` configuration option (on by
 default).
+
+| JoinType                     | Probe side pruned |
+|-----------------------------|------------------|
+| `Inner`, `Left`             | Right input      |
+| `Right`                     | Left input       |
+| `LeftSemi`, `LeftAnti`      | Left input       |
+| `RightSemi`, `RightAnti`    | Right input      |
+
+Dynamic filters are most effective when the join keys are highly selective.
+You can disable the feature by setting
+`datafusion.optimizer.enable_dynamic_filter_pushdown=false`.
 
 For example:
 
