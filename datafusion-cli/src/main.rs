@@ -15,37 +15,37 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::HashMap;
-use std::env;
-use std::path::Path;
-use std::process::ExitCode;
-use std::sync::{Arc, LazyLock};
-
-use datafusion::error::{DataFusionError, Result};
-use datafusion::execution::context::SessionConfig;
-use datafusion::execution::memory_pool::{FairSpillPool, GreedyMemoryPool, MemoryPool};
-use datafusion::execution::runtime_env::RuntimeEnvBuilder;
-use datafusion::prelude::SessionContext;
-use datafusion_cli::catalog::DynamicObjectStoreCatalog;
-<<<<<<< HEAD
-use datafusion_cli::cli_context::{CliSessionContext, ReplSessionContext};
-use datafusion_cli::functions::ParquetMetadataFunc;
-=======
-use datafusion_cli::functions::{MetadataCacheFunc, ParquetMetadataFunc};
->>>>>>> main
+use clap::Parser;
+use datafusion::{
+    common::config_err,
+    config::ConfigOptions,
+    error::{DataFusionError, Result},
+    execution::{
+        context::SessionConfig, disk_manager::DiskManagerBuilder,
+        disk_manager::DiskManagerMode, memory_pool::FairSpillPool,
+        memory_pool::GreedyMemoryPool, memory_pool::MemoryPool,
+        runtime_env::RuntimeEnvBuilder,
+    },
+    prelude::SessionContext,
+};
 use datafusion_cli::{
+    catalog::DynamicObjectStoreCatalog,
+    cli_context::{CliSessionContext, ReplSessionContext},
     exec,
+    functions::{MetadataCacheFunc, ParquetMetadataFunc},
     pool_type::PoolType,
     print_format::PrintFormat,
     print_options::{MaxRows, PrintOptions},
     DATAFUSION_CLI_VERSION,
 };
-
-use clap::Parser;
-use datafusion::common::config_err;
-use datafusion::config::ConfigOptions;
-use datafusion::execution::disk_manager::{DiskManagerBuilder, DiskManagerMode};
 use mimalloc::MiMalloc;
+use std::{
+    collections::HashMap,
+    env,
+    path::Path,
+    process::ExitCode,
+    sync::{Arc, LazyLock},
+};
 
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
