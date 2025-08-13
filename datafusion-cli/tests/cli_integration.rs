@@ -255,7 +255,13 @@ fn cli_memory_enable_show() {
     settings.add_filter(r"Other: .*?B", "Other: XB");
     let _bound = settings.bind_to_scope();
 
-    let input = "\\memory_profiling enable\nselect 1;\n\\memory_profiling show\n";
+    let input = "\
+\\memory_profiling enable
+select * from generate_series(1,10000) as t1(v1) order by v1;
+\\memory_profiling show
+select 1;
+\\memory_profiling show
+";
 
     assert_cmd_snapshot!(cli().arg("-q").pass_stdin(input));
 }
