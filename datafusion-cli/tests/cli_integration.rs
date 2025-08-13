@@ -268,6 +268,43 @@ select * from generate_series(1,10000) as t1(v1) order by v1;
     assert_cmd_snapshot!(cli().arg("-q").pass_stdin(input));
 }
 
+#[test]
+fn cli_memory_show_without_enable() {
+    let mut settings = make_settings();
+    settings.set_snapshot_suffix("memory_show_without_enable");
+    let _bound = settings.bind_to_scope();
+
+    // Show with no profiling enabled
+    let input = "\
+\\memory_profiling show
+";
+
+    assert_cmd_snapshot!(cli().arg("-q").pass_stdin(input));
+}
+
+#[test]
+fn cli_memory_disable_then_show() {
+    let mut settings = make_settings();
+    settings.set_snapshot_suffix("memory_disable_then_show");
+    // Loosen memory profiling output for default empty case
+    settings.add_filter(r"Peak memory usage: .*?B", "Peak memory usage: XB");
+    settings.add_filter(
+        r"Cumulative allocations: .*?B",
+        "Cumulative allocations: XB",
+    );
+    settings.add_filter(r"Other: .*?B", "Other: XB");
+    settings.add_filter(r"Sorting: .*?B", "Sorting: XB");
+    let _bound = settings.bind_to_scope();
+
+    // Disable profiling and then show
+    let input = "\
+\\memory_profiling disable
+\\memory_profiling show
+";
+
+    assert_cmd_snapshot!(cli().arg("-q").pass_stdin(input));
+}
+
 #[tokio::test]
 async fn test_cli() {
     if env::var("TEST_STORAGE_INTEGRATION").is_err() {
