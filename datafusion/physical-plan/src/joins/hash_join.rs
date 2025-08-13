@@ -94,7 +94,8 @@ use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use futures::{ready, Stream, StreamExt, TryStreamExt};
 use parking_lot::Mutex;
 
-// Helper functions copied from optimizer's push_down_filter module
+// Helper functions mirrored from the optimizer's push_down_filter module.
+// KEEP IN SYNC WITH datafusion/optimizer/src/push_down_filter.rs
 // Determine which sides of a JOIN preserve rows for join output filters
 fn lr_is_preserved(join_type: JoinType) -> (bool, bool) {
     match join_type {
@@ -122,9 +123,10 @@ fn on_lr_is_preserved(join_type: JoinType) -> (bool, bool) {
     }
 }
 
-// Determine which side should receive the dynamic filter.
-// Mark joins filter the opposite side of the preserved input to
-// restrict rows feeding the ON clause evaluation.
+/// Returns which side of the join should receive a dynamic filter.
+///
+/// Mark joins apply filters to the *opposite* side of the preserved input so
+/// that only rows capable of satisfying the ON clause are evaluated.
 fn dynamic_filter_side(join_type: JoinType) -> JoinSide {
     let (left_preserved, right_preserved) = lr_is_preserved(join_type);
     let (on_left_preserved, on_right_preserved) = on_lr_is_preserved(join_type);
@@ -746,15 +748,18 @@ impl DisplayAs for HashJoinExec {
                     .join(", ");
                 let dynamic_filter_display = match &self.dynamic_filter {
                     Some(df) => {
-                        let target = dynamic_filter_side(self.join_type);
+                        let probe_side = dynamic_filter_side(self.join_type);
                         let keys = df.key_count();
                         match df.current() {
                             Ok(current) if current != lit(true) => {
-                                format!(", filter=[{current}], filter_target={:?}, filter_keys={}", target, keys)
+                                format!(
+                                    ", probe_filter=[{current}], probe_side={:?}, probe_keys={}",
+                                    probe_side, keys
+                                )
                             }
                             _ => format!(
-                                ", filter_target={:?}, filter_keys={}",
-                                target, keys
+                                ", probe_side={:?}, probe_keys={}",
+                                probe_side, keys
                             ),
                         }
                     }
@@ -865,7 +870,10 @@ impl ExecutionPlan for HashJoinExec {
             self.mode,
             self.null_equality,
         )?;
-        // Preserve the dynamic filter if it exists
+        // Preserve the dynamic filter if it exists.
+        // The `on` clause is unchanged so the filter keys remain valid; if the
+        // `on` clause changes, `try_new` recomputes the keys via
+        // `create_dynamic_filter` to avoid stale filters.
         new_join.dynamic_filter = self.dynamic_filter.clone();
         Ok(Arc::new(new_join))
     }
@@ -887,6 +895,8 @@ impl ExecutionPlan for HashJoinExec {
             column_indices: self.column_indices.clone(),
             null_equality: self.null_equality,
             cache: self.cache.clone(),
+            // Recompute dynamic filter to ensure keys reflect the current `on`
+            // expressions and avoid carrying stale filters across executions.
             dynamic_filter: Self::create_dynamic_filter(&self.on, self.join_type),
         }))
     }
