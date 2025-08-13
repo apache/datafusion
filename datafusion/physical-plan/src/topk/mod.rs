@@ -17,13 +17,13 @@
 
 //! TopK: Combination of Sort / LIMIT
 
+use arc_swap::ArcSwapOption;
 use arrow::{
     array::{Array, AsArray},
     compute::{interleave_record_batch, prep_null_mask_filter, FilterBuilder},
     row::{RowConverter, Rows, SortField},
 };
 use datafusion_expr::{ColumnarValue, Operator};
-use arc_swap::ArcSwapOption;
 use std::mem::size_of;
 use std::{cmp::Ordering, collections::BinaryHeap, sync::Arc};
 
@@ -375,24 +375,28 @@ impl TopK {
             let new_threshold_arc = Arc::new(new_threshold_row.to_vec());
 
             // Atomically update the threshold using compare-and-swap
-            let old_threshold = self.filter.threshold_row.compare_and_swap(&current_threshold, Some(Arc::clone(&new_threshold_arc)));
-            
+            let old_threshold = self.filter.threshold_row.compare_and_swap(
+                &current_threshold,
+                Some(Arc::clone(&new_threshold_arc)),
+            );
+
             // Only update filter if we successfully updated the threshold
             // (or if there was no previous threshold and we're the first)
-            let should_update_filter = match (old_threshold.as_ref(), current_threshold.as_ref()) {
-                // We successfully swapped
-                (Some(old), Some(expected)) if Arc::ptr_eq(old, expected) => true,
-                // We were the first to set it
-                (None, None) => true,
-                // Another thread updated before us, check if our threshold is still better
-                (Some(actual_old), _) => {
-                    actual_old.as_slice().cmp(new_threshold_row) == Ordering::Greater
-                }
-                _ => false,
-            };
+            let should_update_filter =
+                match (old_threshold.as_ref(), current_threshold.as_ref()) {
+                    // We successfully swapped
+                    (Some(old), Some(expected)) if Arc::ptr_eq(old, expected) => true,
+                    // We were the first to set it
+                    (None, None) => true,
+                    // Another thread updated before us, check if our threshold is still better
+                    (Some(actual_old), _) => {
+                        actual_old.as_slice().cmp(new_threshold_row) == Ordering::Greater
+                    }
+                    _ => false,
+                };
 
             if should_update_filter {
-                // Update the filter expression 
+                // Update the filter expression
                 if let Some(pred) = predicate {
                     if !pred.eq(&lit(true)) {
                         filter_expr.update(pred)?;
