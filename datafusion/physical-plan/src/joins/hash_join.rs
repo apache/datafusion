@@ -76,9 +76,7 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::utils::memory::estimate_memory_size;
 use datafusion_common::{
     internal_datafusion_err, internal_err,
-    joins::{
-        preservation_for_on_filters, preservation_for_output_filters,
-    },
+    joins::{preservation_for_on_filters, preservation_for_output_filters},
     plan_err, project_schema, JoinSide, JoinType, NullEquality, Result, ScalarValue,
 };
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
@@ -98,16 +96,13 @@ use futures::{ready, Stream, StreamExt, TryStreamExt};
 use parking_lot::Mutex;
 
 /// Returns which side of the join should receive a dynamic filter.
-///
-// Inner joins choose the right (probe) side for determinism.
+/// `Inner` joins choose the right (probe) side for determinism.
 /// Mark joins apply filters to the *opposite* side of the preserved input so
-/// that only rows capable of satisfying the ON clause are evaluated.
+/// that only rows capable of satisfying the `ON` clause are evaluated.
 #[inline]
 fn dynamic_filter_side(join_type: JoinType) -> JoinSide {
-    let (left_preserved, right_preserved) =
-        preservation_for_output_filters(join_type);
-    let (on_left_preserved, on_right_preserved) =
-        preservation_for_on_filters(join_type);
+    let (left_preserved, right_preserved) = preservation_for_output_filters(join_type);
+    let (on_left_preserved, on_right_preserved) = preservation_for_on_filters(join_type);
     match (
         left_preserved,
         right_preserved,
@@ -1103,14 +1098,17 @@ impl ExecutionPlan for HashJoinExec {
             parent_filters
                 .iter()
                 .map(|f| {
-                    crate::filter_pushdown::PushedDownPredicate::unsupported(Arc::clone(f))
+                    crate::filter_pushdown::PushedDownPredicate::unsupported(Arc::clone(
+                        f,
+                    ))
                 })
                 .collect::<Vec<_>>()
         } else {
             vec![]
         };
 
-        let mut left_child = if left_preserved || matches!(dynamic_target, JoinSide::Left) {
+        let mut left_child = if left_preserved || matches!(dynamic_target, JoinSide::Left)
+        {
             let mut desc = crate::filter_pushdown::ChildFilterDescription::from_child(
                 &parent_filters,
                 self.left(),
@@ -1129,7 +1127,9 @@ impl ExecutionPlan for HashJoinExec {
             }
         };
 
-        let mut right_child = if right_preserved || matches!(dynamic_target, JoinSide::Right) {
+        let mut right_child = if right_preserved
+            || matches!(dynamic_target, JoinSide::Right)
+        {
             let mut desc = crate::filter_pushdown::ChildFilterDescription::from_child(
                 &parent_filters,
                 self.right(),

@@ -47,9 +47,8 @@ allowing DataFusion to prune the probe side as join keys are discovered at
 runtime. `HashJoinExec` builds from its left child and probes with its right
 child (Left = left child, Right = right child). Full joins are not supported and
 only equi-join keys contribute. Non-equi predicates require range analysis and
-cross-conjunct reasoning (future work). Dynamic filters obey
-`NullEqualsNothing` semantics, so rows with null join keys never match and
-generate no filter values. Consider enabling
+cross-conjunct reasoning (future work). Rows with `NULL` join keys do not
+produce dynamic filter values (`NullEqualsNothing`). Consider enabling
 `datafusion.optimizer.filter_null_join_keys` to remove nulls early. This
 behavior is controlled by the
 `datafusion.optimizer.enable_dynamic_filter_pushdown` configuration option (on
@@ -61,15 +60,25 @@ for Parquet this means enabling
 not benefit.
 
 | JoinType                 | Probe side pruned |
-| ------------------------ | ---------------- |
-| `Inner`, `Left`          | Right input      |
-| `Right`                  | Left input       |
-| `LeftSemi`, `LeftAnti`   | Left input       |
-| `RightSemi`, `RightAnti` | Right input      |
+| ------------------------ | ----------------- |
+| `Inner`, `Left`          | Right input       |
+| `Right`                  | Left input        |
+| `LeftSemi`, `LeftAnti`   | Left input        |
+| `RightSemi`, `RightAnti` | Right input       |
+
+See [join preservation tables](join-preservation.md) for more detail on which
+inputs survive each join type.
 
 Dynamic filters are most effective when the join keys are highly selective.
 You can disable the feature by setting
 `datafusion.optimizer.enable_dynamic_filter_pushdown=false`.
+
+```rust
+use datafusion::prelude::SessionConfig;
+
+let config = SessionConfig::new()
+    .with_optimizer_enable_dynamic_filter_pushdown(false);
+```
 
 For example:
 
