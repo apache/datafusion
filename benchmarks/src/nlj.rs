@@ -136,7 +136,7 @@ const NLJ_QUERIES: &[&str] = &[
     r#"
         SELECT *
         FROM range(30000) AS t1
-        FULL JOIN range(30000) AS t2
+        INNER JOIN range(30000) AS t2
         ON (t1.value > t2.value);
     "#,
     // Q12: FULL OUTER 30K x 30K | MEDIUM 50% | cheap predicate
