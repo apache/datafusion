@@ -25,9 +25,9 @@ use arrow::datatypes::{TimeUnit::Nanosecond, *};
 use common::MockContextProvider;
 use datafusion_common::{assert_contains, DataFusionError, Result};
 use datafusion_expr::{
-    col, logical_plan::LogicalPlan, test::function_stub::sum_udaf, udf_equals_hash,
-    ColumnarValue, CreateIndex, DdlStatement, ScalarFunctionArgs, ScalarUDF,
-    ScalarUDFImpl, Signature, Volatility,
+    col, logical_plan::LogicalPlan, test::function_stub::sum_udaf, ColumnarValue,
+    CreateIndex, DdlStatement, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
+    Volatility,
 };
 use datafusion_functions::{string, unicode};
 use datafusion_sql::{
@@ -58,10 +58,10 @@ fn parse_decimals_1() {
     let plan = logical_plan_with_options(sql, options).unwrap();
     assert_snapshot!(
         plan,
-        @r#"
-        Projection: Int64(1)
-          EmptyRelation
-        "#
+        @r"
+    Projection: Int64(1)
+      EmptyRelation: rows=1
+    "
     );
 }
 
@@ -72,10 +72,10 @@ fn parse_decimals_2() {
     let plan = logical_plan_with_options(sql, options).unwrap();
     assert_snapshot!(
         plan,
-        @r#"
-        Projection: Int64(1)
-          EmptyRelation
-        "#
+        @r"
+    Projection: Int64(1)
+      EmptyRelation: rows=1
+    "
     );
 }
 
@@ -86,10 +86,10 @@ fn parse_decimals_3() {
     let plan = logical_plan_with_options(sql, options).unwrap();
     assert_snapshot!(
         plan,
-        @r#"
-        Projection: Decimal128(Some(1),1,1)
-          EmptyRelation
-        "#
+        @r"
+    Projection: Decimal128(Some(1),1,1)
+      EmptyRelation: rows=1
+    "
     );
 }
 
@@ -100,10 +100,10 @@ fn parse_decimals_4() {
     let plan = logical_plan_with_options(sql, options).unwrap();
     assert_snapshot!(
         plan,
-        @r#"
-        Projection: Decimal128(Some(1),2,2)
-          EmptyRelation
-        "#
+        @r"
+    Projection: Decimal128(Some(1),2,2)
+      EmptyRelation: rows=1
+    "
     );
 }
 
@@ -114,10 +114,10 @@ fn parse_decimals_5() {
     let plan = logical_plan_with_options(sql, options).unwrap();
     assert_snapshot!(
         plan,
-        @r#"
-        Projection: Decimal128(Some(10),2,1)
-          EmptyRelation
-        "#
+        @r"
+    Projection: Decimal128(Some(10),2,1)
+      EmptyRelation: rows=1
+    "
     );
 }
 
@@ -128,10 +128,10 @@ fn parse_decimals_6() {
     let plan = logical_plan_with_options(sql, options).unwrap();
     assert_snapshot!(
         plan,
-        @r#"
-        Projection: Decimal128(Some(1001),4,2)
-          EmptyRelation
-        "#
+        @r"
+    Projection: Decimal128(Some(1001),4,2)
+      EmptyRelation: rows=1
+    "
     );
 }
 
@@ -142,10 +142,10 @@ fn parse_decimals_7() {
     let plan = logical_plan_with_options(sql, options).unwrap();
     assert_snapshot!(
         plan,
-        @r#"
-        Projection: Decimal128(Some(1000000000000000000000),22,2)
-          EmptyRelation
-        "#
+        @r"
+    Projection: Decimal128(Some(1000000000000000000000),22,2)
+      EmptyRelation: rows=1
+    "
     );
 }
 
@@ -156,10 +156,10 @@ fn parse_decimals_8() {
     let plan = logical_plan_with_options(sql, options).unwrap();
     assert_snapshot!(
         plan,
-        @r#"
-        Projection: UInt64(18446744073709551615)
-          EmptyRelation
-        "#
+        @r"
+    Projection: UInt64(18446744073709551615)
+      EmptyRelation: rows=1
+    "
     );
 }
 
@@ -170,10 +170,10 @@ fn parse_decimals_9() {
     let plan = logical_plan_with_options(sql, options).unwrap();
     assert_snapshot!(
         plan,
-        @r#"
-        Projection: Decimal128(Some(18446744073709551616),20,0)
-          EmptyRelation
-        "#
+        @r"
+    Projection: Decimal128(Some(18446744073709551616),20,0)
+      EmptyRelation: rows=1
+    "
     );
 }
 
@@ -185,9 +185,9 @@ fn parse_ident_normalization_1() {
     assert_snapshot!(
         plan,
         @r#"
-        Projection: character_length(Utf8("str"))
-          EmptyRelation
-        "#
+    Projection: character_length(Utf8("str"))
+      EmptyRelation: rows=1
+    "#
     );
 }
 
@@ -199,9 +199,9 @@ fn parse_ident_normalization_2() {
     assert_snapshot!(
         plan,
         @r#"
-        Projection: concat(Utf8("Hello"), Utf8("World"))
-          EmptyRelation
-        "#
+    Projection: concat(Utf8("Hello"), Utf8("World"))
+      EmptyRelation: rows=1
+    "#
     );
 }
 
@@ -281,10 +281,10 @@ fn select_no_relation() {
     let plan = logical_plan("SELECT 1").unwrap();
     assert_snapshot!(
         plan,
-        @r#"
-        Projection: Int64(1)
-          EmptyRelation
-        "#
+        @r"
+    Projection: Int64(1)
+      EmptyRelation: rows=1
+    "
     );
 }
 
@@ -293,10 +293,10 @@ fn test_real_f32() {
     let plan = logical_plan("SELECT CAST(1.1 AS REAL)").unwrap();
     assert_snapshot!(
         plan,
-        @r#"
-        Projection: CAST(Float64(1.1) AS Float32)
-          EmptyRelation
-        "#
+        @r"
+    Projection: CAST(Float64(1.1) AS Float32)
+      EmptyRelation: rows=1
+    "
     );
 }
 
@@ -305,10 +305,10 @@ fn test_int_decimal_default() {
     let plan = logical_plan("SELECT CAST(10 AS DECIMAL)").unwrap();
     assert_snapshot!(
         plan,
-        @r#"
-        Projection: CAST(Int64(10) AS Decimal128(38, 10))
-          EmptyRelation
-        "#
+        @r"
+    Projection: CAST(Int64(10) AS Decimal128(38, 10))
+      EmptyRelation: rows=1
+    "
     );
 }
 
@@ -317,10 +317,10 @@ fn test_int_decimal_no_scale() {
     let plan = logical_plan("SELECT CAST(10 AS DECIMAL(5))").unwrap();
     assert_snapshot!(
         plan,
-        @r#"
-        Projection: CAST(Int64(10) AS Decimal128(5, 0))
-          EmptyRelation
-        "#
+        @r"
+    Projection: CAST(Int64(10) AS Decimal128(5, 0))
+      EmptyRelation: rows=1
+    "
     );
 }
 
@@ -329,10 +329,10 @@ fn test_tinyint() {
     let plan = logical_plan("SELECT CAST(6 AS TINYINT)").unwrap();
     assert_snapshot!(
         plan,
-        @r#"
-        Projection: CAST(Int64(6) AS Int8)
-          EmptyRelation
-        "#
+        @r"
+    Projection: CAST(Int64(6) AS Int8)
+      EmptyRelation: rows=1
+    "
     );
 }
 
@@ -341,11 +341,11 @@ fn cast_from_subquery() {
     let plan = logical_plan("SELECT CAST (a AS FLOAT) FROM (SELECT 1 AS a)").unwrap();
     assert_snapshot!(
         plan,
-        @r#"
-        Projection: CAST(a AS Float32)
-          Projection: Int64(1) AS a
-            EmptyRelation
-        "#
+        @r"
+    Projection: CAST(a AS Float32)
+      Projection: Int64(1) AS a
+        EmptyRelation: rows=1
+    "
     );
 }
 
@@ -381,10 +381,10 @@ fn cast_to_invalid_decimal_type_precision_gt_38() {
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
-        @r#"
-        Projection: CAST(Int64(10) AS Decimal256(39, 0))
-          EmptyRelation
-        "#
+        @r"
+    Projection: CAST(Int64(10) AS Decimal256(39, 0))
+      EmptyRelation: rows=1
+    "
     );
 }
 
@@ -419,9 +419,9 @@ fn plan_create_table_with_pk() {
     assert_snapshot!(
         plan,
         @r#"
-        CreateMemoryTable: Bare { table: "person" } constraints=[PrimaryKey([0])]
-          EmptyRelation
-        "#
+    CreateMemoryTable: Bare { table: "person" } constraints=[PrimaryKey([0])]
+      EmptyRelation: rows=0
+    "#
     );
 
     let sql = "create table person (id int primary key, name string)";
@@ -429,9 +429,9 @@ fn plan_create_table_with_pk() {
     assert_snapshot!(
         plan,
         @r#"
-        CreateMemoryTable: Bare { table: "person" } constraints=[PrimaryKey([0])]
-          EmptyRelation
-        "#
+    CreateMemoryTable: Bare { table: "person" } constraints=[PrimaryKey([0])]
+      EmptyRelation: rows=0
+    "#
     );
 
     let sql =
@@ -440,9 +440,9 @@ fn plan_create_table_with_pk() {
     assert_snapshot!(
         plan,
         @r#"
-        CreateMemoryTable: Bare { table: "person" } constraints=[PrimaryKey([0]), Unique([1])]
-          EmptyRelation
-        "#
+    CreateMemoryTable: Bare { table: "person" } constraints=[PrimaryKey([0]), Unique([1])]
+      EmptyRelation: rows=0
+    "#
     );
 
     let sql = "create table person (id int, name varchar,  primary key(name,  id));";
@@ -450,9 +450,9 @@ fn plan_create_table_with_pk() {
     assert_snapshot!(
         plan,
         @r#"
-        CreateMemoryTable: Bare { table: "person" } constraints=[PrimaryKey([1, 0])]
-          EmptyRelation
-        "#
+    CreateMemoryTable: Bare { table: "person" } constraints=[PrimaryKey([1, 0])]
+      EmptyRelation: rows=0
+    "#
     );
 }
 
@@ -463,9 +463,9 @@ fn plan_create_table_with_multi_pk() {
     assert_snapshot!(
         plan,
         @r#"
-        CreateMemoryTable: Bare { table: "person" } constraints=[PrimaryKey([0]), PrimaryKey([1])]
-          EmptyRelation
-        "#
+    CreateMemoryTable: Bare { table: "person" } constraints=[PrimaryKey([0]), PrimaryKey([1])]
+      EmptyRelation: rows=0
+    "#
     );
 }
 
@@ -476,9 +476,9 @@ fn plan_create_table_with_unique() {
     assert_snapshot!(
         plan,
         @r#"
-        CreateMemoryTable: Bare { table: "person" } constraints=[Unique([0])]
-          EmptyRelation
-        "#
+    CreateMemoryTable: Bare { table: "person" } constraints=[Unique([0])]
+      EmptyRelation: rows=0
+    "#
     );
 }
 
@@ -489,9 +489,9 @@ fn plan_create_table_no_pk() {
     assert_snapshot!(
         plan,
         @r#"
-        CreateMemoryTable: Bare { table: "person" }
-          EmptyRelation
-        "#
+    CreateMemoryTable: Bare { table: "person" }
+      EmptyRelation: rows=0
+    "#
     );
 }
 
@@ -502,9 +502,9 @@ fn plan_create_table_check_constraint() {
     assert_snapshot!(
         plan,
         @r#"
-        CreateMemoryTable: Bare { table: "person" } constraints=[Unique([0])]
-          EmptyRelation
-        "#
+    CreateMemoryTable: Bare { table: "person" } constraints=[Unique([0])]
+      EmptyRelation: rows=0
+    "#
     );
 }
 
@@ -803,10 +803,10 @@ fn select_scalar_func_with_literal_no_relation() {
     let plan = logical_plan("SELECT sqrt(9)").unwrap();
     assert_snapshot!(
         plan,
-        @r#"
-        Projection: sqrt(Int64(9))
-          EmptyRelation
-        "#
+        @r"
+    Projection: sqrt(Int64(9))
+      EmptyRelation: rows=1
+    "
     );
 }
 
@@ -3138,9 +3138,9 @@ fn select_typed_date_string() {
     assert_snapshot!(
         plan,
         @r#"
-Projection: CAST(Utf8("2020-12-10") AS Date32) AS date
-  EmptyRelation
-"#
+    Projection: CAST(Utf8("2020-12-10") AS Date32) AS date
+      EmptyRelation: rows=1
+    "#
     );
 }
 
@@ -3151,9 +3151,9 @@ fn select_typed_time_string() {
     assert_snapshot!(
         plan,
         @r#"
-Projection: CAST(Utf8("08:09:10.123") AS Time64(Nanosecond)) AS time
-  EmptyRelation
-"#
+    Projection: CAST(Utf8("08:09:10.123") AS Time64(Nanosecond)) AS time
+      EmptyRelation: rows=1
+    "#
     );
 }
 
@@ -3349,8 +3349,6 @@ impl ScalarUDFImpl for DummyUDF {
     fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         panic!("dummy - not implemented")
     }
-
-    udf_equals_hash!(ScalarUDFImpl);
 }
 
 fn parse_decimals_parser_options() -> ParserOptions {
@@ -3445,9 +3443,9 @@ fn negative_interval_plus_interval_in_projection() {
     assert_snapshot!(
         plan,
         @r#"
-Projection: IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: -2, nanoseconds: 0 }") + IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 5, nanoseconds: 0 }")
-  EmptyRelation
-"#
+    Projection: IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: -2, nanoseconds: 0 }") + IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 5, nanoseconds: 0 }")
+      EmptyRelation: rows=1
+    "#
     );
 }
 
@@ -3458,9 +3456,9 @@ fn complex_interval_expression_in_projection() {
     assert_snapshot!(
         plan,
         @r#"
-Projection: IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: -2, nanoseconds: 0 }") + IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 5, nanoseconds: 0 }") + IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: -3, nanoseconds: 0 }") + IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 5, nanoseconds: 0 }")
-  EmptyRelation
-"#
+    Projection: IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: -2, nanoseconds: 0 }") + IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 5, nanoseconds: 0 }") + IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: -3, nanoseconds: 0 }") + IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 5, nanoseconds: 0 }")
+      EmptyRelation: rows=1
+    "#
     );
 }
 
@@ -3471,9 +3469,9 @@ fn negative_sum_intervals_in_projection() {
     assert_snapshot!(
         plan,
         @r#"
-Projection: (- IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 2, nanoseconds: 0 }") + IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 5, nanoseconds: 0 }") + (- IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 4, nanoseconds: 0 }") + IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 7, nanoseconds: 0 }")))
-  EmptyRelation
-"#
+    Projection: (- IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 2, nanoseconds: 0 }") + IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 5, nanoseconds: 0 }") + (- IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 4, nanoseconds: 0 }") + IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 7, nanoseconds: 0 }")))
+      EmptyRelation: rows=1
+    "#
     );
 }
 
@@ -4417,7 +4415,7 @@ fn test_parse_escaped_string_literal_value() {
         plan,
         @r#"
     Projection: character_length(Utf8("\r\n")) AS len
-      EmptyRelation
+      EmptyRelation: rows=1
     "#
     );
     let sql = "SELECT character_length(E'\r\n') AS len";
@@ -4425,17 +4423,17 @@ fn test_parse_escaped_string_literal_value() {
     assert_snapshot!(
         plan,
         @r#"
-Projection: character_length(Utf8("
-")) AS len
-  EmptyRelation
-"#
+    Projection: character_length(Utf8("
+    ")) AS len
+      EmptyRelation: rows=1
+    "#
     );
     let sql =
         r"SELECT character_length(E'\445') AS len, E'\x4B' AS hex, E'\u0001' AS unicode";
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
-        @"Projection: character_length(Utf8(\"%\")) AS len, Utf8(\"K\") AS hex, Utf8(\"\u{1}\") AS unicode\n  EmptyRelation"
+        @"Projection: character_length(Utf8(\"%\")) AS len, Utf8(\"K\") AS hex, Utf8(\"\u{1}\") AS unicode\n  EmptyRelation: rows=1"
     );
 
     let sql = r"SELECT character_length(E'\000') AS len";
@@ -4564,20 +4562,20 @@ fn test_custom_type_plan() -> Result<()> {
 
     assert_snapshot!(
         plan,
-        @r###"
-        Projection: CAST(Utf8("2001-01-01 18:00:00") AS Timestamp(Nanosecond, None))
-          EmptyRelation
-        "###
+        @r#"
+    Projection: CAST(Utf8("2001-01-01 18:00:00") AS Timestamp(Nanosecond, None))
+      EmptyRelation: rows=1
+    "#
     );
 
     let plan = plan_sql("SELECT CAST(TIMESTAMP '2001-01-01 18:00:00' AS DATETIME)");
 
     assert_snapshot!(
         plan,
-        @r###"
-        Projection: CAST(CAST(Utf8("2001-01-01 18:00:00") AS Timestamp(Nanosecond, None)) AS Timestamp(Nanosecond, None))
-          EmptyRelation
-        "###
+        @r#"
+    Projection: CAST(CAST(Utf8("2001-01-01 18:00:00") AS Timestamp(Nanosecond, None)) AS Timestamp(Nanosecond, None))
+      EmptyRelation: rows=1
+    "#
     );
 
     let plan = plan_sql(
@@ -4586,10 +4584,10 @@ fn test_custom_type_plan() -> Result<()> {
 
     assert_snapshot!(
         plan,
-        @r###"
-        Projection: make_array(CAST(Utf8("2001-01-01 18:00:00") AS Timestamp(Nanosecond, None)), CAST(Utf8("2001-01-02 18:00:00") AS Timestamp(Nanosecond, None)))
-          EmptyRelation
-        "###
+        @r#"
+    Projection: make_array(CAST(Utf8("2001-01-01 18:00:00") AS Timestamp(Nanosecond, None)), CAST(Utf8("2001-01-02 18:00:00") AS Timestamp(Nanosecond, None)))
+      EmptyRelation: rows=1
+    "#
     );
 
     Ok(())

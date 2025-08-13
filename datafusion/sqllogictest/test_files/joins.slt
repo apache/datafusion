@@ -3629,12 +3629,12 @@ logical_plan
 02)--SubqueryAlias: a
 03)----Union
 04)------Projection: Int64(1) AS c, Int64(2) AS d
-05)--------EmptyRelation
+05)--------EmptyRelation: rows=1
 06)------Projection: Int64(1) AS c, Int64(3) AS d
-07)--------EmptyRelation
+07)--------EmptyRelation: rows=1
 08)--SubqueryAlias: rhs
 09)----Projection: Int64(1) AS e, Int64(3) AS f
-10)------EmptyRelation
+10)------EmptyRelation: rows=1
 physical_plan
 01)ProjectionExec: expr=[c@2 as c, d@3 as d, e@0 as e, f@1 as f]
 02)--CoalesceBatchesExec: target_batch_size=2
@@ -3672,12 +3672,12 @@ logical_plan
 02)--SubqueryAlias: a
 03)----Union
 04)------Projection: Int64(1) AS c, Int64(2) AS d
-05)--------EmptyRelation
+05)--------EmptyRelation: rows=1
 06)------Projection: Int64(1) AS c, Int64(3) AS d
-07)--------EmptyRelation
+07)--------EmptyRelation: rows=1
 08)--SubqueryAlias: rhs
 09)----Projection: Int64(1) AS e, Int64(3) AS f
-10)------EmptyRelation
+10)------EmptyRelation: rows=1
 physical_plan
 01)ProjectionExec: expr=[c@2 as c, d@3 as d, e@0 as e, f@1 as f]
 02)--CoalesceBatchesExec: target_batch_size=2
@@ -3712,7 +3712,7 @@ EXPLAIN SELECT * FROM (
     SELECT 1 as a WHERE 1=0
 ) AS a INNER JOIN (SELECT 1 as a) AS b ON a.a=b.a;
 ----
-logical_plan EmptyRelation
+logical_plan EmptyRelation: rows=0
 
 # Inner join with empty right table
 query TT
@@ -3720,7 +3720,7 @@ EXPLAIN SELECT * FROM (
     SELECT 1 AS a
 ) AS a INNER JOIN (SELECT 1 AS a WHERE 1=0) AS b ON a.a=b.a;
 ----
-logical_plan EmptyRelation
+logical_plan EmptyRelation: rows=0
 
 # Left join with empty left table
 query TT
@@ -3728,7 +3728,7 @@ EXPLAIN SELECT * FROM (
     SELECT 1 as a WHERE 1=0
 ) AS a LEFT JOIN (SELECT 1 as a) AS b ON a.a=b.a;
 ----
-logical_plan EmptyRelation
+logical_plan EmptyRelation: rows=0
 
 # Left join with empty left and empty right table
 query TT
@@ -3736,7 +3736,7 @@ EXPLAIN SELECT * FROM (
     SELECT 1 as a WHERE 1=0
 ) AS a LEFT JOIN (SELECT 1 as a WHERE 1=0) AS b ON a.a=b.a;
 ----
-logical_plan EmptyRelation
+logical_plan EmptyRelation: rows=0
 
 # Right join with empty right table
 query TT
@@ -3744,7 +3744,7 @@ EXPLAIN SELECT * FROM (
     SELECT 1 AS a
 ) AS a RIGHT JOIN (SELECT 1 AS a WHERE 1=0) AS b ON a.a=b.a;
 ----
-logical_plan EmptyRelation
+logical_plan EmptyRelation: rows=0
 
 # Right join with empty right and empty left table
 query TT
@@ -3752,7 +3752,7 @@ EXPLAIN SELECT * FROM (
     SELECT 1 as a WHERE 1=0
 ) AS a RIGHT JOIN (SELECT 1 as a WHERE 1=0) AS b ON a.a=b.a;
 ----
-logical_plan EmptyRelation
+logical_plan EmptyRelation: rows=0
 
 # Left SEMI join with empty left table
 query TT
@@ -3760,7 +3760,7 @@ EXPLAIN SELECT * FROM (
     SELECT 1 AS a
 ) AS a LEFT SEMI JOIN (SELECT 1 AS a WHERE 1=0) AS b ON a.a=b.a;
 ----
-logical_plan EmptyRelation
+logical_plan EmptyRelation: rows=0
 
 # Left SEMI join with empty right table
 query TT
@@ -3768,7 +3768,7 @@ EXPLAIN SELECT * FROM (
     SELECT 1 AS a WHERE 1=0
 ) AS a LEFT SEMI JOIN (SELECT 1 AS a) AS b ON a.a=b.a;
 ----
-logical_plan EmptyRelation
+logical_plan EmptyRelation: rows=0
 
 # Right SEMI join with empty left table
 query TT
@@ -3776,7 +3776,7 @@ EXPLAIN SELECT * FROM (
     SELECT 1 AS a WHERE 1=0
 ) AS a RIGHT SEMI JOIN (SELECT 1 AS a) AS b ON a.a=b.a;
 ----
-logical_plan EmptyRelation
+logical_plan EmptyRelation: rows=0
 
 # Right SEMI join with empty right table
 query TT
@@ -3784,7 +3784,7 @@ EXPLAIN SELECT * FROM (
     SELECT 1 AS a
 ) AS a RIGHT SEMI JOIN (SELECT 1 AS a WHERE 1=0) AS b ON a.a=b.a;
 ----
-logical_plan EmptyRelation
+logical_plan EmptyRelation: rows=0
 
 # Left ANTI join with empty left table
 query TT
@@ -3792,7 +3792,7 @@ EXPLAIN SELECT * FROM (
     SELECT 1 AS a WHERE 1=0
 ) AS a LEFT ANTI JOIN (SELECT 1 AS a) AS b ON a.a=b.a;
 ----
-logical_plan EmptyRelation
+logical_plan EmptyRelation: rows=0
 
 # Right ANTI join with empty right table
 query TT
@@ -3800,7 +3800,7 @@ EXPLAIN SELECT * FROM (
     SELECT 1 AS a
 ) AS a RIGHT ANTI JOIN (SELECT 1 AS a WHERE 1=0) AS b ON a.a=b.a;
 ----
-logical_plan EmptyRelation
+logical_plan EmptyRelation: rows=0
 
 # FULL OUTER join with empty left and empty right table
 query TT
@@ -3808,7 +3808,7 @@ EXPLAIN SELECT * FROM (
 	SELECT 1 as a WHERE 1=0
 ) AS a FULL JOIN (SELECT 1 AS a WHERE 1=0) AS b ON a.a=b.a;
 ----
-logical_plan EmptyRelation
+logical_plan EmptyRelation: rows=0
 
 # Left ANTI join with empty right table
 query TT
@@ -3819,7 +3819,7 @@ EXPLAIN SELECT * FROM (
 logical_plan
 01)SubqueryAlias: a
 02)--Projection: Int64(1) AS a
-03)----EmptyRelation
+03)----EmptyRelation: rows=1
 
 # Right ANTI join with empty left table
 query TT
@@ -3830,7 +3830,7 @@ EXPLAIN SELECT * FROM (
 logical_plan
 01)SubqueryAlias: b
 02)--Projection: Int64(1) AS a
-03)----EmptyRelation
+03)----EmptyRelation: rows=1
 
 
 statement ok
@@ -4033,7 +4033,7 @@ logical_plan
 08)----------Projection: __unnest_placeholder(generate_series(Int64(1),outer_ref(t1.t1_int)),depth=1) AS UNNEST(generate_series(Int64(1),outer_ref(t1.t1_int)))
 09)------------Unnest: lists[__unnest_placeholder(generate_series(Int64(1),outer_ref(t1.t1_int)))|depth=1] structs[]
 10)--------------Projection: generate_series(Int64(1), CAST(outer_ref(t1.t1_int) AS Int64)) AS __unnest_placeholder(generate_series(Int64(1),outer_ref(t1.t1_int)))
-11)----------------EmptyRelation
+11)----------------EmptyRelation: rows=1
 physical_plan_error This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn(UInt32, Column { relation: Some(Bare { table: "t1" }), name: "t1_int" })
 
 
@@ -4058,7 +4058,7 @@ logical_plan
 08)----------Projection: __unnest_placeholder(generate_series(Int64(1),outer_ref(t2.t1_int)),depth=1) AS UNNEST(generate_series(Int64(1),outer_ref(t2.t1_int)))
 09)------------Unnest: lists[__unnest_placeholder(generate_series(Int64(1),outer_ref(t2.t1_int)))|depth=1] structs[]
 10)--------------Projection: generate_series(Int64(1), CAST(outer_ref(t2.t1_int) AS Int64)) AS __unnest_placeholder(generate_series(Int64(1),outer_ref(t2.t1_int)))
-11)----------------EmptyRelation
+11)----------------EmptyRelation: rows=1
 physical_plan_error This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn(UInt32, Column { relation: Some(Bare { table: "t2" }), name: "t1_int" })
 
 
@@ -4738,7 +4738,7 @@ logical_plan
 02)--TableScan: j1 projection=[j1_string, j1_id]
 03)--SubqueryAlias: j2
 04)----Projection: Int64(1)
-05)------EmptyRelation
+05)------EmptyRelation: rows=1
 physical_plan
 01)CrossJoinExec
 02)--DataSourceExec: partitions=1, partition_sizes=[0]

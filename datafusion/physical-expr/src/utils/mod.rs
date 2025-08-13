@@ -282,7 +282,7 @@ pub(crate) mod tests {
 
     use petgraph::visit::Bfs;
 
-    #[derive(Debug, Clone)]
+    #[derive(Debug, PartialEq, Eq, Hash)]
     pub struct TestScalarUDF {
         pub(crate) signature: Signature,
     }

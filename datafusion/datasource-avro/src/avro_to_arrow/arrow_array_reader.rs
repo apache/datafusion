@@ -1046,7 +1046,7 @@ mod test {
     use std::fs::File;
     use std::sync::Arc;
 
-    fn build_reader(name: &str, batch_size: usize) -> Reader<File> {
+    fn build_reader(name: &'_ str, batch_size: usize) -> Reader<'_, File> {
         let testdata = datafusion_common::test_util::arrow_test_data();
         let filename = format!("{testdata}/avro/{name}");
         let builder = ReaderBuilder::new()
