@@ -1139,7 +1139,7 @@ mod tests {
             plan,
             @r"
         Aggregate: groupBy=[[]], aggr=[[count(Int32(1))]]
-          EmptyRelation
+          EmptyRelation: rows=1
         "
         )
     }
