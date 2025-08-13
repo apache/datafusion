@@ -871,7 +871,7 @@
 <span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">plan</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ctx</span><span class="p">.</span><span class="n">sql</span><span class="p">(</span><span class="n">sql</span><span class="p">).</span><span class="k">await</span><span class="o">?</span><span class="p">.</span><span class="n">into_optimized_plan</span><span class="p">()</span><span class="o">?</span><span class="p">.</span><span class="n">clone</span><span class="p">();</span>
 
 <span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">expected</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">r#&quot;Projection: Int64(6) AS added_one</span>
-<span class="s">  EmptyRelation&quot;#</span><span class="p">;</span>
+<span class="s">  EmptyRelation: rows=1&quot;#</span><span class="p">;</span>
 
 <span class="w">    </span><span class="fm">assert_eq!</span><span class="p">(</span><span class="n">plan</span><span class="p">.</span><span class="n">to_string</span><span class="p">(),</span><span class="w"> </span><span class="n">expected</span><span class="p">);</span>
 
