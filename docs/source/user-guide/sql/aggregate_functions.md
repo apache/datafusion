@@ -1065,6 +1065,24 @@ approx_percentile_cont(percentile [, centroids]) WITHIN GROUP (ORDER BY expressi
 +-----------------------------------------------------------------------+
 ```
 
+An alternate syntax is also supported:
+
+```sql
+> SELECT approx_percentile_cont(column_name, 0.75) FROM table_name;
++-----------------------------------------------+
+| approx_percentile_cont(column_name, 0.75)     |
++-----------------------------------------------+
+| 65.0                                          |
++-----------------------------------------------+
+
+> SELECT approx_percentile_cont(column_name, 0.75, 100) FROM table_name;
++----------------------------------------------------------+
+| approx_percentile_cont(column_name, 0.75, 100)           |
++----------------------------------------------------------+
+| 65.0                                                     |
++----------------------------------------------------------+
+```
+
 ### `approx_percentile_cont_with_weight`
 
 Returns the weighted approximate percentile of input values using the t-digest algorithm.
@@ -1095,4 +1113,15 @@ approx_percentile_cont_with_weight(weight, percentile [, centroids]) WITHIN GROU
 +--------------------------------------------------------------------------------------------------+
 | 78.5                                                                                             |
 +--------------------------------------------------------------------------------------------------+
+```
+
+An alternative syntax is also supported:
+
+```sql
+> SELECT approx_percentile_cont_with_weight(column_name, weight_column, 0.90) FROM table_name;
++--------------------------------------------------+
+| approx_percentile_cont_with_weight(column_name, weight_column, 0.90) |
++--------------------------------------------------+
+| 78.5                                             |
++--------------------------------------------------+
 ```
