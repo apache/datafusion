@@ -159,8 +159,9 @@ pub struct PushDownFilter {}
 /// For example:
 ///   - In an inner join, both sides are preserved, because each row of the output
 ///     maps directly to a row from each side.
-/// Evaluates the columns referenced in the given expression to see if they refer
-/// only to the left or right columns
+///
+///     Evaluates the columns referenced in the given expression to see if they refer
+///     only to the left or right columns
 #[derive(Debug)]
 struct ColumnChecker<'a> {
     /// schema of left join input

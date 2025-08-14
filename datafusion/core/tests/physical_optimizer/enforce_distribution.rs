@@ -1201,9 +1201,8 @@ fn reorder_join_keys_to_left_input() -> Result<()> {
         let top_join_plan = if join_type == JoinType::Inner
             || join_type == JoinType::Left
             || join_type == JoinType::LeftAnti
+            || join_type == JoinType::LeftSemi
         {
-            format!("HashJoinExec: mode=Partitioned, join_type={:?}, on=[(AA@1, a1@5), (B@2, b1@6), (C@3, c@2)], probe_side=Right, probe_keys=0", &join_type)
-        } else if join_type == JoinType::LeftSemi {
             format!("HashJoinExec: mode=Partitioned, join_type={:?}, on=[(AA@1, a1@5), (B@2, b1@6), (C@3, c@2)], probe_side=Right, probe_keys=0", &join_type)
         } else if join_type == JoinType::Full {
             format!("HashJoinExec: mode=Partitioned, join_type={:?}, on=[(AA@1, a1@5), (B@2, b1@6), (C@3, c@2)]", &join_type)

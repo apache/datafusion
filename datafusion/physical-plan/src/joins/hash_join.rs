@@ -730,14 +730,12 @@ impl DisplayAs for HashJoinExec {
                         match df.current() {
                             Ok(current) if current != lit(true) => {
                                 format!(
-                                    ", probe_filter=[{current}], probe_side={:?}, probe_keys={}",
-                                    probe_side, keys
+                                    ", probe_filter=[{current}], probe_side={probe_side:?}, probe_keys={keys}"
                                 )
                             }
-                            _ => format!(
-                                ", probe_side={:?}, probe_keys={}",
-                                probe_side, keys
-                            ),
+                            _ => {
+                                format!(", probe_side={probe_side:?}, probe_keys={keys}")
+                            }
                         }
                     }
                     None => "".to_string(),

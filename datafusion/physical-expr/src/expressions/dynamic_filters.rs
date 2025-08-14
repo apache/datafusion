@@ -207,8 +207,9 @@ impl DynamicFilterPhysicalExpr {
     /// This should be called e.g.:
     /// - When we've computed the probe side's hash table in a HashJoinExec
     /// - After every batch is processed if we update the TopK heap in a SortExec using a TopK approach.
-    /// `key_count` specifies the number of keys currently tracked by the filter
-    /// and is used for observability.
+    ///
+    ///   `key_count` specifies the number of keys currently tracked by the filter
+    ///   and is used for observability.
     #[inline]
     pub fn update(
         &self,
