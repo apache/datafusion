@@ -1469,12 +1469,12 @@ impl NestedLoopJoinStream {
     fn update_matched_bitmap(
         &mut self,
         l_index: usize,
-        r_matched: &BooleanArray,
+        r_matched_bitmap: &BooleanArray,
     ) -> Result<()> {
         let left_data = self.get_left_data()?;
 
         // number of successfully joined pairs from (l_index x cur_right_batch)
-        let joined_len = r_matched.true_count();
+        let joined_len = r_matched_bitmap.true_count();
 
         // 1. Maybe update the left bitmap
         if need_produce_result_in_final(self.join_type) && (joined_len > 0) {
@@ -1492,7 +1492,7 @@ impl NestedLoopJoinStream {
                 })?;
             let (buf, nulls) = right_bitmap.into_parts();
             debug_assert!(nulls.is_none());
-            let updated_right_bitmap = buf.bitor(r_matched.values());
+            let updated_right_bitmap = buf.bitor(r_matched_bitmap.values());
 
             self.current_right_batch_matched =
                 Some(BooleanArray::new(updated_right_bitmap, None));
@@ -1539,8 +1539,22 @@ fn apply_filter_to_row_join_batch(
         .expression()
         .evaluate(&intermediate_batch)?
         .into_array(intermediate_batch.num_rows())?;
+    let filter_arr = as_boolean_array(&filter_result)?;
 
-    Ok(as_boolean_array(&filter_result)?.clone())
+    // [Caution] This step has previously introduced bugs
+    // The filter result is NOT a bitmap; it contains true/false/null values.
+    // For example, 1 < NULL is evaluated to NULL. Therefore, we must combine (AND)
+    // the boolean array with its null bitmap to construct a unified bitmap.
+    let (is_filtered, nulls) = filter_arr.clone().into_parts();
+    let bitmap_combined = match nulls {
+        Some(nulls) => {
+            let combined = nulls.inner() & &is_filtered;
+            BooleanArray::new(combined, None)
+        }
+        None => BooleanArray::new(is_filtered, None),
+    };
+
+    Ok(bitmap_combined)
 }
 
 /// This function performs the following steps:
@@ -1614,6 +1628,20 @@ fn build_row_join_batch(
 
     if filtered_probe_batch.num_rows() == 0 {
         return Ok(None);
+    }
+
+    // Edge case: downstream operator does not require any columns from this NLJ,
+    // so allow an empty projection.
+    // Example:
+    //  SELECT DISTINCT 32 AS col2
+    //  FROM tab0 AS cor0
+    //  LEFT OUTER JOIN tab2 AS cor1
+    //  ON ( NULL ) IS NULL;
+    if output_schema.fields.is_empty() {
+        return Ok(Some(create_record_batch_with_empty_schema(
+            Arc::new(output_schema.clone()),
+            filtered_probe_batch.num_rows(),
+        )?));
     }
 
     let mut columns: Vec<Arc<dyn Array>> =
@@ -1782,7 +1810,13 @@ fn build_unmatched_batch(
                     })
                     .collect::<Vec<_>>(),
             ));
-            let left_null_batch = RecordBatch::try_new(nullable_left_schema, left_null_columns)?;
+            let left_null_batch = if nullable_left_schema.fields.is_empty() {
+                // Left input can be an empty relation, in this case left relation
+                // won't be used to construct the result batch (i.e. not in `col_indices`)
+                create_record_batch_with_empty_schema(nullable_left_schema, 0)?
+            } else {
+                RecordBatch::try_new(nullable_left_schema, left_null_columns)?
+            };
 
             debug_assert_ne!(batch_side, JoinSide::None);
             let opposite_side = batch_side.negate();
