@@ -61,7 +61,7 @@ physical_plan
 06)----------RepartitionExec: partitioning=Hash([o_orderpriority@0], 4), input_partitions=4
 07)------------AggregateExec: mode=Partial, gby=[o_orderpriority@0 as o_orderpriority], aggr=[count(Int64(1))]
 08)--------------CoalesceBatchesExec: target_batch_size=8192
-09)----------------HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(o_orderkey@0, l_orderkey@0)], projection=[o_orderpriority@1]
+09)----------------HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(o_orderkey@0, l_orderkey@0)], projection=[o_orderpriority@1], probe_side=Right, probe_keys=0
 10)------------------CoalesceBatchesExec: target_batch_size=8192
 11)--------------------RepartitionExec: partitioning=Hash([o_orderkey@0], 4), input_partitions=4
 12)----------------------CoalesceBatchesExec: target_batch_size=8192

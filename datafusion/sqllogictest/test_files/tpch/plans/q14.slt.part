@@ -47,7 +47,7 @@ physical_plan
 04)------AggregateExec: mode=Partial, gby=[], aggr=[sum(CASE WHEN part.p_type LIKE Utf8("PROMO%") THEN lineitem.l_extendedprice * Int64(1) - lineitem.l_discount ELSE Int64(0) END), sum(lineitem.l_extendedprice * Int64(1) - lineitem.l_discount)]
 05)--------ProjectionExec: expr=[l_extendedprice@0 * (Some(1),20,0 - l_discount@1) as __common_expr_1, p_type@2 as p_type]
 06)----------CoalesceBatchesExec: target_batch_size=8192
-07)------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(l_partkey@0, p_partkey@0)], projection=[l_extendedprice@1, l_discount@2, p_type@4]
+07)------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(l_partkey@0, p_partkey@0)], projection=[l_extendedprice@1, l_discount@2, p_type@4], probe_side=Right, probe_keys=0
 08)--------------CoalesceBatchesExec: target_batch_size=8192
 09)----------------RepartitionExec: partitioning=Hash([l_partkey@0], 4), input_partitions=4
 10)------------------CoalesceBatchesExec: target_batch_size=8192
