@@ -197,6 +197,13 @@ impl MetricsSet {
             .map(|v| v.as_usize())
     }
 
+    /// Convenience: return the number of bytes produced, aggregated
+    /// across partitions or `None` if no metric is present
+    pub fn output_bytes(&self) -> Option<usize> {
+        self.sum(|metric| matches!(metric.value(), MetricValue::OutputBytes(_)))
+            .map(|v| v.as_usize())
+    }
+
     /// Convenience: return the count of spills, aggregated
     /// across partitions or `None` if no metric is present
     pub fn spill_count(&self) -> Option<usize> {
@@ -257,6 +264,7 @@ impl MetricsSet {
             MetricValue::Count { name, .. } => name == metric_name,
             MetricValue::Time { name, .. } => name == metric_name,
             MetricValue::OutputRows(_) => false,
+            MetricValue::OutputBytes(_) => false,
             MetricValue::ElapsedCompute(_) => false,
             MetricValue::SpillCount(_) => false,
             MetricValue::SpilledBytes(_) => false,
