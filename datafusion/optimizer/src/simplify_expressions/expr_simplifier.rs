@@ -4313,8 +4313,6 @@ mod tests {
                 None
             }
         }
-
-        udf_equals_hash!(AggregateUDFImpl);
     }
 
     #[test]
@@ -4386,7 +4384,7 @@ mod tests {
             unimplemented!("not needed for tests")
         }
     }
-    #[derive(Debug)]
+    #[derive(Debug, PartialEq, Eq, Hash)]
     struct VolatileUdf {
         signature: Signature,
     }

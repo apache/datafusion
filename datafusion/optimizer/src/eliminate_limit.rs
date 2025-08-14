@@ -148,7 +148,7 @@ mod tests {
         // No aggregate / scan / limit
         assert_optimized_plan_equal!(
             plan,
-            @ r"EmptyRelation"
+            @ "EmptyRelation: rows=0"
         )
     }
 
@@ -169,7 +169,7 @@ mod tests {
             plan,
             @ r"
         Union
-          EmptyRelation
+          EmptyRelation: rows=0
           Aggregate: groupBy=[[test.a]], aggr=[[sum(test.b)]]
             TableScan: test
         "
@@ -188,7 +188,7 @@ mod tests {
         // No aggregate / scan / limit
         assert_optimized_plan_eq_with_pushdown!(
             plan,
-            @ "EmptyRelation"
+            @ "EmptyRelation: rows=0"
         )
     }
 

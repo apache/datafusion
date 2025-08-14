@@ -171,7 +171,7 @@ macro_rules! make_math_unary_udf {
                 Signature, Volatility,
             };
 
-            #[derive(Debug)]
+            #[derive(Debug, PartialEq, Eq, Hash)]
             pub struct $UDF {
                 signature: Signature,
             }
@@ -285,7 +285,7 @@ macro_rules! make_math_binary_udf {
                 Signature, Volatility,
             };
 
-            #[derive(Debug)]
+            #[derive(Debug, PartialEq, Eq, Hash)]
             pub struct $UDF {
                 signature: Signature,
             }
