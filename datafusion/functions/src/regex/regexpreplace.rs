@@ -29,6 +29,7 @@ use datafusion_common::cast::{
 };
 use datafusion_common::exec_err;
 use datafusion_common::plan_err;
+use datafusion_common::types::logical_string;
 use datafusion_common::ScalarValue;
 use datafusion_common::{
     cast::as_generic_string_array, internal_err, DataFusionError, Result,
@@ -37,6 +38,7 @@ use datafusion_expr::function::Hint;
 use datafusion_expr::ColumnarValue;
 use datafusion_expr::TypeSignature;
 use datafusion_expr::{Documentation, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
 use datafusion_macros::user_doc;
 use regex::Regex;
 use std::any::Any;
@@ -96,23 +98,22 @@ impl Default for RegexpReplaceFunc {
 
 impl RegexpReplaceFunc {
     pub fn new() -> Self {
-        use DataType::*;
         use TypeSignature::*;
+        use TypeSignatureClass::*;
         Self {
             signature: Signature::one_of(
                 vec![
-                    Uniform(3, vec![Utf8, Utf8View]),
-                    Exact(vec![Utf8, Utf8View, Utf8]),
-                    Exact(vec![Utf8, Utf8, Utf8View]),
-                    Exact(vec![Utf8, Utf8View, Utf8View]),
-                    Exact(vec![Utf8View, Utf8, Utf8View]),
-                    Exact(vec![Utf8View, Utf8View, Utf8]),
-                    Exact(vec![Utf8View, Utf8, Utf8]),
-                    Exact(vec![LargeUtf8, Utf8, Utf8]),
-                    Exact(vec![LargeUtf8, Utf8View, Utf8]),
-                    Exact(vec![LargeUtf8, Utf8, Utf8View]),
-                    Exact(vec![LargeUtf8, Utf8View, Utf8View]),
-                    Uniform(4, vec![Utf8, Utf8View]),
+                    Coercible(vec![
+                        Coercion::new_exact(Native(logical_string())),
+                        Coercion::new_exact(Native(logical_string())),
+                        Coercion::new_exact(Native(logical_string())),
+                    ]),
+                    Coercible(vec![
+                        Coercion::new_exact(Native(logical_string())),
+                        Coercion::new_exact(Native(logical_string())),
+                        Coercion::new_exact(Native(logical_string())),
+                        Coercion::new_exact(Native(logical_string())),
+                    ]),
                 ],
                 Volatility::Immutable,
             ),
@@ -136,13 +137,13 @@ impl ScalarUDFImpl for RegexpReplaceFunc {
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         use DataType::*;
         Ok(match &arg_types[0] {
-            LargeUtf8 | LargeBinary => LargeUtf8,
-            Utf8 | Binary => Utf8,
-            Utf8View | BinaryView => Utf8View,
+            LargeUtf8 => LargeUtf8,
+            Utf8 => Utf8,
+            Utf8View => Utf8View,
             Null => Null,
             Dictionary(_, t) => match **t {
-                LargeUtf8 | LargeBinary => LargeUtf8,
-                Utf8 | Binary => Utf8,
+                LargeUtf8 => LargeUtf8,
+                Utf8 => Utf8,
                 Null => Null,
                 _ => {
                     return plan_err!(
@@ -731,6 +732,25 @@ mod tests {
         large_string_array_string_view_arrays,
         LargeStringArray,
         StringViewArray,
+        i64
+    );
+
+    static_pattern_regexp_replace!(
+        string_array_large_string_arrays,
+        StringArray,
+        LargeStringArray,
+        i32
+    );
+    static_pattern_regexp_replace!(
+        string_view_array_large_string_arrays,
+        StringViewArray,
+        LargeStringArray,
+        i32
+    );
+    static_pattern_regexp_replace!(
+        large_string_array_large_string_arrays,
+        LargeStringArray,
+        LargeStringArray,
         i64
     );
 
