@@ -562,7 +562,7 @@ fn multi_hash_joins() -> Result<()> {
     for join_type in join_types {
         let join = hash_join_exec(left.clone(), right.clone(), &join_on, &join_type);
         let join_plan = |shift| -> String {
-            format!("{}HashJoinExec: mode=Partitioned, join_type={join_type}, on=[(a@0, b1@1)]", " ".repeat(shift))
+            format!("{}HashJoinExec: mode=Partitioned, join_type={join_type}, on=[(a@0, b1@1)], probe_side=Right, probe_keys=0", " ".repeat(shift))
         };
         let join_plan_indent2 = join_plan(2);
         let join_plan_indent4 = join_plan(4);
@@ -587,7 +587,7 @@ fn multi_hash_joins() -> Result<()> {
                     &join_type,
                 );
                 let top_join_plan =
-                    format!("HashJoinExec: mode=Partitioned, join_type={join_type}, on=[(a@0, c@2)]");
+                    format!("HashJoinExec: mode=Partitioned, join_type={join_type}, on=[(a@0, c@2)], probe_side=Right, probe_keys=0");
 
                 let expected = match join_type {
                     // Should include 3 RepartitionExecs
