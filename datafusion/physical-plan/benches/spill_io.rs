@@ -115,8 +115,9 @@ fn bench_spill_io(c: &mut Criterion) {
                 // - Wait for the consumer to finish processing
                 |spill_file| {
                     rt.block_on(async {
-                        let stream =
-                            spill_manager.read_spill_as_stream(spill_file).unwrap();
+                        let stream = spill_manager
+                            .read_spill_as_stream(spill_file, None)
+                            .unwrap();
                         let _ = collect(stream).await.unwrap();
                     })
                 },
@@ -519,8 +520,9 @@ fn benchmark_spill_batches_for_all_codec(
                             )
                             .unwrap()
                             .unwrap();
-                        let stream =
-                            spill_manager.read_spill_as_stream(spill_file).unwrap();
+                        let stream = spill_manager
+                            .read_spill_as_stream(spill_file, None)
+                            .unwrap();
                         let _ = collect(stream).await.unwrap();
                     })
                 },
@@ -553,7 +555,9 @@ fn benchmark_spill_batches_for_all_codec(
         let rt = Runtime::new().unwrap();
         let start = Instant::now();
         rt.block_on(async {
-            let stream = spill_manager.read_spill_as_stream(spill_file).unwrap();
+            let stream = spill_manager
+                .read_spill_as_stream(spill_file, None)
+                .unwrap();
             let _ = collect(stream).await.unwrap();
         });
         let read_time = start.elapsed();
