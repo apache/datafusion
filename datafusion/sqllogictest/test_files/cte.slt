@@ -910,7 +910,7 @@ logical_plan
 05)------TableScan: person projection=[id]
 physical_plan
 01)CoalesceBatchesExec: target_batch_size=8182
-02)--HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(id@0, id@0)]
+02)--HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(id@0, id@0)], probe_side=Right, probe_keys=0
 03)----DataSourceExec: partitions=1, partition_sizes=[0]
 04)----DataSourceExec: partitions=1, partition_sizes=[0]
 

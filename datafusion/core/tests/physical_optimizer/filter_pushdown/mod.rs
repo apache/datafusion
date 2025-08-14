@@ -1744,9 +1744,9 @@ async fn test_hashjoin_right_semi_dynamic_filter_pushdown() {
         &formatted,
         "DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=DynamicFilterPhysicalExpr"
     );
-    assert_not_contains!(
+    assert_contains!(
         &formatted,
-        "DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate"
+        "DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=<none>"
     );
 }
 
@@ -1769,9 +1769,9 @@ async fn test_hashjoin_right_anti_dynamic_filter_pushdown() {
         &formatted,
         "DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=DynamicFilterPhysicalExpr"
     );
-    assert_not_contains!(
+    assert_contains!(
         &formatted,
-        "DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate"
+        "DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=<none>"
     );
 }
 
