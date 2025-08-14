@@ -91,7 +91,24 @@ pub fn approx_percentile_cont(
 +-----------------------------------------------------------------------+
 | 65.0                                                                  |
 +-----------------------------------------------------------------------+
-```"#,
+```
+An alternate syntax is also supported:
+```sql
+> SELECT approx_percentile_cont(column_name, 0.75) FROM table_name;
++-----------------------------------------------+
+| approx_percentile_cont(column_name, 0.75)     |
++-----------------------------------------------+
+| 65.0                                          |
++-----------------------------------------------+
+
+> SELECT approx_percentile_cont(column_name, 0.75, 100) FROM table_name;
++----------------------------------------------------------+
+| approx_percentile_cont(column_name, 0.75, 100)           |
++----------------------------------------------------------+
+| 65.0                                                     |
++----------------------------------------------------------+
+```
+"#,
     standard_argument(name = "expression",),
     argument(
         name = "percentile",

@@ -1230,6 +1230,7 @@ mod test {
     };
     use std::any::Any;
     use std::cmp::Ordering;
+    use std::hash::{DefaultHasher, Hash, Hasher};
 
     #[derive(Debug, Clone, PartialEq, Eq, Hash)]
     struct AMeanUdf {
@@ -1319,6 +1320,7 @@ mod test {
         let eq = a1 == a2;
         assert!(eq);
         assert_eq!(a1, a2);
+        assert_eq!(hash(a1), hash(a2));
     }
 
     #[test]
@@ -1332,5 +1334,11 @@ mod test {
         let b1 = AggregateUDF::from(BMeanUdf::new());
         assert!(a1 < b1);
         assert!(!(a1 == b1));
+    }
+
+    fn hash<T: Hash>(value: T) -> u64 {
+        let hasher = &mut DefaultHasher::new();
+        value.hash(hasher);
+        hasher.finish()
     }
 }

@@ -249,7 +249,7 @@ impl ExecutionPlan for ProjectionExec {
         Ok(stats_projection(
             input_stats,
             self.expr.iter().map(|(e, _)| Arc::clone(e)),
-            Arc::clone(&self.schema),
+            Arc::clone(&self.input.schema()),
         ))
     }
 
@@ -1030,8 +1030,10 @@ mod tests {
 
     use crate::common::collect;
     use crate::test;
+    use crate::test::exec::StatisticsExec;
 
-    use arrow::datatypes::DataType;
+    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::stats::{ColumnStatistics, Precision, Statistics};
     use datafusion_common::ScalarValue;
 
     use datafusion_expr::Operator;
@@ -1229,5 +1231,87 @@ mod tests {
         };
 
         assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_projection_statistics_uses_input_schema() {
+        let input_schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+            Field::new("c", DataType::Int32, false),
+            Field::new("d", DataType::Int32, false),
+            Field::new("e", DataType::Int32, false),
+            Field::new("f", DataType::Int32, false),
+        ]);
+
+        let input_statistics = Statistics {
+            num_rows: Precision::Exact(10),
+            column_statistics: vec![
+                ColumnStatistics {
+                    min_value: Precision::Exact(ScalarValue::Int32(Some(1))),
+                    max_value: Precision::Exact(ScalarValue::Int32(Some(100))),
+                    ..Default::default()
+                },
+                ColumnStatistics {
+                    min_value: Precision::Exact(ScalarValue::Int32(Some(5))),
+                    max_value: Precision::Exact(ScalarValue::Int32(Some(50))),
+                    ..Default::default()
+                },
+                ColumnStatistics {
+                    min_value: Precision::Exact(ScalarValue::Int32(Some(10))),
+                    max_value: Precision::Exact(ScalarValue::Int32(Some(40))),
+                    ..Default::default()
+                },
+                ColumnStatistics {
+                    min_value: Precision::Exact(ScalarValue::Int32(Some(20))),
+                    max_value: Precision::Exact(ScalarValue::Int32(Some(30))),
+                    ..Default::default()
+                },
+                ColumnStatistics {
+                    min_value: Precision::Exact(ScalarValue::Int32(Some(21))),
+                    max_value: Precision::Exact(ScalarValue::Int32(Some(29))),
+                    ..Default::default()
+                },
+                ColumnStatistics {
+                    min_value: Precision::Exact(ScalarValue::Int32(Some(24))),
+                    max_value: Precision::Exact(ScalarValue::Int32(Some(26))),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+
+        let input = Arc::new(StatisticsExec::new(input_statistics, input_schema));
+
+        // Create projection expressions that reference columns from the input schema and the length
+        // of output schema columns < input schema columns and hence if we use the last few columns
+        // from the input schema in the expressions here, bounds_check would fail on them if output
+        // schema is supplied to the partitions_statistics method.
+        let exprs: Vec<(Arc<dyn PhysicalExpr>, String)> = vec![
+            (
+                Arc::new(Column::new("c", 2)) as Arc<dyn PhysicalExpr>,
+                "c_renamed".to_string(),
+            ),
+            (
+                Arc::new(BinaryExpr::new(
+                    Arc::new(Column::new("e", 4)),
+                    Operator::Plus,
+                    Arc::new(Column::new("f", 5)),
+                )) as Arc<dyn PhysicalExpr>,
+                "e_plus_f".to_string(),
+            ),
+        ];
+
+        let projection = ProjectionExec::try_new(exprs, input).unwrap();
+
+        let stats = projection.partition_statistics(None).unwrap();
+
+        assert_eq!(stats.num_rows, Precision::Exact(10));
+        assert_eq!(
+            stats.column_statistics.len(),
+            2,
+            "Expected 2 columns in projection statistics"
+        );
+        assert!(stats.total_byte_size.is_exact().unwrap_or(false));
     }
 }
