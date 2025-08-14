@@ -106,9 +106,9 @@ impl WindowAggExec {
 
     /// Return the output sort order of partition keys: For example
     /// OVER(PARTITION BY a, ORDER BY b) -> would give sorting of the column a
-    // We are sure that partition by columns are always at the beginning of sort_keys
-    // Hence returned `PhysicalSortExpr` corresponding to `PARTITION BY` columns can be used safely
-    // to calculate partition separation points
+    /// We are sure that partition by columns are always at the beginning of sort_keys
+    /// Hence returned `PhysicalSortExpr` corresponding to `PARTITION BY` columns can be used safely
+    /// to calculate partition separation points
     pub fn partition_by_sort_keys(&self) -> Result<Vec<PhysicalSortExpr>> {
         let partition_by = self.window_expr()[0].partition_by();
         get_partition_by_sort_exprs(
