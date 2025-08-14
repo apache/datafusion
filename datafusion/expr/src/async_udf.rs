@@ -15,14 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::utils::{arc_ptr_eq, arc_ptr_hash};
-use crate::{
-    udf_equals_hash, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl,
-};
-use arrow::array::ArrayRef;
+use crate::ptr_eq::{arc_ptr_eq, arc_ptr_hash};
+use crate::{ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl};
 use arrow::datatypes::{DataType, FieldRef};
 use async_trait::async_trait;
-use datafusion_common::config::ConfigOptions;
 use datafusion_common::error::Result;
 use datafusion_common::internal_err;
 use datafusion_expr_common::columnar_value::ColumnarValue;
@@ -52,8 +48,7 @@ pub trait AsyncScalarUDFImpl: ScalarUDFImpl {
     async fn invoke_async_with_args(
         &self,
         args: ScalarFunctionArgs,
-        option: &ConfigOptions,
-    ) -> Result<ArrayRef>;
+    ) -> Result<ColumnarValue>;
 }
 
 /// A scalar UDF that must be invoked using async methods
@@ -72,6 +67,7 @@ impl PartialEq for AsyncScalarUDF {
         arc_ptr_eq(inner, &other.inner)
     }
 }
+impl Eq for AsyncScalarUDF {}
 
 impl Hash for AsyncScalarUDF {
     fn hash<H: Hasher>(&self, state: &mut H) {
@@ -100,9 +96,8 @@ impl AsyncScalarUDF {
     pub async fn invoke_async_with_args(
         &self,
         args: ScalarFunctionArgs,
-        option: &ConfigOptions,
-    ) -> Result<ArrayRef> {
-        self.inner.invoke_async_with_args(args, option).await
+    ) -> Result<ColumnarValue> {
+        self.inner.invoke_async_with_args(args).await
     }
 }
 
@@ -130,8 +125,6 @@ impl ScalarUDFImpl for AsyncScalarUDF {
     fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         internal_err!("async functions should not be called directly")
     }
-
-    udf_equals_hash!(ScalarUDFImpl);
 }
 
 impl Display for AsyncScalarUDF {

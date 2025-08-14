@@ -744,8 +744,10 @@ pub mod physical_planner;
 pub mod prelude;
 pub mod scalar;
 
-// re-export dependencies from arrow-rs to minimize version maintenance for crate users
+// Re-export dependencies that are part of DataFusion public API (e.g. via DataFusionError)
 pub use arrow;
+pub use object_store;
+
 #[cfg(feature = "parquet")]
 pub use parquet;
 
@@ -824,13 +826,6 @@ pub mod functions {
 
 /// re-export of [`datafusion_functions_nested`] crate, if "nested_expressions" feature is enabled
 pub mod functions_nested {
-    #[cfg(feature = "nested_expressions")]
-    pub use datafusion_functions_nested::*;
-}
-
-/// re-export of [`datafusion_functions_nested`] crate as [`functions_array`] for backward compatibility, if "nested_expressions" feature is enabled
-#[deprecated(since = "41.0.0", note = "use datafusion-functions-nested instead")]
-pub mod functions_array {
     #[cfg(feature = "nested_expressions")]
     pub use datafusion_functions_nested::*;
 }

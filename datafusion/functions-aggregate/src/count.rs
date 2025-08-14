@@ -147,6 +147,7 @@ pub fn count_all_window() -> Expr {
 ```"#,
     standard_argument(name = "expression",)
 )]
+#[derive(PartialEq, Eq, Hash)]
 pub struct Count {
     signature: Signature,
 }

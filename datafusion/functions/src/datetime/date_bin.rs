@@ -95,7 +95,7 @@ FROM VALUES ('2023-01-01T18:18:18Z'), ('2023-01-03T19:00:03Z')  t(time);
 "#
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct DateBinFunc {
     signature: Signature,
 }
@@ -512,6 +512,7 @@ mod tests {
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
 
     use chrono::TimeDelta;
+    use datafusion_common::config::ConfigOptions;
 
     fn invoke_date_bin_with_args(
         args: Vec<ColumnarValue>,
@@ -528,6 +529,7 @@ mod tests {
             arg_fields,
             number_rows,
             return_field: Arc::clone(return_field),
+            config_options: Arc::new(ConfigOptions::default()),
         };
         DateBinFunc::new().invoke_with_args(args)
     }

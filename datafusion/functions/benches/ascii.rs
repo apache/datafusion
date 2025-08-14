@@ -20,6 +20,7 @@ mod helper;
 
 use arrow::datatypes::{DataType, Field};
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use datafusion_common::config::ConfigOptions;
 use datafusion_expr::ScalarFunctionArgs;
 use helper::gen_string_array;
 use std::sync::Arc;
@@ -46,6 +47,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         let arg_fields =
             vec![Field::new("a", args_string_ascii[0].data_type(), true).into()];
         let return_field = Field::new("f", DataType::Utf8, true).into();
+        let config_options = Arc::new(ConfigOptions::default());
 
         c.bench_function(
             format!("ascii/string_ascii_only (null_density={null_density})").as_str(),
@@ -56,6 +58,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         arg_fields: arg_fields.clone(),
                         number_rows: N_ROWS,
                         return_field: Arc::clone(&return_field),
+                        config_options: Arc::clone(&config_options),
                     }))
                 })
             },
@@ -76,6 +79,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         arg_fields: arg_fields.clone(),
                         number_rows: N_ROWS,
                         return_field: Arc::clone(&return_field),
+                        config_options: Arc::clone(&config_options),
                     }))
                 })
             },
@@ -102,6 +106,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         arg_fields: arg_fields.clone(),
                         number_rows: N_ROWS,
                         return_field: Arc::clone(&return_field),
+                        config_options: Arc::clone(&config_options),
                     }))
                 })
             },
@@ -122,6 +127,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         arg_fields: arg_fields.clone(),
                         number_rows: N_ROWS,
                         return_field: Arc::clone(&return_field),
+                        config_options: Arc::clone(&config_options),
                     }))
                 })
             },

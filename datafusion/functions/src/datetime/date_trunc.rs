@@ -69,7 +69,7 @@ use chrono::{
         description = "Time expression to operate on. Can be a constant, column, or function."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct DateTruncFunc {
     signature: Signature,
     aliases: Vec<String>,
@@ -559,6 +559,7 @@ mod tests {
     use arrow::array::{Array, TimestampNanosecondArray};
     use arrow::compute::kernels::cast_utils::string_to_timestamp_nanos;
     use arrow::datatypes::{DataType, Field, TimeUnit};
+    use datafusion_common::config::ConfigOptions;
     use datafusion_common::ScalarValue;
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
 
@@ -814,6 +815,7 @@ mod tests {
                     true,
                 )
                 .into(),
+                config_options: Arc::new(ConfigOptions::default()),
             };
             let result = DateTruncFunc::new().invoke_with_args(args).unwrap();
             if let ColumnarValue::Array(result) = result {
@@ -1001,6 +1003,7 @@ mod tests {
                     true,
                 )
                 .into(),
+                config_options: Arc::new(ConfigOptions::default()),
             };
             let result = DateTruncFunc::new().invoke_with_args(args).unwrap();
             if let ColumnarValue::Array(result) = result {
