@@ -1311,6 +1311,7 @@ mod test {
             expr: vec![sort_expr],
             input: Arc::new(plan),
             fetch: None,
+            preserve_partitioning: false,
         });
 
         // Plan C: no coerce
@@ -1434,6 +1435,7 @@ mod test {
             expr: vec![sort_expr],
             input: Arc::new(plan),
             fetch: None,
+            preserve_partitioning: false,
         });
 
         // Plan C: no coerce
