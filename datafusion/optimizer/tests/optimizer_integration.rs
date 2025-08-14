@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#![cfg_attr(test, allow(clippy::clone_on_ref_ptr))]
+
 use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;

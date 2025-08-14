@@ -34,6 +34,8 @@
 //! * Runtime environment configuration
 //! * Query state persistence
 
+#![cfg_attr(test, allow(clippy::clone_on_ref_ptr))]
+
 pub mod session;
 
 pub use crate::session::{Session, SessionStore};

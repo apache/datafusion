@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#![cfg_attr(test, allow(clippy::clone_on_ref_ptr))]
+
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::{
     assert_contains, Column, DFSchema, DFSchemaRef, DataFusionError, Result,

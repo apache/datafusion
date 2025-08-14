@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#![cfg_attr(test, allow(clippy::clone_on_ref_ptr))]
+
 pub mod file_format;
 pub mod source;
 

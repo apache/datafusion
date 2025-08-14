@@ -27,6 +27,7 @@
     not(test),
     deny(clippy::or_fun_call, clippy::unnecessary_lazy_evaluations)
 )]
+#![cfg_attr(test, allow(clippy::clone_on_ref_ptr))]
 #![warn(missing_docs, clippy::needless_borrow)]
 
 //! [DataFusion] is an extensible query engine written in Rust that
