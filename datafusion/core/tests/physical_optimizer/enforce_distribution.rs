@@ -859,7 +859,7 @@ fn join_after_agg_alias() -> Result<()> {
 
     // Only two RepartitionExecs added
     let expected = &[
-        "HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a1@0, a2@0)]",
+        "HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a1@0, a2@0)], probe_side=Right, probe_keys=0",
         "  AggregateExec: mode=FinalPartitioned, gby=[a1@0 as a1], aggr=[]",
         "    RepartitionExec: partitioning=Hash([a1@0], 10), input_partitions=10",
         "      AggregateExec: mode=Partial, gby=[a@0 as a1], aggr=[]",
@@ -912,7 +912,7 @@ fn hash_join_key_ordering() -> Result<()> {
 
     // Only two RepartitionExecs added
     let expected = &[
-        "HashJoinExec: mode=Partitioned, join_type=Inner, on=[(b1@1, b@0), (a1@0, a@1)]",
+        "HashJoinExec: mode=Partitioned, join_type=Inner, on=[(b1@1, b@0), (a1@0, a@1)], probe_side=Right, probe_keys=0",
         "  ProjectionExec: expr=[a1@1 as a1, b1@0 as b1]",
         "    AggregateExec: mode=FinalPartitioned, gby=[b1@0 as b1, a1@1 as a1], aggr=[]",
         "      RepartitionExec: partitioning=Hash([b1@0, a1@1], 10), input_partitions=10",
@@ -1033,9 +1033,9 @@ fn multi_hash_join_key_ordering() -> Result<()> {
     // The bottom joins' join key ordering is adjusted based on the top join. And the top join should not introduce additional RepartitionExec
     let expected = &[
         "FilterExec: c@6 > 1",
-        "  HashJoinExec: mode=Partitioned, join_type=Inner, on=[(B@2, b1@6), (C@3, c@2), (AA@1, a1@5)]",
+        "  HashJoinExec: mode=Partitioned, join_type=Inner, on=[(B@2, b1@6), (C@3, c@2), (AA@1, a1@5)], probe_side=Right, probe_keys=0",
         "    ProjectionExec: expr=[a@0 as A, a@0 as AA, b@1 as B, c@2 as C]",
-        "      HashJoinExec: mode=Partitioned, join_type=Inner, on=[(b@1, b1@1), (c@2, c1@2), (a@0, a1@0)]",
+        "      HashJoinExec: mode=Partitioned, join_type=Inner, on=[(b@1, b1@1), (c@2, c1@2), (a@0, a1@0)], probe_side=Right, probe_keys=0",
         "        RepartitionExec: partitioning=Hash([b@1, c@2, a@0], 10), input_partitions=10",
         "          RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
         "            DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
@@ -1043,7 +1043,7 @@ fn multi_hash_join_key_ordering() -> Result<()> {
         "          RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
         "            ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1]",
         "              DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
-        "    HashJoinExec: mode=Partitioned, join_type=Inner, on=[(b@1, b1@1), (c@2, c1@2), (a@0, a1@0)]",
+        "    HashJoinExec: mode=Partitioned, join_type=Inner, on=[(b@1, b1@1), (c@2, c1@2), (a@0, a1@0)], probe_side=Right, probe_keys=0",
         "      RepartitionExec: partitioning=Hash([b@1, c@2, a@0], 10), input_partitions=10",
         "        RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
         "          DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
