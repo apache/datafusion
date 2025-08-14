@@ -117,8 +117,7 @@ async fn query_multi_csv_file() {
     +---------+-------+-------+
     ------- Object Store Request Summary -------
     RequestCountingObjectStore()
-    Total Requests: 4
-    - LIST prefix=data
+    Total Requests: 3
     - GET  (opts) path=data/file_0.csv
     - GET  (opts) path=data/file_1.csv
     - GET  (opts) path=data/file_2.csv
@@ -145,8 +144,7 @@ async fn query_partitioned_csv_file() {
     +---------+-------+-------+---+----+-----+
     ------- Object Store Request Summary -------
     RequestCountingObjectStore()
-    Total Requests: 4
-    - LIST prefix=data
+    Total Requests: 3
     - GET  (opts) path=data/a=1/b=10/c=100/file_1.csv
     - GET  (opts) path=data/a=2/b=20/c=200/file_2.csv
     - GET  (opts) path=data/a=3/b=30/c=300/file_3.csv
@@ -183,8 +181,7 @@ async fn query_partitioned_csv_file() {
     +---------+-------+-------+---+----+-----+
     ------- Object Store Request Summary -------
     RequestCountingObjectStore()
-    Total Requests: 2
-    - LIST prefix=data
+    Total Requests: 1
     - GET  (opts) path=data/a=2/b=20/c=200/file_2.csv
     "
     );
@@ -201,8 +198,7 @@ async fn query_partitioned_csv_file() {
     +---------+-------+-------+---+----+-----+
     ------- Object Store Request Summary -------
     RequestCountingObjectStore()
-    Total Requests: 2
-    - LIST prefix=data
+    Total Requests: 1
     - GET  (opts) path=data/a=2/b=20/c=200/file_2.csv
     "
     );
@@ -237,8 +233,7 @@ async fn query_partitioned_csv_file() {
     +---------+-------+-------+---+----+-----+
     ------- Object Store Request Summary -------
     RequestCountingObjectStore()
-    Total Requests: 2
-    - LIST prefix=data
+    Total Requests: 1
     - GET  (opts) path=data/a=1/b=10/c=100/file_1.csv
     "
     );
