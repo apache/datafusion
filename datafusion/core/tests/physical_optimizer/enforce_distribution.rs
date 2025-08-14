@@ -586,8 +586,11 @@ fn multi_hash_joins() -> Result<()> {
                     &top_join_on,
                     &join_type,
                 );
-                let top_join_plan =
-                    format!("HashJoinExec: mode=Partitioned, join_type={join_type}, on=[(a@0, c@2)], probe_side=Right, probe_keys=0");
+                let top_join_plan = if join_type == JoinType::Right {
+                    format!("HashJoinExec: mode=Partitioned, join_type={join_type}, on=[(a@0, c@2)], probe_side=Left, probe_keys=0")
+                } else {
+                    format!("HashJoinExec: mode=Partitioned, join_type={join_type}, on=[(a@0, c@2)], probe_side=Right, probe_keys=0")
+                };
 
                 let expected = match join_type {
                     // Should include 3 RepartitionExecs
@@ -651,7 +654,7 @@ fn multi_hash_joins() -> Result<()> {
                     JoinType::RightSemi | JoinType::RightAnti =>
                         format!("HashJoinExec: mode=Partitioned, join_type={join_type}, on=[(b1@1, c@2)]"),
                     _ =>
-                        format!("HashJoinExec: mode=Partitioned, join_type={join_type}, on=[(b1@6, c@2)]"),
+                        format!("HashJoinExec: mode=Partitioned, join_type={join_type}, on=[(b1@6, c@2)], probe_side=Right, probe_keys=0"),
                 };
 
                 let expected = match join_type {
