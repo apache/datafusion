@@ -178,124 +178,129 @@ impl<'a> BinaryTypeCoercer<'a> {
         use arrow::datatypes::DataType::*;
         use Operator::*;
         let result = match self.op {
-        Eq |
-        NotEq |
-        Lt |
-        LtEq |
-        Gt |
-        GtEq |
-        IsDistinctFrom |
-        IsNotDistinctFrom => {
-            comparison_coercion(lhs, rhs).map(Signature::comparison).ok_or_else(|| {
-                plan_datafusion_err!(
-                    "Cannot infer common argument type for comparison operation {} {} {}",
-                    self.lhs,
-                    self.op,
-                    self.rhs
-                )
-            })
-        }
-        And | Or => if matches!((lhs, rhs), (Boolean | Null, Boolean | Null)) {
-            // Logical binary boolean operators can only be evaluated for
-            // boolean or null arguments.                   
-            Ok(Signature::uniform(Boolean))
-        } else {
-            plan_err!(
-                "Cannot infer common argument type for logical boolean operation {} {} {}", self.lhs, self.op, self.rhs
-            )
-        }
-        RegexMatch | RegexIMatch | RegexNotMatch | RegexNotIMatch => {
-            regex_coercion(lhs, rhs).map(Signature::comparison).ok_or_else(|| {
-                plan_datafusion_err!(
-                    "Cannot infer common argument type for regex operation {} {} {}", self.lhs, self.op, self.rhs
-                )
-            })
-        }
-        LikeMatch | ILikeMatch | NotLikeMatch | NotILikeMatch => {
-            regex_coercion(lhs, rhs).map(Signature::comparison).ok_or_else(|| {
-                plan_datafusion_err!(
-                    "Cannot infer common argument type for regex operation {} {} {}", self.lhs, self.op, self.rhs
-                )
-            })
-        }
-        BitwiseAnd | BitwiseOr | BitwiseXor | BitwiseShiftRight | BitwiseShiftLeft => {
-            bitwise_coercion(lhs, rhs).map(Signature::uniform).ok_or_else(|| {
-                plan_datafusion_err!(
-                    "Cannot infer common type for bitwise operation {} {} {}", self.lhs, self.op, self.rhs
-                )
-            })
-        }
-        StringConcat => {
-            string_concat_coercion(lhs, rhs).map(Signature::uniform).ok_or_else(|| {
-                plan_datafusion_err!(
-                    "Cannot infer common string type for string concat operation {} {} {}", self.lhs, self.op, self.rhs
-                )
-            })
-        }
-        AtArrow | ArrowAt => {
-            // Array contains or search (similar to LIKE) operation
-            array_coercion(lhs, rhs)
-                .or_else(|| like_coercion(lhs, rhs)).map(Signature::comparison).ok_or_else(|| {
+            Eq | NotEq | Lt | LtEq | Gt | GtEq | IsDistinctFrom | IsNotDistinctFrom => {
+                comparison_coercion(lhs, rhs).map(Signature::comparison).ok_or_else(|| {
                     plan_datafusion_err!(
-                        "Cannot infer common argument type for operation {} {} {}", self.lhs, self.op, self.rhs
+                        "Cannot infer common argument type for comparison operation {} {} {}",
+                        self.lhs,
+                        self.op,
+                        self.rhs
                     )
                 })
-        }
-        AtAt => {
-            // text search has similar signature to LIKE
-            like_coercion(lhs, rhs).map(Signature::comparison).ok_or_else(|| {
-                plan_datafusion_err!(
-                    "Cannot infer common argument type for AtAt operation {} {} {}", self.lhs, self.op, self.rhs
-                )
-            })
-        }
-        Plus | Minus | Multiply | Divide | Modulo  =>  {
-            if let Ok(ret) = self.get_result(lhs, rhs) {
-                // Temporal arithmetic, e.g. Date32 + Interval
-                Ok(Signature{
-                    lhs: lhs.clone(),
-                    rhs: rhs.clone(),
-                    ret,
-                })
-            } else if let Some(coerced) = temporal_coercion_strict_timezone(lhs, rhs) {
-                // Temporal arithmetic by first coercing to a common time representation
-                // e.g. Date32 - Timestamp
-                let ret = self.get_result(&coerced, &coerced).map_err(|e| {
-                    plan_datafusion_err!(
-                        "Cannot get result type for temporal operation {coerced} {} {coerced}: {e}", self.op
-                    )
-                })?;
-                Ok(Signature{
-                    lhs: coerced.clone(),
-                    rhs: coerced,
-                    ret,
-                })
-            } else if let Some((lhs, rhs)) = math_decimal_coercion(lhs, rhs) {
-                // Decimal arithmetic, e.g. Decimal(10, 2) + Decimal(10, 0)
-                let ret = self.get_result(&lhs, &rhs).map_err(|e| {
-                    plan_datafusion_err!(
-                        "Cannot get result type for decimal operation {} {} {}: {e}", self.lhs, self.op, self.rhs
-                    )
-                })?;
-                Ok(Signature{
-                    lhs,
-                    rhs,
-                    ret,
-                })
-            } else if let Some(numeric) = mathematics_numerical_coercion(lhs, rhs) {
-                // Numeric arithmetic, e.g. Int32 + Int32
-                Ok(Signature::uniform(numeric))
+            }
+            And | Or => if matches!((lhs, rhs), (Boolean | Null, Boolean | Null)) {
+                // Logical binary boolean operators can only be evaluated for
+                // boolean or null arguments.
+                Ok(Signature::uniform(Boolean))
             } else {
                 plan_err!(
-                    "Cannot coerce arithmetic expression {} {} {} to valid types", self.lhs, self.op, self.rhs
+                    "Cannot infer common argument type for logical boolean operation {} {} {}", self.lhs, self.op, self.rhs
                 )
             }
-        },
-        IntegerDivide | Arrow | LongArrow | HashArrow | HashLongArrow
-        | HashMinus | AtQuestion | Question | QuestionAnd | QuestionPipe => {
-            not_impl_err!("Operator {} is not yet supported", self.op)
-        }
-    };
+            RegexMatch | RegexIMatch | RegexNotMatch | RegexNotIMatch => {
+                regex_coercion(lhs, rhs).map(Signature::comparison).ok_or_else(|| {
+                    plan_datafusion_err!(
+                        "Cannot infer common argument type for regex operation {} {} {}", self.lhs, self.op, self.rhs
+                    )
+                })
+            }
+            LikeMatch | ILikeMatch | NotLikeMatch | NotILikeMatch => {
+                regex_coercion(lhs, rhs).map(Signature::comparison).ok_or_else(|| {
+                    plan_datafusion_err!(
+                        "Cannot infer common argument type for regex operation {} {} {}", self.lhs, self.op, self.rhs
+                    )
+                })
+            }
+            BitwiseAnd | BitwiseOr | BitwiseXor | BitwiseShiftRight | BitwiseShiftLeft => {
+                bitwise_coercion(lhs, rhs).map(Signature::uniform).ok_or_else(|| {
+                    plan_datafusion_err!(
+                        "Cannot infer common type for bitwise operation {} {} {}", self.lhs, self.op, self.rhs
+                    )
+                })
+            }
+            StringConcat => {
+                string_concat_coercion(lhs, rhs).map(Signature::uniform).ok_or_else(|| {
+                    plan_datafusion_err!(
+                        "Cannot infer common string type for string concat operation {} {} {}", self.lhs, self.op, self.rhs
+                    )
+                })
+            }
+            AtArrow | ArrowAt => {
+                // Array contains or search (similar to LIKE) operation
+                array_coercion(lhs, rhs)
+                    .or_else(|| like_coercion(lhs, rhs)).map(Signature::comparison).ok_or_else(|| {
+                        plan_datafusion_err!(
+                            "Cannot infer common argument type for operation {} {} {}", self.lhs, self.op, self.rhs
+                        )
+                    })
+            }
+            AtAt => {
+                // text search has similar signature to LIKE
+                like_coercion(lhs, rhs).map(Signature::comparison).ok_or_else(|| {
+                    plan_datafusion_err!(
+                        "Cannot infer common argument type for AtAt operation {} {} {}", self.lhs, self.op, self.rhs
+                    )
+                })
+            }
+            Plus | Minus | Multiply | Divide | Modulo  =>  {
+                if let Ok(ret) = self.get_result(lhs, rhs) {
+                    // Temporal arithmetic, e.g. Date32 + Interval
+                    Ok(Signature{
+                        lhs: lhs.clone(),
+                        rhs: rhs.clone(),
+                        ret,
+                    })
+                } else if let Some(coerced) = temporal_coercion_strict_timezone(lhs, rhs) {
+                    // Temporal arithmetic by first coercing to a common time representation
+                    // e.g. Date32 - Timestamp
+                    let ret = self.get_result(&coerced, &coerced).map_err(|e| {
+                        plan_datafusion_err!(
+                            "Cannot get result type for temporal operation {coerced} {} {coerced}: {e}", self.op
+                        )
+                    })?;
+                    Ok(Signature{
+                        lhs: coerced.clone(),
+                        rhs: coerced,
+                        ret,
+                    })
+                } else if let Some((lhs, rhs)) = temporal_coercion_resolve_ints_to_intervals(lhs, rhs) {
+                    // e.g. Date32 + Int32
+                    let ret = self.get_result(&lhs, &rhs).map_err(|e| {
+                        plan_datafusion_err!(
+                            "Cannot get result type for temporal operation {} {} {}: {e}", self.lhs, self.op, self.rhs
+                        )
+                    })?;
+                    Ok(Signature{
+                        lhs: lhs.clone(),
+                        rhs: rhs.clone(),
+                        ret,
+                    })
+                } else if let Some((lhs, rhs)) = math_decimal_coercion(lhs, rhs) {
+                    // decimal arithmetic, e.g. Decimal(10, 2) + Decimal(10, 0)
+                    let ret = self.get_result(&lhs, &rhs).map_err(|e| {
+                        plan_datafusion_err!(
+                            "Cannot get result type for decimal operation {} {} {}: {e}", self.lhs, self.op, self.rhs
+                        )
+                    })?;
+                    Ok(Signature{
+                        lhs,
+                        rhs,
+                        ret,
+                    })
+                } else if let Some(numeric) = mathematics_numerical_coercion(lhs, rhs) {
+                    // Numeric arithmetic, e.g. Int32 + Int32
+                    Ok(Signature::uniform(numeric))
+                } else {
+                    plan_err!(
+                        "Cannot coerce arithmetic expression {} {} {} to valid types", self.lhs, self.op, self.rhs
+                    )
+                }
+            },
+            IntegerDivide | Arrow | LongArrow | HashArrow | HashLongArrow | HashMinus | AtQuestion | Question | QuestionAnd | QuestionPipe => {
+                not_impl_err!("Operator {} is not yet supported", self.op)
+            }
+        };
+
         result.map_err(|err| {
             let diagnostic =
                 Diagnostic::new_error("expressions have incompatible types", self.span())
@@ -1430,6 +1435,18 @@ fn temporal_coercion_nonstrict_timezone(
             Some(Timestamp(unit, tz))
         }
         _ => temporal_coercion(lhs_type, rhs_type),
+    }
+}
+
+fn temporal_coercion_resolve_ints_to_intervals(
+    lhs: &DataType,
+    rhs: &DataType,
+) -> Option<(DataType, DataType)> {
+    use arrow::datatypes::DataType::{Date32, Int32, Int64, Interval};
+    use arrow::datatypes::IntervalUnit::DayTime;
+    match (lhs, rhs) {
+        (Date32, Int32 | Int64) => Some((lhs.clone(), Interval(DayTime))),
+        _ => None,
     }
 }
 
