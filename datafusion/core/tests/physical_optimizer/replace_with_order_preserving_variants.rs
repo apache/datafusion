@@ -1034,7 +1034,7 @@ async fn test_with_multiple_child_trees(
     let expected_input_unbounded = [
             "SortPreservingMergeExec: [a@0 ASC]",
             "  SortExec: expr=[a@0 ASC], preserve_partitioning=[true]",
-            "    HashJoinExec: mode=Partitioned, join_type=Inner, on=[(c@1, c@1)]",
+            "    HashJoinExec: mode=Partitioned, join_type=Inner, on=[(c@1, c@1)], probe_side=Right, probe_keys=0",
             "      CoalesceBatchesExec: target_batch_size=4096",
             "        RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
             "          RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
@@ -1047,7 +1047,7 @@ async fn test_with_multiple_child_trees(
     let expected_input_bounded = [
             "SortPreservingMergeExec: [a@0 ASC]",
             "  SortExec: expr=[a@0 ASC], preserve_partitioning=[true]",
-            "    HashJoinExec: mode=Partitioned, join_type=Inner, on=[(c@1, c@1)]",
+            "    HashJoinExec: mode=Partitioned, join_type=Inner, on=[(c@1, c@1)], probe_side=Right, probe_keys=0",
             "      CoalesceBatchesExec: target_batch_size=4096",
             "        RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
             "          RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
@@ -1062,7 +1062,7 @@ async fn test_with_multiple_child_trees(
     let expected_optimized_unbounded = [
             "SortPreservingMergeExec: [a@0 ASC]",
             "  SortExec: expr=[a@0 ASC], preserve_partitioning=[true]",
-            "    HashJoinExec: mode=Partitioned, join_type=Inner, on=[(c@1, c@1)]",
+            "    HashJoinExec: mode=Partitioned, join_type=Inner, on=[(c@1, c@1)], probe_side=Right, probe_keys=0",
             "      CoalesceBatchesExec: target_batch_size=4096",
             "        RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
             "          RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
@@ -1078,7 +1078,7 @@ async fn test_with_multiple_child_trees(
     let expected_optimized_bounded = [
             "SortPreservingMergeExec: [a@0 ASC]",
             "  SortExec: expr=[a@0 ASC], preserve_partitioning=[true]",
-            "    HashJoinExec: mode=Partitioned, join_type=Inner, on=[(c@1, c@1)]",
+            "    HashJoinExec: mode=Partitioned, join_type=Inner, on=[(c@1, c@1)], probe_side=Right, probe_keys=0",
             "      CoalesceBatchesExec: target_batch_size=4096",
             "        RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
             "          RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
