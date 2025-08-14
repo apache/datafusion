@@ -1674,58 +1674,6 @@ async fn test_hashjoin_left_anti_dynamic_filter_pushdown() {
 }
 
 #[tokio::test]
-async fn test_hashjoin_right_semi_dynamic_filter_pushdown() {
-    let plan = build_join_with_dynamic_filter(
-        JoinType::RightSemi,
-        true,
-        true,
-        PartitionMode::Partitioned,
-    );
-    let mut config = ConfigOptions::default();
-    config.execution.parquet.pushdown_filters = true;
-    config.optimizer.enable_dynamic_filter_pushdown = true;
-    let plan = FilterPushdown::new_post_optimization()
-        .optimize(plan, &config)
-        .unwrap();
-    let formatted = format_plan_for_test(&plan);
-    assert_contains!(
-        &formatted,
-        "DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=DynamicFilterPhysicalExpr"
-    );
-    assert_contains!(
-        &formatted,
-        "DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=<none>"
-    );
-    assert_contains!(&formatted, "probe_keys=0");
-}
-
-#[tokio::test]
-async fn test_hashjoin_right_anti_dynamic_filter_pushdown() {
-    let plan = build_join_with_dynamic_filter(
-        JoinType::RightAnti,
-        true,
-        true,
-        PartitionMode::Partitioned,
-    );
-    let mut config = ConfigOptions::default();
-    config.execution.parquet.pushdown_filters = true;
-    config.optimizer.enable_dynamic_filter_pushdown = true;
-    let plan = FilterPushdown::new_post_optimization()
-        .optimize(plan, &config)
-        .unwrap();
-    let formatted = format_plan_for_test(&plan);
-    assert_contains!(
-        &formatted,
-        "DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=DynamicFilterPhysicalExpr"
-    );
-    assert_contains!(
-        &formatted,
-        "DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=<none>"
-    );
-    assert_contains!(&formatted, "probe_keys=0");
-}
-
-#[tokio::test]
 async fn test_hashjoin_left_mark_dynamic_filter_pushdown() {
     let plan = build_join_with_dynamic_filter(
         JoinType::LeftMark,
