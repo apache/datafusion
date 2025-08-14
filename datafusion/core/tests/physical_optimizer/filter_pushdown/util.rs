@@ -195,18 +195,24 @@ impl FileSource for TestSource {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 let support = format!(", pushdown_supported={}", self.support);
 
+                // Use `<none>` to denote the absence of a predicate so that
+                // test output remains stable across formats.
                 let predicate_string = self
                     .predicate
                     .as_ref()
                     .map(|p| format!(", predicate={p}"))
-                    .unwrap_or_default();
+                    .unwrap_or_else(|| ", predicate=<none>".to_string());
 
                 write!(f, "{support}{predicate_string}")
             }
             DisplayFormatType::TreeRender => {
+                // Tree format also uses `<none>` as the placeholder for
+                // missing predicates.
+                writeln!(f, "pushdown_supported={}", self.support)?;
                 if let Some(predicate) = &self.predicate {
-                    writeln!(f, "pushdown_supported={}", fmt_sql(predicate.as_ref()))?;
                     writeln!(f, "predicate={}", fmt_sql(predicate.as_ref()))?;
+                } else {
+                    writeln!(f, "predicate=<none>")?;
                 }
                 Ok(())
             }

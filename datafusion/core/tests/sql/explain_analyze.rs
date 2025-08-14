@@ -651,9 +651,9 @@ async fn test_physical_plan_display_indent_multi_children() {
 
     assert_snapshot!(
         actual,
-        @r###"
+        @r"
     CoalesceBatchesExec: target_batch_size=4096
-      HashJoinExec: mode=Partitioned, join_type=Inner, on=[(c1@0, c2@0)], projection=[c1@0]
+      HashJoinExec: mode=Partitioned, join_type=Inner, on=[(c1@0, c2@0)], projection=[c1@0], probe_side=Right, probe_keys=0
         CoalesceBatchesExec: target_batch_size=4096
           RepartitionExec: partitioning=Hash([c1@0], 9000), input_partitions=9000
             RepartitionExec: partitioning=RoundRobinBatch(9000), input_partitions=1
@@ -663,7 +663,7 @@ async fn test_physical_plan_display_indent_multi_children() {
             RepartitionExec: partitioning=RoundRobinBatch(9000), input_partitions=1
               ProjectionExec: expr=[c1@0 as c2]
                 DataSourceExec: file_groups={1 group: [[ARROW_TEST_DATA/csv/aggregate_test_100.csv]]}, projection=[c1], file_type=csv, has_header=true
-    "###
+    "
     );
 }
 
