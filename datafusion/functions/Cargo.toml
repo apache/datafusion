@@ -35,7 +35,7 @@ all-features = true
 workspace = true
 
 [features]
-crypto_expressions = ["md-5", "sha2", "blake2", "blake3"]
+crypto_expressions = ["md-5", "sha2", "blake2", "blake3", "twox-hash"]
 # enable datetime functions
 datetime_expressions = []
 # Enable encoding by default so the doctests work. In general don't automatically enable all packages.
@@ -83,6 +83,7 @@ regex = { workspace = true, optional = true }
 sha2 = { version = "^0.10.9", optional = true }
 unicode-segmentation = { version = "^1.7.1", optional = true }
 uuid = { version = "1.17", features = ["v4"], optional = true }
+twox-hash = { version = "2.1.1", optional = true }
 
 [dev-dependencies]
 arrow = { workspace = true, features = ["test_utils"] }

@@ -27,12 +27,14 @@ pub mod sha224;
 pub mod sha256;
 pub mod sha384;
 pub mod sha512;
+pub mod xxhash64;
 make_udf_function!(digest::DigestFunc, digest);
 make_udf_function!(md5::Md5Func, md5);
 make_udf_function!(sha224::SHA224Func, sha224);
 make_udf_function!(sha256::SHA256Func, sha256);
 make_udf_function!(sha384::SHA384Func, sha384);
 make_udf_function!(sha512::SHA512Func, sha512);
+make_udf_function!(xxhash64::XXHash64Func, xxhash64);
 
 pub mod expr_fn {
     export_functions!((
@@ -59,10 +61,22 @@ pub mod expr_fn {
         sha512,
         "Computes the SHA-512 hash of a binary string.",
         input_arg1
+    ),(
+        xxhash64,
+        "Computes the XXHash64 hash of a binary string.",
+        input_arg
     ));
 }
 
 /// Returns all DataFusion functions defined in this package
 pub fn functions() -> Vec<Arc<ScalarUDF>> {
-    vec![digest(), md5(), sha224(), sha256(), sha384(), sha512()]
+    vec![
+        digest(),
+        md5(),
+        sha224(),
+        sha256(),
+        sha384(),
+        sha512(),
+        xxhash64(),
+    ]
 }
