@@ -282,17 +282,15 @@ impl TableProvider for ExampleTableProvider {
 }
 
 /// Scalar UDF that uses serde_json to access json fields
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct JsonGetStr {
     signature: Signature,
-    aliases: [String; 1],
 }
 
 impl Default for JsonGetStr {
     fn default() -> Self {
         Self {
             signature: Signature::variadic_any(Volatility::Immutable),
-            aliases: ["json_get_str".to_string()],
         }
     }
 }
@@ -303,7 +301,7 @@ impl ScalarUDFImpl for JsonGetStr {
     }
 
     fn name(&self) -> &str {
-        self.aliases[0].as_str()
+        "json_get_str"
     }
 
     fn signature(&self) -> &Signature {
@@ -354,10 +352,6 @@ impl ScalarUDFImpl for JsonGetStr {
             })
             .collect::<StringArray>();
         Ok(ColumnarValue::Array(Arc::new(values)))
-    }
-
-    fn aliases(&self) -> &[String] {
-        &self.aliases
     }
 }
 

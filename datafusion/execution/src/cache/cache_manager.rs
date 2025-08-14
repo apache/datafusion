@@ -21,6 +21,7 @@ use datafusion_common::{Result, Statistics};
 use object_store::path::Path;
 use object_store::ObjectMeta;
 use std::any::Any;
+use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
@@ -42,17 +43,36 @@ pub trait FileMetadata: Any + Send + Sync {
 
     /// Returns the size of the metadata in bytes.
     fn memory_size(&self) -> usize;
+
+    /// Returns extra information about this entry (used by [`FileMetadataCache::list_entries`]).
+    fn extra_info(&self) -> HashMap<String, String>;
 }
 
 /// Cache to store file-embedded metadata.
 pub trait FileMetadataCache:
     CacheAccessor<ObjectMeta, Arc<dyn FileMetadata>, Extra = ObjectMeta>
 {
-    // Returns the cache's memory limit in bytes.
+    /// Returns the cache's memory limit in bytes.
     fn cache_limit(&self) -> usize;
 
-    // Updates the cache with a new memory limit in bytes.
+    /// Updates the cache with a new memory limit in bytes.
     fn update_cache_limit(&self, limit: usize);
+
+    /// Retrieves the information about the entries currently cached.
+    fn list_entries(&self) -> HashMap<Path, FileMetadataCacheEntry>;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// Represents information about a cached metadata entry.
+/// This is used to expose the metadata cache contents to outside modules.
+pub struct FileMetadataCacheEntry {
+    pub object_meta: ObjectMeta,
+    /// Size of the cached metadata, in bytes.
+    pub size_bytes: usize,
+    /// Number of times this entry was retrieved.
+    pub hits: usize,
+    /// Additional object-specific information.
+    pub extra: HashMap<String, String>,
 }
 
 impl Debug for dyn CacheAccessor<Path, Arc<Statistics>, Extra = ObjectMeta> {

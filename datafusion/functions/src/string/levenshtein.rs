@@ -57,7 +57,7 @@ use datafusion_macros::user_doc;
         description = "String expression to compute Levenshtein distance with str1."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct LevenshteinFunc {
     signature: Signature,
 }

@@ -94,7 +94,7 @@ fn get_min_max_result_type(input_types: &[DataType]) -> Result<Vec<DataType>> {
     standard_argument(name = "expression",)
 )]
 // MAX aggregate UDF
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct Max {
     signature: Signature,
 }
@@ -849,7 +849,7 @@ impl Accumulator for SlidingMaxAccumulator {
 ```"#,
     standard_argument(name = "expression",)
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct Min {
     signature: Signature,
 }
