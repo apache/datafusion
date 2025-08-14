@@ -200,7 +200,7 @@ async fn test_remove_unnecessary_sort5() -> Result<()> {
         "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet",
     ];
     let expected_optimized = [
-        "HashJoinExec: mode=Partitioned, join_type=Inner, on=[(col_a@0, c@2)]",
+        "HashJoinExec: mode=Partitioned, join_type=Inner, on=[(col_a@0, c@2)], probe_side=Right, probe_keys=0",
         "  DataSourceExec: partitions=1, partition_sizes=[0]",
         "  DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet",
     ];
