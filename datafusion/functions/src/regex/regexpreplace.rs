@@ -24,7 +24,9 @@ use arrow::array::{new_null_array, ArrayIter, AsArray};
 use arrow::array::{Array, ArrayRef, OffsetSizeTrait};
 use arrow::array::{ArrayAccessor, StringViewArray};
 use arrow::datatypes::DataType;
-use datafusion_common::cast::as_string_view_array;
+use datafusion_common::cast::{
+    as_large_string_array, as_string_array, as_string_view_array,
+};
 use datafusion_common::exec_err;
 use datafusion_common::plan_err;
 use datafusion_common::ScalarValue;
@@ -95,13 +97,22 @@ impl Default for RegexpReplaceFunc {
 impl RegexpReplaceFunc {
     pub fn new() -> Self {
         use DataType::*;
+        use TypeSignature::*;
         Self {
             signature: Signature::one_of(
                 vec![
-                    TypeSignature::Exact(vec![Utf8, Utf8, Utf8]),
-                    TypeSignature::Exact(vec![Utf8View, Utf8, Utf8]),
-                    TypeSignature::Exact(vec![Utf8, Utf8, Utf8, Utf8]),
-                    TypeSignature::Exact(vec![Utf8View, Utf8, Utf8, Utf8]),
+                    Uniform(3, vec![Utf8, Utf8View]),
+                    Exact(vec![Utf8, Utf8View, Utf8]),
+                    Exact(vec![Utf8, Utf8, Utf8View]),
+                    Exact(vec![Utf8, Utf8View, Utf8View]),
+                    Exact(vec![Utf8View, Utf8, Utf8View]),
+                    Exact(vec![Utf8View, Utf8View, Utf8]),
+                    Exact(vec![Utf8View, Utf8, Utf8]),
+                    Exact(vec![LargeUtf8, Utf8, Utf8]),
+                    Exact(vec![LargeUtf8, Utf8View, Utf8]),
+                    Exact(vec![LargeUtf8, Utf8, Utf8View]),
+                    Exact(vec![LargeUtf8, Utf8View, Utf8View]),
+                    Uniform(4, vec![Utf8, Utf8View]),
                 ],
                 Volatility::Immutable,
             ),
@@ -398,12 +409,37 @@ fn _regexp_replace_early_abort<T: ArrayAccessor>(
 /// Note: If the array is empty or the first argument is null,
 /// then calls the given early abort function.
 macro_rules! fetch_string_arg {
-    ($ARG:expr, $NAME:expr, $T:ident, $EARLY_ABORT:ident, $ARRAY_SIZE:expr) => {{
-        let array = as_generic_string_array::<$T>($ARG)?;
-        if array.len() == 0 || array.is_null(0) {
-            return $EARLY_ABORT(array, $ARRAY_SIZE);
-        } else {
-            array.value(0)
+    ($ARG:expr, $NAME:expr, $EARLY_ABORT:ident, $ARRAY_SIZE:expr) => {{
+        let string_array_type = ($ARG).data_type();
+        match string_array_type {
+            DataType::Utf8 => {
+                let array = as_string_array($ARG)?;
+                if array.len() == 0 || array.is_null(0) {
+                    return $EARLY_ABORT(array, $ARRAY_SIZE);
+                } else {
+                    array.value(0)
+                }
+            }
+            DataType::LargeUtf8 => {
+                let array = as_large_string_array($ARG)?;
+                if array.len() == 0 || array.is_null(0) {
+                    return $EARLY_ABORT(array, $ARRAY_SIZE);
+                } else {
+                    array.value(0)
+                }
+            }
+            DataType::Utf8View => {
+                let array = as_string_view_array($ARG)?;
+                if array.len() == 0 || array.is_null(0) {
+                    return $EARLY_ABORT(array, $ARRAY_SIZE);
+                } else {
+                    array.value(0)
+                }
+            }
+            _ => unreachable!(
+                "Invalid data type for regexp_replace: {}",
+                string_array_type
+            ),
         }
     }};
 }
@@ -417,23 +453,17 @@ fn _regexp_replace_static_pattern_replace<T: OffsetSizeTrait>(
     args: &[ArrayRef],
 ) -> Result<ArrayRef> {
     let array_size = args[0].len();
-    let pattern = fetch_string_arg!(
-        &args[1],
-        "pattern",
-        i32,
-        _regexp_replace_early_abort,
-        array_size
-    );
+    let pattern =
+        fetch_string_arg!(&args[1], "pattern", _regexp_replace_early_abort, array_size);
     let replacement = fetch_string_arg!(
         &args[2],
         "replacement",
-        i32,
         _regexp_replace_early_abort,
         array_size
     );
     let flags = match args.len() {
         3 => None,
-        4 => Some(fetch_string_arg!(&args[3], "flags", i32, _regexp_replace_early_abort, array_size)),
+        4 => Some(fetch_string_arg!(&args[3], "flags", _regexp_replace_early_abort, array_size)),
         other => {
             return exec_err!(
                 "regexp_replace was called with {other} arguments. It requires at least 3 and at most 4."
@@ -640,7 +670,7 @@ mod tests {
     use super::*;
 
     macro_rules! static_pattern_regexp_replace {
-        ($name:ident, $T:ty, $O:ty) => {
+        ($name:ident, $T:ty, $U:ty, $O:ty) => {
             #[test]
             fn $name() {
                 let values = vec!["abc", "acd", "abcd1234567890123", "123456789012abc"];
@@ -650,8 +680,8 @@ mod tests {
                     vec!["afooc", "acd", "afoocd1234567890123", "123456789012afooc"];
 
                 let values = <$T>::from(values);
-                let patterns = StringArray::from(patterns);
-                let replacements = StringArray::from(replacement);
+                let patterns = <$U>::from(patterns);
+                let replacements = <$U>::from(replacement);
                 let expected = <$T>::from(expected);
 
                 let re = _regexp_replace_static_pattern_replace::<$O>(&[
@@ -666,9 +696,43 @@ mod tests {
         };
     }
 
-    static_pattern_regexp_replace!(string_array, StringArray, i32);
-    static_pattern_regexp_replace!(string_view_array, StringViewArray, i32);
-    static_pattern_regexp_replace!(large_string_array, LargeStringArray, i64);
+    static_pattern_regexp_replace!(
+        string_array_string_arrays,
+        StringArray,
+        StringArray,
+        i32
+    );
+    static_pattern_regexp_replace!(
+        string_view_array_string_arrays,
+        StringViewArray,
+        StringArray,
+        i32
+    );
+    static_pattern_regexp_replace!(
+        large_string_array_string_arrays,
+        LargeStringArray,
+        StringArray,
+        i64
+    );
+
+    static_pattern_regexp_replace!(
+        string_array_string_view_arrays,
+        StringArray,
+        StringViewArray,
+        i32
+    );
+    static_pattern_regexp_replace!(
+        string_view_array_string_view_arrays,
+        StringViewArray,
+        StringViewArray,
+        i32
+    );
+    static_pattern_regexp_replace!(
+        large_string_array_string_view_arrays,
+        LargeStringArray,
+        StringViewArray,
+        i64
+    );
 
     macro_rules! static_pattern_regexp_replace_with_flags {
         ($name:ident, $T:ty, $O: ty) => {
