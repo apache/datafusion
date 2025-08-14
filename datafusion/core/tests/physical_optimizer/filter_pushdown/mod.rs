@@ -75,7 +75,7 @@ fn test_pushdown_into_scan() {
     OptimizationTest:
       input:
         - FilterExec: a@0 = foo
-        -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+        -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=<none>
       output:
         Ok:
           - DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@0 = foo
@@ -110,11 +110,11 @@ fn test_pushdown_volatile_functions_not_allowed() {
     OptimizationTest:
       input:
         - FilterExec: a@0 = random()
-        -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+        -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=<none>
       output:
         Ok:
           - FilterExec: a@0 = random()
-          -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+          -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=<none>
     ",
     );
 }
@@ -137,11 +137,11 @@ fn test_pushdown_into_scan_with_config_options() {
     OptimizationTest:
       input:
         - FilterExec: a@0 = foo
-        -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+        -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=<none>
       output:
         Ok:
           - FilterExec: a@0 = foo
-          -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+          -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=<none>
     "
     );
 
@@ -156,7 +156,7 @@ fn test_pushdown_into_scan_with_config_options() {
     OptimizationTest:
       input:
         - FilterExec: a@0 = foo
-        -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+        -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=<none>
       output:
         Ok:
           - DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@0 = foo
@@ -245,9 +245,9 @@ async fn test_dynamic_filter_pushdown_through_hash_join_with_topk() {
     insta::assert_snapshot!(
         format_plan_for_test(&plan),
         @r"
-    - SortExec: TopK(fetch=2), expr=[e@4 ASC], preserve_partitioning=[false], filter_keys=0
+    - SortExec: TopK(fetch=2), expr=[e@4 ASC], preserve_partitioning=[false]
     -   HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, d@0)], probe_side=Right, probe_keys=0
-    -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+    -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=<none>
     -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[d, e, f], file_type=test, pushdown_supported=true, predicate=DynamicFilterPhysicalExpr [ true ] AND DynamicFilterPhysicalExpr [ true ]
     "
     );
@@ -270,7 +270,7 @@ async fn test_dynamic_filter_pushdown_through_hash_join_with_topk() {
         @r"
     - SortExec: TopK(fetch=2), expr=[e@4 ASC], preserve_partitioning=[false], filter=[e@4 IS NULL OR e@4 < bb], filter_keys=2
     -   HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, d@0)], probe_filter=[d@0 >= aa AND d@0 <= ab], probe_side=Right, probe_keys=2
-    -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+    -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=<none>
     -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[d, e, f], file_type=test, pushdown_supported=true, predicate=DynamicFilterPhysicalExpr [ d@0 >= aa AND d@0 <= ab ] AND DynamicFilterPhysicalExpr [ e@1 IS NULL OR e@1 < bb ]
     "
     );
@@ -371,13 +371,13 @@ async fn test_static_filter_pushdown_through_hash_join() {
         - FilterExec: a@0 = d@3
         -   FilterExec: e@4 = ba
         -     FilterExec: a@0 = aa
-        -       HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, d@0)]
+        -       HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, d@0)], probe_side=Right, probe_keys=0
         -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=<none>
         -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[d, e, f], file_type=test, pushdown_supported=true, predicate=<none>
       output:
         Ok:
           - FilterExec: a@0 = d@3
-          -   HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, d@0)]
+          -   HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, d@0)], probe_side=Right, probe_keys=0
           -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@0 = aa
           -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[d, e, f], file_type=test, pushdown_supported=true, predicate=e@1 = ba
     "
@@ -417,14 +417,14 @@ async fn test_static_filter_pushdown_through_hash_join() {
     OptimizationTest:
       input:
         - FilterExec: a@0 = aa
-        -   HashJoinExec: mode=Partitioned, join_type=Left, on=[(a@0, d@0)]
-        -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
-        -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[d, e, f], file_type=test, pushdown_supported=true
+        -   HashJoinExec: mode=Partitioned, join_type=Left, on=[(a@0, d@0)], probe_side=Right, probe_keys=0
+        -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=<none>
+        -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[d, e, f], file_type=test, pushdown_supported=true, predicate=<none>
       output:
         Ok:
-          - HashJoinExec: mode=Partitioned, join_type=Left, on=[(a@0, d@0)]
+          - HashJoinExec: mode=Partitioned, join_type=Left, on=[(a@0, d@0)], probe_side=Right, probe_keys=0
           -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@0 = aa
-          -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[d, e, f], file_type=test, pushdown_supported=true
+          -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[d, e, f], file_type=test, pushdown_supported=true, predicate=<none>
     "
     );
 }
@@ -445,7 +445,7 @@ fn test_filter_collapse() {
       input:
         - FilterExec: b@1 = bar
         -   FilterExec: a@0 = foo
-        -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+        -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=<none>
       output:
         Ok:
           - DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@0 = foo AND b@1 = bar
@@ -472,7 +472,7 @@ fn test_filter_with_projection() {
     OptimizationTest:
       input:
         - FilterExec: a@0 = foo, projection=[b@1, a@0]
-        -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+        -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=<none>
       output:
         Ok:
           - ProjectionExec: expr=[b@1 as b, a@0 as a]
@@ -495,7 +495,7 @@ fn test_filter_with_projection() {
     OptimizationTest:
       input:
         - FilterExec: a@0 = foo, projection=[b@1]
-        -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+        -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=<none>
       output:
         Ok:
           - ProjectionExec: expr=[b@1 as b]
@@ -592,7 +592,7 @@ fn test_no_pushdown_through_aggregates() {
         -     AggregateExec: mode=Final, gby=[a@0 as a, b@1 as b], aggr=[cnt], ordering_mode=PartiallySorted([0])
         -       FilterExec: a@0 = foo
         -         CoalesceBatchesExec: target_batch_size=10
-        -           DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+        -           DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=<none>
       output:
         Ok:
           - FilterExec: b@1 = bar
@@ -619,7 +619,7 @@ fn test_node_handles_child_pushdown_result() {
     OptimizationTest:
       input:
         - TestInsertExec { inject_filter: true }
-        -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+        -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=<none>
       output:
         Ok:
           - TestInsertExec { inject_filter: true }
@@ -638,12 +638,12 @@ fn test_node_handles_child_pushdown_result() {
     OptimizationTest:
       input:
         - TestInsertExec { inject_filter: true }
-        -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
+        -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false, predicate=<none>
       output:
         Ok:
           - TestInsertExec { inject_filter: false }
           -   FilterExec: a@0 = foo
-          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
+          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false, predicate=<none>
     ",
     );
 
@@ -706,7 +706,7 @@ async fn test_topk_dynamic_filter_pushdown() {
     OptimizationTest:
       input:
         - SortExec: TopK(fetch=1), expr=[b@1 DESC NULLS LAST], preserve_partitioning=[false]
-        -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+        -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=<none>
       output:
         Ok:
           - SortExec: TopK(fetch=1), expr=[b@1 DESC NULLS LAST], preserve_partitioning=[false]
@@ -811,12 +811,12 @@ async fn test_hashjoin_dynamic_filter_pushdown() {
         @r"
     OptimizationTest:
       input:
-        - HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, a@0), (b@1, b@1)]
+        - HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, a@0), (b@1, b@1)], probe_side=Right, probe_keys=0
         -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=<none>
         -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=<none>
       output:
         Ok:
-          - HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, a@0), (b@1, b@1)]
+          - HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, a@0), (b@1, b@1)], probe_side=Right, probe_keys=0
           -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=<none>
           -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilterPhysicalExpr [ true ]
     ",
@@ -1145,16 +1145,16 @@ async fn test_nested_hashjoin_dynamic_filter_pushdown() {
         @r"
     OptimizationTest:
       input:
-        - HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, b@0)]
-        -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, x], file_type=test, pushdown_supported=true
-        -   HashJoinExec: mode=Partitioned, join_type=Inner, on=[(c@1, d@0)]
-        -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[b, c, y], file_type=test, pushdown_supported=true
-        -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[d, z], file_type=test, pushdown_supported=true
+        - HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, b@0)], probe_side=Right, probe_keys=0
+        -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, x], file_type=test, pushdown_supported=true, predicate=<none>
+        -   HashJoinExec: mode=Partitioned, join_type=Inner, on=[(c@1, d@0)], probe_side=Right, probe_keys=0
+        -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[b, c, y], file_type=test, pushdown_supported=true, predicate=<none>
+        -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[d, z], file_type=test, pushdown_supported=true, predicate=<none>
       output:
         Ok:
-          - HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, b@0)]
-          -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, x], file_type=test, pushdown_supported=true
-          -   HashJoinExec: mode=Partitioned, join_type=Inner, on=[(c@1, d@0)]
+          - HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, b@0)], probe_side=Right, probe_keys=0
+          -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, x], file_type=test, pushdown_supported=true, predicate=<none>
+          -   HashJoinExec: mode=Partitioned, join_type=Inner, on=[(c@1, d@0)], probe_side=Right, probe_keys=0
           -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[b, c, y], file_type=test, pushdown_supported=true, predicate=DynamicFilterPhysicalExpr [ true ]
           -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[d, z], file_type=test, pushdown_supported=true, predicate=DynamicFilterPhysicalExpr [ true ]
     ",
@@ -1184,8 +1184,8 @@ async fn test_nested_hashjoin_dynamic_filter_pushdown() {
         format!("{}", format_plan_for_test(&plan)),
         @r"
     - HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, b@0)], probe_filter=[b@0 >= aa AND b@0 <= ab], probe_side=Right, probe_keys=2
-    -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, x], file_type=test, pushdown_supported=true
-    -   HashJoinExec: mode=Partitioned, join_type=Inner, on=[(c@1, d@0)], probe_filter=[d@0 >= ca AND d@0 <= ce], probe_side=Right, probe_keys=2
+    -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, x], file_type=test, pushdown_supported=true, predicate=<none>
+    -   HashJoinExec: mode=Partitioned, join_type=Inner, on=[(c@1, d@0)], probe_filter=[d@0 >= ca AND d@0 <= ce], probe_side=Right, probe_keys=5
     -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[b, c, y], file_type=test, pushdown_supported=true, predicate=DynamicFilterPhysicalExpr [ b@0 >= aa AND b@0 <= ab ]
     -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[d, z], file_type=test, pushdown_supported=true, predicate=DynamicFilterPhysicalExpr [ d@0 >= ca AND d@0 <= ce ]
     "
@@ -1290,13 +1290,13 @@ async fn test_hashjoin_parent_filter_pushdown() {
         - FilterExec: a@0 = d@3
         -   FilterExec: e@4 = ba
         -     FilterExec: a@0 = aa
-        -       HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, d@0)]
+        -       HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, d@0)], probe_side=Right, probe_keys=0
         -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=<none>
         -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[d, e, f], file_type=test, pushdown_supported=true, predicate=<none>
       output:
         Ok:
           - FilterExec: a@0 = d@3
-          -   HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, d@0)]
+          -   HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, d@0)], probe_side=Right, probe_keys=0
           -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@0 = aa
           -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[d, e, f], file_type=test, pushdown_supported=true, predicate=e@1 = ba
     "
