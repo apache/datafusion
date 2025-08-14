@@ -733,19 +733,20 @@ config_namespace! {
         /// year 2025 any files that only have timestamps in the year 2024 can be skipped /
         /// pruned at various stages in the scan.
         ///
-        /// Dynamic filters are also produced by joins, allowing DataFusion to prune
-        /// the *probe* side during execution. `HashJoinExec` builds from its left
-        /// input and probes with its right input. Legend: Left = left child, Right =
-        /// right child.
+        /// Dynamic filters are also produced by joins. At runtime, DataFusion applies
+        /// the filter to one input to prune work. `HashJoinExec` builds from its left
+        /// input and probes with its right input, but the dynamic filter target (the
+        /// side we prune) depends on the join type:
         ///
-        /// | Join type                | Probe side |
-        /// |-------------------------|------------|
-        /// | `Inner`, `Left`         | Right input |
-        /// | `Right`                 | Left input  |
-        /// | `LeftSemi`, `LeftAnti`  | Left input  |
-        /// | `RightSemi`, `RightAnti`| Right input |
-        ///
-        /// Full joins are not supported.
+        /// | Join type                | Dynamic filter target |
+        /// |--------------------------|-----------------------|
+        /// | `Inner`, `Left`         | Right input            |
+        /// | `Right`                 | Left input             |
+        /// | `LeftSemi`, `LeftAnti`  | Left input             |
+        /// | `RightSemi`, `RightAnti`| Right input            |
+        /// | `LeftMark`              | Right input            |
+        /// | `RightMark`             | Left input             |
+        /// | `Full`                  | Not supported          |
         ///
         /// Non-equi join predicates do **not** generate dynamic filters; they require
         /// range analysis and cross-conjunct reasoning (future work). Composite
