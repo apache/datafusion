@@ -353,6 +353,15 @@ impl SessionConfig {
         self
     }
 
+    /// Enables or disables dynamic filter pushdown in the optimizer
+    pub fn with_optimizer_enable_dynamic_filter_pushdown(
+        mut self,
+        enabled: bool,
+    ) -> Self {
+        self.options_mut().optimizer.enable_dynamic_filter_pushdown = enabled;
+        self
+    }
+
     /// Enables or disables the use of pruning predicate for parquet readers to skip row groups
     pub fn with_parquet_pruning(mut self, enabled: bool) -> Self {
         self.options_mut().execution.parquet.pruning = enabled;
