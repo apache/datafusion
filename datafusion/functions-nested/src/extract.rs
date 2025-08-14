@@ -103,7 +103,7 @@ make_udf_expr_and_func!(
         description = "Index to extract the element from the array."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ArrayElement {
     signature: Signature,
     aliases: Vec<String>,
@@ -320,7 +320,7 @@ pub fn array_slice(array: Expr, begin: Expr, end: Expr, stride: Option<Expr>) ->
         description = "Stride of the array slice. The default is 1."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub(super) struct ArraySlice {
     signature: Signature,
     aliases: Vec<String>,
@@ -663,7 +663,7 @@ where
         description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub(super) struct ArrayPopFront {
     signature: Signature,
     aliases: Vec<String>,
@@ -770,7 +770,7 @@ where
         description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub(super) struct ArrayPopBack {
     signature: Signature,
     aliases: Vec<String>,
@@ -878,7 +878,7 @@ where
         description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub(super) struct ArrayAnyValue {
     signature: Signature,
     aliases: Vec<String>,

@@ -42,7 +42,7 @@ use datafusion_macros::user_doc;
     standard_argument(name = "base", prefix = "Numeric"),
     standard_argument(name = "exponent", prefix = "Exponent numeric")
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct PowerFunc {
     signature: Signature,
     aliases: Vec<String>,

@@ -768,7 +768,7 @@ nvl2(expression1, expression2, expression3)
 
 ### `ascii`
 
-Returns the Unicode character code of the first character in a string.
+Returns the first Unicode scalar value of a string.
 
 ```sql
 ascii(str)
@@ -909,7 +909,7 @@ character_length(str)
 
 ### `chr`
 
-Returns the character with the specified ASCII or Unicode code value.
+Returns a string containing the character with the specified Unicode scalar value.
 
 ```sql
 chr(expression)
