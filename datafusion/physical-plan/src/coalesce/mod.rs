@@ -121,8 +121,7 @@ impl LimitedBatchCoalescer {
         self.total_rows += batch.num_rows();
 
         if batch.num_rows() >= self.biggest_coalesce_size {
-           self.inner
-                .flush_buffer_and_push_batch_to_completed(batch)?;
+            self.inner.flush_buffer_and_push_batch_to_completed(batch)?;
         } else {
             self.inner.push_batch(batch)?;
         }
