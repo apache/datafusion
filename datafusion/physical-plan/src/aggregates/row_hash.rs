@@ -431,7 +431,7 @@ pub(crate) struct GroupedHashAggregateStream {
     /// Execution metrics
     baseline_metrics: BaselineMetrics,
 
-    /// Metrics for sorting in the spill manager
+    /// Metrics for the sort_batch function itself, used when spilling and when stream-merging.
     lexsort_metrics: LexSortMetrics,
 }
 

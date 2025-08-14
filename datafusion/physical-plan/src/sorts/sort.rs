@@ -65,8 +65,6 @@ use log::{debug, trace};
 
 #[derive(Clone, Debug)]
 pub struct LexSortMetrics {
-    pub time_evaluating_sort_columns: Time,
-
     pub time_calculating_lexsort_indices: Time,
 
     pub time_taking_indices_in_lexsort: Time,
@@ -75,8 +73,6 @@ pub struct LexSortMetrics {
 impl LexSortMetrics {
     pub fn new(metrics: &ExecutionPlanMetricsSet, partition: usize) -> Self {
         Self {
-            time_evaluating_sort_columns: MetricBuilder::new(metrics)
-                .subset_time("time_evaluating_sort_columns", partition),
             time_calculating_lexsort_indices: MetricBuilder::new(metrics)
                 .subset_time("time_calculating_lexsort_indices", partition),
             time_taking_indices_in_lexsort: MetricBuilder::new(metrics)
@@ -841,17 +837,13 @@ pub fn sort_batch(
     metrics: Option<&LexSortMetrics>,
     fetch: Option<usize>,
 ) -> Result<RecordBatch> {
-    let sort_columns = {
-        let _timer = metrics.map(|metrics| metrics.time_evaluating_sort_columns.timer());
-        expressions
-            .iter()
-            .map(|expr| expr.evaluate_to_sort_column(batch))
-            .collect::<Result<Vec<_>>>()?
-    };
-
     let indices = {
         let _timer =
             metrics.map(|metrics| metrics.time_calculating_lexsort_indices.timer());
+        let sort_columns = expressions
+            .iter()
+            .map(|expr| expr.evaluate_to_sort_column(batch))
+            .collect::<Result<Vec<_>>>()?;
         lexsort_to_indices(&sort_columns, fetch)?
     };
     let mut columns = {
