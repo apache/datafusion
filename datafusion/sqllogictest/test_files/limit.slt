@@ -799,7 +799,7 @@ CREATE TABLE src_table (
 # File 1:
 query I
 COPY (SELECT * FROM src_table where part_key = 1)
-TO 'test_files/scratch/parquet/test_limit_with_partitions/part-0.parquet'
+TO 'test_files/scratch/limit/test_limit_with_partitions/part-0.parquet'
 STORED AS PARQUET;
 ----
 3
@@ -807,7 +807,7 @@ STORED AS PARQUET;
 # File 2:
 query I
 COPY (SELECT * FROM src_table where part_key = 2)
-TO 'test_files/scratch/parquet/test_limit_with_partitions/part-1.parquet'
+TO 'test_files/scratch/limit/test_limit_with_partitions/part-1.parquet'
 STORED AS PARQUET;
 ----
 4
@@ -815,7 +815,7 @@ STORED AS PARQUET;
 # File 3:
 query I
 COPY (SELECT * FROM src_table where part_key = 3)
-TO 'test_files/scratch/parquet/test_limit_with_partitions/part-2.parquet'
+TO 'test_files/scratch/limit/test_limit_with_partitions/part-2.parquet'
 STORED AS PARQUET;
 ----
 3
@@ -827,7 +827,7 @@ CREATE EXTERNAL TABLE test_limit_with_partitions
   value INT
 )
 STORED AS PARQUET
-LOCATION 'test_files/scratch/parquet/test_limit_with_partitions/';
+LOCATION 'test_files/scratch/limit/test_limit_with_partitions/';
 
 query TT
 explain
@@ -853,7 +853,7 @@ physical_plan
 01)ProjectionExec: expr=[1 as foo]
 02)--SortPreservingMergeExec: [part_key@0 ASC NULLS LAST], fetch=1
 03)----SortExec: TopK(fetch=1), expr=[part_key@0 ASC NULLS LAST], preserve_partitioning=[true]
-04)------DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_limit_with_partitions/part-0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_limit_with_partitions/part-1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_limit_with_partitions/part-2.parquet]]}, projection=[part_key], file_type=parquet, predicate=DynamicFilterPhysicalExpr [ true ]
+04)------DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/limit/test_limit_with_partitions/part-0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/limit/test_limit_with_partitions/part-1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/limit/test_limit_with_partitions/part-2.parquet]]}, projection=[part_key], file_type=parquet, predicate=DynamicFilterPhysicalExpr [ true ]
 
 query I
 with selection as (

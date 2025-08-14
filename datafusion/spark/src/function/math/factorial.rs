@@ -27,7 +27,7 @@ use datafusion_expr::Signature;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Volatility};
 
 /// <https://spark.apache.org/docs/latest/api/sql/index.html#factorial>
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkFactorial {
     signature: Signature,
     aliases: Vec<String>,
