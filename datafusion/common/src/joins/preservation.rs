@@ -96,6 +96,6 @@ pub const fn preservation_for_on_filters(join_type: JoinType) -> (bool, bool) {
 }
 
 #[allow(unused_imports)]
-pub(crate) use preservation_for_output_filters as lr_is_preserved;
-#[allow(unused_imports)]
 pub(crate) use preservation_for_on_filters as on_lr_is_preserved;
+#[allow(unused_imports)]
+pub(crate) use preservation_for_output_filters as lr_is_preserved;

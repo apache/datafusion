@@ -19,6 +19,4 @@
 
 pub mod preservation;
 
-pub use preservation::{
-    preservation_for_on_filters, preservation_for_output_filters,
-};
+pub use preservation::{preservation_for_on_filters, preservation_for_output_filters};

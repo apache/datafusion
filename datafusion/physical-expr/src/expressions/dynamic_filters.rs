@@ -190,9 +190,9 @@ impl DynamicFilterPhysicalExpr {
                 .inner
                 .read()
                 .map_err(|e| {
-                    datafusion_common::DataFusionError::Execution(
-                        format!("Failed to acquire read lock for inner: {e}"),
-                    )
+                    datafusion_common::DataFusionError::Execution(format!(
+                        "Failed to acquire read lock for inner: {e}"
+                    ))
                 })?
                 .expr,
         );
@@ -215,14 +215,11 @@ impl DynamicFilterPhysicalExpr {
         new_expr: Arc<dyn PhysicalExpr>,
         key_count: usize,
     ) -> Result<()> {
-        let mut current = self
-            .inner
-            .write()
-            .map_err(|e| {
-                datafusion_common::DataFusionError::Execution(
-                    format!("Failed to acquire write lock for inner: {e}"),
-                )
-            })?;
+        let mut current = self.inner.write().map_err(|e| {
+            datafusion_common::DataFusionError::Execution(format!(
+                "Failed to acquire write lock for inner: {e}"
+            ))
+        })?;
         // Remap the children of the new expression to match the original children
         // We still do this again in `current()` but doing it preventively here
         // reduces the work needed in some cases if `current()` is called multiple times
