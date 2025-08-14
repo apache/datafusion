@@ -658,11 +658,11 @@ fn test_node_handles_child_pushdown_result() {
     OptimizationTest:
       input:
         - TestInsertExec { inject_filter: false }
-        -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
+        -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false, predicate=<none>
       output:
         Ok:
           - TestInsertExec { inject_filter: false }
-          -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
+          -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false, predicate=<none>
     ",
     );
 }
