@@ -75,7 +75,7 @@ use std::sync::Arc;
         description = "The field name in the map or struct to retrieve data for. Must evaluate to a string."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct GetFieldFunc {
     signature: Signature,
 }
