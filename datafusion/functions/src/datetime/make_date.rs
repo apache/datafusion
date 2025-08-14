@@ -66,7 +66,7 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
         description = "Day to use when making the date. Can be a constant, column or function, and any combination of arithmetic operators."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct MakeDateFunc {
     signature: Signature,
 }
