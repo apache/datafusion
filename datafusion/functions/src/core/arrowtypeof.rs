@@ -40,7 +40,7 @@ use std::any::Any;
         description = "Expression to evaluate. The expression can be a constant, column, or function, and any combination of operators."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ArrowTypeOfFunc {
     signature: Signature,
 }

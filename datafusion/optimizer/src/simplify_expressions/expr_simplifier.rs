@@ -4384,7 +4384,7 @@ mod tests {
             unimplemented!("not needed for tests")
         }
     }
-    #[derive(Debug)]
+    #[derive(Debug, PartialEq, Eq, Hash)]
     struct VolatileUdf {
         signature: Signature,
     }

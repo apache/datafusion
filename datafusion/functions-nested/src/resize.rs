@@ -70,7 +70,7 @@ make_udf_expr_and_func!(
         description = "Defines new elements' value or empty if value is not set."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ArrayResize {
     signature: Signature,
     aliases: Vec<String>,

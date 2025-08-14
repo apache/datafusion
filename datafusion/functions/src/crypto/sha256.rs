@@ -44,7 +44,7 @@ use std::any::Any;
 ```"#,
     standard_argument(name = "expression", prefix = "String")
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SHA256Func {
     signature: Signature,
 }

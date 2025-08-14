@@ -1511,7 +1511,7 @@ mod test {
         )
     }
 
-    #[derive(Debug, Clone)]
+    #[derive(Debug, PartialEq, Eq, Hash)]
     struct TestScalarUDF {
         signature: Signature,
     }
