@@ -698,57 +698,57 @@ mod tests {
     }
 
     static_pattern_regexp_replace!(
-        string_array_string_arrays,
+        string_array_string_args,
         StringArray,
         StringArray,
         i32
     );
     static_pattern_regexp_replace!(
-        string_view_array_string_arrays,
+        string_view_array_string_args,
         StringViewArray,
         StringArray,
         i32
     );
     static_pattern_regexp_replace!(
-        large_string_array_string_arrays,
+        large_string_array_string_args,
         LargeStringArray,
         StringArray,
         i64
     );
 
     static_pattern_regexp_replace!(
-        string_array_string_view_arrays,
+        string_array_string_view_args,
         StringArray,
         StringViewArray,
         i32
     );
     static_pattern_regexp_replace!(
-        string_view_array_string_view_arrays,
+        string_view_array_string_view_args,
         StringViewArray,
         StringViewArray,
         i32
     );
     static_pattern_regexp_replace!(
-        large_string_array_string_view_arrays,
+        large_string_array_string_view_args,
         LargeStringArray,
         StringViewArray,
         i64
     );
 
     static_pattern_regexp_replace!(
-        string_array_large_string_arrays,
+        string_array_large_string_args,
         StringArray,
         LargeStringArray,
         i32
     );
     static_pattern_regexp_replace!(
-        string_view_array_large_string_arrays,
+        string_view_array_large_string_args,
         StringViewArray,
         LargeStringArray,
         i32
     );
     static_pattern_regexp_replace!(
-        large_string_array_large_string_arrays,
+        large_string_array_large_string_args,
         LargeStringArray,
         LargeStringArray,
         i64
