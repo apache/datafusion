@@ -32,7 +32,8 @@ use crate::filter_pushdown::{
 };
 use crate::limit::LimitStream;
 use crate::metrics::{
-    BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet, SpillMetrics,
+    BaselineMetrics, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet, SpillMetrics,
+    Time,
 };
 use crate::projection::{make_with_child, update_ordering, ProjectionExec};
 use crate::sorts::streaming_merge::{SortedSpillFile, StreamingMergeBuilder};
@@ -62,11 +63,31 @@ use datafusion_physical_expr::PhysicalExpr;
 use futures::{StreamExt, TryStreamExt};
 use log::{debug, trace};
 
+#[derive(Clone, Debug)]
+pub struct LexSortMetrics {
+    pub time_calculating_lexsort_indices: Time,
+
+    pub time_taking_indices_in_lexsort: Time,
+}
+
+impl LexSortMetrics {
+    pub fn new(metrics: &ExecutionPlanMetricsSet, partition: usize) -> Self {
+        Self {
+            time_calculating_lexsort_indices: MetricBuilder::new(metrics)
+                .subset_time("time_calculating_lexsort_indices", partition),
+            time_taking_indices_in_lexsort: MetricBuilder::new(metrics)
+                .subset_time("time_taking_indices_in_lexsort", partition),
+        }
+    }
+}
+
 struct ExternalSorterMetrics {
     /// metrics
     baseline: BaselineMetrics,
 
     spill_metrics: SpillMetrics,
+
+    lexsort_metrics: LexSortMetrics,
 }
 
 impl ExternalSorterMetrics {
@@ -74,6 +95,7 @@ impl ExternalSorterMetrics {
         Self {
             baseline: BaselineMetrics::new(metrics, partition),
             spill_metrics: SpillMetrics::new(metrics, partition),
+            lexsort_metrics: LexSortMetrics::new(metrics, partition),
         }
     }
 }
@@ -708,11 +730,12 @@ impl ExternalSorter {
         );
         let schema = batch.schema();
 
+        let lexsort_metrics = self.metrics.lexsort_metrics.clone();
         let expressions = self.expr.clone();
         let stream = futures::stream::once(async move {
             let _timer = metrics.elapsed_compute().timer();
 
-            let sorted = sort_batch(&batch, &expressions, None)?;
+            let sorted = sort_batch(&batch, &expressions, Some(&lexsort_metrics), None)?;
 
             metrics.record_output(sorted.num_rows());
             drop(batch);
@@ -811,15 +834,23 @@ impl Debug for ExternalSorter {
 pub fn sort_batch(
     batch: &RecordBatch,
     expressions: &LexOrdering,
+    metrics: Option<&LexSortMetrics>,
     fetch: Option<usize>,
 ) -> Result<RecordBatch> {
-    let sort_columns = expressions
-        .iter()
-        .map(|expr| expr.evaluate_to_sort_column(batch))
-        .collect::<Result<Vec<_>>>()?;
-
-    let indices = lexsort_to_indices(&sort_columns, fetch)?;
-    let mut columns = take_arrays(batch.columns(), &indices, None)?;
+    let indices = {
+        let _timer =
+            metrics.map(|metrics| metrics.time_calculating_lexsort_indices.timer());
+        let sort_columns = expressions
+            .iter()
+            .map(|expr| expr.evaluate_to_sort_column(batch))
+            .collect::<Result<Vec<_>>>()?;
+        lexsort_to_indices(&sort_columns, fetch)?
+    };
+    let mut columns = {
+        let _timer =
+            metrics.map(|metrics| metrics.time_taking_indices_in_lexsort.timer());
+        take_arrays(batch.columns(), &indices, None)?
+    };
 
     // The columns may be larger than the unsorted columns in `batch` especially for variable length
     // data types due to exponential growth when building the sort columns. We shrink the columns
@@ -2051,7 +2082,7 @@ mod tests {
         }]
         .into();
 
-        let result = sort_batch(&batch, &expressions, None).unwrap();
+        let result = sort_batch(&batch, &expressions, None, None).unwrap();
         assert_eq!(result.num_rows(), 1);
     }
 
