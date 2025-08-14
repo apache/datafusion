@@ -29,7 +29,6 @@ use datafusion_common::cast::{
 };
 use datafusion_common::exec_err;
 use datafusion_common::plan_err;
-use datafusion_common::types::logical_string;
 use datafusion_common::ScalarValue;
 use datafusion_common::{
     cast::as_generic_string_array, internal_err, DataFusionError, Result,
@@ -38,7 +37,6 @@ use datafusion_expr::function::Hint;
 use datafusion_expr::ColumnarValue;
 use datafusion_expr::TypeSignature;
 use datafusion_expr::{Documentation, ScalarUDFImpl, Signature, Volatility};
-use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
 use datafusion_macros::user_doc;
 use regex::Regex;
 use std::any::Any;
@@ -98,23 +96,9 @@ impl Default for RegexpReplaceFunc {
 
 impl RegexpReplaceFunc {
     pub fn new() -> Self {
-        use TypeSignature::*;
-        use TypeSignatureClass::*;
         Self {
             signature: Signature::one_of(
-                vec![
-                    Coercible(vec![
-                        Coercion::new_exact(Native(logical_string())),
-                        Coercion::new_exact(Native(logical_string())),
-                        Coercion::new_exact(Native(logical_string())),
-                    ]),
-                    Coercible(vec![
-                        Coercion::new_exact(Native(logical_string())),
-                        Coercion::new_exact(Native(logical_string())),
-                        Coercion::new_exact(Native(logical_string())),
-                        Coercion::new_exact(Native(logical_string())),
-                    ]),
-                ],
+                vec![TypeSignature::String(3), TypeSignature::String(4)],
                 Volatility::Immutable,
             ),
         }
