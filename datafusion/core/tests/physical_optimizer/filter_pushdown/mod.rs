@@ -1727,7 +1727,12 @@ async fn test_hashjoin_right_mark_dynamic_filter_pushdown() {
 
 #[tokio::test]
 async fn test_hashjoin_right_semi_dynamic_filter_pushdown() {
-    let plan = build_join_with_dynamic_filter(JoinType::RightSemi, true, true);
+    let plan = build_join_with_dynamic_filter(
+        JoinType::RightSemi,
+        true,
+        true,
+        PartitionMode::Partitioned,
+    );
     let mut config = ConfigOptions::default();
     config.execution.parquet.pushdown_filters = true;
     config.optimizer.enable_dynamic_filter_pushdown = true;
@@ -1747,7 +1752,12 @@ async fn test_hashjoin_right_semi_dynamic_filter_pushdown() {
 
 #[tokio::test]
 async fn test_hashjoin_right_anti_dynamic_filter_pushdown() {
-    let plan = build_join_with_dynamic_filter(JoinType::RightAnti, true, true);
+    let plan = build_join_with_dynamic_filter(
+        JoinType::RightAnti,
+        true,
+        true,
+        PartitionMode::Partitioned,
+    );
     let mut config = ConfigOptions::default();
     config.execution.parquet.pushdown_filters = true;
     config.optimizer.enable_dynamic_filter_pushdown = true;
