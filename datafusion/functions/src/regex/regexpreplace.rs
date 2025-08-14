@@ -145,13 +145,13 @@ impl ScalarUDFImpl for RegexpReplaceFunc {
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         use DataType::*;
         Ok(match &arg_types[0] {
-            LargeUtf8 => LargeUtf8,
-            Utf8 => Utf8,
-            Utf8View => Utf8View,
+            LargeUtf8 | LargeBinary => LargeUtf8,
+            Utf8 | Binary => Utf8,
+            Utf8View | BinaryView => Utf8View,
             Null => Null,
             Dictionary(_, t) => match **t {
-                LargeUtf8 => LargeUtf8,
-                Utf8 => Utf8,
+                LargeUtf8 | LargeBinary => LargeUtf8,
+                Utf8 | Binary => Utf8,
                 Null => Null,
                 _ => {
                     return plan_err!(
