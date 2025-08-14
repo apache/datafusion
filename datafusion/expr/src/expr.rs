@@ -1039,7 +1039,6 @@ impl WindowFunctionDefinition {
     pub fn return_field(
         &self,
         input_expr_fields: &[FieldRef],
-        _input_expr_nullable: &[bool],
         display_name: &str,
     ) -> Result<FieldRef> {
         match self {
