@@ -16,7 +16,7 @@
 # under the License.
 
 name: Dev
-on: [push, pull_request]
+on: [push, pull_request, merge_group]
 
 concurrency:
   group: ${{ github.repository }}-${{ github.head_ref || github.sha }}-${{ github.workflow }}
