@@ -59,6 +59,7 @@ use datafusion_physical_plan::{
 
 use futures::StreamExt;
 use object_store::{memory::InMemory, ObjectStore};
+use rstest::rstest;
 use util::{format_plan_for_test, OptimizationTest, TestNode, TestScanBuilder};
 
 mod util;
@@ -1164,7 +1165,75 @@ async fn test_nested_hashjoin_dynamic_filter_pushdown() {
         .with_support(true)
         .with_batches(t1_batches)
         .build();
+    // t2 and t3: larger tables joined together on (c = d)
+    let t2_batches = vec![record_batch!(
+        ("b", Utf8, ["aa", "ab", "ac", "ad", "ae"]),
+        ("c", Utf8, ["ca", "cb", "cc", "cd", "ce"]),
+        ("y", Float64, [1.0, 2.0, 3.0, 4.0, 5.0])
+    )
+    .unwrap()];
+    let t2_schema = Arc::new(Schema::new(vec![
+        Field::new("b", DataType::Utf8, false),
+        Field::new("c", DataType::Utf8, false),
+        Field::new("y", DataType::Float64, false),
+    ]));
+    let t2_scan = TestScanBuilder::new(Arc::clone(&t2_schema))
+        .with_support(true)
+        .with_batches(t2_batches)
+        .build();
 
+    let t3_batches = vec![record_batch!(
+        ("d", Utf8, ["ca", "cb", "cc", "cd", "ce"]),
+        ("z", Float64, [1.0, 2.0, 3.0, 4.0, 5.0])
+    )
+    .unwrap()];
+    let t3_schema = Arc::new(Schema::new(vec![
+        Field::new("d", DataType::Utf8, false),
+        Field::new("z", DataType::Float64, false),
+    ]));
+    let t3_scan = TestScanBuilder::new(Arc::clone(&t3_schema))
+        .with_support(true)
+        .with_batches(t3_batches)
+        .build();
+
+    // Inner join t2 and t3 on c = d
+    let inner_on = vec![(col("c", &t2_schema).unwrap(), col("d", &t3_schema).unwrap())];
+    let inner_join = Arc::new(
+        HashJoinExec::try_new(
+            t2_scan,
+            t3_scan,
+            inner_on,
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::Partitioned,
+            datafusion_common::NullEquality::NullEqualsNothing,
+        )
+        .unwrap(),
+    ) as Arc<dyn ExecutionPlan>;
+
+    // Outer join t1 with the inner join on a = b
+    let inner_schema = inner_join.schema();
+    let outer_on = vec![(
+        col("a", &t1_schema).unwrap(),
+        col("b", &inner_schema).unwrap(),
+    )];
+    let outer_join = Arc::new(
+        HashJoinExec::try_new(
+            t1_scan,
+            inner_join,
+            outer_on,
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::Partitioned,
+            datafusion_common::NullEquality::NullEqualsNothing,
+        )
+        .unwrap(),
+    ) as Arc<dyn ExecutionPlan>;
+
+    let mut config = ConfigOptions::default();
+    config.execution.parquet.pushdown_filters = true;
     config.optimizer.enable_dynamic_filter_pushdown = true;
     let plan = FilterPushdown::new_post_optimization()
         .optimize(outer_join, &config)
@@ -1268,8 +1337,44 @@ fn build_join_with_dynamic_filter(
     ) as Arc<dyn ExecutionPlan>
 }
 
+fn assert_dynamic_filter_location(formatted: &str, join_type: &JoinType) {
+    match join_type {
+        JoinType::Left | JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark => {
+            assert_contains!(
+                formatted,
+                "DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilterPhysicalExpr"
+            );
+            assert_contains!(
+                formatted,
+                "DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=<none>"
+            );
+        }
+        JoinType::Right
+        | JoinType::RightSemi
+        | JoinType::RightAnti
+        | JoinType::RightMark => {
+            assert_contains!(
+                formatted,
+                "DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=DynamicFilterPhysicalExpr"
+            );
+            assert_contains!(
+                formatted,
+                "DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=<none>"
+            );
+        }
+        _ => unreachable!(),
+    }
+}
+
+#[rstest(
+    join_type,
+    case::inner(JoinType::Inner),
+    case::left(JoinType::Left),
+    case::right(JoinType::Right),
+    case::full(JoinType::Full)
+)]
 #[tokio::test]
-async fn test_hashjoin_non_equi_predicate_no_dynamic_filter() {
+async fn test_hashjoin_non_equi_predicate_no_dynamic_filter(join_type: JoinType) {
     // Non-equi join predicates like `l.a > r.a` are not supported by HashJoinExec
     // and thus cannot produce dynamic filters.
     let left_batches = vec![record_batch!(("a", Utf8, ["aa", "ab"])).unwrap()];
@@ -1304,7 +1409,7 @@ async fn test_hashjoin_non_equi_predicate_no_dynamic_filter() {
         right_scan,
         vec![],
         Some(join_filter),
-        &JoinType::Inner,
+        &join_type,
         None,
         PartitionMode::Partitioned,
         datafusion_common::NullEquality::NullEqualsNothing,
@@ -1313,14 +1418,11 @@ async fn test_hashjoin_non_equi_predicate_no_dynamic_filter() {
     assert_not_contains!(err.to_string(), "non-equi");
 }
 
+#[rstest(join_type, case::left(JoinType::Left), case::right(JoinType::Right))]
 #[tokio::test]
-async fn test_hashjoin_left_dynamic_filter_pushdown() {
-    let plan = build_join_with_dynamic_filter(
-        JoinType::Left,
-        true,
-        true,
-        PartitionMode::Partitioned,
-    );
+async fn test_hashjoin_outer_dynamic_filter_pushdown(join_type: JoinType) {
+    let plan =
+        build_join_with_dynamic_filter(join_type, true, true, PartitionMode::Partitioned);
     let mut config = ConfigOptions::default();
     config.execution.parquet.pushdown_filters = true;
     config.optimizer.enable_dynamic_filter_pushdown = true;
@@ -1328,69 +1430,15 @@ async fn test_hashjoin_left_dynamic_filter_pushdown() {
         .optimize(plan, &config)
         .unwrap();
     let formatted = format_plan_for_test(&plan);
-    assert_contains!(
-        &formatted,
-        "DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilterPhysicalExpr"
-    );
-    assert_contains!(
-        &formatted,
-        "DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=<none>"
-    );
+    assert_dynamic_filter_location(&formatted, &join_type);
     assert_contains!(&formatted, "probe_keys=0");
 }
 
+#[rstest(join_type, case::left(JoinType::Left), case::right(JoinType::Right))]
 #[tokio::test]
-async fn test_hashjoin_left_dynamic_filter_pushdown_disabled() {
-    let plan = build_join_with_dynamic_filter(
-        JoinType::Left,
-        true,
-        true,
-        PartitionMode::Partitioned,
-    );
-    let mut config = ConfigOptions::default();
-    config.execution.parquet.pushdown_filters = false;
-    config.optimizer.enable_dynamic_filter_pushdown = false;
-    let plan = FilterPushdown::new_post_optimization()
-        .optimize(plan, &config)
-        .unwrap();
-    let formatted = format_plan_for_test(&plan);
-    assert_not_contains!(formatted, "DynamicFilterPhysicalExpr");
-}
-
-#[tokio::test]
-async fn test_hashjoin_right_dynamic_filter_pushdown() {
-    let plan = build_join_with_dynamic_filter(
-        JoinType::Right,
-        true,
-        true,
-        PartitionMode::Partitioned,
-    );
-    let mut config = ConfigOptions::default();
-    config.execution.parquet.pushdown_filters = true;
-    config.optimizer.enable_dynamic_filter_pushdown = true;
-    let plan = FilterPushdown::new_post_optimization()
-        .optimize(plan, &config)
-        .unwrap();
-    let formatted = format_plan_for_test(&plan);
-    assert_contains!(
-        &formatted,
-        "DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=DynamicFilterPhysicalExpr"
-    );
-    assert_contains!(
-        &formatted,
-        "DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=<none>"
-    );
-    assert_contains!(&formatted, "probe_keys=0");
-}
-
-#[tokio::test]
-async fn test_hashjoin_right_dynamic_filter_pushdown_disabled() {
-    let plan = build_join_with_dynamic_filter(
-        JoinType::Right,
-        true,
-        true,
-        PartitionMode::Partitioned,
-    );
+async fn test_hashjoin_outer_dynamic_filter_pushdown_disabled(join_type: JoinType) {
+    let plan =
+        build_join_with_dynamic_filter(join_type, true, true, PartitionMode::Partitioned);
     let mut config = ConfigOptions::default();
     config.execution.parquet.pushdown_filters = false;
     config.optimizer.enable_dynamic_filter_pushdown = false;
@@ -1427,14 +1475,15 @@ async fn test_hashjoin_left_dynamic_filter_pushdown_collect_left() {
     assert_contains!(&formatted, "probe_keys=0");
 }
 
+#[rstest(
+    join_type,
+    case::left(JoinType::LeftSemi),
+    case::right(JoinType::RightSemi)
+)]
 #[tokio::test]
-async fn test_hashjoin_left_semi_dynamic_filter_pushdown() {
-    let plan = build_join_with_dynamic_filter(
-        JoinType::LeftSemi,
-        true,
-        true,
-        PartitionMode::Partitioned,
-    );
+async fn test_hashjoin_semi_dynamic_filter_pushdown(join_type: JoinType) {
+    let plan =
+        build_join_with_dynamic_filter(join_type, true, true, PartitionMode::Partitioned);
     let mut config = ConfigOptions::default();
     config.execution.parquet.pushdown_filters = true;
     config.optimizer.enable_dynamic_filter_pushdown = true;
@@ -1442,25 +1491,19 @@ async fn test_hashjoin_left_semi_dynamic_filter_pushdown() {
         .optimize(plan, &config)
         .unwrap();
     let formatted = format_plan_for_test(&plan);
-    assert_contains!(
-        &formatted,
-        "DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilterPhysicalExpr"
-    );
-    assert_contains!(
-        &formatted,
-        "DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=<none>"
-    );
+    assert_dynamic_filter_location(&formatted, &join_type);
     assert_contains!(&formatted, "probe_keys=0");
 }
 
+#[rstest(
+    join_type,
+    case::left(JoinType::LeftAnti),
+    case::right(JoinType::RightAnti)
+)]
 #[tokio::test]
-async fn test_hashjoin_left_anti_dynamic_filter_pushdown() {
-    let plan = build_join_with_dynamic_filter(
-        JoinType::LeftAnti,
-        true,
-        true,
-        PartitionMode::Partitioned,
-    );
+async fn test_hashjoin_anti_dynamic_filter_pushdown(join_type: JoinType) {
+    let plan =
+        build_join_with_dynamic_filter(join_type, true, true, PartitionMode::Partitioned);
     let mut config = ConfigOptions::default();
     config.execution.parquet.pushdown_filters = true;
     config.optimizer.enable_dynamic_filter_pushdown = true;
@@ -1468,25 +1511,19 @@ async fn test_hashjoin_left_anti_dynamic_filter_pushdown() {
         .optimize(plan, &config)
         .unwrap();
     let formatted = format_plan_for_test(&plan);
-    assert_contains!(
-        &formatted,
-        "DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilterPhysicalExpr"
-    );
-    assert_contains!(
-        &formatted,
-        "DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=<none>"
-    );
+    assert_dynamic_filter_location(&formatted, &join_type);
     assert_contains!(&formatted, "probe_keys=0");
 }
 
+#[rstest(
+    join_type,
+    case::left(JoinType::LeftMark),
+    case::right(JoinType::RightMark)
+)]
 #[tokio::test]
-async fn test_hashjoin_left_mark_dynamic_filter_pushdown() {
-    let plan = build_join_with_dynamic_filter(
-        JoinType::LeftMark,
-        true,
-        true,
-        PartitionMode::Partitioned,
-    );
+async fn test_hashjoin_mark_dynamic_filter_pushdown(join_type: JoinType) {
+    let plan =
+        build_join_with_dynamic_filter(join_type, true, true, PartitionMode::Partitioned);
     let mut config = ConfigOptions::default();
     config.execution.parquet.pushdown_filters = true;
     config.optimizer.enable_dynamic_filter_pushdown = true;
@@ -1494,91 +1531,8 @@ async fn test_hashjoin_left_mark_dynamic_filter_pushdown() {
         .optimize(plan, &config)
         .unwrap();
     let formatted = format_plan_for_test(&plan);
-    assert_contains!(
-        &formatted,
-        "DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilterPhysicalExpr"
-    );
-    assert_contains!(
-        &formatted,
-        "DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=<none>"
-    );
+    assert_dynamic_filter_location(&formatted, &join_type);
     assert_contains!(&formatted, "probe_keys=0");
-}
-
-#[tokio::test]
-async fn test_hashjoin_right_mark_dynamic_filter_pushdown() {
-    let plan = build_join_with_dynamic_filter(
-        JoinType::RightMark,
-        true,
-        true,
-        PartitionMode::Partitioned,
-    );
-    let mut config = ConfigOptions::default();
-    config.execution.parquet.pushdown_filters = true;
-    config.optimizer.enable_dynamic_filter_pushdown = true;
-    let plan = FilterPushdown::new_post_optimization()
-        .optimize(plan, &config)
-        .unwrap();
-    let formatted = format_plan_for_test(&plan);
-    assert_contains!(
-        &formatted,
-        "DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=DynamicFilterPhysicalExpr"
-    );
-    assert_contains!(
-        &formatted,
-        "DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=<none>"
-    );
-    assert_contains!(&formatted, "probe_keys=0");
-}
-
-#[tokio::test]
-async fn test_hashjoin_right_semi_dynamic_filter_pushdown() {
-    let plan = build_join_with_dynamic_filter(
-        JoinType::RightSemi,
-        true,
-        true,
-        PartitionMode::Partitioned,
-    );
-    let mut config = ConfigOptions::default();
-    config.execution.parquet.pushdown_filters = true;
-    config.optimizer.enable_dynamic_filter_pushdown = true;
-    let plan = FilterPushdown::new_post_optimization()
-        .optimize(plan, &config)
-        .unwrap();
-    let formatted = format_plan_for_test(&plan);
-    assert_contains!(
-        &formatted,
-        "DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=DynamicFilterPhysicalExpr"
-    );
-    assert_contains!(
-        &formatted,
-        "DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=<none>"
-    );
-}
-
-#[tokio::test]
-async fn test_hashjoin_right_anti_dynamic_filter_pushdown() {
-    let plan = build_join_with_dynamic_filter(
-        JoinType::RightAnti,
-        true,
-        true,
-        PartitionMode::Partitioned,
-    );
-    let mut config = ConfigOptions::default();
-    config.execution.parquet.pushdown_filters = true;
-    config.optimizer.enable_dynamic_filter_pushdown = true;
-    let plan = FilterPushdown::new_post_optimization()
-        .optimize(plan, &config)
-        .unwrap();
-    let formatted = format_plan_for_test(&plan);
-    assert_contains!(
-        &formatted,
-        "DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=DynamicFilterPhysicalExpr"
-    );
-    assert_contains!(
-        &formatted,
-        "DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=<none>"
-    );
 }
 
 #[tokio::test]
@@ -1599,28 +1553,27 @@ async fn test_hashjoin_full_dynamic_filter_no_pushdown() {
     assert_not_contains!(formatted, "DynamicFilterPhysicalExpr");
 }
 
+#[rstest(
+    join_type,
+    left_support,
+    right_support,
+    partition_mode,
+    case::left(JoinType::Left, true, false, PartitionMode::CollectLeft),
+    case::right(JoinType::Right, false, true, PartitionMode::Auto)
+)]
 #[tokio::test]
-async fn test_hashjoin_dynamic_filter_pushdown_unsupported() {
+async fn test_hashjoin_dynamic_filter_pushdown_unsupported(
+    join_type: JoinType,
+    left_support: bool,
+    right_support: bool,
+    partition_mode: PartitionMode,
+) {
     let plan = build_join_with_dynamic_filter(
-        JoinType::Left,
-        true,
-        false,
-        PartitionMode::CollectLeft,
+        join_type,
+        left_support,
+        right_support,
+        partition_mode,
     );
-    let mut config = ConfigOptions::default();
-    config.execution.parquet.pushdown_filters = true;
-    config.optimizer.enable_dynamic_filter_pushdown = true;
-    let plan = FilterPushdown::new_post_optimization()
-        .optimize(plan, &config)
-        .unwrap();
-    let formatted = format_plan_for_test(&plan);
-    assert_not_contains!(formatted, "DynamicFilterPhysicalExpr");
-}
-
-#[tokio::test]
-async fn test_hashjoin_dynamic_filter_pushdown_unsupported_left() {
-    let plan =
-        build_join_with_dynamic_filter(JoinType::Right, false, true, PartitionMode::Auto);
     let mut config = ConfigOptions::default();
     config.execution.parquet.pushdown_filters = true;
     config.optimizer.enable_dynamic_filter_pushdown = true;
