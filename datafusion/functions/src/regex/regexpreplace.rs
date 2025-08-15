@@ -631,8 +631,8 @@ pub fn specialize_regexp_replace<T: OffsetSizeTrait>(
                 .map(|arg| arg.to_array(inferred_length))
                 .collect::<Result<Vec<_>>>()?;
 
-            match args[0].data_type() {
-                DataType::Utf8View => {
+            match (args[0].data_type(), args[1].data_type(), args[2].data_type()) {
+                (DataType::Utf8View, DataType::Utf8, DataType::Utf8) => {
                     let string_array = args[0].as_string_view();
                     let pattern_array = args[1].as_string::<i32>();
                     let replacement_array = args[2].as_string::<i32>();
@@ -647,7 +647,7 @@ pub fn specialize_regexp_replace<T: OffsetSizeTrait>(
                         flags_array,
                     )
                 }
-                DataType::Utf8 => {
+                (DataType::Utf8, DataType::Utf8, DataType::Utf8) => {
                     let string_array = args[0].as_string::<i32>();
                     let pattern_array = args[1].as_string::<i32>();
                     let replacement_array = args[2].as_string::<i32>();
@@ -662,7 +662,367 @@ pub fn specialize_regexp_replace<T: OffsetSizeTrait>(
                         flags_array,
                     )
                 }
-                DataType::LargeUtf8 => {
+                (DataType::LargeUtf8, DataType::Utf8, DataType::Utf8) => {
+                    let string_array = args[0].as_string::<i64>();
+                    let pattern_array = args[1].as_string::<i32>();
+                    let replacement_array = args[2].as_string::<i32>();
+                    let flags_array = match args.get(3) {
+                        Some(flags) => { Some(as_generic_string_array::<i32>(flags)?) }
+                        None => None
+                    };
+                    regexp_replace::<i64, _, _, _, _>(
+                        string_array,
+                        pattern_array,
+                        replacement_array,
+                        flags_array,
+                    )
+                }
+                (DataType::Utf8View, DataType::Utf8View, DataType::Utf8) => {
+                    let string_array = args[0].as_string_view();
+                    let pattern_array = args[1].as_string_view();
+                    let replacement_array = args[2].as_string::<i32>();
+                    let flags_array = match args.get(3) {
+                        Some(flags) => { Some(as_generic_string_array::<i32>(flags)?) }
+                        None => None
+                    };
+                    regexp_replace::<i32, _, _, _, _>(
+                        string_array,
+                        pattern_array,
+                        replacement_array,
+                        flags_array,
+                    )
+                }
+                (DataType::Utf8View, DataType::LargeUtf8, DataType::Utf8) => {
+                    let string_array = args[0].as_string_view();
+                    let pattern_array = args[1].as_string::<i64>();
+                    let replacement_array = args[2].as_string::<i32>();
+                    let flags_array = match args.get(3) {
+                        Some(flags) => { Some(as_generic_string_array::<i32>(flags)?) }
+                        None => None
+                    };
+                    regexp_replace::<i32, _, _, _, _>(
+                        string_array,
+                        pattern_array,
+                        replacement_array,
+                        flags_array,
+                    )
+                }
+                (DataType::Utf8View, DataType::Utf8, DataType::Utf8View) => {
+                    let string_array = args[0].as_string_view();
+                    let pattern_array = args[1].as_string::<i32>();
+                    let replacement_array = args[2].as_string_view();
+                    let flags_array = match args.get(3) {
+                        Some(flags) => { Some(as_generic_string_array::<i32>(flags)?) }
+                        None => None
+                    };
+                    regexp_replace::<i32, _, _, _, _>(
+                        string_array,
+                        pattern_array,
+                        replacement_array,
+                        flags_array,
+                    )
+                }
+                (DataType::Utf8View, DataType::Utf8View, DataType::Utf8View) => {
+                    let string_array = args[0].as_string_view();
+                    let pattern_array = args[1].as_string_view();
+                    let replacement_array = args[2].as_string_view();
+                    let flags_array = match args.get(3) {
+                        Some(flags) => { Some(as_generic_string_array::<i32>(flags)?) }
+                        None => None
+                    };
+                    regexp_replace::<i32, _, _, _, _>(
+                        string_array,
+                        pattern_array,
+                        replacement_array,
+                        flags_array,
+                    )
+                }
+                (DataType::Utf8View, DataType::LargeUtf8, DataType::Utf8View) => {
+                    let string_array = args[0].as_string_view();
+                    let pattern_array = args[1].as_string::<i64>();
+                    let replacement_array = args[2].as_string_view();
+                    let flags_array = match args.get(3) {
+                        Some(flags) => { Some(as_generic_string_array::<i32>(flags)?) }
+                        None => None
+                    };
+                    regexp_replace::<i32, _, _, _, _>(
+                        string_array,
+                        pattern_array,
+                        replacement_array,
+                        flags_array,
+                    )
+                }
+                (DataType::Utf8View, DataType::Utf8, DataType::LargeUtf8) => {
+                    let string_array = args[0].as_string_view();
+                    let pattern_array = args[1].as_string::<i32>();
+                    let replacement_array = args[2].as_string::<i64>();
+                    let flags_array = match args.get(3) {
+                        Some(flags) => { Some(as_generic_string_array::<i32>(flags)?) }
+                        None => None
+                    };
+                    regexp_replace::<i32, _, _, _, _>(
+                        string_array,
+                        pattern_array,
+                        replacement_array,
+                        flags_array,
+                    )
+                }
+                (DataType::Utf8View, DataType::Utf8View, DataType::LargeUtf8) => {
+                    let string_array = args[0].as_string_view();
+                    let pattern_array = args[1].as_string_view();
+                    let replacement_array = args[2].as_string::<i64>();
+                    let flags_array = match args.get(3) {
+                        Some(flags) => { Some(as_generic_string_array::<i32>(flags)?) }
+                        None => None
+                    };
+                    regexp_replace::<i32, _, _, _, _>(
+                        string_array,
+                        pattern_array,
+                        replacement_array,
+                        flags_array,
+                    )
+                }
+                (DataType::Utf8View, DataType::LargeUtf8, DataType::LargeUtf8) => {
+                    let string_array = args[0].as_string_view();
+                    let pattern_array = args[1].as_string::<i64>();
+                    let replacement_array = args[2].as_string::<i64>();
+                    let flags_array = match args.get(3) {
+                        Some(flags) => { Some(as_generic_string_array::<i32>(flags)?) }
+                        None => None
+                    };
+                    regexp_replace::<i32, _, _, _, _>(
+                        string_array,
+                        pattern_array,
+                        replacement_array,
+                        flags_array,
+                    )
+                }
+                (DataType::Utf8, DataType::Utf8View, DataType::Utf8) => {
+                    let string_array = args[0].as_string::<i32>();
+                    let pattern_array = args[1].as_string_view();
+                    let replacement_array = args[2].as_string::<i32>();
+                    let flags_array = match args.get(3) {
+                        Some(flags) => { Some(as_generic_string_array::<i32>(flags)?) }
+                        None => None
+                    };
+                    regexp_replace::<i32, _, _, _, _>(
+                        string_array,
+                        pattern_array,
+                        replacement_array,
+                        flags_array,
+                    )
+                }
+                (DataType::Utf8, DataType::LargeUtf8, DataType::Utf8) => {
+                    let string_array = args[0].as_string::<i32>();
+                    let pattern_array = args[1].as_string::<i64>();
+                    let replacement_array = args[2].as_string::<i32>();
+                    let flags_array = match args.get(3) {
+                        Some(flags) => { Some(as_generic_string_array::<i32>(flags)?) }
+                        None => None
+                    };
+                    regexp_replace::<i32, _, _, _, _>(
+                        string_array,
+                        pattern_array,
+                        replacement_array,
+                        flags_array,
+                    )
+                }
+                (DataType::Utf8, DataType::Utf8, DataType::Utf8View) => {
+                    let string_array = args[0].as_string::<i32>();
+                    let pattern_array = args[1].as_string::<i32>();
+                    let replacement_array = args[2].as_string_view();
+                    let flags_array = match args.get(3) {
+                        Some(flags) => { Some(as_generic_string_array::<i32>(flags)?) }
+                        None => None
+                    };
+                    regexp_replace::<i32, _, _, _, _>(
+                        string_array,
+                        pattern_array,
+                        replacement_array,
+                        flags_array,
+                    )
+                }
+                (DataType::Utf8, DataType::Utf8View, DataType::Utf8View) => {
+                    let string_array = args[0].as_string::<i32>();
+                    let pattern_array = args[1].as_string_view();
+                    let replacement_array = args[2].as_string_view();
+                    let flags_array = match args.get(3) {
+                        Some(flags) => { Some(as_generic_string_array::<i32>(flags)?) }
+                        None => None
+                    };
+                    regexp_replace::<i32, _, _, _, _>(
+                        string_array,
+                        pattern_array,
+                        replacement_array,
+                        flags_array,
+                    )
+                }
+                (DataType::Utf8, DataType::LargeUtf8, DataType::Utf8View) => {
+                    let string_array = args[0].as_string::<i32>();
+                    let pattern_array = args[1].as_string::<i64>();
+                    let replacement_array = args[2].as_string_view();
+                    let flags_array = match args.get(3) {
+                        Some(flags) => { Some(as_generic_string_array::<i32>(flags)?) }
+                        None => None
+                    };
+                    regexp_replace::<i32, _, _, _, _>(
+                        string_array,
+                        pattern_array,
+                        replacement_array,
+                        flags_array,
+                    )
+                }
+                (DataType::Utf8, DataType::Utf8, DataType::LargeUtf8) => {
+                    let string_array = args[0].as_string::<i32>();
+                    let pattern_array = args[1].as_string::<i32>();
+                    let replacement_array = args[2].as_string::<i64>();
+                    let flags_array = match args.get(3) {
+                        Some(flags) => { Some(as_generic_string_array::<i32>(flags)?) }
+                        None => None
+                    };
+                    regexp_replace::<i32, _, _, _, _>(
+                        string_array,
+                        pattern_array,
+                        replacement_array,
+                        flags_array,
+                    )
+                }
+                (DataType::Utf8, DataType::Utf8View, DataType::LargeUtf8) => {
+                    let string_array = args[0].as_string::<i32>();
+                    let pattern_array = args[1].as_string_view();
+                    let replacement_array = args[2].as_string::<i64>();
+                    let flags_array = match args.get(3) {
+                        Some(flags) => { Some(as_generic_string_array::<i32>(flags)?) }
+                        None => None
+                    };
+                    regexp_replace::<i32, _, _, _, _>(
+                        string_array,
+                        pattern_array,
+                        replacement_array,
+                        flags_array,
+                    )
+                }
+                (DataType::Utf8, DataType::LargeUtf8, DataType::LargeUtf8) => {
+                    let string_array = args[0].as_string::<i32>();
+                    let pattern_array = args[1].as_string::<i64>();
+                    let replacement_array = args[2].as_string::<i64>();
+                    let flags_array = match args.get(3) {
+                        Some(flags) => { Some(as_generic_string_array::<i32>(flags)?) }
+                        None => None
+                    };
+                    regexp_replace::<i32, _, _, _, _>(
+                        string_array,
+                        pattern_array,
+                        replacement_array,
+                        flags_array,
+                    )
+                }
+                (DataType::LargeUtf8, DataType::Utf8View, DataType::Utf8) => {
+                    let string_array = args[0].as_string::<i64>();
+                    let pattern_array = args[1].as_string_view();
+                    let replacement_array = args[2].as_string::<i32>();
+                    let flags_array = match args.get(3) {
+                        Some(flags) => { Some(as_generic_string_array::<i32>(flags)?) }
+                        None => None
+                    };
+                    regexp_replace::<i64, _, _, _, _>(
+                        string_array,
+                        pattern_array,
+                        replacement_array,
+                        flags_array,
+                    )
+                }
+                (DataType::LargeUtf8, DataType::LargeUtf8, DataType::Utf8) => {
+                    let string_array = args[0].as_string::<i64>();
+                    let pattern_array = args[1].as_string::<i64>();
+                    let replacement_array = args[2].as_string::<i32>();
+                    let flags_array = match args.get(3) {
+                        Some(flags) => { Some(as_generic_string_array::<i32>(flags)?) }
+                        None => None
+                    };
+                    regexp_replace::<i64, _, _, _, _>(
+                        string_array,
+                        pattern_array,
+                        replacement_array,
+                        flags_array,
+                    )
+                }
+                (DataType::LargeUtf8, DataType::Utf8, DataType::Utf8View) => {
+                    let string_array = args[0].as_string::<i64>();
+                    let pattern_array = args[1].as_string::<i32>();
+                    let replacement_array = args[2].as_string_view();
+                    let flags_array = match args.get(3) {
+                        Some(flags) => { Some(as_generic_string_array::<i32>(flags)?) }
+                        None => None
+                    };
+                    regexp_replace::<i64, _, _, _, _>(
+                        string_array,
+                        pattern_array,
+                        replacement_array,
+                        flags_array,
+                    )
+                }
+                (DataType::LargeUtf8, DataType::Utf8View, DataType::Utf8View) => {
+                    let string_array = args[0].as_string::<i64>();
+                    let pattern_array = args[1].as_string_view();
+                    let replacement_array = args[2].as_string_view();
+                    let flags_array = match args.get(3) {
+                        Some(flags) => { Some(as_generic_string_array::<i32>(flags)?) }
+                        None => None
+                    };
+                    regexp_replace::<i64, _, _, _, _>(
+                        string_array,
+                        pattern_array,
+                        replacement_array,
+                        flags_array,
+                    )
+                }
+                (DataType::LargeUtf8, DataType::LargeUtf8, DataType::Utf8View) => {
+                    let string_array = args[0].as_string::<i64>();
+                    let pattern_array = args[1].as_string::<i64>();
+                    let replacement_array = args[2].as_string_view();
+                    let flags_array = match args.get(3) {
+                        Some(flags) => { Some(as_generic_string_array::<i32>(flags)?) }
+                        None => None
+                    };
+                    regexp_replace::<i64, _, _, _, _>(
+                        string_array,
+                        pattern_array,
+                        replacement_array,
+                        flags_array,
+                    )
+                }
+                (DataType::LargeUtf8, DataType::Utf8, DataType::LargeUtf8) => {
+                    let string_array = args[0].as_string::<i64>();
+                    let pattern_array = args[1].as_string::<i32>();
+                    let replacement_array = args[2].as_string::<i64>();
+                    let flags_array = match args.get(3) {
+                        Some(flags) => { Some(as_generic_string_array::<i32>(flags)?) }
+                        None => None
+                    };
+                    regexp_replace::<i64, _, _, _, _>(
+                        string_array,
+                        pattern_array,
+                        replacement_array,
+                        flags_array,
+                    )
+                }
+                (DataType::LargeUtf8, DataType::Utf8View, DataType::LargeUtf8) => {
+                    let string_array = args[0].as_string::<i64>();
+                    let pattern_array = args[1].as_string_view();
+                    let replacement_array = args[2].as_string::<i64>();
+                    let flags_array = match args.get(3) {
+                        Some(flags) => { Some(as_generic_string_array::<i32>(flags)?) }
+                        None => None
+                    };
+                    regexp_replace::<i64, _, _, _, _>(
+                        string_array,
+                        pattern_array,
+                        replacement_array,
+                        flags_array,
+                    )
+                }
+                (DataType::LargeUtf8, DataType::LargeUtf8, DataType::LargeUtf8) => {
                     let string_array = args[0].as_string::<i64>();
                     let pattern_array = args[1].as_string::<i64>();
                     let replacement_array = args[2].as_string::<i64>();
