@@ -125,6 +125,15 @@ impl TestSource {
             ..Default::default()
         }
     }
+
+    /// Return the currently assigned predicate (if any).
+    ///
+    /// This is a test-only accessor used by assertions in the
+    /// `filter_pushdown` tests to verify that predicates were pushed into
+    /// the underlying file source.
+    pub fn predicate(&self) -> Option<&Arc<dyn PhysicalExpr>> {
+        self.predicate.as_ref()
+    }
 }
 
 impl FileSource for TestSource {

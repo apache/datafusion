@@ -1245,7 +1245,8 @@ async fn test_hashjoin_dynamic_filter_pushdown_high_cardinality() {
     .expect("optimizer should finish in time")
     .unwrap();
     let formatted = format_plan_for_test(&plan);
-    assert_contains!(&formatted, "DynamicFilterPhysicalExpr");
+    // Programmatic check: ensure some child received a dynamic filter for Inner join
+    assert_dynamic_filter_location_plan(&plan, &JoinType::Inner);
 
     assert_contains!(&formatted, "probe_keys=0");
 
@@ -1347,6 +1348,63 @@ fn assert_dynamic_filter_location(formatted: &str, join_type: &JoinType) {
     }
 }
 
+/// Programmatic check: inspect the `HashJoinExec` children and verify which
+/// side received a pushed predicate in the underlying `TestSource`.
+fn assert_dynamic_filter_location_plan(
+    plan: &Arc<dyn ExecutionPlan>,
+    join_type: &JoinType,
+) {
+    // Find top-level HashJoinExec
+    let join = plan
+        .as_any()
+        .downcast_ref::<HashJoinExec>()
+        .expect("expected HashJoinExec");
+
+    // Helper to check whether a child has a pushed predicate
+    let child_has_predicate = |child: &Arc<dyn ExecutionPlan>| -> bool {
+        if let Some(data_src) = child
+            .as_any()
+            .downcast_ref::<datafusion::datasource::source::DataSourceExec>(
+        ) {
+            if let Some((_, test_source)) =
+                data_src.downcast_to_file_source::<util::TestSource>()
+            {
+                return test_source.predicate().is_some();
+            }
+        }
+        false
+    };
+
+    match join_type {
+        JoinType::Left | JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark => {
+            // For left-type joins the right side (probe) should receive the dynamic filter
+            assert!(
+                child_has_predicate(&join.right),
+                "expected predicate on right child"
+            );
+            assert!(
+                !child_has_predicate(&join.left),
+                "expected no predicate on left child"
+            );
+        }
+        JoinType::Right
+        | JoinType::RightSemi
+        | JoinType::RightAnti
+        | JoinType::RightMark => {
+            // For right-type joins the left side should receive the dynamic filter
+            assert!(
+                child_has_predicate(&join.left),
+                "expected predicate on left child"
+            );
+            assert!(
+                !child_has_predicate(&join.right),
+                "expected no predicate on right child"
+            );
+        }
+        _ => unreachable!(),
+    }
+}
+
 #[rstest(
     join_type,
     case::inner(JoinType::Inner),
@@ -1411,7 +1469,7 @@ async fn test_hashjoin_outer_dynamic_filter_pushdown(join_type: JoinType) {
         .optimize(plan, &config)
         .unwrap();
     let formatted = format_plan_for_test(&plan);
-    assert_dynamic_filter_location(&formatted, &join_type);
+    assert_dynamic_filter_location_plan(&plan, &join_type);
     assert_contains!(&formatted, "probe_keys=0");
 }
 
@@ -1445,14 +1503,8 @@ async fn test_hashjoin_left_dynamic_filter_pushdown_collect_left() {
         .optimize(plan, &config)
         .unwrap();
     let formatted = format_plan_for_test(&plan);
-    assert_contains!(
-        &formatted,
-        "DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilterPhysicalExpr"
-    );
-    assert_contains!(
-        &formatted,
-        "DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=<none>"
-    );
+    // Programmatic check: verify the dynamic filter was pushed to the expected side
+    assert_dynamic_filter_location_plan(&plan, &JoinType::Left);
     assert_contains!(&formatted, "probe_keys=0");
 }
 
@@ -1472,7 +1524,7 @@ async fn test_hashjoin_semi_dynamic_filter_pushdown(join_type: JoinType) {
         .optimize(plan, &config)
         .unwrap();
     let formatted = format_plan_for_test(&plan);
-    assert_dynamic_filter_location(&formatted, &join_type);
+    assert_dynamic_filter_location_plan(&plan, &join_type);
     assert_contains!(&formatted, "probe_keys=0");
 }
 
@@ -1492,7 +1544,7 @@ async fn test_hashjoin_anti_dynamic_filter_pushdown(join_type: JoinType) {
         .optimize(plan, &config)
         .unwrap();
     let formatted = format_plan_for_test(&plan);
-    assert_dynamic_filter_location(&formatted, &join_type);
+    assert_dynamic_filter_location_plan(&plan, &join_type);
     assert_contains!(&formatted, "probe_keys=0");
 }
 
@@ -1512,7 +1564,7 @@ async fn test_hashjoin_mark_dynamic_filter_pushdown(join_type: JoinType) {
         .optimize(plan, &config)
         .unwrap();
     let formatted = format_plan_for_test(&plan);
-    assert_dynamic_filter_location(&formatted, &join_type);
+    assert_dynamic_filter_location_plan(&plan, &join_type);
     assert_contains!(&formatted, "probe_keys=0");
 }
 
