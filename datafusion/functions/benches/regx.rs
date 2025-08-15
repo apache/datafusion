@@ -282,7 +282,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         let mut rng = rand::rng();
         let data = cast(&data(&mut rng), &DataType::Utf8View).unwrap();
         let regex = cast(&regex(&mut rng), &DataType::Utf8View).unwrap();
-        let flags = cast(&crate::regex(&mut rng), &DataType::Utf8View).unwrap();
+        let flags = cast(&flags(&mut rng), &DataType::Utf8View).unwrap();
         let replacement = Arc::new(StringViewArray::from_iter_values(iter::repeat_n(
             "XX", 1000,
         )));
