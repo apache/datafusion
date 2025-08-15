@@ -435,7 +435,8 @@ impl HashJoinExec {
     }
 
     fn create_dynamic_filter(on: &JoinOn) -> Arc<DynamicFilterPhysicalExpr> {
-        // Extract the right-side keys from the `on` clauses
+        // Extract the right-side keys (probe side keys) from the `on` clauses
+        // Dynamic filter will be created from build side values (left side) and applied to probe side (right side)
         let right_keys: Vec<_> = on.iter().map(|(_, r)| Arc::clone(r)).collect();
         // Initialize with a placeholder expression (true) that will be updated when the hash table is built
         Arc::new(DynamicFilterPhysicalExpr::new(right_keys, lit(true)))
@@ -804,8 +805,8 @@ impl ExecutionPlan for HashJoinExec {
             self.mode,
             self.null_equality,
         )?;
-        // Preserve the dynamic filter if it exists
-        new_join.dynamic_filter = Arc::clone(&self.dynamic_filter);
+        // Create a new dynamic filter with swapped keys after inputs are swapped
+        new_join.dynamic_filter = Self::create_dynamic_filter(&new_join.on);
         Ok(Arc::new(new_join))
     }
 
