@@ -780,14 +780,13 @@ impl ExecutionPlan for RepartitionExec {
                 .map(|bytes| Precision::Inexact(bytes / partition_count))
                 .unwrap_or(Precision::Absent);
 
-            // Handle column statistics: keep min/max values, make others absent
+            // Make all column stats absent
             for col_stats in &mut stats.column_statistics {
-                // Keep min_value and max_value as they represent data range
-                // Make null_count, distinct_count, and sum_value absent as they're hard to estimate without
-                // the actual data
                 col_stats.null_count = Precision::Absent;
-                col_stats.distinct_count = Precision::Absent;
+                col_stats.max_value = Precision::Absent;
+                col_stats.min_value = Precision::Absent;
                 col_stats.sum_value = Precision::Absent;
+                col_stats.distinct_count = Precision::Absent;
             }
 
             Ok(stats)

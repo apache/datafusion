@@ -781,8 +781,8 @@ mod test {
             column_statistics: vec![
                 ColumnStatistics {
                     null_count: Precision::Absent,
-                    max_value: Precision::Exact(ScalarValue::Int32(Some(4))),
-                    min_value: Precision::Exact(ScalarValue::Int32(Some(1))),
+                    max_value: Precision::Absent,
+                    min_value: Precision::Absent,
                     sum_value: Precision::Absent,
                     distinct_count: Precision::Absent,
                 },
