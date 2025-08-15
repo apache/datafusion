@@ -956,6 +956,130 @@ async fn test_hashjoin_dynamic_filter_pushdown() {
 }
 
 #[tokio::test]
+async fn test_nested_hashjoin_dynamic_filter_pushdown() {
+    // Create test data for three tables: t1, t2, t3
+    // t1: small table with limited values (will be build side of outer join)
+    let t1_batches =
+        vec![
+            record_batch!(("a", Utf8, ["aa", "ab"]), ("x", Float64, [1.0, 2.0])).unwrap(),
+        ];
+    let t1_schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Utf8, false),
+        Field::new("x", DataType::Float64, false),
+    ]));
+    let t1_scan = TestScanBuilder::new(Arc::clone(&t1_schema))
+        .with_support(true)
+        .with_batches(t1_batches)
+        .build();
+    // t2 and t3: larger tables joined together on (c = d)
+    let t2_batches = vec![record_batch!(
+        ("b", Utf8, ["aa", "ab", "ac", "ad", "ae"]),
+        ("c", Utf8, ["ca", "cb", "cc", "cd", "ce"]),
+        ("y", Float64, [1.0, 2.0, 3.0, 4.0, 5.0])
+    )
+    .unwrap()];
+    let t2_schema = Arc::new(Schema::new(vec![
+        Field::new("b", DataType::Utf8, false),
+        Field::new("c", DataType::Utf8, false),
+        Field::new("y", DataType::Float64, false),
+    ]));
+    let t2_scan = TestScanBuilder::new(Arc::clone(&t2_schema))
+        .with_support(true)
+        .with_batches(t2_batches)
+        .build();
+
+    let t3_batches = vec![record_batch!(
+        ("d", Utf8, ["ca", "cb", "cc", "cd", "ce"]),
+        ("z", Float64, [1.0, 2.0, 3.0, 4.0, 5.0])
+    )
+    .unwrap()];
+    let t3_schema = Arc::new(Schema::new(vec![
+        Field::new("d", DataType::Utf8, false),
+        Field::new("z", DataType::Float64, false),
+    ]));
+    let t3_scan = TestScanBuilder::new(Arc::clone(&t3_schema))
+        .with_support(true)
+        .with_batches(t3_batches)
+        .build();
+
+    // Inner join t2 and t3 on c = d
+    let inner_on = vec![(col("c", &t2_schema).unwrap(), col("d", &t3_schema).unwrap())];
+    let inner_join = Arc::new(
+        HashJoinExec::try_new(
+            t2_scan,
+            t3_scan,
+            inner_on,
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::Partitioned,
+            datafusion_common::NullEquality::NullEqualsNothing,
+        )
+        .unwrap(),
+    ) as Arc<dyn ExecutionPlan>;
+
+    // Outer join t1 with the inner join on a = b
+    let inner_schema = inner_join.schema();
+    let outer_on = vec![(
+        col("a", &t1_schema).unwrap(),
+        col("b", &inner_schema).unwrap(),
+    )];
+    let outer_join = Arc::new(
+        HashJoinExec::try_new(
+            t1_scan,
+            inner_join,
+            outer_on,
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::Partitioned,
+            datafusion_common::NullEquality::NullEqualsNothing,
+        )
+        .unwrap(),
+    ) as Arc<dyn ExecutionPlan>;
+
+    let mut config = ConfigOptions::default();
+    config.execution.parquet.pushdown_filters = true;
+    config.optimizer.enable_dynamic_filter_pushdown = true;
+    let plan = FilterPushdown::new_post_optimization()
+        .optimize(outer_join, &config)
+        .unwrap();
+    let config = SessionConfig::new().with_batch_size(10);
+    let session_ctx = SessionContext::new_with_config(config);
+    session_ctx.register_object_store(
+        ObjectStoreUrl::parse("test://").unwrap().as_ref(),
+        Arc::new(InMemory::new()),
+    );
+    let state = session_ctx.state();
+    let task_ctx = state.task_ctx();
+    let mut stream = plan.execute(0, Arc::clone(&task_ctx)).unwrap();
+    // Execute to populate the dynamic filters
+    stream.next().await.unwrap().unwrap();
+
+    // Verify that both the inner and outer join have updated dynamic filters
+    insta::assert_snapshot!(
+        format!("{}", format_plan_for_test(&plan)),
+        @r"
+    - HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, b@0)], probe_filter=[b@0 >= aa AND b@0 <= ab], probe_side=Right, probe_keys=2
+    -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, x], file_type=test, pushdown_supported=true, predicate=<none>
+    -   HashJoinExec: mode=Partitioned, join_type=Inner, on=[(c@1, d@0)], probe_filter=[d@0 >= ca AND d@0 <= ce], probe_side=Right, probe_keys=5
+    -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[b, c, y], file_type=test, pushdown_supported=true, predicate=DynamicFilterPhysicalExpr [ b@0 >= aa AND b@0 <= ab ]
+    -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[d, z], file_type=test, pushdown_supported=true, predicate=DynamicFilterPhysicalExpr [ d@0 >= ca AND d@0 <= ce ]
+    "
+    );
+
+    let formatted = format_plan_for_test(&plan);
+    assert_contains!(&formatted, "probe_keys=");
+    assert_not_contains!(formatted, "probe_keys=0");
+
+    let outer = plan.as_any().downcast_ref::<HashJoinExec>().unwrap();
+    assert_projection(&outer.left, &["a", "x"]);
+    let inner = outer.right.as_any().downcast_ref::<HashJoinExec>().unwrap();
+    assert_projection(&inner.left, &["b", "c", "y"]);
+    assert_projection(&inner.right, &["d", "z"]);
+}
+
+#[tokio::test]
 async fn test_hashjoin_dynamic_filter_pushdown_null_keys() {
     // Build side containing only null join keys
     let build_batches = vec![record_batch!(
@@ -1127,130 +1251,6 @@ async fn test_hashjoin_dynamic_filter_pushdown_high_cardinality() {
     let join = plan.as_any().downcast_ref::<HashJoinExec>().unwrap();
     assert_projection(&join.left, &["a", "x"]);
     assert_projection(&join.right, &["a", "y"]);
-}
-
-#[tokio::test]
-async fn test_nested_hashjoin_dynamic_filter_pushdown() {
-    // Create test data for three tables: t1, t2, t3
-    // t1: small table with limited values (will be build side of outer join)
-    let t1_batches =
-        vec![
-            record_batch!(("a", Utf8, ["aa", "ab"]), ("x", Float64, [1.0, 2.0])).unwrap(),
-        ];
-    let t1_schema = Arc::new(Schema::new(vec![
-        Field::new("a", DataType::Utf8, false),
-        Field::new("x", DataType::Float64, false),
-    ]));
-    let t1_scan = TestScanBuilder::new(Arc::clone(&t1_schema))
-        .with_support(true)
-        .with_batches(t1_batches)
-        .build();
-    // t2 and t3: larger tables joined together on (c = d)
-    let t2_batches = vec![record_batch!(
-        ("b", Utf8, ["aa", "ab", "ac", "ad", "ae"]),
-        ("c", Utf8, ["ca", "cb", "cc", "cd", "ce"]),
-        ("y", Float64, [1.0, 2.0, 3.0, 4.0, 5.0])
-    )
-    .unwrap()];
-    let t2_schema = Arc::new(Schema::new(vec![
-        Field::new("b", DataType::Utf8, false),
-        Field::new("c", DataType::Utf8, false),
-        Field::new("y", DataType::Float64, false),
-    ]));
-    let t2_scan = TestScanBuilder::new(Arc::clone(&t2_schema))
-        .with_support(true)
-        .with_batches(t2_batches)
-        .build();
-
-    let t3_batches = vec![record_batch!(
-        ("d", Utf8, ["ca", "cb", "cc", "cd", "ce"]),
-        ("z", Float64, [1.0, 2.0, 3.0, 4.0, 5.0])
-    )
-    .unwrap()];
-    let t3_schema = Arc::new(Schema::new(vec![
-        Field::new("d", DataType::Utf8, false),
-        Field::new("z", DataType::Float64, false),
-    ]));
-    let t3_scan = TestScanBuilder::new(Arc::clone(&t3_schema))
-        .with_support(true)
-        .with_batches(t3_batches)
-        .build();
-
-    // Inner join t2 and t3 on c = d
-    let inner_on = vec![(col("c", &t2_schema).unwrap(), col("d", &t3_schema).unwrap())];
-    let inner_join = Arc::new(
-        HashJoinExec::try_new(
-            t2_scan,
-            t3_scan,
-            inner_on,
-            None,
-            &JoinType::Inner,
-            None,
-            PartitionMode::Partitioned,
-            datafusion_common::NullEquality::NullEqualsNothing,
-        )
-        .unwrap(),
-    ) as Arc<dyn ExecutionPlan>;
-
-    // Outer join t1 with the inner join on a = b
-    let inner_schema = inner_join.schema();
-    let outer_on = vec![(
-        col("a", &t1_schema).unwrap(),
-        col("b", &inner_schema).unwrap(),
-    )];
-    let outer_join = Arc::new(
-        HashJoinExec::try_new(
-            t1_scan,
-            inner_join,
-            outer_on,
-            None,
-            &JoinType::Inner,
-            None,
-            PartitionMode::Partitioned,
-            datafusion_common::NullEquality::NullEqualsNothing,
-        )
-        .unwrap(),
-    ) as Arc<dyn ExecutionPlan>;
-
-    let mut config = ConfigOptions::default();
-    config.execution.parquet.pushdown_filters = true;
-    config.optimizer.enable_dynamic_filter_pushdown = true;
-    let plan = FilterPushdown::new_post_optimization()
-        .optimize(outer_join, &config)
-        .unwrap();
-    let config = SessionConfig::new().with_batch_size(10);
-    let session_ctx = SessionContext::new_with_config(config);
-    session_ctx.register_object_store(
-        ObjectStoreUrl::parse("test://").unwrap().as_ref(),
-        Arc::new(InMemory::new()),
-    );
-    let state = session_ctx.state();
-    let task_ctx = state.task_ctx();
-    let mut stream = plan.execute(0, Arc::clone(&task_ctx)).unwrap();
-    // Execute to populate the dynamic filters
-    stream.next().await.unwrap().unwrap();
-
-    // Verify that both the inner and outer join have updated dynamic filters
-    insta::assert_snapshot!(
-        format!("{}", format_plan_for_test(&plan)),
-        @r"
-    - HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, b@0)], probe_filter=[b@0 >= aa AND b@0 <= ab], probe_side=Right, probe_keys=2
-    -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, x], file_type=test, pushdown_supported=true, predicate=<none>
-    -   HashJoinExec: mode=Partitioned, join_type=Inner, on=[(c@1, d@0)], probe_filter=[d@0 >= ca AND d@0 <= ce], probe_side=Right, probe_keys=5
-    -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[b, c, y], file_type=test, pushdown_supported=true, predicate=DynamicFilterPhysicalExpr [ b@0 >= aa AND b@0 <= ab ]
-    -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[d, z], file_type=test, pushdown_supported=true, predicate=DynamicFilterPhysicalExpr [ d@0 >= ca AND d@0 <= ce ]
-    "
-    );
-
-    let formatted = format_plan_for_test(&plan);
-    assert_contains!(&formatted, "probe_keys=");
-    assert_not_contains!(formatted, "probe_keys=0");
-
-    let outer = plan.as_any().downcast_ref::<HashJoinExec>().unwrap();
-    assert_projection(&outer.left, &["a", "x"]);
-    let inner = outer.right.as_any().downcast_ref::<HashJoinExec>().unwrap();
-    assert_projection(&inner.left, &["b", "c", "y"]);
-    assert_projection(&inner.right, &["d", "z"]);
 }
 
 fn build_join_with_dynamic_filter(
