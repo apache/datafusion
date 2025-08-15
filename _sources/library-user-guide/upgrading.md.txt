@@ -142,6 +142,24 @@ impl AsyncScalarUDFImpl for AskLLM {
 }
 ```
 
+### Schema Rewriter Module Moved to New Crate
+
+The `schema_rewriter` module and its associated symbols have been moved from `datafusion_physical_expr` to a new crate `datafusion_physical_expr_adapter`. This affects the following symbols:
+
+- `DefaultPhysicalExprAdapter`
+- `DefaultPhysicalExprAdapterFactory`
+- `PhysicalExprAdapter`
+- `PhysicalExprAdapterFactory`
+
+To upgrade, change your imports to:
+
+```rust
+use datafusion_physical_expr_adapter::{
+    DefaultPhysicalExprAdapter, DefaultPhysicalExprAdapterFactory,
+    PhysicalExprAdapter, PhysicalExprAdapterFactory
+};
+```
+
 ### Upgrade to arrow `56.0.0` and parquet `56.0.0`
 
 This version of DataFusion upgrades the underlying Apache Arrow implementation

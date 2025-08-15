@@ -658,6 +658,11 @@
     </a>
    </li>
    <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#schema-rewriter-module-moved-to-new-crate">
+     Schema Rewriter Module Moved to New Crate
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
     <a class="reference internal nav-link" href="#upgrade-to-arrow-56-0-0-and-parquet-56-0-0">
      Upgrade to arrow
      <code class="docutils literal notranslate">
@@ -1305,6 +1310,23 @@ parameter.</p>
 <span class="w">    </span><span class="p">}</span>
 <span class="w">    </span><span class="o">..</span><span class="p">.</span>
 <span class="p">}</span>
+</pre></div>
+</div>
+</section>
+<section id="schema-rewriter-module-moved-to-new-crate">
+<h3>Schema Rewriter Module Moved to New Crate<a class="headerlink" href="#schema-rewriter-module-moved-to-new-crate" title="Link to this heading">¶</a></h3>
+<p>The <code class="docutils literal notranslate"><span class="pre">schema_rewriter</span></code> module and its associated symbols have been moved from <code class="docutils literal notranslate"><span class="pre">datafusion_physical_expr</span></code> to a new crate <code class="docutils literal notranslate"><span class="pre">datafusion_physical_expr_adapter</span></code>. This affects the following symbols:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">DefaultPhysicalExprAdapter</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">DefaultPhysicalExprAdapterFactory</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">PhysicalExprAdapter</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">PhysicalExprAdapterFactory</span></code></p></li>
+</ul>
+<p>To upgrade, change your imports to:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">datafusion_physical_expr_adapter</span><span class="p">::{</span>
+<span class="w">    </span><span class="n">DefaultPhysicalExprAdapter</span><span class="p">,</span><span class="w"> </span><span class="n">DefaultPhysicalExprAdapterFactory</span><span class="p">,</span>
+<span class="w">    </span><span class="n">PhysicalExprAdapter</span><span class="p">,</span><span class="w"> </span><span class="n">PhysicalExprAdapterFactory</span>
+<span class="p">};</span>
 </pre></div>
 </div>
 </section>
