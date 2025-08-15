@@ -352,7 +352,6 @@ fn test_backtrace_output(#[case] query: &str) {
     let combined_output = format!("{}{}", stdout, stderr);
 
     // Assert that the output includes literal 'backtrace'
-    // Note: The user mentioned backtrace isn't working yet, but we test for the literal string
     assert!(
         combined_output.to_lowercase().contains("backtrace"),
         "Expected output to contain 'backtrace', but got stdout: '{}' stderr: '{}'",
