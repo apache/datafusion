@@ -1166,6 +1166,7 @@ async fn test_hashjoin_dynamic_filter_pushdown_null_keys() {
 
     // TODO: NullEqualsNothing yields no matching keys, so the dynamic filter
     // becomes a tautology.
+    // https://github.com/apache/datafusion/issues/17206
     let join = plan.as_any().downcast_ref::<HashJoinExec>().unwrap();
     assert_projection(&join.left, &["a", "b", "c"]);
     assert_projection(&join.right, &["a", "b", "e"]);
