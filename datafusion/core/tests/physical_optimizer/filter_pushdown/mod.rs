@@ -15,11 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::{Arc, LazyLock};
-
 use arrow::{
-    array::record_batch,
+    array::{record_batch, ArrayRef, Float64Array, Int32Array},
     datatypes::{DataType, Field, Schema, SchemaRef},
+    record_batch::RecordBatch,
     util::pretty::pretty_format_batches,
 };
 use arrow_schema::SortOptions;
@@ -41,9 +40,9 @@ use datafusion_expr::ScalarUDF;
 use datafusion_functions::math::random::RandomFunc;
 use datafusion_functions_aggregate::count::count_udaf;
 use datafusion_physical_expr::{
-    aggregate::AggregateExprBuilder, Partitioning, ScalarFunctionExpr,
+    aggregate::AggregateExprBuilder, expressions::col, LexOrdering, Partitioning,
+    PhysicalSortExpr, ScalarFunctionExpr,
 };
-use datafusion_physical_expr::{expressions::col, LexOrdering, PhysicalSortExpr};
 use datafusion_physical_optimizer::{
     filter_pushdown::FilterPushdown, PhysicalOptimizerRule,
 };
@@ -60,6 +59,8 @@ use datafusion_physical_plan::{
 use futures::StreamExt;
 use object_store::{memory::InMemory, ObjectStore};
 use rstest::rstest;
+use std::sync::{Arc, LazyLock};
+use tokio::time::{timeout, Duration};
 use util::{format_plan_for_test, OptimizationTest, TestNode, TestScanBuilder};
 
 mod util;
@@ -168,9 +169,6 @@ fn test_pushdown_into_scan_with_config_options() {
 
 #[tokio::test]
 async fn test_dynamic_filter_pushdown_through_hash_join_with_topk() {
-    use datafusion_common::JoinType;
-    use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
-
     // Create build side with limited values
     let build_batches = vec![record_batch!(
         ("a", Utf8, ["aa", "ab"]),
@@ -287,9 +285,6 @@ async fn test_dynamic_filter_pushdown_through_hash_join_with_topk() {
 // Dynamic filters arise in cases such as nested inner joins or TopK -> HashJoinExec -> Scan setups.
 #[tokio::test]
 async fn test_static_filter_pushdown_through_hash_join() {
-    use datafusion_common::JoinType;
-    use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
-
     // Create build side with limited values
     let build_batches = vec![record_batch!(
         ("a", Utf8, ["aa", "ab"]),
@@ -843,9 +838,6 @@ async fn test_topk_dynamic_filter_pushdown_multi_column_sort() {
 
 #[tokio::test]
 async fn test_hashjoin_dynamic_filter_pushdown() {
-    use datafusion_common::JoinType;
-    use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
-
     // Create build side with limited values
     let build_batches = vec![record_batch!(
         ("a", Utf8, ["aa", "ab"]),
@@ -965,9 +957,6 @@ async fn test_hashjoin_dynamic_filter_pushdown() {
 
 #[tokio::test]
 async fn test_hashjoin_dynamic_filter_pushdown_null_keys() {
-    use datafusion_common::JoinType;
-    use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
-
     // Build side containing only null join keys
     let build_batches = vec![record_batch!(
         ("a", Utf8, [None::<&str>, None]),
@@ -1060,12 +1049,6 @@ async fn test_hashjoin_dynamic_filter_pushdown_null_keys() {
 
 #[tokio::test]
 async fn test_hashjoin_dynamic_filter_pushdown_high_cardinality() {
-    use arrow::array::{ArrayRef, Float64Array, Int32Array};
-    use arrow::record_batch::RecordBatch;
-    use datafusion_common::JoinType;
-    use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
-    use tokio::time::{timeout, Duration};
-
     // Generate large key sets to watch for planning regressions
     let size = 10_000;
     let build_schema = Arc::new(Schema::new(vec![
@@ -1148,9 +1131,6 @@ async fn test_hashjoin_dynamic_filter_pushdown_high_cardinality() {
 
 #[tokio::test]
 async fn test_nested_hashjoin_dynamic_filter_pushdown() {
-    use datafusion_common::JoinType;
-    use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
-
     // Create test data for three tables: t1, t2, t3
     // t1: small table with limited values (will be build side of outer join)
     let t1_batches =
