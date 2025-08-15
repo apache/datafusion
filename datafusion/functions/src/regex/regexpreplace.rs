@@ -258,15 +258,16 @@ fn regex_replace_posix_groups(replacement: &str) -> String {
 /// # Ok(())
 /// # }
 /// ```
-pub fn regexp_replace<'a, T: OffsetSizeTrait, V, B>(
-    string_array: V,
-    pattern_array: B,
-    replacement_array: B,
+pub fn regexp_replace<'a, T: OffsetSizeTrait, U, V, W>(
+    string_array: U,
+    pattern_array: V,
+    replacement_array: W,
     flags: Option<&ArrayRef>,
 ) -> Result<ArrayRef>
 where
+    U: ArrayAccessor<Item = &'a str>,
     V: ArrayAccessor<Item = &'a str>,
-    B: ArrayAccessor<Item = &'a str>,
+    W: ArrayAccessor<Item = &'a str>,
 {
     // Default implementation for regexp_replace, assumes all args are arrays
     // and args is a sequence of 3 or 4 elements.
@@ -634,7 +635,7 @@ pub fn specialize_regexp_replace<T: OffsetSizeTrait>(
                     let string_array = args[0].as_string_view();
                     let pattern_array = args[1].as_string::<i32>();
                     let replacement_array = args[2].as_string::<i32>();
-                    regexp_replace::<i32, _, _>(
+                    regexp_replace::<i32, _, _,_>(
                         string_array,
                         pattern_array,
                         replacement_array,
@@ -645,7 +646,7 @@ pub fn specialize_regexp_replace<T: OffsetSizeTrait>(
                     let string_array = args[0].as_string::<i32>();
                     let pattern_array = args[1].as_string::<i32>();
                     let replacement_array = args[2].as_string::<i32>();
-                    regexp_replace::<i32, _, _>(
+                    regexp_replace::<i32, _, _, _>(
                         string_array,
                         pattern_array,
                         replacement_array,
@@ -656,7 +657,7 @@ pub fn specialize_regexp_replace<T: OffsetSizeTrait>(
                     let string_array = args[0].as_string::<i64>();
                     let pattern_array = args[1].as_string::<i64>();
                     let replacement_array = args[2].as_string::<i64>();
-                    regexp_replace::<i64, _, _>(
+                    regexp_replace::<i64, _, _, _>(
                         string_array,
                         pattern_array,
                         replacement_array,
