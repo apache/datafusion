@@ -350,7 +350,7 @@ pub struct HashJoinExec {
     ///
     /// Each output stream waits on the `OnceAsync` to signal the completion of
     /// the hash table creation.
-    left_fut: OnceAsync<JoinLeftData>,
+    left_fut: Arc<OnceAsync<JoinLeftData>>,
     /// Shared the `RandomState` for the hashing algorithm
     random_state: RandomState,
     /// Partitioning mode to use
@@ -366,7 +366,7 @@ pub struct HashJoinExec {
     /// Cache holding plan properties like equivalences, output partitioning etc.
     cache: PlanProperties,
     /// Dynamic filter for pushing down to the probe side
-    dynamic_filter: Arc<DynamicFilterPhysicalExpr>,
+    dynamic_filter: Option<Arc<DynamicFilterPhysicalExpr>>,
 }
 
 impl HashJoinExec {
@@ -413,8 +413,6 @@ impl HashJoinExec {
             projection.as_ref(),
         )?;
 
-        let dynamic_filter = Self::create_dynamic_filter(&on);
-
         Ok(HashJoinExec {
             left,
             right,
@@ -430,7 +428,7 @@ impl HashJoinExec {
             column_indices,
             null_equality,
             cache,
-            dynamic_filter,
+            dynamic_filter: None,
         })
     }
 
@@ -687,11 +685,14 @@ impl DisplayAs for HashJoinExec {
                     .map(|(c1, c2)| format!("({c1}, {c2})"))
                     .collect::<Vec<String>>()
                     .join(", ");
-                let dynamic_filter_display = match self.dynamic_filter.current() {
-                    Ok(current) if current != lit(true) => {
-                        format!(", filter=[{current}]")
-                    }
-                    _ => "".to_string(),
+                let dynamic_filter_display = match self.dynamic_filter.as_ref() {
+                    Some(dynamic_filter) => match dynamic_filter.current() {
+                        Ok(current) if current != lit(true) => {
+                            format!(", filter=[{current}]")
+                        }
+                        _ => "".to_string(),
+                    },
+                    None => "".to_string(),
                 };
                 write!(
                     f,
@@ -795,7 +796,7 @@ impl ExecutionPlan for HashJoinExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let mut new_join = HashJoinExec::try_new(
+        let new_join = HashJoinExec::try_new(
             Arc::clone(&children[0]),
             Arc::clone(&children[1]),
             self.on.clone(),
@@ -805,8 +806,6 @@ impl ExecutionPlan for HashJoinExec {
             self.mode,
             self.null_equality,
         )?;
-        // Create a new dynamic filter with swapped keys after inputs are swapped
-        new_join.dynamic_filter = Self::create_dynamic_filter(&new_join.on);
         Ok(Arc::new(new_join))
     }
 
@@ -819,7 +818,7 @@ impl ExecutionPlan for HashJoinExec {
             filter: self.filter.clone(),
             join_type: self.join_type,
             join_schema: Arc::clone(&self.join_schema),
-            left_fut: OnceAsync::default(),
+            left_fut: Arc::new(OnceAsync::default()),
             random_state: self.random_state.clone(),
             mode: self.mode,
             metrics: ExecutionPlanMetricsSet::new(),
@@ -827,7 +826,7 @@ impl ExecutionPlan for HashJoinExec {
             column_indices: self.column_indices.clone(),
             null_equality: self.null_equality,
             cache: self.cache.clone(),
-            dynamic_filter: Self::create_dynamic_filter(&self.on),
+            dynamic_filter: None,
         }))
     }
 
@@ -887,7 +886,8 @@ impl ExecutionPlan for HashJoinExec {
                     need_produce_result_in_final(self.join_type),
                     self.right().output_partitioning().partition_count(),
                     enable_dynamic_filter_pushdown
-                        .then_some(Arc::clone(&self.dynamic_filter)),
+                        .then_some(self.dynamic_filter.clone())
+                        .flatten(),
                     on_right.clone(),
                 ))
             })?,
@@ -907,7 +907,8 @@ impl ExecutionPlan for HashJoinExec {
                     need_produce_result_in_final(self.join_type),
                     1,
                     enable_dynamic_filter_pushdown
-                        .then_some(Arc::clone(&self.dynamic_filter)),
+                        .then_some(self.dynamic_filter.clone())
+                        .flatten(),
                     on_right.clone(),
                 ))
             }
@@ -1051,8 +1052,7 @@ impl ExecutionPlan for HashJoinExec {
             && config.optimizer.enable_dynamic_filter_pushdown
         {
             // Add actual dynamic filter to right side (probe side)
-            let dynamic_filter =
-                Arc::clone(&self.dynamic_filter) as Arc<dyn PhysicalExpr>;
+            let dynamic_filter = Self::create_dynamic_filter(&self.on);
             right_child = right_child.with_self_filter(dynamic_filter);
         }
 
@@ -1079,7 +1079,40 @@ impl ExecutionPlan for HashJoinExec {
                 child_pushdown_result,
             ));
         }
-        Ok(FilterPushdownPropagation::if_any(child_pushdown_result))
+
+        let mut result = FilterPushdownPropagation::if_any(child_pushdown_result.clone());
+        assert_eq!(child_pushdown_result.self_filters.len(), 2); // Should always be 2, we have 2 children
+        let right_child_self_filters = &child_pushdown_result.self_filters[1]; // We only push down filters to the right child
+                                                                               // We expect 0 or 1 self filters
+        if let Some(filter) = right_child_self_filters.get(0) {
+            // Note that we don't check PushdDownPredicate::discrimnant because even if nothing said
+            // "yes, I can fully evaluate this filter" things might still use it for statistics -> it's worth updating
+            let predicate = Arc::clone(&filter.predicate);
+            if let Ok(dynamic_filter) =
+                Arc::downcast::<DynamicFilterPhysicalExpr>(predicate)
+            {
+                // We successfully pushed down our self filter - we need to make a new node with the dynamic filter
+                let new_node = Arc::new(HashJoinExec {
+                    left: Arc::clone(&self.left),
+                    right: Arc::clone(&self.right),
+                    on: self.on.clone(),
+                    filter: self.filter.clone(),
+                    join_type: self.join_type,
+                    join_schema: Arc::clone(&self.join_schema),
+                    left_fut: self.left_fut.clone(),
+                    random_state: self.random_state.clone(),
+                    mode: self.mode,
+                    metrics: ExecutionPlanMetricsSet::new(),
+                    projection: self.projection.clone(),
+                    column_indices: self.column_indices.clone(),
+                    null_equality: self.null_equality,
+                    cache: self.cache.clone(),
+                    dynamic_filter: Some(dynamic_filter),
+                });
+                result = result.with_updated_node(new_node as Arc<dyn ExecutionPlan>);
+            }
+        }
+        Ok(result)
     }
 }
 
