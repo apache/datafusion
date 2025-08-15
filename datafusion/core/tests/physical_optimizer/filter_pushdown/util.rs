@@ -152,7 +152,8 @@ impl FileSource for TestSource {
     }
 
     fn as_any(&self) -> &dyn Any {
-        todo!("should not be called")
+        // Allow downcasting a FileSource to the concrete TestSource in tests.
+        self
     }
 
     fn with_batch_size(&self, batch_size: usize) -> Arc<dyn FileSource> {
