@@ -27,7 +27,6 @@ use datafusion_functions::regex::regexpinstr::regexp_instr_func;
 use datafusion_functions::regex::regexplike::regexp_like;
 use datafusion_functions::regex::regexpmatch::regexp_match;
 use datafusion_functions::regex::regexpreplace::regexp_replace_with_flags;
-use datafusion_functions::regex::regexpreplace::regexp_replace_without_flags;
 use rand::distr::Alphanumeric;
 use rand::prelude::IndexedRandom;
 use rand::rngs::ThreadRng;
