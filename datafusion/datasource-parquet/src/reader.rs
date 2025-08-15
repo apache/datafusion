@@ -244,7 +244,7 @@ impl AsyncFileReader for CachedParquetFileReader {
 
     fn get_metadata<'a>(
         &'a mut self,
-        options: Option<&'a ArrowReaderOptions>,
+        _options: Option<&'a ArrowReaderOptions>,
     ) -> BoxFuture<'a, parquet::errors::Result<Arc<ParquetMetaData>>> {
         let file_meta = self.file_meta.clone();
         let metadata_cache = Arc::clone(&self.metadata_cache);
@@ -252,7 +252,7 @@ impl AsyncFileReader for CachedParquetFileReader {
         async move {
             #[cfg(feature = "parquet_encryption")]
             let file_decryption_properties =
-                options.and_then(|o| o.file_decryption_properties());
+                _options.and_then(|o| o.file_decryption_properties());
 
             #[cfg(not(feature = "parquet_encryption"))]
             let file_decryption_properties = None;
