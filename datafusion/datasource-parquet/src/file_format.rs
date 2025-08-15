@@ -1232,12 +1232,15 @@ pub fn statistics_from_parquet_meta_calc(
                     file_metadata.schema_descr(),
                 ) {
                     Ok(stats_converter) => {
+                        let mut accumulators = StatisticsAccumulators {
+                            min_accs: &mut min_accs,
+                            max_accs: &mut max_accs,
+                            null_counts_array: &mut null_counts_array,
+                            is_min_value_exact: &mut is_min_value_exact,
+                            is_max_value_exact: &mut is_max_value_exact,
+                        };
                         summarize_min_max_null_counts(
-                            &mut min_accs,
-                            &mut max_accs,
-                            &mut null_counts_array,
-                            &mut is_min_value_exact,
-                            &mut is_max_value_exact,
+                            &mut accumulators,
                             idx,
                             num_rows,
                             &stats_converter,
@@ -1312,12 +1315,17 @@ fn get_col_stats(
         .collect()
 }
 
+/// Holds the accumulator state for collecting statistics from row groups
+struct StatisticsAccumulators<'a> {
+    min_accs: &'a mut [Option<MinAccumulator>],
+    max_accs: &'a mut [Option<MaxAccumulator>],
+    null_counts_array: &'a mut [Precision<usize>],
+    is_min_value_exact: &'a mut [Option<bool>],
+    is_max_value_exact: &'a mut [Option<bool>],
+}
+
 fn summarize_min_max_null_counts(
-    min_accs: &mut [Option<MinAccumulator>],
-    max_accs: &mut [Option<MaxAccumulator>],
-    null_counts_array: &mut [Precision<usize>],
-    is_min_value_exact: &mut [Option<bool>],
-    is_max_value_exact: &mut [Option<bool>],
+    accumulators: &mut StatisticsAccumulators,
     arrow_schema_index: usize,
     num_rows: usize,
     stats_converter: &StatisticsConverter,
@@ -1331,30 +1339,31 @@ fn summarize_min_max_null_counts(
     let is_min_value_exact_stat =
         stats_converter.row_group_is_min_value_exact(row_groups_metadata)?;
 
-    if let Some(max_acc) = &mut max_accs[arrow_schema_index] {
+    if let Some(max_acc) = &mut accumulators.max_accs[arrow_schema_index] {
         max_acc.update_batch(&[Arc::clone(&max_values)])?;
         let mut cur_max_acc = max_acc.clone();
-        is_max_value_exact[arrow_schema_index] = has_any_exact_match(
+        accumulators.is_max_value_exact[arrow_schema_index] = has_any_exact_match(
             cur_max_acc.evaluate()?,
             max_values,
             is_max_value_exact_stat,
         );
     }
 
-    if let Some(min_acc) = &mut min_accs[arrow_schema_index] {
+    if let Some(min_acc) = &mut accumulators.min_accs[arrow_schema_index] {
         min_acc.update_batch(&[Arc::clone(&min_values)])?;
         let mut cur_min_acc = min_acc.clone();
-        is_min_value_exact[arrow_schema_index] = has_any_exact_match(
+        accumulators.is_min_value_exact[arrow_schema_index] = has_any_exact_match(
             cur_min_acc.evaluate()?,
             min_values,
             is_min_value_exact_stat,
         );
     }
 
-    null_counts_array[arrow_schema_index] = Precision::Exact(match sum(&null_counts) {
-        Some(null_count) => null_count as usize,
-        None => num_rows,
-    });
+    accumulators.null_counts_array[arrow_schema_index] =
+        Precision::Exact(match sum(&null_counts) {
+            Some(null_count) => null_count as usize,
+            None => num_rows,
+        });
 
     Ok(())
 }
@@ -2042,6 +2051,7 @@ mod tests {
 
     use super::*;
 
+    use arrow::array::{BooleanArray, Int32Array};
     use arrow::datatypes::DataType;
     use parquet::schema::parser::parse_message_type;
 
@@ -2250,5 +2260,52 @@ mod tests {
         ]);
 
         assert_eq!(result, expected_schema);
+    }
+
+    #[test]
+    fn test_has_any_exact_match() {
+        // Case 1: Mixed exact and inexact matches
+        {
+            let computed_min = ScalarValue::Int32(Some(0));
+            let row_group_mins =
+                Arc::new(Int32Array::from(vec![0, 1, 0, 3, 0, 5])) as ArrayRef;
+            let exactness =
+                BooleanArray::from(vec![true, false, false, false, false, false]);
+
+            let result = has_any_exact_match(computed_min, row_group_mins, exactness);
+            assert_eq!(result, Some(true));
+        }
+        // Case 2: All inexact matches
+        {
+            let computed_min = ScalarValue::Int32(Some(0));
+            let row_group_mins =
+                Arc::new(Int32Array::from(vec![0, 1, 0, 3, 0, 5])) as ArrayRef;
+            let exactness =
+                BooleanArray::from(vec![false, false, false, false, false, false]);
+
+            let result = has_any_exact_match(computed_min, row_group_mins, exactness);
+            assert_eq!(result, Some(false));
+        }
+        // Case 3: All exact matches
+        {
+            let computed_max = ScalarValue::Int32(Some(5));
+            let row_group_maxes =
+                Arc::new(Int32Array::from(vec![1, 5, 3, 5, 2, 5])) as ArrayRef;
+            let exactness =
+                BooleanArray::from(vec![false, true, true, true, false, true]);
+
+            let result = has_any_exact_match(computed_max, row_group_maxes, exactness);
+            assert_eq!(result, Some(true));
+        }
+        // Case 4: All maxes are null values
+        {
+            let computed_max = ScalarValue::Int32(None);
+            let row_group_maxes =
+                Arc::new(Int32Array::from(vec![None, None, None, None])) as ArrayRef;
+            let exactness = BooleanArray::from(vec![None, Some(true), None, Some(false)]);
+
+            let result = has_any_exact_match(computed_max, row_group_maxes, exactness);
+            assert_eq!(result, Some(false));
+        }
     }
 }
