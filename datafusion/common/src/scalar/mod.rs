@@ -4043,7 +4043,7 @@ impl From<&str> for ScalarValue {
 impl From<Option<&str>> for ScalarValue {
     fn from(value: Option<&str>) -> Self {
         let value = value.map(|s| s.to_string());
-        ScalarValue::Utf8(value)
+        value.into()
     }
 }
 
@@ -4070,7 +4070,13 @@ impl FromStr for ScalarValue {
 
 impl From<String> for ScalarValue {
     fn from(value: String) -> Self {
-        ScalarValue::Utf8(Some(value))
+        Some(value).into()
+    }
+}
+
+impl From<Option<String>> for ScalarValue {
+    fn from(value: Option<String>) -> Self {
+        ScalarValue::Utf8(value)
     }
 }
 

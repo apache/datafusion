@@ -43,7 +43,7 @@ use datafusion_macros::user_doc;
         description = "Optional. The number of decimal places to round to. Defaults to 0."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct RoundFunc {
     signature: Signature,
 }

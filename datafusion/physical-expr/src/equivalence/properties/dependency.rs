@@ -396,6 +396,7 @@ mod tests {
 
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
+    use datafusion_common::config::ConfigOptions;
     use datafusion_common::{Constraint, Constraints, Result};
     use datafusion_expr::sort_properties::SortProperties;
     use datafusion_expr::Operator;
@@ -1035,6 +1036,7 @@ mod tests {
             concat(),
             vec![Arc::clone(&col_a), Arc::clone(&col_b)],
             Field::new("f", DataType::Utf8, true).into(),
+            Arc::new(ConfigOptions::default()),
         ));
 
         // Assume existing ordering is [c ASC, a ASC, b ASC]
@@ -1125,6 +1127,7 @@ mod tests {
             concat(),
             vec![Arc::clone(&col_a), Arc::clone(&col_b)],
             Field::new("f", DataType::Utf8, true).into(),
+            Arc::new(ConfigOptions::default()),
         )) as _;
 
         // Assume existing ordering is [concat(a, b) ASC, a ASC, b ASC]

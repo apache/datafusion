@@ -1429,12 +1429,6 @@ impl Expr {
         }
     }
 
-    /// Returns a full and complete string representation of this expression.
-    #[deprecated(since = "42.0.0", note = "use format! instead")]
-    pub fn canonical_name(&self) -> String {
-        format!("{self}")
-    }
-
     /// Return String representation of the variant represented by `self`
     /// Useful for non-rust based bindings
     pub fn variant_name(&self) -> &str {
@@ -3253,10 +3247,6 @@ impl Display for Expr {
             Expr::ScalarFunction(fun) => {
                 fmt_function(f, fun.name(), false, &fun.args, true)
             }
-            // TODO: use udf's display_name, need to fix the separator issue, <https://github.com/apache/datafusion/issues/10364>
-            // Expr::ScalarFunction(ScalarFunction { func, args }) => {
-            //     write!(f, "{}", func.display_name(args).unwrap())
-            // }
             Expr::WindowFunction(window_fun) => {
                 let WindowFunction { fun, params } = window_fun.as_ref();
                 match fun {
@@ -3556,27 +3546,23 @@ mod test {
     }
 
     #[test]
-    #[allow(deprecated)]
     fn format_case_when() -> Result<()> {
         let expr = case(col("a"))
             .when(lit(1), lit(true))
             .when(lit(0), lit(false))
             .otherwise(lit(ScalarValue::Null))?;
         let expected = "CASE a WHEN Int32(1) THEN Boolean(true) WHEN Int32(0) THEN Boolean(false) ELSE NULL END";
-        assert_eq!(expected, expr.canonical_name());
         assert_eq!(expected, format!("{expr}"));
         Ok(())
     }
 
     #[test]
-    #[allow(deprecated)]
     fn format_cast() -> Result<()> {
         let expr = Expr::Cast(Cast {
             expr: Box::new(Expr::Literal(ScalarValue::Float32(Some(1.23)), None)),
             data_type: DataType::Utf8,
         });
         let expected_canonical = "CAST(Float32(1.23) AS Utf8)";
-        assert_eq!(expected_canonical, expr.canonical_name());
         assert_eq!(expected_canonical, format!("{expr}"));
         // Note that CAST intentionally has a name that is different from its `Display`
         // representation. CAST does not change the name of expressions.
@@ -3658,7 +3644,7 @@ mod test {
     #[test]
     fn test_is_volatile_scalar_func() {
         // UDF
-        #[derive(Debug)]
+        #[derive(Debug, PartialEq, Eq, Hash)]
         struct TestScalarUDF {
             signature: Signature,
         }

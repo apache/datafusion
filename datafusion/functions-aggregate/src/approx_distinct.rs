@@ -293,6 +293,7 @@ impl Default for ApproxDistinct {
 ```"#,
     standard_argument(name = "expression",)
 )]
+#[derive(PartialEq, Eq, Hash)]
 pub struct ApproxDistinct {
     signature: Signature,
 }

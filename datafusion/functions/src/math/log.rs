@@ -45,7 +45,7 @@ log(numeric_expression)"#,
     standard_argument(name = "base", prefix = "Base numeric"),
     standard_argument(name = "numeric_expression", prefix = "Numeric")
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct LogFunc {
     signature: Signature,
 }
@@ -260,6 +260,7 @@ mod tests {
     use arrow::compute::SortOptions;
     use arrow::datatypes::Field;
     use datafusion_common::cast::{as_float32_array, as_float64_array};
+    use datafusion_common::config::ConfigOptions;
     use datafusion_common::DFSchema;
     use datafusion_expr::execution_props::ExecutionProps;
     use datafusion_expr::simplify::SimplifyContext;
@@ -281,6 +282,7 @@ mod tests {
             arg_fields,
             number_rows: 4,
             return_field: Field::new("f", DataType::Float64, true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
         };
         let _ = LogFunc::new().invoke_with_args(args);
     }
@@ -295,6 +297,7 @@ mod tests {
             arg_fields: vec![arg_field],
             number_rows: 1,
             return_field: Field::new("f", DataType::Float64, true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
         };
 
         let result = LogFunc::new().invoke_with_args(args);
@@ -311,6 +314,7 @@ mod tests {
             arg_fields: vec![arg_field],
             number_rows: 1,
             return_field: Field::new("f", DataType::Float32, true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
         };
         let result = LogFunc::new()
             .invoke_with_args(args)
@@ -340,6 +344,7 @@ mod tests {
             arg_fields: vec![arg_field],
             number_rows: 1,
             return_field: Field::new("f", DataType::Float64, true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
         };
         let result = LogFunc::new()
             .invoke_with_args(args)
@@ -373,6 +378,7 @@ mod tests {
             arg_fields,
             number_rows: 1,
             return_field: Field::new("f", DataType::Float32, true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
         };
         let result = LogFunc::new()
             .invoke_with_args(args)
@@ -406,6 +412,7 @@ mod tests {
             arg_fields,
             number_rows: 1,
             return_field: Field::new("f", DataType::Float64, true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
         };
         let result = LogFunc::new()
             .invoke_with_args(args)
@@ -437,6 +444,7 @@ mod tests {
             arg_fields: vec![arg_field],
             number_rows: 4,
             return_field: Field::new("f", DataType::Float64, true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
         };
         let result = LogFunc::new()
             .invoke_with_args(args)
@@ -471,6 +479,7 @@ mod tests {
             arg_fields: vec![arg_field],
             number_rows: 4,
             return_field: Field::new("f", DataType::Float32, true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
         };
         let result = LogFunc::new()
             .invoke_with_args(args)
@@ -511,6 +520,7 @@ mod tests {
             arg_fields,
             number_rows: 4,
             return_field: Field::new("f", DataType::Float64, true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
         };
         let result = LogFunc::new()
             .invoke_with_args(args)
@@ -551,6 +561,7 @@ mod tests {
             arg_fields,
             number_rows: 4,
             return_field: Field::new("f", DataType::Float32, true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
         };
         let result = LogFunc::new()
             .invoke_with_args(args)
@@ -637,7 +648,7 @@ mod tests {
 
         // Test log(num)
         for order in orders.iter().cloned() {
-            let result = log.output_ordering(&[order.clone()]).unwrap();
+            let result = log.output_ordering(std::slice::from_ref(&order)).unwrap();
             assert_eq!(result, order.sort_properties);
         }
 

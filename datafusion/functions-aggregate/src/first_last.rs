@@ -19,7 +19,7 @@
 
 use std::any::Any;
 use std::fmt::Debug;
-use std::hash::{DefaultHasher, Hash, Hasher};
+use std::hash::Hash;
 use std::mem::size_of_val;
 use std::sync::Arc;
 
@@ -89,6 +89,7 @@ pub fn last_value(expression: Expr, order_by: Vec<SortExpr>) -> Expr {
 ```"#,
     standard_argument(name = "expression",)
 )]
+#[derive(PartialEq, Eq, Hash)]
 pub struct FirstValue {
     signature: Signature,
     is_input_pre_ordered: bool,
@@ -292,30 +293,6 @@ impl AggregateUDFImpl for FirstValue {
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
-    }
-
-    fn equals(&self, other: &dyn AggregateUDFImpl) -> bool {
-        let Some(other) = other.as_any().downcast_ref::<Self>() else {
-            return false;
-        };
-        let Self {
-            signature,
-            is_input_pre_ordered,
-        } = self;
-        signature == &other.signature
-            && is_input_pre_ordered == &other.is_input_pre_ordered
-    }
-
-    fn hash_value(&self) -> u64 {
-        let Self {
-            signature,
-            is_input_pre_ordered,
-        } = self;
-        let mut hasher = DefaultHasher::new();
-        std::any::type_name::<Self>().hash(&mut hasher);
-        signature.hash(&mut hasher);
-        is_input_pre_ordered.hash(&mut hasher);
-        hasher.finish()
     }
 }
 
@@ -1029,6 +1006,7 @@ impl Accumulator for FirstValueAccumulator {
 ```"#,
     standard_argument(name = "expression",)
 )]
+#[derive(PartialEq, Eq, Hash)]
 pub struct LastValue {
     signature: Signature,
     is_input_pre_ordered: bool,
@@ -1236,30 +1214,6 @@ impl AggregateUDFImpl for LastValue {
                 )
             }
         }
-    }
-
-    fn equals(&self, other: &dyn AggregateUDFImpl) -> bool {
-        let Some(other) = other.as_any().downcast_ref::<Self>() else {
-            return false;
-        };
-        let Self {
-            signature,
-            is_input_pre_ordered,
-        } = self;
-        signature == &other.signature
-            && is_input_pre_ordered == &other.is_input_pre_ordered
-    }
-
-    fn hash_value(&self) -> u64 {
-        let Self {
-            signature,
-            is_input_pre_ordered,
-        } = self;
-        let mut hasher = DefaultHasher::new();
-        std::any::type_name::<Self>().hash(&mut hasher);
-        signature.hash(&mut hasher);
-        is_input_pre_ordered.hash(&mut hasher);
-        hasher.finish()
     }
 }
 
