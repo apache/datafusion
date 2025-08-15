@@ -1105,7 +1105,7 @@ impl ExecutionPlan for HashJoinExec {
         assert_eq!(child_pushdown_result.self_filters.len(), 2); // Should always be 2, we have 2 children
         let right_child_self_filters = &child_pushdown_result.self_filters[1]; // We only push down filters to the right child
                                                                                // We expect 0 or 1 self filters
-        if let Some(filter) = right_child_self_filters.get(0) {
+        if let Some(filter) = right_child_self_filters.first() {
             // Note that we don't check PushdDownPredicate::discrimnant because even if nothing said
             // "yes, I can fully evaluate this filter" things might still use it for statistics -> it's worth updating
             let predicate = Arc::clone(&filter.predicate);
@@ -1120,7 +1120,7 @@ impl ExecutionPlan for HashJoinExec {
                     filter: self.filter.clone(),
                     join_type: self.join_type,
                     join_schema: Arc::clone(&self.join_schema),
-                    left_fut: self.left_fut.clone(),
+                    left_fut: Arc::clone(&self.left_fut),
                     random_state: self.random_state.clone(),
                     mode: self.mode,
                     metrics: ExecutionPlanMetricsSet::new(),
