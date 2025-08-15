@@ -5,7 +5,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>Roadmap &#8212; Apache DataFusion  documentation</title>
+    <title>Roadmap and Improvement Proposals &#8212; Apache DataFusion  documentation</title>
     
     <link href="../_static/styles/theme.css?digest=1999514e3f237ded88cf" rel="stylesheet">
 <link href="../_static/styles/pydata-sphinx-theme.css?digest=1999514e3f237ded88cf" rel="stylesheet">
@@ -453,7 +453,7 @@
  </li>
  <li class="toctree-l1 current active">
   <a class="current reference internal" href="#">
-   Roadmap
+   Roadmap and Improvement Proposals
   </a>
  </li>
  <li class="toctree-l1">
@@ -549,28 +549,43 @@
 
 <nav id="bd-toc-nav">
     <ul class="visible nav section-nav flex-column">
- <li class="toc-h1 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#">
-   Roadmap
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#planning-epics">
+   Planning
+   <code class="docutils literal notranslate">
+    <span class="pre">
+     EPIC
+    </span>
+   </code>
+   s
   </a>
-  <ul class="visible nav section-nav flex-column">
-   <li class="toc-h2 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#planning-epics">
-     Planning
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       EPIC
-      </span>
-     </code>
-     s
-    </a>
-   </li>
-  </ul>
  </li>
- <li class="toc-h1 nav-item toc-entry">
+ <li class="toc-h2 nav-item toc-entry">
   <a class="reference internal nav-link" href="#quarterly-roadmap">
    Quarterly Roadmap
   </a>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#improvement-proposals">
+   Improvement Proposals
+  </a>
+  <ul class="nav section-nav flex-column">
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#discussing-new-features">
+     Discussing New Features
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#what-contributions-are-good-fits">
+     What Contributions are Good Fits?
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#design-build-vs-big-up-front-design">
+     Design Build vs. Big Up Front Design
+    </a>
+   </li>
+  </ul>
  </li>
 </ul>
 
@@ -618,8 +633,8 @@ KIND, either express or implied. See the License for the
 specific language governing permissions and limitations
 under the License.
 -->
-<section id="roadmap">
-<h1>Roadmap<a class="headerlink" href="#roadmap" title="Link to this heading">¶</a></h1>
+<section id="roadmap-and-improvement-proposals">
+<h1>Roadmap and Improvement Proposals<a class="headerlink" href="#roadmap-and-improvement-proposals" title="Link to this heading">¶</a></h1>
 <p>The <a class="reference internal" href="../user-guide/introduction.html"><span class="doc std std-doc">project introduction</span></a> explains the
 overview and goals of DataFusion, and our development efforts largely
 align to that vision.</p>
@@ -641,9 +656,8 @@ start a conversation using a github issue or the
 make review efficient and avoid surprises.</p>
 <p><a class="reference external" href="https://github.com/apache/datafusion/issues?q=is%3Aissue+is%3Aopen+epic">The current list of <code class="docutils literal notranslate"><span class="pre">EPIC</span></code>s can be found here</a>.</p>
 </section>
-</section>
 <section id="quarterly-roadmap">
-<h1>Quarterly Roadmap<a class="headerlink" href="#quarterly-roadmap" title="Link to this heading">¶</a></h1>
+<h2>Quarterly Roadmap<a class="headerlink" href="#quarterly-roadmap" title="Link to this heading">¶</a></h2>
 <p>The DataFusion roadmap is driven by the priorities of contributors rather than
 any single organization or coordinating committee. We typically discuss our
 roadmap using GitHub issues, approximately quarterly, and invite you to join the
@@ -654,6 +668,69 @@ discussion.</p>
 <li><p><a class="reference external" href="https://github.com/apache/datafusion/issues/15878">DataFusion Road Map: Q3-Q4 2025</a></p></li>
 <li><p><a class="reference external" href="https://github.com/apache/datafusion/issues/13274">2024 Q4 / 2025 Q1 Roadmap</a></p></li>
 </ol>
+</section>
+<section id="improvement-proposals">
+<h2>Improvement Proposals<a class="headerlink" href="#improvement-proposals" title="Link to this heading">¶</a></h2>
+<section id="discussing-new-features">
+<h3>Discussing New Features<a class="headerlink" href="#discussing-new-features" title="Link to this heading">¶</a></h3>
+<p>If you plan to work on a new feature that doesn’t have an existing ticket, it is
+a good idea to open a ticket to discuss the feature. Advanced discussion often
+helps avoid wasted effort by determining early if the feature is a good fit for
+DataFusion before too much time is invested. Discussion on a ticket can help
+gather feedback from the community and is likely easier to discuss than a 1000
+line PR.</p>
+<p>If you open a ticket and it doesn’t get any response, you can try <code class="docutils literal notranslate"><span class="pre">&#64;</span></code>-mentioning
+recently active community members in the ticket to get their attention.</p>
+</section>
+<section id="what-contributions-are-good-fits">
+<h3>What Contributions are Good Fits?<a class="headerlink" href="#what-contributions-are-good-fits" title="Link to this heading">¶</a></h3>
+<p>DataFusion is designed to be highly extensible, and many features can be
+implemented as extensions without changes or additions to the core. Support for
+new functions, data formats, and similar functionality can be added using those
+extension APIs, and there are already many existing community supported
+extensions listed in the <a class="reference internal" href="../library-user-guide/extensions.html"><span class="std std-doc">extensions list</span></a>.</p>
+<p>Query engines are complex pieces of software to develop and maintain. Given our
+limited maintenance bandwidth, we try to keep the DataFusion core as simple and
+focused as possible, while still satisfying the <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/index.html#design-goals">design goal</a> of an easy to
+start initial experience.</p>
+<p>With that in mind, contributions that meet the following criteria are more likely
+to be accepted:</p>
+<ol class="arabic simple">
+<li><p>Bug fixes for existing features</p></li>
+<li><p>Test coverage for existing features</p></li>
+<li><p>Documentation improvements / examples</p></li>
+<li><p>Performance improvements to existing features (with benchmarks)</p></li>
+<li><p>“Small” functional improvements to existing features (if they don’t change existing behavior)</p></li>
+<li><p>Additional APIs for extending DataFusion’s capabilities</p></li>
+<li><p>CI improvements</p></li>
+</ol>
+<p>Contributions that will likely involve more discussion (see Discussing New
+Features above) prior to acceptance include:</p>
+<ol class="arabic simple">
+<li><p>Major new functionality (even if it is part of the “standard SQL”)</p></li>
+<li><p>New functions, especially if they aren’t part of “standard SQL”</p></li>
+<li><p>New data sources (e.g. support for Apache ORC)</p></li>
+</ol>
+</section>
+<section id="design-build-vs-big-up-front-design">
+<h3>Design Build vs. Big Up Front Design<a class="headerlink" href="#design-build-vs-big-up-front-design" title="Link to this heading">¶</a></h3>
+<p>Typically, the DataFusion community attacks large problems by solving them bit
+by bit and refining a solution iteratively on the <code class="docutils literal notranslate"><span class="pre">main</span></code> branch as a series of
+Pull Requests. This is different from projects which front-load the effort
+with a more comprehensive design process.</p>
+<p>By “advancing the front” the community always makes tangible progress, and the strategy is
+especially effective in a project that relies on individual contributors who may
+not have the time or resources to invest in a large upfront design effort.
+However, this “bit by bit approach” doesn’t always succeed, and sometimes we get
+stuck or go down the wrong path and then change directions.</p>
+<p>Our process necessarily results in imperfect solutions being the “state of the
+code” in some cases, and larger visions are not yet fully realized. However, the
+community is good at driving things to completion in the long run. If you see
+something that needs improvement or an area that is not yet fully realized,
+please consider submitting an issue or PR to improve it. We are always looking
+for more contributions.</p>
+</section>
+</section>
 </section>
 
 
