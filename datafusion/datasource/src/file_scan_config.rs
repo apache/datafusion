@@ -1968,7 +1968,7 @@ mod tests {
                     .map(|expr| {
                         create_physical_sort_expr(
                             &expr,
-                            &DFSchema::try_from(table_schema.as_ref().clone())?,
+                            &DFSchema::try_from(Arc::clone(&table_schema))?,
                             &ExecutionProps::default(),
                         )
                     })

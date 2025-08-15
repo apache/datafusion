@@ -899,6 +899,7 @@ impl TryFrom<SchemaRef> for DFSchema {
             field_qualifiers: vec![None; field_count],
             functional_dependencies: FunctionalDependencies::empty(),
         };
+        dfschema.check_names()?;
         Ok(dfschema)
     }
 }
