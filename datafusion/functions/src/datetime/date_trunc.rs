@@ -191,7 +191,7 @@ impl ScalarUDFImpl for DateTruncFunc {
             // fast path for fine granularities
             if matches!(
                 granularity.as_str(),
-                // For morden timezones, it's correct to truncate "minute" in this way.
+                // For modern timezones, it's correct to truncate "minute" in this way.
                 // Both datafusion and arrow are ignoring historical timezone's non-minute granularity
                 // bias (e.g., Asia/Kathmandu before 1919 is UTC+05:41:16).
                 "second" | "minute" | "millisecond" | "microsecond"

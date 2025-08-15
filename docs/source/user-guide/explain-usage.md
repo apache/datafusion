@@ -249,7 +249,7 @@ a separate core. Data crosses between cores only within certain operators such a
 
 You can read more about this in the [Partitioning Docs].
 
-[partitoning docs]: https://docs.rs/datafusion/latest/datafusion/physical_expr/enum.Partitioning.html
+[partitioning docs]: https://docs.rs/datafusion/latest/datafusion/physical_expr/enum.Partitioning.html
 
 ## Example of an Aggregate Query
 

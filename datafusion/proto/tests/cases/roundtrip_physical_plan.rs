@@ -398,7 +398,7 @@ fn roundtrip_window() -> Result<()> {
     let args = vec![cast(col("a", &schema)?, &schema, DataType::Float64)?];
     let sum_expr = AggregateExprBuilder::new(sum_udaf(), args)
         .schema(Arc::clone(&schema))
-        .alias("SUM(a) RANGE BETWEEN CURRENT ROW AND UNBOUNDED PRECEEDING")
+        .alias("SUM(a) RANGE BETWEEN CURRENT ROW AND UNBOUNDED PROCEEDING")
         .build()
         .map(Arc::new)?;
 
@@ -419,7 +419,7 @@ fn roundtrip_window() -> Result<()> {
 }
 
 #[test]
-fn rountrip_aggregate() -> Result<()> {
+fn roundtrip_aggregate() -> Result<()> {
     let field_a = Field::new("a", DataType::Int64, false);
     let field_b = Field::new("b", DataType::Int64, false);
     let schema = Arc::new(Schema::new(vec![field_a, field_b]));
@@ -467,7 +467,7 @@ fn rountrip_aggregate() -> Result<()> {
 }
 
 #[test]
-fn rountrip_aggregate_with_limit() -> Result<()> {
+fn roundtrip_aggregate_with_limit() -> Result<()> {
     let field_a = Field::new("a", DataType::Int64, false);
     let field_b = Field::new("b", DataType::Int64, false);
     let schema = Arc::new(Schema::new(vec![field_a, field_b]));
@@ -497,7 +497,7 @@ fn rountrip_aggregate_with_limit() -> Result<()> {
 }
 
 #[test]
-fn rountrip_aggregate_with_approx_pencentile_cont() -> Result<()> {
+fn roundtrip_aggregate_with_approx_pencentile_cont() -> Result<()> {
     let field_a = Field::new("a", DataType::Int64, false);
     let field_b = Field::new("b", DataType::Int64, false);
     let schema = Arc::new(Schema::new(vec![field_a, field_b]));
@@ -526,7 +526,7 @@ fn rountrip_aggregate_with_approx_pencentile_cont() -> Result<()> {
 }
 
 #[test]
-fn rountrip_aggregate_with_sort() -> Result<()> {
+fn roundtrip_aggregate_with_sort() -> Result<()> {
     let field_a = Field::new("a", DataType::Int64, false);
     let field_b = Field::new("b", DataType::Int64, false);
     let schema = Arc::new(Schema::new(vec![field_a, field_b]));

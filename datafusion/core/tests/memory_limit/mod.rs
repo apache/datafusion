@@ -546,7 +546,7 @@ async fn test_external_sort_zero_merge_reservation() {
 // Tests for disk limit (`max_temp_directory_size` in `DiskManager`)
 // ------------------------------------------------------------------
 
-// Create a new `SessionContext` with speicified disk limit, memory pool limit, and spill compression codec
+// Create a new `SessionContext` with specified disk limit, memory pool limit, and spill compression codec
 async fn setup_context(
     disk_limit: u64,
     memory_pool_limit: usize,

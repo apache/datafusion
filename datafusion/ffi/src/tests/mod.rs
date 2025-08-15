@@ -75,7 +75,7 @@ pub struct ForeignLibraryModule {
     /// Create an aggregate UDAF using sum
     pub create_sum_udaf: extern "C" fn() -> FFI_AggregateUDF,
 
-    /// Createa  grouping UDAF using stddev
+    /// Create  grouping UDAF using stddev
     pub create_stddev_udaf: extern "C" fn() -> FFI_AggregateUDF,
 
     pub create_rank_udwf: extern "C" fn() -> FFI_WindowUDF,

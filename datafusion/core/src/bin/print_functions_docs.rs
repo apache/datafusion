@@ -260,7 +260,7 @@ fn print_docs(
     }
 }
 
-/// Trait for accessing name / aliases / documentation for differnet functions
+/// Trait for accessing name / aliases / documentation for different functions
 trait DocProvider {
     fn get_name(&self) -> String;
     fn get_aliases(&self) -> Vec<String>;

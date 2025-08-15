@@ -31,7 +31,7 @@ static INIT: Once = Once::new();
 
 // ===========================================================================
 // Test runners:
-// Runners are splitted into multiple tests to run in parallel
+// Runners are split into multiple tests to run in parallel
 // ===========================================================================
 
 #[test]

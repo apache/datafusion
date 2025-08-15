@@ -738,8 +738,8 @@ fn plan_update() {
 }
 
 #[rstest]
-#[case::missing_assignement_target("UPDATE person SET doesnotexist = true")]
-#[case::missing_assignement_expression("UPDATE person SET age = doesnotexist + 42")]
+#[case::missing_assignment_target("UPDATE person SET doesnotexist = true")]
+#[case::missing_assignment_expression("UPDATE person SET age = doesnotexist + 42")]
 #[case::missing_selection_expression(
     "UPDATE person SET age = 42 WHERE doesnotexist = true"
 )]

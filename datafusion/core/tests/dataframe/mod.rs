@@ -92,8 +92,8 @@ async fn physical_plan_to_string(df: &DataFrame) -> String {
         .await
         .expect("Error creating physical plan");
 
-    let formated = displayable(physical_plan.as_ref()).indent(true);
-    formated.to_string()
+    let formatted = displayable(physical_plan.as_ref()).indent(true);
+    formatted.to_string()
 }
 
 pub fn table_with_constraints() -> Arc<dyn TableProvider> {
@@ -5660,7 +5660,7 @@ async fn test_alias() -> Result<()> {
         .await?
         .select(vec![col("a"), col("test.b"), lit(1).alias("one")])?
         .alias("table_alias")?;
-    // All ouput column qualifiers are changed to "table_alias"
+    // All output column qualifiers are changed to "table_alias"
     df.schema().columns().iter().for_each(|c| {
         assert_eq!(c.relation, Some("table_alias".into()));
     });

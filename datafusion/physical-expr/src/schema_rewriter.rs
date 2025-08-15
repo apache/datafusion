@@ -36,7 +36,7 @@ use crate::expressions::{self, CastExpr, Column};
 /// against the physical schema of the file being scanned. It allows for handling
 /// differences between logical and physical schemas, such as type mismatches or missing columns.
 ///
-/// You can create a custom implemention of this trait to handle specific rewriting logic.
+/// You can create a custom implementation of this trait to handle specific rewriting logic.
 /// For example, to fill in missing columns with default values instead of nulls:
 ///
 /// ```rust
@@ -248,12 +248,12 @@ impl<'a> DefaultPhysicalExprAdapterRewriter<'a> {
                     self.physical_file_schema.field_with_name(column.name())
                 {
                     // If the column exists in the physical schema, we can use it in place of the logical column.
-                    // This is nice to users because if they do a rewrite that results in something like `phyiscal_int32_col = 123u64`
+                    // This is nice to users because if they do a rewrite that results in something like `physical_int32_col = 123u64`
                     // we'll at least handle the casts for them.
                     physical_field
                 } else {
                     // A completely unknown column that doesn't exist in either schema!
-                    // This should probably never be hit unless something upstream broke, but nontheless it's better
+                    // This should probably never be hit unless something upstream broke, but nonetheless it's better
                     // for us to return a handleable error than to panic / do something unexpected.
                     return Err(e.into());
                 }
@@ -374,7 +374,7 @@ mod tests {
     }
 
     #[test]
-    fn test_rewrite_mulit_column_expr_with_type_cast() {
+    fn test_rewrite_multi_column_expr_with_type_cast() {
         let (physical_schema, logical_schema) = create_test_schema();
         let factory = DefaultPhysicalExprAdapterFactory;
         let adapter = factory.create(Arc::new(logical_schema), Arc::new(physical_schema));

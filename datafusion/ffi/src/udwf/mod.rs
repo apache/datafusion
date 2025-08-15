@@ -81,7 +81,7 @@ pub struct FFI_WindowUDF {
         display_name: RString,
     ) -> RResult<WrappedSchema, RString>,
 
-    /// Performs type coersion. To simply this interface, all UDFs are treated as having
+    /// Performs type coercion. To simply this interface, all UDFs are treated as having
     /// user defined signatures, which will in turn call coerce_types to be called. This
     /// call should be transparent to most users as the internal function performs the
     /// appropriate calls on the underlying [`WindowUDF`]

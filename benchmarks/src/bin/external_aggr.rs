@@ -113,7 +113,7 @@ impl ExternalAggrConfig {
         "#,
     ];
 
-    /// If `--query` and `--memory-limit` is not speicified, run all queries
+    /// If `--query` and `--memory-limit` is not specified, run all queries
     /// with pre-configured memory limits
     /// If only `--query` is specified, run the query with all memory limits
     /// for this query

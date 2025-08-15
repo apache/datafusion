@@ -548,7 +548,7 @@ impl TreeNodeRewriter for RecursiveUnnestRewriter<'_> {
                 let most_inner = unnest_stack.first().unwrap();
                 let inner_expr = most_inner.expr.as_ref();
                 // unnest(unnest(struct_arr_col)) is not allow to be done recursively
-                // it needs to be splitted into multiple unnest logical plan
+                // it needs to be split into multiple unnest logical plan
                 // unnest(struct_arr)
                 //  unnest(struct_arr_col) as struct_arr
                 // instead of unnest(struct_arr_col, depth = 2)

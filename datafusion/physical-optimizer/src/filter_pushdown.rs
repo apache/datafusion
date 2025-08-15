@@ -47,7 +47,7 @@ use datafusion_physical_plan::{with_new_children_if_necessary, ExecutionPlan};
 
 use itertools::{izip, Itertools};
 
-/// Attempts to recursively push given filters from the top of the tree into leafs.
+/// Attempts to recursively push given filters from the top of the tree into leaves.
 ///
 /// # Default Implementation
 ///

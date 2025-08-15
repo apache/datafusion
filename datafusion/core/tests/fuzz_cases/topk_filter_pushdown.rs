@@ -219,16 +219,16 @@ struct RunQueryResult {
 }
 
 impl RunQueryResult {
-    fn expected_formated(&self) -> String {
+    fn expected_formatted(&self) -> String {
         format!("{}", pretty_format_batches(&self.expected).unwrap())
     }
 
-    fn result_formated(&self) -> String {
+    fn result_formatted(&self) -> String {
         format!("{}", pretty_format_batches(&self.result).unwrap())
     }
 
     fn is_ok(&self) -> bool {
-        self.expected_formated() == self.result_formated()
+        self.expected_formatted() == self.result_formatted()
     }
 }
 
@@ -374,8 +374,8 @@ async fn test_fuzz_topk_filter_pushdown() {
     for failure in &failures {
         println!("Failure:");
         println!("Query:\n{}", failure.query);
-        println!("\nExpected:\n{}", failure.expected_formated());
-        println!("\nResult:\n{}", failure.result_formated());
+        println!("\nExpected:\n{}", failure.expected_formatted());
+        println!("\nResult:\n{}", failure.result_formatted());
         println!("\n\n");
     }
 

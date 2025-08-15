@@ -41,7 +41,7 @@ use object_store::path::Path;
 use object_store::{ObjectStore, PutPayload};
 
 // Example showing how to implement custom casting rules to adapt file schemas.
-// This example enforces that casts must be stricly widening: if the file type is Int64 and the table type is Int32, it will error
+// This example enforces that casts must be strictly widening: if the file type is Int64 and the table type is Int32, it will error
 // before even reading the data.
 // Without this custom cast rule DataFusion would happily do the narrowing cast, potentially erroring only if it found a row with data it could not cast.
 

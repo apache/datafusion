@@ -1425,7 +1425,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 )?;
 
                 // Assumed common usize field was batch size
-                // Used u64 to avoid any nastyness involving large values, most data clusters are probably uniformly 64 bits any ways
+                // Used u64 to avoid any nastiness involving large values, most data clusters are probably uniformly 64 bits any ways
                 use protobuf::repartition_node::PartitionMethod;
 
                 let pb_partition_method = match partitioning_scheme {
