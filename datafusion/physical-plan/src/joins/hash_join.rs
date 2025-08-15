@@ -329,7 +329,6 @@ impl JoinLeftData {
 /// Note this structure includes a [`OnceAsync`] that is used to coordinate the
 /// loading of the left side with the processing in each output stream.
 /// Therefore it can not be [`Clone`]
-#[derive(Debug)]
 pub struct HashJoinExec {
     /// left (build) side which gets hashed
     pub left: Arc<dyn ExecutionPlan>,
@@ -367,6 +366,28 @@ pub struct HashJoinExec {
     cache: PlanProperties,
     /// Dynamic filter for pushing down to the probe side
     dynamic_filter: Option<Arc<DynamicFilterPhysicalExpr>>,
+}
+
+impl fmt::Debug for HashJoinExec {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("HashJoinExec")
+            .field("left", &self.left)
+            .field("right", &self.right)
+            .field("on", &self.on)
+            .field("filter", &self.filter)
+            .field("join_type", &self.join_type)
+            .field("join_schema", &self.join_schema)
+            .field("left_fut", &self.left_fut)
+            .field("random_state", &self.random_state)
+            .field("mode", &self.mode)
+            .field("metrics", &self.metrics)
+            .field("projection", &self.projection)
+            .field("column_indices", &self.column_indices)
+            .field("null_equality", &self.null_equality)
+            .field("cache", &self.cache)
+            // Explicitly exclude dynamic_filter to avoid runtime state differences in tests
+            .finish()
+    }
 }
 
 impl HashJoinExec {
