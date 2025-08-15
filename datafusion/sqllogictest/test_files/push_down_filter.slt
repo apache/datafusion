@@ -175,7 +175,7 @@ CREATE TABLE src_table (
 # File 1:
 query I
 COPY (SELECT * FROM src_table where part_key = 1)
-TO 'test_files/scratch/parquet/test_filter_with_limit/part-0.parquet'
+TO 'test_files/scratch/push_down_filter/test_filter_with_limit/part-0.parquet'
 STORED AS PARQUET;
 ----
 3
@@ -183,7 +183,7 @@ STORED AS PARQUET;
 # File 2:
 query I
 COPY (SELECT * FROM src_table where part_key = 2)
-TO 'test_files/scratch/parquet/test_filter_with_limit/part-1.parquet'
+TO 'test_files/scratch/push_down_filter/test_filter_with_limit/part-1.parquet'
 STORED AS PARQUET;
 ----
 4
@@ -191,7 +191,7 @@ STORED AS PARQUET;
 # File 3:
 query I
 COPY (SELECT * FROM src_table where part_key = 3)
-TO 'test_files/scratch/parquet/test_filter_with_limit/part-2.parquet'
+TO 'test_files/scratch/push_down_filter/test_filter_with_limit/part-2.parquet'
 STORED AS PARQUET;
 ----
 3
@@ -203,14 +203,14 @@ CREATE EXTERNAL TABLE test_filter_with_limit
   value INT
 )
 STORED AS PARQUET
-LOCATION 'test_files/scratch/parquet/test_filter_with_limit/';
+LOCATION 'test_files/scratch/push_down_filter/test_filter_with_limit/';
 
 query TT
 explain select * from test_filter_with_limit where value = 2 limit 1;
 ----
 physical_plan
 01)CoalescePartitionsExec: fetch=1
-02)--DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_filter_with_limit/part-0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_filter_with_limit/part-1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_filter_with_limit/part-2.parquet]]}, projection=[part_key, value], limit=1, file_type=parquet, predicate=value@1 = 2, pruning_predicate=value_null_count@2 != row_count@3 AND value_min@0 <= 2 AND 2 <= value_max@1, required_guarantees=[value in (2)]
+02)--DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter/test_filter_with_limit/part-0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter/test_filter_with_limit/part-1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter/test_filter_with_limit/part-2.parquet]]}, projection=[part_key, value], limit=1, file_type=parquet, predicate=value@1 = 2, pruning_predicate=value_null_count@2 != row_count@3 AND value_min@0 <= 2 AND 2 <= value_max@1, required_guarantees=[value in (2)]
 
 query II
 select * from test_filter_with_limit where value = 2 limit 1;

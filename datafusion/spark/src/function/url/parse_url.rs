@@ -33,7 +33,7 @@ use datafusion_expr::{
 use datafusion_functions::utils::make_scalar_function;
 use url::Url;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ParseUrl {
     signature: Signature,
 }

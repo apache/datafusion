@@ -69,7 +69,7 @@ use chrono::{
         description = "Time expression to operate on. Can be a constant, column, or function."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct DateTruncFunc {
     signature: Signature,
     aliases: Vec<String>,

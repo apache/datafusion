@@ -83,6 +83,7 @@ mod config_field {
 
         impl std::error::Error for E {}
 
+        #[allow(dead_code)]
         struct S;
 
         impl std::str::FromStr for S {

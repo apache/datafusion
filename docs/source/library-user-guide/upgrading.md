@@ -24,6 +24,24 @@
 **Note:** DataFusion `50.0.0` has not been released yet. The information provided in this section pertains to features and changes that have already been merged to the main branch and are awaiting release in this version.
 You can see the current [status of the `50.0.0 `release here](https://github.com/apache/datafusion/issues/16799)
 
+### `ScalarUDFImpl`, `AggregateUDFImpl` and `WindowUDFImpl` traits now require `PartialEq`, `Eq`, and `Hash` traits
+
+To address error-proneness of `ScalarUDFImpl::equals`, `AggregateUDFImpl::equals`and
+`WindowUDFImpl::equals` methods and to make it easy to implement function equality correctly,
+the `equals` and `hash_value` methods have been removed from `ScalarUDFImpl`, `AggregateUDFImpl`
+and `WindowUDFImpl` traits. They are replaced the requirement to implement the `PartialEq`, `Eq`,
+and `Hash` traits on any type implementing `ScalarUDFImpl`, `AggregateUDFImpl` or `WindowUDFImpl`.
+Please see [issue #16677] for more details.
+
+Most of the scalar functions are stateless and have a `signature` field. These can be migrated
+using regular expressions
+
+- search for `\#\[derive\(Debug\)\](\n *(pub )?struct \w+ \{\n *signature\: Signature\,\n *\})`,
+- replace with `#[derive(Debug, PartialEq, Eq, Hash)]$1`,
+- review all the changes and make sure only function structs were changed.
+
+[issue #16677]: https://github.com/apache/datafusion/issues/16677
+
 ### `AsyncScalarUDFImpl::invoke_async_with_args` returns `ColumnarValue`
 
 In order to enable single value optimizations and be consistent with other
@@ -134,6 +152,24 @@ impl AsyncScalarUDFImpl for AskLLM {
     ...
 }
 # */
+```
+
+### Schema Rewriter Module Moved to New Crate
+
+The `schema_rewriter` module and its associated symbols have been moved from `datafusion_physical_expr` to a new crate `datafusion_physical_expr_adapter`. This affects the following symbols:
+
+- `DefaultPhysicalExprAdapter`
+- `DefaultPhysicalExprAdapterFactory`
+- `PhysicalExprAdapter`
+- `PhysicalExprAdapterFactory`
+
+To upgrade, change your imports to:
+
+```rust
+use datafusion_physical_expr_adapter::{
+    DefaultPhysicalExprAdapter, DefaultPhysicalExprAdapterFactory,
+    PhysicalExprAdapter, PhysicalExprAdapterFactory
+};
 ```
 
 ### Upgrade to arrow `56.0.0` and parquet `56.0.0`

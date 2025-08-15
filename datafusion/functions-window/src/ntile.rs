@@ -76,7 +76,7 @@ FROM employees;
 ```
 "#
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct Ntile {
     signature: Signature,
 }
