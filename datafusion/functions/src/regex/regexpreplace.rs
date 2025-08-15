@@ -258,16 +258,17 @@ fn regex_replace_posix_groups(replacement: &str) -> String {
 /// # Ok(())
 /// # }
 /// ```
-pub fn regexp_replace<'a, T: OffsetSizeTrait, U, V, W>(
+pub fn regexp_replace<'a, T: OffsetSizeTrait, U, V, W, X>(
     string_array: U,
     pattern_array: V,
     replacement_array: W,
-    flags: Option<&ArrayRef>,
+    flags_array: Option<X>,
 ) -> Result<ArrayRef>
 where
-    U: ArrayAccessor<Item = &'a str>,
-    V: ArrayAccessor<Item = &'a str>,
-    W: ArrayAccessor<Item = &'a str>,
+    U: ArrayAccessor<Item=&'a str>,
+    V: ArrayAccessor<Item=&'a str>,
+    W: ArrayAccessor<Item=&'a str>,
+    X: ArrayAccessor<Item=&'a str>,
 {
     // Default implementation for regexp_replace, assumes all args are arrays
     // and args is a sequence of 3 or 4 elements.
@@ -281,7 +282,7 @@ where
     let pattern_array_iter = ArrayIter::new(pattern_array);
     let replacement_array_iter = ArrayIter::new(replacement_array);
 
-    match flags {
+    match flags_array {
         None => {
             let result_iter = string_array_iter
                 .zip(pattern_array_iter)
@@ -328,13 +329,13 @@ where
                 }
             }
         }
-        Some(flags) => {
-            let flags_array = as_generic_string_array::<T>(flags)?;
+        Some(flags_array) => {
+            let flags_array_iter = ArrayIter::new(flags_array);
 
             let result_iter = string_array_iter
                 .zip(pattern_array_iter)
                 .zip(replacement_array_iter)
-                .zip(flags_array.iter())
+                .zip(flags_array_iter)
                 .map(|(((string, pattern), replacement), flags)| {
                     match (string, pattern, replacement, flags) {
                         (Some(string), Some(pattern), Some(replacement), Some(flags)) => {
@@ -377,7 +378,7 @@ where
                                     re.replace(string, replacement.as_str())
                                 }
                             }))
-                            .transpose()
+                                .transpose()
                         }
                         _ => Ok(None),
                     }
@@ -635,33 +636,45 @@ pub fn specialize_regexp_replace<T: OffsetSizeTrait>(
                     let string_array = args[0].as_string_view();
                     let pattern_array = args[1].as_string::<i32>();
                     let replacement_array = args[2].as_string::<i32>();
-                    regexp_replace::<i32, _, _,_>(
+                    let flags_array = match args.get(3) {
+                        Some(flags) => { Some(as_generic_string_array::<i32>(flags)?) }
+                        None => None
+                    };
+                    regexp_replace::<i32, _, _, _, _>(
                         string_array,
                         pattern_array,
                         replacement_array,
-                        args.get(3),
+                        flags_array,
                     )
                 }
                 DataType::Utf8 => {
                     let string_array = args[0].as_string::<i32>();
                     let pattern_array = args[1].as_string::<i32>();
                     let replacement_array = args[2].as_string::<i32>();
-                    regexp_replace::<i32, _, _, _>(
+                    let flags_array = match args.get(3) {
+                        Some(flags) => { Some(as_generic_string_array::<i32>(flags)?) }
+                        None => None
+                    };
+                    regexp_replace::<i32, _, _, _, _>(
                         string_array,
                         pattern_array,
                         replacement_array,
-                        args.get(3),
+                        flags_array,
                     )
                 }
                 DataType::LargeUtf8 => {
                     let string_array = args[0].as_string::<i64>();
                     let pattern_array = args[1].as_string::<i64>();
                     let replacement_array = args[2].as_string::<i64>();
-                    regexp_replace::<i64, _, _, _>(
+                    let flags_array = match args.get(3) {
+                        Some(flags) => { Some(as_generic_string_array::<i32>(flags)?) }
+                        None => None
+                    };
+                    regexp_replace::<i64, _, _, _, _>(
                         string_array,
                         pattern_array,
                         replacement_array,
-                        args.get(3),
+                        flags_array,
                     )
                 }
                 other => {
@@ -829,7 +842,7 @@ mod tests {
             Arc::new(patterns),
             Arc::new(replacements),
         ])
-        .unwrap();
+            .unwrap();
 
         assert_eq!(re.as_ref(), &expected);
     }
@@ -846,7 +859,7 @@ mod tests {
             Arc::new(patterns),
             Arc::new(replacements),
         ])
-        .unwrap();
+            .unwrap();
 
         assert_eq!(re.as_ref(), &expected);
     }
@@ -865,7 +878,7 @@ mod tests {
             Arc::new(replacements),
             Arc::new(flags),
         ])
-        .unwrap();
+            .unwrap();
 
         assert_eq!(re.as_ref(), &expected);
     }
@@ -920,7 +933,7 @@ mod tests {
             Arc::new(patterns),
             Arc::new(replacements),
         ])
-        .unwrap();
+            .unwrap();
 
         assert_eq!(re.as_ref(), &expected);
         assert_eq!(re.null_count(), 4);
@@ -948,7 +961,7 @@ mod tests {
             Arc::new(patterns),
             Arc::new(replacements),
         ])
-        .unwrap();
+            .unwrap();
         assert_eq!(re.as_ref(), &expected);
         assert_eq!(re.null_count(), 3);
     }
