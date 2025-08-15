@@ -40,6 +40,7 @@ use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_common::error::Result;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::ScalarValue;
+use datafusion_common::{assert_contains, assert_not_contains};
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_expr::{JoinType, Operator};
@@ -737,6 +738,33 @@ fn multi_hash_joins() -> Result<()> {
         }
     }
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn hash_join_with_probe_filter() -> Result<()> {
+    let left = crate::physical_optimizer::test_utils::mock_data()?;
+    let right = crate::physical_optimizer::test_utils::mock_data()?;
+
+    let join_on = vec![(
+        Arc::new(Column::new_with_schema("a", &left.schema()).unwrap()) as _,
+        Arc::new(Column::new_with_schema("a", &right.schema()).unwrap()) as _,
+    )];
+    let join = hash_join_exec(left, right, &join_on, &JoinType::Inner);
+
+    let config = test_suite_default_config_options();
+    let plan = EnforceDistribution::new().optimize(join, &config)?;
+
+    let session_ctx = SessionContext::new_with_config(SessionConfig::new());
+    let state = session_ctx.state();
+    let task_ctx = state.task_ctx();
+    let mut stream = plan.execute(0, Arc::clone(&task_ctx)).unwrap();
+    use futures::StreamExt;
+    stream.next().await;
+
+    let formatted = get_plan_string(&plan).join("\n");
+    assert_contains!(&formatted, "probe_keys=");
+    assert_not_contains!(&formatted, "probe_keys=0");
     Ok(())
 }
 
