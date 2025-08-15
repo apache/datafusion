@@ -676,6 +676,12 @@ fn multi_hash_joins() -> Result<()> {
 
                 let top_join =
                     hash_join_exec(join, parquet_exec(), &top_join_on, &join_type);
+                // Determine probe_side and key offset based on join type:
+                // - Right and Full joins include both sides, so 'b1' offset is after left columns (index 6).
+                //   probe_side is Left for Right joins, omitted for Full.
+                // - RightSemi/RightAnti only return right side columns, so 'b1' offset resets to index 1.
+                //   probe_side is Left (semi/anti use Left as probe to filter right rows).
+                // - All other join types use probe_side=Right and standard offsets.
                 let top_join_plan = match join_type {
                     JoinType::Right =>
                         format!("HashJoinExec: mode=Partitioned, join_type={join_type}, on=[(b1@6, c@2)], probe_side=Left, probe_keys=0"),

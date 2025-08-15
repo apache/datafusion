@@ -826,6 +826,9 @@ async fn test_topk_dynamic_filter_pushdown_multi_column_sort() {
     ];
     assert_batches_eq!(expected, &[res]);
     // Now check what our filter looks like
+    // `filter_keys=2` indicates the dynamic filter was generated from two sort keys
+    // (here: `b@1 ASC NULLS LAST` and `a@0 DESC`) — TopK uses those two keys to
+    // build the predicate, so the plan shows `filter_keys=2`.
     insta::assert_snapshot!(
         format!("{}", format_plan_for_test(&plan)),
         @r"
