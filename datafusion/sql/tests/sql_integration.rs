@@ -43,7 +43,7 @@ use datafusion_functions_aggregate::{
 };
 use datafusion_functions_aggregate::{average::avg_udaf, grouping::grouping_udaf};
 use datafusion_functions_nested::make_array::make_array_udf;
-use datafusion_functions_window::rank::rank_udwf;
+use datafusion_functions_window::{rank::rank_udwf, row_number::row_number_udwf};
 use insta::{allow_duplicates, assert_snapshot};
 use rstest::rstest;
 use sqlparser::dialect::{Dialect, GenericDialect, HiveDialect, MySqlDialect};
@@ -3298,6 +3298,7 @@ fn logical_plan_with_dialect_and_options(
         .with_aggregate_function(max_udaf())
         .with_aggregate_function(grouping_udaf())
         .with_window_function(rank_udwf())
+        .with_window_function(row_number_udwf())
         .with_expr_planner(Arc::new(CoreFunctionPlanner::default()));
 
     let context = MockContextProvider { state };
@@ -4186,6 +4187,47 @@ fn test_select_distinct_order_by() {
     );
 }
 
+#[test]
+fn test_select_qualify_basic() {
+    let sql = "SELECT person.id, ROW_NUMBER() OVER (PARTITION BY person.age ORDER BY person.id) as rn FROM person QUALIFY rn = 1";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+Projection: person.id, row_number() PARTITION BY [person.age] ORDER BY [person.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS rn
+  Filter: row_number() PARTITION BY [person.age] ORDER BY [person.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW = Int64(1)
+    WindowAggr: windowExpr=[[row_number() PARTITION BY [person.age] ORDER BY [person.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+      TableScan: person
+"#
+    );
+}
+
+#[test]
+fn test_select_qualify_without_window_function() {
+    let sql = "SELECT person.id FROM person QUALIFY person.id > 1";
+    let err = logical_plan(sql).unwrap_err();
+    assert_eq!(
+        err.strip_backtrace(),
+        "Error during planning: QUALIFY clause requires window functions in the SELECT list or QUALIFY clause"
+    );
+}
+
+#[test]
+fn test_select_qualify_complex_condition() {
+    let sql = "SELECT person.id, person.age, ROW_NUMBER() OVER (PARTITION BY person.age ORDER BY person.id) as rn, RANK() OVER (ORDER BY person.salary) as rank FROM person QUALIFY rn <= 2 AND rank <= 5";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+Projection: person.id, person.age, row_number() PARTITION BY [person.age] ORDER BY [person.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS rn, rank() ORDER BY [person.salary ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS rank
+  Filter: row_number() PARTITION BY [person.age] ORDER BY [person.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW <= Int64(2) AND rank() ORDER BY [person.salary ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW <= Int64(5)
+    WindowAggr: windowExpr=[[rank() ORDER BY [person.salary ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+      WindowAggr: windowExpr=[[row_number() PARTITION BY [person.age] ORDER BY [person.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+        TableScan: person
+"#
+    );
+}
+
 #[rstest]
 #[case::select_cluster_by_unsupported(
     "SELECT customer_name, sum(order_total) as total_order_amount FROM orders CLUSTER BY customer_name",
@@ -4194,10 +4236,6 @@ fn test_select_distinct_order_by() {
 #[case::select_lateral_view_unsupported(
     "SELECT id, number FROM person LATERAL VIEW explode(numbers) exploded_table AS number",
     "This feature is not implemented: LATERAL VIEWS"
-)]
-#[case::select_qualify_unsupported(
-    "SELECT i, p, o FROM person QUALIFY ROW_NUMBER() OVER (PARTITION BY p ORDER BY o) = 1",
-    "This feature is not implemented: QUALIFY"
 )]
 #[case::select_top_unsupported(
     "SELECT TOP (5) * FROM person",
