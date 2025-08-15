@@ -229,3 +229,21 @@ unexpected_cfgs = { level = "warn", check-cfg = [
     "cfg(tarpaulin_include)",
 ] }
 unused_qualifications = "deny"
+
+
+# patch branch to use testing version of arrow
+# pin to zhuqi-lucas/support_exact_size_config branch
+[patch.crates-io]
+arrow = { git = "https://github.com/zhuqi-lucas/arrow-rs.git", rev = "60a239ae614568bacff819494b9332c98052badc" }
+arrow-array = { git = "https://github.com/zhuqi-lucas/arrow-rs.git", rev = "60a239ae614568bacff819494b9332c98052badc" }
+arrow-buffer = { git = "https://github.com/zhuqi-lucas/arrow-rs.git", rev = "60a239ae614568bacff819494b9332c98052badc" }
+arrow-cast = { git = "https://github.com/zhuqi-lucas/arrow-rs.git", rev = "60a239ae614568bacff819494b9332c98052badc" }
+arrow-data = { git = "https://github.com/zhuqi-lucas/arrow-rs.git", rev = "60a239ae614568bacff819494b9332c98052badc" }
+arrow-ipc = { git = "https://github.com/zhuqi-lucas/arrow-rs.git", rev = "60a239ae614568bacff819494b9332c98052badc" }
+arrow-schema = { git = "https://github.com/zhuqi-lucas/arrow-rs.git", rev = "60a239ae614568bacff819494b9332c98052badc" }
+arrow-select = { git = "https://github.com/zhuqi-lucas/arrow-rs.git", rev = "60a239ae614568bacff819494b9332c98052badc" }
+arrow-string = { git = "https://github.com/zhuqi-lucas/arrow-rs.git", rev = "60a239ae614568bacff819494b9332c98052badc" }
+arrow-ord = { git = "https://github.com/zhuqi-lucas/arrow-rs.git", rev = "60a239ae614568bacff819494b9332c98052badc" }
+arrow-flight = { git = "https://github.com/zhuqi-lucas/arrow-rs.git", rev = "60a239ae614568bacff819494b9332c98052badc" }
+parquet = { git = "https://github.com/zhuqi-lucas/arrow-rs.git", rev = "60a239ae614568bacff819494b9332c98052badc" }
+
