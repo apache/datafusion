@@ -603,7 +603,7 @@ mod tests {
         let dic_array = DictionaryArray::<Int32Type>::try_new(keys, Arc::new(values))?;
         let c_dic: ArrayRef = Arc::new(dic_array);
 
-        // Data for column string_truncation: ["a".repeat(128), null, null, null, null]
+        // Data for column string_truncation: ["a".repeat(128), null, "b".repeat(128), null]
         let string_truncation: ArrayRef = Arc::new(StringArray::from(vec![
             Some("a".repeat(128)),
             None,
@@ -619,7 +619,7 @@ mod tests {
         // Use store_parquet to write each batch to its own file
         // . batch1 written into first file and includes:
         //    - column c_dic that has 4 rows with no null. Stats min and max of dictionary column is available.
-        //    - column string_truncation that has 4 rows with 3 nulls. Stats min and max of string column is available but not exact.
+        //    - column string_truncation that has 4 rows with 2 nulls. Stats min and max of string column is available but not exact.
         let store = Arc::new(RequestCountingObjectStore::new(Arc::new(
             LocalFileSystem::new(),
         )));
