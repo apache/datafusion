@@ -62,7 +62,6 @@ default = [
     "unicode_expressions",
     "compression",
     "parquet",
-    "parquet_encryption",
     "recursive_protection",
 ]
 encoding_expressions = ["datafusion-functions/encoding_expressions"]
