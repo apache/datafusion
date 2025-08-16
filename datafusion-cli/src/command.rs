@@ -17,22 +17,31 @@
 
 //! Command within CLI
 
-use crate::cli_context::CliSessionContext;
-use crate::exec::{exec_and_print, exec_from_lines};
-use crate::functions::{display_all_functions, Function};
-use crate::print_format::PrintFormat;
-use crate::print_options::PrintOptions;
+use crate::{
+    cli_context::CliSessionContext,
+    exec::{exec_and_print, exec_from_lines},
+    functions::{display_all_functions, Function},
+    print_format::PrintFormat,
+    print_options::PrintOptions,
+};
 use clap::ValueEnum;
-use datafusion::arrow::array::{ArrayRef, StringArray};
-use datafusion::arrow::datatypes::{DataType, Field, Schema};
-use datafusion::arrow::record_batch::RecordBatch;
-use datafusion::common::exec_err;
-use datafusion::common::instant::Instant;
-use datafusion::error::{DataFusionError, Result};
-use std::fs::File;
-use std::io::BufReader;
-use std::str::FromStr;
-use std::sync::Arc;
+use datafusion::{
+    arrow::{
+        array::ArrayRef, array::StringArray, datatypes::DataType, datatypes::Field,
+        datatypes::Schema, record_batch::RecordBatch,
+    },
+    common::{exec_err, instant::Instant},
+    error::{DataFusionError, Result},
+    execution::memory_pool::format_metrics,
+};
+use std::{fs::File, io::BufReader, str::FromStr, sync::Arc};
+
+#[derive(Debug, Clone, Copy)]
+pub enum MemoryProfilingCommand {
+    Enable,
+    Disable,
+    Show,
+}
 
 /// Command
 #[derive(Debug)]
@@ -46,6 +55,7 @@ pub enum Command {
     SearchFunctions(String),
     QuietMode(Option<bool>),
     OutputFormat(Option<String>),
+    MemoryProfiling(Option<MemoryProfilingCommand>),
 }
 
 pub enum OutputFormat {
@@ -110,6 +120,28 @@ impl Command {
                 }
                 Ok(())
             }
+            Self::MemoryProfiling(subcmd) => {
+                match subcmd {
+                    Some(MemoryProfilingCommand::Enable) => {
+                        ctx.set_memory_profiling(true);
+                        println!("Memory profiling enabled");
+                    }
+                    Some(MemoryProfilingCommand::Disable) => {
+                        ctx.set_memory_profiling(false);
+                        println!("Memory profiling disabled");
+                    }
+                    Some(MemoryProfilingCommand::Show) => {
+                        if let Some(pool) = ctx.tracked_memory_pool() {
+                            let metrics = pool.consumer_metrics();
+                            println!("{}", format_metrics(&metrics));
+                        } else {
+                            println!("{}", format_metrics(&[]));
+                        }
+                    }
+                    None => println!("Usage: \\memory_profiling [enable|disable|show] (aliases: on|off)"),
+                }
+                Ok(())
+            }
             Self::Quit => exec_err!("Unexpected quit, this should be handled outside"),
             Self::ListFunctions => display_all_functions(),
             Self::SearchFunctions(function) => {
@@ -142,11 +174,15 @@ impl Command {
             Self::OutputFormat(_) => {
                 ("\\pset [NAME [VALUE]]", "set table output option\n(format)")
             }
+            Self::MemoryProfiling(_) => (
+                "\\memory_profiling [enable|disable|show] (aliases: on|off)",
+                "enable profiling, disable it, or display the last report (requires --top-memory-consumers N at startup for metrics)",
+            ),
         }
     }
 }
 
-const ALL_COMMANDS: [Command; 9] = [
+const ALL_COMMANDS: [Command; 10] = [
     Command::ListTables,
     Command::DescribeTableStmt(String::new()),
     Command::Quit,
@@ -156,6 +192,7 @@ const ALL_COMMANDS: [Command; 9] = [
     Command::SearchFunctions(String::new()),
     Command::QuietMode(None),
     Command::OutputFormat(None),
+    Command::MemoryProfiling(None),
 ];
 
 fn all_commands_info() -> RecordBatch {
@@ -206,8 +243,28 @@ impl FromStr for Command {
                 Self::OutputFormat(Some(subcommand.to_string()))
             }
             ("pset", None) => Self::OutputFormat(None),
+            ("memory_profiling", sub) => {
+                let sub = match sub {
+                    Some(s) => Some(s.parse::<MemoryProfilingCommand>().map_err(|_| ())?),
+                    None => None,
+                };
+                Self::MemoryProfiling(sub)
+            }
             _ => return Err(()),
         })
+    }
+}
+
+impl FromStr for MemoryProfilingCommand {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "enable" | "on" => Ok(Self::Enable),
+            "disable" | "off" => Ok(Self::Disable),
+            "show" => Ok(Self::Show),
+            _ => Err(()),
+        }
     }
 }
 

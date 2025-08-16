@@ -15,35 +15,37 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::HashMap;
-use std::env;
-use std::num::NonZeroUsize;
-use std::path::Path;
-use std::process::ExitCode;
-use std::sync::{Arc, LazyLock};
-
-use datafusion::error::{DataFusionError, Result};
-use datafusion::execution::context::SessionConfig;
-use datafusion::execution::memory_pool::{
-    FairSpillPool, GreedyMemoryPool, MemoryPool, TrackConsumersPool,
+use clap::Parser;
+use datafusion::{
+    common::config_err,
+    config::ConfigOptions,
+    error::{DataFusionError, Result},
+    execution::{
+        context::SessionConfig, disk_manager::DiskManagerBuilder,
+        disk_manager::DiskManagerMode, memory_pool::FairSpillPool,
+        memory_pool::GreedyMemoryPool, memory_pool::MemoryPool,
+        runtime_env::RuntimeEnvBuilder,
+    },
+    prelude::SessionContext,
 };
-use datafusion::execution::runtime_env::RuntimeEnvBuilder;
-use datafusion::prelude::SessionContext;
-use datafusion_cli::catalog::DynamicObjectStoreCatalog;
-use datafusion_cli::functions::{MetadataCacheFunc, ParquetMetadataFunc};
 use datafusion_cli::{
+    catalog::DynamicObjectStoreCatalog,
+    cli_context::{CliSessionContext, ReplSessionContext},
     exec,
+    functions::{MetadataCacheFunc, ParquetMetadataFunc},
     pool_type::PoolType,
     print_format::PrintFormat,
     print_options::{MaxRows, PrintOptions},
     DATAFUSION_CLI_VERSION,
 };
-
-use clap::Parser;
-use datafusion::common::config_err;
-use datafusion::config::ConfigOptions;
-use datafusion::execution::disk_manager::{DiskManagerBuilder, DiskManagerMode};
 use mimalloc::MiMalloc;
+use std::{
+    collections::HashMap,
+    env,
+    path::Path,
+    process::ExitCode,
+    sync::{Arc, LazyLock},
+};
 
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
@@ -123,7 +125,7 @@ struct Args {
     #[clap(
         long,
         help = "The number of top memory consumers to display when query fails due to memory exhaustion. To disable memory consumer tracking, set this value to 0",
-        default_value = "3"
+        default_value = "5"
     )]
     top_memory_consumers: usize,
 
@@ -174,27 +176,15 @@ async fn main_inner() -> Result<()> {
     let session_config = get_session_config(&args)?;
 
     let mut rt_builder = RuntimeEnvBuilder::new();
-    // set memory pool size
+    let mut base_pool: Option<Arc<dyn MemoryPool>> = None;
     if let Some(memory_limit) = args.memory_limit {
         // set memory pool type
         let pool: Arc<dyn MemoryPool> = match args.mem_pool_type {
-            PoolType::Fair if args.top_memory_consumers == 0 => {
-                Arc::new(FairSpillPool::new(memory_limit))
-            }
-            PoolType::Fair => Arc::new(TrackConsumersPool::new(
-                FairSpillPool::new(memory_limit),
-                NonZeroUsize::new(args.top_memory_consumers).unwrap(),
-            )),
-            PoolType::Greedy if args.top_memory_consumers == 0 => {
-                Arc::new(GreedyMemoryPool::new(memory_limit))
-            }
-            PoolType::Greedy => Arc::new(TrackConsumersPool::new(
-                GreedyMemoryPool::new(memory_limit),
-                NonZeroUsize::new(args.top_memory_consumers).unwrap(),
-            )),
+            PoolType::Fair => Arc::new(FairSpillPool::new(memory_limit)),
+            PoolType::Greedy => Arc::new(GreedyMemoryPool::new(memory_limit)),
         };
-
-        rt_builder = rt_builder.with_memory_pool(pool)
+        rt_builder = rt_builder.with_memory_pool(pool.clone());
+        base_pool = Some(pool);
     }
 
     // set disk limit
@@ -206,26 +196,32 @@ async fn main_inner() -> Result<()> {
     }
 
     let runtime_env = rt_builder.build_arc()?;
+    let pool = base_pool.unwrap_or_else(|| runtime_env.memory_pool.clone());
 
     // enable dynamic file query
-    let ctx = SessionContext::new_with_config_rt(session_config, runtime_env)
+    let session_ctx = SessionContext::new_with_config_rt(session_config, runtime_env)
         .enable_url_table();
-    ctx.refresh_catalogs().await?;
+    session_ctx.refresh_catalogs().await?;
     // install dynamic catalog provider that can register required object stores
-    ctx.register_catalog_list(Arc::new(DynamicObjectStoreCatalog::new(
-        ctx.state().catalog_list().clone(),
-        ctx.state_weak_ref(),
+    session_ctx.register_catalog_list(Arc::new(DynamicObjectStoreCatalog::new(
+        session_ctx.state().catalog_list().clone(),
+        session_ctx.state_weak_ref(),
     )));
     // register `parquet_metadata` table function to get metadata from parquet files
-    ctx.register_udtf("parquet_metadata", Arc::new(ParquetMetadataFunc {}));
-
+    session_ctx.register_udtf("parquet_metadata", Arc::new(ParquetMetadataFunc {}));
     // register `metadata_cache` table function to get the contents of the file metadata cache
-    ctx.register_udtf(
+    session_ctx.register_udtf(
         "metadata_cache",
         Arc::new(MetadataCacheFunc::new(
-            ctx.task_ctx().runtime_env().cache_manager.clone(),
+            session_ctx.task_ctx().runtime_env().cache_manager.clone(),
         )),
     );
+    // wrap the SessionContext in a REPL context (adds profiling, top consumers, etc.)
+    let ctx =
+        ReplSessionContext::new(session_ctx, pool.clone(), args.top_memory_consumers);
+    if args.top_memory_consumers > 0 {
+        ctx.set_memory_profiling(true);
+    }
 
     let mut print_options = PrintOptions {
         format: args.format,

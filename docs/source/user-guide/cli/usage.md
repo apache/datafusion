@@ -122,6 +122,30 @@ Available commands inside DataFusion CLI are:
 > \h function
 ```
 
+- Memory profiling
+  > **Tip:** Memory profiling requires the tracked pool. Start the CLI with `--top-memory-consumers N` (N≥1), or profiling will report no metrics. By default CLI starts with --top-memory-consumers 5.
+
+```bash
+> \memory_profiling enable
+```
+
+```bash
+> \memory_profiling show
+```
+
+```text
+Peak memory usage: 10.0 MB
+Cumulative allocations: 101.6 MB
+Memory usage by operator:
+Aggregation: 762.2 KB
+Repartition: 884.8 KB
+Sorting: 100.0 MB
+```
+
+```bash
+> \memory_profiling disable
+```
+
 ## Supported SQL
 
 In addition to the normal [SQL supported in DataFusion], `datafusion-cli` also

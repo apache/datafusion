@@ -19,9 +19,13 @@
 //! help with allocation accounting.
 
 use datafusion_common::{internal_err, Result};
-use std::hash::{Hash, Hasher};
-use std::{cmp::Ordering, sync::atomic, sync::Arc};
-
+use std::{
+    cmp::Ordering,
+    fmt,
+    hash::{Hash, Hasher},
+    sync::{atomic, Arc},
+};
+mod metrics;
 mod pool;
 pub mod proxy {
     pub use datafusion_common::utils::proxy::{
@@ -29,6 +33,7 @@ pub mod proxy {
     };
 }
 
+pub use metrics::{format_metrics, operator_category};
 pub use pool::*;
 
 /// Tracks and potentially limits memory use across operators during execution.
@@ -78,7 +83,7 @@ pub use pool::*;
 ///
 /// Scenario 1:
 /// For `Filter` operator, `RecordBatch`es will stream through it, so it
-/// don't have to keep track of memory usage through [`MemoryPool`].
+/// doesn't have to keep track of memory usage through [`MemoryPool`].
 ///
 /// Scenario 2:
 /// For `CrossJoin` operator, if the input size gets larger, the intermediate
@@ -176,7 +181,7 @@ pub use pool::*;
 ///
 /// * [`TrackConsumersPool`]: Wraps another [`MemoryPool`] and tracks consumers,
 ///   providing better error messages on the largest memory users.
-pub trait MemoryPool: Send + Sync + std::fmt::Debug {
+pub trait MemoryPool: Send + Sync + fmt::Debug {
     /// Registers a new [`MemoryConsumer`]
     ///
     /// Note: Subsequent calls to [`Self::grow`] must be made to reserve memory
@@ -221,6 +226,38 @@ pub enum MemoryLimit {
     /// Bounded memory limit in bytes.
     Finite(usize),
     Unknown,
+}
+
+/// Implement MemoryPool for any `Arc<MemoryPool>` to make it to
+/// wrap MemoryPool.
+impl<T: MemoryPool + ?Sized> MemoryPool for Arc<T> {
+    fn register(&self, consumer: &MemoryConsumer) {
+        (**self).register(consumer)
+    }
+
+    fn unregister(&self, consumer: &MemoryConsumer) {
+        (**self).unregister(consumer)
+    }
+
+    fn grow(&self, reservation: &MemoryReservation, additional: usize) {
+        (**self).grow(reservation, additional)
+    }
+
+    fn shrink(&self, reservation: &MemoryReservation, shrink: usize) {
+        (**self).shrink(reservation, shrink)
+    }
+
+    fn try_grow(&self, reservation: &MemoryReservation, additional: usize) -> Result<()> {
+        (**self).try_grow(reservation, additional)
+    }
+
+    fn reserved(&self) -> usize {
+        (**self).reserved()
+    }
+
+    fn memory_limit(&self) -> MemoryLimit {
+        (**self).memory_limit()
+    }
 }
 
 /// A memory consumer is a named allocation traced by a particular
@@ -322,6 +359,7 @@ impl MemoryConsumer {
                 consumer: self,
             }),
             size: 0,
+            peak: 0,
         }
     }
 }
@@ -351,12 +389,17 @@ impl Drop for SharedRegistration {
 pub struct MemoryReservation {
     registration: Arc<SharedRegistration>,
     size: usize,
+    peak: usize,
 }
 
 impl MemoryReservation {
     /// Returns the size of this reservation in bytes
     pub fn size(&self) -> usize {
         self.size
+    }
+    /// Returns the peak size of this reservation in bytes
+    pub fn peak(&self) -> usize {
+        self.peak
     }
 
     /// Returns [MemoryConsumer] for this [MemoryReservation]
@@ -409,6 +452,9 @@ impl MemoryReservation {
             Ordering::Less => self.shrink(self.size - capacity),
             _ => {}
         }
+        if self.size > self.peak {
+            self.peak = self.size;
+        }
     }
 
     /// Try to set the size of this reservation to `capacity`
@@ -418,6 +464,9 @@ impl MemoryReservation {
             Ordering::Less => self.shrink(self.size - capacity),
             _ => {}
         };
+        if self.size > self.peak {
+            self.peak = self.size;
+        }
         Ok(())
     }
 
@@ -425,6 +474,9 @@ impl MemoryReservation {
     pub fn grow(&mut self, capacity: usize) {
         self.registration.pool.grow(self, capacity);
         self.size += capacity;
+        if self.size > self.peak {
+            self.peak = self.size;
+        }
     }
 
     /// Try to increase the size of this reservation by `capacity`
@@ -433,6 +485,9 @@ impl MemoryReservation {
     pub fn try_grow(&mut self, capacity: usize) -> Result<()> {
         self.registration.pool.try_grow(self, capacity)?;
         self.size += capacity;
+        if self.size > self.peak {
+            self.peak = self.size;
+        }
         Ok(())
     }
 
@@ -451,6 +506,7 @@ impl MemoryReservation {
         Self {
             size: capacity,
             registration: Arc::clone(&self.registration),
+            peak: capacity,
         }
     }
 
@@ -459,6 +515,7 @@ impl MemoryReservation {
         Self {
             size: 0,
             registration: Arc::clone(&self.registration),
+            peak: 0,
         }
     }
 
@@ -472,6 +529,19 @@ impl MemoryReservation {
 impl Drop for MemoryReservation {
     fn drop(&mut self) {
         self.free();
+    }
+}
+
+impl fmt::Display for MemoryReservation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}#{} reserved {} (peak {})",
+            self.consumer().name(),
+            self.consumer().id(),
+            human_readable_size(self.size()),
+            human_readable_size(self.peak())
+        )
     }
 }
 

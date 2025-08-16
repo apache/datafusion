@@ -1,0 +1,15 @@
+---
+source: datafusion-cli/tests/cli_integration.rs
+info:
+  program: datafusion-cli
+  args:
+    - "-q"
+  stdin: "\\memory_profiling show\n"
+---
+success: true
+exit_code: 0
+----- stdout -----
+no memory metrics recorded
+\q
+
+----- stderr -----
