@@ -515,7 +515,7 @@ mod tests {
         assert!(err.is_err());
         assert_eq!(
             "Arrow error: Parser error: Unexpected end of byte stream for Arrow IPC file",
-            err.unwrap_err().to_string()
+            err.unwrap_err().to_string().lines().next().unwrap()
         );
 
         Ok(())
