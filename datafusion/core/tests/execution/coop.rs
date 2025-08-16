@@ -54,6 +54,7 @@ use datafusion_physical_plan::union::InterleaveExec;
 use futures::StreamExt;
 use parking_lot::RwLock;
 use rstest::rstest;
+use std::any::Any;
 use std::error::Error;
 use std::fmt::Formatter;
 use std::ops::Range;
@@ -80,6 +81,10 @@ impl std::fmt::Display for RangeBatchGenerator {
 }
 
 impl LazyBatchGenerator for RangeBatchGenerator {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
     fn boundedness(&self) -> Boundedness {
         self.boundedness
     }
