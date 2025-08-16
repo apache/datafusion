@@ -111,6 +111,51 @@ impl JoinType {
                 | JoinType::RightAnti
         )
     }
+
+    /// Determines whether each input of the join is preserved for WHERE clause filters.
+    ///
+    /// A join input is "preserved" if every row from that input appears in at least one
+    /// output row. This property determines whether filters referencing only columns
+    /// from that input can be safely pushed below the join.
+    ///
+    /// For example:
+    ///   - In an inner join, both sides are preserved, because each row of the output
+    ///     maps directly to a row from each side.
+    ///   - In a left join, the left side is preserved (we can push predicates) but
+    ///     the right is not, because there may be rows in the output that don't
+    ///     directly map to a row in the right input (due to nulls filling where there
+    ///     is no match on the right).
+    ///   - In semi joins, only the preserved side's columns appear in the output,
+    ///     so filters can only reference and be pushed to that side.
+    ///
+    /// # Returns
+    /// A tuple of `(left_preserved, right_preserved)` booleans.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use datafusion_common::JoinType;
+    ///
+    /// assert_eq!(JoinType::Inner.lr_is_preserved(), (true, true));
+    /// assert_eq!(JoinType::Left.lr_is_preserved(), (true, false));
+    /// assert_eq!(JoinType::LeftSemi.lr_is_preserved(), (true, false));
+    /// ```
+    pub fn lr_is_preserved(self) -> (bool, bool) {
+        match self {
+            JoinType::Inner => (true, true),
+            JoinType::Left => (true, false),
+            JoinType::Right => (false, true),
+            JoinType::Full => (false, false),
+            // No columns from the right side of the join can be referenced in output
+            // predicates for semi/anti joins, so whether we specify t/f doesn't matter.
+            JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark => (true, false),
+            // No columns from the left side of the join can be referenced in output
+            // predicates for semi/anti joins, so whether we specify t/f doesn't matter.
+            JoinType::RightSemi | JoinType::RightAnti | JoinType::RightMark => {
+                (false, true)
+            }
+        }
+    }
 }
 
 impl Display for JoinType {

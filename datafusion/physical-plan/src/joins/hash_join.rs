@@ -86,6 +86,7 @@ use datafusion_physical_expr::equivalence::{
     join_equivalence_properties, ProjectionMapping,
 };
 use datafusion_physical_expr::expressions::{lit, BinaryExpr, DynamicFilterPhysicalExpr};
+use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{PhysicalExpr, PhysicalExprRef};
 use datafusion_physical_expr_common::datum::compare_op_for_nested;
 
@@ -367,6 +368,106 @@ pub struct HashJoinExec {
     cache: PlanProperties,
     /// Dynamic filter for pushing down to the probe side
     dynamic_filter: Arc<DynamicFilterPhysicalExpr>,
+}
+
+/// Check if a physical expression only references columns from the left child
+fn is_left_only_predicate(
+    predicate: &Arc<dyn PhysicalExpr>,
+    left_schema_len: usize,
+) -> bool {
+    let columns = collect_columns(predicate);
+    // All column indices must be less than left_schema_len
+    columns.iter().all(|col| col.index() < left_schema_len)
+}
+
+/// Create child filter descriptions that respect join semantics
+///
+/// This function analyzes parent filters and determines which ones can be pushed
+/// to each child based on the join type's preservation properties and column analysis.
+fn create_join_aware_child_descriptions(
+    parent_filters: &[Arc<dyn PhysicalExpr>],
+    left_child: &Arc<dyn ExecutionPlan>,
+    right_child: &Arc<dyn ExecutionPlan>,
+    join_type: JoinType,
+) -> Result<(
+    crate::filter_pushdown::ChildFilterDescription,
+    crate::filter_pushdown::ChildFilterDescription,
+)> {
+    let (left_preserved, right_preserved) = join_type.lr_is_preserved();
+    let left_schema_len = left_child.schema().fields().len();
+
+    // For left child: apply schema analysis + join-specific rules
+    let mut left_parent_filters = Vec::new();
+    // For right child: apply schema analysis + join-specific rules
+    let mut right_parent_filters = Vec::new();
+
+    for filter in parent_filters {
+        // Left child analysis
+        if left_preserved && is_left_only_predicate(filter, left_schema_len) {
+            // Check if the filter can actually be pushed based on schema
+            let temp_left_desc =
+                crate::filter_pushdown::ChildFilterDescription::from_child(
+                    &[Arc::clone(filter)],
+                    left_child,
+                )?;
+
+            if let Some(first_filter) = temp_left_desc.parent_filters.first() {
+                left_parent_filters.push(first_filter.clone());
+            } else {
+                left_parent_filters.push(
+                    crate::filter_pushdown::PushedDownPredicate::unsupported(Arc::clone(
+                        filter,
+                    )),
+                );
+            }
+        } else {
+            left_parent_filters.push(
+                crate::filter_pushdown::PushedDownPredicate::unsupported(Arc::clone(
+                    filter,
+                )),
+            );
+        }
+
+        // Right child analysis
+        if right_preserved && !is_left_only_predicate(filter, left_schema_len) {
+            // For right side, we need filters that DON'T reference only left columns
+            // Check if the filter can actually be pushed based on schema
+            let temp_right_desc =
+                crate::filter_pushdown::ChildFilterDescription::from_child(
+                    &[Arc::clone(filter)],
+                    right_child,
+                )?;
+
+            if let Some(first_filter) = temp_right_desc.parent_filters.first() {
+                right_parent_filters.push(first_filter.clone());
+            } else {
+                right_parent_filters.push(
+                    crate::filter_pushdown::PushedDownPredicate::unsupported(Arc::clone(
+                        filter,
+                    )),
+                );
+            }
+        } else {
+            right_parent_filters.push(
+                crate::filter_pushdown::PushedDownPredicate::unsupported(Arc::clone(
+                    filter,
+                )),
+            );
+        }
+    }
+
+    // Create the child descriptions with the analyzed filters
+    let left_desc = crate::filter_pushdown::ChildFilterDescription {
+        parent_filters: left_parent_filters,
+        self_filters: vec![],
+    };
+
+    let right_desc = crate::filter_pushdown::ChildFilterDescription {
+        parent_filters: right_parent_filters,
+        self_filters: vec![],
+    };
+
+    Ok((left_desc, right_desc))
 }
 
 impl HashJoinExec {
@@ -1024,25 +1125,23 @@ impl ExecutionPlan for HashJoinExec {
         parent_filters: Vec<Arc<dyn PhysicalExpr>>,
         config: &ConfigOptions,
     ) -> Result<FilterDescription> {
-        // Other types of joins can support *some* filters, but restrictions are complex and error prone.
-        // For now we don't support them.
-        // See the logical optimizer rules for more details: datafusion/optimizer/src/push_down_filter.rs
+        // For now, only support Inner and LeftSemi joins
+        // Even though other join types like Left have one preserved side, the implementation
+        // is more complex and error prone. See the logical optimizer rules for more details.
         // See https://github.com/apache/datafusion/issues/16973 for tracking.
-        if self.join_type != JoinType::Inner {
+        if !matches!(self.join_type, JoinType::Inner | JoinType::LeftSemi) {
             return Ok(FilterDescription::all_unsupported(
                 &parent_filters,
                 &self.children(),
             ));
         }
 
-        // Get basic filter descriptions for both children
-        let left_child = crate::filter_pushdown::ChildFilterDescription::from_child(
+        // Create join-aware child descriptions that respect join semantics from the start
+        let (left_child, mut right_child) = create_join_aware_child_descriptions(
             &parent_filters,
             self.left(),
-        )?;
-        let mut right_child = crate::filter_pushdown::ChildFilterDescription::from_child(
-            &parent_filters,
             self.right(),
+            self.join_type,
         )?;
 
         // Add dynamic filters in Post phase if enabled
@@ -1066,11 +1165,12 @@ impl ExecutionPlan for HashJoinExec {
         child_pushdown_result: ChildPushdownResult,
         _config: &ConfigOptions,
     ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
+        // For now, only support Inner and LeftSemi joins
         // Note: this check shouldn't be necessary because we already marked all parent filters as unsupported for
-        // non-inner joins in `gather_filters_for_pushdown`.
+        // unsupported join types in `gather_filters_for_pushdown`.
         // However it's a cheap check and serves to inform future devs touching this function that they need to be really
         // careful pushing down filters through non-inner joins.
-        if self.join_type != JoinType::Inner {
+        if !matches!(self.join_type, JoinType::Inner | JoinType::LeftSemi) {
             // Other types of joins can support *some* filters, but restrictions are complex and error prone.
             // For now we don't support them.
             // See the logical optimizer rules for more details: datafusion/optimizer/src/push_down_filter.rs
