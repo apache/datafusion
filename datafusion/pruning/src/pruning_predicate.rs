@@ -465,7 +465,7 @@ impl PruningPredicate {
         let mut required_columns = RequiredColumns::new();
         let predicate_expr = build_predicate_expression(
             &expr,
-            schema.as_ref(),
+            &schema,
             &mut required_columns,
             &unhandled_hook,
         );
@@ -951,7 +951,7 @@ struct PruningExpressionBuilder<'a> {
     column_expr: Arc<dyn PhysicalExpr>,
     op: Operator,
     scalar_expr: Arc<dyn PhysicalExpr>,
-    field: &'a Field,
+    field: Field,
     required_columns: &'a mut RequiredColumns,
 }
 
@@ -960,7 +960,7 @@ impl<'a> PruningExpressionBuilder<'a> {
         left: &'a Arc<dyn PhysicalExpr>,
         right: &'a Arc<dyn PhysicalExpr>,
         op: Operator,
-        schema: &'a Schema,
+        schema: &SchemaRef,
         required_columns: &'a mut RequiredColumns,
     ) -> Result<Self> {
         // find column name; input could be a more complicated expression
@@ -978,8 +978,8 @@ impl<'a> PruningExpressionBuilder<'a> {
                 }
             };
 
-        // TODO pass in SchemaRef so we don't need to clone the schema
-        let df_schema = DFSchema::try_from(schema.clone())?;
+        // TODO FIXME
+        let df_schema = DFSchema::try_from(Arc::clone(schema))?;
         let (column_expr, correct_operator, scalar_expr) = rewrite_expr_to_prunable(
             column_expr,
             correct_operator,
@@ -988,7 +988,7 @@ impl<'a> PruningExpressionBuilder<'a> {
         )?;
         let column = columns.iter().next().unwrap().clone();
         let field = match schema.column_with_name(column.name()) {
-            Some((_, f)) => f,
+            Some((_, f)) => f.clone(),
             _ => {
                 return plan_err!("Field not found in schema");
             }
@@ -1014,12 +1014,12 @@ impl<'a> PruningExpressionBuilder<'a> {
 
     fn min_column_expr(&mut self) -> Result<Arc<dyn PhysicalExpr>> {
         self.required_columns
-            .min_column_expr(&self.column, &self.column_expr, self.field)
+            .min_column_expr(&self.column, &self.column_expr, &self.field)
     }
 
     fn max_column_expr(&mut self) -> Result<Arc<dyn PhysicalExpr>> {
         self.required_columns
-            .max_column_expr(&self.column, &self.column_expr, self.field)
+            .max_column_expr(&self.column, &self.column_expr, &self.field)
     }
 
     /// This function is to simply retune the `null_count` physical expression no matter what the
@@ -1369,7 +1369,7 @@ impl PredicateRewriter {
         let mut required_columns = RequiredColumns::new();
         build_predicate_expression(
             expr,
-            schema,
+            &Arc::new(schema.clone()),
             &mut required_columns,
             &self.unhandled_hook,
         )
@@ -1387,7 +1387,7 @@ impl PredicateRewriter {
 /// Notice: Does not handle [`phys_expr::InListExpr`] greater than 20, which will fall back to calling `unhandled_hook`
 fn build_predicate_expression(
     expr: &Arc<dyn PhysicalExpr>,
-    schema: &Schema,
+    schema: &SchemaRef,
     required_columns: &mut RequiredColumns,
     unhandled_hook: &Arc<dyn UnhandledPredicateHook>,
 ) -> Arc<dyn PhysicalExpr> {
@@ -5131,7 +5131,7 @@ mod tests {
     ) -> Arc<dyn PhysicalExpr> {
         let expr = logical2physical(expr, schema);
         let unhandled_hook = Arc::new(ConstantUnhandledPredicateHook::default()) as _;
-        build_predicate_expression(&expr, schema, required_columns, &unhandled_hook)
+        build_predicate_expression(&expr, &Arc::new(schema.clone()), required_columns, &unhandled_hook) // TODO this is test
     }
 
     #[test]
