@@ -603,11 +603,23 @@ mod tests {
         let dic_array = DictionaryArray::<Int32Type>::try_new(keys, Arc::new(values))?;
         let c_dic: ArrayRef = Arc::new(dic_array);
 
-        let batch1 = RecordBatch::try_from_iter(vec![("c_dic", c_dic)])?;
+        // Data for column string_truncation: ["a".repeat(128), null, "b".repeat(128), null]
+        let string_truncation: ArrayRef = Arc::new(StringArray::from(vec![
+            Some("a".repeat(128)),
+            None,
+            Some("b".repeat(128)),
+            None,
+        ]));
+
+        let batch1 = RecordBatch::try_from_iter(vec![
+            ("c_dic", c_dic),
+            ("string_truncation", string_truncation),
+        ])?;
 
         // Use store_parquet to write each batch to its own file
         // . batch1 written into first file and includes:
         //    - column c_dic that has 4 rows with no null. Stats min and max of dictionary column is available.
+        //    - column string_truncation that has 4 rows with 2 nulls. Stats min and max of string column is available but not exact.
         let store = Arc::new(RequestCountingObjectStore::new(Arc::new(
             LocalFileSystem::new(),
         )));
@@ -645,6 +657,19 @@ mod tests {
         assert_eq!(
             c_dic_stats.min_value,
             Precision::Exact(Utf8(Some("a".into())))
+        );
+
+        // column string_truncation
+        let string_truncation_stats = &stats.column_statistics[1];
+
+        assert_eq!(string_truncation_stats.null_count, Precision::Exact(2));
+        assert_eq!(
+            string_truncation_stats.max_value,
+            Precision::Inexact(ScalarValue::Utf8View(Some("b".repeat(63) + "c")))
+        );
+        assert_eq!(
+            string_truncation_stats.min_value,
+            Precision::Inexact(ScalarValue::Utf8View(Some("a".repeat(64))))
         );
 
         Ok(())
