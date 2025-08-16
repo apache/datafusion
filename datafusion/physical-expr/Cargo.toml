@@ -39,6 +39,7 @@ name = "datafusion_physical_expr"
 
 [dependencies]
 ahash = { workspace = true }
+arc-swap = { workspace = true }
 arrow = { workspace = true }
 datafusion-common = { workspace = true, default-features = true }
 datafusion-expr = { workspace = true }

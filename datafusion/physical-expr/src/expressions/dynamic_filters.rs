@@ -22,6 +22,8 @@ use std::{
     sync::{Arc, RwLock},
 };
 
+use arc_swap::ArcSwap;
+
 use crate::PhysicalExpr;
 use arrow::datatypes::{DataType, Schema};
 use datafusion_common::{
@@ -47,7 +49,7 @@ pub struct DynamicFilterPhysicalExpr {
     /// so that when we update `current()` in subsequent iterations we can re-apply the replacements.
     remapped_children: Option<Vec<Arc<dyn PhysicalExpr>>>,
     /// The source of dynamic filters.
-    inner: Arc<RwLock<Inner>>,
+    inner: Arc<ArcSwap<Inner>>,
     /// For testing purposes track the data type and nullability to make sure they don't change.
     /// If they do, there's a bug in the implementation.
     /// But this can have overhead in production, so it's only included in our tests.
@@ -137,7 +139,7 @@ impl DynamicFilterPhysicalExpr {
         Self {
             children,
             remapped_children: None, // Initially no remapped children
-            inner: Arc::new(RwLock::new(Inner::new(inner))),
+            inner: Arc::new(ArcSwap::from_pointee(Inner::new(inner))),
             data_type: Arc::new(RwLock::new(None)),
             nullable: Arc::new(RwLock::new(None)),
         }
@@ -176,17 +178,8 @@ impl DynamicFilterPhysicalExpr {
     /// This will return the current expression with any children
     /// remapped to match calls to [`PhysicalExpr::with_new_children`].
     pub fn current(&self) -> Result<Arc<dyn PhysicalExpr>> {
-        let inner = Arc::clone(
-            &self
-                .inner
-                .read()
-                .map_err(|_| {
-                    datafusion_common::DataFusionError::Execution(
-                        "Failed to acquire read lock for inner".to_string(),
-                    )
-                })?
-                .expr,
-        );
+        let inner_ref = self.inner.load();
+        let inner = Arc::clone(&inner_ref.expr);
         let inner =
             Self::remap_children(&self.children, self.remapped_children.as_ref(), inner)?;
         Ok(inner)
@@ -199,11 +192,6 @@ impl DynamicFilterPhysicalExpr {
     /// - When we've computed the probe side's hash table in a HashJoinExec
     /// - After every batch is processed if we update the TopK heap in a SortExec using a TopK approach.
     pub fn update(&self, new_expr: Arc<dyn PhysicalExpr>) -> Result<()> {
-        let mut current = self.inner.write().map_err(|_| {
-            datafusion_common::DataFusionError::Execution(
-                "Failed to acquire write lock for inner".to_string(),
-            )
-        })?;
         // Remap the children of the new expression to match the original children
         // We still do this again in `current()` but doing it preventively here
         // reduces the work needed in some cases if `current()` is called multiple times
@@ -213,10 +201,14 @@ impl DynamicFilterPhysicalExpr {
             self.remapped_children.as_ref(),
             new_expr,
         )?;
-        // Update the inner expression to the new expression.
-        current.expr = new_expr;
-        // Increment the generation to indicate that the expression has changed.
-        current.generation += 1;
+
+        // Load the current inner, increment generation, and store the new one
+        let current = self.inner.load();
+        let new_inner = Inner {
+            generation: current.generation + 1,
+            expr: new_expr,
+        };
+        self.inner.store(Arc::new(new_inner));
         Ok(())
     }
 }
@@ -324,10 +316,7 @@ impl PhysicalExpr for DynamicFilterPhysicalExpr {
 
     fn snapshot_generation(&self) -> u64 {
         // Return the current generation of the expression.
-        self.inner
-            .read()
-            .expect("Failed to acquire read lock for inner")
-            .generation
+        self.inner.load().generation
     }
 }
 
