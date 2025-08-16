@@ -57,6 +57,9 @@ pub struct FFI_RecordBatchStream {
     /// Return the schema of the record batch
     pub schema: unsafe extern "C" fn(stream: &Self) -> WrappedSchema,
 
+    /// Release the memory of the private data when it is no longer being used.
+    pub release: unsafe extern "C" fn(arg: &mut Self),
+
     /// Internal data. This is only to be accessed by the provider of the plan.
     /// The foreign library should never attempt to access this data.
     pub private_data: *mut c_void,
@@ -82,6 +85,7 @@ impl FFI_RecordBatchStream {
         FFI_RecordBatchStream {
             poll_next: poll_next_fn_wrapper,
             schema: schema_fn_wrapper,
+            release: release_fn_wrapper,
             private_data,
         }
     }
@@ -94,6 +98,12 @@ unsafe extern "C" fn schema_fn_wrapper(stream: &FFI_RecordBatchStream) -> Wrappe
     let stream = &(*private_data).rbs;
 
     (*stream).schema().into()
+}
+
+unsafe extern "C" fn release_fn_wrapper(provider: &mut FFI_RecordBatchStream) {
+    let private_data =
+        Box::from_raw(provider.private_data as *mut RecordBatchStreamPrivateData);
+    drop(private_data);
 }
 
 fn record_batch_to_wrapped_array(
@@ -194,6 +204,12 @@ impl Stream for FFI_RecordBatchStream {
                 "Error occurred during poll_next on FFI_RecordBatchStream".to_string(),
             )))),
         }
+    }
+}
+
+impl Drop for FFI_RecordBatchStream {
+    fn drop(&mut self) {
+        unsafe { (self.release)(self) }
     }
 }
 
