@@ -415,11 +415,22 @@ impl FileOpener for ParquetOpener {
                 let schema_mapping = Some(schema_mapping);
                 let file_pruner = file_pruner;
                 let stream = stream.map_err(|e| ArrowError::ExternalError(Box::new(e)));
-                let files_ranges_pruned_statistics = file_metrics.files_ranges_pruned_statistics.clone();
+                let files_ranges_pruned_statistics =
+                    file_metrics.files_ranges_pruned_statistics.clone();
 
                 stream::try_unfold(
-                    (stream, schema_mapping, file_pruner, files_ranges_pruned_statistics),
-                    move |(mut stream, schema_mapping_opt, mut file_pruner, files_ranges_pruned_statistics)| async move {
+                    (
+                        stream,
+                        schema_mapping,
+                        file_pruner,
+                        files_ranges_pruned_statistics,
+                    ),
+                    move |(
+                        mut stream,
+                        schema_mapping_opt,
+                        mut file_pruner,
+                        files_ranges_pruned_statistics,
+                    )| async move {
                         match stream.try_next().await? {
                             Some(batch) => {
                                 let schema_mapping = schema_mapping_opt.as_ref().unwrap();
@@ -435,11 +446,19 @@ impl FileOpener for ParquetOpener {
                                     }
                                 }
 
-                                Ok(Some((mapped_batch, (stream, schema_mapping_opt, file_pruner, files_ranges_pruned_statistics))))
+                                Ok(Some((
+                                    mapped_batch,
+                                    (
+                                        stream,
+                                        schema_mapping_opt,
+                                        file_pruner,
+                                        files_ranges_pruned_statistics,
+                                    ),
+                                )))
                             }
                             None => Ok(None),
                         }
-                    }
+                    },
                 )
             };
 
