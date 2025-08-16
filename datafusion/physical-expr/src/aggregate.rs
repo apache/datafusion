@@ -24,6 +24,92 @@ pub(crate) mod groups_accumulator {
         accumulate::NullState, GroupsAccumulatorAdapter,
     };
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::expressions::Literal;
+    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::ScalarValue;
+    use datafusion_expr::{AggregateUDF, AggregateUDFImpl, Signature, Volatility};
+    use std::{any::Any, sync::Arc};
+    #[derive(Debug)]
+    struct DummyUdf {
+        signature: Signature,
+    }
+
+    impl DummyUdf {
+        fn new() -> Self {
+            Self {
+                signature: Signature::any(1, Volatility::Immutable),
+            }
+        }
+    }
+
+    impl AggregateUDFImpl for DummyUdf {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+        fn name(&self) -> &str {
+            "dummy"
+        }
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+        fn return_type(&self, _args: &[DataType]) -> Result<DataType> {
+            Ok(DataType::UInt64)
+        }
+        fn accumulator(&self, _args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+            unimplemented!()
+        }
+        fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
+            unimplemented!()
+        }
+        fn groups_accumulator_supported(&self, _args: AccumulatorArgs) -> bool {
+            true
+        }
+        fn create_groups_accumulator(
+            &self,
+            _args: AccumulatorArgs,
+        ) -> Result<Box<dyn GroupsAccumulator>> {
+            unimplemented!()
+        }
+    }
+
+    #[test]
+    fn test_args_schema_and_groups_path() {
+        // literal-only: empty physical schema synthesizes schema from literal expr
+        let udf = Arc::new(AggregateUDF::from(DummyUdf::new()));
+        let lit_expr =
+            Arc::new(Literal::new(ScalarValue::UInt32(Some(1)))) as Arc<dyn PhysicalExpr>;
+        let agg =
+            AggregateExprBuilder::new(Arc::clone(&udf), vec![Arc::clone(&lit_expr)])
+                .alias("x")
+                .schema(Arc::new(Schema::empty()))
+                .build()
+                .unwrap();
+        match agg.args_schema() {
+            Cow::Owned(s) => assert_eq!(s.field(0).name(), "lit"),
+            _ => panic!("expected owned schema"),
+        }
+        assert!(agg.groups_accumulator_supported());
+
+        // non-empty physical schema should be borrowed
+        let f = Field::new("b", DataType::Int32, false);
+        let phys_schema = Schema::new(vec![f.clone()]);
+        let col_expr = Arc::new(Column::new("b", 0)) as Arc<dyn PhysicalExpr>;
+        let agg2 = AggregateExprBuilder::new(udf, vec![col_expr])
+            .alias("x")
+            .schema(Arc::new(phys_schema))
+            .build()
+            .unwrap();
+        match agg2.args_schema() {
+            Cow::Borrowed(s) => assert_eq!(s.field(0).name(), "b"),
+            _ => panic!("expected borrowed schema"),
+        }
+        assert!(agg2.groups_accumulator_supported());
+    }
+}
 pub(crate) mod stats {
     pub use datafusion_functions_aggregate_common::stats::StatsType;
 }
@@ -33,25 +119,25 @@ pub mod utils {
         DecimalAverager, Hashable,
     };
 }
-
-use std::fmt::Debug;
-use std::sync::Arc;
-
 use crate::expressions::Column;
-
-use arrow::compute::SortOptions;
-use arrow::datatypes::{DataType, FieldRef, Schema, SchemaRef};
+use arrow::{
+    compute::SortOptions,
+    datatypes::{DataType, FieldRef, Schema, SchemaRef},
+};
 use datafusion_common::{internal_err, not_impl_err, Result, ScalarValue};
 use datafusion_expr::{AggregateUDF, ReversedUDAF, SetMonotonicity};
-use datafusion_expr_common::accumulator::Accumulator;
-use datafusion_expr_common::groups_accumulator::GroupsAccumulator;
-use datafusion_expr_common::type_coercion::aggregates::check_arg_count;
-use datafusion_functions_aggregate_common::accumulator::{
-    AccumulatorArgs, StateFieldsArgs,
+use datafusion_expr_common::{
+    accumulator::Accumulator, groups_accumulator::GroupsAccumulator,
+    type_coercion::aggregates::check_arg_count,
 };
-use datafusion_functions_aggregate_common::order::AggregateOrderSensitivity;
-use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
-use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
+use datafusion_functions_aggregate_common::{
+    accumulator::{AccumulatorArgs, StateFieldsArgs},
+    order::AggregateOrderSensitivity,
+};
+use datafusion_physical_expr_common::{
+    physical_expr::PhysicalExpr, sort_expr::PhysicalSortExpr,
+};
+use std::{borrow::Cow, fmt::Debug, sync::Arc};
 
 /// Builder for physical [`AggregateFunctionExpr`]
 ///
@@ -376,21 +462,52 @@ impl AggregateFunctionExpr {
             .into()
     }
 
-    /// the accumulator used to accumulate values from the expressions.
-    /// the accumulator expects the same number of arguments as `expressions` and must
-    /// return states with the same description as `state_fields`
-    pub fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        let acc_args = AccumulatorArgs {
+    /// Returns a schema containing the fields corresponding to this
+    /// aggregate's input expressions in the same order as `input_fields`/`exprs`.
+    ///
+    /// If the physical input schema is empty (literal-only inputs),
+    /// synthesizes a new schema from the literal expressions to preserve
+    /// field-level metadata (such as Arrow extension types).
+    /// Field order is guaranteed to match the order of input expressions.
+    /// In mixed column and literal inputs, existing physical schema fields
+    /// win; synthesized metadata is only applied when the physical schema
+    /// has no fields.
+    ///
+    /// Uses [`std::borrow::Cow`] to avoid allocation when the existing
+    /// schema is non-empty. For micro-optimizations, implementers may
+    /// cache the owned schema if multiple calls are made per instance.
+    fn args_schema(&self) -> Cow<'_, Schema> {
+        if self.schema.fields().is_empty() {
+            Cow::Owned(Schema::new(
+                self.input_fields
+                    .iter()
+                    .map(|f| f.as_ref().clone())
+                    .collect::<Vec<_>>(),
+            ))
+        } else {
+            Cow::Borrowed(&self.schema)
+        }
+    }
+    /// Construct AccumulatorArgs for this aggregate using a given schema slice.
+    fn make_acc_args<'a>(&'a self, schema: &'a Schema) -> AccumulatorArgs<'a> {
+        AccumulatorArgs {
             return_field: Arc::clone(&self.return_field),
-            schema: &self.schema,
+            schema,
             ignore_nulls: self.ignore_nulls,
             order_bys: self.order_bys.as_ref(),
             is_distinct: self.is_distinct,
             name: &self.name,
             is_reversed: self.is_reversed,
             exprs: &self.args,
-        };
+        }
+    }
 
+    /// the accumulator used to accumulate values from the expressions.
+    /// the accumulator expects the same number of arguments as `expressions` and must
+    /// return states with the same description as `state_fields`
+    pub fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
+        let schema = self.args_schema();
+        let acc_args = self.make_acc_args(schema.as_ref());
         self.fun.accumulator(acc_args)
     }
 
@@ -464,17 +581,8 @@ impl AggregateFunctionExpr {
 
     /// Creates accumulator implementation that supports retract
     pub fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        let args = AccumulatorArgs {
-            return_field: Arc::clone(&self.return_field),
-            schema: &self.schema,
-            ignore_nulls: self.ignore_nulls,
-            order_bys: self.order_bys.as_ref(),
-            is_distinct: self.is_distinct,
-            name: &self.name,
-            is_reversed: self.is_reversed,
-            exprs: &self.args,
-        };
-
+        let schema = self.args_schema();
+        let args = self.make_acc_args(schema.as_ref());
         let accumulator = self.fun.create_sliding_accumulator(args)?;
 
         // Accumulators that have window frame startings different
@@ -533,16 +641,8 @@ impl AggregateFunctionExpr {
     /// [`GroupsAccumulator`] implementation. If this returns true,
     /// `[Self::create_groups_accumulator`] will be called.
     pub fn groups_accumulator_supported(&self) -> bool {
-        let args = AccumulatorArgs {
-            return_field: Arc::clone(&self.return_field),
-            schema: &self.schema,
-            ignore_nulls: self.ignore_nulls,
-            order_bys: self.order_bys.as_ref(),
-            is_distinct: self.is_distinct,
-            name: &self.name,
-            is_reversed: self.is_reversed,
-            exprs: &self.args,
-        };
+        let schema = self.args_schema();
+        let args = self.make_acc_args(schema.as_ref());
         self.fun.groups_accumulator_supported(args)
     }
 
@@ -552,16 +652,8 @@ impl AggregateFunctionExpr {
     /// For maximum performance, a [`GroupsAccumulator`] should be
     /// implemented in addition to [`Accumulator`].
     pub fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
-        let args = AccumulatorArgs {
-            return_field: Arc::clone(&self.return_field),
-            schema: &self.schema,
-            ignore_nulls: self.ignore_nulls,
-            order_bys: self.order_bys.as_ref(),
-            is_distinct: self.is_distinct,
-            name: &self.name,
-            is_reversed: self.is_reversed,
-            exprs: &self.args,
-        };
+        let schema = self.args_schema();
+        let args = self.make_acc_args(schema.as_ref());
         self.fun.create_groups_accumulator(args)
     }
 
