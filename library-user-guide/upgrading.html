@@ -688,6 +688,11 @@
      </code>
     </a>
    </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#nested-loop-join-input-sort-order-cannot-be-preserved">
+     Nested Loop Join input sort order cannot be preserved
+    </a>
+   </li>
   </ul>
  </li>
  <li class="toc-h2 nav-item toc-entry">
@@ -1342,6 +1347,12 @@ for more details.</p>
 produced incorrect results in recursive queries, a new method <code class="docutils literal notranslate"><span class="pre">reset_state</span></code> has been added to the <code class="docutils literal notranslate"><span class="pre">ExecutionPlan</span></code> trait.</p>
 <p>Any <code class="docutils literal notranslate"><span class="pre">ExecutionPlan</span></code> that needs to maintain internal state or references to other nodes in the execution plan tree should implement this method to reset that state.
 See <a class="reference external" href="https://github.com/apache/datafusion/pull/17028">#17028</a> for more details and an example implementation for <code class="docutils literal notranslate"><span class="pre">SortExec</span></code>.</p>
+</section>
+<section id="nested-loop-join-input-sort-order-cannot-be-preserved">
+<h3>Nested Loop Join input sort order cannot be preserved<a class="headerlink" href="#nested-loop-join-input-sort-order-cannot-be-preserved" title="Link to this heading">¶</a></h3>
+<p>The Nested Loop Join operator has been rewritten from scratch to improve performance and memory efficiency. From the micro-benchmarks: this change introduces up to 5X speed-up and uses only 1% memory in extreme cases compared to the previous implementation.</p>
+<p>However, the new implementation cannot preserve input sort order like the old version could. This is a fundamental design trade-off that prioritizes performance and memory efficiency over sort order preservation.</p>
+<p>See <a class="reference external" href="https://github.com/apache/datafusion/pull/16996">#16996</a> for details.</p>
 </section>
 </section>
 <section id="datafusion-49-0-0">
