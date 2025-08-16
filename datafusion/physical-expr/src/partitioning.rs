@@ -119,6 +119,8 @@ pub enum Partitioning {
     Hash(Vec<Arc<dyn PhysicalExpr>>, usize),
     /// Unknown partitioning scheme with a known number of partitions
     UnknownPartitioning(usize),
+    /// On Demand partitioning, where the partitioning is determined at runtime
+    OnDemand(usize),
 }
 
 impl Display for Partitioning {
@@ -136,6 +138,7 @@ impl Display for Partitioning {
             Partitioning::UnknownPartitioning(size) => {
                 write!(f, "UnknownPartitioning({size})")
             }
+            Partitioning::OnDemand(size) => write!(f, "OnDemand({size})"),
         }
     }
 }
@@ -144,7 +147,7 @@ impl Partitioning {
     pub fn partition_count(&self) -> usize {
         use Partitioning::*;
         match self {
-            RoundRobinBatch(n) | Hash(_, n) | UnknownPartitioning(n) => *n,
+            RoundRobinBatch(n) | Hash(_, n) | UnknownPartitioning(n) | OnDemand(n) => *n,
         }
     }
 
@@ -228,6 +231,11 @@ impl PartialEq for Partitioning {
             ) if count1 == count2 => true,
             (Partitioning::Hash(exprs1, count1), Partitioning::Hash(exprs2, count2))
                 if physical_exprs_equal(exprs1, exprs2) && (count1 == count2) =>
+            {
+                true
+            }
+            (Partitioning::OnDemand(count1), Partitioning::OnDemand(count2))
+                if count1 == count2 =>
             {
                 true
             }
