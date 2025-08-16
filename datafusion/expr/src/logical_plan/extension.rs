@@ -57,7 +57,7 @@ pub trait UserDefinedLogicalNode: fmt::Debug + Send + Sync {
     fn schema(&self) -> &DFSchemaRef;
 
     /// Perform check of invariants for the extension node.
-    fn check_invariants(&self, check: InvariantLevel, plan: &LogicalPlan) -> Result<()>;
+    fn check_invariants(&self, check: InvariantLevel) -> Result<()>;
 
     /// Returns all expressions in the current logical plan node. This should
     /// not include expressions of any inputs (aka non-recursively).
@@ -241,11 +241,7 @@ pub trait UserDefinedLogicalNodeCore:
     /// Perform check of invariants for the extension node.
     ///
     /// This is the default implementation for extension nodes.
-    fn check_invariants(
-        &self,
-        _check: InvariantLevel,
-        _plan: &LogicalPlan,
-    ) -> Result<()> {
+    fn check_invariants(&self, _check: InvariantLevel) -> Result<()> {
         Ok(())
     }
 
@@ -334,8 +330,8 @@ impl<T: UserDefinedLogicalNodeCore> UserDefinedLogicalNode for T {
         self.schema()
     }
 
-    fn check_invariants(&self, check: InvariantLevel, plan: &LogicalPlan) -> Result<()> {
-        self.check_invariants(check, plan)
+    fn check_invariants(&self, check: InvariantLevel) -> Result<()> {
+        self.check_invariants(check)
     }
 
     fn expressions(&self) -> Vec<Expr> {
