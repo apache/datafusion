@@ -47,8 +47,10 @@ mod test {
     use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
     use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
     use datafusion_physical_plan::projection::ProjectionExec;
+    use datafusion_physical_plan::repartition::RepartitionExec;
     use datafusion_physical_plan::sorts::sort::SortExec;
-    use datafusion_physical_plan::union::UnionExec;
+    use datafusion_physical_plan::union::{InterleaveExec, UnionExec};
+    use datafusion_physical_plan::Partitioning;
     use datafusion_physical_plan::{
         execute_stream_partitioned, get_plan_string, ExecutionPlan,
         ExecutionPlanProperties,
@@ -66,6 +68,7 @@ mod test {
     ///   - Second partition: [1, 2]
     /// - Each row is 110 bytes in size
     ///
+    /// @param create_table_sql Optional parameter to set the create table SQL
     /// @param target_partition Optional parameter to set the target partitions
     /// @return ExecutionPlan representing the scan of the table with statistics
     async fn create_scan_exec_with_statistics(
@@ -106,6 +109,29 @@ mod test {
             .scan(&ctx.state(), None, &[], None)
             .await
             .unwrap()
+    }
+
+    /// Creates a test table with statistics and hash partitioning from the test data directory.
+    ///
+    /// This function creates a scan with hash partitioning on the 'id' column to ensure
+    /// that multiple scans have the same partitioning scheme.
+    ///
+    /// @param create_table_sql Optional parameter to set the create table SQL
+    /// @param target_partition Optional parameter to set the target partitions
+    /// @return ExecutionPlan representing the scan of the table with hash partitioning
+    async fn create_scan_exec_with_hash_partitioning(
+        create_table_sql: Option<&str>,
+        target_partition: Option<usize>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let scan =
+            create_scan_exec_with_statistics(create_table_sql, target_partition).await;
+
+        // Create hash partitioning on the 'id' column
+        let hash_expr = vec![col("id", &scan.schema())?];
+        let partitioning =
+            Partitioning::Hash(hash_expr, scan.output_partitioning().partition_count());
+
+        Ok(Arc::new(RepartitionExec::try_new(scan, partitioning)?))
     }
 
     /// Helper function to create expected statistics for a partition with Int32 column
@@ -384,6 +410,35 @@ mod test {
     }
 
     #[tokio::test]
+    async fn test_statistics_by_partition_of_interleave() -> Result<()> {
+        // Create 2 scans with the same hash partitioning
+        let scan1 = create_scan_exec_with_hash_partitioning(None, Some(2)).await?;
+        let scan2 = create_scan_exec_with_hash_partitioning(None, Some(2)).await?;
+
+        let interleave_exec: Arc<dyn ExecutionPlan> =
+            Arc::new(InterleaveExec::try_new(vec![scan1, scan2])?);
+
+        // Get statistics for all partitions
+        let statistics = (0..interleave_exec.output_partitioning().partition_count())
+            .map(|idx| interleave_exec.partition_statistics(Some(idx)))
+            .collect::<Result<Vec<_>>>()?;
+
+        // Verify we have 2 partitions (same as the input scans)
+        assert_eq!(statistics.len(), 2);
+
+        // Also verify the other partitions for completeness
+        let expected_statistic_partition_0 =
+            create_partition_statistics(4, 220, 3, 4, true);
+        let expected_statistic_partition_1 =
+            create_partition_statistics(4, 220, 1, 2, true);
+
+        assert_eq!(statistics[0], expected_statistic_partition_0);
+        assert_eq!(statistics[1], expected_statistic_partition_1);
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_statistic_by_partition_of_cross_join() -> Result<()> {
         let left_scan = create_scan_exec_with_statistics(None, Some(1)).await;
         let right_create_table_sql = "CREATE EXTERNAL TABLE t2 (id INT NOT NULL) \
@@ -549,7 +604,6 @@ mod test {
         let _ = plan_string.swap_remove(1);
         let expected_plan = vec![
             "AggregateExec: mode=Partial, gby=[id@0 as id, 1 + id@0 as expr], aggr=[COUNT(c)]",
-            //"  DataSourceExec: file_groups={2 groups: [[.../datafusion/core/tests/data/test_statistics_per_partition/date=2025-03-01/j5fUeSDQo22oPyPU.parquet, .../datafusion/core/tests/data/test_statistics_per_partition/date=2025-03-02/j5fUeSDQo22oPyPU.parquet], [.../datafusion/core/tests/data/test_statistics_per_partition/date=2025-03-03/j5fUeSDQo22oPyPU.parquet, .../datafusion/core/tests/data/test_statistics_per_partition/date=2025-03-04/j5fUeSDQo22oPyPU.parquet]]}, projection=[id, date], file_type=parquet
         ];
         assert_eq!(plan_string, expected_plan);
 

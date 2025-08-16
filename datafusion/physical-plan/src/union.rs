@@ -498,13 +498,10 @@ impl ExecutionPlan for InterleaveExec {
     }
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
-        if partition.is_some() {
-            return Ok(Statistics::new_unknown(&self.schema()));
-        }
         let stats = self
             .inputs
             .iter()
-            .map(|stat| stat.partition_statistics(None))
+            .map(|stat| stat.partition_statistics(partition))
             .collect::<Result<Vec<_>>>()?;
 
         Ok(stats
