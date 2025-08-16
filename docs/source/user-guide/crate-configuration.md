@@ -107,7 +107,7 @@ Then, in `main.rs.` update the memory allocator with the below after your import
 
 <!-- Note can't include snmalloc-rs in a runnable example, because it takes over the global allocator -->
 
-```no-run
+```rust,no_run
 use datafusion::prelude::*;
 
 #[global_allocator]
