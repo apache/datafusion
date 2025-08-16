@@ -133,6 +133,7 @@ impl FileSource for TestSource {
         _object_store: Arc<dyn ObjectStore>,
         _base_config: &FileScanConfig,
         _partition: usize,
+        _batch_size: usize,
     ) -> Arc<dyn FileOpener> {
         Arc::new(TestOpener {
             batches: self.batches.clone(),
@@ -144,13 +145,6 @@ impl FileSource for TestSource {
 
     fn as_any(&self) -> &dyn Any {
         todo!("should not be called")
-    }
-
-    fn with_batch_size(&self, batch_size: usize) -> Arc<dyn FileSource> {
-        Arc::new(TestSource {
-            batch_size: Some(batch_size),
-            ..self.clone()
-        })
     }
 
     fn with_schema(&self, schema: SchemaRef) -> Arc<dyn FileSource> {
