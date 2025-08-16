@@ -69,12 +69,7 @@ pub fn schema_add_window_field(
         .iter()
         .map(|e| Arc::clone(e).as_ref().return_field(schema))
         .collect::<Result<Vec<_>>>()?;
-    let nullability = args
-        .iter()
-        .map(|e| Arc::clone(e).as_ref().nullable(schema))
-        .collect::<Result<Vec<_>>>()?;
-    let window_expr_return_field =
-        window_fn.return_field(&fields, &nullability, fn_name)?;
+    let window_expr_return_field = window_fn.return_field(&fields, fn_name)?;
     let mut window_fields = schema
         .fields()
         .iter()
