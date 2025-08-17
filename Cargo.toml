@@ -40,6 +40,7 @@ members = [
     "datafusion/functions-window-common",
     "datafusion/optimizer",
     "datafusion/physical-expr",
+    "datafusion/physical-expr-adapter",
     "datafusion/physical-expr-common",
     "datafusion/physical-optimizer",
     "datafusion/pruning",
@@ -77,7 +78,7 @@ repository = "https://github.com/apache/datafusion"
 # Define Minimum Supported Rust Version (MSRV)
 rust-version = "1.85.1"
 # Define DataFusion version
-version = "49.0.0"
+version = "49.0.1"
 
 [workspace.dependencies]
 # We turn off default-features for some dependencies here so the workspaces which inherit them can
@@ -134,6 +135,7 @@ datafusion-functions-window-common = { path = "datafusion/functions-window-commo
 datafusion-macros = { path = "datafusion/macros", version = "49.0.0" }
 datafusion-optimizer = { path = "datafusion/optimizer", version = "49.0.0", default-features = false }
 datafusion-physical-expr = { path = "datafusion/physical-expr", version = "49.0.0", default-features = false }
+datafusion-physical-expr-adapter = { path = "datafusion/physical-expr-adapter", version = "49.0.0", default-features = false }
 datafusion-physical-expr-common = { path = "datafusion/physical-expr-common", version = "49.0.0", default-features = false }
 datafusion-physical-optimizer = { path = "datafusion/physical-optimizer", version = "49.0.0" }
 datafusion-physical-plan = { path = "datafusion/physical-plan", version = "49.0.0" }

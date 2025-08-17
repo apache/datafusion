@@ -33,7 +33,7 @@ EXPLAIN WITH "NUMBERS" AS (SELECT 1 as a, 2 as b, 3 as c) SELECT "NUMBERS".* FRO
 logical_plan
 01)SubqueryAlias: NUMBERS
 02)--Projection: Int64(1) AS a, Int64(2) AS b, Int64(3) AS c
-03)----EmptyRelation
+03)----EmptyRelation: rows=1
 physical_plan
 01)ProjectionExec: expr=[1 as a, 2 as b, 3 as c]
 02)--PlaceholderRowExec
@@ -107,7 +107,7 @@ logical_plan
 01)SubqueryAlias: nodes
 02)--RecursiveQuery: is_distinct=false
 03)----Projection: Int64(1) AS id
-04)------EmptyRelation
+04)------EmptyRelation: rows=1
 05)----Projection: nodes.id + Int64(1) AS id
 06)------Filter: nodes.id < Int64(10)
 07)--------TableScan: nodes
@@ -720,14 +720,14 @@ logical_plan
 01)SubqueryAlias: recursive_cte
 02)--RecursiveQuery: is_distinct=false
 03)----Projection: Int64(1) AS val
-04)------EmptyRelation
+04)------EmptyRelation: rows=1
 05)----Projection: Int64(2) AS val
 06)------Cross Join: 
 07)--------Filter: recursive_cte.val < Int64(2)
 08)----------TableScan: recursive_cte
 09)--------SubqueryAlias: sub_cte
 10)----------Projection: Int64(2) AS val
-11)------------EmptyRelation
+11)------------EmptyRelation: rows=1
 physical_plan
 01)RecursiveQueryExec: name=recursive_cte, is_distinct=false
 02)--ProjectionExec: expr=[1 as val]
@@ -869,7 +869,7 @@ explain with numbers(a,b,c) as (select 1 as x, 2 as y, 3 as z) select * from num
 logical_plan
 01)SubqueryAlias: numbers
 02)--Projection: Int64(1) AS a, Int64(2) AS b, Int64(3) AS c
-03)----EmptyRelation
+03)----EmptyRelation: rows=1
 physical_plan
 01)ProjectionExec: expr=[1 as a, 2 as b, 3 as c]
 02)--PlaceholderRowExec
@@ -880,7 +880,7 @@ explain with numbers(a,b,c) as (select 1,2,3) select * from numbers;
 logical_plan
 01)SubqueryAlias: numbers
 02)--Projection: Int64(1) AS a, Int64(2) AS b, Int64(3) AS c
-03)----EmptyRelation
+03)----EmptyRelation: rows=1
 physical_plan
 01)ProjectionExec: expr=[1 as a, 2 as b, 3 as c]
 02)--PlaceholderRowExec
@@ -891,7 +891,7 @@ explain with numbers as (select 1 as a, 2 as b, 3 as c) select * from numbers;
 logical_plan
 01)SubqueryAlias: numbers
 02)--Projection: Int64(1) AS a, Int64(2) AS b, Int64(3) AS c
-03)----EmptyRelation
+03)----EmptyRelation: rows=1
 physical_plan
 01)ProjectionExec: expr=[1 as a, 2 as b, 3 as c]
 02)--PlaceholderRowExec
@@ -931,7 +931,7 @@ logical_plan
 02)--TableScan: j1 projection=[a]
 03)--SubqueryAlias: j2
 04)----Projection: Int64(1)
-05)------EmptyRelation
+05)------EmptyRelation: rows=1
 physical_plan
 01)CrossJoinExec
 02)--DataSourceExec: partitions=1, partition_sizes=[0]
@@ -955,7 +955,7 @@ logical_plan
 01)SubqueryAlias: numbers
 02)--RecursiveQuery: is_distinct=false
 03)----Projection: Int64(1) AS n
-04)------EmptyRelation
+04)------EmptyRelation: rows=1
 05)----Projection: numbers.n + Int64(1)
 06)------Filter: numbers.n < Int64(10)
 07)--------TableScan: numbers
@@ -981,7 +981,7 @@ logical_plan
 01)SubqueryAlias: numbers
 02)--RecursiveQuery: is_distinct=false
 03)----Projection: Int64(1) AS n
-04)------EmptyRelation
+04)------EmptyRelation: rows=1
 05)----Projection: numbers.n + Int64(1)
 06)------Filter: numbers.n < Int64(10)
 07)--------TableScan: numbers
@@ -1039,7 +1039,7 @@ logical_plan
 02)--Limit: skip=0, fetch=5
 03)----RecursiveQuery: is_distinct=false
 04)------Projection: Int64(0) AS k, Int64(0) AS v
-05)--------EmptyRelation
+05)--------EmptyRelation: rows=1
 06)------Sort: r.v ASC NULLS LAST, fetch=1
 07)--------Projection: r.k, r.v
 08)----------TableScan: r

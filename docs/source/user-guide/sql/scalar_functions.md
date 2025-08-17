@@ -768,7 +768,7 @@ nvl2(expression1, expression2, expression3)
 
 ### `ascii`
 
-Returns the Unicode character code of the first character in a string.
+Returns the first Unicode scalar value of a string.
 
 ```sql
 ascii(str)
@@ -909,7 +909,7 @@ character_length(str)
 
 ### `chr`
 
-Returns the character with the specified ASCII or Unicode code value.
+Returns a string containing the character with the specified Unicode scalar value.
 
 ```sql
 chr(expression)
@@ -2114,9 +2114,10 @@ date_part(part, expression)
   - millisecond
   - microsecond
   - nanosecond
-  - dow (day of the week)
+  - dow (day of the week where Sunday is 0)
   - doy (day of the year)
   - epoch (seconds since Unix epoch)
+  - isodow (day of the week where Monday is 0)
 
 - **expression**: Time expression to operate on. Can be a constant, column, or function.
 

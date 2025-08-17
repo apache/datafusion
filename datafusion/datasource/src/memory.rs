@@ -650,7 +650,7 @@ impl RePartition {
 
 impl PartialOrd for RePartition {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.row_count.cmp(&other.row_count))
+        Some(self.cmp(other))
     }
 }
 

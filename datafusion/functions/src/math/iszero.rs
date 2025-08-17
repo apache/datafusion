@@ -38,7 +38,7 @@ use crate::utils::make_scalar_function;
     syntax_example = "iszero(numeric_expression)",
     standard_argument(name = "numeric_expression", prefix = "Numeric")
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct IsZeroFunc {
     signature: Signature,
 }
