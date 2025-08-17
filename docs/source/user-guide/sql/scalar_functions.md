@@ -2581,6 +2581,7 @@ _Alias of [current_date](#current_date)._
 - [array_empty](#array_empty)
 - [array_except](#array_except)
 - [array_extract](#array_extract)
+- [array_filter](#array_filter)
 - [array_has](#array_has)
 - [array_has_all](#array_has_all)
 - [array_has_any](#array_has_any)
@@ -2911,6 +2912,30 @@ array_except(array1, array2)
 ### `array_extract`
 
 _Alias of [array_element](#array_element)._
+
+### `array_filter`
+
+Filters array elements using a lambda function.
+
+```sql
+array_filter(array, lambda)
+```
+
+#### Arguments
+
+- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **lambda**: Lambda function with one argument that returns a boolean. The lambda is applied to each element of the array.
+
+#### Example
+
+```sql
+> select array_filter([1, 2, 3, 4, 5], x -> x > 3);
++--------------------------------------------------+
+| array_filter(List([1,2,3,4,5]), x -> x > 3)      |
++--------------------------------------------------+
+| [4, 5]                                           |
++--------------------------------------------------+
+```
 
 ### `array_has`
 
