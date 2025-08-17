@@ -3178,10 +3178,26 @@ fn schema_name_from_exprs_inner(exprs: &[Expr], sep: &str) -> Result<String, fmt
     Ok(s)
 }
 
+/// Creates a schema name from a slice of expression references.
+/// 
+/// This function generates a comma-separated string representation of expressions
+/// suitable for use in schema names. It's particularly useful for functions that
+/// work with lambda expressions where argument names need to be preserved.
+/// 
+/// # Arguments
+/// * `exprs` - A slice of expression references to convert to schema names
+/// 
+/// # Returns
+/// A comma-separated string representation of the expressions
 pub fn schema_name_from_exprs_ref(exprs: &[&Expr]) -> Result<String, fmt::Error> {
     schema_name_from_exprs_inner_ref(exprs, ", ")
 }
 
+/// Internal helper function for creating schema names with custom separator.
+/// 
+/// # Arguments
+/// * `exprs` - A slice of expression references
+/// * `sep` - The separator to use between expressions
 fn schema_name_from_exprs_inner_ref(
     exprs: &[&Expr],
     sep: &str,
@@ -3450,13 +3466,28 @@ impl Display for Expr {
     }
 }
 
+/// Represents a lambda function expression with parameters and a body.
+/// 
+/// Lambda functions are anonymous functions that can be used in higher-order 
+/// functions like `array_filter`. They consist of parameter names and an
+/// expression body that can reference those parameters.
+/// 
+/// # Example
+/// In SQL: `x -> x > 3` represents a lambda with parameter `x` and body `x > 3`
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub struct LambdaFunction {
+    /// The parameter names for this lambda function
     pub params: Vec<String>,
+    /// The expression body that references the parameters
     pub body: Box<Expr>,
 }
 
 impl LambdaFunction {
+    /// Creates a new lambda function with the given parameters and body.
+    /// 
+    /// # Arguments
+    /// * `params` - The parameter names for the lambda function
+    /// * `body` - The expression body that can reference the parameters
     pub fn new(params: Vec<String>, body: Box<Expr>) -> Self {
         Self { params, body }
     }

@@ -45,6 +45,15 @@ make_udf_expr_and_func!(ArrayFilter,
     array_filter_udf // internal function name
 );
 
+/// Implementation of the `array_filter` scalar user-defined function.
+/// 
+/// This function filters array elements using a lambda function, returning a new array
+/// containing only the elements for which the lambda function returns true.
+/// 
+/// The struct maintains both logical and physical representations of the lambda:
+/// - `lambda`: The logical lambda expression from the SQL query
+/// - `physical_lambda`: The planned physical lambda that can be executed
+/// - `signature`: Function signature indicating it operates on arrays
 #[user_doc(
     doc_section(label = "Array Functions"),
     description = "Filters array elements using a lambda function.",
@@ -96,6 +105,10 @@ impl Default for ArrayFilter {
 }
 
 impl ArrayFilter {
+    /// Creates a new instance of ArrayFilter with default settings.
+    /// 
+    /// Initializes the function with an array signature and no lambda expressions.
+    /// The lambda will be set later during query planning.
     pub fn new() -> Self {
         Self {
             signature: Signature::array(Volatility::Immutable),
@@ -104,6 +117,13 @@ impl ArrayFilter {
         }
     }
 
+    /// Creates a new ArrayFilter instance with a physical lambda attached.
+    /// 
+    /// This is used during query execution when the logical lambda has been
+    /// planned into an executable physical lambda.
+    /// 
+    /// # Arguments
+    /// * `physical_lambda` - The planned physical lambda function
     fn with_physical_lambda(&self, physical_lambda: Box<dyn PhysicalLambda>) -> Self {
         Self {
             signature: self.signature.clone(),
@@ -112,6 +132,13 @@ impl ArrayFilter {
         }
     }
 
+    /// Creates a new ArrayFilter instance with a logical lambda expression.
+    /// 
+    /// This is used during query planning when the lambda expression has been
+    /// parsed but not yet converted to a physical representation.
+    /// 
+    /// # Arguments  
+    /// * `lambda` - The logical lambda expression from the SQL query
     fn with_lambda(&self, lambda: &Expr) -> Self {
         Self {
             signature: self.signature.clone(),
