@@ -15,7 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion_expr::expr::{AggregateFunctionParams, Unnest, WindowFunctionParams};
+use datafusion_expr::expr::{
+    AggregateFunctionParams, LambdaFunction, Unnest, WindowFunctionParams,
+};
 use sqlparser::ast::Value::SingleQuotedString;
 use sqlparser::ast::{
     self, Array, BinaryOperator, CaseWhen, DuplicateTreatment, Expr as AstExpr, Function,
@@ -123,7 +125,12 @@ impl Unparser<'_> {
                     return Ok(expr);
                 }
 
-                self.scalar_function_to_sql(func_name, args)
+                let args = func
+                    .args_with_lambda(args)?
+                    .into_iter()
+                    .map(|e| e.clone())
+                    .collect::<Vec<_>>();
+                self.scalar_function_to_sql(func_name, &args)
             }
             Expr::Between(Between {
                 expr,
@@ -517,6 +524,22 @@ impl Unparser<'_> {
             }
             Expr::OuterReferenceColumn(_, col) => self.col_to_sql(col),
             Expr::Unnest(unnest) => self.unnest_to_sql(unnest),
+            Expr::Lambda(LambdaFunction { params, body }) => {
+                let params = params
+                    .iter()
+                    .map(|arg| self.new_ident_quoted_if_needs(arg.to_string()))
+                    .collect::<Vec<_>>();
+                let body = self.expr_to_sql_inner(body)?;
+                let params = if params.len() == 1 {
+                    ast::OneOrManyWithParens::One(params[0].clone())
+                } else {
+                    ast::OneOrManyWithParens::Many(params.clone())
+                };
+                Ok(ast::Expr::Lambda(ast::LambdaFunction {
+                    params,
+                    body: Box::new(body),
+                }))
+            }
         }
     }
 

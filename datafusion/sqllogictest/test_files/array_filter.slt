@@ -1,0 +1,92 @@
+# array_filter function tests
+
+statement ok
+set datafusion.sql_parser.dialect = 'Databricks';
+
+
+# Basic array_filter functionality
+query ?
+SELECT array_filter([1, 2, 3, 4, 5], x -> x > 3)
+----
+[4, 5]
+
+# array_filter with empty array
+query ?
+SELECT array_filter(arrow_cast([], 'List(Int64)'), x -> x > 0)
+----
+[]
+
+# array_filter with null array
+query ?
+SELECT array_filter(arrow_cast(NULL, 'List(Int64)'), x -> x > 0)
+----
+NULL
+
+# array_filter with all elements filtered out
+query ?
+SELECT array_filter([1, 2, 3], x -> x > 10)
+----
+[]
+
+# array_filter with string arrays
+query ?
+SELECT array_filter(['apple', 'banana', 'cherry'], x -> length(x)::bigint > 5)
+----
+[banana, cherry]
+
+# array_filter with boolean arrays
+query ?
+SELECT array_filter([true, false, true, false], x -> x = true)
+----
+[true, true]
+
+# array_filter with nested arrays
+query ?
+SELECT array_filter([[1, 2], [3, 4], [5, 6]], x -> array_length(x)::bigint > 1)
+----
+[[1, 2], [3, 4], [5, 6]]
+
+# array_filter with complex lambda expressions
+query ?
+SELECT array_filter([1, 2, 3, 4, 5], x -> x % 2 = 0 AND x > 2)
+----
+[4]
+
+# array_filter with multiple conditions
+query ?
+SELECT array_filter([10, 20, 30, 40, 50], x -> x >= 20 AND x <= 40)
+----
+[20, 30, 40]
+
+# array_filter with type coercion
+query ?
+SELECT array_filter([1.5, 2.5, 3.5], x -> x > 2.0)
+----
+[2.5, 3.5]
+
+statement error Invalid arithmetic operation: Int64 \+ Utf8
+SELECT array_filter([1, 2, 3], x -> x + 'invalid')
+
+# array_filter with multiple array columns
+statement ok
+CREATE TABLE test_arrays (arr1 ARRAY<INTEGER>, arr2 ARRAY<INTEGER>) AS VALUES ([1, 2, 3], [4, 5, 6]);
+
+query ??
+SELECT array_filter(arr1, x -> x > 1::int), array_filter(arr2, x -> x < 6::int) FROM test_arrays;
+----
+[2, 3] [4, 5]
+
+# array_filter in WHERE clause
+query ?
+SELECT arr1 FROM test_arrays WHERE array_length(array_filter(arr1, x -> x > 2::int)) > 1;
+----
+
+
+# array_filter with empty result in WHERE clause
+query ?
+SELECT arr1 FROM test_arrays WHERE array_length(array_filter(arr1, x -> x > 10::int)) = 0;
+----
+[1, 2, 3]
+
+statement ok
+DROP TABLE test_arrays;

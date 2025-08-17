@@ -23,6 +23,7 @@ use crate::{
     PhysicalExpr,
 };
 
+use arrow::array::RecordBatch;
 use arrow::datatypes::Schema;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{
@@ -30,12 +31,13 @@ use datafusion_common::{
 };
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::expr::{
-    Alias, Cast, FieldMetadata, InList, Placeholder, ScalarFunction,
+    Alias, Cast, FieldMetadata, InList, LambdaFunction, Placeholder, ScalarFunction,
 };
 use datafusion_expr::var_provider::is_system_variables;
 use datafusion_expr::var_provider::VarType;
 use datafusion_expr::{
-    binary_expr, lit, Between, BinaryExpr, Expr, Like, Operator, TryCast,
+    binary_expr, lit, Between, BinaryExpr, ColumnarValue, Expr, LambdaPlanner, Like,
+    Operator, PhysicalLambda, TryCast,
 };
 
 /// [PhysicalExpr] evaluate DataFusion expressions such as `A + 1`, or `CAST(c1
@@ -322,9 +324,15 @@ pub fn create_physical_expr(
                 Some(config_options) => Arc::clone(config_options),
                 None => Arc::new(ConfigOptions::default()),
             };
-
+            let lambda_planner = DefaultLambdaPlanner { execution_props };
+            let func =
+                if let Some(func) = func.plan(&lambda_planner, args, input_dfschema)? {
+                    Arc::new(func)
+                } else {
+                    Arc::clone(func)
+                };
             Ok(Arc::new(ScalarFunctionExpr::try_new(
-                Arc::clone(func),
+                func,
                 physical_args,
                 input_schema,
                 config_options,
@@ -410,6 +418,47 @@ pub fn logical2physical(expr: &Expr, schema: &Schema) -> Arc<dyn PhysicalExpr> {
     let df_schema = schema.clone().to_dfschema().unwrap();
     let execution_props = ExecutionProps::new();
     create_physical_expr(expr, &df_schema, &execution_props).unwrap()
+}
+
+pub struct DefaultPhysicalLambda {
+    params: Vec<String>,
+    physical_expr: Arc<dyn PhysicalExpr>,
+}
+
+impl PhysicalLambda for DefaultPhysicalLambda {
+    fn params(&self) -> &[String] {
+        &self.params
+    }
+
+    fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
+        self.physical_expr.evaluate(batch)
+    }
+}
+
+pub struct DefaultLambdaPlanner<'a> {
+    execution_props: &'a ExecutionProps,
+}
+
+impl<'a> LambdaPlanner for DefaultLambdaPlanner<'a> {
+    fn plan_lambda(
+        &self,
+        lambda: &LambdaFunction,
+        df_schema: &DFSchema,
+    ) -> Result<Box<dyn PhysicalLambda>> {
+        if df_schema.fields().len() != lambda.params.len() {
+            return exec_err!(
+                "Lambda has {} arguments, but {} were provided",
+                lambda.params.len(),
+                df_schema.fields().len()
+            );
+        }
+        let physical_expr =
+            create_physical_expr(&lambda.body, df_schema, self.execution_props)?;
+        Ok(Box::new(DefaultPhysicalLambda {
+            params: lambda.params.clone(),
+            physical_expr,
+        }))
+    }
 }
 
 #[cfg(test)]

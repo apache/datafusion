@@ -19,13 +19,14 @@
 
 use crate::async_udf::AsyncScalarUDF;
 use crate::expr::schema_name_from_exprs_comma_separated_without_space;
+use crate::lambda::LambdaPlanner;
 use crate::simplify::{ExprSimplifyResult, SimplifyInfo};
 use crate::sort_properties::{ExprProperties, SortProperties};
 use crate::udf_eq::UdfEq;
 use crate::{udf_equals_hash, ColumnarValue, Documentation, Expr, Signature};
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::{not_impl_err, ExprSchema, Result, ScalarValue};
+use datafusion_common::{not_impl_err, DFSchema, ExprSchema, Result, ScalarValue};
 use datafusion_expr_common::interval_arithmetic::Interval;
 use std::any::Any;
 use std::cmp::Ordering;
@@ -131,6 +132,14 @@ impl ScalarUDF {
             Arc::new(self.clone()),
             args,
         ))
+    }
+
+    pub fn try_call(&self, args: Vec<Expr>) -> Result<Expr> {
+        let result = self.inner.try_call(args.as_slice())?;
+        if let Some(expr) = result {
+            return Ok(expr);
+        }
+        Ok(self.call(args))
     }
 
     /// Returns this function's name.
@@ -288,6 +297,22 @@ impl ScalarUDF {
     /// Return true if this function is an async function
     pub fn as_async(&self) -> Option<&AsyncScalarUDF> {
         self.inner().as_any().downcast_ref::<AsyncScalarUDF>()
+    }
+
+    pub fn plan(
+        &self,
+        planner: &dyn LambdaPlanner,
+        args: &[Expr],
+        input_dfschema: &DFSchema,
+    ) -> Result<Option<Self>> {
+        let Some(inner) = self.inner.plan(planner, args, input_dfschema)? else {
+            return Ok(None);
+        };
+        Ok(Some(Self::new_from_shared_impl(inner)))
+    }
+
+    pub fn args_with_lambda<'a>(&'a self, args: &'a [Expr]) -> Result<Vec<&'a Expr>> {
+        self.inner.args_with_lambda(args)
     }
 }
 
@@ -741,6 +766,23 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     fn documentation(&self) -> Option<&Documentation> {
         None
     }
+
+    fn try_call(&self, _args: &[Expr]) -> Result<Option<Expr>> {
+        Ok(None)
+    }
+
+    fn plan(
+        &self,
+        _planner: &dyn LambdaPlanner,
+        _args: &[Expr],
+        _input_dfschema: &DFSchema,
+    ) -> Result<Option<Arc<dyn ScalarUDFImpl>>> {
+        Ok(None)
+    }
+
+    fn args_with_lambda<'a>(&'a self, args: &'a [Expr]) -> Result<Vec<&'a Expr>> {
+        Ok(args.iter().collect())
+    }
 }
 
 /// ScalarUDF that adds an alias to the underlying function. It is better to
@@ -842,6 +884,22 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
 
     fn documentation(&self) -> Option<&Documentation> {
         self.inner.documentation()
+    }
+
+    fn plan(
+        &self,
+        planner: &dyn LambdaPlanner,
+        args: &[Expr],
+        input_dfschema: &DFSchema,
+    ) -> Result<Option<Arc<dyn ScalarUDFImpl>>> {
+        let inner = self.inner.plan(planner, args, input_dfschema)?;
+        let Some(inner) = inner else {
+            return Ok(None);
+        };
+        Ok(Some(Arc::new(AliasedScalarUDFImpl {
+            inner: inner.into(),
+            aliases: self.aliases.clone(),
+        })))
     }
 }
 

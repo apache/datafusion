@@ -15,14 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::datatypes::{DataType, TimeUnit};
+use std::collections::HashMap;
+
+use arrow::datatypes::{DataType, Field, Fields, TimeUnit};
 use datafusion_expr::planner::{
     PlannerResult, RawBinaryExpr, RawDictionaryExpr, RawFieldAccessExpr,
 };
 use sqlparser::ast::{
     AccessExpr, BinaryOperator, CastFormat, CastKind, DataType as SQLDataType,
-    DictionaryField, Expr as SQLExpr, ExprWithAlias as SQLExprWithAlias, MapEntry,
-    StructField, Subscript, TrimWhereField, Value, ValueWithSpan,
+    DictionaryField, Expr as SQLExpr, ExprWithAlias as SQLExprWithAlias,
+    LambdaFunction as SQLLambdaFunction, MapEntry, StructField, Subscript,
+    TrimWhereField, Value, ValueWithSpan,
 };
 
 use datafusion_common::{
@@ -30,8 +33,8 @@ use datafusion_common::{
     ScalarValue,
 };
 
-use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::expr::{InList, WildcardOptions};
+use datafusion_expr::expr::{LambdaFunction, ScalarFunction};
 use datafusion_expr::{
     lit, Between, BinaryExpr, Cast, Expr, ExprSchemable, GetFieldAccess, Like, Literal,
     Operator, TryCast,
@@ -603,6 +606,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 options: Box::new(WildcardOptions::default()),
             }),
             SQLExpr::Tuple(values) => self.parse_tuple(schema, planner_context, values),
+            SQLExpr::Lambda(lambda) => {
+                self.sql_lambda_to_expr(schema, planner_context, lambda)
+            }
             _ => not_impl_err!("Unsupported ast node in sqltorel: {sql:?}"),
         }
     }
@@ -1163,6 +1169,32 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     "GetFieldAccess not supported by ExprPlanner: {field_access_expr:?}"
                 )
             })
+    }
+
+    fn sql_lambda_to_expr(
+        &self,
+        _schema: &DFSchema,
+        planner_context: &mut PlannerContext,
+        lambda: SQLLambdaFunction,
+    ) -> Result<Expr> {
+        let params = lambda
+            .params
+            .iter()
+            .map(|arg| arg.to_string())
+            .collect::<Vec<_>>();
+        let fields = Fields::from(
+            params
+                .iter()
+                .map(|param| Field::new(param.to_string(), DataType::Null, true))
+                .collect::<Vec<_>>(),
+        );
+        let schema = DFSchema::from_unqualified_fields(fields, HashMap::new())?;
+        let body =
+            self.sql_expr_to_logical_expr(*lambda.body, &schema, planner_context)?;
+        Ok(Expr::Lambda(LambdaFunction {
+            params,
+            body: Box::new(body),
+        }))
     }
 }
 

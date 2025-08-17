@@ -34,7 +34,6 @@ use datafusion_expr::{
     WindowFunctionDefinition,
 };
 
-use crate::protobuf::RecursionUnnestOption;
 use crate::protobuf::{
     self,
     plan_type::PlanTypeEnum::{
@@ -48,6 +47,7 @@ use crate::protobuf::{
     OptimizedLogicalPlanType, OptimizedPhysicalPlanType, PlaceholderNode, RollupNode,
     ToProtoError as Error,
 };
+use crate::protobuf::{LambdaNode, RecursionUnnestOption};
 
 use super::LogicalExtensionCodec;
 
@@ -610,6 +610,12 @@ pub fn serialize_expr(
                 })),
             }
         }
+        Expr::Lambda(lambda) => protobuf::LogicalExprNode {
+            expr_type: Some(ExprType::Lambda(Box::new(LambdaNode {
+                params: lambda.params.clone(),
+                body: Some(Box::new(serialize_expr(lambda.body.as_ref(), codec)?)),
+            }))),
+        },
     };
 
     Ok(expr_node)

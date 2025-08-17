@@ -304,7 +304,8 @@ pub fn expr_to_columns(expr: &Expr, accum: &mut HashSet<Column>) -> Result<()> {
             | Expr::ScalarSubquery(_)
             | Expr::Wildcard { .. }
             | Expr::Placeholder(_)
-            | Expr::OuterReferenceColumn { .. } => {}
+            | Expr::OuterReferenceColumn { .. }
+            | Expr::Lambda(..) => {}
         }
         Ok(TreeNodeRecursion::Continue)
     })

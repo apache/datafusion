@@ -365,6 +365,8 @@ pub enum Expr {
     OuterReferenceColumn(DataType, Column),
     /// Unnest expression
     Unnest(Unnest),
+    /// Lambda expression
+    Lambda(LambdaFunction),
 }
 
 impl Default for Expr {
@@ -1467,6 +1469,7 @@ impl Expr {
             #[expect(deprecated)]
             Expr::Wildcard { .. } => "Wildcard",
             Expr::Unnest { .. } => "Unnest",
+            Expr::Lambda(..) => "LambdaFunction",
         }
     }
 
@@ -2021,7 +2024,8 @@ impl Expr {
             | Expr::Wildcard { .. }
             | Expr::WindowFunction(..)
             | Expr::Literal(..)
-            | Expr::Placeholder(..) => false,
+            | Expr::Placeholder(..)
+            | Expr::Lambda(..) => false,
         }
     }
 
@@ -2608,6 +2612,12 @@ impl HashNode for Expr {
                 column.hash(state);
             }
             Expr::Unnest(Unnest { expr: _expr }) => {}
+            Expr::Lambda(LambdaFunction {
+                params: arguments,
+                body: _body,
+            }) => {
+                arguments.hash(state);
+            }
         };
     }
 }
@@ -2912,6 +2922,17 @@ impl Display for SchemaDisplay<'_> {
                     }
                 }
             }
+            Expr::Lambda(LambdaFunction {
+                params: arguments,
+                body,
+            }) => {
+                write!(
+                    f,
+                    "({arguments}) -> {body}",
+                    arguments = arguments.join(", "),
+                    body = SchemaDisplay(body)
+                )
+            }
         }
     }
 }
@@ -3146,6 +3167,25 @@ pub fn schema_name_from_exprs(exprs: &[Expr]) -> Result<String, fmt::Error> {
 }
 
 fn schema_name_from_exprs_inner(exprs: &[Expr], sep: &str) -> Result<String, fmt::Error> {
+    let mut s = String::new();
+    for (i, e) in exprs.iter().enumerate() {
+        if i > 0 {
+            write!(&mut s, "{sep}")?;
+        }
+        write!(&mut s, "{}", SchemaDisplay(e))?;
+    }
+
+    Ok(s)
+}
+
+pub fn schema_name_from_exprs_ref(exprs: &[&Expr]) -> Result<String, fmt::Error> {
+    schema_name_from_exprs_inner_ref(exprs, ", ")
+}
+
+fn schema_name_from_exprs_inner_ref(
+    exprs: &[&Expr],
+    sep: &str,
+) -> Result<String, fmt::Error> {
     let mut s = String::new();
     for (i, e) in exprs.iter().enumerate() {
         if i > 0 {
@@ -3398,7 +3438,27 @@ impl Display for Expr {
             Expr::Unnest(Unnest { expr }) => {
                 write!(f, "{UNNEST_COLUMN_PREFIX}({expr})")
             }
+            Expr::Lambda(LambdaFunction { params, body }) => {
+                write!(
+                    f,
+                    "({params}) -> {body}",
+                    params = params.join(", "),
+                    body = SchemaDisplay(body)
+                )
+            }
         }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
+pub struct LambdaFunction {
+    pub params: Vec<String>,
+    pub body: Box<Expr>,
+}
+
+impl LambdaFunction {
+    pub fn new(params: Vec<String>, body: Box<Expr>) -> Self {
+        Self { params, body }
     }
 }
 

@@ -34,6 +34,7 @@
 //!
 //! The [expr_fn] module contains functions for creating expressions.
 
+mod lambda;
 mod literal;
 mod operation;
 mod partition_evaluator;
@@ -97,6 +98,7 @@ pub use function::{
     AccumulatorFactoryFunction, PartitionEvaluatorFactory, ReturnTypeFunction,
     ScalarFunctionImplementation, StateTypeFunction,
 };
+pub use lambda::{LambdaPlanner, PhysicalLambda};
 pub use literal::{
     lit, lit_timestamp_nano, lit_with_metadata, Literal, TimestampLiteral,
 };
