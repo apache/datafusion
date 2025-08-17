@@ -61,7 +61,7 @@ use datafusion_sql::unparser::extension_unparser::{
     UnparseToStatementResult, UnparseWithinStatementResult,
     UserDefinedLogicalNodeUnparser,
 };
-use sqlparser::dialect::{Dialect, GenericDialect, MySqlDialect, DatabricksDialect};
+use sqlparser::dialect::{DatabricksDialect, Dialect, GenericDialect, MySqlDialect};
 use sqlparser::parser::Parser;
 
 #[test]

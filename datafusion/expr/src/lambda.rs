@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::fmt::Debug;
+
 use arrow::array::RecordBatch;
 use datafusion_common::{DFSchema, Result};
 use datafusion_expr_common::columnar_value::ColumnarValue;
@@ -22,7 +24,7 @@ use datafusion_expr_common::columnar_value::ColumnarValue;
 use crate::expr::LambdaFunction;
 
 /// Trait for planning lambda functions into their physical representation.
-/// 
+///
 /// This trait is implemented by query planners to convert logical lambda expressions
 /// into executable physical lambda functions that can be evaluated at runtime.
 pub trait LambdaPlanner {
@@ -42,17 +44,17 @@ pub trait LambdaPlanner {
 }
 
 /// Trait for physical lambda functions that can be executed on record batches.
-/// 
+///
 /// Physical lambda functions are the runtime representation of lambda expressions
 /// that have been planned and optimized for execution. They can evaluate lambda
 /// logic against columnar data in record batches.
-pub trait PhysicalLambda: Send + Sync {
+pub trait PhysicalLambda: Send + Sync + Debug {
     /// Returns the parameter names for this lambda function.
     ///
     /// # Returns
     /// A slice of parameter names that this lambda expects
     fn params(&self) -> &[String];
-    
+
     /// Evaluates the lambda function against a record batch.
     ///
     /// # Arguments

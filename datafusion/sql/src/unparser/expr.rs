@@ -128,7 +128,7 @@ impl Unparser<'_> {
                 let args = func
                     .args_with_lambda(args)?
                     .into_iter()
-                    .map(|e| e.clone())
+                    .cloned()
                     .collect::<Vec<_>>();
                 self.scalar_function_to_sql(func_name, &args)
             }

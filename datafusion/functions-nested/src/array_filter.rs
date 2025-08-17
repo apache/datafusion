@@ -33,7 +33,7 @@ use datafusion_expr::{Expr, LambdaPlanner, PhysicalLambda, ScalarUDF};
 use datafusion_macros::user_doc;
 
 use std::any::Any;
-use std::hash::{DefaultHasher, Hash as _, Hasher as _};
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use crate::utils::make_scalar_function;
@@ -46,10 +46,10 @@ make_udf_expr_and_func!(ArrayFilter,
 );
 
 /// Implementation of the `array_filter` scalar user-defined function.
-/// 
+///
 /// This function filters array elements using a lambda function, returning a new array
 /// containing only the elements for which the lambda function returns true.
-/// 
+///
 /// The struct maintains both logical and physical representations of the lambda:
 /// - `lambda`: The logical lambda expression from the SQL query
 /// - `physical_lambda`: The planned physical lambda that can be executed
@@ -81,6 +81,21 @@ pub struct ArrayFilter {
     physical_lambda: Option<Box<dyn PhysicalLambda>>,
 }
 
+impl PartialEq for ArrayFilter {
+    fn eq(&self, other: &Self) -> bool {
+        self.signature == other.signature && self.lambda == other.lambda
+    }
+}
+
+impl Hash for ArrayFilter {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.signature.hash(state);
+        self.lambda.hash(state);
+    }
+}
+
+impl Eq for ArrayFilter {}
+
 impl std::fmt::Debug for ArrayFilter {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ArrayFilter")
@@ -106,7 +121,7 @@ impl Default for ArrayFilter {
 
 impl ArrayFilter {
     /// Creates a new instance of ArrayFilter with default settings.
-    /// 
+    ///
     /// Initializes the function with an array signature and no lambda expressions.
     /// The lambda will be set later during query planning.
     pub fn new() -> Self {
@@ -118,10 +133,10 @@ impl ArrayFilter {
     }
 
     /// Creates a new ArrayFilter instance with a physical lambda attached.
-    /// 
+    ///
     /// This is used during query execution when the logical lambda has been
     /// planned into an executable physical lambda.
-    /// 
+    ///
     /// # Arguments
     /// * `physical_lambda` - The planned physical lambda function
     fn with_physical_lambda(&self, physical_lambda: Box<dyn PhysicalLambda>) -> Self {
@@ -133,10 +148,10 @@ impl ArrayFilter {
     }
 
     /// Creates a new ArrayFilter instance with a logical lambda expression.
-    /// 
+    ///
     /// This is used during query planning when the lambda expression has been
     /// parsed but not yet converted to a physical representation.
-    /// 
+    ///
     /// # Arguments  
     /// * `lambda` - The logical lambda expression from the SQL query
     fn with_lambda(&self, lambda: &Expr) -> Self {
@@ -225,8 +240,11 @@ impl ScalarUDFImpl for ArrayFilter {
     }
 
     fn display_name(&self, args: &[Expr]) -> Result<String> {
-        let names: Vec<String> =
-            self.args_with_lambda(args)?.iter().map(ToString::to_string).collect();
+        let names: Vec<String> = self
+            .args_with_lambda(args)?
+            .iter()
+            .map(ToString::to_string)
+            .collect();
         Ok(std::format!("{}({})", self.name(), names.join(", ")))
     }
 
@@ -265,27 +283,6 @@ impl ScalarUDFImpl for ArrayFilter {
             "Function {} does not implement coerce_types",
             self.name()
         )
-    }
-
-    fn equals(&self, other: &dyn ScalarUDFImpl) -> bool {
-        self.as_any().type_id() == other.as_any().type_id()
-            && self.name() == other.name()
-            && self.aliases() == other.aliases()
-            && self.signature() == other.signature()
-            && self.lambda.as_ref()
-                == other
-                    .as_any()
-                    .downcast_ref::<Self>()
-                    .unwrap()
-                    .lambda
-                    .as_ref()
-    }
-
-    fn hash_value(&self) -> u64 {
-        let hasher = &mut DefaultHasher::new();
-        self.as_any().type_id().hash(hasher);
-        self.lambda.as_ref().hash(hasher);
-        hasher.finish()
     }
 
     fn args_with_lambda<'a>(&'a self, args: &'a [Expr]) -> Result<Vec<&'a Expr>> {

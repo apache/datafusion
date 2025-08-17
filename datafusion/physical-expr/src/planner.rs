@@ -420,6 +420,7 @@ pub fn logical2physical(expr: &Expr, schema: &Schema) -> Arc<dyn PhysicalExpr> {
     create_physical_expr(expr, &df_schema, &execution_props).unwrap()
 }
 
+#[derive(Debug)]
 pub struct DefaultPhysicalLambda {
     params: Vec<String>,
     physical_expr: Arc<dyn PhysicalExpr>,
