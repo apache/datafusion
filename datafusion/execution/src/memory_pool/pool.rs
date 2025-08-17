@@ -378,10 +378,11 @@ impl TrackedConsumer {
 ///         if let Err(_) = self.reservation.try_grow(additional_memory) {
 ///             // Memory limit reached - handle by spilling or other strategy
 ///             self.spill_to_disk()?;
+///
+///             // Now safe to allocate and add the data
+///             self.reservation.try_grow(additional_memory)?;
 ///         }
 ///
-///         // Now safe to allocate and add the data
-///         self.reservation.try_grow(additional_memory)?;
 ///         self.buffer.extend_from_slice(&batch_data);
 ///         Ok(())
 ///     }
