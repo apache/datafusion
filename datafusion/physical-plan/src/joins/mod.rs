@@ -19,7 +19,6 @@
 
 use arrow::array::BooleanBufferBuilder;
 pub use cross_join::CrossJoinExec;
-use datafusion_physical_expr::PhysicalExprRef;
 pub use hash_join::HashJoinExec;
 pub use nested_loop_join::NestedLoopJoinExec;
 use parking_lot::Mutex;
@@ -39,11 +38,6 @@ mod join_hash_map;
 
 #[cfg(test)]
 pub mod test_utils;
-
-/// The on clause of the join, as vector of (left, right) columns.
-pub type JoinOn = Vec<(PhysicalExprRef, PhysicalExprRef)>;
-/// Reference for JoinOn.
-pub type JoinOnRef<'a> = &'a [(PhysicalExprRef, PhysicalExprRef)];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 /// Hash join Partitioning mode

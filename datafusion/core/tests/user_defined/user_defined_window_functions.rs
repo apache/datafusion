@@ -633,7 +633,7 @@ fn odd_count(arr: &Int64Array) -> i64 {
 
 /// returns an array of num_rows that has the number of odd values in `arr`
 fn odd_count_arr(arr: &Int64Array, num_rows: usize) -> ArrayRef {
-    let array: Int64Array = std::iter::repeat_n(odd_count(arr), num_rows).collect();
+    let array: Int64Array = std::iter::repeat(odd_count(arr)).take(num_rows).collect();
     Arc::new(array)
 }
 

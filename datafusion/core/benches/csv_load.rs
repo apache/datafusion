@@ -32,12 +32,8 @@ use std::time::Duration;
 use test_utils::AccessLogGenerator;
 use tokio::runtime::Runtime;
 
-fn load_csv(
-    ctx: Arc<Mutex<SessionContext>>,
-    rt: &Runtime,
-    path: &str,
-    options: CsvReadOptions,
-) {
+fn load_csv(ctx: Arc<Mutex<SessionContext>>, path: &str, options: CsvReadOptions) {
+    let rt = Runtime::new().unwrap();
     let df = rt.block_on(ctx.lock().read_csv(path, options)).unwrap();
     criterion::black_box(rt.block_on(df.collect()).unwrap());
 }
@@ -65,7 +61,6 @@ fn generate_test_file() -> TestCsvFile {
 
 fn criterion_benchmark(c: &mut Criterion) {
     let ctx = create_context().unwrap();
-    let rt = Runtime::new().unwrap();
     let test_file = generate_test_file();
 
     let mut group = c.benchmark_group("load csv testing");
@@ -75,7 +70,6 @@ fn criterion_benchmark(c: &mut Criterion) {
         b.iter(|| {
             load_csv(
                 ctx.clone(),
-                &rt,
                 test_file.path().to_str().unwrap(),
                 CsvReadOptions::default(),
             )
@@ -86,7 +80,6 @@ fn criterion_benchmark(c: &mut Criterion) {
         b.iter(|| {
             load_csv(
                 ctx.clone(),
-                &rt,
                 test_file.path().to_str().unwrap(),
                 CsvReadOptions::default().null_regex(Some("^NULL$|^$".to_string())),
             )

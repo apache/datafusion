@@ -611,7 +611,7 @@ fn make_bytearray_batch(
     large_binary_values: Vec<&[u8]>,
 ) -> RecordBatch {
     let num_rows = string_values.len();
-    let name: StringArray = std::iter::repeat_n(Some(name), num_rows).collect();
+    let name: StringArray = std::iter::repeat(Some(name)).take(num_rows).collect();
     let service_string: StringArray = string_values.iter().map(Some).collect();
     let service_binary: BinaryArray = binary_values.iter().map(Some).collect();
     let service_fixedsize: FixedSizeBinaryArray = fixedsize_values
@@ -659,7 +659,7 @@ fn make_bytearray_batch(
 /// name | service.name
 fn make_names_batch(name: &str, service_name_values: Vec<&str>) -> RecordBatch {
     let num_rows = service_name_values.len();
-    let name: StringArray = std::iter::repeat_n(Some(name), num_rows).collect();
+    let name: StringArray = std::iter::repeat(Some(name)).take(num_rows).collect();
     let service_name: StringArray = service_name_values.iter().map(Some).collect();
 
     let schema = Schema::new(vec![
@@ -698,7 +698,7 @@ fn make_int_batches_with_null(
                 Int8Array::from_iter(
                     v8.into_iter()
                         .map(Some)
-                        .chain(std::iter::repeat_n(None, null_values)),
+                        .chain(std::iter::repeat(None).take(null_values)),
                 )
                 .to_data(),
             ),
@@ -706,7 +706,7 @@ fn make_int_batches_with_null(
                 Int16Array::from_iter(
                     v16.into_iter()
                         .map(Some)
-                        .chain(std::iter::repeat_n(None, null_values)),
+                        .chain(std::iter::repeat(None).take(null_values)),
                 )
                 .to_data(),
             ),
@@ -714,7 +714,7 @@ fn make_int_batches_with_null(
                 Int32Array::from_iter(
                     v32.into_iter()
                         .map(Some)
-                        .chain(std::iter::repeat_n(None, null_values)),
+                        .chain(std::iter::repeat(None).take(null_values)),
                 )
                 .to_data(),
             ),
@@ -722,7 +722,7 @@ fn make_int_batches_with_null(
                 Int64Array::from_iter(
                     v64.into_iter()
                         .map(Some)
-                        .chain(std::iter::repeat_n(None, null_values)),
+                        .chain(std::iter::repeat(None).take(null_values)),
                 )
                 .to_data(),
             ),

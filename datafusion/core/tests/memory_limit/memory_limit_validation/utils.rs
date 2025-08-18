@@ -18,7 +18,7 @@
 use datafusion_common_runtime::SpawnedTask;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System};
+use sysinfo::System;
 use tokio::time::{interval, Duration};
 
 use datafusion::prelude::{SessionConfig, SessionContext};
@@ -62,11 +62,7 @@ where
 
         loop {
             interval.tick().await;
-            sys.refresh_processes_specifics(
-                ProcessesToUpdate::Some(&[pid]),
-                true,
-                ProcessRefreshKind::nothing().with_memory(),
-            );
+            sys.refresh_all();
             if let Some(process) = sys.process(pid) {
                 let rss_bytes = process.memory();
                 max_rss_clone
@@ -120,8 +116,8 @@ where
 /// # Example
 ///
 ///     utils::validate_query_with_memory_limits(
-///         40_000_000 * 2,
-///         Some(40_000_000),
+///         40_000_000 * 2,                   
+///         Some(40_000_000),              
 ///         "SELECT * FROM generate_series(1, 100000000) AS t(i) ORDER BY i",
 ///         "SELECT * FROM generate_series(1, 10000000) AS t(i) ORDER BY i"
 ///     );

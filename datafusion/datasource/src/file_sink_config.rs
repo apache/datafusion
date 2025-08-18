@@ -89,7 +89,6 @@ pub trait FileSink: DataSink {
 
 /// The base configurations to provide when creating a physical plan for
 /// writing to any given file format.
-#[derive(Debug, Clone)]
 pub struct FileSinkConfig {
     /// The unresolved URL specified by the user
     pub original_url: String,

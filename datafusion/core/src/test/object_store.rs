@@ -66,7 +66,7 @@ pub fn local_unpartitioned_file(path: impl AsRef<std::path::Path>) -> ObjectMeta
     ObjectMeta {
         location,
         last_modified: metadata.modified().map(chrono::DateTime::from).unwrap(),
-        size: metadata.len(),
+        size: metadata.len() as usize,
         e_tag: None,
         version: None,
     }
@@ -166,7 +166,7 @@ impl ObjectStore for BlockingObjectStore {
     fn list(
         &self,
         prefix: Option<&Path>,
-    ) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
+    ) -> BoxStream<'_, object_store::Result<ObjectMeta>> {
         self.inner.list(prefix)
     }
 

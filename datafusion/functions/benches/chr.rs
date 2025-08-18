@@ -17,20 +17,14 @@
 
 extern crate criterion;
 
-use arrow::{array::PrimitiveArray, datatypes::Int64Type};
+use arrow::{array::PrimitiveArray, datatypes::Int64Type, util::test_util::seedable_rng};
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::string::chr;
-use rand::{Rng, SeedableRng};
+use rand::Rng;
 
 use arrow::datatypes::DataType;
-use rand::rngs::StdRng;
 use std::sync::Arc;
-
-/// Returns fixed seedable RNG
-pub fn seedable_rng() -> StdRng {
-    StdRng::seed_from_u64(42)
-}
 
 fn criterion_benchmark(c: &mut Criterion) {
     let cot_fn = chr();

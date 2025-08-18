@@ -44,8 +44,7 @@ mod context_generator;
 mod data_generator;
 mod fuzzer;
 
-pub use crate::fuzz_cases::record_batch_generator::ColumnDescr;
-pub use data_generator::DatasetGeneratorConfig;
+pub use data_generator::{ColumnDescr, DatasetGeneratorConfig};
 pub use fuzzer::*;
 
 #[derive(Debug)]

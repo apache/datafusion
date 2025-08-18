@@ -209,10 +209,10 @@ impl ListingTableUrl {
     /// assert_eq!(url.file_extension(), None);
     /// ```
     pub fn file_extension(&self) -> Option<&str> {
-        if let Some(mut segments) = self.url.path_segments() {
-            if let Some(last_segment) = segments.next_back() {
+        if let Some(segments) = self.url.path_segments() {
+            if let Some(last_segment) = segments.last() {
                 if last_segment.contains(".") && !last_segment.ends_with(".") {
-                    return last_segment.split('.').next_back();
+                    return last_segment.split('.').last();
                 }
             }
         }

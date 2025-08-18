@@ -704,7 +704,6 @@ impl FileOpener for CsvOpener {
             let result = store.get_opts(file_meta.location(), options).await?;
 
             match result.payload {
-                #[cfg(not(target_arch = "wasm32"))]
                 GetResultPayload::File(mut file, _) => {
                     let is_whole_file_scanned = file_meta.range.is_none();
                     let decoder = if is_whole_file_scanned {

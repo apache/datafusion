@@ -50,7 +50,6 @@ pub use crate::ordering::InputOrderMode;
 pub use crate::stream::EmptyRecordBatchStream;
 pub use crate::topk::TopK;
 pub use crate::visitor::{accept, visit_execution_plan, ExecutionPlanVisitor};
-pub use spill::spill_manager::SpillManager;
 
 mod ordering;
 mod render_tree;
@@ -67,7 +66,6 @@ pub mod empty;
 pub mod execution_plan;
 pub mod explain;
 pub mod filter;
-pub mod filter_pushdown;
 pub mod joins;
 pub mod limit;
 pub mod memory;

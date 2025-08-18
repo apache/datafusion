@@ -52,7 +52,7 @@ async fn get_parquet_exec(state: &SessionState, filter: Expr) -> DataSourceExec 
     let meta = ObjectMeta {
         location,
         last_modified: metadata.modified().map(chrono::DateTime::from).unwrap(),
-        size: metadata.len(),
+        size: metadata.len() as usize,
         e_tag: None,
         version: None,
     };

@@ -444,7 +444,8 @@ pub fn build_sides_record_batches(
             .collect::<Vec<i32>>(),
     ));
     let ordered_asc_null_first = Arc::new(Int32Array::from_iter({
-        std::iter::repeat_n(None, index as usize)
+        std::iter::repeat(None)
+            .take(index as usize)
             .chain(rest_of.clone().map(Some))
             .collect::<Vec<Option<i32>>>()
     }));
@@ -452,12 +453,13 @@ pub fn build_sides_record_batches(
         rest_of
             .clone()
             .map(Some)
-            .chain(std::iter::repeat_n(None, index as usize))
+            .chain(std::iter::repeat(None).take(index as usize))
             .collect::<Vec<Option<i32>>>()
     }));
 
     let ordered_desc_null_first = Arc::new(Int32Array::from_iter({
-        std::iter::repeat_n(None, index as usize)
+        std::iter::repeat(None)
+            .take(index as usize)
             .chain(rest_of.rev().map(Some))
             .collect::<Vec<Option<i32>>>()
     }));

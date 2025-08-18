@@ -49,12 +49,7 @@ impl InProgressSpillFile {
         }
     }
 
-    /// Appends a `RecordBatch` to the spill file, initializing the writer if necessary.
-    ///
-    /// # Errors
-    /// - Returns an error if the file is not active (has been finalized)
-    /// - Returns an error if appending would exceed the disk usage limit configured
-    ///   by `max_temp_directory_size` in `DiskManager`
+    /// Appends a `RecordBatch` to the file, initializing the writer if necessary.
     pub fn append_batch(&mut self, batch: &RecordBatch) -> Result<()> {
         if self.in_progress_file.is_none() {
             return Err(exec_datafusion_err!(
@@ -75,11 +70,6 @@ impl InProgressSpillFile {
         }
         if let Some(writer) = &mut self.writer {
             let (spilled_rows, spilled_bytes) = writer.write(batch)?;
-            if let Some(in_progress_file) = &mut self.in_progress_file {
-                in_progress_file.update_disk_usage()?;
-            } else {
-                unreachable!() // Already checked inside current function
-            }
 
             // Update metrics
             self.spill_writer.metrics.spilled_bytes.add(spilled_bytes);

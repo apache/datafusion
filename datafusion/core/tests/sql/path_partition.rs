@@ -712,7 +712,7 @@ impl ObjectStore for MirroringObjectStore {
         let meta = ObjectMeta {
             location: location.clone(),
             last_modified: metadata.modified().map(chrono::DateTime::from).unwrap(),
-            size: metadata.len(),
+            size: metadata.len() as usize,
             e_tag: None,
             version: None,
         };
@@ -728,15 +728,14 @@ impl ObjectStore for MirroringObjectStore {
     async fn get_range(
         &self,
         location: &Path,
-        range: Range<u64>,
+        range: Range<usize>,
     ) -> object_store::Result<Bytes> {
         self.files.iter().find(|x| *x == location).unwrap();
         let path = std::path::PathBuf::from(&self.mirrored_file);
         let mut file = File::open(path).unwrap();
-        file.seek(SeekFrom::Start(range.start)).unwrap();
+        file.seek(SeekFrom::Start(range.start as u64)).unwrap();
 
         let to_read = range.end - range.start;
-        let to_read: usize = to_read.try_into().unwrap();
         let mut data = Vec::with_capacity(to_read);
         let read = file.take(to_read as u64).read_to_end(&mut data).unwrap();
         assert_eq!(read, to_read);
@@ -751,10 +750,9 @@ impl ObjectStore for MirroringObjectStore {
     fn list(
         &self,
         prefix: Option<&Path>,
-    ) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
+    ) -> BoxStream<'_, object_store::Result<ObjectMeta>> {
         let prefix = prefix.cloned().unwrap_or_default();
-        let size = self.file_size;
-        Box::pin(stream::iter(self.files.clone().into_iter().filter_map(
+        Box::pin(stream::iter(self.files.iter().filter_map(
             move |location| {
                 // Don't return for exact prefix match
                 let filter = location
@@ -764,9 +762,9 @@ impl ObjectStore for MirroringObjectStore {
 
                 filter.then(|| {
                     Ok(ObjectMeta {
-                        location,
+                        location: location.clone(),
                         last_modified: Utc.timestamp_nanos(0),
-                        size,
+                        size: self.file_size as usize,
                         e_tag: None,
                         version: None,
                     })
@@ -804,7 +802,7 @@ impl ObjectStore for MirroringObjectStore {
                 let object = ObjectMeta {
                     location: k.clone(),
                     last_modified: Utc.timestamp_nanos(0),
-                    size: self.file_size,
+                    size: self.file_size as usize,
                     e_tag: None,
                     version: None,
                 };

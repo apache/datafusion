@@ -31,14 +31,10 @@ use datafusion_physical_plan::{
 
 use crate::file_scan_config::FileScanConfig;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::{Constraints, Result, Statistics};
+use datafusion_common::{Constraints, Statistics};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
-use datafusion_physical_plan::filter_pushdown::{
-    filter_pushdown_not_supported, FilterDescription, FilterPushdownResult,
-    FilterPushdownSupport,
-};
 
 /// Common behaviors in Data Sources for both from Files and Memory.
 ///
@@ -55,7 +51,7 @@ pub trait DataSource: Send + Sync + Debug {
         &self,
         partition: usize,
         context: Arc<TaskContext>,
-    ) -> Result<SendableRecordBatchStream>;
+    ) -> datafusion_common::Result<SendableRecordBatchStream>;
     fn as_any(&self) -> &dyn Any;
     /// Format this source for display in explain plans
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> fmt::Result;
@@ -66,13 +62,13 @@ pub trait DataSource: Send + Sync + Debug {
         _target_partitions: usize,
         _repartition_file_min_size: usize,
         _output_ordering: Option<LexOrdering>,
-    ) -> Result<Option<Arc<dyn DataSource>>> {
+    ) -> datafusion_common::Result<Option<Arc<dyn DataSource>>> {
         Ok(None)
     }
 
     fn output_partitioning(&self) -> Partitioning;
     fn eq_properties(&self) -> EquivalenceProperties;
-    fn statistics(&self) -> Result<Statistics>;
+    fn statistics(&self) -> datafusion_common::Result<Statistics>;
     /// Return a copy of this DataSource with a new fetch limit
     fn with_fetch(&self, _limit: Option<usize>) -> Option<Arc<dyn DataSource>>;
     fn fetch(&self) -> Option<usize>;
@@ -82,16 +78,7 @@ pub trait DataSource: Send + Sync + Debug {
     fn try_swapping_with_projection(
         &self,
         _projection: &ProjectionExec,
-    ) -> Result<Option<Arc<dyn ExecutionPlan>>>;
-    /// Try to push down filters into this DataSource.
-    /// See [`ExecutionPlan::try_pushdown_filters`] for more details.
-    fn try_pushdown_filters(
-        &self,
-        fd: FilterDescription,
-        _config: &ConfigOptions,
-    ) -> Result<FilterPushdownResult<Arc<dyn DataSource>>> {
-        Ok(filter_pushdown_not_supported(fd))
-    }
+    ) -> datafusion_common::Result<Option<Arc<dyn ExecutionPlan>>>;
 }
 
 /// [`ExecutionPlan`] handles different file formats like JSON, CSV, AVRO, ARROW, PARQUET
@@ -144,7 +131,7 @@ impl ExecutionPlan for DataSourceExec {
     fn with_new_children(
         self: Arc<Self>,
         _: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
+    ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
         Ok(self)
     }
 
@@ -152,7 +139,7 @@ impl ExecutionPlan for DataSourceExec {
         &self,
         target_partitions: usize,
         config: &ConfigOptions,
-    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+    ) -> datafusion_common::Result<Option<Arc<dyn ExecutionPlan>>> {
         let data_source = self.data_source.repartitioned(
             target_partitions,
             config.optimizer.repartition_file_min_size,
@@ -176,7 +163,7 @@ impl ExecutionPlan for DataSourceExec {
         &self,
         partition: usize,
         context: Arc<TaskContext>,
-    ) -> Result<SendableRecordBatchStream> {
+    ) -> datafusion_common::Result<SendableRecordBatchStream> {
         self.data_source.open(partition, context)
     }
 
@@ -184,7 +171,7 @@ impl ExecutionPlan for DataSourceExec {
         Some(self.data_source.metrics().clone_inner())
     }
 
-    fn statistics(&self) -> Result<Statistics> {
+    fn statistics(&self) -> datafusion_common::Result<Statistics> {
         self.data_source.statistics()
     }
 
@@ -202,44 +189,8 @@ impl ExecutionPlan for DataSourceExec {
     fn try_swapping_with_projection(
         &self,
         projection: &ProjectionExec,
-    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+    ) -> datafusion_common::Result<Option<Arc<dyn ExecutionPlan>>> {
         self.data_source.try_swapping_with_projection(projection)
-    }
-
-    fn try_pushdown_filters(
-        &self,
-        fd: FilterDescription,
-        config: &ConfigOptions,
-    ) -> Result<FilterPushdownResult<Arc<dyn ExecutionPlan>>> {
-        let FilterPushdownResult {
-            support,
-            remaining_description,
-        } = self.data_source.try_pushdown_filters(fd, config)?;
-
-        match support {
-            FilterPushdownSupport::Supported {
-                child_descriptions,
-                op,
-                revisit,
-            } => {
-                let new_exec = Arc::new(DataSourceExec::new(op));
-
-                debug_assert!(child_descriptions.is_empty());
-                debug_assert!(!revisit);
-
-                Ok(FilterPushdownResult {
-                    support: FilterPushdownSupport::Supported {
-                        child_descriptions,
-                        op: new_exec,
-                        revisit,
-                    },
-                    remaining_description,
-                })
-            }
-            FilterPushdownSupport::NotSupported => {
-                Ok(filter_pushdown_not_supported(remaining_description))
-            }
-        }
     }
 }
 
@@ -301,15 +252,5 @@ impl DataSourceExec {
                     .downcast_ref::<T>()
                     .map(|source| (file_scan_conf, source))
             })
-    }
-}
-
-/// Create a new `DataSourceExec` from a `DataSource`
-impl<S> From<S> for DataSourceExec
-where
-    S: DataSource + 'static,
-{
-    fn from(source: S) -> Self {
-        Self::new(Arc::new(source))
     }
 }

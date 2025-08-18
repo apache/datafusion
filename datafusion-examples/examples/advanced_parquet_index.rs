@@ -571,9 +571,7 @@ impl ParquetFileReaderFactory for CachedParquetFileReaderFactory {
             .to_string();
 
         let object_store = Arc::clone(&self.object_store);
-        let mut inner =
-            ParquetObjectReader::new(object_store, file_meta.object_meta.location)
-                .with_file_size(file_meta.object_meta.size);
+        let mut inner = ParquetObjectReader::new(object_store, file_meta.object_meta);
 
         if let Some(hint) = metadata_size_hint {
             inner = inner.with_footer_size_hint(hint)
@@ -601,7 +599,7 @@ struct ParquetReaderWithCache {
 impl AsyncFileReader for ParquetReaderWithCache {
     fn get_bytes(
         &mut self,
-        range: Range<u64>,
+        range: Range<usize>,
     ) -> BoxFuture<'_, datafusion::parquet::errors::Result<Bytes>> {
         println!("get_bytes: {} Reading range {:?}", self.filename, range);
         self.inner.get_bytes(range)
@@ -609,7 +607,7 @@ impl AsyncFileReader for ParquetReaderWithCache {
 
     fn get_byte_ranges(
         &mut self,
-        ranges: Vec<Range<u64>>,
+        ranges: Vec<Range<usize>>,
     ) -> BoxFuture<'_, datafusion::parquet::errors::Result<Vec<Bytes>>> {
         println!(
             "get_byte_ranges: {} Reading ranges {:?}",
@@ -620,7 +618,6 @@ impl AsyncFileReader for ParquetReaderWithCache {
 
     fn get_metadata(
         &mut self,
-        _options: Option<&ArrowReaderOptions>,
     ) -> BoxFuture<'_, datafusion::parquet::errors::Result<Arc<ParquetMetaData>>> {
         println!("get_metadata: {} returning cached metadata", self.filename);
 

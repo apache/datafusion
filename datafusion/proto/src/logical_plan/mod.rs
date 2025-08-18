@@ -33,7 +33,7 @@ use crate::{
 };
 
 use crate::protobuf::{proto_error, ToProtoError};
-use arrow::datatypes::{DataType, Schema, SchemaBuilder, SchemaRef};
+use arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion::datasource::cte_worktable::CteWorkTable;
 #[cfg(feature = "avro")]
 use datafusion::datasource::file_format::avro::AvroFormat;
@@ -355,7 +355,10 @@ impl AsLogicalPlan for LogicalPlanNode {
                     .as_ref()
                     .map(|expr| from_proto::parse_expr(expr, ctx, extension_codec))
                     .transpose()?
-                    .ok_or_else(|| proto_error("expression required"))?;
+                    .ok_or_else(|| {
+                        DataFusionError::Internal("expression required".to_string())
+                    })?;
+                // .try_into()?;
                 LogicalPlanBuilder::from(input).filter(expr)?.build()
             }
             LogicalPlanType::Window(window) => {
@@ -455,25 +458,23 @@ impl AsLogicalPlan for LogicalPlanNode {
                     .map(ListingTableUrl::parse)
                     .collect::<Result<Vec<_>, _>>()?;
 
-                let partition_columns = scan
-                    .table_partition_cols
-                    .iter()
-                    .map(|col| {
-                        let Some(arrow_type) = col.arrow_type.as_ref() else {
-                            return Err(proto_error(
-                                "Missing Arrow type in partition columns",
-                            ));
-                        };
-                        let arrow_type = DataType::try_from(arrow_type).map_err(|e| {
-                            proto_error(format!("Received an unknown ArrowType: {}", e))
-                        })?;
-                        Ok((col.name.clone(), arrow_type))
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-
                 let options = ListingOptions::new(file_format)
                     .with_file_extension(&scan.file_extension)
-                    .with_table_partition_cols(partition_columns)
+                    .with_table_partition_cols(
+                        scan.table_partition_cols
+                            .iter()
+                            .map(|col| {
+                                (
+                                    col.clone(),
+                                    schema
+                                        .field_with_name(col)
+                                        .unwrap()
+                                        .data_type()
+                                        .clone(),
+                                )
+                            })
+                            .collect(),
+                    )
                     .with_collect_stat(scan.collect_stat)
                     .with_target_partitions(scan.target_partitions as usize)
                     .with_file_sort_order(all_sort_orders);
@@ -1045,6 +1046,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                         })
                     }
                 };
+                let schema: protobuf::Schema = schema.as_ref().try_into()?;
 
                 let filters: Vec<protobuf::LogicalExprNode> =
                     serialize_exprs(filters, extension_codec)?;
@@ -1097,21 +1099,6 @@ impl AsLogicalPlan for LogicalPlanNode {
 
                     let options = listing_table.options();
 
-                    let mut builder = SchemaBuilder::from(schema.as_ref());
-                    for (idx, field) in schema.fields().iter().enumerate().rev() {
-                        if options
-                            .table_partition_cols
-                            .iter()
-                            .any(|(name, _)| name == field.name())
-                        {
-                            builder.remove(idx);
-                        }
-                    }
-
-                    let schema = builder.finish();
-
-                    let schema: protobuf::Schema = (&schema).try_into()?;
-
                     let mut exprs_vec: Vec<SortExprNodeCollection> = vec![];
                     for order in &options.file_sort_order {
                         let expr_vec = SortExprNodeCollection {
@@ -1120,24 +1107,6 @@ impl AsLogicalPlan for LogicalPlanNode {
                         exprs_vec.push(expr_vec);
                     }
 
-                    let partition_columns = options
-                        .table_partition_cols
-                        .iter()
-                        .map(|(name, arrow_type)| {
-                            let arrow_type = protobuf::ArrowType::try_from(arrow_type)
-                                .map_err(|e| {
-                                    proto_error(format!(
-                                        "Received an unknown ArrowType: {}",
-                                        e
-                                    ))
-                                })?;
-                            Ok(protobuf::PartitionColumn {
-                                name: name.clone(),
-                                arrow_type: Some(arrow_type),
-                            })
-                        })
-                        .collect::<Result<Vec<_>>>()?;
-
                     Ok(LogicalPlanNode {
                         logical_plan_type: Some(LogicalPlanType::ListingScan(
                             protobuf::ListingTableScanNode {
@@ -1145,7 +1114,11 @@ impl AsLogicalPlan for LogicalPlanNode {
                                 table_name: Some(table_name.clone().into()),
                                 collect_stat: options.collect_stat,
                                 file_extension: options.file_extension.clone(),
-                                table_partition_cols: partition_columns,
+                                table_partition_cols: options
+                                    .table_partition_cols
+                                    .iter()
+                                    .map(|x| x.0.clone())
+                                    .collect::<Vec<_>>(),
                                 paths: listing_table
                                     .table_paths()
                                     .iter()
@@ -1160,7 +1133,6 @@ impl AsLogicalPlan for LogicalPlanNode {
                         )),
                     })
                 } else if let Some(view_table) = source.downcast_ref::<ViewTable>() {
-                    let schema: protobuf::Schema = schema.as_ref().try_into()?;
                     Ok(LogicalPlanNode {
                         logical_plan_type: Some(LogicalPlanType::ViewScan(Box::new(
                             protobuf::ViewTableScanNode {
@@ -1195,7 +1167,6 @@ impl AsLogicalPlan for LogicalPlanNode {
                         )),
                     })
                 } else {
-                    let schema: protobuf::Schema = schema.as_ref().try_into()?;
                     let mut bytes = vec![];
                     extension_codec
                         .try_encode_table_provider(table_name, provider, &mut bytes)

@@ -102,7 +102,7 @@ impl TestParquetFile {
 
         println!("Generated test dataset with {num_rows} rows");
 
-        let size = std::fs::metadata(&path)?.len();
+        let size = std::fs::metadata(&path)?.len() as usize;
 
         let mut canonical_path = path.canonicalize()?;
 
