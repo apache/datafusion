@@ -1812,7 +1812,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 let value_string = match &values[0] {
                     SQLExpr::Identifier(i) => ident_to_string(i),
                     SQLExpr::Value(v) => match crate::utils::value_to_string(&v.value) {
-                        None => return plan_err!("Unsupported value {:?}", v),
+                        None => {
+                            return plan_err!("Unsupported value {:?}", v.value);
+                        }
                         Some(s) => s,
                     },
                     SQLExpr::UnaryOp { op, expr } => match op {
