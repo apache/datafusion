@@ -47,7 +47,7 @@ use arrow::datatypes::{SchemaRef, UInt32Type};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::stats::Precision;
 use datafusion_common::utils::transpose;
-use datafusion_common::{internal_err, HashMap};
+use datafusion_common::{internal_err, ColumnStatistics, HashMap};
 use datafusion_common::{not_impl_err, DataFusionError, Result};
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::memory_pool::MemoryConsumer;
@@ -780,14 +780,12 @@ impl ExecutionPlan for RepartitionExec {
                 .map(|bytes| Precision::Inexact(bytes / partition_count))
                 .unwrap_or(Precision::Absent);
 
-            // Make all column stats absent
-            for col_stats in &mut stats.column_statistics {
-                col_stats.null_count = Precision::Absent;
-                col_stats.max_value = Precision::Absent;
-                col_stats.min_value = Precision::Absent;
-                col_stats.sum_value = Precision::Absent;
-                col_stats.distinct_count = Precision::Absent;
-            }
+            // Make all column stats unknown
+            stats.column_statistics = stats
+                .column_statistics
+                .iter()
+                .map(|_| ColumnStatistics::new_unknown())
+                .collect();
 
             Ok(stats)
         } else {

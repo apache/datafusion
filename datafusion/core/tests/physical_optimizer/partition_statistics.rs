@@ -782,20 +782,8 @@ mod test {
             num_rows: Precision::Inexact(1),
             total_byte_size: Precision::Inexact(73),
             column_statistics: vec![
-                ColumnStatistics {
-                    null_count: Precision::Absent,
-                    max_value: Precision::Absent,
-                    min_value: Precision::Absent,
-                    sum_value: Precision::Absent,
-                    distinct_count: Precision::Absent,
-                },
-                ColumnStatistics {
-                    null_count: Precision::Absent,
-                    max_value: Precision::Absent,
-                    min_value: Precision::Absent,
-                    sum_value: Precision::Absent,
-                    distinct_count: Precision::Absent,
-                },
+                ColumnStatistics::new_unknown(),
+                ColumnStatistics::new_unknown(),
             ],
         };
 
