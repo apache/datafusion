@@ -33,8 +33,6 @@ pub struct LimitedBatchCoalescer {
     fetch: Option<usize>,
     /// Indicates if the coalescer is finished
     finished: bool,
-    /// The biggest size of the coalesced batch
-    biggest_coalesce_size: usize,
 }
 
 /// Status returned by [`LimitedBatchCoalescer::push_batch`]
@@ -56,18 +54,17 @@ impl LimitedBatchCoalescer {
     /// - `target_batch_size` - the minimum number of rows for each
     ///   output batch (until limit reached)
     /// - `fetch` - the maximum number of rows to fetch, `None` means fetch all rows
-    /// - `biggest_coalesce_size` - the max size of the batch to coalesce, now it's fixed to `target_batch_size / 2`
     pub fn new(
         schema: SchemaRef,
         target_batch_size: usize,
         fetch: Option<usize>,
     ) -> Self {
         Self {
-            inner: BatchCoalescer::new(schema, target_batch_size),
+            inner: BatchCoalescer::new(schema, target_batch_size)
+                .with_biggest_coalesce_batch_size(Some(target_batch_size / 2)),
             total_rows: 0,
             fetch,
             finished: false,
-            biggest_coalesce_size: target_batch_size / 2,
         }
     }
 
@@ -119,12 +116,7 @@ impl LimitedBatchCoalescer {
 
         // Limit not reached, push the entire batch
         self.total_rows += batch.num_rows();
-
-        if batch.num_rows() >= self.biggest_coalesce_size {
-            self.inner.flush_buffer_and_push_batch_to_completed(batch)?;
-        } else {
-            self.inner.push_batch(batch)?;
-        }
+        self.inner.push_batch(batch)?;
 
         Ok(PushBatchStatus::Continue)
     }
