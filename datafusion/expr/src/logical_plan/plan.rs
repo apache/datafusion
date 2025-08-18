@@ -31,7 +31,10 @@ use super::invariants::{
 };
 use super::DdlStatement;
 use crate::builder::{change_redundant_column, unnest_with_options};
-use crate::expr::{Placeholder, Sort as SortExpr, WindowFunction, WindowFunctionParams};
+use crate::expr::{
+    intersect_for_union, Placeholder, Sort as SortExpr, WindowFunction,
+    WindowFunctionParams,
+};
 use crate::expr_rewriter::{
     create_col_from_scalar_expr, normalize_cols, normalize_sorts, NamePreserver,
 };
@@ -2896,16 +2899,7 @@ impl Union {
 fn intersect_maps<'a>(
     inputs: impl IntoIterator<Item = &'a HashMap<String, String>>,
 ) -> HashMap<String, String> {
-    let mut inputs = inputs.into_iter();
-    let mut merged: HashMap<String, String> = inputs.next().cloned().unwrap_or_default();
-    for input in inputs {
-        // The extra dereference below (`&*v`) is a workaround for https://github.com/rkyv/rkyv/issues/434.
-        // When this crate is used in a workspace that enables the `rkyv-64` feature in the `chrono` crate,
-        // this triggers a Rust compilation error:
-        // error[E0277]: can't compare `Option<&std::string::String>` with `Option<&mut std::string::String>`.
-        merged.retain(|k, v| input.get(k) == Some(&*v));
-    }
-    merged
+    intersect_for_union(inputs)
 }
 
 // Manual implementation needed because of `schema` field. Comparison excludes this field.
