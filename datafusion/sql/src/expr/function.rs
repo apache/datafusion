@@ -120,7 +120,7 @@ impl FunctionArgs {
                 null_treatment,
                 distinct: false,
                 within_group,
-                function_without_parenthesis: matches!(args, FunctionArguments::None),
+                function_without_parentheses: matches!(args, FunctionArguments::None),
             });
         };
 
@@ -202,7 +202,7 @@ impl FunctionArgs {
             null_treatment,
             distinct,
             within_group,
-            function_without_parenthesis: false,
+            function_without_parentheses: false,
         })
     }
 }
@@ -224,7 +224,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             null_treatment,
             distinct,
             within_group,
-            function_without_parenthesis,
+            function_without_parentheses,
         } = function_args;
 
         if over.is_some() && !within_group.is_empty() {
@@ -477,7 +477,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         }
 
         // workaround for https://github.com/apache/datafusion-sqlparser-rs/issues/1909
-        if function_without_parenthesis {
+        if function_without_parentheses {
             let maybe_ids = object_name
                 .0
                 .iter()
