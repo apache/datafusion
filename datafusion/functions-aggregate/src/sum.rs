@@ -17,6 +17,7 @@
 
 //! Defines `SUM` and `SUM DISTINCT` aggregate accumulators
 
+use ahash::RandomState;
 use datafusion_expr::utils::AggregateOrderSensitivity;
 use std::any::Any;
 use std::mem::size_of_val;
@@ -24,7 +25,6 @@ use std::mem::size_of_val;
 use arrow::array::Array;
 use arrow::array::ArrowNativeTypeOp;
 use arrow::array::{ArrowNumericType, AsArray};
-use arrow::datatypes::ArrowPrimitiveType;
 use arrow::datatypes::{ArrowNativeType, FieldRef};
 use arrow::datatypes::{
     DataType, Decimal128Type, Decimal256Type, Float64Type, Int64Type, UInt64Type,
