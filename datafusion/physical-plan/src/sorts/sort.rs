@@ -371,7 +371,6 @@ impl ExternalSorter {
         // Only for first time
         if self.cursor_batch_ratio.is_none() {
             let ratio = self.calculate_ratio(&input)?;
-            println!("ratio:{ratio}");
             self.cursor_batch_ratio = Some(ratio);
         }
 
@@ -470,13 +469,32 @@ impl ExternalSorter {
 
         debug!("Spilling sort data of ExternalSorter to disk whilst inserting");
 
-        let batches_to_spill = std::mem::take(globally_sorted_batches);
+        let mut batches_to_spill = std::mem::take(globally_sorted_batches);
         self.reservation.free();
 
         let (in_progress_file, max_record_batch_size) =
             self.in_progress_spill_file.as_mut().ok_or_else(|| {
                 internal_datafusion_err!("In-progress spill file should be initialized")
             })?;
+
+        // Slice only the last batch if it's too large.
+        // This prevents an oversized batch from inflating `max_record_batch_size`,
+        // ensuring more consistent memory usage when reading back spilled batches.
+        if let Some(last_batch) = batches_to_spill.pop() {
+            let total_rows = last_batch.num_rows();
+            let mut offset = 0;
+
+            if total_rows <= self.batch_size {
+                batches_to_spill.push(last_batch);
+            } else {
+                while offset < total_rows {
+                    let length = std::cmp::min(total_rows - offset, self.batch_size);
+                    let sliced_batch = last_batch.slice(offset, length);
+                    batches_to_spill.push(sliced_batch);
+                    offset += length;
+                }
+            }
+        }
 
         for batch in batches_to_spill {
             in_progress_file.append_batch(&batch)?;
