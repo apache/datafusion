@@ -449,7 +449,7 @@ pub struct FieldMetadata {
     /// The inner metadata of a literal expression, which is a map of string
     /// keys to string values.
     ///
-    /// Note this is not a `HashMap because `HashMap` does not provide
+    /// Note this is not a `HashMap` because `HashMap` does not provide
     /// implementations for traits like `Debug` and `Hash`.
     inner: Arc<BTreeMap<String, String>>,
 }
@@ -1039,7 +1039,6 @@ impl WindowFunctionDefinition {
     pub fn return_field(
         &self,
         input_expr_fields: &[FieldRef],
-        _input_expr_nullable: &[bool],
         display_name: &str,
     ) -> Result<FieldRef> {
         match self {
