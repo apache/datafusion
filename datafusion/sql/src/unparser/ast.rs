@@ -112,6 +112,7 @@ impl QueryBuilder {
             for_clause: self.for_clause.clone(),
             settings: None,
             format_clause: None,
+            pipe_operators: vec![],
         })
     }
     fn create_empty() -> Self {
@@ -147,7 +148,7 @@ pub struct SelectBuilder {
     group_by: Option<ast::GroupByExpr>,
     cluster_by: Vec<ast::Expr>,
     distribute_by: Vec<ast::Expr>,
-    sort_by: Vec<ast::Expr>,
+    sort_by: Vec<ast::OrderByExpr>,
     having: Option<ast::Expr>,
     named_window: Vec<ast::NamedWindowDefinition>,
     qualify: Option<ast::Expr>,
@@ -264,7 +265,7 @@ impl SelectBuilder {
         self.distribute_by = value;
         self
     }
-    pub fn sort_by(&mut self, value: Vec<ast::Expr>) -> &mut Self {
+    pub fn sort_by(&mut self, value: Vec<ast::OrderByExpr>) -> &mut Self {
         self.sort_by = value;
         self
     }
@@ -319,6 +320,7 @@ impl SelectBuilder {
                 Some(ref value) => value.clone(),
                 None => return Err(Into::into(UninitializedFieldError::from("flavor"))),
             },
+            exclude: None,
         })
     }
     fn create_empty() -> Self {

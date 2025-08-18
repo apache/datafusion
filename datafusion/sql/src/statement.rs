@@ -55,9 +55,9 @@ use datafusion_expr::{
     Volatility, WriteOp,
 };
 use sqlparser::ast::{
-    self, BeginTransactionKind, IndexType, NullsDistinctOption, OrderByExpr, Set,
-    ShowStatementIn, ShowStatementOptions, SqliteOnConflict, TableObject,
-    UpdateTableFromKind, ValueWithSpan,
+    self, BeginTransactionKind, IndexColumn, IndexType, NullsDistinctOption, OrderByExpr,
+    OrderByOptions, Set, ShowStatementIn, ShowStatementOptions, SqliteOnConflict,
+    TableObject, UpdateTableFromKind, ValueWithSpan,
 };
 use sqlparser::ast::{
     Assignment, AssignmentTarget, ColumnDef, CreateIndex, CreateTable,
@@ -111,7 +111,17 @@ fn calc_inline_constraints_from_columns(columns: &[ColumnDef]) -> Vec<TableConst
                     characteristics,
                 } => constraints.push(TableConstraint::Unique {
                     name: name.clone(),
-                    columns: vec![column.name.clone()],
+                    columns: vec![IndexColumn {
+                        column: OrderByExpr {
+                            expr: SQLExpr::Identifier(column.name.clone()),
+                            options: OrderByOptions {
+                                asc: None,
+                                nulls_first: None,
+                            },
+                            with_fill: None,
+                        },
+                        operator_class: None,
+                    }],
                     characteristics: *characteristics,
                     index_name: None,
                     index_type_display: ast::KeyOrIndexDisplay::None,
@@ -124,7 +134,17 @@ fn calc_inline_constraints_from_columns(columns: &[ColumnDef]) -> Vec<TableConst
                     characteristics,
                 } => constraints.push(TableConstraint::PrimaryKey {
                     name: name.clone(),
-                    columns: vec![column.name.clone()],
+                    columns: vec![IndexColumn {
+                        column: OrderByExpr {
+                            expr: SQLExpr::Identifier(column.name.clone()),
+                            options: OrderByOptions {
+                                asc: None,
+                                nulls_first: None,
+                            },
+                            with_fill: None,
+                        },
+                        operator_class: None,
+                    }],
                     characteristics: *characteristics,
                     index_name: None,
                     index_type: None,
@@ -144,11 +164,13 @@ fn calc_inline_constraints_from_columns(columns: &[ColumnDef]) -> Vec<TableConst
                     on_delete: *on_delete,
                     on_update: *on_update,
                     characteristics: *characteristics,
+                    index_name: None,
                 }),
                 ast::ColumnOption::Check(expr) => {
                     constraints.push(TableConstraint::Check {
                         name: name.clone(),
                         expr: Box::new(expr.clone()),
+                        enforced: None,
                     })
                 }
                 // Other options are not constraint related.
@@ -168,6 +190,7 @@ fn calc_inline_constraints_from_columns(columns: &[ColumnDef]) -> Vec<TableConst
                 | ast::ColumnOption::Policy(_)
                 | ast::ColumnOption::Tags(_)
                 | ast::ColumnOption::Alias(_)
+                | ast::ColumnOption::Srid(_)
                 | ast::ColumnOption::Collation(_) => {}
             }
         }
@@ -248,18 +271,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 name,
                 columns,
                 constraints,
-                table_properties,
-                with_options,
                 if_not_exists,
                 or_replace,
                 without_rowid,
                 like,
                 clone,
-                engine,
                 comment,
-                auto_increment_offset,
-                default_charset,
-                collation,
                 on_commit,
                 on_cluster,
                 primary_key,
@@ -267,7 +284,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 partition_by,
                 cluster_by,
                 clustered_by,
-                options,
                 strict,
                 copy_grants,
                 enable_schema_evolution,
@@ -285,7 +301,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 catalog_sync,
                 storage_serialization_policy,
                 inherits,
-            }) if table_properties.is_empty() && with_options.is_empty() => {
+                table_options: CreateTableOptions::None,
+            }) => {
                 if temporary {
                     return not_impl_err!("Temporary tables not supported")?;
                 }
@@ -334,20 +351,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 if clone.is_some() {
                     return not_impl_err!("Clone not supported")?;
                 }
-                if engine.is_some() {
-                    return not_impl_err!("Engine not supported")?;
-                }
                 if comment.is_some() {
                     return not_impl_err!("Comment not supported")?;
-                }
-                if auto_increment_offset.is_some() {
-                    return not_impl_err!("Auto increment offset not supported")?;
-                }
-                if default_charset.is_some() {
-                    return not_impl_err!("Default charset not supported")?;
-                }
-                if collation.is_some() {
-                    return not_impl_err!("Collation not supported")?;
                 }
                 if on_commit.is_some() {
                     return not_impl_err!("On commit not supported")?;
@@ -369,9 +374,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 }
                 if clustered_by.is_some() {
                     return not_impl_err!("Clustered by not supported")?;
-                }
-                if options.is_some() {
-                    return not_impl_err!("Options not supported")?;
                 }
                 if strict {
                     return not_impl_err!("Strict not supported")?;
@@ -644,6 +646,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 restrict: _,
                 purge: _,
                 temporary: _,
+                table: _,
             } => {
                 // We don't support cascade and purge for now.
                 // nor do we support multiple object names
@@ -739,6 +742,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 has_parentheses: _,
                 immediate,
                 into,
+                output,
+                default,
             } => {
                 // `USING` is a MySQL-specific syntax and currently not supported.
                 if !using.is_empty() {
@@ -753,6 +758,16 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 }
                 if !into.is_empty() {
                     return not_impl_err!("Execute statement with INTO is not supported");
+                }
+                if output {
+                    return not_impl_err!(
+                        "Execute statement with OUTPUT is not supported"
+                    );
+                }
+                if default {
+                    return not_impl_err!(
+                        "Execute statement with DEFAULT is not supported"
+                    );
                 }
                 let empty_schema = DFSchema::empty();
                 let parameters = parameters
@@ -1020,8 +1035,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 modifier,
                 transaction,
                 statements,
-                exception_statements,
                 has_end_keyword,
+                exception,
             } => {
                 if let Some(modifier) = modifier {
                     return not_impl_err!(
@@ -1033,7 +1048,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         "Transaction with multiple statements not supported"
                     );
                 }
-                if exception_statements.is_some() {
+                if exception.is_some() {
                     return not_impl_err!(
                         "Transaction with exception statements not supported"
                     );
@@ -1187,6 +1202,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                                 return not_impl_err!(
                                     "Qualified functions (AsBeginEnd) are not supported"
                                 )?;
+                            }
+                            ast::CreateFunctionBody::AsReturnExpr(_)
+                            | ast::CreateFunctionBody::AsReturnSelect(_) => {
+                                return not_impl_err!(
+                                    "AS RETURN function syntax are not supported"
+                                )?
                             }
                         },
                         &DFSchema::empty(),
@@ -1547,13 +1568,21 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     fn get_constraint_column_indices(
         &self,
         df_schema: &DFSchemaRef,
-        columns: &[Ident],
+        columns: &[IndexColumn],
         constraint_name: &str,
     ) -> Result<Vec<usize>> {
         let field_names = df_schema.field_names();
         columns
             .iter()
-            .map(|ident| {
+            .map(|index_column| {
+                let expr = &index_column.column.expr;
+                let ident = if let SQLExpr::Identifier(ident) = expr {
+                    ident
+                } else {
+                    return Err(plan_datafusion_err!(
+                        "Column name for {constraint_name} must be an identifier: {expr}"
+                    ));
+                };
                 let column = self.ident_normalizer.normalize(ident.clone());
                 field_names
                     .iter()

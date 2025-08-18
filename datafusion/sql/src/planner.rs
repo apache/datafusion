@@ -745,6 +745,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             | SQLDataType::UHugeInt
             | SQLDataType::UBigInt
             | SQLDataType::TimestampNtz
+            | SQLDataType::NamedTable { .. }
+            | SQLDataType::TsVector
+            | SQLDataType::TsQuery
             | SQLDataType::GeometricType(_) => {
                 not_impl_err!("Unsupported SQL type {sql_type:?}")
             }
