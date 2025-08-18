@@ -60,7 +60,7 @@ pub fn sum(expr: Expr) -> Expr {
         vec![expr],
         false,
         None,
-        None,
+        vec![],
         None,
     ))
 }
@@ -73,7 +73,7 @@ pub fn count(expr: Expr) -> Expr {
         vec![expr],
         false,
         None,
-        None,
+        vec![],
         None,
     ))
 }
@@ -86,13 +86,13 @@ pub fn avg(expr: Expr) -> Expr {
         vec![expr],
         false,
         None,
-        None,
+        vec![],
         None,
     ))
 }
 
 /// Stub `sum` used for optimizer testing
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct Sum {
     signature: Signature,
 }
@@ -200,6 +200,7 @@ impl AggregateUDFImpl for Sum {
 }
 
 /// Testing stub implementation of COUNT aggregate
+#[derive(PartialEq, Eq, Hash)]
 pub struct Count {
     signature: Signature,
     aliases: Vec<String>,
@@ -282,12 +283,13 @@ pub fn min(expr: Expr) -> Expr {
         vec![expr],
         false,
         None,
-        None,
+        vec![],
         None,
     ))
 }
 
 /// Testing stub implementation of Min aggregate
+#[derive(PartialEq, Eq, Hash)]
 pub struct Min {
     signature: Signature,
 }
@@ -363,12 +365,13 @@ pub fn max(expr: Expr) -> Expr {
         vec![expr],
         false,
         None,
-        None,
+        vec![],
         None,
     ))
 }
 
 /// Testing stub implementation of MAX aggregate
+#[derive(PartialEq, Eq, Hash)]
 pub struct Max {
     signature: Signature,
 }
@@ -437,7 +440,7 @@ impl AggregateUDFImpl for Max {
 }
 
 /// Testing stub implementation of avg aggregate
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct Avg {
     signature: Signature,
     aliases: Vec<String>,

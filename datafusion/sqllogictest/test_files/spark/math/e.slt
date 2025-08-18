@@ -25,4 +25,3 @@
 ## PySpark 3.5.5 Result: {'E()': 2.718281828459045, 'typeof(E())': 'double'}
 #query
 #SELECT e();
-

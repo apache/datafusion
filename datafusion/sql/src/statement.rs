@@ -238,7 +238,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     ) -> Result<LogicalPlan> {
         match statement {
             Statement::ExplainTable {
-                describe_alias: DescribeAlias::Describe, // only parse 'DESCRIBE table_name' and not 'EXPLAIN table_name'
+                describe_alias: DescribeAlias::Describe | DescribeAlias::Desc, // only parse 'DESCRIBE table_name' or 'DESC table_name' and not 'EXPLAIN table_name'
                 table_name,
                 ..
             } => self.describe_table_to_plan(table_name),
@@ -1421,13 +1421,13 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             .map(|f| f.name().to_owned())
             .collect();
 
-        Ok(LogicalPlan::Copy(CopyTo {
-            input: Arc::new(input),
-            output_url: statement.target,
-            file_type,
+        Ok(LogicalPlan::Copy(CopyTo::new(
+            Arc::new(input),
+            statement.target,
             partition_by,
-            options: options_map,
-        }))
+            file_type,
+            options_map,
+        )))
     }
 
     fn build_order_by(
@@ -1454,7 +1454,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                                 .unwrap();
                             let asc = order_by_expr.options.asc.unwrap_or(true);
                             let nulls_first =
-                                order_by_expr.options.nulls_first.unwrap_or(!asc);
+                                order_by_expr.options.nulls_first.unwrap_or_else(|| {
+                                    self.options.default_null_ordering.nulls_first(asc)
+                                });
 
                             SortExpr::new(ordered_expr, asc, nulls_first)
                         })
@@ -2001,8 +2003,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         // Do a table lookup to verify the table exists
         let table_name = self.object_name_to_table_reference(table_name)?;
         let table_source = self.context_provider.get_table_source(table_name.clone())?;
-        let arrow_schema = (*table_source.schema()).clone();
-        let table_schema = DFSchema::try_from(arrow_schema)?;
+        let table_schema = DFSchema::try_from(table_source.schema())?;
 
         // Get insert fields and target table's value indices
         //

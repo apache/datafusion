@@ -6,8 +6,8 @@ ClickBench is focused on aggregation and filtering performance (though it has no
 
 ## Files:
 
-- `queries.sql` - Actual ClickBench queries, downloaded from the [ClickBench repository]
-- `extended.sql` - "Extended" DataFusion specific queries.
+- `queries/*.sql` - Actual ClickBench queries, downloaded from the [ClickBench repository](https://raw.githubusercontent.com/ClickHouse/ClickBench/main/datafusion/queries.sql) and split by the `update_queries.sh` script.
+- `extended/*.sql` - "Extended" DataFusion specific queries.
 
 [clickbench repository]: https://github.com/ClickHouse/ClickBench/blob/main/datafusion/queries.sql
 
@@ -15,8 +15,8 @@ ClickBench is focused on aggregation and filtering performance (though it has no
 
 The "extended" queries are not part of the official ClickBench benchmark.
 Instead they are used to test other DataFusion features that are not covered by
-the standard benchmark. Each description below is for the corresponding line in
-`extended.sql` (line 1 is `Q0`, line 2 is `Q1`, etc.)
+the standard benchmark. Each description below is for the corresponding file in
+`extended`
 
 ### Q0: Data Exploration
 

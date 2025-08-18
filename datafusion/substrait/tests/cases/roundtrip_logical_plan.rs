@@ -112,11 +112,7 @@ impl UserDefinedLogicalNode for MockUserDefinedLogicalPlan {
         &self.empty_schema
     }
 
-    fn check_invariants(
-        &self,
-        _check: InvariantLevel,
-        _plan: &LogicalPlan,
-    ) -> Result<()> {
+    fn check_invariants(&self, _check: InvariantLevel) -> Result<()> {
         Ok(())
     }
 
@@ -348,7 +344,7 @@ async fn decimal_literal() -> Result<()> {
 
 #[tokio::test]
 async fn null_decimal_literal() -> Result<()> {
-    roundtrip("SELECT * FROM data WHERE b = NULL").await
+    roundtrip("SELECT *, CAST(NULL AS decimal(10, 2)) FROM data").await
 }
 
 #[tokio::test]
@@ -424,6 +420,41 @@ async fn simple_scalar_function_pow() -> Result<()> {
 #[tokio::test]
 async fn simple_scalar_function_substr() -> Result<()> {
     roundtrip("SELECT SUBSTR(f, 1, 3) FROM data").await
+}
+
+// Test that DataFusion functions gets correctly mapped to Substrait names (when the names are diferent)
+// Follows the same structure as existing roundtrip tests, but more explicitly tests for name mappings
+async fn test_substrait_to_df_name_mapping(
+    substrait_name: &str,
+    sql: &str,
+) -> Result<()> {
+    let ctx = create_context().await?;
+    let df = ctx.sql(sql).await?;
+    let plan = df.into_optimized_plan()?;
+    let proto = to_substrait_plan(&plan, &ctx.state())?;
+
+    let function_name = match proto.extensions[0].mapping_type.as_ref().unwrap() {
+        MappingType::ExtensionFunction(ext_f) => &ext_f.name,
+        _ => unreachable!("Expected function extension"),
+    };
+
+    assert_eq!(function_name, substrait_name);
+
+    let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
+    let plan2 = ctx.state().optimize(&plan2)?;
+
+    let plan1str = format!("{plan}");
+    let plan2str = format!("{plan2}");
+    assert_eq!(plan1str, plan2str);
+
+    assert_eq!(plan.schema(), plan2.schema());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn scalar_function_is_nan_mapping() -> Result<()> {
+    test_substrait_to_df_name_mapping("is_nan", "SELECT ISNAN(a) FROM data").await
 }
 
 #[tokio::test]

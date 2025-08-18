@@ -68,7 +68,7 @@ async fn count_only_nulls() -> Result<()> {
                 args: vec![input_col_ref],
                 distinct: false,
                 filter: None,
-                order_by: None,
+                order_by: vec![],
                 null_treatment: None,
             },
         })],
@@ -128,7 +128,7 @@ fn inline_scan_projection_test() -> Result<()> {
         @r"
     SubqueryAlias: ?table?
       Projection: a
-        EmptyRelation
+        EmptyRelation: rows=0
     "
     );
 

@@ -30,4 +30,3 @@
 ## PySpark 3.5.5 Result: {'format_number(12332.123456, 4)': '12,332.1235', 'typeof(format_number(12332.123456, 4))': 'string', 'typeof(12332.123456)': 'decimal(11,6)', 'typeof(4)': 'int'}
 #query
 #SELECT format_number(12332.123456::decimal(11,6), 4::int);
-

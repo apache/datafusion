@@ -28,6 +28,7 @@ use datafusion::common::test_util::batches_to_string;
 use datafusion::common::{Result, ScalarValue};
 use datafusion::prelude::SessionContext;
 use datafusion_common::exec_datafusion_err;
+use datafusion_expr::ptr_eq::PtrEq;
 use datafusion_expr::{
     PartitionEvaluator, Signature, TypeSignature, Volatility, WindowUDF, WindowUDFImpl,
 };
@@ -40,6 +41,7 @@ use datafusion_physical_expr::{
     PhysicalExpr,
 };
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 use std::{
     any::Any,
     ops::Range,
@@ -522,10 +524,10 @@ impl OddCounter {
     }
 
     fn register(ctx: &mut SessionContext, test_state: Arc<TestState>) {
-        #[derive(Debug, Clone)]
+        #[derive(Debug, Clone, PartialEq, Eq, Hash)]
         struct SimpleWindowUDF {
             signature: Signature,
-            test_state: Arc<TestState>,
+            test_state: PtrEq<Arc<TestState>>,
             aliases: Vec<String>,
         }
 
@@ -535,7 +537,7 @@ impl OddCounter {
                     Signature::exact(vec![DataType::Float64], Volatility::Immutable);
                 Self {
                     signature,
-                    test_state,
+                    test_state: test_state.into(),
                     aliases: vec!["odd_counter_alias".to_string()],
                 }
             }
@@ -643,7 +645,7 @@ fn odd_count_arr(arr: &Int64Array, num_rows: usize) -> ArrayRef {
     Arc::new(array)
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 struct VariadicWindowUDF {
     signature: Signature,
 }
@@ -763,6 +765,31 @@ struct MetadataBasedWindowUdf {
     name: String,
     signature: Signature,
     metadata: HashMap<String, String>,
+}
+
+impl PartialEq for MetadataBasedWindowUdf {
+    fn eq(&self, other: &Self) -> bool {
+        let Self {
+            name,
+            signature,
+            metadata,
+        } = self;
+        name == &other.name
+            && signature == &other.signature
+            && metadata == &other.metadata
+    }
+}
+impl Eq for MetadataBasedWindowUdf {}
+impl Hash for MetadataBasedWindowUdf {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        let Self {
+            name,
+            signature,
+            metadata: _, // unhashable
+        } = self;
+        name.hash(state);
+        signature.hash(state);
+    }
 }
 
 impl MetadataBasedWindowUdf {

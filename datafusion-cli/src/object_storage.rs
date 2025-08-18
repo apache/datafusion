@@ -15,32 +15,53 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
-use std::error::Error;
-use std::fmt::{Debug, Display};
-use std::sync::Arc;
-
-use datafusion::common::config::{
-    ConfigEntry, ConfigExtension, ConfigField, ExtensionOptions, TableOptions, Visit,
-};
-use datafusion::common::{config_err, exec_datafusion_err, exec_err};
-use datafusion::error::{DataFusionError, Result};
-use datafusion::execution::context::SessionState;
-
 use async_trait::async_trait;
 use aws_config::BehaviorVersion;
-use aws_credential_types::provider::error::CredentialsError;
-use aws_credential_types::provider::{ProvideCredentials, SharedCredentialsProvider};
+use aws_credential_types::provider::{
+    error::CredentialsError, ProvideCredentials, SharedCredentialsProvider,
+};
+use datafusion::{
+    common::{
+        config::ConfigEntry, config::ConfigExtension, config::ConfigField,
+        config::ExtensionOptions, config::TableOptions, config::Visit, config_err,
+        exec_datafusion_err, exec_err,
+    },
+    error::{DataFusionError, Result},
+    execution::context::SessionState,
+};
 use log::debug;
-use object_store::aws::{AmazonS3Builder, AwsCredential};
-use object_store::gcp::GoogleCloudStorageBuilder;
-use object_store::http::HttpBuilder;
-use object_store::{ClientOptions, CredentialProvider, ObjectStore};
+use object_store::{
+    aws::{AmazonS3Builder, AmazonS3ConfigKey, AwsCredential},
+    gcp::GoogleCloudStorageBuilder,
+    http::HttpBuilder,
+    ClientOptions, CredentialProvider,
+    Error::Generic,
+    ObjectStore,
+};
+use std::{
+    any::Any,
+    error::Error,
+    fmt::{Debug, Display},
+    sync::Arc,
+};
 use url::Url;
+
+#[cfg(not(test))]
+use object_store::aws::resolve_bucket_region;
+
+// Provide a local mock when running tests so we don't make network calls
+#[cfg(test)]
+async fn resolve_bucket_region(
+    _bucket: &str,
+    _client_options: &ClientOptions,
+) -> object_store::Result<String> {
+    Ok("eu-central-1".to_string())
+}
 
 pub async fn get_s3_object_store_builder(
     url: &Url,
     aws_options: &AwsOptions,
+    resolve_region: bool,
 ) -> Result<AmazonS3Builder> {
     let AwsOptions {
         access_key_id,
@@ -88,6 +109,16 @@ pub async fn get_s3_object_store_builder(
         builder = builder.with_region(region);
     }
 
+    // If the region is not set or auto_detect_region is true, resolve the region.
+    if builder
+        .get_config_value(&AmazonS3ConfigKey::Region)
+        .is_none()
+        || resolve_region
+    {
+        let region = resolve_bucket_region(bucket_name, &ClientOptions::new()).await?;
+        builder = builder.with_region(region);
+    }
+
     if let Some(endpoint) = endpoint {
         // Make a nicer error if the user hasn't allowed http and the endpoint
         // is http as the default message is "URL scheme is not allowed"
@@ -130,10 +161,10 @@ impl CredentialsFromConfig {
         let credentials = config
             .credentials_provider()
             .ok_or_else(|| {
-                DataFusionError::ObjectStore(object_store::Error::Generic {
+                DataFusionError::ObjectStore(Box::new(Generic {
                     store: "S3",
                     source: "Failed to get S3 credentials aws_config".into(),
-                })
+                }))
             })?
             .clone();
 
@@ -160,10 +191,10 @@ impl CredentialsFromConfig {
                     "Error getting credentials from provider: {e}{source_message}",
                 );
 
-                return Err(DataFusionError::ObjectStore(object_store::Error::Generic {
+                return Err(DataFusionError::ObjectStore(Box::new(Generic {
                     store: "S3",
                     source: message.into(),
-                }));
+                })));
             }
         };
         Ok(Self {
@@ -183,12 +214,14 @@ impl CredentialProvider for S3CredentialProvider {
     type Credential = AwsCredential;
 
     async fn get_credential(&self) -> object_store::Result<Arc<Self::Credential>> {
-        let creds = self.credentials.provide_credentials().await.map_err(|e| {
-            object_store::Error::Generic {
-                store: "S3",
-                source: Box::new(e),
-            }
-        })?;
+        let creds =
+            self.credentials
+                .provide_credentials()
+                .await
+                .map_err(|e| Generic {
+                    store: "S3",
+                    source: Box::new(e),
+                })?;
         Ok(Arc::new(AwsCredential {
             key_id: creds.access_key_id().to_string(),
             secret_key: creds.secret_access_key().to_string(),
@@ -470,6 +503,7 @@ pub(crate) async fn get_object_store(
     scheme: &str,
     url: &Url,
     table_options: &TableOptions,
+    resolve_region: bool,
 ) -> Result<Arc<dyn ObjectStore>, DataFusionError> {
     let store: Arc<dyn ObjectStore> = match scheme {
         "s3" => {
@@ -478,7 +512,8 @@ pub(crate) async fn get_object_store(
                     "Given table options incompatible with the 's3' scheme"
                 );
             };
-            let builder = get_s3_object_store_builder(url, options).await?;
+            let builder =
+                get_s3_object_store_builder(url, options, resolve_region).await?;
             Arc::new(builder.build()?)
         }
         "oss" => {
@@ -545,6 +580,9 @@ mod tests {
     #[tokio::test]
     async fn s3_object_store_builder_default() -> Result<()> {
         let location = "s3://bucket/path/FAKE/file.parquet";
+        // Set it to a non-existent file to avoid reading the default configuration file
+        std::env::set_var("AWS_CONFIG_FILE", "data/aws.config");
+        std::env::set_var("AWS_SHARED_CREDENTIALS_FILE", "data/aws.credentials");
 
         // No options
         let table_url = ListingTableUrl::parse(location)?;
@@ -557,12 +595,14 @@ mod tests {
         let table_options = get_table_options(&ctx, &sql).await;
         let aws_options = table_options.extensions.get::<AwsOptions>().unwrap();
         let builder =
-            get_s3_object_store_builder(table_url.as_ref(), aws_options).await?;
+            get_s3_object_store_builder(table_url.as_ref(), aws_options, false).await?;
 
         // If the environment variables are set (as they are in CI) use them
         let expected_access_key_id = std::env::var("AWS_ACCESS_KEY_ID").ok();
         let expected_secret_access_key = std::env::var("AWS_SECRET_ACCESS_KEY").ok();
-        let expected_region = std::env::var("AWS_REGION").ok();
+        let expected_region = Some(
+            std::env::var("AWS_REGION").unwrap_or_else(|_| "eu-central-1".to_string()),
+        );
         let expected_endpoint = std::env::var("AWS_ENDPOINT").ok();
 
         // get the actual configuration information, then assert_eq!
@@ -624,7 +664,7 @@ mod tests {
         let table_options = get_table_options(&ctx, &sql).await;
         let aws_options = table_options.extensions.get::<AwsOptions>().unwrap();
         let builder =
-            get_s3_object_store_builder(table_url.as_ref(), aws_options).await?;
+            get_s3_object_store_builder(table_url.as_ref(), aws_options, false).await?;
         // get the actual configuration information, then assert_eq!
         let config = [
             (AmazonS3ConfigKey::AccessKeyId, access_key_id),
@@ -667,7 +707,7 @@ mod tests {
 
         let table_options = get_table_options(&ctx, &sql).await;
         let aws_options = table_options.extensions.get::<AwsOptions>().unwrap();
-        let err = get_s3_object_store_builder(table_url.as_ref(), aws_options)
+        let err = get_s3_object_store_builder(table_url.as_ref(), aws_options, false)
             .await
             .unwrap_err();
 
@@ -686,7 +726,57 @@ mod tests {
 
         let aws_options = table_options.extensions.get::<AwsOptions>().unwrap();
         // ensure this isn't an error
-        get_s3_object_store_builder(table_url.as_ref(), aws_options).await?;
+        get_s3_object_store_builder(table_url.as_ref(), aws_options, false).await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn s3_object_store_builder_resolves_region_when_none_provided() -> Result<()> {
+        let expected_region = "eu-central-1";
+        let location = "s3://test-bucket/path/file.parquet";
+        // Set it to a non-existent file to avoid reading the default configuration file
+        std::env::set_var("AWS_CONFIG_FILE", "data/aws.config");
+
+        let table_url = ListingTableUrl::parse(location)?;
+        let aws_options = AwsOptions {
+            region: None, // No region specified - should auto-detect
+            ..Default::default()
+        };
+
+        let builder =
+            get_s3_object_store_builder(table_url.as_ref(), &aws_options, false).await?;
+
+        // Verify that the region was auto-detected in test environment
+        assert_eq!(
+            builder.get_config_value(&AmazonS3ConfigKey::Region),
+            Some(expected_region.to_string())
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn s3_object_store_builder_overrides_region_when_resolve_region_enabled(
+    ) -> Result<()> {
+        let original_region = "us-east-1";
+        let expected_region = "eu-central-1"; // This should be the auto-detected region
+        let location = "s3://test-bucket/path/file.parquet";
+
+        let table_url = ListingTableUrl::parse(location)?;
+        let aws_options = AwsOptions {
+            region: Some(original_region.to_string()), // Explicit region provided
+            ..Default::default()
+        };
+
+        let builder =
+            get_s3_object_store_builder(table_url.as_ref(), &aws_options, true).await?;
+
+        // Verify that the region was overridden by auto-detection
+        assert_eq!(
+            builder.get_config_value(&AmazonS3ConfigKey::Region),
+            Some(expected_region.to_string())
+        );
 
         Ok(())
     }

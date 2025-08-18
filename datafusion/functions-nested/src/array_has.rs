@@ -81,7 +81,7 @@ make_udf_expr_and_func!(ArrayHasAny,
         description = "Scalar or Array expression. Can be a constant, column, or function, and any combination of array operators."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ArrayHas {
     signature: Signature,
     aliases: Vec<String>,
@@ -339,14 +339,32 @@ fn array_has_dispatch_for_scalar(
     }
     let eq_array = compare_with_eq(values, needle, is_nested)?;
     let mut final_contained = vec![None; haystack.len()];
+
+    // Check validity buffer to distinguish between null and empty arrays
+    let validity = match &haystack {
+        ArrayWrapper::FixedSizeList(arr) => arr.nulls(),
+        ArrayWrapper::List(arr) => arr.nulls(),
+        ArrayWrapper::LargeList(arr) => arr.nulls(),
+    };
+
     for (i, (start, end)) in haystack.offsets().tuple_windows().enumerate() {
         let length = end - start;
-        // For non-nested list, length is 0 for null
-        if length == 0 {
-            continue;
+
+        // Check if the array at this position is null
+        if let Some(validity_buffer) = validity {
+            if !validity_buffer.is_valid(i) {
+                final_contained[i] = None; // null array -> null result
+                continue;
+            }
         }
-        let sliced_array = eq_array.slice(start, length);
-        final_contained[i] = Some(sliced_array.true_count() > 0);
+
+        // For non-null arrays: length is 0 for empty arrays
+        if length == 0 {
+            final_contained[i] = Some(false); // empty array -> false
+        } else {
+            let sliced_array = eq_array.slice(start, length);
+            final_contained[i] = Some(sliced_array.true_count() > 0);
+        }
     }
 
     Ok(Arc::new(BooleanArray::from(final_contained)))
@@ -464,7 +482,7 @@ fn array_has_any_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ArrayHasAll {
     signature: Signature,
     aliases: Vec<String>,
@@ -538,7 +556,7 @@ impl ScalarUDFImpl for ArrayHasAll {
         description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ArrayHasAny {
     signature: Signature,
     aliases: Vec<String>,

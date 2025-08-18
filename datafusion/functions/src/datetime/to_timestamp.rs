@@ -19,12 +19,14 @@ use std::any::Any;
 use std::sync::Arc;
 
 use crate::datetime::common::*;
+use arrow::array::Float64Array;
 use arrow::datatypes::DataType::*;
 use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
 use arrow::datatypes::{
     ArrowTimestampType, DataType, TimeUnit, TimestampMicrosecondType,
     TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
 };
+use datafusion_common::format::DEFAULT_CAST_OPTIONS;
 use datafusion_common::{exec_err, Result, ScalarType, ScalarValue};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
@@ -64,7 +66,7 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
         description = "Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression. Formats will be tried in the order they appear with the first successful one being returned. If none of the formats successfully parse the expression an error will be returned."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ToTimestampFunc {
     signature: Signature,
 }
@@ -98,7 +100,7 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
         description = "Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression. Formats will be tried in the order they appear with the first successful one being returned. If none of the formats successfully parse the expression an error will be returned."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ToTimestampSecondsFunc {
     signature: Signature,
 }
@@ -132,7 +134,7 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
         description = "Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression. Formats will be tried in the order they appear with the first successful one being returned. If none of the formats successfully parse the expression an error will be returned."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ToTimestampMillisFunc {
     signature: Signature,
 }
@@ -166,7 +168,7 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
         description = "Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression. Formats will be tried in the order they appear with the first successful one being returned. If none of the formats successfully parse the expression an error will be returned."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ToTimestampMicrosFunc {
     signature: Signature,
 }
@@ -200,7 +202,7 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
         description = "Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression. Formats will be tried in the order they appear with the first successful one being returned. If none of the formats successfully parse the expression an error will be returned."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ToTimestampNanosFunc {
     signature: Signature,
 }
@@ -319,8 +321,21 @@ impl ScalarUDFImpl for ToTimestampFunc {
             Int32 | Int64 => args[0]
                 .cast_to(&Timestamp(Second, None), None)?
                 .cast_to(&Timestamp(Nanosecond, None), None),
-            Null | Float64 | Timestamp(_, None) => {
+            Null | Timestamp(_, None) => {
                 args[0].cast_to(&Timestamp(Nanosecond, None), None)
+            }
+            Float64 => {
+                let rescaled = arrow::compute::kernels::numeric::mul(
+                    &args[0].to_array(1)?,
+                    &arrow::array::Scalar::new(Float64Array::from(vec![
+                        1_000_000_000f64,
+                    ])),
+                )?;
+                Ok(ColumnarValue::Array(arrow::compute::cast_with_options(
+                    &rescaled,
+                    &Timestamp(Nanosecond, None),
+                    &DEFAULT_CAST_OPTIONS,
+                )?))
             }
             Timestamp(_, Some(tz)) => {
                 args[0].cast_to(&Timestamp(Nanosecond, Some(tz)), None)
@@ -641,6 +656,7 @@ mod tests {
     use arrow::array::{ArrayRef, Int64Array, StringBuilder};
     use arrow::datatypes::{Field, TimeUnit};
     use chrono::Utc;
+    use datafusion_common::config::ConfigOptions;
     use datafusion_common::{assert_contains, DataFusionError, ScalarValue};
     use datafusion_expr::ScalarFunctionImplementation;
 
@@ -1019,6 +1035,7 @@ mod tests {
                     arg_fields: vec![arg_field],
                     number_rows: 4,
                     return_field: Field::new("f", rt, true).into(),
+                    config_options: Arc::new(ConfigOptions::default()),
                 };
                 let res = udf
                     .invoke_with_args(args)
@@ -1068,6 +1085,7 @@ mod tests {
                     arg_fields: vec![arg_field],
                     number_rows: 5,
                     return_field: Field::new("f", rt, true).into(),
+                    config_options: Arc::new(ConfigOptions::default()),
                 };
                 let res = udf
                     .invoke_with_args(args)

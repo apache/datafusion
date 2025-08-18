@@ -226,7 +226,7 @@ where
 /// # use datafusion::execution::SessionStateBuilder;
 /// # use datafusion_execution::runtime_env::RuntimeEnvBuilder;
 /// // Configure a 4k batch size
-/// let config = SessionConfig::new() .with_batch_size(4 * 1024);
+/// let config = SessionConfig::new().with_batch_size(4 * 1024);
 ///
 /// // configure a memory limit of 1GB with 20%  slop
 ///  let runtime_env = RuntimeEnvBuilder::new()
@@ -1055,24 +1055,34 @@ impl SessionContext {
     fn set_runtime_variable(&self, variable: &str, value: &str) -> Result<()> {
         let key = variable.strip_prefix("datafusion.runtime.").unwrap();
 
-        match key {
+        let mut state = self.state.write();
+
+        let mut builder = RuntimeEnvBuilder::from_runtime_env(state.runtime_env());
+        builder = match key {
             "memory_limit" => {
                 let memory_limit = Self::parse_memory_limit(value)?;
-
-                let mut state = self.state.write();
-                let mut builder =
-                    RuntimeEnvBuilder::from_runtime_env(state.runtime_env());
-                builder = builder.with_memory_limit(memory_limit, 1.0);
-                *state = SessionStateBuilder::from(state.clone())
-                    .with_runtime_env(Arc::new(builder.build()?))
-                    .build();
+                builder.with_memory_limit(memory_limit, 1.0)
+            }
+            "max_temp_directory_size" => {
+                let directory_size = Self::parse_memory_limit(value)?;
+                builder.with_max_temp_directory_size(directory_size as u64)
+            }
+            "temp_directory" => builder.with_temp_file_path(value),
+            "metadata_cache_limit" => {
+                let limit = Self::parse_memory_limit(value)?;
+                builder.with_metadata_cache_limit(limit)
             }
             _ => {
                 return Err(DataFusionError::Plan(format!(
                     "Unknown runtime configuration: {variable}"
                 )))
             }
-        }
+        };
+
+        *state = SessionStateBuilder::from(state.clone())
+            .with_runtime_env(Arc::new(builder.build()?))
+            .build();
+
         Ok(())
     }
 
@@ -1640,7 +1650,7 @@ impl SessionContext {
     /// [`ConfigOptions`]: crate::config::ConfigOptions
     pub fn state(&self) -> SessionState {
         let mut state = self.state.read().clone();
-        state.execution_props_mut().start_execution();
+        state.mark_start_execution();
         state
     }
 

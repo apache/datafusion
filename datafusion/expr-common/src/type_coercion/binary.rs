@@ -124,6 +124,57 @@ impl<'a> BinaryTypeCoercer<'a> {
 
     /// Returns a [`Signature`] for applying `op` to arguments of type `lhs` and `rhs`
     fn signature(&'a self) -> Result<Signature> {
+        if let Some(coerced) = null_coercion(self.lhs, self.rhs) {
+            use Operator::*;
+            // Special handling for arithmetic + null coercion:
+            // For arithmetic operators on non-temporal types, we must handle the result type here using Arrow's numeric kernel.
+            // This is because Arrow expects concrete numeric types, and this ensures the correct result type (e.g., for NULL + Int32, result is Int32).
+            // For all other cases (including temporal arithmetic and non-arithmetic operators),
+            // we can delegate to signature_inner(&coerced, &coerced), which handles the necessary logic for those operators.
+            // In those cases, signature_inner is designed to work with the coerced type, even if it originated from a NULL.
+            if matches!(self.op, Plus | Minus | Multiply | Divide | Modulo)
+                && !coerced.is_temporal()
+            {
+                let ret = self.get_result(&coerced, &coerced).map_err(|e| {
+                    plan_datafusion_err!(
+                        "Cannot get result type for arithmetic operation {coerced} {} {coerced}: {e}",
+                        self.op
+                    )
+                })?;
+
+                return Ok(Signature {
+                    lhs: coerced.clone(),
+                    rhs: coerced,
+                    ret,
+                });
+            }
+            return self.signature_inner(&coerced, &coerced);
+        }
+        self.signature_inner(self.lhs, self.rhs)
+    }
+
+    /// Returns the result type for arithmetic operations
+    fn get_result(
+        &self,
+        lhs: &DataType,
+        rhs: &DataType,
+    ) -> arrow::error::Result<DataType> {
+        use arrow::compute::kernels::numeric::*;
+        let l = new_empty_array(lhs);
+        let r = new_empty_array(rhs);
+
+        let result = match self.op {
+            Operator::Plus => add_wrapping(&l, &r),
+            Operator::Minus => sub_wrapping(&l, &r),
+            Operator::Multiply => mul_wrapping(&l, &r),
+            Operator::Divide => div(&l, &r),
+            Operator::Modulo => rem(&l, &r),
+            _ => unreachable!(),
+        };
+        result.map(|x| x.data_type().clone())
+    }
+
+    fn signature_inner(&'a self, lhs: &DataType, rhs: &DataType) -> Result<Signature> {
         use arrow::datatypes::DataType::*;
         use Operator::*;
         let result = match self.op {
@@ -135,7 +186,7 @@ impl<'a> BinaryTypeCoercer<'a> {
         GtEq |
         IsDistinctFrom |
         IsNotDistinctFrom => {
-            comparison_coercion(self.lhs, self.rhs).map(Signature::comparison).ok_or_else(|| {
+            comparison_coercion(lhs, rhs).map(Signature::comparison).ok_or_else(|| {
                 plan_datafusion_err!(
                     "Cannot infer common argument type for comparison operation {} {} {}",
                     self.lhs,
@@ -144,7 +195,7 @@ impl<'a> BinaryTypeCoercer<'a> {
                 )
             })
         }
-        And | Or => if matches!((self.lhs, self.rhs), (Boolean | Null, Boolean | Null)) {
+        And | Or => if matches!((lhs, rhs), (Boolean | Null, Boolean | Null)) {
             // Logical binary boolean operators can only be evaluated for
             // boolean or null arguments.                   
             Ok(Signature::uniform(Boolean))
@@ -154,28 +205,28 @@ impl<'a> BinaryTypeCoercer<'a> {
             )
         }
         RegexMatch | RegexIMatch | RegexNotMatch | RegexNotIMatch => {
-            regex_coercion(self.lhs, self.rhs).map(Signature::comparison).ok_or_else(|| {
+            regex_coercion(lhs, rhs).map(Signature::comparison).ok_or_else(|| {
                 plan_datafusion_err!(
                     "Cannot infer common argument type for regex operation {} {} {}", self.lhs, self.op, self.rhs
                 )
             })
         }
         LikeMatch | ILikeMatch | NotLikeMatch | NotILikeMatch => {
-            regex_coercion(self.lhs, self.rhs).map(Signature::comparison).ok_or_else(|| {
+            regex_coercion(lhs, rhs).map(Signature::comparison).ok_or_else(|| {
                 plan_datafusion_err!(
                     "Cannot infer common argument type for regex operation {} {} {}", self.lhs, self.op, self.rhs
                 )
             })
         }
         BitwiseAnd | BitwiseOr | BitwiseXor | BitwiseShiftRight | BitwiseShiftLeft => {
-            bitwise_coercion(self.lhs, self.rhs).map(Signature::uniform).ok_or_else(|| {
+            bitwise_coercion(lhs, rhs).map(Signature::uniform).ok_or_else(|| {
                 plan_datafusion_err!(
                     "Cannot infer common type for bitwise operation {} {} {}", self.lhs, self.op, self.rhs
                 )
             })
         }
         StringConcat => {
-            string_concat_coercion(self.lhs, self.rhs).map(Signature::uniform).ok_or_else(|| {
+            string_concat_coercion(lhs, rhs).map(Signature::uniform).ok_or_else(|| {
                 plan_datafusion_err!(
                     "Cannot infer common string type for string concat operation {} {} {}", self.lhs, self.op, self.rhs
                 )
@@ -183,8 +234,8 @@ impl<'a> BinaryTypeCoercer<'a> {
         }
         AtArrow | ArrowAt => {
             // Array contains or search (similar to LIKE) operation
-            array_coercion(self.lhs, self.rhs)
-                .or_else(|| like_coercion(self.lhs, self.rhs)).map(Signature::comparison).ok_or_else(|| {
+            array_coercion(lhs, rhs)
+                .or_else(|| like_coercion(lhs, rhs)).map(Signature::comparison).ok_or_else(|| {
                     plan_datafusion_err!(
                         "Cannot infer common argument type for operation {} {} {}", self.lhs, self.op, self.rhs
                     )
@@ -192,40 +243,24 @@ impl<'a> BinaryTypeCoercer<'a> {
         }
         AtAt => {
             // text search has similar signature to LIKE
-            like_coercion(self.lhs, self.rhs).map(Signature::comparison).ok_or_else(|| {
+            like_coercion(lhs, rhs).map(Signature::comparison).ok_or_else(|| {
                 plan_datafusion_err!(
                     "Cannot infer common argument type for AtAt operation {} {} {}", self.lhs, self.op, self.rhs
                 )
             })
         }
         Plus | Minus | Multiply | Divide | Modulo  =>  {
-            let get_result = |lhs, rhs| {
-                use arrow::compute::kernels::numeric::*;
-                let l = new_empty_array(lhs);
-                let r = new_empty_array(rhs);
-
-                let result = match self.op {
-                    Plus => add_wrapping(&l, &r),
-                    Minus => sub_wrapping(&l, &r),
-                    Multiply => mul_wrapping(&l, &r),
-                    Divide => div(&l, &r),
-                    Modulo => rem(&l, &r),
-                    _ => unreachable!(),
-                };
-                result.map(|x| x.data_type().clone())
-            };
-
-            if let Ok(ret) = get_result(self.lhs, self.rhs) {
+            if let Ok(ret) = self.get_result(lhs, rhs) {
                 // Temporal arithmetic, e.g. Date32 + Interval
                 Ok(Signature{
-                    lhs: self.lhs.clone(),
-                    rhs: self.rhs.clone(),
+                    lhs: lhs.clone(),
+                    rhs: rhs.clone(),
                     ret,
                 })
-            } else if let Some(coerced) = temporal_coercion_strict_timezone(self.lhs, self.rhs) {
+            } else if let Some(coerced) = temporal_coercion_strict_timezone(lhs, rhs) {
                 // Temporal arithmetic by first coercing to a common time representation
                 // e.g. Date32 - Timestamp
-                let ret = get_result(&coerced, &coerced).map_err(|e| {
+                let ret = self.get_result(&coerced, &coerced).map_err(|e| {
                     plan_datafusion_err!(
                         "Cannot get result type for temporal operation {coerced} {} {coerced}: {e}", self.op
                     )
@@ -235,9 +270,9 @@ impl<'a> BinaryTypeCoercer<'a> {
                     rhs: coerced,
                     ret,
                 })
-            } else if let Some((lhs, rhs)) = math_decimal_coercion(self.lhs, self.rhs) {
+            } else if let Some((lhs, rhs)) = math_decimal_coercion(lhs, rhs) {
                 // Decimal arithmetic, e.g. Decimal(10, 2) + Decimal(10, 0)
-                let ret = get_result(&lhs, &rhs).map_err(|e| {
+                let ret = self.get_result(&lhs, &rhs).map_err(|e| {
                     plan_datafusion_err!(
                         "Cannot get result type for decimal operation {} {} {}: {e}", self.lhs, self.op, self.rhs
                     )
@@ -247,7 +282,7 @@ impl<'a> BinaryTypeCoercer<'a> {
                     rhs,
                     ret,
                 })
-            } else if let Some(numeric) = mathematics_numerical_coercion(self.lhs, self.rhs) {
+            } else if let Some(numeric) = mathematics_numerical_coercion(lhs, rhs) {
                 // Numeric arithmetic, e.g. Int32 + Int32
                 Ok(Signature::uniform(numeric))
             } else {
@@ -307,17 +342,25 @@ fn math_decimal_coercion(
         }
         // Unlike with comparison we don't coerce to a decimal in the case of floating point
         // numbers, instead falling back to floating point arithmetic instead
-        (Decimal128(_, _), Int8 | Int16 | Int32 | Int64) => {
-            Some((lhs_type.clone(), coerce_numeric_type_to_decimal(rhs_type)?))
-        }
-        (Int8 | Int16 | Int32 | Int64, Decimal128(_, _)) => {
-            Some((coerce_numeric_type_to_decimal(lhs_type)?, rhs_type.clone()))
-        }
-        (Decimal256(_, _), Int8 | Int16 | Int32 | Int64) => Some((
+        (
+            Decimal128(_, _),
+            Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64,
+        ) => Some((lhs_type.clone(), coerce_numeric_type_to_decimal(rhs_type)?)),
+        (
+            Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64,
+            Decimal128(_, _),
+        ) => Some((coerce_numeric_type_to_decimal(lhs_type)?, rhs_type.clone())),
+        (
+            Decimal256(_, _),
+            Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64,
+        ) => Some((
             lhs_type.clone(),
             coerce_numeric_type_to_decimal256(rhs_type)?,
         )),
-        (Int8 | Int16 | Int32 | Int64, Decimal256(_, _)) => Some((
+        (
+            Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64,
+            Decimal256(_, _),
+        ) => Some((
             coerce_numeric_type_to_decimal256(lhs_type)?,
             rhs_type.clone(),
         )),
@@ -1501,1085 +1544,4 @@ fn null_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    use datafusion_common::assert_contains;
-
-    #[test]
-    fn test_coercion_error() -> Result<()> {
-        let coercer =
-            BinaryTypeCoercer::new(&DataType::Float32, &Operator::Plus, &DataType::Utf8);
-        let result_type = coercer.get_input_types();
-
-        let e = result_type.unwrap_err();
-        assert_eq!(e.strip_backtrace(), "Error during planning: Cannot coerce arithmetic expression Float32 + Utf8 to valid types");
-        Ok(())
-    }
-
-    #[test]
-    fn test_decimal_binary_comparison_coercion() -> Result<()> {
-        let input_decimal = DataType::Decimal128(20, 3);
-        let input_types = [
-            DataType::Int8,
-            DataType::Int16,
-            DataType::Int32,
-            DataType::Int64,
-            DataType::Float32,
-            DataType::Float64,
-            DataType::Decimal128(38, 10),
-            DataType::Decimal128(20, 8),
-            DataType::Null,
-        ];
-        let result_types = [
-            DataType::Decimal128(20, 3),
-            DataType::Decimal128(20, 3),
-            DataType::Decimal128(20, 3),
-            DataType::Decimal128(23, 3),
-            DataType::Decimal128(24, 7),
-            DataType::Decimal128(32, 15),
-            DataType::Decimal128(38, 10),
-            DataType::Decimal128(25, 8),
-            DataType::Decimal128(20, 3),
-        ];
-        let comparison_op_types = [
-            Operator::NotEq,
-            Operator::Eq,
-            Operator::Gt,
-            Operator::GtEq,
-            Operator::Lt,
-            Operator::LtEq,
-        ];
-        for (i, input_type) in input_types.iter().enumerate() {
-            let expect_type = &result_types[i];
-            for op in comparison_op_types {
-                let (lhs, rhs) = BinaryTypeCoercer::new(&input_decimal, &op, input_type)
-                    .get_input_types()?;
-                assert_eq!(expect_type, &lhs);
-                assert_eq!(expect_type, &rhs);
-            }
-        }
-        // negative test
-        let result_type =
-            BinaryTypeCoercer::new(&input_decimal, &Operator::Eq, &DataType::Boolean)
-                .get_input_types();
-        assert!(result_type.is_err());
-        Ok(())
-    }
-
-    #[test]
-    fn test_decimal_mathematics_op_type() {
-        assert_eq!(
-            coerce_numeric_type_to_decimal(&DataType::Int8).unwrap(),
-            DataType::Decimal128(3, 0)
-        );
-        assert_eq!(
-            coerce_numeric_type_to_decimal(&DataType::Int16).unwrap(),
-            DataType::Decimal128(5, 0)
-        );
-        assert_eq!(
-            coerce_numeric_type_to_decimal(&DataType::Int32).unwrap(),
-            DataType::Decimal128(10, 0)
-        );
-        assert_eq!(
-            coerce_numeric_type_to_decimal(&DataType::Int64).unwrap(),
-            DataType::Decimal128(20, 0)
-        );
-        assert_eq!(
-            coerce_numeric_type_to_decimal(&DataType::Float16).unwrap(),
-            DataType::Decimal128(6, 3)
-        );
-        assert_eq!(
-            coerce_numeric_type_to_decimal(&DataType::Float32).unwrap(),
-            DataType::Decimal128(14, 7)
-        );
-        assert_eq!(
-            coerce_numeric_type_to_decimal(&DataType::Float64).unwrap(),
-            DataType::Decimal128(30, 15)
-        );
-    }
-
-    #[test]
-    fn test_dictionary_type_coercion() {
-        use DataType::*;
-
-        let lhs_type = Dictionary(Box::new(Int8), Box::new(Int32));
-        let rhs_type = Dictionary(Box::new(Int8), Box::new(Int16));
-        assert_eq!(
-            dictionary_comparison_coercion(&lhs_type, &rhs_type, true),
-            Some(Int32)
-        );
-        assert_eq!(
-            dictionary_comparison_coercion(&lhs_type, &rhs_type, false),
-            Some(Int32)
-        );
-
-        // Since we can coerce values of Int16 to Utf8 can support this
-        let lhs_type = Dictionary(Box::new(Int8), Box::new(Utf8));
-        let rhs_type = Dictionary(Box::new(Int8), Box::new(Int16));
-        assert_eq!(
-            dictionary_comparison_coercion(&lhs_type, &rhs_type, true),
-            Some(Utf8)
-        );
-
-        // Since we can coerce values of Utf8 to Binary can support this
-        let lhs_type = Dictionary(Box::new(Int8), Box::new(Utf8));
-        let rhs_type = Dictionary(Box::new(Int8), Box::new(Binary));
-        assert_eq!(
-            dictionary_comparison_coercion(&lhs_type, &rhs_type, true),
-            Some(Binary)
-        );
-
-        let lhs_type = Dictionary(Box::new(Int8), Box::new(Utf8));
-        let rhs_type = Utf8;
-        assert_eq!(
-            dictionary_comparison_coercion(&lhs_type, &rhs_type, false),
-            Some(Utf8)
-        );
-        assert_eq!(
-            dictionary_comparison_coercion(&lhs_type, &rhs_type, true),
-            Some(lhs_type.clone())
-        );
-
-        let lhs_type = Utf8;
-        let rhs_type = Dictionary(Box::new(Int8), Box::new(Utf8));
-        assert_eq!(
-            dictionary_comparison_coercion(&lhs_type, &rhs_type, false),
-            Some(Utf8)
-        );
-        assert_eq!(
-            dictionary_comparison_coercion(&lhs_type, &rhs_type, true),
-            Some(rhs_type.clone())
-        );
-    }
-
-    /// Test coercion rules for binary operators
-    ///
-    /// Applies coercion rules for `$LHS_TYPE $OP $RHS_TYPE` and asserts that
-    /// the result type is `$RESULT_TYPE`
-    macro_rules! test_coercion_binary_rule {
-        ($LHS_TYPE:expr, $RHS_TYPE:expr, $OP:expr, $RESULT_TYPE:expr) => {{
-            let (lhs, rhs) =
-                BinaryTypeCoercer::new(&$LHS_TYPE, &$OP, &$RHS_TYPE).get_input_types()?;
-            assert_eq!(lhs, $RESULT_TYPE);
-            assert_eq!(rhs, $RESULT_TYPE);
-        }};
-    }
-
-    /// Test coercion rules for binary operators
-    ///
-    /// Applies coercion rules for each RHS_TYPE in $RHS_TYPES such that
-    /// `$LHS_TYPE $OP RHS_TYPE` and asserts that the result type is `$RESULT_TYPE`.
-    /// Also tests that the inverse `RHS_TYPE $OP $LHS_TYPE` is true
-    macro_rules! test_coercion_binary_rule_multiple {
-        ($LHS_TYPE:expr, $RHS_TYPES:expr, $OP:expr, $RESULT_TYPE:expr) => {{
-            for rh_type in $RHS_TYPES {
-                let (lhs, rhs) = BinaryTypeCoercer::new(&$LHS_TYPE, &$OP, &rh_type)
-                    .get_input_types()?;
-                assert_eq!(lhs, $RESULT_TYPE);
-                assert_eq!(rhs, $RESULT_TYPE);
-
-                BinaryTypeCoercer::new(&rh_type, &$OP, &$LHS_TYPE).get_input_types()?;
-                assert_eq!(lhs, $RESULT_TYPE);
-                assert_eq!(rhs, $RESULT_TYPE);
-            }
-        }};
-    }
-
-    /// Test coercion rules for like
-    ///
-    /// Applies coercion rules for both
-    /// * `$LHS_TYPE LIKE $RHS_TYPE`
-    /// * `$RHS_TYPE LIKE $LHS_TYPE`
-    ///
-    /// And asserts the result type is `$RESULT_TYPE`
-    macro_rules! test_like_rule {
-        ($LHS_TYPE:expr, $RHS_TYPE:expr, $RESULT_TYPE:expr) => {{
-            println!("Coercing {} LIKE {}", $LHS_TYPE, $RHS_TYPE);
-            let result = like_coercion(&$LHS_TYPE, &$RHS_TYPE);
-            assert_eq!(result, $RESULT_TYPE);
-            // reverse the order
-            let result = like_coercion(&$RHS_TYPE, &$LHS_TYPE);
-            assert_eq!(result, $RESULT_TYPE);
-        }};
-    }
-
-    #[test]
-    fn test_date_timestamp_arithmetic_error() -> Result<()> {
-        let (lhs, rhs) = BinaryTypeCoercer::new(
-            &DataType::Timestamp(TimeUnit::Nanosecond, None),
-            &Operator::Minus,
-            &DataType::Timestamp(TimeUnit::Millisecond, None),
-        )
-        .get_input_types()?;
-        assert_eq!(lhs.to_string(), "Timestamp(Millisecond, None)");
-        assert_eq!(rhs.to_string(), "Timestamp(Millisecond, None)");
-
-        let err =
-            BinaryTypeCoercer::new(&DataType::Date32, &Operator::Plus, &DataType::Date64)
-                .get_input_types()
-                .unwrap_err()
-                .to_string();
-
-        assert_contains!(
-            &err,
-            "Cannot get result type for temporal operation Date64 + Date64"
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_like_coercion() {
-        // string coerce to strings
-        test_like_rule!(DataType::Utf8, DataType::Utf8, Some(DataType::Utf8));
-        test_like_rule!(
-            DataType::LargeUtf8,
-            DataType::Utf8,
-            Some(DataType::LargeUtf8)
-        );
-        test_like_rule!(
-            DataType::Utf8,
-            DataType::LargeUtf8,
-            Some(DataType::LargeUtf8)
-        );
-        test_like_rule!(
-            DataType::LargeUtf8,
-            DataType::LargeUtf8,
-            Some(DataType::LargeUtf8)
-        );
-
-        // Also coerce binary to strings
-        test_like_rule!(DataType::Binary, DataType::Utf8, Some(DataType::Utf8));
-        test_like_rule!(
-            DataType::LargeBinary,
-            DataType::Utf8,
-            Some(DataType::LargeUtf8)
-        );
-        test_like_rule!(
-            DataType::Binary,
-            DataType::LargeUtf8,
-            Some(DataType::LargeUtf8)
-        );
-        test_like_rule!(
-            DataType::LargeBinary,
-            DataType::LargeUtf8,
-            Some(DataType::LargeUtf8)
-        );
-    }
-
-    #[test]
-    fn test_type_coercion() -> Result<()> {
-        test_coercion_binary_rule!(
-            DataType::Utf8,
-            DataType::Date32,
-            Operator::Eq,
-            DataType::Date32
-        );
-        test_coercion_binary_rule!(
-            DataType::Utf8,
-            DataType::Date64,
-            Operator::Lt,
-            DataType::Date64
-        );
-        test_coercion_binary_rule!(
-            DataType::Utf8,
-            DataType::Time32(TimeUnit::Second),
-            Operator::Eq,
-            DataType::Time32(TimeUnit::Second)
-        );
-        test_coercion_binary_rule!(
-            DataType::Utf8,
-            DataType::Time32(TimeUnit::Millisecond),
-            Operator::Eq,
-            DataType::Time32(TimeUnit::Millisecond)
-        );
-        test_coercion_binary_rule!(
-            DataType::Utf8,
-            DataType::Time64(TimeUnit::Microsecond),
-            Operator::Eq,
-            DataType::Time64(TimeUnit::Microsecond)
-        );
-        test_coercion_binary_rule!(
-            DataType::Utf8,
-            DataType::Time64(TimeUnit::Nanosecond),
-            Operator::Eq,
-            DataType::Time64(TimeUnit::Nanosecond)
-        );
-        test_coercion_binary_rule!(
-            DataType::Utf8,
-            DataType::Timestamp(TimeUnit::Second, None),
-            Operator::Lt,
-            DataType::Timestamp(TimeUnit::Nanosecond, None)
-        );
-        test_coercion_binary_rule!(
-            DataType::Utf8,
-            DataType::Timestamp(TimeUnit::Millisecond, None),
-            Operator::Lt,
-            DataType::Timestamp(TimeUnit::Nanosecond, None)
-        );
-        test_coercion_binary_rule!(
-            DataType::Utf8,
-            DataType::Timestamp(TimeUnit::Microsecond, None),
-            Operator::Lt,
-            DataType::Timestamp(TimeUnit::Nanosecond, None)
-        );
-        test_coercion_binary_rule!(
-            DataType::Utf8,
-            DataType::Timestamp(TimeUnit::Nanosecond, None),
-            Operator::Lt,
-            DataType::Timestamp(TimeUnit::Nanosecond, None)
-        );
-        test_coercion_binary_rule!(
-            DataType::Utf8,
-            DataType::Utf8,
-            Operator::RegexMatch,
-            DataType::Utf8
-        );
-        test_coercion_binary_rule!(
-            DataType::Utf8,
-            DataType::Utf8View,
-            Operator::RegexMatch,
-            DataType::Utf8View
-        );
-        test_coercion_binary_rule!(
-            DataType::Utf8View,
-            DataType::Utf8,
-            Operator::RegexMatch,
-            DataType::Utf8View
-        );
-        test_coercion_binary_rule!(
-            DataType::Utf8View,
-            DataType::Utf8View,
-            Operator::RegexMatch,
-            DataType::Utf8View
-        );
-        test_coercion_binary_rule!(
-            DataType::Utf8,
-            DataType::Utf8,
-            Operator::RegexNotMatch,
-            DataType::Utf8
-        );
-        test_coercion_binary_rule!(
-            DataType::Utf8View,
-            DataType::Utf8,
-            Operator::RegexNotMatch,
-            DataType::Utf8View
-        );
-        test_coercion_binary_rule!(
-            DataType::Utf8,
-            DataType::Utf8View,
-            Operator::RegexNotMatch,
-            DataType::Utf8View
-        );
-        test_coercion_binary_rule!(
-            DataType::Utf8View,
-            DataType::Utf8View,
-            Operator::RegexNotMatch,
-            DataType::Utf8View
-        );
-        test_coercion_binary_rule!(
-            DataType::Utf8,
-            DataType::Utf8,
-            Operator::RegexNotIMatch,
-            DataType::Utf8
-        );
-        test_coercion_binary_rule!(
-            DataType::Utf8View,
-            DataType::Utf8,
-            Operator::RegexNotIMatch,
-            DataType::Utf8View
-        );
-        test_coercion_binary_rule!(
-            DataType::Utf8,
-            DataType::Utf8View,
-            Operator::RegexNotIMatch,
-            DataType::Utf8View
-        );
-        test_coercion_binary_rule!(
-            DataType::Utf8View,
-            DataType::Utf8View,
-            Operator::RegexNotIMatch,
-            DataType::Utf8View
-        );
-        test_coercion_binary_rule!(
-            DataType::Dictionary(DataType::Int32.into(), DataType::Utf8.into()),
-            DataType::Utf8,
-            Operator::RegexMatch,
-            DataType::Utf8
-        );
-        test_coercion_binary_rule!(
-            DataType::Dictionary(DataType::Int32.into(), DataType::Utf8.into()),
-            DataType::Utf8View,
-            Operator::RegexMatch,
-            DataType::Utf8View
-        );
-        test_coercion_binary_rule!(
-            DataType::Dictionary(DataType::Int32.into(), DataType::Utf8View.into()),
-            DataType::Utf8,
-            Operator::RegexMatch,
-            DataType::Utf8View
-        );
-        test_coercion_binary_rule!(
-            DataType::Dictionary(DataType::Int32.into(), DataType::Utf8View.into()),
-            DataType::Utf8View,
-            Operator::RegexMatch,
-            DataType::Utf8View
-        );
-        test_coercion_binary_rule!(
-            DataType::Dictionary(DataType::Int32.into(), DataType::Utf8.into()),
-            DataType::Utf8,
-            Operator::RegexIMatch,
-            DataType::Utf8
-        );
-        test_coercion_binary_rule!(
-            DataType::Dictionary(DataType::Int32.into(), DataType::Utf8View.into()),
-            DataType::Utf8,
-            Operator::RegexIMatch,
-            DataType::Utf8View
-        );
-        test_coercion_binary_rule!(
-            DataType::Dictionary(DataType::Int32.into(), DataType::Utf8.into()),
-            DataType::Utf8View,
-            Operator::RegexIMatch,
-            DataType::Utf8View
-        );
-        test_coercion_binary_rule!(
-            DataType::Dictionary(DataType::Int32.into(), DataType::Utf8View.into()),
-            DataType::Utf8View,
-            Operator::RegexIMatch,
-            DataType::Utf8View
-        );
-        test_coercion_binary_rule!(
-            DataType::Dictionary(DataType::Int32.into(), DataType::Utf8.into()),
-            DataType::Utf8,
-            Operator::RegexNotMatch,
-            DataType::Utf8
-        );
-        test_coercion_binary_rule!(
-            DataType::Dictionary(DataType::Int32.into(), DataType::Utf8.into()),
-            DataType::Utf8View,
-            Operator::RegexNotMatch,
-            DataType::Utf8View
-        );
-        test_coercion_binary_rule!(
-            DataType::Dictionary(DataType::Int32.into(), DataType::Utf8View.into()),
-            DataType::Utf8,
-            Operator::RegexNotMatch,
-            DataType::Utf8View
-        );
-        test_coercion_binary_rule!(
-            DataType::Dictionary(DataType::Int32.into(), DataType::Utf8.into()),
-            DataType::Utf8View,
-            Operator::RegexNotMatch,
-            DataType::Utf8View
-        );
-        test_coercion_binary_rule!(
-            DataType::Dictionary(DataType::Int32.into(), DataType::Utf8.into()),
-            DataType::Utf8,
-            Operator::RegexNotIMatch,
-            DataType::Utf8
-        );
-        test_coercion_binary_rule!(
-            DataType::Dictionary(DataType::Int32.into(), DataType::Utf8View.into()),
-            DataType::Utf8,
-            Operator::RegexNotIMatch,
-            DataType::Utf8View
-        );
-        test_coercion_binary_rule!(
-            DataType::Dictionary(DataType::Int32.into(), DataType::Utf8.into()),
-            DataType::Utf8View,
-            Operator::RegexNotIMatch,
-            DataType::Utf8View
-        );
-        test_coercion_binary_rule!(
-            DataType::Dictionary(DataType::Int32.into(), DataType::Utf8View.into()),
-            DataType::Utf8View,
-            Operator::RegexNotIMatch,
-            DataType::Utf8View
-        );
-        test_coercion_binary_rule!(
-            DataType::Int16,
-            DataType::Int64,
-            Operator::BitwiseAnd,
-            DataType::Int64
-        );
-        test_coercion_binary_rule!(
-            DataType::UInt64,
-            DataType::UInt64,
-            Operator::BitwiseAnd,
-            DataType::UInt64
-        );
-        test_coercion_binary_rule!(
-            DataType::Int8,
-            DataType::UInt32,
-            Operator::BitwiseAnd,
-            DataType::Int64
-        );
-        test_coercion_binary_rule!(
-            DataType::UInt32,
-            DataType::Int32,
-            Operator::BitwiseAnd,
-            DataType::Int64
-        );
-        test_coercion_binary_rule!(
-            DataType::UInt16,
-            DataType::Int16,
-            Operator::BitwiseAnd,
-            DataType::Int32
-        );
-        test_coercion_binary_rule!(
-            DataType::UInt32,
-            DataType::UInt32,
-            Operator::BitwiseAnd,
-            DataType::UInt32
-        );
-        test_coercion_binary_rule!(
-            DataType::UInt16,
-            DataType::UInt32,
-            Operator::BitwiseAnd,
-            DataType::UInt32
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn test_type_coercion_arithmetic() -> Result<()> {
-        use DataType::*;
-
-        // (Float64, _) | (_, Float64) => Some(Float64),
-        test_coercion_binary_rule_multiple!(
-            Float64,
-            [
-                Float64, Float32, Float16, Int64, UInt64, Int32, UInt32, Int16, UInt16,
-                Int8, UInt8
-            ],
-            Operator::Plus,
-            Float64
-        );
-        // (_, Float32) | (Float32, _) => Some(Float32),
-        test_coercion_binary_rule_multiple!(
-            Float32,
-            [
-                Float32, Float16, Int64, UInt64, Int32, UInt32, Int16, UInt16, Int8,
-                UInt8
-            ],
-            Operator::Plus,
-            Float32
-        );
-        // (_, Float16) | (Float16, _) => Some(Float16),
-        test_coercion_binary_rule_multiple!(
-            Float16,
-            [Float16, Int64, UInt64, Int32, UInt32, Int16, UInt16, Int8, UInt8],
-            Operator::Plus,
-            Float16
-        );
-        // (UInt64, Int64 | Int32 | Int16 | Int8) | (Int64 | Int32 | Int16 | Int8, UInt64)  => Some(Decimal128(20, 0)),
-        test_coercion_binary_rule_multiple!(
-            UInt64,
-            [Int64, Int32, Int16, Int8],
-            Operator::Divide,
-            Decimal128(20, 0)
-        );
-        // (UInt64, _) | (_, UInt64) => Some(UInt64),
-        test_coercion_binary_rule_multiple!(
-            UInt64,
-            [UInt64, UInt32, UInt16, UInt8],
-            Operator::Modulo,
-            UInt64
-        );
-        // (Int64, _) | (_, Int64) => Some(Int64),
-        test_coercion_binary_rule_multiple!(
-            Int64,
-            [Int64, Int32, UInt32, Int16, UInt16, Int8, UInt8],
-            Operator::Modulo,
-            Int64
-        );
-        // (UInt32, Int32 | Int16 | Int8) | (Int32 | Int16 | Int8, UInt32) => Some(Int64)
-        test_coercion_binary_rule_multiple!(
-            UInt32,
-            [Int32, Int16, Int8],
-            Operator::Modulo,
-            Int64
-        );
-        // (UInt32, _) | (_, UInt32) => Some(UInt32),
-        test_coercion_binary_rule_multiple!(
-            UInt32,
-            [UInt32, UInt16, UInt8],
-            Operator::Modulo,
-            UInt32
-        );
-        // (Int32, _) | (_, Int32) => Some(Int32),
-        test_coercion_binary_rule_multiple!(
-            Int32,
-            [Int32, Int16, Int8],
-            Operator::Modulo,
-            Int32
-        );
-        // (UInt16, Int16 | Int8) | (Int16 | Int8, UInt16) => Some(Int32)
-        test_coercion_binary_rule_multiple!(
-            UInt16,
-            [Int16, Int8],
-            Operator::Minus,
-            Int32
-        );
-        // (UInt16, _) | (_, UInt16) => Some(UInt16),
-        test_coercion_binary_rule_multiple!(
-            UInt16,
-            [UInt16, UInt8, UInt8],
-            Operator::Plus,
-            UInt16
-        );
-        // (Int16, _) | (_, Int16) => Some(Int16),
-        test_coercion_binary_rule_multiple!(Int16, [Int16, Int8], Operator::Plus, Int16);
-        // (UInt8, Int8) | (Int8, UInt8) => Some(Int16)
-        test_coercion_binary_rule!(Int8, UInt8, Operator::Minus, Int16);
-        test_coercion_binary_rule!(UInt8, Int8, Operator::Multiply, Int16);
-        // (UInt8, _) | (_, UInt8) => Some(UInt8),
-        test_coercion_binary_rule!(UInt8, UInt8, Operator::Minus, UInt8);
-        // (Int8, _) | (_, Int8) => Some(Int8),
-        test_coercion_binary_rule!(Int8, Int8, Operator::Plus, Int8);
-
-        Ok(())
-    }
-
-    fn test_math_decimal_coercion_rule(
-        lhs_type: DataType,
-        rhs_type: DataType,
-        expected_lhs_type: DataType,
-        expected_rhs_type: DataType,
-    ) {
-        // The coerced types for lhs and rhs, if any of them is not decimal
-        let (lhs_type, rhs_type) = math_decimal_coercion(&lhs_type, &rhs_type).unwrap();
-        assert_eq!(lhs_type, expected_lhs_type);
-        assert_eq!(rhs_type, expected_rhs_type);
-    }
-
-    #[test]
-    fn test_coercion_arithmetic_decimal() -> Result<()> {
-        test_math_decimal_coercion_rule(
-            DataType::Decimal128(10, 2),
-            DataType::Decimal128(10, 2),
-            DataType::Decimal128(10, 2),
-            DataType::Decimal128(10, 2),
-        );
-
-        test_math_decimal_coercion_rule(
-            DataType::Int32,
-            DataType::Decimal128(10, 2),
-            DataType::Decimal128(10, 0),
-            DataType::Decimal128(10, 2),
-        );
-
-        test_math_decimal_coercion_rule(
-            DataType::Int32,
-            DataType::Decimal128(10, 2),
-            DataType::Decimal128(10, 0),
-            DataType::Decimal128(10, 2),
-        );
-
-        test_math_decimal_coercion_rule(
-            DataType::Int32,
-            DataType::Decimal128(10, 2),
-            DataType::Decimal128(10, 0),
-            DataType::Decimal128(10, 2),
-        );
-
-        test_math_decimal_coercion_rule(
-            DataType::Int32,
-            DataType::Decimal128(10, 2),
-            DataType::Decimal128(10, 0),
-            DataType::Decimal128(10, 2),
-        );
-
-        test_math_decimal_coercion_rule(
-            DataType::Int32,
-            DataType::Decimal128(10, 2),
-            DataType::Decimal128(10, 0),
-            DataType::Decimal128(10, 2),
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_type_coercion_compare() -> Result<()> {
-        // boolean
-        test_coercion_binary_rule!(
-            DataType::Boolean,
-            DataType::Boolean,
-            Operator::Eq,
-            DataType::Boolean
-        );
-        // float
-        test_coercion_binary_rule!(
-            DataType::Float16,
-            DataType::Int64,
-            Operator::Eq,
-            DataType::Float16
-        );
-        test_coercion_binary_rule!(
-            DataType::Float16,
-            DataType::Float64,
-            Operator::Eq,
-            DataType::Float64
-        );
-        test_coercion_binary_rule!(
-            DataType::Float32,
-            DataType::Int64,
-            Operator::Eq,
-            DataType::Float32
-        );
-        test_coercion_binary_rule!(
-            DataType::Float32,
-            DataType::Float64,
-            Operator::GtEq,
-            DataType::Float64
-        );
-        // signed integer
-        test_coercion_binary_rule!(
-            DataType::Int8,
-            DataType::Int32,
-            Operator::LtEq,
-            DataType::Int32
-        );
-        test_coercion_binary_rule!(
-            DataType::Int64,
-            DataType::Int32,
-            Operator::LtEq,
-            DataType::Int64
-        );
-        // unsigned integer
-        test_coercion_binary_rule!(
-            DataType::UInt32,
-            DataType::UInt8,
-            Operator::Gt,
-            DataType::UInt32
-        );
-        test_coercion_binary_rule!(
-            DataType::UInt64,
-            DataType::UInt8,
-            Operator::Eq,
-            DataType::UInt64
-        );
-        test_coercion_binary_rule!(
-            DataType::UInt64,
-            DataType::Int64,
-            Operator::Eq,
-            DataType::Decimal128(20, 0)
-        );
-        // numeric/decimal
-        test_coercion_binary_rule!(
-            DataType::Int64,
-            DataType::Decimal128(10, 0),
-            Operator::Eq,
-            DataType::Decimal128(20, 0)
-        );
-        test_coercion_binary_rule!(
-            DataType::Int64,
-            DataType::Decimal128(10, 2),
-            Operator::Lt,
-            DataType::Decimal128(22, 2)
-        );
-        test_coercion_binary_rule!(
-            DataType::Float64,
-            DataType::Decimal128(10, 3),
-            Operator::Gt,
-            DataType::Decimal128(30, 15)
-        );
-        test_coercion_binary_rule!(
-            DataType::Int64,
-            DataType::Decimal128(10, 0),
-            Operator::Eq,
-            DataType::Decimal128(20, 0)
-        );
-        test_coercion_binary_rule!(
-            DataType::Decimal128(14, 2),
-            DataType::Decimal128(10, 3),
-            Operator::GtEq,
-            DataType::Decimal128(15, 3)
-        );
-        test_coercion_binary_rule!(
-            DataType::UInt64,
-            DataType::Decimal128(20, 0),
-            Operator::Eq,
-            DataType::Decimal128(20, 0)
-        );
-
-        // Binary
-        test_coercion_binary_rule!(
-            DataType::Binary,
-            DataType::Binary,
-            Operator::Eq,
-            DataType::Binary
-        );
-        test_coercion_binary_rule!(
-            DataType::Utf8,
-            DataType::Binary,
-            Operator::Eq,
-            DataType::Binary
-        );
-        test_coercion_binary_rule!(
-            DataType::Binary,
-            DataType::Utf8,
-            Operator::Eq,
-            DataType::Binary
-        );
-
-        // LargeBinary
-        test_coercion_binary_rule!(
-            DataType::LargeBinary,
-            DataType::LargeBinary,
-            Operator::Eq,
-            DataType::LargeBinary
-        );
-        test_coercion_binary_rule!(
-            DataType::Binary,
-            DataType::LargeBinary,
-            Operator::Eq,
-            DataType::LargeBinary
-        );
-        test_coercion_binary_rule!(
-            DataType::LargeBinary,
-            DataType::Binary,
-            Operator::Eq,
-            DataType::LargeBinary
-        );
-        test_coercion_binary_rule!(
-            DataType::Utf8,
-            DataType::LargeBinary,
-            Operator::Eq,
-            DataType::LargeBinary
-        );
-        test_coercion_binary_rule!(
-            DataType::LargeBinary,
-            DataType::Utf8,
-            Operator::Eq,
-            DataType::LargeBinary
-        );
-        test_coercion_binary_rule!(
-            DataType::LargeUtf8,
-            DataType::LargeBinary,
-            Operator::Eq,
-            DataType::LargeBinary
-        );
-        test_coercion_binary_rule!(
-            DataType::LargeBinary,
-            DataType::LargeUtf8,
-            Operator::Eq,
-            DataType::LargeBinary
-        );
-
-        // Timestamps
-        let utc: Option<Arc<str>> = Some("UTC".into());
-        test_coercion_binary_rule!(
-            DataType::Timestamp(TimeUnit::Second, utc.clone()),
-            DataType::Timestamp(TimeUnit::Second, utc.clone()),
-            Operator::Eq,
-            DataType::Timestamp(TimeUnit::Second, utc.clone())
-        );
-        test_coercion_binary_rule!(
-            DataType::Timestamp(TimeUnit::Second, utc.clone()),
-            DataType::Timestamp(TimeUnit::Second, Some("Europe/Brussels".into())),
-            Operator::Eq,
-            DataType::Timestamp(TimeUnit::Second, utc.clone())
-        );
-        test_coercion_binary_rule!(
-            DataType::Timestamp(TimeUnit::Second, Some("America/New_York".into())),
-            DataType::Timestamp(TimeUnit::Second, Some("Europe/Brussels".into())),
-            Operator::Eq,
-            DataType::Timestamp(TimeUnit::Second, Some("America/New_York".into()))
-        );
-        test_coercion_binary_rule!(
-            DataType::Timestamp(TimeUnit::Second, Some("Europe/Brussels".into())),
-            DataType::Timestamp(TimeUnit::Second, utc),
-            Operator::Eq,
-            DataType::Timestamp(TimeUnit::Second, Some("Europe/Brussels".into()))
-        );
-
-        // list
-        let inner_field = Arc::new(Field::new_list_field(DataType::Int64, true));
-        test_coercion_binary_rule!(
-            DataType::List(Arc::clone(&inner_field)),
-            DataType::List(Arc::clone(&inner_field)),
-            Operator::Eq,
-            DataType::List(Arc::clone(&inner_field))
-        );
-        test_coercion_binary_rule!(
-            DataType::List(Arc::clone(&inner_field)),
-            DataType::LargeList(Arc::clone(&inner_field)),
-            Operator::Eq,
-            DataType::LargeList(Arc::clone(&inner_field))
-        );
-        test_coercion_binary_rule!(
-            DataType::LargeList(Arc::clone(&inner_field)),
-            DataType::List(Arc::clone(&inner_field)),
-            Operator::Eq,
-            DataType::LargeList(Arc::clone(&inner_field))
-        );
-        test_coercion_binary_rule!(
-            DataType::LargeList(Arc::clone(&inner_field)),
-            DataType::LargeList(Arc::clone(&inner_field)),
-            Operator::Eq,
-            DataType::LargeList(Arc::clone(&inner_field))
-        );
-        test_coercion_binary_rule!(
-            DataType::FixedSizeList(Arc::clone(&inner_field), 10),
-            DataType::FixedSizeList(Arc::clone(&inner_field), 10),
-            Operator::Eq,
-            DataType::FixedSizeList(Arc::clone(&inner_field), 10)
-        );
-        test_coercion_binary_rule!(
-            DataType::FixedSizeList(Arc::clone(&inner_field), 10),
-            DataType::LargeList(Arc::clone(&inner_field)),
-            Operator::Eq,
-            DataType::LargeList(Arc::clone(&inner_field))
-        );
-        test_coercion_binary_rule!(
-            DataType::LargeList(Arc::clone(&inner_field)),
-            DataType::FixedSizeList(Arc::clone(&inner_field), 10),
-            Operator::Eq,
-            DataType::LargeList(Arc::clone(&inner_field))
-        );
-        test_coercion_binary_rule!(
-            DataType::List(Arc::clone(&inner_field)),
-            DataType::FixedSizeList(Arc::clone(&inner_field), 10),
-            Operator::Eq,
-            DataType::List(Arc::clone(&inner_field))
-        );
-        test_coercion_binary_rule!(
-            DataType::FixedSizeList(Arc::clone(&inner_field), 10),
-            DataType::List(Arc::clone(&inner_field)),
-            Operator::Eq,
-            DataType::List(Arc::clone(&inner_field))
-        );
-
-        // Negative test: inner_timestamp_field and inner_field are not compatible because their inner types are not compatible
-        let inner_timestamp_field = Arc::new(Field::new_list_field(
-            DataType::Timestamp(TimeUnit::Microsecond, None),
-            true,
-        ));
-        let result_type = BinaryTypeCoercer::new(
-            &DataType::List(Arc::clone(&inner_field)),
-            &Operator::Eq,
-            &DataType::List(Arc::clone(&inner_timestamp_field)),
-        )
-        .get_input_types();
-        assert!(result_type.is_err());
-
-        // TODO add other data type
-        Ok(())
-    }
-
-    #[test]
-    fn test_list_coercion() {
-        let lhs_type = DataType::List(Arc::new(Field::new("lhs", DataType::Int8, false)));
-
-        let rhs_type = DataType::List(Arc::new(Field::new("rhs", DataType::Int64, true)));
-
-        let coerced_type = list_coercion(&lhs_type, &rhs_type).unwrap();
-        assert_eq!(
-            coerced_type,
-            DataType::List(Arc::new(Field::new("lhs", DataType::Int64, true)))
-        ); // nullable because the RHS is nullable
-    }
-
-    #[test]
-    fn test_type_coercion_logical_op() -> Result<()> {
-        test_coercion_binary_rule!(
-            DataType::Boolean,
-            DataType::Boolean,
-            Operator::And,
-            DataType::Boolean
-        );
-
-        test_coercion_binary_rule!(
-            DataType::Boolean,
-            DataType::Boolean,
-            Operator::Or,
-            DataType::Boolean
-        );
-        test_coercion_binary_rule!(
-            DataType::Boolean,
-            DataType::Null,
-            Operator::And,
-            DataType::Boolean
-        );
-        test_coercion_binary_rule!(
-            DataType::Boolean,
-            DataType::Null,
-            Operator::Or,
-            DataType::Boolean
-        );
-        test_coercion_binary_rule!(
-            DataType::Null,
-            DataType::Null,
-            Operator::Or,
-            DataType::Boolean
-        );
-        test_coercion_binary_rule!(
-            DataType::Null,
-            DataType::Null,
-            Operator::And,
-            DataType::Boolean
-        );
-        test_coercion_binary_rule!(
-            DataType::Null,
-            DataType::Boolean,
-            Operator::And,
-            DataType::Boolean
-        );
-        test_coercion_binary_rule!(
-            DataType::Null,
-            DataType::Boolean,
-            Operator::Or,
-            DataType::Boolean
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn test_map_coercion() -> Result<()> {
-        let lhs = Field::new_map(
-            "lhs",
-            "entries",
-            Arc::new(Field::new("keys", DataType::Utf8, false)),
-            Arc::new(Field::new("values", DataType::LargeUtf8, false)),
-            true,
-            false,
-        );
-        let rhs = Field::new_map(
-            "rhs",
-            "kvp",
-            Arc::new(Field::new("k", DataType::Utf8, false)),
-            Arc::new(Field::new("v", DataType::Utf8, true)),
-            false,
-            true,
-        );
-
-        let expected = Field::new_map(
-            "expected",
-            "entries", // struct coercion takes lhs name
-            Arc::new(Field::new(
-                "keys", // struct coercion takes lhs name
-                DataType::Utf8,
-                false,
-            )),
-            Arc::new(Field::new(
-                "values",            // struct coercion takes lhs name
-                DataType::LargeUtf8, // lhs is large string
-                true,                // rhs is nullable
-            )),
-            false, // both sides must be sorted
-            true,  // rhs is nullable
-        );
-
-        test_coercion_binary_rule!(
-            lhs.data_type(),
-            rhs.data_type(),
-            Operator::Eq,
-            expected.data_type().clone()
-        );
-        Ok(())
-    }
-}
+mod tests;
