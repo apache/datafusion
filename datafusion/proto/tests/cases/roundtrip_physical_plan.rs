@@ -398,7 +398,7 @@ fn roundtrip_window() -> Result<()> {
     let args = vec![cast(col("a", &schema)?, &schema, DataType::Float64)?];
     let sum_expr = AggregateExprBuilder::new(sum_udaf(), args)
         .schema(Arc::clone(&schema))
-        .alias("SUM(a) RANGE BETWEEN CURRENT ROW AND UNBOUNDED PROCEEDING")
+        .alias("SUM(a) RANGE BETWEEN CURRENT ROW AND UNBOUNDED PRECEDING")
         .build()
         .map(Arc::new)?;
 
