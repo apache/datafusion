@@ -567,6 +567,21 @@ impl protobuf::PhysicalPlanNode {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let input: Arc<dyn ExecutionPlan> =
             into_physical_plan(&filter.input, ctx, runtime, extension_codec)?;
+
+        let predicate = filter
+            .expr
+            .as_ref()
+            .map(|expr| {
+                parse_physical_expr(expr, ctx, input.schema().as_ref(), extension_codec)
+            })
+            .transpose()?
+            .ok_or_else(|| {
+                DataFusionError::Internal(
+                    "filter (FilterExecNode) in PhysicalPlanNode is missing.".to_owned(),
+                )
+            })?;
+
+        let filter_selectivity = filter.default_filter_selectivity.try_into();
         let projection = if !filter.projection.is_empty() {
             Some(
                 filter
@@ -579,31 +594,6 @@ impl protobuf::PhysicalPlanNode {
             None
         };
 
-        // Use the projected schema if projection is present, otherwise use the full schema
-        let predicate_schema = if let Some(ref proj_indices) = projection {
-            // Create projected schema for parsing the predicate
-            let projected_fields: Vec<_> = proj_indices
-                .iter()
-                .map(|&i| input.schema().field(i).clone())
-                .collect();
-            Arc::new(Schema::new(projected_fields))
-        } else {
-            input.schema()
-        };
-
-        let predicate = filter
-            .expr
-            .as_ref()
-            .map(|expr| {
-                parse_physical_expr(expr, ctx, predicate_schema.as_ref(), extension_codec)
-            })
-            .transpose()?
-            .ok_or_else(|| {
-                DataFusionError::Internal(
-                    "filter (FilterExecNode) in PhysicalPlanNode is missing.".to_owned(),
-                )
-            })?;
-        let filter_selectivity = filter.default_filter_selectivity.try_into();
         let filter =
             FilterExec::try_new(predicate, input)?.with_projection(projection)?;
         match filter_selectivity {
