@@ -284,7 +284,15 @@ fn verify_file_encrypted(
     options
         .options
         .insert("test_key".to_string(), "test value".to_string());
-    let object_path = object_store::path::Path::from(file_path.to_str().unwrap());
+
+    // the paths in encryption_factory are stored with "/", so we need to replace them on Windows
+    let file_path_str = if cfg!(target_os = "windows") {
+        file_path.to_str().unwrap().replace("\\", "/")
+    } else {
+        file_path.to_str().unwrap().to_owned()
+    };
+
+    let object_path = object_store::path::Path::from(file_path_str);
     let decryption_properties = encryption_factory
         .get_file_decryption_properties(&options, &object_path)?
         .unwrap();
