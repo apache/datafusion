@@ -52,6 +52,7 @@ use arrow::array::{Array, RecordBatch, RecordBatchOptions, StringViewArray};
 use arrow::compute::{concat_batches, lexsort_to_indices, take_arrays};
 use arrow::datatypes::SchemaRef;
 use datafusion_common::config::SpillCompression;
+use datafusion_common::instant::Instant;
 use datafusion_common::{internal_datafusion_err, internal_err, DataFusionError, Result};
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::runtime_env::RuntimeEnv;
@@ -63,20 +64,22 @@ use datafusion_physical_expr::PhysicalExpr;
 use futures::{StreamExt, TryStreamExt};
 use log::{debug, trace};
 
+/// Our current sort_batch implementation can be divided into two sections:
+/// 1. The first section calculates the indices of the sorted order
+/// 2. We use a take kernel to recreate the batch in sorted order
 #[derive(Clone, Debug)]
 pub struct LexSortMetrics {
-    pub time_calculating_lexsort_indices: Time,
-
-    pub time_taking_indices_in_lexsort: Time,
+    pub calculate_indices_time: Time,
+    pub recreate_batch_time: Time,
 }
 
 impl LexSortMetrics {
     pub fn new(metrics: &ExecutionPlanMetricsSet, partition: usize) -> Self {
         Self {
-            time_calculating_lexsort_indices: MetricBuilder::new(metrics)
-                .subset_time("time_calculating_lexsort_indices", partition),
-            time_taking_indices_in_lexsort: MetricBuilder::new(metrics)
-                .subset_time("time_taking_indices_in_lexsort", partition),
+            calculate_indices_time: MetricBuilder::new(metrics)
+                .subset_time("calculate_indices_time", partition),
+            recreate_batch_time: MetricBuilder::new(metrics)
+                .subset_time("recreate_batch_time", partition),
         }
     }
 }
@@ -837,28 +840,36 @@ pub fn sort_batch(
     metrics: Option<&LexSortMetrics>,
     fetch: Option<usize>,
 ) -> Result<RecordBatch> {
-    let indices = {
-        let _timer =
-            metrics.map(|metrics| metrics.time_calculating_lexsort_indices.timer());
-        let sort_columns = expressions
-            .iter()
-            .map(|expr| expr.evaluate_to_sort_column(batch))
-            .collect::<Result<Vec<_>>>()?;
-        lexsort_to_indices(&sort_columns, fetch)?
-    };
-    let mut columns = {
-        let _timer =
-            metrics.map(|metrics| metrics.time_taking_indices_in_lexsort.timer());
-        take_arrays(batch.columns(), &indices, None)?
+    let start_time = Instant::now();
+
+    let sort_columns = expressions
+        .iter()
+        .map(|expr| expr.evaluate_to_sort_column(batch))
+        .collect::<Result<Vec<_>>>()?;
+    let indices = lexsort_to_indices(&sort_columns, fetch)?;
+    let indices_time = if let Some(metrics) = metrics {
+        let indices_time = Instant::now();
+        metrics
+            .calculate_indices_time
+            .add_duration(indices_time - start_time);
+        Some(indices_time)
+    } else {
+        None
     };
 
+    let mut columns = take_arrays(batch.columns(), &indices, None)?;
     // The columns may be larger than the unsorted columns in `batch` especially for variable length
     // data types due to exponential growth when building the sort columns. We shrink the columns
     // to prevent memory reservation failures, as well as excessive memory allocation when running
     // merges in `SortPreservingMergeStream`.
-    columns.iter_mut().for_each(|c| {
-        c.shrink_to_fit();
-    });
+    columns.iter_mut().for_each(|c| c.shrink_to_fit());
+
+    if let Some(metrics) = metrics {
+        let batch_time = Instant::now();
+        metrics
+            .recreate_batch_time
+            .add_duration(batch_time - indices_time.unwrap());
+    }
 
     let options = RecordBatchOptions::new().with_row_count(Some(indices.len()));
     Ok(RecordBatch::try_new_with_options(
