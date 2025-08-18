@@ -19,17 +19,23 @@ use std::sync::Arc;
 
 use arrow::array::{
     Array, ArrayRef, ArrowPrimitiveType, AsArray, ListArray, NullBufferBuilder,
+    PrimitiveArray,
 };
 use arrow::datatypes::{Field, Int64Type};
-use arrow::util::bench_util::create_primitive_array;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use datafusion_expr::Accumulator;
 use datafusion_functions_aggregate::array_agg::ArrayAggAccumulator;
 
 use arrow::buffer::OffsetBuffer;
-use arrow::util::test_util::seedable_rng;
-use rand::distributions::{Distribution, Standard};
+use rand::distr::{Distribution, StandardUniform};
+use rand::prelude::StdRng;
 use rand::Rng;
+use rand::SeedableRng;
+
+/// Returns fixed seedable RNG
+pub fn seedable_rng() -> StdRng {
+    StdRng::seed_from_u64(42)
+}
 
 fn merge_batch_bench(c: &mut Criterion, name: &str, values: ArrayRef) {
     let list_item_data_type = values.as_list::<i32>().values().data_type().clone();
@@ -37,17 +43,35 @@ fn merge_batch_bench(c: &mut Criterion, name: &str, values: ArrayRef) {
         b.iter(|| {
             #[allow(clippy::unit_arg)]
             black_box(
-                ArrayAggAccumulator::try_new(&list_item_data_type)
+                ArrayAggAccumulator::try_new(&list_item_data_type, false)
                     .unwrap()
-                    .merge_batch(&[values.clone()])
+                    .merge_batch(std::slice::from_ref(&values))
                     .unwrap(),
             )
         })
     });
 }
 
+pub fn create_primitive_array<T>(size: usize, null_density: f32) -> PrimitiveArray<T>
+where
+    T: ArrowPrimitiveType,
+    StandardUniform: Distribution<T::Native>,
+{
+    let mut rng = seedable_rng();
+
+    (0..size)
+        .map(|_| {
+            if rng.random::<f32>() < null_density {
+                None
+            } else {
+                Some(rng.random())
+            }
+        })
+        .collect()
+}
+
 /// Create List array with the given item data type, null density, null locations and zero length lists density
-/// Creates an random (but fixed-seeded) array of a given size and null density
+/// Creates a random (but fixed-seeded) array of a given size and null density
 pub fn create_list_array<T>(
     size: usize,
     null_density: f32,
@@ -55,20 +79,20 @@ pub fn create_list_array<T>(
 ) -> ListArray
 where
     T: ArrowPrimitiveType,
-    Standard: Distribution<T::Native>,
+    StandardUniform: Distribution<T::Native>,
 {
     let mut nulls_builder = NullBufferBuilder::new(size);
-    let mut rng = seedable_rng();
+    let mut rng = StdRng::seed_from_u64(42);
 
     let offsets = OffsetBuffer::from_lengths((0..size).map(|_| {
-        let is_null = rng.gen::<f32>() < null_density;
+        let is_null = rng.random::<f32>() < null_density;
 
-        let mut length = rng.gen_range(1..10);
+        let mut length = rng.random_range(1..10);
 
         if is_null {
             nulls_builder.append_null();
 
-            if rng.gen::<f32>() <= zero_length_lists_probability {
+            if rng.random::<f32>() <= zero_length_lists_probability {
                 length = 0;
             }
         } else {

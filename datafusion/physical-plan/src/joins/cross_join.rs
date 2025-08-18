@@ -25,7 +25,6 @@ use super::utils::{
     BatchTransformer, BuildProbeJoinMetrics, NoopBatchTransformer, OnceAsync, OnceFut,
     StatefulStreamResult,
 };
-use crate::coalesce_partitions::CoalescePartitionsExec;
 use crate::execution_plan::{boundedness_from_children, EmissionType};
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::projection::{
@@ -116,7 +115,7 @@ impl CrossJoinExec {
         };
 
         let schema = Arc::new(Schema::new(all_columns).with_metadata(metadata));
-        let cache = Self::compute_properties(&left, &right, Arc::clone(&schema));
+        let cache = Self::compute_properties(&left, &right, Arc::clone(&schema)).unwrap();
 
         CrossJoinExec {
             left,
@@ -143,7 +142,7 @@ impl CrossJoinExec {
         left: &Arc<dyn ExecutionPlan>,
         right: &Arc<dyn ExecutionPlan>,
         schema: SchemaRef,
-    ) -> PlanProperties {
+    ) -> Result<PlanProperties> {
         // Calculate equivalence properties
         // TODO: Check equivalence properties of cross join, it may preserve
         //       ordering in some cases.
@@ -155,7 +154,7 @@ impl CrossJoinExec {
             &[false, false],
             None,
             &[],
-        );
+        )?;
 
         // Get output partitioning:
         // TODO: Optimize the cross join implementation to generate M * N
@@ -163,14 +162,14 @@ impl CrossJoinExec {
         let output_partitioning = adjust_right_output_partitioning(
             right.output_partitioning(),
             left.schema().fields.len(),
-        );
+        )?;
 
-        PlanProperties::new(
+        Ok(PlanProperties::new(
             eq_properties,
             output_partitioning,
             EmissionType::Final,
             boundedness_from_children([left, right]),
-        )
+        ))
     }
 
     /// Returns a new `ExecutionPlan` that computes the same join as this one,
@@ -189,19 +188,11 @@ impl CrossJoinExec {
 
 /// Asynchronously collect the result of the left child
 async fn load_left_input(
-    left: Arc<dyn ExecutionPlan>,
-    context: Arc<TaskContext>,
+    stream: SendableRecordBatchStream,
     metrics: BuildProbeJoinMetrics,
     reservation: MemoryReservation,
 ) -> Result<JoinLeftData> {
-    // merge all left parts into a single stream
-    let left_schema = left.schema();
-    let merge = if left.output_partitioning().partition_count() != 1 {
-        Arc::new(CoalescePartitionsExec::new(left))
-    } else {
-        left
-    };
-    let stream = merge.execute(0, context)?;
+    let left_schema = stream.schema();
 
     // Load all batches and count the rows
     let (batches, _metrics, reservation) = stream
@@ -279,6 +270,18 @@ impl ExecutionPlan for CrossJoinExec {
         )))
     }
 
+    fn reset_state(self: Arc<Self>) -> Result<Arc<dyn ExecutionPlan>> {
+        let new_exec = CrossJoinExec {
+            left: Arc::clone(&self.left),
+            right: Arc::clone(&self.right),
+            schema: Arc::clone(&self.schema),
+            left_fut: Default::default(), // reset the build side!
+            metrics: ExecutionPlanMetricsSet::default(),
+            cache: self.cache.clone(),
+        };
+        Ok(Arc::new(new_exec))
+    }
+
     fn required_input_distribution(&self) -> Vec<Distribution> {
         vec![
             Distribution::SinglePartition,
@@ -291,6 +294,13 @@ impl ExecutionPlan for CrossJoinExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
+        if self.left.output_partitioning().partition_count() != 1 {
+            return internal_err!(
+                "Invalid CrossJoinExec, the output partition count of the left child must be 1,\
+                 consider using CoalescePartitionsExec or the EnforceDistribution rule"
+            );
+        }
+
         let stream = self.right.execute(partition, Arc::clone(&context))?;
 
         let join_metrics = BuildProbeJoinMetrics::new(partition, &self.metrics);
@@ -303,14 +313,15 @@ impl ExecutionPlan for CrossJoinExec {
         let enforce_batch_size_in_joins =
             context.session_config().enforce_batch_size_in_joins();
 
-        let left_fut = self.left_fut.once(|| {
-            load_left_input(
-                Arc::clone(&self.left),
-                context,
+        let left_fut = self.left_fut.try_once(|| {
+            let left_stream = self.left.execute(0, context)?;
+
+            Ok(load_left_input(
+                left_stream,
                 join_metrics.clone(),
                 reservation,
-            )
-        });
+            ))
+        })?;
 
         if enforce_batch_size_in_joins {
             Ok(Box::pin(CrossJoinStream {
@@ -338,10 +349,15 @@ impl ExecutionPlan for CrossJoinExec {
     }
 
     fn statistics(&self) -> Result<Statistics> {
-        Ok(stats_cartesian_product(
-            self.left.statistics()?,
-            self.right.statistics()?,
-        ))
+        self.partition_statistics(None)
+    }
+
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        // Get the all partitions statistics of the left
+        let left_stats = self.left.partition_statistics(None)?;
+        let right_stats = self.right.partition_statistics(partition)?;
+
+        Ok(stats_cartesian_product(left_stats, right_stats))
     }
 
     /// Tries to swap the projection with its input [`CrossJoinExec`]. If it can be done,
@@ -555,7 +571,8 @@ impl<T: BatchTransformer> CrossJoinStream<T> {
                     handle_state!(ready!(self.fetch_probe_batch(cx)))
                 }
                 CrossJoinStreamState::BuildBatches(_) => {
-                    handle_state!(self.build_batches())
+                    let poll = handle_state!(self.build_batches());
+                    self.join_metrics.baseline.record_poll(poll)
                 }
             };
         }
@@ -628,7 +645,6 @@ impl<T: BatchTransformer> CrossJoinStream<T> {
                     }
 
                     self.join_metrics.output_batches.add(1);
-                    self.join_metrics.output_rows.add(batch.num_rows());
                     return Ok(StatefulStreamResult::Ready(Some(batch)));
                 }
             }
@@ -643,7 +659,7 @@ impl<T: BatchTransformer> CrossJoinStream<T> {
 mod tests {
     use super::*;
     use crate::common;
-    use crate::test::build_table_scan_i32;
+    use crate::test::{assert_join_metrics, build_table_scan_i32};
 
     use datafusion_common::{assert_contains, test_util::batches_to_sort_string};
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
@@ -653,14 +669,15 @@ mod tests {
         left: Arc<dyn ExecutionPlan>,
         right: Arc<dyn ExecutionPlan>,
         context: Arc<TaskContext>,
-    ) -> Result<(Vec<String>, Vec<RecordBatch>)> {
+    ) -> Result<(Vec<String>, Vec<RecordBatch>, MetricsSet)> {
         let join = CrossJoinExec::new(left, right);
         let columns_header = columns(&join.schema());
 
         let stream = join.execute(0, context)?;
         let batches = common::collect(stream).await?;
+        let metrics = join.metrics().unwrap();
 
-        Ok((columns_header, batches))
+        Ok((columns_header, batches, metrics))
     }
 
     #[tokio::test]
@@ -827,7 +844,7 @@ mod tests {
             ("c2", &vec![14, 15]),
         );
 
-        let (columns, batches) = join_collect(left, right, task_ctx).await?;
+        let (columns, batches, metrics) = join_collect(left, right, task_ctx).await?;
 
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
 
@@ -843,6 +860,8 @@ mod tests {
             | 3  | 6  | 9  | 11 | 13 | 15 |
             +----+----+----+----+----+----+
             "#);
+
+        assert_join_metrics!(metrics, 6);
 
         Ok(())
     }
@@ -870,7 +889,7 @@ mod tests {
 
         assert_contains!(
             err.to_string(),
-            "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as: CrossJoinExec"
+            "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:\n  CrossJoinExec"
         );
 
         Ok(())

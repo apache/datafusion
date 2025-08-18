@@ -27,7 +27,7 @@ use super::{
     DisplayAs, ExecutionPlanProperties, PlanProperties, SendableRecordBatchStream,
     Statistics,
 };
-use crate::execution_plan::CardinalityEffect;
+use crate::execution_plan::{CardinalityEffect, EvaluationType, SchedulingType};
 use crate::projection::{make_with_child, ProjectionExec};
 use crate::{DisplayFormatType, ExecutionPlan, Partitioning};
 
@@ -59,6 +59,12 @@ impl CoalescePartitionsExec {
         }
     }
 
+    /// Update fetch with the argument
+    pub fn with_fetch(mut self, fetch: Option<usize>) -> Self {
+        self.fetch = fetch;
+        self
+    }
+
     /// Input execution plan
     pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
         &self.input
@@ -66,6 +72,16 @@ impl CoalescePartitionsExec {
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn compute_properties(input: &Arc<dyn ExecutionPlan>) -> PlanProperties {
+        let input_partitions = input.output_partitioning().partition_count();
+        let (drive, scheduling) = if input_partitions > 1 {
+            (EvaluationType::Eager, SchedulingType::Cooperative)
+        } else {
+            (
+                input.properties().evaluation_type,
+                input.properties().scheduling_type,
+            )
+        };
+
         // Coalescing partitions loses existing orderings:
         let mut eq_properties = input.equivalence_properties().clone();
         eq_properties.clear_orderings();
@@ -76,6 +92,8 @@ impl CoalescePartitionsExec {
             input.pipeline_behavior(),
             input.boundedness(),
         )
+        .with_evaluation_type(drive)
+        .with_scheduling_type(scheduling)
     }
 }
 
@@ -190,7 +208,13 @@ impl ExecutionPlan for CoalescePartitionsExec {
     }
 
     fn statistics(&self) -> Result<Statistics> {
-        Statistics::with_fetch(self.input.statistics()?, self.schema(), self.fetch, 0, 1)
+        self.partition_statistics(None)
+    }
+
+    fn partition_statistics(&self, _partition: Option<usize>) -> Result<Statistics> {
+        self.input
+            .partition_statistics(None)?
+            .with_fetch(self.schema(), self.fetch, 0, 1)
     }
 
     fn supports_limit_pushdown(&self) -> bool {

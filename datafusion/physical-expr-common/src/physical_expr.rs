@@ -23,10 +23,13 @@ use std::sync::Arc;
 
 use crate::utils::scatter;
 
-use arrow::array::BooleanArray;
+use arrow::array::{ArrayRef, BooleanArray};
 use arrow::compute::filter_record_batch;
-use arrow::datatypes::{DataType, Schema};
+use arrow::datatypes::{DataType, Field, FieldRef, Schema};
 use arrow::record_batch::RecordBatch;
+use datafusion_common::tree_node::{
+    Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
+};
 use datafusion_common::{internal_err, not_impl_err, Result, ScalarValue};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::interval_arithmetic::Interval;
@@ -70,11 +73,23 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + DynEq + DynHash {
     /// downcast to a specific implementation.
     fn as_any(&self) -> &dyn Any;
     /// Get the data type of this expression, given the schema of the input
-    fn data_type(&self, input_schema: &Schema) -> Result<DataType>;
+    fn data_type(&self, input_schema: &Schema) -> Result<DataType> {
+        Ok(self.return_field(input_schema)?.data_type().to_owned())
+    }
     /// Determine whether this expression is nullable, given the schema of the input
-    fn nullable(&self, input_schema: &Schema) -> Result<bool>;
+    fn nullable(&self, input_schema: &Schema) -> Result<bool> {
+        Ok(self.return_field(input_schema)?.is_nullable())
+    }
     /// Evaluate an expression against a RecordBatch
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue>;
+    /// The output field associated with this expression
+    fn return_field(&self, input_schema: &Schema) -> Result<FieldRef> {
+        Ok(Arc::new(Field::new(
+            format!("{self}"),
+            self.data_type(input_schema)?,
+            self.nullable(input_schema)?,
+        )))
+    }
     /// Evaluate an expression against a RecordBatch after first applying a
     /// validity array
     fn evaluate_selection(
@@ -91,6 +106,18 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + DynEq + DynHash {
             Ok(tmp_result)
         } else if let ColumnarValue::Array(a) = tmp_result {
             scatter(selection, a.as_ref()).map(ColumnarValue::Array)
+        } else if let ColumnarValue::Scalar(ScalarValue::Boolean(value)) = &tmp_result {
+            // When the scalar is true or false, skip the scatter process
+            if let Some(v) = value {
+                if *v {
+                    Ok(ColumnarValue::from(Arc::new(selection.clone()) as ArrayRef))
+                } else {
+                    Ok(tmp_result)
+                }
+            } else {
+                let array = BooleanArray::from(vec![None; batch.num_rows()]);
+                scatter(selection, &array).map(ColumnarValue::Array)
+            }
         } else {
             Ok(tmp_result)
         }
@@ -283,41 +310,87 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + DynEq + DynHash {
     /// See the [`fmt_sql`] function for an example of printing `PhysicalExpr`s as SQL.
     ///
     fn fmt_sql(&self, f: &mut Formatter<'_>) -> fmt::Result;
-}
 
-/// [`PhysicalExpr`] can't be constrained by [`Eq`] directly because it must remain object
-/// safe. To ease implementation, blanket implementation is provided for [`Eq`] types.
-pub trait DynEq {
-    fn dyn_eq(&self, other: &dyn Any) -> bool;
-}
+    /// Take a snapshot of this `PhysicalExpr`, if it is dynamic.
+    ///
+    /// "Dynamic" in this case means containing references to structures that may change
+    /// during plan execution, such as hash tables.
+    ///
+    /// This method is used to capture the current state of `PhysicalExpr`s that may contain
+    /// dynamic references to other operators in order to serialize it over the wire
+    /// or treat it via downcast matching.
+    ///
+    /// You should not call this method directly as it does not handle recursion.
+    /// Instead use [`snapshot_physical_expr`] to handle recursion and capture the
+    /// full state of the `PhysicalExpr`.
+    ///
+    /// This is expected to return "simple" expressions that do not have mutable state
+    /// and are composed of DataFusion's built-in `PhysicalExpr` implementations.
+    /// Callers however should *not* assume anything about the returned expressions
+    /// since callers and implementers may not agree on what "simple" or "built-in"
+    /// means.
+    /// In other words, if you need to serialize a `PhysicalExpr` across the wire
+    /// you should call this method and then try to serialize the result,
+    /// but you should handle unknown or unexpected `PhysicalExpr` implementations gracefully
+    /// just as if you had not called this method at all.
+    ///
+    /// In particular, consider:
+    /// * A `PhysicalExpr` that references the current state of a `datafusion::physical_plan::TopK`
+    ///   that is involved in a query with `SELECT * FROM t1 ORDER BY a LIMIT 10`.
+    ///   This function may return something like `a >= 12`.
+    /// * A `PhysicalExpr` that references the current state of a `datafusion::physical_plan::joins::HashJoinExec`
+    ///   from a query such as `SELECT * FROM t1 JOIN t2 ON t1.a = t2.b`.
+    ///   This function may return something like `t2.b IN (1, 5, 7)`.
+    ///
+    /// A system or function that can only deal with a hardcoded set of `PhysicalExpr` implementations
+    /// or needs to serialize this state to bytes may not be able to handle these dynamic references.
+    /// In such cases, we should return a simplified version of the `PhysicalExpr` that does not
+    /// contain these dynamic references.
+    ///
+    /// Systems that implement remote execution of plans, e.g. serialize a portion of the query plan
+    /// and send it across the wire to a remote executor may want to call this method after
+    /// every batch on the source side and brodcast / update the current snaphot to the remote executor.
+    ///
+    /// Note for implementers: this method should *not* handle recursion.
+    /// Recursion is handled in [`snapshot_physical_expr`].
+    fn snapshot(&self) -> Result<Option<Arc<dyn PhysicalExpr>>> {
+        // By default, we return None to indicate that this PhysicalExpr does not
+        // have any dynamic references or state.
+        // This is a safe default behavior.
+        Ok(None)
+    }
 
-impl<T: Eq + Any> DynEq for T {
-    fn dyn_eq(&self, other: &dyn Any) -> bool {
-        other.downcast_ref::<Self>() == Some(self)
+    /// Returns the generation of this `PhysicalExpr` for snapshotting purposes.
+    /// The generation is an arbitrary u64 that can be used to track changes
+    /// in the state of the `PhysicalExpr` over time without having to do an exhaustive comparison.
+    /// This is useful to avoid unecessary computation or serialization if there are no changes to the expression.
+    /// In particular, dynamic expressions that may change over time; this allows cheap checks for changes.
+    /// Static expressions that do not change over time should return 0, as does the default implementation.
+    /// You should not call this method directly as it does not handle recursion.
+    /// Instead use [`snapshot_generation`] to handle recursion and capture the
+    /// full state of the `PhysicalExpr`.
+    fn snapshot_generation(&self) -> u64 {
+        // By default, we return 0 to indicate that this PhysicalExpr does not
+        // have any dynamic references or state.
+        // Since the recursive algorithm XORs the generations of all children the overall
+        // generation will be 0 if no children have a non-zero generation, meaning that
+        // static expressions will always return 0.
+        0
     }
 }
+
+#[deprecated(
+    since = "50.0.0",
+    note = "Use `datafusion_expr_common::dyn_eq` instead"
+)]
+pub use datafusion_expr_common::dyn_eq::{DynEq, DynHash};
 
 impl PartialEq for dyn PhysicalExpr {
     fn eq(&self, other: &Self) -> bool {
         self.dyn_eq(other.as_any())
     }
 }
-
 impl Eq for dyn PhysicalExpr {}
-
-/// [`PhysicalExpr`] can't be constrained by [`Hash`] directly because it must remain
-/// object safe. To ease implementation blanket implementation is provided for [`Hash`]
-/// types.
-pub trait DynHash {
-    fn dyn_hash(&self, _state: &mut dyn Hasher);
-}
-
-impl<T: Hash + Any> DynHash for T {
-    fn dyn_hash(&self, mut state: &mut dyn Hasher) {
-        self.type_id().hash(&mut state);
-        self.hash(&mut state)
-    }
-}
 
 impl Hash for dyn PhysicalExpr {
     fn hash<H: Hasher>(&self, state: &mut H) {
@@ -346,21 +419,6 @@ pub fn with_new_children_if_necessary(
     }
 }
 
-#[deprecated(since = "44.0.0")]
-pub fn down_cast_any_ref(any: &dyn Any) -> &dyn Any {
-    if any.is::<Arc<dyn PhysicalExpr>>() {
-        any.downcast_ref::<Arc<dyn PhysicalExpr>>()
-            .unwrap()
-            .as_any()
-    } else if any.is::<Box<dyn PhysicalExpr>>() {
-        any.downcast_ref::<Box<dyn PhysicalExpr>>()
-            .unwrap()
-            .as_any()
-    } else {
-        any
-    }
-}
-
 /// Returns [`Display`] able a list of [`PhysicalExpr`]
 ///
 /// Example output: `[a + 1, b]`
@@ -384,10 +442,10 @@ where
             let mut iter = self.0.clone();
             write!(f, "[")?;
             if let Some(expr) = iter.next() {
-                write!(f, "{}", expr)?;
+                write!(f, "{expr}")?;
             }
             for expr in iter {
-                write!(f, ", {}", expr)?;
+                write!(f, ", {expr}")?;
             }
             write!(f, "]")?;
             Ok(())
@@ -401,27 +459,28 @@ where
 ///
 /// # Example
 /// ```
-/// # // The boiler plate needed to create a `PhysicalExpr` for the example
+/// # // The boilerplate needed to create a `PhysicalExpr` for the example
 /// # use std::any::Any;
+/// use std::collections::HashMap;
 /// # use std::fmt::Formatter;
 /// # use std::sync::Arc;
 /// # use arrow::array::RecordBatch;
-/// # use arrow::datatypes::{DataType, Schema};
+/// # use arrow::datatypes::{DataType, Field, FieldRef, Schema};
 /// # use datafusion_common::Result;
 /// # use datafusion_expr_common::columnar_value::ColumnarValue;
 /// # use datafusion_physical_expr_common::physical_expr::{fmt_sql, DynEq, PhysicalExpr};
-/// # #[derive(Debug, Hash, PartialOrd, PartialEq)]
-/// # struct MyExpr {};
+/// # #[derive(Debug, PartialEq, Eq, Hash)]
+/// # struct MyExpr {}
 /// # impl PhysicalExpr for MyExpr {fn as_any(&self) -> &dyn Any { unimplemented!() }
 /// # fn data_type(&self, input_schema: &Schema) -> Result<DataType> { unimplemented!() }
 /// # fn nullable(&self, input_schema: &Schema) -> Result<bool> { unimplemented!() }
 /// # fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> { unimplemented!() }
+/// # fn return_field(&self, input_schema: &Schema) -> Result<FieldRef> { unimplemented!() }
 /// # fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>>{ unimplemented!() }
 /// # fn with_new_children(self: Arc<Self>, children: Vec<Arc<dyn PhysicalExpr>>) -> Result<Arc<dyn PhysicalExpr>> { unimplemented!() }
 /// # fn fmt_sql(&self, f: &mut Formatter<'_>) -> std::fmt::Result { write!(f, "CASE a > b THEN 1 ELSE 0 END") }
 /// # }
 /// # impl std::fmt::Display for MyExpr {fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result { unimplemented!() } }
-/// # impl DynEq for MyExpr {fn dyn_eq(&self, other: &dyn Any) -> bool { unimplemented!() } }
 /// # fn make_physical_expr() -> Arc<dyn PhysicalExpr> { Arc::new(MyExpr{}) }
 /// let expr: Arc<dyn PhysicalExpr> = make_physical_expr();
 /// // wrap the expression in `sql_fmt` which can be used with
@@ -445,4 +504,59 @@ pub fn fmt_sql(expr: &dyn PhysicalExpr) -> impl Display + '_ {
     }
 
     Wrapper { expr }
+}
+
+/// Take a snapshot of the given `PhysicalExpr` if it is dynamic.
+///
+/// Take a snapshot of this `PhysicalExpr` if it is dynamic.
+/// This is used to capture the current state of `PhysicalExpr`s that may contain
+/// dynamic references to other operators in order to serialize it over the wire
+/// or treat it via downcast matching.
+///
+/// See the documentation of [`PhysicalExpr::snapshot`] for more details.
+///
+/// # Returns
+///
+/// Returns an `Option<Arc<dyn PhysicalExpr>>` which is the snapshot of the
+/// `PhysicalExpr` if it is dynamic. If the `PhysicalExpr` does not have
+/// any dynamic references or state, it returns `None`.
+pub fn snapshot_physical_expr(
+    expr: Arc<dyn PhysicalExpr>,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    expr.transform_up(|e| {
+        if let Some(snapshot) = e.snapshot()? {
+            Ok(Transformed::yes(snapshot))
+        } else {
+            Ok(Transformed::no(Arc::clone(&e)))
+        }
+    })
+    .data()
+}
+
+/// Check the generation of this `PhysicalExpr`.
+/// Dynamic `PhysicalExpr`s may have a generation that is incremented
+/// every time the state of the `PhysicalExpr` changes.
+/// If the generation changes that means this `PhysicalExpr` or one of its children
+/// has changed since the last time it was evaluated.
+///
+/// This algorithm will not produce collisions as long as the structure of the
+/// `PhysicalExpr` does not change and no `PhysicalExpr` decrements its own generation.
+pub fn snapshot_generation(expr: &Arc<dyn PhysicalExpr>) -> u64 {
+    let mut generation = 0u64;
+    expr.apply(|e| {
+        // Add the current generation of the `PhysicalExpr` to our global generation.
+        generation = generation.wrapping_add(e.snapshot_generation());
+        Ok(TreeNodeRecursion::Continue)
+    })
+    .expect("this traversal is infallible");
+
+    generation
+}
+
+/// Check if the given `PhysicalExpr` is dynamic.
+/// Internally this calls [`snapshot_generation`] to check if the generation is non-zero,
+/// any dynamic `PhysicalExpr` should have a non-zero generation.
+pub fn is_dynamic_physical_expr(expr: &Arc<dyn PhysicalExpr>) -> bool {
+    // If the generation is non-zero, then this `PhysicalExpr` is dynamic.
+    snapshot_generation(expr) != 0
 }

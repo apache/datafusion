@@ -21,9 +21,10 @@ use std::sync::Arc;
 use super::{ParquetAccessPlan, ParquetFileMetrics};
 use arrow::array::{ArrayRef, BooleanArray};
 use arrow::datatypes::Schema;
+use datafusion_common::pruning::PruningStatistics;
 use datafusion_common::{Column, Result, ScalarValue};
 use datafusion_datasource::FileRange;
-use datafusion_physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
+use datafusion_pruning::PruningPredicate;
 use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
 use parquet::arrow::parquet_column;
 use parquet::basic::Type;
@@ -1241,12 +1242,16 @@ mod tests {
             .run(
                 lit("1").eq(lit("1")).and(
                     col(r#""String""#)
-                        .eq(Expr::Literal(ScalarValue::Utf8View(Some(String::from(
-                            "Hello_Not_Exists",
-                        )))))
-                        .or(col(r#""String""#).eq(Expr::Literal(ScalarValue::Utf8View(
-                            Some(String::from("Hello_Not_Exists2")),
-                        )))),
+                        .eq(Expr::Literal(
+                            ScalarValue::Utf8View(Some(String::from("Hello_Not_Exists"))),
+                            None,
+                        ))
+                        .or(col(r#""String""#).eq(Expr::Literal(
+                            ScalarValue::Utf8View(Some(String::from(
+                                "Hello_Not_Exists2",
+                            ))),
+                            None,
+                        ))),
                 ),
             )
             .await
@@ -1265,7 +1270,7 @@ mod tests {
 
         let expr = col(r#""String""#).in_list(
             (1..25)
-                .map(|i| lit(format!("Hello_Not_Exists{}", i)))
+                .map(|i| lit(format!("Hello_Not_Exists{i}")))
                 .collect::<Vec<_>>(),
             false,
         );
@@ -1326,15 +1331,18 @@ mod tests {
             // generate pruning predicate `(String = "Hello") OR (String = "the quick") OR (String = "are you")`
             .run(
                 col(r#""String""#)
-                    .eq(Expr::Literal(ScalarValue::Utf8View(Some(String::from(
-                        "Hello",
-                    )))))
-                    .or(col(r#""String""#).eq(Expr::Literal(ScalarValue::Utf8View(
-                        Some(String::from("the quick")),
-                    ))))
-                    .or(col(r#""String""#).eq(Expr::Literal(ScalarValue::Utf8View(
-                        Some(String::from("are you")),
-                    )))),
+                    .eq(Expr::Literal(
+                        ScalarValue::Utf8View(Some(String::from("Hello"))),
+                        None,
+                    ))
+                    .or(col(r#""String""#).eq(Expr::Literal(
+                        ScalarValue::Utf8View(Some(String::from("the quick"))),
+                        None,
+                    )))
+                    .or(col(r#""String""#).eq(Expr::Literal(
+                        ScalarValue::Utf8View(Some(String::from("are you"))),
+                        None,
+                    ))),
             )
             .await
     }
@@ -1513,7 +1521,7 @@ mod tests {
         let object_meta = ObjectMeta {
             location: object_store::path::Path::parse(file_name).expect("creating path"),
             last_modified: chrono::DateTime::from(std::time::SystemTime::now()),
-            size: data.len(),
+            size: data.len() as u64,
             e_tag: None,
             version: None,
         };
@@ -1526,8 +1534,11 @@ mod tests {
         let metrics = ExecutionPlanMetricsSet::new();
         let file_metrics =
             ParquetFileMetrics::new(0, object_meta.location.as_ref(), &metrics);
+        let inner = ParquetObjectReader::new(Arc::new(in_memory), object_meta.location)
+            .with_file_size(object_meta.size);
+
         let reader = ParquetFileReader {
-            inner: ParquetObjectReader::new(Arc::new(in_memory), object_meta),
+            inner,
             file_metrics: file_metrics.clone(),
         };
         let mut builder = ParquetRecordBatchStreamBuilder::new(reader).await.unwrap();

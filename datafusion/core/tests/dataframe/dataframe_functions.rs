@@ -384,7 +384,7 @@ async fn test_fn_approx_median() -> Result<()> {
 
 #[tokio::test]
 async fn test_fn_approx_percentile_cont() -> Result<()> {
-    let expr = approx_percentile_cont(col("b"), lit(0.5), None);
+    let expr = approx_percentile_cont(col("b").sort(true, false), lit(0.5), None);
 
     let df = create_test_table().await?;
     let batches = df.aggregate(vec![], vec![expr]).unwrap().collect().await?;
@@ -392,11 +392,26 @@ async fn test_fn_approx_percentile_cont() -> Result<()> {
     assert_snapshot!(
         batches_to_string(&batches),
         @r"
-    +---------------------------------------------+
-    | approx_percentile_cont(test.b,Float64(0.5)) |
-    +---------------------------------------------+
-    | 10                                          |
-    +---------------------------------------------+
+    +---------------------------------------------------------------------------+
+    | approx_percentile_cont(Float64(0.5)) WITHIN GROUP [test.b ASC NULLS LAST] |
+    +---------------------------------------------------------------------------+
+    | 10                                                                        |
+    +---------------------------------------------------------------------------+
+    ");
+
+    let expr = approx_percentile_cont(col("b").sort(false, false), lit(0.1), None);
+
+    let df = create_test_table().await?;
+    let batches = df.aggregate(vec![], vec![expr]).unwrap().collect().await?;
+
+    assert_snapshot!(
+        batches_to_string(&batches),
+        @r"
+    +----------------------------------------------------------------------------+
+    | approx_percentile_cont(Float64(0.1)) WITHIN GROUP [test.b DESC NULLS LAST] |
+    +----------------------------------------------------------------------------+
+    | 100                                                                        |
+    +----------------------------------------------------------------------------+
     ");
 
     // the arg2 parameter is a complex expr, but it can be evaluated to the literal value
@@ -405,23 +420,43 @@ async fn test_fn_approx_percentile_cont() -> Result<()> {
         None::<&str>,
         "arg_2".to_string(),
     ));
-    let expr = approx_percentile_cont(col("b"), alias_expr, None);
+    let expr = approx_percentile_cont(col("b").sort(true, false), alias_expr, None);
     let df = create_test_table().await?;
     let batches = df.aggregate(vec![], vec![expr]).unwrap().collect().await?;
 
     assert_snapshot!(
         batches_to_string(&batches),
         @r"
-    +--------------------------------------+
-    | approx_percentile_cont(test.b,arg_2) |
-    +--------------------------------------+
-    | 10                                   |
-    +--------------------------------------+
+    +--------------------------------------------------------------------+
+    | approx_percentile_cont(arg_2) WITHIN GROUP [test.b ASC NULLS LAST] |
+    +--------------------------------------------------------------------+
+    | 10                                                                 |
+    +--------------------------------------------------------------------+
+    "
+    );
+
+    let alias_expr = Expr::Alias(Alias::new(
+        cast(lit(0.1), DataType::Float32),
+        None::<&str>,
+        "arg_2".to_string(),
+    ));
+    let expr = approx_percentile_cont(col("b").sort(false, false), alias_expr, None);
+    let df = create_test_table().await?;
+    let batches = df.aggregate(vec![], vec![expr]).unwrap().collect().await?;
+
+    assert_snapshot!(
+        batches_to_string(&batches),
+        @r"
+    +---------------------------------------------------------------------+
+    | approx_percentile_cont(arg_2) WITHIN GROUP [test.b DESC NULLS LAST] |
+    +---------------------------------------------------------------------+
+    | 100                                                                 |
+    +---------------------------------------------------------------------+
     "
     );
 
     // with number of centroids set
-    let expr = approx_percentile_cont(col("b"), lit(0.5), Some(lit(2)));
+    let expr = approx_percentile_cont(col("b").sort(true, false), lit(0.5), Some(lit(2)));
 
     let df = create_test_table().await?;
     let batches = df.aggregate(vec![], vec![expr]).unwrap().collect().await?;
@@ -429,11 +464,27 @@ async fn test_fn_approx_percentile_cont() -> Result<()> {
     assert_snapshot!(
         batches_to_string(&batches),
         @r"
-    +------------------------------------------------------+
-    | approx_percentile_cont(test.b,Float64(0.5),Int32(2)) |
-    +------------------------------------------------------+
-    | 30                                                   |
-    +------------------------------------------------------+
+    +------------------------------------------------------------------------------------+
+    | approx_percentile_cont(Float64(0.5),Int32(2)) WITHIN GROUP [test.b ASC NULLS LAST] |
+    +------------------------------------------------------------------------------------+
+    | 30                                                                                 |
+    +------------------------------------------------------------------------------------+
+    ");
+
+    let expr =
+        approx_percentile_cont(col("b").sort(false, false), lit(0.1), Some(lit(2)));
+
+    let df = create_test_table().await?;
+    let batches = df.aggregate(vec![], vec![expr]).unwrap().collect().await?;
+
+    assert_snapshot!(
+        batches_to_string(&batches),
+        @r"
+    +-------------------------------------------------------------------------------------+
+    | approx_percentile_cont(Float64(0.1),Int32(2)) WITHIN GROUP [test.b DESC NULLS LAST] |
+    +-------------------------------------------------------------------------------------+
+    | 69                                                                                  |
+    +-------------------------------------------------------------------------------------+
     ");
 
     Ok(())
@@ -1164,7 +1215,7 @@ async fn test_fn_decode() -> Result<()> {
     // Note that the decode function returns binary, and the default display of
     // binary is "hexadecimal" and therefore the output looks like decode did
     // nothing. So compare to a constant.
-    let df_schema = DFSchema::try_from(test_schema().as_ref().clone())?;
+    let df_schema = DFSchema::try_from(test_schema())?;
     let expr = decode(encode(col("a"), lit("hex")), lit("hex"))
         // need to cast to utf8 otherwise the default display of binary array is hex
         // so it looks like nothing is done

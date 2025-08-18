@@ -36,9 +36,7 @@ use datafusion::datasource::MemTable;
 use datafusion::error::Result;
 use datafusion::execution::context::SessionContext;
 
-fn query(ctx: Arc<Mutex<SessionContext>>, sql: &str) {
-    let rt = Runtime::new().unwrap();
-
+fn query(ctx: Arc<Mutex<SessionContext>>, rt: &Runtime, sql: &str) {
     // execute the query
     let df = rt.block_on(ctx.lock().sql(sql)).unwrap();
     rt.block_on(df.collect()).unwrap();
@@ -81,29 +79,31 @@ fn criterion_benchmark(c: &mut Criterion) {
     let array_len = 1048576; // 2^20
     let batch_size = 512; // 2^9
     let ctx = create_context(array_len, batch_size).unwrap();
+    let rt = Runtime::new().unwrap();
+
     c.bench_function("sqrt_20_9", |b| {
-        b.iter(|| query(ctx.clone(), "SELECT sqrt(f32) FROM t"))
+        b.iter(|| query(ctx.clone(), &rt, "SELECT sqrt(f32) FROM t"))
     });
 
     let array_len = 1048576; // 2^20
     let batch_size = 4096; // 2^12
     let ctx = create_context(array_len, batch_size).unwrap();
     c.bench_function("sqrt_20_12", |b| {
-        b.iter(|| query(ctx.clone(), "SELECT sqrt(f32) FROM t"))
+        b.iter(|| query(ctx.clone(), &rt, "SELECT sqrt(f32) FROM t"))
     });
 
     let array_len = 4194304; // 2^22
     let batch_size = 4096; // 2^12
     let ctx = create_context(array_len, batch_size).unwrap();
     c.bench_function("sqrt_22_12", |b| {
-        b.iter(|| query(ctx.clone(), "SELECT sqrt(f32) FROM t"))
+        b.iter(|| query(ctx.clone(), &rt, "SELECT sqrt(f32) FROM t"))
     });
 
     let array_len = 4194304; // 2^22
     let batch_size = 16384; // 2^14
     let ctx = create_context(array_len, batch_size).unwrap();
     c.bench_function("sqrt_22_14", |b| {
-        b.iter(|| query(ctx.clone(), "SELECT sqrt(f32) FROM t"))
+        b.iter(|| query(ctx.clone(), &rt, "SELECT sqrt(f32) FROM t"))
     });
 }
 

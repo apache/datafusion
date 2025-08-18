@@ -75,7 +75,7 @@ Please see [expr_api.rs](https://github.com/apache/datafusion/blob/main/datafusi
 
 ## A Scalar UDF Example
 
-We'll use a `ScalarUDF` expression as our example. This necessitates implementing an actual UDF, and for ease we'll use the same example from the [adding UDFs](./adding-udfs.md) guide.
+We'll use a `ScalarUDF` expression as our example. This necessitates implementing an actual UDF, and for ease we'll use the same example from the [adding UDFs](functions/adding-udfs.md) guide.
 
 So assuming you've written that function, you can use it to create an `Expr`:
 
@@ -322,7 +322,7 @@ async fn main() -> Result<()> {
     let plan = ctx.sql(sql).await?.into_optimized_plan()?.clone();
 
     let expected = r#"Projection: Int64(6) AS added_one
-  EmptyRelation"#;
+  EmptyRelation: rows=1"#;
 
     assert_eq!(plan.to_string(), expected);
 

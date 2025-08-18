@@ -118,9 +118,9 @@ impl<'a> Unparser<'a> {
     /// The child unparsers are called iteratively.
     /// There are two methods in [`Unparser`] will be called:
     /// - `extension_to_statement`: This method is called when the custom logical node is a custom statement.
-    ///     If multiple child unparsers return a non-None value, the last unparsing result will be returned.
+    ///   If multiple child unparsers return a non-None value, the last unparsing result will be returned.
     /// - `extension_to_sql`: This method is called when the custom logical node is part of a statement.
-    ///    If multiple child unparsers are registered for the same custom logical node, all of them will be called in order.
+    ///   If multiple child unparsers are registered for the same custom logical node, all of them will be called in order.
     pub fn with_extension_unparsers(
         mut self,
         extension_unparsers: Vec<Arc<dyn UserDefinedLogicalNodeUnparser>>,

@@ -50,13 +50,38 @@ use datafusion::prelude::*;
 
 Here is a minimal example showing the execution of a query using the DataFrame API.
 
+Create DataFrame using macro API from in memory rows
+
 ```rust
 use datafusion::prelude::*;
 use datafusion::error::Result;
-use datafusion::functions_aggregate::expr_fn::min;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Create a new dataframe with in-memory data using macro
+    let df = dataframe!(
+        "a" => [1, 2, 3],
+        "b" => [true, true, false],
+        "c" => [Some("foo"), Some("bar"), None]
+    )?;
+    df.show().await?;
+    Ok(())
+}
+```
+
+Create DataFrame from file or in memory rows using standard API
+
+```rust
+use datafusion::arrow::array::{Int32Array, RecordBatch, StringArray};
+use datafusion::arrow::datatypes::{DataType, Field, Schema};
+use datafusion::error::Result;
+use datafusion::functions_aggregate::expr_fn::min;
+use datafusion::prelude::*;
+use std::sync::Arc;
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    // Read the data from a csv file
     let ctx = SessionContext::new();
     let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
     let df = df.filter(col("a").lt_eq(col("b")))?
@@ -64,6 +89,22 @@ async fn main() -> Result<()> {
         .limit(0, Some(100))?;
     // Print results
     df.show().await?;
+
+    // Create a new dataframe with in-memory data
+    let schema = Schema::new(vec![
+      Field::new("id", DataType::Int32, true),
+      Field::new("name", DataType::Utf8, true),
+    ]);
+    let batch = RecordBatch::try_new(
+      Arc::new(schema),
+      vec![
+          Arc::new(Int32Array::from(vec![1, 2, 3])),
+          Arc::new(StringArray::from(vec!["foo", "bar", "baz"])),
+      ],
+    )?;
+    let df = ctx.read_batch(batch)?;
+    df.show().await?;
+
     Ok(())
 }
 ```

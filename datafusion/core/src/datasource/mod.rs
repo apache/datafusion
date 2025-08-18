@@ -24,10 +24,9 @@ pub mod empty;
 pub mod file_format;
 pub mod listing;
 pub mod listing_table_factory;
-pub mod memory;
+mod memory_test;
 pub mod physical_plan;
 pub mod provider;
-mod statistics;
 mod view_test;
 
 // backwards compatibility
@@ -40,6 +39,7 @@ pub use crate::catalog::TableProvider;
 pub use crate::logical_expr::TableType;
 pub use datafusion_catalog::cte_worktable;
 pub use datafusion_catalog::default_table_source;
+pub use datafusion_catalog::memory;
 pub use datafusion_catalog::stream;
 pub use datafusion_catalog::view;
 pub use datafusion_datasource::schema_adapter;
@@ -47,33 +47,31 @@ pub use datafusion_datasource::sink;
 pub use datafusion_datasource::source;
 pub use datafusion_execution::object_store;
 pub use datafusion_physical_expr::create_ordering;
-pub use statistics::get_statistics_with_limit;
 
 #[cfg(all(test, feature = "parquet"))]
 mod tests {
 
     use crate::prelude::SessionContext;
-
-    use std::fs;
-    use std::sync::Arc;
-
-    use arrow::array::{Int32Array, StringArray};
-    use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-    use arrow::record_batch::RecordBatch;
-    use datafusion_common::test_util::batches_to_sort_string;
-    use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
-    use datafusion_datasource::schema_adapter::{
-        DefaultSchemaAdapterFactory, SchemaAdapter, SchemaAdapterFactory, SchemaMapper,
+    use ::object_store::{path::Path, ObjectMeta};
+    use arrow::{
+        array::{Int32Array, StringArray},
+        datatypes::{DataType, Field, Schema, SchemaRef},
+        record_batch::RecordBatch,
     };
-    use datafusion_datasource::PartitionedFile;
+    use datafusion_common::{record_batch, test_util::batches_to_sort_string};
+    use datafusion_datasource::{
+        file::FileSource,
+        file_scan_config::FileScanConfigBuilder,
+        schema_adapter::{
+            DefaultSchemaAdapterFactory, SchemaAdapter, SchemaAdapterFactory,
+            SchemaMapper,
+        },
+        source::DataSourceExec,
+        PartitionedFile,
+    };
     use datafusion_datasource_parquet::source::ParquetSource;
-
-    use datafusion_common::record_batch;
-
-    use ::object_store::path::Path;
-    use ::object_store::ObjectMeta;
-    use datafusion_datasource::source::DataSourceExec;
     use datafusion_physical_plan::collect;
+    use std::{fs, sync::Arc};
     use tempfile::TempDir;
 
     #[tokio::test]
@@ -107,7 +105,7 @@ mod tests {
         let meta = ObjectMeta {
             location,
             last_modified: metadata.modified().map(chrono::DateTime::from).unwrap(),
-            size: metadata.len() as usize,
+            size: metadata.len(),
             e_tag: None,
             version: None,
         };
@@ -125,10 +123,9 @@ mod tests {
         let f2 = Field::new("extra_column", DataType::Utf8, true);
 
         let schema = Arc::new(Schema::new(vec![f1.clone(), f2.clone()]));
-        let source = Arc::new(
-            ParquetSource::default()
-                .with_schema_adapter_factory(Arc::new(TestSchemaAdapterFactory {})),
-        );
+        let source = ParquetSource::default()
+            .with_schema_adapter_factory(Arc::new(TestSchemaAdapterFactory {}))
+            .unwrap();
         let base_conf = FileScanConfigBuilder::new(
             ObjectStoreUrl::local_filesystem(),
             schema,
@@ -264,6 +261,13 @@ mod tests {
             new_columns.push(extra_column);
 
             Ok(RecordBatch::try_new(schema, new_columns).unwrap())
+        }
+
+        fn map_column_statistics(
+            &self,
+            _file_col_statistics: &[datafusion_common::ColumnStatistics],
+        ) -> datafusion_common::Result<Vec<datafusion_common::ColumnStatistics>> {
+            unimplemented!()
         }
     }
 }

@@ -130,8 +130,8 @@ impl Column {
     /// where `"foo.BAR"` would be parsed to a reference to column named `foo.BAR`
     pub fn from_qualified_name(flat_name: impl Into<String>) -> Self {
         let flat_name = flat_name.into();
-        Self::from_idents(parse_identifiers_normalized(&flat_name, false)).unwrap_or(
-            Self {
+        Self::from_idents(parse_identifiers_normalized(&flat_name, false)).unwrap_or_else(
+            || Self {
                 relation: None,
                 name: flat_name,
                 spans: Spans::new(),
@@ -142,8 +142,8 @@ impl Column {
     /// Deserialize a fully qualified name string into a column preserving column text case
     pub fn from_qualified_name_ignore_case(flat_name: impl Into<String>) -> Self {
         let flat_name = flat_name.into();
-        Self::from_idents(parse_identifiers_normalized(&flat_name, true)).unwrap_or(
-            Self {
+        Self::from_idents(parse_identifiers_normalized(&flat_name, true)).unwrap_or_else(
+            || Self {
                 relation: None,
                 name: flat_name,
                 spans: Spans::new(),
@@ -262,7 +262,7 @@ impl Column {
 
                     // If not due to USING columns then due to ambiguous column name
                     return _schema_err!(SchemaError::AmbiguousReference {
-                        field: Column::new_unqualified(&self.name),
+                        field: Box::new(Column::new_unqualified(&self.name)),
                     })
                     .map_err(|err| {
                         let mut diagnostic = Diagnostic::new_error(

@@ -24,4 +24,9 @@
 This crate contains packages of function that can be used to customize the
 functionality of DataFusion.
 
+Most projects should use the [`datafusion`] crate directly, which re-exports
+this module. If you are already using the [`datafusion`] crate, there is no
+reason to use this crate directly in your project as well.
+
 [df]: https://crates.io/crates/datafusion
+[`datafusion`]: https://crates.io/crates/datafusion

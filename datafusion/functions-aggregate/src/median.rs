@@ -35,7 +35,7 @@ use arrow::{
 
 use arrow::array::Array;
 use arrow::array::ArrowNativeTypeOp;
-use arrow::datatypes::{ArrowNativeType, ArrowPrimitiveType};
+use arrow::datatypes::{ArrowNativeType, ArrowPrimitiveType, FieldRef};
 
 use datafusion_common::{
     internal_datafusion_err, internal_err, DataFusionError, HashSet, Result, ScalarValue,
@@ -81,6 +81,7 @@ make_udaf_expr_and_func!(
 /// If using the distinct variation, the memory usage will be similarly high if the
 /// cardinality is high as it stores all distinct values in memory before computing the
 /// result, but if cardinality is low then memory usage will also be lower.
+#[derive(PartialEq, Eq, Hash)]
 pub struct Median {
     signature: Signature,
 }
@@ -125,9 +126,9 @@ impl AggregateUDFImpl for Median {
         Ok(arg_types[0].clone())
     }
 
-    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
+    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         //Intermediate state is a list of the elements we have collected so far
-        let field = Field::new_list_field(args.input_types[0].clone(), true);
+        let field = Field::new_list_field(args.input_fields[0].data_type().clone(), true);
         let state_name = if args.is_distinct {
             "distinct_median"
         } else {
@@ -138,7 +139,8 @@ impl AggregateUDFImpl for Median {
             format_state_name(args.name, state_name),
             DataType::List(Arc::new(field)),
             true,
-        )])
+        )
+        .into()])
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
@@ -211,10 +213,6 @@ impl AggregateUDFImpl for Median {
                 dt,
             ))),
         }
-    }
-
-    fn aliases(&self) -> &[String] {
-        &[]
     }
 
     fn documentation(&self) -> Option<&Documentation> {

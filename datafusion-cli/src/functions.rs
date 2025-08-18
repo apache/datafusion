@@ -22,8 +22,8 @@ use std::fs::File;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use arrow::array::{Int64Array, StringArray};
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use arrow::array::{Int64Array, StringArray, TimestampMillisecondArray, UInt64Array};
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
 use arrow::record_batch::RecordBatch;
 use arrow::util::pretty::pretty_format_batches;
 use datafusion::catalog::{Session, TableFunctionImpl};
@@ -31,6 +31,7 @@ use datafusion::common::{plan_err, Column};
 use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::datasource::TableProvider;
 use datafusion::error::Result;
+use datafusion::execution::cache::cache_manager::CacheManager;
 use datafusion::logical_expr::Expr;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::scalar::ScalarValue;
@@ -205,7 +206,7 @@ pub fn display_all_functions() -> Result<()> {
     let array = StringArray::from(
         ALL_FUNCTIONS
             .iter()
-            .map(|f| format!("{}", f))
+            .map(|f| format!("{f}"))
             .collect::<Vec<String>>(),
     );
     let schema = Schema::new(vec![Field::new("Function", DataType::Utf8, false)]);
@@ -322,7 +323,7 @@ pub struct ParquetMetadataFunc {}
 impl TableFunctionImpl for ParquetMetadataFunc {
     fn call(&self, exprs: &[Expr]) -> Result<Arc<dyn TableProvider>> {
         let filename = match exprs.first() {
-            Some(Expr::Literal(ScalarValue::Utf8(Some(s)))) => s, // single quote: parquet_metadata('x.parquet')
+            Some(Expr::Literal(ScalarValue::Utf8(Some(s)), _)) => s, // single quote: parquet_metadata('x.parquet')
             Some(Expr::Column(Column { name, .. })) => name, // double quote: parquet_metadata("x.parquet")
             _ => {
                 return plan_err!(
@@ -458,5 +459,123 @@ impl TableFunctionImpl for ParquetMetadataFunc {
 
         let parquet_metadata = ParquetMetadataTable { schema, batch: rb };
         Ok(Arc::new(parquet_metadata))
+    }
+}
+
+/// METADATA_CACHE table function
+#[derive(Debug)]
+struct MetadataCacheTable {
+    schema: SchemaRef,
+    batch: RecordBatch,
+}
+
+#[async_trait]
+impl TableProvider for MetadataCacheTable {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn schema(&self) -> arrow::datatypes::SchemaRef {
+        self.schema.clone()
+    }
+
+    fn table_type(&self) -> datafusion::logical_expr::TableType {
+        datafusion::logical_expr::TableType::Base
+    }
+
+    async fn scan(
+        &self,
+        _state: &dyn Session,
+        projection: Option<&Vec<usize>>,
+        _filters: &[Expr],
+        _limit: Option<usize>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(MemorySourceConfig::try_new_exec(
+            &[vec![self.batch.clone()]],
+            TableProvider::schema(self),
+            projection.cloned(),
+        )?)
+    }
+}
+
+#[derive(Debug)]
+pub struct MetadataCacheFunc {
+    cache_manager: Arc<CacheManager>,
+}
+
+impl MetadataCacheFunc {
+    pub fn new(cache_manager: Arc<CacheManager>) -> Self {
+        Self { cache_manager }
+    }
+}
+
+impl TableFunctionImpl for MetadataCacheFunc {
+    fn call(&self, exprs: &[Expr]) -> Result<Arc<dyn TableProvider>> {
+        if !exprs.is_empty() {
+            return plan_err!("metadata_cache should have no arguments");
+        }
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("path", DataType::Utf8, false),
+            Field::new(
+                "file_modified",
+                DataType::Timestamp(TimeUnit::Millisecond, None),
+                false,
+            ),
+            Field::new("file_size_bytes", DataType::UInt64, false),
+            Field::new("e_tag", DataType::Utf8, true),
+            Field::new("version", DataType::Utf8, true),
+            Field::new("metadata_size_bytes", DataType::UInt64, false),
+            Field::new("hits", DataType::UInt64, false),
+            Field::new("extra", DataType::Utf8, true),
+        ]));
+
+        // construct record batch from metadata
+        let mut path_arr = vec![];
+        let mut file_modified_arr = vec![];
+        let mut file_size_bytes_arr = vec![];
+        let mut e_tag_arr = vec![];
+        let mut version_arr = vec![];
+        let mut metadata_size_bytes = vec![];
+        let mut hits_arr = vec![];
+        let mut extra_arr = vec![];
+
+        let cached_entries = self.cache_manager.get_file_metadata_cache().list_entries();
+
+        for (path, entry) in cached_entries {
+            path_arr.push(path.to_string());
+            file_modified_arr
+                .push(Some(entry.object_meta.last_modified.timestamp_millis()));
+            file_size_bytes_arr.push(entry.object_meta.size);
+            e_tag_arr.push(entry.object_meta.e_tag);
+            version_arr.push(entry.object_meta.version);
+            metadata_size_bytes.push(entry.size_bytes as u64);
+            hits_arr.push(entry.hits as u64);
+
+            let mut extra = entry
+                .extra
+                .iter()
+                .map(|(k, v)| format!("{k}={v}"))
+                .collect::<Vec<_>>();
+            extra.sort();
+            extra_arr.push(extra.join(" "));
+        }
+
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(StringArray::from(path_arr)),
+                Arc::new(TimestampMillisecondArray::from(file_modified_arr)),
+                Arc::new(UInt64Array::from(file_size_bytes_arr)),
+                Arc::new(StringArray::from(e_tag_arr)),
+                Arc::new(StringArray::from(version_arr)),
+                Arc::new(UInt64Array::from(metadata_size_bytes)),
+                Arc::new(UInt64Array::from(hits_arr)),
+                Arc::new(StringArray::from(extra_arr)),
+            ],
+        )?;
+
+        let metadata_cache = MetadataCacheTable { schema, batch };
+        Ok(Arc::new(metadata_cache))
     }
 }

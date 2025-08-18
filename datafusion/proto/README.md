@@ -19,11 +19,11 @@
 
 # `datafusion-proto`: Apache DataFusion Protobuf Serialization / Deserialization
 
-This crate contains code to convert Apache [DataFusion] plans to and from
+This crate contains code to convert [Apache DataFusion] plans to and from
 bytes, which can be useful for sending plans over the network, for example
 when building a distributed query engine.
 
 See [API Docs] for details and examples.
 
-[datafusion]: https://datafusion.apache.org
+[apache datafusion]: https://datafusion.apache.org
 [api docs]: http://docs.rs/datafusion-proto/latest

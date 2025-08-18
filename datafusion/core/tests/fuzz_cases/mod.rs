@@ -20,6 +20,8 @@ mod distinct_count_string_fuzz;
 mod join_fuzz;
 mod merge_fuzz;
 mod sort_fuzz;
+mod sort_query_fuzz;
+mod topk_filter_pushdown;
 
 mod aggregation_fuzzer;
 mod equivalence;
@@ -29,3 +31,8 @@ mod pruning;
 mod limit_fuzz;
 mod sort_preserving_repartition_fuzz;
 mod window_fuzz;
+
+// Utility modules
+mod once_exec;
+mod record_batch_generator;
+mod spilling_fuzz_in_memory_constrained_env;

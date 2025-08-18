@@ -24,7 +24,7 @@ use arrow::util::pretty::pretty_format_batches;
 use datafusion::datasource::MemTable;
 use datafusion::prelude::SessionContext;
 use datafusion_common::assert_contains;
-use rand::{thread_rng, Rng};
+use rand::{rng, Rng};
 use std::sync::Arc;
 use test_utils::stagger_batch;
 
@@ -54,11 +54,11 @@ async fn run_limit_fuzz_test<F>(make_data: F)
 where
     F: Fn(usize) -> SortedData,
 {
-    let mut rng = thread_rng();
+    let mut rng = rng();
     for size in [10, 1_0000, 10_000, 100_000] {
         let data = make_data(size);
         // test various limits including some random ones
-        for limit in [1, 3, 7, 17, 10000, rng.gen_range(1..size * 2)] {
+        for limit in [1, 3, 7, 17, 10000, rng.random_range(1..size * 2)] {
             //  limit can be larger than the number of rows in the input
             run_limit_test(limit, &data).await;
         }
@@ -97,13 +97,13 @@ impl SortedData {
     /// Create an i32 column of random values, with the specified number of
     /// rows, sorted the default
     fn new_i32(size: usize) -> Self {
-        let mut rng = thread_rng();
+        let mut rng = rng();
         // have some repeats (approximately 1/3 of the values are the same)
         let max = size as i32 / 3;
         let data: Vec<Option<i32>> = (0..size)
             .map(|_| {
                 // no nulls for now
-                Some(rng.gen_range(0..max))
+                Some(rng.random_range(0..max))
             })
             .collect();
 
@@ -118,17 +118,17 @@ impl SortedData {
     /// Create an f64 column of random values, with the specified number of
     /// rows, sorted the default
     fn new_f64(size: usize) -> Self {
-        let mut rng = thread_rng();
+        let mut rng = rng();
         let mut data: Vec<Option<f64>> = (0..size / 3)
             .map(|_| {
                 // no nulls for now
-                Some(rng.gen_range(0.0..1.0f64))
+                Some(rng.random_range(0.0..1.0f64))
             })
             .collect();
 
         // have some repeats (approximately 1/3 of the values are the same)
         while data.len() < size {
-            data.push(data[rng.gen_range(0..data.len())]);
+            data.push(data[rng.random_range(0..data.len())]);
         }
 
         let batches = stagger_batch(f64_batch(data.iter().cloned()));
@@ -142,7 +142,7 @@ impl SortedData {
     /// Create an string column of random values, with the specified number of
     /// rows, sorted the default
     fn new_str(size: usize) -> Self {
-        let mut rng = thread_rng();
+        let mut rng = rng();
         let mut data: Vec<Option<String>> = (0..size / 3)
             .map(|_| {
                 // no nulls for now
@@ -152,7 +152,7 @@ impl SortedData {
 
         // have some repeats (approximately 1/3 of the values are the same)
         while data.len() < size {
-            data.push(data[rng.gen_range(0..data.len())].clone());
+            data.push(data[rng.random_range(0..data.len())].clone());
         }
 
         let batches = stagger_batch(string_batch(data.iter()));
@@ -166,7 +166,7 @@ impl SortedData {
     /// Create two  columns of random values (int64, string), with the specified number of
     /// rows, sorted the default
     fn new_i64str(size: usize) -> Self {
-        let mut rng = thread_rng();
+        let mut rng = rng();
 
         // 100 distinct values
         let strings: Vec<Option<String>> = (0..100)
@@ -180,8 +180,8 @@ impl SortedData {
         let data = (0..size)
             .map(|_| {
                 (
-                    Some(rng.gen_range(0..10)),
-                    strings[rng.gen_range(0..strings.len())].clone(),
+                    Some(rng.random_range(0..10)),
+                    strings[rng.random_range(0..strings.len())].clone(),
                 )
             })
             .collect::<Vec<_>>();
@@ -340,8 +340,8 @@ async fn run_limit_test(fetch: usize, data: &SortedData) {
 
 /// Return random ASCII String with len
 fn get_random_string(len: usize) -> String {
-    thread_rng()
-        .sample_iter(rand::distributions::Alphanumeric)
+    rng()
+        .sample_iter(rand::distr::Alphanumeric)
         .take(len)
         .map(char::from)
         .collect()

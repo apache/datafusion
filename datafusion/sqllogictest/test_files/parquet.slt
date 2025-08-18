@@ -130,8 +130,7 @@ STORED AS PARQUET;
 ----
 3
 
-# Check output plan again, expect no "output_ordering" clause in the physical_plan -> ParquetExec,
-# due to there being more files than partitions:
+# Check output plan again
 query TT
 EXPLAIN SELECT int_col, string_col
 FROM test_table
@@ -142,8 +141,7 @@ logical_plan
 02)--TableScan: test_table projection=[int_col, string_col]
 physical_plan
 01)SortPreservingMergeExec: [string_col@1 ASC NULLS LAST, int_col@0 ASC NULLS LAST]
-02)--SortExec: expr=[string_col@1 ASC NULLS LAST, int_col@0 ASC NULLS LAST], preserve_partitioning=[true]
-03)----DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_table/0.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_table/1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_table/2.parquet]]}, projection=[int_col, string_col], file_type=parquet
+02)--DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_table/0.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_table/1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_table/2.parquet]]}, projection=[int_col, string_col], output_ordering=[string_col@1 ASC NULLS LAST, int_col@0 ASC NULLS LAST], file_type=parquet
 
 
 # Perform queries using MIN and MAX
@@ -301,6 +299,54 @@ set datafusion.execution.listing_table_ignore_subdirectory = false;
 # scan file: 0.parquet 1.parquet 2.parquet 3.parquet
 query I
 select count(*) from listing_table;
+----
+12
+
+# Test table pointing to the folder with parquet files(ends with /)
+statement ok
+CREATE EXTERNAL TABLE listing_table_folder_0
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet/test_table/';
+
+statement ok
+set datafusion.execution.listing_table_ignore_subdirectory = true;
+
+# scan file: 0.parquet 1.parquet 2.parquet
+query I
+select count(*) from listing_table_folder_0;
+----
+9
+
+statement ok
+set datafusion.execution.listing_table_ignore_subdirectory = false;
+
+# scan file: 0.parquet 1.parquet 2.parquet 3.parquet
+query I
+select count(*) from listing_table_folder_0;
+----
+12
+
+# Test table pointing to the folder with parquet files(doesn't end with /)
+statement ok
+CREATE EXTERNAL TABLE listing_table_folder_1
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet/test_table';
+
+statement ok
+set datafusion.execution.listing_table_ignore_subdirectory = true;
+
+# scan file: 0.parquet 1.parquet 2.parquet
+query I
+select count(*) from listing_table_folder_1;
+----
+9
+
+statement ok
+set datafusion.execution.listing_table_ignore_subdirectory = false;
+
+# scan file: 0.parquet 1.parquet 2.parquet 3.parquet
+query I
+select count(*) from listing_table_folder_1;
 ----
 12
 
@@ -629,3 +675,190 @@ physical_plan
 
 statement ok
 drop table foo
+
+
+# Tests for int96 timestamps written by spark
+# See https://github.com/apache/datafusion/issues/9981
+
+statement ok
+CREATE EXTERNAL TABLE int96_from_spark
+STORED AS PARQUET
+LOCATION '../../parquet-testing/data/int96_from_spark.parquet';
+
+# by default the value is read as nanosecond precision
+query TTT
+describe int96_from_spark
+----
+a Timestamp(Nanosecond, None) YES
+
+# Note that the values are read as nanosecond precision
+query P
+select * from int96_from_spark
+----
+2024-01-01T20:34:56.123456
+2024-01-01T01:00:00
+1816-03-29T08:56:08.066277376
+2024-12-30T23:00:00
+NULL
+1815-11-08T16:01:01.191053312
+
+statement ok
+drop table int96_from_spark;
+
+# Enable coercion of int96 to microseconds
+statement ok
+set datafusion.execution.parquet.coerce_int96 = ms;
+
+statement ok
+CREATE EXTERNAL TABLE int96_from_spark
+STORED AS PARQUET
+LOCATION '../../parquet-testing/data/int96_from_spark.parquet';
+
+# Print schema
+query TTT
+describe int96_from_spark;
+----
+a Timestamp(Millisecond, None) YES
+
+# Per https://github.com/apache/parquet-testing/blob/6e851ddd768d6af741c7b15dc594874399fc3cff/data/int96_from_spark.md?plain=1#L37
+# these values should be
+#
+# Some("2024-01-01T12:34:56.123456"),
+# Some("2024-01-01T01:00:00Z"),
+# Some("9999-12-31T01:00:00-02:00"),
+# Some("2024-12-31T01:00:00+02:00"),
+# None,
+# Some("290000-12-31T01:00:00+02:00"))
+#
+# However, printing the large dates (9999-12-31 and 290000-12-31) is not supported by
+# arrow yet
+#
+# See https://github.com/apache/arrow-rs/issues/7287
+query P
+select * from int96_from_spark
+----
+2024-01-01T20:34:56.123
+2024-01-01T01:00:00
+9999-12-31T03:00:00
+2024-12-30T23:00:00
+NULL
+ERROR: Cast error: Failed to convert -9357363680509551 to datetime for Timestamp(Millisecond, None)
+
+# Cleanup / reset default setting
+statement ok
+drop table int96_from_spark;
+
+statement ok
+set datafusion.execution.parquet.coerce_int96 = ns;
+
+
+### Tests for metadata caching
+
+# Create temporary data
+query I
+COPY (
+  SELECT 'k-' || i as k, i as v
+  FROM generate_series(1, 20000) t(i)
+  ORDER BY k
+)
+TO 'test_files/scratch/parquet/cache_metadata.parquet'
+OPTIONS (MAX_ROW_GROUP_SIZE 4096, DATA_PAGE_ROW_COUNT_LIMIT 2048);
+----
+20000
+
+statement ok
+CREATE EXTERNAL TABLE t
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet/cache_metadata.parquet';
+
+query TI
+select * from t where k = 'k-1000' or k = 'k-9999' order by k
+----
+k-1000 1000
+k-9999 9999
+
+query IT
+select v, k from t where (v between 1 and 2) or (v between 9999 and 10000) order by v
+----
+1 k-1
+2 k-2
+9999 k-9999
+10000 k-10000
+
+# Updating the file should invalidate the cache. Otherwise, the following queries would fail
+# (e.g., with "Arrow: Parquet argument error: External: incomplete frame").
+query I
+COPY (
+  SELECT 'k-' || i as k, 20000 - i as v
+  FROM generate_series(1, 20000) t(i)
+  ORDER BY k
+)
+TO 'test_files/scratch/parquet/cache_metadata.parquet'
+OPTIONS (MAX_ROW_GROUP_SIZE 4096, DATA_PAGE_ROW_COUNT_LIMIT 2048);
+----
+20000
+
+query TI
+select * from t where k = 'k-1000' or k = 'k-9999' order by k
+----
+k-1000 19000
+k-9999 10001
+
+query IT
+select v, k from t where (v between 1 and 2) or (v between 9999 and 10000) order by v
+----
+1 k-19999
+2 k-19998
+9999 k-10001
+10000 k-10000
+
+statement ok
+DROP TABLE t;
+
+# Partitioned files should be independently cached. Otherwise, the following queries might fail.
+statement ok
+COPY (
+  SELECT i % 10 as part, 'k-' || i as k, i as v 
+  FROM generate_series(0, 9) t(i)
+  ORDER BY k
+)
+TO 'test_files/scratch/parquet/cache_metadata_partitioned.parquet'
+PARTITIONED BY (part);
+
+statement ok
+CREATE EXTERNAL TABLE t
+STORED AS PARQUET
+PARTITIONED BY (part)
+LOCATION 'test_files/scratch/parquet/cache_metadata_partitioned.parquet';
+
+query TTI
+select part, k, v from t where k = 'k-0'
+----
+0 k-0 0
+
+query TTI
+select part, k, v from t where k = 'k-5'
+----
+5 k-5 5
+
+query TTI
+select part, k, v from t where k = 'k-9'
+----
+9 k-9 9
+
+query TTI
+select part, k, v from t order by k
+----
+0 k-0 0
+1 k-1 1
+2 k-2 2
+3 k-3 3
+4 k-4 4
+5 k-5 5
+6 k-6 6
+7 k-7 7
+8 k-8 8
+9 k-9 9
+
+statement ok
+DROP TABLE t;

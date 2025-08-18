@@ -19,12 +19,16 @@ use arrow::array::{
     ArrayRef, FixedSizeListArray, Int32Builder, MapArray, MapBuilder, StringBuilder,
 };
 use arrow::datatypes::{
-    DataType, Field, Fields, Int32Type, IntervalDayTimeType, IntervalMonthDayNanoType,
-    IntervalUnit, Schema, SchemaRef, TimeUnit, UnionFields, UnionMode,
-    DECIMAL256_MAX_PRECISION,
+    DataType, Field, FieldRef, Fields, Int32Type, IntervalDayTimeType,
+    IntervalMonthDayNanoType, IntervalUnit, Schema, SchemaRef, TimeUnit, UnionFields,
+    UnionMode, DECIMAL256_MAX_PRECISION,
 };
 use arrow::util::pretty::pretty_format_batches;
-use datafusion::datasource::file_format::json::JsonFormatFactory;
+use datafusion::datasource::file_format::json::{JsonFormat, JsonFormatFactory};
+use datafusion::datasource::listing::{
+    ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
+};
+use datafusion::execution::options::ArrowReadOptions;
 use datafusion::optimizer::eliminate_nested_union::EliminateNestedUnion;
 use datafusion::optimizer::Optimizer;
 use datafusion_common::parsers::CompressionTypeVariant;
@@ -110,15 +114,21 @@ fn roundtrip_json_test(proto: &protobuf::LogicalExprNode) {
 #[cfg(not(feature = "json"))]
 fn roundtrip_json_test(_proto: &protobuf::LogicalExprNode) {}
 
-// Given a DataFusion logical Expr, convert it to protobuf and back, using debug formatting to test
-// equality.
 fn roundtrip_expr_test(initial_struct: Expr, ctx: SessionContext) {
     let extension_codec = DefaultLogicalExtensionCodec {};
-    let proto: protobuf::LogicalExprNode =
-        serialize_expr(&initial_struct, &extension_codec)
-            .unwrap_or_else(|e| panic!("Error serializing expression: {:?}", e));
-    let round_trip: Expr =
-        from_proto::parse_expr(&proto, &ctx, &extension_codec).unwrap();
+    roundtrip_expr_test_with_codec(initial_struct, ctx, &extension_codec);
+}
+
+// Given a DataFusion logical Expr, convert it to protobuf and back, using debug formatting to test
+// equality.
+fn roundtrip_expr_test_with_codec(
+    initial_struct: Expr,
+    ctx: SessionContext,
+    codec: &dyn LogicalExtensionCodec,
+) {
+    let proto: protobuf::LogicalExprNode = serialize_expr(&initial_struct, codec)
+        .unwrap_or_else(|e| panic!("Error serializing expression: {e:?}"));
+    let round_trip: Expr = from_proto::parse_expr(&proto, &ctx, codec).unwrap();
 
     assert_eq!(format!("{:?}", &initial_struct), format!("{round_trip:?}"));
 
@@ -420,13 +430,13 @@ async fn roundtrip_logical_plan_copy_to_sql_options() -> Result<()> {
     let input = create_csv_scan(&ctx).await?;
     let file_type = format_as_file_type(Arc::new(CsvFormatFactory::new()));
 
-    let plan = LogicalPlan::Copy(CopyTo {
-        input: Arc::new(input),
-        output_url: "test.csv".to_string(),
-        partition_by: vec!["a".to_string(), "b".to_string(), "c".to_string()],
+    let plan = LogicalPlan::Copy(CopyTo::new(
+        Arc::new(input),
+        "test.csv".to_string(),
+        vec!["a".to_string(), "b".to_string(), "c".to_string()],
         file_type,
-        options: Default::default(),
-    });
+        Default::default(),
+    ));
 
     let codec = CsvLogicalExtensionCodec {};
     let bytes = logical_plan_to_bytes_with_extension_codec(&plan, &codec)?;
@@ -460,13 +470,13 @@ async fn roundtrip_logical_plan_copy_to_writer_options() -> Result<()> {
         ParquetFormatFactory::new_with_options(parquet_format),
     ));
 
-    let plan = LogicalPlan::Copy(CopyTo {
-        input: Arc::new(input),
-        output_url: "test.parquet".to_string(),
+    let plan = LogicalPlan::Copy(CopyTo::new(
+        Arc::new(input),
+        "test.parquet".to_string(),
+        vec!["a".to_string(), "b".to_string(), "c".to_string()],
         file_type,
-        partition_by: vec!["a".to_string(), "b".to_string(), "c".to_string()],
-        options: Default::default(),
-    });
+        Default::default(),
+    ));
 
     let codec = ParquetLogicalExtensionCodec {};
     let bytes = logical_plan_to_bytes_with_extension_codec(&plan, &codec)?;
@@ -492,13 +502,13 @@ async fn roundtrip_logical_plan_copy_to_arrow() -> Result<()> {
 
     let file_type = format_as_file_type(Arc::new(ArrowFormatFactory::new()));
 
-    let plan = LogicalPlan::Copy(CopyTo {
-        input: Arc::new(input),
-        output_url: "test.arrow".to_string(),
-        partition_by: vec!["a".to_string(), "b".to_string(), "c".to_string()],
+    let plan = LogicalPlan::Copy(CopyTo::new(
+        Arc::new(input),
+        "test.arrow".to_string(),
+        vec!["a".to_string(), "b".to_string(), "c".to_string()],
         file_type,
-        options: Default::default(),
-    });
+        Default::default(),
+    ));
 
     let codec = ArrowLogicalExtensionCodec {};
     let bytes = logical_plan_to_bytes_with_extension_codec(&plan, &codec)?;
@@ -539,13 +549,13 @@ async fn roundtrip_logical_plan_copy_to_csv() -> Result<()> {
         csv_format.clone(),
     )));
 
-    let plan = LogicalPlan::Copy(CopyTo {
-        input: Arc::new(input),
-        output_url: "test.csv".to_string(),
-        partition_by: vec!["a".to_string(), "b".to_string(), "c".to_string()],
+    let plan = LogicalPlan::Copy(CopyTo::new(
+        Arc::new(input),
+        "test.csv".to_string(),
+        vec!["a".to_string(), "b".to_string(), "c".to_string()],
         file_type,
-        options: Default::default(),
-    });
+        Default::default(),
+    ));
 
     let codec = CsvLogicalExtensionCodec {};
     let bytes = logical_plan_to_bytes_with_extension_codec(&plan, &codec)?;
@@ -605,13 +615,13 @@ async fn roundtrip_logical_plan_copy_to_json() -> Result<()> {
         json_format.clone(),
     )));
 
-    let plan = LogicalPlan::Copy(CopyTo {
-        input: Arc::new(input),
-        output_url: "test.json".to_string(),
-        partition_by: vec!["a".to_string(), "b".to_string(), "c".to_string()],
+    let plan = LogicalPlan::Copy(CopyTo::new(
+        Arc::new(input),
+        "test.json".to_string(),
+        vec!["a".to_string(), "b".to_string(), "c".to_string()],
         file_type,
-        options: Default::default(),
-    });
+        Default::default(),
+    ));
 
     // Assume JsonLogicalExtensionCodec is implemented similarly to CsvLogicalExtensionCodec
     let codec = JsonLogicalExtensionCodec {};
@@ -677,13 +687,13 @@ async fn roundtrip_logical_plan_copy_to_parquet() -> Result<()> {
         ParquetFormatFactory::new_with_options(parquet_format.clone()),
     ));
 
-    let plan = LogicalPlan::Copy(CopyTo {
-        input: Arc::new(input),
-        output_url: "test.parquet".to_string(),
-        partition_by: vec!["a".to_string(), "b".to_string(), "c".to_string()],
+    let plan = LogicalPlan::Copy(CopyTo::new(
+        Arc::new(input),
+        "test.parquet".to_string(),
+        vec!["a".to_string(), "b".to_string(), "c".to_string()],
         file_type,
-        options: Default::default(),
-    });
+        Default::default(),
+    ));
 
     // Assume ParquetLogicalExtensionCodec is implemented similarly to JsonLogicalExtensionCodec
     let codec = ParquetLogicalExtensionCodec {};
@@ -951,8 +961,8 @@ async fn roundtrip_expr_api() -> Result<()> {
         array_replace_all(make_array(vec![lit(1), lit(2), lit(3)]), lit(2), lit(4)),
         count(lit(1)),
         count_distinct(lit(1)),
-        first_value(lit(1), None),
-        first_value(lit(1), Some(vec![lit(2).sort(true, true)])),
+        first_value(lit(1), vec![]),
+        first_value(lit(1), vec![lit(2).sort(true, true)]),
         functions_window::nth_value::first_value(lit(1)),
         functions_window::nth_value::last_value(lit(1)),
         functions_window::nth_value::nth_value(lit(1), 1),
@@ -970,9 +980,20 @@ async fn roundtrip_expr_api() -> Result<()> {
         stddev_pop(lit(2.2)),
         approx_distinct(lit(2)),
         approx_median(lit(2)),
-        approx_percentile_cont(lit(2), lit(0.5), None),
-        approx_percentile_cont(lit(2), lit(0.5), Some(lit(50))),
-        approx_percentile_cont_with_weight(lit(2), lit(1), lit(0.5)),
+        approx_percentile_cont(lit(2).sort(true, false), lit(0.5), None),
+        approx_percentile_cont(lit(2).sort(true, false), lit(0.5), Some(lit(50))),
+        approx_percentile_cont_with_weight(
+            lit(2).sort(true, false),
+            lit(1),
+            lit(0.5),
+            None,
+        ),
+        approx_percentile_cont_with_weight(
+            lit(2).sort(true, false),
+            lit(1),
+            lit(0.5),
+            Some(lit(50)),
+        ),
         grouping(lit(1)),
         bit_and(lit(2)),
         bit_or(lit(2)),
@@ -1057,6 +1078,7 @@ pub mod proto {
         pub expr: Option<datafusion_proto::protobuf::LogicalExprNode>,
     }
 
+    #[allow(dead_code)]
     #[derive(Clone, PartialEq, Eq, ::prost::Message)]
     pub struct TopKExecProto {
         #[prost(uint64, tag = "1")]
@@ -1959,7 +1981,7 @@ fn roundtrip_case_with_null() {
     let test_expr = Expr::Case(Case::new(
         Some(Box::new(lit(1.0_f32))),
         vec![(Box::new(lit(2.0_f32)), Box::new(lit(3.0_f32)))],
-        Some(Box::new(Expr::Literal(ScalarValue::Null))),
+        Some(Box::new(Expr::Literal(ScalarValue::Null, None))),
     ));
 
     let ctx = SessionContext::new();
@@ -1968,7 +1990,7 @@ fn roundtrip_case_with_null() {
 
 #[test]
 fn roundtrip_null_literal() {
-    let test_expr = Expr::Literal(ScalarValue::Null);
+    let test_expr = Expr::Literal(ScalarValue::Null, None);
 
     let ctx = SessionContext::new();
     roundtrip_expr_test(test_expr, ctx);
@@ -2172,7 +2194,7 @@ fn roundtrip_aggregate_udf() {
         vec![lit(1.0_f64)],
         false,
         Some(Box::new(lit(true))),
-        None,
+        vec![],
         None,
     ));
 
@@ -2182,8 +2204,7 @@ fn roundtrip_aggregate_udf() {
     roundtrip_expr_test(test_expr, ctx);
 }
 
-#[test]
-fn roundtrip_scalar_udf() {
+fn dummy_udf() -> ScalarUDF {
     let scalar_fn = Arc::new(|args: &[ColumnarValue]| {
         let ColumnarValue::Array(array) = &args[0] else {
             panic!("should be array")
@@ -2191,13 +2212,18 @@ fn roundtrip_scalar_udf() {
         Ok(ColumnarValue::from(Arc::new(array.clone()) as ArrayRef))
     });
 
-    let udf = create_udf(
+    create_udf(
         "dummy",
         vec![DataType::Utf8],
         DataType::Utf8,
         Volatility::Immutable,
         scalar_fn,
-    );
+    )
+}
+
+#[test]
+fn roundtrip_scalar_udf() {
+    let udf = dummy_udf();
 
     let test_expr = Expr::ScalarFunction(ScalarFunction::new_udf(
         Arc::new(udf.clone()),
@@ -2207,7 +2233,57 @@ fn roundtrip_scalar_udf() {
     let ctx = SessionContext::new();
     ctx.register_udf(udf);
 
-    roundtrip_expr_test(test_expr, ctx);
+    roundtrip_expr_test(test_expr.clone(), ctx);
+
+    // Now test loading the UDF without registering it in the context, but rather creating it in the
+    // extension codec.
+    #[derive(Debug)]
+    struct DummyUDFExtensionCodec;
+
+    impl LogicalExtensionCodec for DummyUDFExtensionCodec {
+        fn try_decode(
+            &self,
+            _buf: &[u8],
+            _inputs: &[LogicalPlan],
+            _ctx: &SessionContext,
+        ) -> Result<Extension> {
+            not_impl_err!("LogicalExtensionCodec is not provided")
+        }
+
+        fn try_encode(&self, _node: &Extension, _buf: &mut Vec<u8>) -> Result<()> {
+            not_impl_err!("LogicalExtensionCodec is not provided")
+        }
+
+        fn try_decode_table_provider(
+            &self,
+            _buf: &[u8],
+            _table_ref: &TableReference,
+            _schema: SchemaRef,
+            _ctx: &SessionContext,
+        ) -> Result<Arc<dyn TableProvider>> {
+            not_impl_err!("LogicalExtensionCodec is not provided")
+        }
+
+        fn try_encode_table_provider(
+            &self,
+            _table_ref: &TableReference,
+            _node: Arc<dyn TableProvider>,
+            _buf: &mut Vec<u8>,
+        ) -> Result<()> {
+            not_impl_err!("LogicalExtensionCodec is not provided")
+        }
+
+        fn try_decode_udf(&self, name: &str, _buf: &[u8]) -> Result<Arc<ScalarUDF>> {
+            if name == "dummy" {
+                Ok(Arc::new(dummy_udf()))
+            } else {
+                Err(DataFusionError::Internal(format!("UDF {name} not found")))
+            }
+        }
+    }
+
+    let ctx = SessionContext::new();
+    roundtrip_expr_test_with_codec(test_expr, ctx, &DummyUDFExtensionCodec)
 }
 
 #[test]
@@ -2296,7 +2372,7 @@ fn roundtrip_window() {
     let ctx = SessionContext::new();
 
     // 1. without window_frame
-    let test_expr1 = Expr::WindowFunction(expr::WindowFunction::new(
+    let test_expr1 = Expr::from(expr::WindowFunction::new(
         WindowFunctionDefinition::WindowUDF(rank_udwf()),
         vec![],
     ))
@@ -2307,7 +2383,7 @@ fn roundtrip_window() {
     .unwrap();
 
     // 2. with default window_frame
-    let test_expr2 = Expr::WindowFunction(expr::WindowFunction::new(
+    let test_expr2 = Expr::from(expr::WindowFunction::new(
         WindowFunctionDefinition::WindowUDF(rank_udwf()),
         vec![],
     ))
@@ -2324,7 +2400,7 @@ fn roundtrip_window() {
         WindowFrameBound::Following(ScalarValue::UInt64(Some(2))),
     );
 
-    let test_expr3 = Expr::WindowFunction(expr::WindowFunction::new(
+    let test_expr3 = Expr::from(expr::WindowFunction::new(
         WindowFunctionDefinition::WindowUDF(rank_udwf()),
         vec![],
     ))
@@ -2341,7 +2417,7 @@ fn roundtrip_window() {
         WindowFrameBound::Following(ScalarValue::UInt64(Some(2))),
     );
 
-    let test_expr4 = Expr::WindowFunction(expr::WindowFunction::new(
+    let test_expr4 = Expr::from(expr::WindowFunction::new(
         WindowFunctionDefinition::AggregateUDF(max_udaf()),
         vec![col("col1")],
     ))
@@ -2391,7 +2467,7 @@ fn roundtrip_window() {
         Arc::new(vec![DataType::Float64, DataType::UInt32]),
     );
 
-    let test_expr5 = Expr::WindowFunction(expr::WindowFunction::new(
+    let test_expr5 = Expr::from(expr::WindowFunction::new(
         WindowFunctionDefinition::AggregateUDF(Arc::new(dummy_agg.clone())),
         vec![col("col1")],
     ))
@@ -2420,7 +2496,7 @@ fn roundtrip_window() {
         }
     }
 
-    #[derive(Debug, Clone)]
+    #[derive(Debug, Clone, PartialEq, Eq, Hash)]
     struct SimpleWindowUDF {
         signature: Signature,
     }
@@ -2453,14 +2529,18 @@ fn roundtrip_window() {
             make_partition_evaluator()
         }
 
-        fn field(&self, field_args: WindowUDFFieldArgs) -> Result<Field> {
-            if let Some(return_type) = field_args.get_input_type(0) {
-                Ok(Field::new(field_args.name(), return_type, true))
+        fn field(&self, field_args: WindowUDFFieldArgs) -> Result<FieldRef> {
+            if let Some(return_field) = field_args.get_input_field(0) {
+                Ok(return_field
+                    .as_ref()
+                    .clone()
+                    .with_name(field_args.name())
+                    .into())
             } else {
                 plan_err!(
                     "dummy_udwf expects 1 argument, got {}: {:?}",
-                    field_args.input_types().len(),
-                    field_args.input_types()
+                    field_args.input_fields().len(),
+                    field_args.input_fields()
                 )
             }
         }
@@ -2472,7 +2552,7 @@ fn roundtrip_window() {
 
     let dummy_window_udf = WindowUDF::from(SimpleWindowUDF::new());
 
-    let test_expr6 = Expr::WindowFunction(expr::WindowFunction::new(
+    let test_expr6 = Expr::from(expr::WindowFunction::new(
         WindowFunctionDefinition::WindowUDF(Arc::new(dummy_window_udf.clone())),
         vec![col("col1")],
     ))
@@ -2482,7 +2562,7 @@ fn roundtrip_window() {
     .build()
     .unwrap();
 
-    let text_expr7 = Expr::WindowFunction(expr::WindowFunction::new(
+    let text_expr7 = Expr::from(expr::WindowFunction::new(
         WindowFunctionDefinition::AggregateUDF(avg_udaf()),
         vec![col("col1")],
     ))
@@ -2557,5 +2637,48 @@ async fn roundtrip_union_query() -> Result<()> {
         format!("{}", plan.display_indent_schema()),
         format!("{}", unnested.display_indent_schema()),
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_custom_listing_tables_schema() -> Result<()> {
+    let ctx = SessionContext::new();
+    // Make sure during round-trip, constraint information is preserved
+    let file_format = JsonFormat::default();
+    let table_partition_cols = vec![("part".to_owned(), DataType::Int64)];
+    let data = "../core/tests/data/partitioned_table_json";
+    let listing_table_url = ListingTableUrl::parse(data)?;
+    let listing_options = ListingOptions::new(Arc::new(file_format))
+        .with_table_partition_cols(table_partition_cols);
+
+    let config = ListingTableConfig::new(listing_table_url)
+        .with_listing_options(listing_options)
+        .infer_schema(&ctx.state())
+        .await?;
+
+    ctx.register_table("hive_style", Arc::new(ListingTable::try_new(config)?))?;
+
+    let plan = ctx
+        .sql("SELECT part, value FROM hive_style LIMIT 1")
+        .await?
+        .logical_plan()
+        .clone();
+
+    let bytes = logical_plan_to_bytes(&plan)?;
+    let new_plan = logical_plan_from_bytes(&bytes, &ctx)?;
+    assert_eq!(plan, new_plan);
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_arrow_scan() -> Result<()> {
+    let ctx = SessionContext::new();
+    let plan = ctx
+        .read_arrow("tests/testdata/test.arrow", ArrowReadOptions::default())
+        .await?
+        .into_optimized_plan()?;
+    let bytes = logical_plan_to_bytes(&plan)?;
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
+    assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
     Ok(())
 }

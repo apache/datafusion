@@ -20,13 +20,14 @@
 use std::any::Any;
 use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
+use std::hash::Hash;
 use std::mem::{size_of, size_of_val};
 
 use ahash::RandomState;
 use arrow::array::{downcast_integer, Array, ArrayRef, AsArray};
 use arrow::datatypes::{
-    ArrowNativeType, ArrowNumericType, DataType, Field, Int16Type, Int32Type, Int64Type,
-    Int8Type, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
+    ArrowNativeType, ArrowNumericType, DataType, Field, FieldRef, Int16Type, Int32Type,
+    Int64Type, Int8Type, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
 };
 
 use datafusion_common::cast::as_list_array;
@@ -87,7 +88,7 @@ macro_rules! accumulator_helper {
 /// `is_distinct` is boolean value indicating whether the operation is distinct or not.
 macro_rules! downcast_bitwise_accumulator {
     ($args:ident, $opr:expr, $is_distinct: expr) => {
-        match $args.return_type {
+        match $args.return_field.data_type() {
             DataType::Int8 => accumulator_helper!(Int8Type, $opr, $is_distinct),
             DataType::Int16 => accumulator_helper!(Int16Type, $opr, $is_distinct),
             DataType::Int32 => accumulator_helper!(Int32Type, $opr, $is_distinct),
@@ -101,7 +102,7 @@ macro_rules! downcast_bitwise_accumulator {
                     "{} not supported for {}: {}",
                     stringify!($opr),
                     $args.name,
-                    $args.return_type
+                    $args.return_field.data_type()
                 )
             }
         }
@@ -196,7 +197,7 @@ make_bitwise_udaf_expr_and_func!(
 );
 
 /// The different types of bitwise operations that can be performed.
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
 enum BitwiseOperationType {
     And,
     Or,
@@ -205,12 +206,12 @@ enum BitwiseOperationType {
 
 impl Display for BitwiseOperationType {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?}", self)
+        write!(f, "{self:?}")
     }
 }
 
 /// [BitwiseOperation] struct encapsulates information about a bitwise operation.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 struct BitwiseOperation {
     signature: Signature,
     /// `operation` indicates the type of bitwise operation to be performed.
@@ -263,7 +264,7 @@ impl AggregateUDFImpl for BitwiseOperation {
         downcast_bitwise_accumulator!(acc_args, self.operation, acc_args.is_distinct)
     }
 
-    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
+    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         if self.operation == BitwiseOperationType::Xor && args.is_distinct {
             Ok(vec![Field::new_list(
                 format_state_name(
@@ -271,15 +272,17 @@ impl AggregateUDFImpl for BitwiseOperation {
                     format!("{} distinct", self.name()).as_str(),
                 ),
                 // See COMMENTS.md to understand why nullable is set to true
-                Field::new_list_field(args.return_type.clone(), true),
+                Field::new_list_field(args.return_type().clone(), true),
                 false,
-            )])
+            )
+            .into()])
         } else {
             Ok(vec![Field::new(
                 format_state_name(args.name, self.name()),
-                args.return_type.clone(),
+                args.return_field.data_type().clone(),
                 true,
-            )])
+            )
+            .into()])
         }
     }
 
@@ -291,7 +294,7 @@ impl AggregateUDFImpl for BitwiseOperation {
         &self,
         args: AccumulatorArgs,
     ) -> Result<Box<dyn GroupsAccumulator>> {
-        let data_type = args.return_type;
+        let data_type = args.return_field.data_type();
         let operation = &self.operation;
         downcast_integer! {
             data_type => (group_accumulator_helper, data_type, operation),
@@ -476,7 +479,7 @@ impl<T: ArrowNumericType> Default for DistinctBitXorAccumulator<T> {
 
 impl<T: ArrowNumericType> Accumulator for DistinctBitXorAccumulator<T>
 where
-    T::Native: std::ops::BitXor<Output = T::Native> + std::hash::Hash + Eq,
+    T::Native: std::ops::BitXor<Output = T::Native> + Hash + Eq,
 {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         if values.is_empty() {

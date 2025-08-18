@@ -17,12 +17,13 @@
 
 extern crate criterion;
 
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field};
 use arrow::{
     datatypes::{Float32Type, Float64Type},
     util::bench_util::create_primitive_array,
 };
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use datafusion_common::config::ConfigOptions;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::math::iszero;
 use std::sync::Arc;
@@ -33,14 +34,26 @@ fn criterion_benchmark(c: &mut Criterion) {
         let f32_array = Arc::new(create_primitive_array::<Float32Type>(size, 0.2));
         let batch_len = f32_array.len();
         let f32_args = vec![ColumnarValue::Array(f32_array)];
-        c.bench_function(&format!("iszero f32 array: {}", size), |b| {
+        let arg_fields = f32_args
+            .iter()
+            .enumerate()
+            .map(|(idx, arg)| {
+                Field::new(format!("arg_{idx}"), arg.data_type(), true).into()
+            })
+            .collect::<Vec<_>>();
+        let return_field = Arc::new(Field::new("f", DataType::Boolean, true));
+        let config_options = Arc::new(ConfigOptions::default());
+
+        c.bench_function(&format!("iszero f32 array: {size}"), |b| {
             b.iter(|| {
                 black_box(
                     iszero
                         .invoke_with_args(ScalarFunctionArgs {
                             args: f32_args.clone(),
+                            arg_fields: arg_fields.clone(),
                             number_rows: batch_len,
-                            return_type: &DataType::Boolean,
+                            return_field: Arc::clone(&return_field),
+                            config_options: Arc::clone(&config_options),
                         })
                         .unwrap(),
                 )
@@ -49,14 +62,25 @@ fn criterion_benchmark(c: &mut Criterion) {
         let f64_array = Arc::new(create_primitive_array::<Float64Type>(size, 0.2));
         let batch_len = f64_array.len();
         let f64_args = vec![ColumnarValue::Array(f64_array)];
-        c.bench_function(&format!("iszero f64 array: {}", size), |b| {
+        let arg_fields = f64_args
+            .iter()
+            .enumerate()
+            .map(|(idx, arg)| {
+                Field::new(format!("arg_{idx}"), arg.data_type(), true).into()
+            })
+            .collect::<Vec<_>>();
+        let return_field = Arc::new(Field::new("f", DataType::Boolean, true));
+
+        c.bench_function(&format!("iszero f64 array: {size}"), |b| {
             b.iter(|| {
                 black_box(
                     iszero
                         .invoke_with_args(ScalarFunctionArgs {
                             args: f64_args.clone(),
+                            arg_fields: arg_fields.clone(),
                             number_rows: batch_len,
-                            return_type: &DataType::Boolean,
+                            return_field: Arc::clone(&return_field),
+                            config_options: Arc::clone(&config_options),
                         })
                         .unwrap(),
                 )

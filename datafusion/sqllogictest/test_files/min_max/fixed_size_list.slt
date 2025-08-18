@@ -1,0 +1,133 @@
+# Min/Max with FixedSizeList over integers
+query ??
+SELECT MIN(column1), MAX(column1) FROM VALUES
+(arrow_cast(make_array(1, 2, 3, 4), 'FixedSizeList(4, Int64)')),
+(arrow_cast(make_array(1, 2), 'FixedSizeList(2, Int64)'));
+----
+[1, 2] [1, 2, 3, 4]
+
+# Min/Max with FixedSizeList over strings
+query ??
+SELECT MIN(column1), MAX(column1) FROM VALUES
+(arrow_cast(make_array('a', 'b', 'c'), 'FixedSizeList(3, Utf8)')),
+(arrow_cast(make_array('a', 'b'), 'LargeList(Utf8)'));
+----
+[a, b] [a, b, c]
+
+# Min/Max with FixedSizeList over booleans
+query ??
+SELECT MIN(column1), MAX(column1) FROM VALUES
+(arrow_cast(make_array(true, false, true), 'FixedSizeList(3, Boolean)')),
+(arrow_cast(make_array(true, false), 'FixedSizeList(2, Boolean)'));
+----
+[true, false] [true, false, true]
+
+# Min/Max with FixedSizeList over nullable integers
+query ??
+SELECT MIN(column1), MAX(column1) FROM VALUES
+(arrow_cast(make_array(NULL, 1, 2), 'FixedSizeList(3, Int64)')),
+(arrow_cast(make_array(1, 2), 'FixedSizeList(2, Int64)'));
+----
+[1, 2] [NULL, 1, 2]
+
+# Min/Max FixedSizeList with different lengths and nulls
+query ??
+SELECT MIN(column1), MAX(column1) FROM VALUES
+(arrow_cast(make_array(1, 2, 3, 4), 'FixedSizeList(4, Int64)')),
+(arrow_cast(make_array(1, 2), 'FixedSizeList(2, Int64)')),
+(arrow_cast(make_array(1, NULL, 3), 'FixedSizeList(3, Int64)'));
+----
+[1, 2] [1, NULL, 3]
+
+# Min/Max FixedSizeList with only NULLs
+query ??
+SELECT MIN(column1), MAX(column1) FROM VALUES
+(arrow_cast(make_array(NULL, NULL), 'FixedSizeList(2, Int64)')),
+(arrow_cast(make_array(NULL), 'FixedSizeList(1, Int64)'));
+----
+[NULL] [NULL, NULL]
+
+
+# Min/Max FixedSizeList of varying types (integers and NULLs)
+query ??
+SELECT MIN(column1), MAX(column1) FROM VALUES
+(arrow_cast(make_array(1, 2, 3), 'FixedSizeList(3, Int64)')),
+(arrow_cast(make_array(NULL, 2, 3), 'FixedSizeList(3, Int64)')),
+(arrow_cast(make_array(1, 2, NULL), 'FixedSizeList(3, Int64)'));
+----
+[1, 2, 3] [NULL, 2, 3]
+
+# Min/Max FixedSizeList grouped by key with NULLs and differing lengths
+query I?? rowsort
+SELECT column1, MIN(column2), MAX(column2) FROM VALUES
+(0, arrow_cast(make_array(1, NULL, 3), 'FixedSizeList(3, Int64)')),
+(0, arrow_cast(make_array(1, 2, 3, 4), 'FixedSizeList(4, Int64)')),
+(1, arrow_cast(make_array(1, 2), 'FixedSizeList(2, Int64)')),
+(1, arrow_cast(make_array(NULL, 5), 'FixedSizeList(2, Int64)'))
+GROUP BY column1;
+----
+0 [1, 2, 3, 4] [1, NULL, 3]
+1 [1, 2] [NULL, 5]
+
+# Min/Max FixedSizeList grouped by key with NULLs and differing lengths
+query I?? rowsort
+SELECT column1, MIN(column2), MAX(column2) FROM VALUES
+(0, arrow_cast(make_array(NULL), 'FixedSizeList(1, Int64)')),
+(0, arrow_cast(make_array(NULL, NULL), 'FixedSizeList(2, Int64)')),
+(1, arrow_cast(make_array(NULL), 'FixedSizeList(1, Int64)'))
+GROUP BY column1;
+----
+0 [NULL] [NULL, NULL]
+1 [NULL] [NULL]
+
+# Min/Max grouped FixedSizeList with empty and non-empty
+query I?? rowsort
+SELECT column1, MIN(column2), MAX(column2) FROM VALUES
+(0, arrow_cast(make_array(1), 'FixedSizeList(1, Int64)')),
+(1, arrow_cast(make_array(5, 6), 'FixedSizeList(2, Int64)'))
+GROUP BY column1;
+----
+0 [1] [1]
+1 [5, 6] [5, 6]
+
+# Min/Max over FixedSizeList with a window function
+query ?
+SELECT min(column1) OVER (ORDER BY column1) FROM VALUES
+(arrow_cast(make_array(1, 2, 3), 'FixedSizeList(3, Int64)')),
+(arrow_cast(make_array(1, 2, 3), 'FixedSizeList(3, Int64)')),
+(arrow_cast(make_array(2, 3), 'FixedSizeList(2, Int64)'))
+----
+[1, 2, 3]
+[1, 2, 3]
+[1, 2, 3]
+
+# Min/Max over FixedSizeList with a window function and nulls
+query ?
+SELECT min(column1) OVER (ORDER BY column1) FROM VALUES
+(arrow_cast(make_array(NULL), 'FixedSizeList(1, Int64)')),
+(arrow_cast(make_array(4, 5), 'FixedSizeList(2, Int64)')),
+(arrow_cast(make_array(2, 3), 'FixedSizeList(2, Int64)'))
+----
+[2, 3]
+[2, 3]
+[2, 3]
+
+# Min/Max over FixedSizeList with a window function, nulls and ROWS BETWEEN statement
+query ?
+SELECT min(column1) OVER (ORDER BY column1 ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING) FROM VALUES
+(arrow_cast(make_array(NULL), 'FixedSizeList(1, Int64)')),
+(arrow_cast(make_array(4, 5), 'FixedSizeList(2, Int64)')),
+(arrow_cast(make_array(2, 3), 'FixedSizeList(2, Int64)'))
+----
+[2, 3]
+[2, 3]
+[4, 5]
+
+# Min/Max over FixedSizeList with a window function using a different column
+query ?
+SELECT max(column2) OVER (ORDER BY column1 ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING) FROM VALUES
+(arrow_cast(make_array(1, 2, 3), 'FixedSizeList(3, Int64)'), arrow_cast(make_array(4, 5), 'FixedSizeList(2, Int64)')),
+(arrow_cast(make_array(2, 3), 'FixedSizeList(2, Int64)'), arrow_cast(make_array(2, 3), 'FixedSizeList(2, Int64)'))
+----
+[4, 5]
+[4, 5]

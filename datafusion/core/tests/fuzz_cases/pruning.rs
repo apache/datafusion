@@ -90,42 +90,42 @@ async fn test_utf8_not_like() {
 
 #[tokio::test]
 async fn test_utf8_like_prefix() {
-    Utf8Test::new(|value| col("a").like(lit(format!("%{}", value))))
+    Utf8Test::new(|value| col("a").like(lit(format!("%{value}"))))
         .run()
         .await;
 }
 
 #[tokio::test]
 async fn test_utf8_like_suffix() {
-    Utf8Test::new(|value| col("a").like(lit(format!("{}%", value))))
+    Utf8Test::new(|value| col("a").like(lit(format!("{value}%"))))
         .run()
         .await;
 }
 
 #[tokio::test]
 async fn test_utf8_not_like_prefix() {
-    Utf8Test::new(|value| col("a").not_like(lit(format!("%{}", value))))
+    Utf8Test::new(|value| col("a").not_like(lit(format!("%{value}"))))
         .run()
         .await;
 }
 
 #[tokio::test]
 async fn test_utf8_not_like_ecsape() {
-    Utf8Test::new(|value| col("a").not_like(lit(format!("\\%{}%", value))))
+    Utf8Test::new(|value| col("a").not_like(lit(format!("\\%{value}%"))))
         .run()
         .await;
 }
 
 #[tokio::test]
 async fn test_utf8_not_like_suffix() {
-    Utf8Test::new(|value| col("a").not_like(lit(format!("{}%", value))))
+    Utf8Test::new(|value| col("a").not_like(lit(format!("{value}%"))))
         .run()
         .await;
 }
 
 #[tokio::test]
 async fn test_utf8_not_like_suffix_one() {
-    Utf8Test::new(|value| col("a").not_like(lit(format!("{}_", value))))
+    Utf8Test::new(|value| col("a").not_like(lit(format!("{value}_"))))
         .run()
         .await;
 }
@@ -226,7 +226,7 @@ impl Utf8Test {
             return (*files).clone();
         }
 
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let values = Self::values();
 
         let mut row_groups = vec![];
@@ -276,7 +276,7 @@ async fn execute_with_predicate(
     ctx: &SessionContext,
 ) -> Vec<String> {
     let parquet_source = if prune_stats {
-        ParquetSource::default().with_predicate(Arc::clone(&schema), predicate.clone())
+        ParquetSource::default().with_predicate(predicate.clone())
     } else {
         ParquetSource::default()
     };
@@ -319,14 +319,9 @@ async fn write_parquet_file(
     row_groups: Vec<Vec<String>>,
 ) -> Bytes {
     let mut buf = BytesMut::new().writer();
-    let mut props = WriterProperties::builder();
-    if let Some(truncation_length) = truncation_length {
-        props = {
-            #[allow(deprecated)]
-            props.set_max_statistics_size(truncation_length)
-        }
-    }
-    props = props.set_statistics_enabled(EnabledStatistics::Chunk); // row group level
+    let props = WriterProperties::builder()
+        .set_statistics_enabled(EnabledStatistics::Chunk) // row group level
+        .set_statistics_truncate_length(truncation_length);
     let props = props.build();
     {
         let mut writer =
@@ -345,7 +340,7 @@ async fn write_parquet_file(
 
 /// The string values for [Utf8Test::values]
 static VALUES: LazyLock<Vec<String>> = LazyLock::new(|| {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
 
     let characters = [
         "z",

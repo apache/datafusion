@@ -24,14 +24,15 @@ use std::mem::size_of_val;
 use arrow::array::Array;
 use arrow::array::ArrowNativeTypeOp;
 use arrow::array::{ArrowNumericType, AsArray};
-use arrow::datatypes::ArrowNativeType;
+use arrow::datatypes::ArrowPrimitiveType;
+use arrow::datatypes::{ArrowNativeType, FieldRef};
 use arrow::datatypes::{
     DataType, Decimal128Type, Decimal256Type, Float64Type, Int64Type, UInt64Type,
     DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION,
 };
 use arrow::{array::ArrayRef, datatypes::Field};
 use datafusion_common::{
-    exec_err, not_impl_err, utils::take_function_args, Result, ScalarValue,
+    exec_err, not_impl_err, utils::take_function_args, HashMap, Result, ScalarValue,
 };
 use datafusion_expr::function::AccumulatorArgs;
 use datafusion_expr::function::StateFieldsArgs;
@@ -60,17 +61,27 @@ make_udaf_expr_and_func!(
 /// `helper` is a macro accepting (ArrowPrimitiveType, DataType)
 macro_rules! downcast_sum {
     ($args:ident, $helper:ident) => {
-        match $args.return_type {
-            DataType::UInt64 => $helper!(UInt64Type, $args.return_type),
-            DataType::Int64 => $helper!(Int64Type, $args.return_type),
-            DataType::Float64 => $helper!(Float64Type, $args.return_type),
-            DataType::Decimal128(_, _) => $helper!(Decimal128Type, $args.return_type),
-            DataType::Decimal256(_, _) => $helper!(Decimal256Type, $args.return_type),
+        match $args.return_field.data_type().clone() {
+            DataType::UInt64 => {
+                $helper!(UInt64Type, $args.return_field.data_type().clone())
+            }
+            DataType::Int64 => {
+                $helper!(Int64Type, $args.return_field.data_type().clone())
+            }
+            DataType::Float64 => {
+                $helper!(Float64Type, $args.return_field.data_type().clone())
+            }
+            DataType::Decimal128(_, _) => {
+                $helper!(Decimal128Type, $args.return_field.data_type().clone())
+            }
+            DataType::Decimal256(_, _) => {
+                $helper!(Decimal256Type, $args.return_field.data_type().clone())
+            }
             _ => {
                 not_impl_err!(
                     "Sum not supported for {}: {}",
                     $args.name,
-                    $args.return_type
+                    $args.return_field.data_type()
                 )
             }
         }
@@ -91,7 +102,7 @@ macro_rules! downcast_sum {
 ```"#,
     standard_argument(name = "expression",)
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct Sum {
     signature: Signature,
 }
@@ -188,25 +199,23 @@ impl AggregateUDFImpl for Sum {
         }
     }
 
-    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
+    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         if args.is_distinct {
             Ok(vec![Field::new_list(
                 format_state_name(args.name, "sum distinct"),
                 // See COMMENTS.md to understand why nullable is set to true
-                Field::new_list_field(args.return_type.clone(), true),
+                Field::new_list_field(args.return_type().clone(), true),
                 false,
-            )])
+            )
+            .into()])
         } else {
             Ok(vec![Field::new(
                 format_state_name(args.name, "sum"),
-                args.return_type.clone(),
+                args.return_type().clone(),
                 true,
-            )])
+            )
+            .into()])
         }
-    }
-
-    fn aliases(&self) -> &[String] {
-        &[]
     }
 
     fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
@@ -232,12 +241,23 @@ impl AggregateUDFImpl for Sum {
         &self,
         args: AccumulatorArgs,
     ) -> Result<Box<dyn Accumulator>> {
-        macro_rules! helper {
-            ($t:ty, $dt:expr) => {
-                Ok(Box::new(SlidingSumAccumulator::<$t>::new($dt.clone())))
-            };
+        if args.is_distinct {
+            // distinct path: use our sliding‐window distinct‐sum
+            macro_rules! helper_distinct {
+                ($t:ty, $dt:expr) => {
+                    Ok(Box::new(SlidingDistinctSumAccumulator::try_new(&$dt)?))
+                };
+            }
+            downcast_sum!(args, helper_distinct)
+        } else {
+            // non‐distinct path: existing sliding sum
+            macro_rules! helper {
+                ($t:ty, $dt:expr) => {
+                    Ok(Box::new(SlidingSumAccumulator::<$t>::new($dt.clone())))
+                };
+            }
+            downcast_sum!(args, helper)
         }
-        downcast_sum!(args, helper)
     }
 
     fn reverse_expr(&self) -> ReversedUDAF {
@@ -378,6 +398,110 @@ impl<T: ArrowNumericType> Accumulator for SlidingSumAccumulator<T> {
             self.sum = self.sum.sub_wrapping(x)
         }
         self.count -= (values.len() - values.null_count()) as u64;
+        Ok(())
+    }
+
+    fn supports_retract_batch(&self) -> bool {
+        true
+    }
+}
+
+/// A sliding‐window accumulator for `SUM(DISTINCT)` over Int64 columns.
+/// Maintains a running sum so that `evaluate()` is O(1).
+#[derive(Debug)]
+pub struct SlidingDistinctSumAccumulator {
+    /// Map each distinct value → its current count in the window
+    counts: HashMap<i64, usize, RandomState>,
+    /// Running sum of all distinct keys currently in the window
+    sum: i64,
+    /// Data type (must be Int64)
+    data_type: DataType,
+}
+
+impl SlidingDistinctSumAccumulator {
+    /// Create a new accumulator; only `DataType::Int64` is supported.
+    pub fn try_new(data_type: &DataType) -> Result<Self> {
+        // TODO support other numeric types
+        if *data_type != DataType::Int64 {
+            return exec_err!("SlidingDistinctSumAccumulator only supports Int64");
+        }
+        Ok(Self {
+            counts: HashMap::default(),
+            sum: 0,
+            data_type: data_type.clone(),
+        })
+    }
+}
+
+impl Accumulator for SlidingDistinctSumAccumulator {
+    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        let arr = values[0].as_primitive::<Int64Type>();
+        for &v in arr.values() {
+            let cnt = self.counts.entry(v).or_insert(0);
+            if *cnt == 0 {
+                // first occurrence in window
+                self.sum = self.sum.wrapping_add(v);
+            }
+            *cnt += 1;
+        }
+        Ok(())
+    }
+
+    fn evaluate(&mut self) -> Result<ScalarValue> {
+        // O(1) wrap of running sum
+        Ok(ScalarValue::Int64(Some(self.sum)))
+    }
+
+    fn size(&self) -> usize {
+        size_of_val(self)
+    }
+
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
+        // Serialize distinct keys for cross-partition merge if needed
+        let keys = self
+            .counts
+            .keys()
+            .cloned()
+            .map(Some)
+            .map(ScalarValue::Int64)
+            .collect::<Vec<_>>();
+        Ok(vec![ScalarValue::List(ScalarValue::new_list_nullable(
+            &keys,
+            &self.data_type,
+        ))])
+    }
+
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        // Merge distinct keys from other partitions
+        let list_arr = states[0].as_list::<i32>();
+        for maybe_inner in list_arr.iter().flatten() {
+            for idx in 0..maybe_inner.len() {
+                if let ScalarValue::Int64(Some(v)) =
+                    ScalarValue::try_from_array(&*maybe_inner, idx)?
+                {
+                    let cnt = self.counts.entry(v).or_insert(0);
+                    if *cnt == 0 {
+                        self.sum = self.sum.wrapping_add(v);
+                    }
+                    *cnt += 1;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        let arr = values[0].as_primitive::<Int64Type>();
+        for &v in arr.values() {
+            if let Some(cnt) = self.counts.get_mut(&v) {
+                *cnt -= 1;
+                if *cnt == 0 {
+                    // last copy leaving window
+                    self.sum = self.sum.wrapping_sub(v);
+                    self.counts.remove(&v);
+                }
+            }
+        }
         Ok(())
     }
 

@@ -32,50 +32,45 @@ use arrow::compute::concat_batches;
 use arrow::record_batch::RecordBatch;
 use datafusion::physical_plan::collect;
 use datafusion::physical_plan::metrics::MetricsSet;
-use datafusion::prelude::{col, lit, lit_timestamp_nano, Expr, SessionContext};
+use datafusion::prelude::{
+    col, lit, lit_timestamp_nano, Expr, ParquetReadOptions, SessionContext,
+};
 use datafusion::test_util::parquet::{ParquetScanOptions, TestParquetFile};
-use datafusion_common::instant::Instant;
 use datafusion_expr::utils::{conjunction, disjunction, split_conjunction};
 
 use itertools::Itertools;
 use parquet::file::properties::WriterProperties;
 use tempfile::TempDir;
-use test_utils::AccessLogGenerator;
 
 /// how many rows of generated data to write to our parquet file (arbitrary)
 const NUM_ROWS: usize = 4096;
 
-fn generate_file(tempdir: &TempDir, props: WriterProperties) -> TestParquetFile {
-    // Tune down the generator for smaller files
-    let generator = AccessLogGenerator::new()
-        .with_row_limit(NUM_ROWS)
-        .with_pods_per_host(1..4)
-        .with_containers_per_pod(1..2)
-        .with_entries_per_container(128..256);
-
-    let file = tempdir.path().join("data.parquet");
-
-    let start = Instant::now();
-    println!("Writing test data to {file:?}");
-    let test_parquet_file = TestParquetFile::try_new(file, props, generator).unwrap();
-    println!(
-        "Completed generating test data in {:?}",
-        Instant::now() - start
-    );
-    test_parquet_file
+async fn read_parquet_test_data<T: Into<String>>(path: T) -> Vec<RecordBatch> {
+    let ctx: SessionContext = SessionContext::new();
+    ctx.read_parquet(path.into(), ParquetReadOptions::default())
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap()
 }
 
 #[tokio::test]
 async fn single_file() {
-    // Only create the parquet file once as it is fairly large
+    let batches =
+        read_parquet_test_data("tests/data/filter_pushdown/single_file.gz.parquet").await;
 
-    let tempdir = TempDir::new_in(Path::new(".")).unwrap();
-    // Set row group size smaller so can test with fewer rows
+    // Set the row group size smaller so can test with fewer rows
     let props = WriterProperties::builder()
         .set_max_row_group_size(1024)
         .build();
-    let test_parquet_file = generate_file(&tempdir, props);
 
+    // Only create the parquet file once as it is fairly large
+    let tempdir = TempDir::new_in(Path::new(".")).unwrap();
+
+    let test_parquet_file =
+        TestParquetFile::try_new(tempdir.path().join("data.parquet"), props, batches)
+            .unwrap();
     let case = TestCase::new(&test_parquet_file)
         .with_name("selective")
         // request_method = 'GET'
@@ -224,16 +219,25 @@ async fn single_file() {
 }
 
 #[tokio::test]
+#[allow(dead_code)]
 async fn single_file_small_data_pages() {
+    let batches = read_parquet_test_data(
+        "tests/data/filter_pushdown/single_file_small_pages.gz.parquet",
+    )
+    .await;
+
     let tempdir = TempDir::new_in(Path::new(".")).unwrap();
 
-    // Set low row count limit to improve page filtering
+    // Set a low row count limit to improve page filtering
     let props = WriterProperties::builder()
         .set_max_row_group_size(2048)
         .set_data_page_row_count_limit(512)
         .set_write_batch_size(512)
         .build();
-    let test_parquet_file = generate_file(&tempdir, props);
+
+    let test_parquet_file =
+        TestParquetFile::try_new(tempdir.path().join("data.parquet"), props, batches)
+            .unwrap();
 
     // The statistics on the 'pod' column are as follows:
     //

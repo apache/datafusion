@@ -26,6 +26,7 @@
 [![Open Issues][open-issues-badge]][open-issues-url]
 [![Discord chat][discord-badge]][discord-url]
 [![Linkedin][linkedin-badge]][linkedin-url]
+![Crates.io MSRV][msrv-badge]
 
 [crates-badge]: https://img.shields.io/crates/v/datafusion.svg
 [crates-url]: https://crates.io/crates/datafusion
@@ -40,6 +41,7 @@
 [open-issues-url]: https://github.com/apache/datafusion/issues
 [linkedin-badge]: https://img.shields.io/badge/Follow-Linkedin-blue
 [linkedin-url]: https://www.linkedin.com/company/apache-datafusion/
+[msrv-badge]: https://img.shields.io/crates/msrv/datafusion?label=Min%20Rust%20Version
 
 [Website](https://datafusion.apache.org/) |
 [API Docs](https://docs.rs/datafusion/latest/datafusion/) |
@@ -58,8 +60,6 @@ See [use cases] for examples. The following related subprojects target end users
 
 - [DataFusion Python](https://github.com/apache/datafusion-python/) offers a Python interface for SQL and DataFrame
   queries.
-- [DataFusion Ray](https://github.com/apache/datafusion-ray/) provides a distributed version of DataFusion that scales
-  out on Ray clusters.
 - [DataFusion Comet](https://github.com/apache/datafusion-comet/) is an accelerator for Apache Spark based on
   DataFusion.
 
@@ -118,6 +118,7 @@ Default features:
 - `datetime_expressions`: date and time functions such as `to_timestamp`
 - `encoding_expressions`: `encode` and `decode` functions
 - `parquet`: support for reading the [Apache Parquet] format
+- `parquet_encryption`: support for using [Parquet Modular Encryption]
 - `regex_expressions`: regular expression functions, such as `regexp_match`
 - `unicode_expressions`: Include unicode aware functions such as `character_length`
 - `unparser`: enables support to reverse LogicalPlans back into SQL
@@ -132,20 +133,7 @@ Optional features:
 
 [apache avro]: https://avro.apache.org/
 [apache parquet]: https://parquet.apache.org/
-
-## Rust Version Compatibility Policy
-
-The Rust toolchain releases are tracked at [Rust Versions](https://releases.rs) and follow
-[semantic versioning](https://semver.org/). A Rust toolchain release can be identified
-by a version string like `1.80.0`, or more generally `major.minor.patch`.
-
-DataFusion's supports the last 4 stable Rust minor versions released and any such versions released within the last 4 months.
-
-For example, given the releases `1.78.0`, `1.79.0`, `1.80.0`, `1.80.1` and `1.81.0` DataFusion will support 1.78.0, which is 3 minor versions prior to the most minor recent `1.81`.
-
-Note: If a Rust hotfix is released for the current MSRV, the MSRV will be updated to the specific minor version that includes all applicable hotfixes preceding other policies.
-
-DataFusion enforces MSRV policy using a [MSRV CI Check](https://github.com/search?q=repo%3Aapache%2Fdatafusion+rust-version+language%3ATOML+path%3A%2F%5ECargo.toml%2F&type=code)
+[parquet modular encryption]: https://parquet.apache.org/docs/file-format/data-pages/encryption/
 
 ## DataFusion API Evolution and Deprecation Guidelines
 

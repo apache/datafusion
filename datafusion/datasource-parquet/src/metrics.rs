@@ -27,6 +27,21 @@ use datafusion_physical_plan::metrics::{
 /// [`ParquetFileReaderFactory`]: super::ParquetFileReaderFactory
 #[derive(Debug, Clone)]
 pub struct ParquetFileMetrics {
+    /// Number of file **ranges** pruned by partition or file level statistics.
+    /// Pruning of files often happens at planning time but may happen at execution time
+    /// if dynamic filters (e.g. from a join) result in additional pruning.
+    ///
+    /// This does **not** necessarily equal the number of files pruned:
+    /// files may be scanned in sub-ranges to increase parallelism,
+    /// in which case this will represent the number of sub-ranges pruned, not the number of files.
+    /// The number of files pruned will always be less than or equal to this number.
+    ///
+    /// A single file may have some ranges that are not pruned and some that are pruned.
+    /// For example, with a query like `ORDER BY col LIMIT 10`, the TopK dynamic filter
+    /// pushdown optimization may fill up the TopK heap when reading the first part of a file,
+    /// then skip the second part if file statistics indicate it cannot contain rows
+    /// that would be in the TopK.
+    pub files_ranges_pruned_statistics: Count,
     /// Number of times the predicate could not be evaluated
     pub predicate_evaluation_errors: Count,
     /// Number of row groups whose bloom filters were checked and matched (not pruned)
@@ -122,7 +137,11 @@ impl ParquetFileMetrics {
             .with_new_label("filename", filename.to_string())
             .subset_time("metadata_load_time", partition);
 
+        let files_ranges_pruned_statistics = MetricBuilder::new(metrics)
+            .counter("files_ranges_pruned_statistics", partition);
+
         Self {
+            files_ranges_pruned_statistics,
             predicate_evaluation_errors,
             row_groups_matched_bloom_filter,
             row_groups_pruned_bloom_filter,

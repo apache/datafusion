@@ -46,7 +46,7 @@ pub fn simplify_regex_expr(
 ) -> Result<Expr> {
     let mode = OperatorMode::new(&op);
 
-    if let Expr::Literal(ScalarValue::Utf8(Some(pattern))) = right.as_ref() {
+    if let Expr::Literal(ScalarValue::Utf8(Some(pattern)), _) = right.as_ref() {
         // Handle the special case for ".*" pattern
         if pattern == ANY_CHAR_REGEX_PATTERN {
             let new_expr = if mode.not {
@@ -121,7 +121,7 @@ impl OperatorMode {
         let like = Like {
             negated: self.not,
             expr,
-            pattern: Box::new(Expr::Literal(ScalarValue::from(pattern))),
+            pattern: Box::new(Expr::Literal(ScalarValue::from(pattern), None)),
             escape_char: None,
             case_insensitive: self.i,
         };
@@ -255,9 +255,9 @@ fn partial_anchored_literal_to_like(v: &[Hir]) -> Option<String> {
     };
 
     if match_begin {
-        Some(format!("{}%", lit))
+        Some(format!("{lit}%"))
     } else {
-        Some(format!("%{}", lit))
+        Some(format!("%{lit}"))
     }
 }
 
@@ -331,7 +331,7 @@ fn lower_simple(mode: &OperatorMode, left: &Expr, hir: &Hir) -> Option<Expr> {
         }
         HirKind::Concat(inner) => {
             if let Some(pattern) = partial_anchored_literal_to_like(inner)
-                .or(collect_concat_to_like_string(inner))
+                .or_else(|| collect_concat_to_like_string(inner))
             {
                 return Some(mode.expr(Box::new(left.clone()), pattern));
             }

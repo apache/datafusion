@@ -18,11 +18,17 @@
 //! This module contains end to end tests of creating
 //! user defined window functions
 
-use arrow::array::{ArrayRef, AsArray, Int64Array, RecordBatch, StringArray};
+use arrow::array::{
+    record_batch, Array, ArrayRef, AsArray, Int64Array, RecordBatch, StringArray,
+    UInt64Array,
+};
 use arrow::datatypes::{DataType, Field, Schema};
+use arrow_schema::FieldRef;
 use datafusion::common::test_util::batches_to_string;
 use datafusion::common::{Result, ScalarValue};
 use datafusion::prelude::SessionContext;
+use datafusion_common::exec_datafusion_err;
+use datafusion_expr::ptr_eq::PtrEq;
 use datafusion_expr::{
     PartitionEvaluator, Signature, TypeSignature, Volatility, WindowUDF, WindowUDFImpl,
 };
@@ -34,6 +40,8 @@ use datafusion_physical_expr::{
     expressions::{col, lit},
     PhysicalExpr,
 };
+use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 use std::{
     any::Any,
     ops::Range,
@@ -516,10 +524,10 @@ impl OddCounter {
     }
 
     fn register(ctx: &mut SessionContext, test_state: Arc<TestState>) {
-        #[derive(Debug, Clone)]
+        #[derive(Debug, Clone, PartialEq, Eq, Hash)]
         struct SimpleWindowUDF {
             signature: Signature,
-            test_state: Arc<TestState>,
+            test_state: PtrEq<Arc<TestState>>,
             aliases: Vec<String>,
         }
 
@@ -529,7 +537,7 @@ impl OddCounter {
                     Signature::exact(vec![DataType::Float64], Volatility::Immutable);
                 Self {
                     signature,
-                    test_state,
+                    test_state: test_state.into(),
                     aliases: vec!["odd_counter_alias".to_string()],
                 }
             }
@@ -559,8 +567,8 @@ impl OddCounter {
                 &self.aliases
             }
 
-            fn field(&self, field_args: WindowUDFFieldArgs) -> Result<Field> {
-                Ok(Field::new(field_args.name(), DataType::Int64, true))
+            fn field(&self, field_args: WindowUDFFieldArgs) -> Result<FieldRef> {
+                Ok(Field::new(field_args.name(), DataType::Int64, true).into())
             }
         }
 
@@ -633,11 +641,11 @@ fn odd_count(arr: &Int64Array) -> i64 {
 
 /// returns an array of num_rows that has the number of odd values in `arr`
 fn odd_count_arr(arr: &Int64Array, num_rows: usize) -> ArrayRef {
-    let array: Int64Array = std::iter::repeat(odd_count(arr)).take(num_rows).collect();
+    let array: Int64Array = std::iter::repeat_n(odd_count(arr), num_rows).collect();
     Arc::new(array)
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 struct VariadicWindowUDF {
     signature: Signature,
 }
@@ -678,7 +686,7 @@ impl WindowUDFImpl for VariadicWindowUDF {
         unimplemented!("unnecessary for testing");
     }
 
-    fn field(&self, _: WindowUDFFieldArgs) -> Result<Field> {
+    fn field(&self, _: WindowUDFFieldArgs) -> Result<FieldRef> {
         unimplemented!("unnecessary for testing");
     }
 }
@@ -723,11 +731,11 @@ fn test_default_expressions() -> Result<()> {
     ];
 
     for input_exprs in &test_cases {
-        let input_types = input_exprs
+        let input_fields = input_exprs
             .iter()
-            .map(|expr: &Arc<dyn PhysicalExpr>| expr.data_type(&schema).unwrap())
+            .map(|expr: &Arc<dyn PhysicalExpr>| expr.return_field(&schema).unwrap())
             .collect::<Vec<_>>();
-        let expr_args = ExpressionArgs::new(input_exprs, &input_types);
+        let expr_args = ExpressionArgs::new(input_exprs, &input_fields);
 
         let ret_exprs = udwf.expressions(expr_args);
 
@@ -735,9 +743,7 @@ fn test_default_expressions() -> Result<()> {
         assert_eq!(
             input_exprs.len(),
             ret_exprs.len(),
-            "\nInput expressions: {:?}\nReturned expressions: {:?}",
-            input_exprs,
-            ret_exprs
+            "\nInput expressions: {input_exprs:?}\nReturned expressions: {ret_exprs:?}"
         );
 
         // Compares each returned expression with original input expressions
@@ -751,5 +757,176 @@ fn test_default_expressions() -> Result<()> {
             );
         }
     }
+    Ok(())
+}
+
+#[derive(Debug)]
+struct MetadataBasedWindowUdf {
+    name: String,
+    signature: Signature,
+    metadata: HashMap<String, String>,
+}
+
+impl PartialEq for MetadataBasedWindowUdf {
+    fn eq(&self, other: &Self) -> bool {
+        let Self {
+            name,
+            signature,
+            metadata,
+        } = self;
+        name == &other.name
+            && signature == &other.signature
+            && metadata == &other.metadata
+    }
+}
+impl Eq for MetadataBasedWindowUdf {}
+impl Hash for MetadataBasedWindowUdf {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        let Self {
+            name,
+            signature,
+            metadata: _, // unhashable
+        } = self;
+        name.hash(state);
+        signature.hash(state);
+    }
+}
+
+impl MetadataBasedWindowUdf {
+    fn new(metadata: HashMap<String, String>) -> Self {
+        // The name we return must be unique. Otherwise we will not call distinct
+        // instances of this UDF. This is a small hack for the unit tests to get unique
+        // names, but you could do something more elegant with the metadata.
+        let name = format!("metadata_based_udf_{}", metadata.len());
+        Self {
+            name,
+            signature: Signature::exact(vec![DataType::UInt64], Volatility::Immutable),
+            metadata,
+        }
+    }
+}
+
+impl WindowUDFImpl for MetadataBasedWindowUdf {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn partition_evaluator(
+        &self,
+        partition_evaluator_args: PartitionEvaluatorArgs,
+    ) -> Result<Box<dyn PartitionEvaluator>> {
+        let input_field = partition_evaluator_args
+            .input_fields()
+            .first()
+            .ok_or(exec_datafusion_err!("Expected one argument"))?;
+
+        let double_output = input_field
+            .metadata()
+            .get("modify_values")
+            .map(|v| v == "double_output")
+            .unwrap_or(false);
+
+        Ok(Box::new(MetadataBasedPartitionEvaluator { double_output }))
+    }
+
+    fn field(&self, field_args: WindowUDFFieldArgs) -> Result<FieldRef> {
+        Ok(Field::new(field_args.name(), DataType::UInt64, true)
+            .with_metadata(self.metadata.clone())
+            .into())
+    }
+}
+
+#[derive(Debug)]
+struct MetadataBasedPartitionEvaluator {
+    double_output: bool,
+}
+
+impl PartitionEvaluator for MetadataBasedPartitionEvaluator {
+    fn evaluate_all(&mut self, values: &[ArrayRef], num_rows: usize) -> Result<ArrayRef> {
+        let values = values[0].as_any().downcast_ref::<UInt64Array>().unwrap();
+        let sum = values.iter().fold(0_u64, |acc, v| acc + v.unwrap_or(0));
+
+        let result = if self.double_output { sum * 2 } else { sum };
+
+        Ok(Arc::new(UInt64Array::from_value(result, num_rows)))
+    }
+}
+
+#[tokio::test]
+async fn test_metadata_based_window_fn() -> Result<()> {
+    let data_array = Arc::new(UInt64Array::from(vec![0, 5, 10, 15, 20])) as ArrayRef;
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("no_metadata", DataType::UInt64, true),
+        Field::new("with_metadata", DataType::UInt64, true).with_metadata(
+            [("modify_values".to_string(), "double_output".to_string())]
+                .into_iter()
+                .collect(),
+        ),
+    ]));
+
+    let batch = RecordBatch::try_new(
+        schema,
+        vec![Arc::clone(&data_array), Arc::clone(&data_array)],
+    )?;
+
+    let ctx = SessionContext::new();
+    ctx.register_batch("t", batch)?;
+    let df = ctx.table("t").await?;
+
+    let no_output_meta_udf = WindowUDF::from(MetadataBasedWindowUdf::new(HashMap::new()));
+    let with_output_meta_udf = WindowUDF::from(MetadataBasedWindowUdf::new(
+        [("output_metatype".to_string(), "custom_value".to_string())]
+            .into_iter()
+            .collect(),
+    ));
+
+    let df = df.select(vec![
+        no_output_meta_udf
+            .call(vec![datafusion_expr::col("no_metadata")])
+            .alias("meta_no_in_no_out"),
+        no_output_meta_udf
+            .call(vec![datafusion_expr::col("with_metadata")])
+            .alias("meta_with_in_no_out"),
+        with_output_meta_udf
+            .call(vec![datafusion_expr::col("no_metadata")])
+            .alias("meta_no_in_with_out"),
+        with_output_meta_udf
+            .call(vec![datafusion_expr::col("with_metadata")])
+            .alias("meta_with_in_with_out"),
+    ])?;
+
+    let actual = df.collect().await?;
+
+    // To test for output metadata handling, we set the expected values on the result
+    // To test for input metadata handling, we check the numbers returned
+    let mut output_meta = HashMap::new();
+    let _ = output_meta.insert("output_metatype".to_string(), "custom_value".to_string());
+    let expected_schema = Schema::new(vec![
+        Field::new("meta_no_in_no_out", DataType::UInt64, true),
+        Field::new("meta_with_in_no_out", DataType::UInt64, true),
+        Field::new("meta_no_in_with_out", DataType::UInt64, true)
+            .with_metadata(output_meta.clone()),
+        Field::new("meta_with_in_with_out", DataType::UInt64, true)
+            .with_metadata(output_meta.clone()),
+    ]);
+
+    let expected = record_batch!(
+        ("meta_no_in_no_out", UInt64, [50, 50, 50, 50, 50]),
+        ("meta_with_in_no_out", UInt64, [100, 100, 100, 100, 100]),
+        ("meta_no_in_with_out", UInt64, [50, 50, 50, 50, 50]),
+        ("meta_with_in_with_out", UInt64, [100, 100, 100, 100, 100])
+    )?
+    .with_schema(Arc::new(expected_schema))?;
+
+    assert_eq!(expected, actual[0]);
+
     Ok(())
 }

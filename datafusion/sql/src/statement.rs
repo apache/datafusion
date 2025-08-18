@@ -215,7 +215,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     ) -> Result<LogicalPlan> {
         match statement {
             Statement::ExplainTable {
-                describe_alias: DescribeAlias::Describe, // only parse 'DESCRIBE table_name' and not 'EXPLAIN table_name'
+                describe_alias: DescribeAlias::Describe | DescribeAlias::Desc, // only parse 'DESCRIBE table_name' or 'DESC table_name' and not 'EXPLAIN table_name'
                 table_name,
                 ..
             } => self.describe_table_to_plan(table_name),
@@ -696,7 +696,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 statement,
             } => {
                 // Convert parser data types to DataFusion data types
-                let data_types: Vec<DataType> = data_types
+                let mut data_types: Vec<DataType> = data_types
                     .into_iter()
                     .map(|t| self.convert_data_type(&t))
                     .collect::<Result<_>>()?;
@@ -710,6 +710,19 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     *statement,
                     &mut planner_context,
                 )?;
+
+                if data_types.is_empty() {
+                    let map_types = plan.get_parameter_types()?;
+                    let param_types: Vec<_> = (1..=map_types.len())
+                        .filter_map(|i| {
+                            let key = format!("${i}");
+                            map_types.get(&key).and_then(|opt| opt.clone())
+                        })
+                        .collect();
+                    data_types.extend(param_types.iter().cloned());
+                    planner_context.with_prepare_param_data_types(param_types);
+                }
+
                 Ok(LogicalPlan::Statement(PlanStatement::Prepare(Prepare {
                     name: ident_to_string(&name),
                     data_types,
@@ -1034,7 +1047,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         TransactionMode::AccessMode(_) => None,
                         TransactionMode::IsolationLevel(level) => Some(level),
                     })
-                    .last()
+                    .next_back()
                     .copied()
                     .unwrap_or(ast::TransactionIsolationLevel::Serializable);
                 let access_mode: ast::TransactionAccessMode = modes
@@ -1043,7 +1056,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         TransactionMode::AccessMode(mode) => Some(mode),
                         TransactionMode::IsolationLevel(_) => None,
                     })
-                    .last()
+                    .next_back()
                     .copied()
                     .unwrap_or(ast::TransactionAccessMode::ReadWrite);
                 let isolation_level = match isolation_level {
@@ -1340,11 +1353,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let options_map = self.parse_options_map(statement.options, true)?;
 
         let maybe_file_type = if let Some(stored_as) = &statement.stored_as {
-            if let Ok(ext_file_type) = self.context_provider.get_file_type(stored_as) {
-                Some(ext_file_type)
-            } else {
-                None
-            }
+            self.context_provider.get_file_type(stored_as).ok()
         } else {
             None
         };
@@ -1379,13 +1388,13 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             .map(|f| f.name().to_owned())
             .collect();
 
-        Ok(LogicalPlan::Copy(CopyTo {
-            input: Arc::new(input),
-            output_url: statement.target,
-            file_type,
+        Ok(LogicalPlan::Copy(CopyTo::new(
+            Arc::new(input),
+            statement.target,
             partition_by,
-            options: options_map,
-        }))
+            file_type,
+            options_map,
+        )))
     }
 
     fn build_order_by(
@@ -1412,7 +1421,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                                 .unwrap();
                             let asc = order_by_expr.options.asc.unwrap_or(true);
                             let nulls_first =
-                                order_by_expr.options.nulls_first.unwrap_or(!asc);
+                                order_by_expr.options.nulls_first.unwrap_or_else(|| {
+                                    self.options.default_null_ordering.nulls_first(asc)
+                                });
 
                             SortExpr::new(ordered_expr, asc, nulls_first)
                         })
@@ -1547,7 +1558,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     }
 
     /// Convert each [TableConstraint] to corresponding [Constraint]
-    fn new_constraint_from_table_constraints(
+    pub fn new_constraint_from_table_constraints(
         &self,
         constraints: &[TableConstraint],
         df_schema: &DFSchemaRef,
@@ -1613,7 +1624,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 // If config does not belong to any namespace, assume it is
                 // a format option and apply the format prefix for backwards
                 // compatibility.
-                let renamed_key = format!("format.{}", key);
+                let renamed_key = format!("format.{key}");
                 options_map.insert(renamed_key.to_lowercase(), value_string);
             } else {
                 options_map.insert(key.to_lowercase(), value_string);
@@ -1798,7 +1809,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         // Do a table lookup to verify the table exists
         let table_ref = self.object_name_to_table_reference(table_name.clone())?;
         let table_source = self.context_provider.get_table_source(table_ref.clone())?;
-        let schema = table_source.schema().to_dfschema_ref()?;
+        let schema = DFSchema::try_from_qualified_schema(
+            table_ref.clone(),
+            &table_source.schema(),
+        )?;
         let scan =
             LogicalPlanBuilder::scan(table_ref.clone(), Arc::clone(&table_source), None)?
                 .build()?;
@@ -1956,8 +1970,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         // Do a table lookup to verify the table exists
         let table_name = self.object_name_to_table_reference(table_name)?;
         let table_source = self.context_provider.get_table_source(table_name.clone())?;
-        let arrow_schema = (*table_source.schema()).clone();
-        let table_schema = DFSchema::try_from(arrow_schema)?;
+        let table_schema = DFSchema::try_from(table_source.schema())?;
 
         // Get insert fields and target table's value indices
         //
@@ -2053,7 +2066,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         .cloned()
                         .unwrap_or_else(|| {
                             // If there is no default for the column, then the default is NULL
-                            Expr::Literal(ScalarValue::Null)
+                            Expr::Literal(ScalarValue::Null, None)
                         })
                         .cast_to(target_field.data_type(), &DFSchema::empty())?,
                 };

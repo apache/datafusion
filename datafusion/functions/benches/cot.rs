@@ -25,7 +25,8 @@ use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::math::cot;
 
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field};
+use datafusion_common::config::ConfigOptions;
 use std::sync::Arc;
 
 fn criterion_benchmark(c: &mut Criterion) {
@@ -33,14 +34,25 @@ fn criterion_benchmark(c: &mut Criterion) {
     for size in [1024, 4096, 8192] {
         let f32_array = Arc::new(create_primitive_array::<Float32Type>(size, 0.2));
         let f32_args = vec![ColumnarValue::Array(f32_array)];
-        c.bench_function(&format!("cot f32 array: {}", size), |b| {
+        let arg_fields = f32_args
+            .iter()
+            .enumerate()
+            .map(|(idx, arg)| {
+                Field::new(format!("arg_{idx}"), arg.data_type(), true).into()
+            })
+            .collect::<Vec<_>>();
+        let config_options = Arc::new(ConfigOptions::default());
+
+        c.bench_function(&format!("cot f32 array: {size}"), |b| {
             b.iter(|| {
                 black_box(
                     cot_fn
                         .invoke_with_args(ScalarFunctionArgs {
                             args: f32_args.clone(),
+                            arg_fields: arg_fields.clone(),
                             number_rows: size,
-                            return_type: &DataType::Float32,
+                            return_field: Field::new("f", DataType::Float32, true).into(),
+                            config_options: Arc::clone(&config_options),
                         })
                         .unwrap(),
                 )
@@ -48,14 +60,25 @@ fn criterion_benchmark(c: &mut Criterion) {
         });
         let f64_array = Arc::new(create_primitive_array::<Float64Type>(size, 0.2));
         let f64_args = vec![ColumnarValue::Array(f64_array)];
-        c.bench_function(&format!("cot f64 array: {}", size), |b| {
+        let arg_fields = f64_args
+            .iter()
+            .enumerate()
+            .map(|(idx, arg)| {
+                Field::new(format!("arg_{idx}"), arg.data_type(), true).into()
+            })
+            .collect::<Vec<_>>();
+        let return_field = Arc::new(Field::new("f", DataType::Float64, true));
+
+        c.bench_function(&format!("cot f64 array: {size}"), |b| {
             b.iter(|| {
                 black_box(
                     cot_fn
                         .invoke_with_args(ScalarFunctionArgs {
                             args: f64_args.clone(),
+                            arg_fields: arg_fields.clone(),
                             number_rows: size,
-                            return_type: &DataType::Float64,
+                            return_field: Arc::clone(&return_field),
+                            config_options: Arc::clone(&config_options),
                         })
                         .unwrap(),
                 )

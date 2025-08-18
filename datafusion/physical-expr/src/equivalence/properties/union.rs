@@ -15,28 +15,26 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion_common::{internal_err, Result};
-use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use std::iter::Peekable;
 use std::sync::Arc;
 
-use crate::equivalence::class::AcrossPartitions;
-use crate::ConstExpr;
-
 use super::EquivalenceProperties;
-use crate::PhysicalSortExpr;
-use arrow::datatypes::SchemaRef;
-use std::slice::Iter;
+use crate::equivalence::class::AcrossPartitions;
+use crate::{ConstExpr, PhysicalSortExpr};
 
-/// Calculates the union (in the sense of `UnionExec`) `EquivalenceProperties`
-/// of  `lhs` and `rhs` according to the schema of `lhs`.
+use arrow::datatypes::SchemaRef;
+use datafusion_common::{internal_err, Result};
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
+
+/// Computes the union (in the sense of `UnionExec`) `EquivalenceProperties`
+/// of `lhs` and `rhs` according to the schema of `lhs`.
 ///
-/// Rules: The UnionExec does not interleave its inputs: instead it passes each
-/// input partition from the children as its own output.
+/// Rules: The `UnionExec` does not interleave its inputs, instead it passes
+/// each input partition from the children as its own output.
 ///
 /// Since the output equivalence properties are properties that are true for
 /// *all* output partitions, that is the same as being true for all *input*
-/// partitions
+/// partitions.
 fn calculate_union_binary(
     lhs: EquivalenceProperties,
     mut rhs: EquivalenceProperties,
@@ -48,28 +46,21 @@ fn calculate_union_binary(
 
     // First, calculate valid constants for the union. An expression is constant
     // at the output of the union if it is constant in both sides with matching values.
+    let rhs_constants = rhs.constants();
     let constants = lhs
         .constants()
-        .iter()
+        .into_iter()
         .filter_map(|lhs_const| {
             // Find matching constant expression in RHS
-            rhs.constants()
+            rhs_constants
                 .iter()
-                .find(|rhs_const| rhs_const.expr().eq(lhs_const.expr()))
+                .find(|rhs_const| rhs_const.expr.eq(&lhs_const.expr))
                 .map(|rhs_const| {
-                    let mut const_expr = ConstExpr::new(Arc::clone(lhs_const.expr()));
-
-                    // If both sides have matching constant values, preserve the value and set across_partitions=true
-                    if let (
-                        AcrossPartitions::Uniform(Some(lhs_val)),
-                        AcrossPartitions::Uniform(Some(rhs_val)),
-                    ) = (lhs_const.across_partitions(), rhs_const.across_partitions())
-                    {
-                        if lhs_val == rhs_val {
-                            const_expr = const_expr.with_across_partitions(
-                                AcrossPartitions::Uniform(Some(lhs_val)),
-                            )
-                        }
+                    let mut const_expr = lhs_const.clone();
+                    // If both sides have matching constant values, preserve it.
+                    // Otherwise, set fall back to heterogeneous values.
+                    if lhs_const.across_partitions != rhs_const.across_partitions {
+                        const_expr.across_partitions = AcrossPartitions::Heterogeneous;
                     }
                     const_expr
                 })
@@ -79,14 +70,13 @@ fn calculate_union_binary(
     // Next, calculate valid orderings for the union by searching for prefixes
     // in both sides.
     let mut orderings = UnionEquivalentOrderingBuilder::new();
-    orderings.add_satisfied_orderings(lhs.normalized_oeq_class(), lhs.constants(), &rhs);
-    orderings.add_satisfied_orderings(rhs.normalized_oeq_class(), rhs.constants(), &lhs);
+    orderings.add_satisfied_orderings(&lhs, &rhs)?;
+    orderings.add_satisfied_orderings(&rhs, &lhs)?;
     let orderings = orderings.build();
 
-    let mut eq_properties =
-        EquivalenceProperties::new(lhs.schema).with_constants(constants);
-
-    eq_properties.add_new_orderings(orderings);
+    let mut eq_properties = EquivalenceProperties::new(lhs.schema);
+    eq_properties.add_constants(constants)?;
+    eq_properties.add_orderings(orderings);
     Ok(eq_properties)
 }
 
@@ -137,135 +127,139 @@ impl UnionEquivalentOrderingBuilder {
         Self { orderings: vec![] }
     }
 
-    /// Add all orderings from `orderings` that satisfy `properties`,
-    /// potentially augmented with`constants`.
+    /// Add all orderings from `source` that satisfy `properties`,
+    /// potentially augmented with the constants in `source`.
     ///
-    /// Note: any column that is known to be constant can be inserted into the
-    /// ordering without changing its meaning
+    /// Note: Any column that is known to be constant can be inserted into the
+    /// ordering without changing its meaning.
     ///
     /// For example:
-    /// * `orderings` contains `[a ASC, c ASC]` and `constants` contains `b`
-    /// * `properties` has required ordering `[a ASC, b ASC]`
+    /// * Orderings in `source` contains `[a ASC, c ASC]` and constants contains
+    ///   `b`,
+    /// * `properties` has the ordering `[a ASC, b ASC]`.
     ///
     /// Then this will add `[a ASC, b ASC]` to the `orderings` list (as `a` was
     /// in the sort order and `b` was a constant).
     fn add_satisfied_orderings(
         &mut self,
-        orderings: impl IntoIterator<Item = LexOrdering>,
-        constants: &[ConstExpr],
+        source: &EquivalenceProperties,
         properties: &EquivalenceProperties,
-    ) {
-        for mut ordering in orderings.into_iter() {
+    ) -> Result<()> {
+        let constants = source.constants();
+        let properties_constants = properties.constants();
+        for mut ordering in source.oeq_cache.normal_cls.clone() {
             // Progressively shorten the ordering to search for a satisfied prefix:
             loop {
-                match self.try_add_ordering(ordering, constants, properties) {
+                ordering = match self.try_add_ordering(
+                    ordering,
+                    &constants,
+                    properties,
+                    &properties_constants,
+                )? {
                     AddedOrdering::Yes => break,
-                    AddedOrdering::No(o) => {
-                        ordering = o;
-                        ordering.pop();
+                    AddedOrdering::No(ordering) => {
+                        let mut sort_exprs: Vec<_> = ordering.into();
+                        sort_exprs.pop();
+                        if let Some(ordering) = LexOrdering::new(sort_exprs) {
+                            ordering
+                        } else {
+                            break;
+                        }
                     }
                 }
             }
         }
+        Ok(())
     }
 
-    /// Adds `ordering`, potentially augmented with constants, if it satisfies
-    /// the target `properties` properties.
+    /// Adds `ordering`, potentially augmented with `constants`, if it satisfies
+    /// the given `properties`.
     ///
-    /// Returns
+    /// # Returns
     ///
-    /// * [`AddedOrdering::Yes`] if the ordering was added (either directly or
-    ///   augmented), or was empty.
-    ///
-    /// * [`AddedOrdering::No`] if the ordering was not added
+    /// An [`AddedOrdering::Yes`] instance if the ordering was added (either
+    /// directly or augmented), or was empty. An [`AddedOrdering::No`] instance
+    /// otherwise.
     fn try_add_ordering(
         &mut self,
         ordering: LexOrdering,
         constants: &[ConstExpr],
         properties: &EquivalenceProperties,
-    ) -> AddedOrdering {
-        if ordering.is_empty() {
-            AddedOrdering::Yes
-        } else if properties.ordering_satisfy(ordering.as_ref()) {
+        properties_constants: &[ConstExpr],
+    ) -> Result<AddedOrdering> {
+        if properties.ordering_satisfy(ordering.clone())? {
             // If the ordering satisfies the target properties, no need to
             // augment it with constants.
             self.orderings.push(ordering);
-            AddedOrdering::Yes
+            Ok(AddedOrdering::Yes)
+        } else if self.try_find_augmented_ordering(
+            &ordering,
+            constants,
+            properties,
+            properties_constants,
+        ) {
+            // Augmented with constants to match the properties.
+            Ok(AddedOrdering::Yes)
         } else {
-            // Did not satisfy target properties, try and augment with constants
-            //  to match the properties
-            if self.try_find_augmented_ordering(&ordering, constants, properties) {
-                AddedOrdering::Yes
-            } else {
-                AddedOrdering::No(ordering)
-            }
+            Ok(AddedOrdering::No(ordering))
         }
     }
 
     /// Attempts to add `constants` to `ordering` to satisfy the properties.
-    ///
-    /// returns true if any orderings were added, false otherwise
+    /// Returns `true` if augmentation took place, `false` otherwise.
     fn try_find_augmented_ordering(
         &mut self,
         ordering: &LexOrdering,
         constants: &[ConstExpr],
         properties: &EquivalenceProperties,
+        properties_constants: &[ConstExpr],
     ) -> bool {
-        // can't augment if there is nothing to augment with
-        if constants.is_empty() {
-            return false;
-        }
-        let start_num_orderings = self.orderings.len();
-
-        // for each equivalent ordering in properties, try and augment
-        // `ordering` it with the constants to match
-        for existing_ordering in properties.oeq_class.iter() {
-            if let Some(augmented_ordering) = self.augment_ordering(
-                ordering,
-                constants,
-                existing_ordering,
-                &properties.constants,
-            ) {
-                if !augmented_ordering.is_empty() {
-                    assert!(properties.ordering_satisfy(augmented_ordering.as_ref()));
+        let mut result = false;
+        // Can only augment if there are constants.
+        if !constants.is_empty() {
+            // For each equivalent ordering in properties, try and augment
+            // `ordering` with the constants to match `existing_ordering`:
+            for existing_ordering in properties.oeq_class.iter() {
+                if let Some(augmented_ordering) = Self::augment_ordering(
+                    ordering,
+                    constants,
+                    existing_ordering,
+                    properties_constants,
+                ) {
                     self.orderings.push(augmented_ordering);
+                    result = true;
                 }
             }
         }
-
-        self.orderings.len() > start_num_orderings
+        result
     }
 
-    /// Attempts to augment the ordering with constants to match the
-    /// `existing_ordering`
-    ///
-    /// Returns Some(ordering) if an augmented ordering was found, None otherwise
+    /// Attempts to augment the ordering with constants to match `existing_ordering`.
+    /// Returns `Some(ordering)` if an augmented ordering was found, `None` otherwise.
     fn augment_ordering(
-        &mut self,
         ordering: &LexOrdering,
         constants: &[ConstExpr],
         existing_ordering: &LexOrdering,
         existing_constants: &[ConstExpr],
     ) -> Option<LexOrdering> {
-        let mut augmented_ordering = LexOrdering::default();
-        let mut sort_expr_iter = ordering.iter().peekable();
-        let mut existing_sort_expr_iter = existing_ordering.iter().peekable();
+        let mut augmented_ordering = vec![];
+        let mut sort_exprs = ordering.iter().peekable();
+        let mut existing_sort_exprs = existing_ordering.iter().peekable();
 
-        // walk in parallel down the two orderings, trying to match them up
-        while sort_expr_iter.peek().is_some() || existing_sort_expr_iter.peek().is_some()
-        {
-            // If the next expressions are equal, add the next match
-            // otherwise try and match with a constant
+        // Walk in parallel down the two orderings, trying to match them up:
+        while sort_exprs.peek().is_some() || existing_sort_exprs.peek().is_some() {
+            // If the next expressions are equal, add the next match. Otherwise,
+            // try and match with a constant.
             if let Some(expr) =
-                advance_if_match(&mut sort_expr_iter, &mut existing_sort_expr_iter)
+                advance_if_match(&mut sort_exprs, &mut existing_sort_exprs)
             {
                 augmented_ordering.push(expr);
             } else if let Some(expr) =
-                advance_if_matches_constant(&mut sort_expr_iter, existing_constants)
+                advance_if_matches_constant(&mut sort_exprs, existing_constants)
             {
                 augmented_ordering.push(expr);
             } else if let Some(expr) =
-                advance_if_matches_constant(&mut existing_sort_expr_iter, constants)
+                advance_if_matches_constant(&mut existing_sort_exprs, constants)
             {
                 augmented_ordering.push(expr);
             } else {
@@ -274,7 +268,7 @@ impl UnionEquivalentOrderingBuilder {
             }
         }
 
-        Some(augmented_ordering)
+        LexOrdering::new(augmented_ordering)
     }
 
     fn build(self) -> Vec<LexOrdering> {
@@ -282,134 +276,135 @@ impl UnionEquivalentOrderingBuilder {
     }
 }
 
-/// Advances two iterators in parallel
-///
-/// If the next expressions are equal, the iterators are advanced and returns
-/// the matched expression .
-///
-/// Otherwise, the iterators are left unchanged and return `None`
-fn advance_if_match(
-    iter1: &mut Peekable<Iter<PhysicalSortExpr>>,
-    iter2: &mut Peekable<Iter<PhysicalSortExpr>>,
+/// Advances two iterators in parallel if the next expressions are equal.
+/// Otherwise, the iterators are left unchanged and returns `None`.
+fn advance_if_match<'a>(
+    iter1: &mut Peekable<impl Iterator<Item = &'a PhysicalSortExpr>>,
+    iter2: &mut Peekable<impl Iterator<Item = &'a PhysicalSortExpr>>,
 ) -> Option<PhysicalSortExpr> {
-    if matches!((iter1.peek(), iter2.peek()), (Some(expr1), Some(expr2)) if expr1.eq(expr2))
-    {
-        iter1.next().unwrap();
+    let (expr1, expr2) = (iter1.peek()?, iter2.peek()?);
+    if expr1.eq(expr2) {
+        iter1.next();
         iter2.next().cloned()
     } else {
         None
     }
 }
 
-/// Advances the iterator with a constant
-///
-/// If the next expression  matches one of the constants, advances the iterator
-/// returning the matched expression
-///
-/// Otherwise, the iterator is left unchanged and returns `None`
-fn advance_if_matches_constant(
-    iter: &mut Peekable<Iter<PhysicalSortExpr>>,
+/// Advances the iterator with a constant if the next expression matches one of
+/// the constants. Otherwise, the iterator is left unchanged and returns `None`.
+fn advance_if_matches_constant<'a>(
+    iter: &mut Peekable<impl Iterator<Item = &'a PhysicalSortExpr>>,
     constants: &[ConstExpr],
 ) -> Option<PhysicalSortExpr> {
     let expr = iter.peek()?;
-    let const_expr = constants.iter().find(|c| c.eq_expr(expr))?;
-    let found_expr = PhysicalSortExpr::new(Arc::clone(const_expr.expr()), expr.options);
+    let const_expr = constants.iter().find(|c| expr.expr.eq(&c.expr))?;
+    let found_expr = PhysicalSortExpr::new(Arc::clone(&const_expr.expr), expr.options);
     iter.next();
     Some(found_expr)
 }
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
-    use crate::equivalence::class::const_exprs_contains;
     use crate::equivalence::tests::{create_test_schema, parse_sort_expr};
     use crate::expressions::col;
+    use crate::PhysicalExpr;
 
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::ScalarValue;
 
     use itertools::Itertools;
 
+    /// Checks whether `expr` is among in the `const_exprs`.
+    fn const_exprs_contains(
+        const_exprs: &[ConstExpr],
+        expr: &Arc<dyn PhysicalExpr>,
+    ) -> bool {
+        const_exprs
+            .iter()
+            .any(|const_expr| const_expr.expr.eq(expr))
+    }
+
     #[test]
-    fn test_union_equivalence_properties_multi_children_1() {
+    fn test_union_equivalence_properties_multi_children_1() -> Result<()> {
         let schema = create_test_schema().unwrap();
         let schema2 = append_fields(&schema, "1");
         let schema3 = append_fields(&schema, "2");
         UnionEquivalenceTest::new(&schema)
             // Children 1
-            .with_child_sort(vec![vec!["a", "b", "c"]], &schema)
+            .with_child_sort(vec![vec!["a", "b", "c"]], &schema)?
             // Children 2
-            .with_child_sort(vec![vec!["a1", "b1", "c1"]], &schema2)
+            .with_child_sort(vec![vec!["a1", "b1", "c1"]], &schema2)?
             // Children 3
-            .with_child_sort(vec![vec!["a2", "b2"]], &schema3)
-            .with_expected_sort(vec![vec!["a", "b"]])
+            .with_child_sort(vec![vec!["a2", "b2"]], &schema3)?
+            .with_expected_sort(vec![vec!["a", "b"]])?
             .run()
     }
 
     #[test]
-    fn test_union_equivalence_properties_multi_children_2() {
+    fn test_union_equivalence_properties_multi_children_2() -> Result<()> {
         let schema = create_test_schema().unwrap();
         let schema2 = append_fields(&schema, "1");
         let schema3 = append_fields(&schema, "2");
         UnionEquivalenceTest::new(&schema)
             // Children 1
-            .with_child_sort(vec![vec!["a", "b", "c"]], &schema)
+            .with_child_sort(vec![vec!["a", "b", "c"]], &schema)?
             // Children 2
-            .with_child_sort(vec![vec!["a1", "b1", "c1"]], &schema2)
+            .with_child_sort(vec![vec!["a1", "b1", "c1"]], &schema2)?
             // Children 3
-            .with_child_sort(vec![vec!["a2", "b2", "c2"]], &schema3)
-            .with_expected_sort(vec![vec!["a", "b", "c"]])
+            .with_child_sort(vec![vec!["a2", "b2", "c2"]], &schema3)?
+            .with_expected_sort(vec![vec!["a", "b", "c"]])?
             .run()
     }
 
     #[test]
-    fn test_union_equivalence_properties_multi_children_3() {
+    fn test_union_equivalence_properties_multi_children_3() -> Result<()> {
         let schema = create_test_schema().unwrap();
         let schema2 = append_fields(&schema, "1");
         let schema3 = append_fields(&schema, "2");
         UnionEquivalenceTest::new(&schema)
             // Children 1
-            .with_child_sort(vec![vec!["a", "b"]], &schema)
+            .with_child_sort(vec![vec!["a", "b"]], &schema)?
             // Children 2
-            .with_child_sort(vec![vec!["a1", "b1", "c1"]], &schema2)
+            .with_child_sort(vec![vec!["a1", "b1", "c1"]], &schema2)?
             // Children 3
-            .with_child_sort(vec![vec!["a2", "b2", "c2"]], &schema3)
-            .with_expected_sort(vec![vec!["a", "b"]])
+            .with_child_sort(vec![vec!["a2", "b2", "c2"]], &schema3)?
+            .with_expected_sort(vec![vec!["a", "b"]])?
             .run()
     }
 
     #[test]
-    fn test_union_equivalence_properties_multi_children_4() {
+    fn test_union_equivalence_properties_multi_children_4() -> Result<()> {
         let schema = create_test_schema().unwrap();
         let schema2 = append_fields(&schema, "1");
         let schema3 = append_fields(&schema, "2");
         UnionEquivalenceTest::new(&schema)
             // Children 1
-            .with_child_sort(vec![vec!["a", "b"]], &schema)
+            .with_child_sort(vec![vec!["a", "b"]], &schema)?
             // Children 2
-            .with_child_sort(vec![vec!["a1", "b1"]], &schema2)
+            .with_child_sort(vec![vec!["a1", "b1"]], &schema2)?
             // Children 3
-            .with_child_sort(vec![vec!["b2", "c2"]], &schema3)
-            .with_expected_sort(vec![])
+            .with_child_sort(vec![vec!["b2", "c2"]], &schema3)?
+            .with_expected_sort(vec![])?
             .run()
     }
 
     #[test]
-    fn test_union_equivalence_properties_multi_children_5() {
+    fn test_union_equivalence_properties_multi_children_5() -> Result<()> {
         let schema = create_test_schema().unwrap();
         let schema2 = append_fields(&schema, "1");
         UnionEquivalenceTest::new(&schema)
             // Children 1
-            .with_child_sort(vec![vec!["a", "b"], vec!["c"]], &schema)
+            .with_child_sort(vec![vec!["a", "b"], vec!["c"]], &schema)?
             // Children 2
-            .with_child_sort(vec![vec!["a1", "b1"], vec!["c1"]], &schema2)
-            .with_expected_sort(vec![vec!["a", "b"], vec!["c"]])
+            .with_child_sort(vec![vec!["a1", "b1"], vec!["c1"]], &schema2)?
+            .with_expected_sort(vec![vec!["a", "b"], vec!["c"]])?
             .run()
     }
 
     #[test]
-    fn test_union_equivalence_properties_constants_common_constants() {
+    fn test_union_equivalence_properties_constants_common_constants() -> Result<()> {
         let schema = create_test_schema().unwrap();
         UnionEquivalenceTest::new(&schema)
             .with_child_sort_and_const_exprs(
@@ -417,23 +412,23 @@ mod tests {
                 vec![vec!["a"]],
                 vec!["b", "c"],
                 &schema,
-            )
+            )?
             .with_child_sort_and_const_exprs(
                 // Second child: [b ASC], const [a, c]
                 vec![vec!["b"]],
                 vec!["a", "c"],
                 &schema,
-            )
+            )?
             .with_expected_sort_and_const_exprs(
                 // Union expected orderings: [[a ASC], [b ASC]], const [c]
                 vec![vec!["a"], vec!["b"]],
                 vec!["c"],
-            )
+            )?
             .run()
     }
 
     #[test]
-    fn test_union_equivalence_properties_constants_prefix() {
+    fn test_union_equivalence_properties_constants_prefix() -> Result<()> {
         let schema = create_test_schema().unwrap();
         UnionEquivalenceTest::new(&schema)
             .with_child_sort_and_const_exprs(
@@ -441,23 +436,23 @@ mod tests {
                 vec![vec!["a"]],
                 vec![],
                 &schema,
-            )
+            )?
             .with_child_sort_and_const_exprs(
                 // Second child: [a ASC, b ASC], const []
                 vec![vec!["a", "b"]],
                 vec![],
                 &schema,
-            )
+            )?
             .with_expected_sort_and_const_exprs(
                 // Union orderings: [a ASC], const []
                 vec![vec!["a"]],
                 vec![],
-            )
+            )?
             .run()
     }
 
     #[test]
-    fn test_union_equivalence_properties_constants_asc_desc_mismatch() {
+    fn test_union_equivalence_properties_constants_asc_desc_mismatch() -> Result<()> {
         let schema = create_test_schema().unwrap();
         UnionEquivalenceTest::new(&schema)
             .with_child_sort_and_const_exprs(
@@ -465,23 +460,23 @@ mod tests {
                 vec![vec!["a"]],
                 vec![],
                 &schema,
-            )
+            )?
             .with_child_sort_and_const_exprs(
                 // Second child orderings: [a DESC], const []
                 vec![vec!["a DESC"]],
                 vec![],
                 &schema,
-            )
+            )?
             .with_expected_sort_and_const_exprs(
                 // Union doesn't have any ordering or constant
                 vec![],
                 vec![],
-            )
+            )?
             .run()
     }
 
     #[test]
-    fn test_union_equivalence_properties_constants_different_schemas() {
+    fn test_union_equivalence_properties_constants_different_schemas() -> Result<()> {
         let schema = create_test_schema().unwrap();
         let schema2 = append_fields(&schema, "1");
         UnionEquivalenceTest::new(&schema)
@@ -490,13 +485,13 @@ mod tests {
                 vec![vec!["a"]],
                 vec![],
                 &schema,
-            )
+            )?
             .with_child_sort_and_const_exprs(
                 // Second child orderings: [a1 ASC, b1 ASC], const []
                 vec![vec!["a1", "b1"]],
                 vec![],
                 &schema2,
-            )
+            )?
             .with_expected_sort_and_const_exprs(
                 // Union orderings: [a ASC]
                 //
@@ -504,12 +499,12 @@ mod tests {
                 // corresponding schemas.
                 vec![vec!["a"]],
                 vec![],
-            )
+            )?
             .run()
     }
 
     #[test]
-    fn test_union_equivalence_properties_constants_fill_gaps() {
+    fn test_union_equivalence_properties_constants_fill_gaps() -> Result<()> {
         let schema = create_test_schema().unwrap();
         UnionEquivalenceTest::new(&schema)
             .with_child_sort_and_const_exprs(
@@ -517,13 +512,13 @@ mod tests {
                 vec![vec!["a", "c"]],
                 vec!["b"],
                 &schema,
-            )
+            )?
             .with_child_sort_and_const_exprs(
                 // Second child orderings: [b ASC, c ASC], const [a]
                 vec![vec!["b", "c"]],
                 vec!["a"],
                 &schema,
-            )
+            )?
             .with_expected_sort_and_const_exprs(
                 // Union orderings: [
                 //   [a ASC, b ASC, c ASC],
@@ -531,12 +526,12 @@ mod tests {
                 // ], const []
                 vec![vec!["a", "b", "c"], vec!["b", "a", "c"]],
                 vec![],
-            )
+            )?
             .run()
     }
 
     #[test]
-    fn test_union_equivalence_properties_constants_no_fill_gaps() {
+    fn test_union_equivalence_properties_constants_no_fill_gaps() -> Result<()> {
         let schema = create_test_schema().unwrap();
         UnionEquivalenceTest::new(&schema)
             .with_child_sort_and_const_exprs(
@@ -544,23 +539,23 @@ mod tests {
                 vec![vec!["a", "c"]],
                 vec!["d"],
                 &schema,
-            )
+            )?
             .with_child_sort_and_const_exprs(
                 // Second child orderings: [b ASC, c ASC], const [a]
                 vec![vec!["b", "c"]],
                 vec!["a"],
                 &schema,
-            )
+            )?
             .with_expected_sort_and_const_exprs(
                 // Union orderings: [[a]] (only a is constant)
                 vec![vec!["a"]],
                 vec![],
-            )
+            )?
             .run()
     }
 
     #[test]
-    fn test_union_equivalence_properties_constants_fill_some_gaps() {
+    fn test_union_equivalence_properties_constants_fill_some_gaps() -> Result<()> {
         let schema = create_test_schema().unwrap();
         UnionEquivalenceTest::new(&schema)
             .with_child_sort_and_const_exprs(
@@ -568,23 +563,24 @@ mod tests {
                 vec![vec!["c"]],
                 vec!["a", "b"],
                 &schema,
-            )
+            )?
             .with_child_sort_and_const_exprs(
                 // Second child orderings: [a DESC, b], const []
                 vec![vec!["a DESC", "b"]],
                 vec![],
                 &schema,
-            )
+            )?
             .with_expected_sort_and_const_exprs(
                 // Union orderings: [[a, b]] (can fill in the a/b with constants)
                 vec![vec!["a DESC", "b"]],
                 vec![],
-            )
+            )?
             .run()
     }
 
     #[test]
-    fn test_union_equivalence_properties_constants_fill_gaps_non_symmetric() {
+    fn test_union_equivalence_properties_constants_fill_gaps_non_symmetric() -> Result<()>
+    {
         let schema = create_test_schema().unwrap();
         UnionEquivalenceTest::new(&schema)
             .with_child_sort_and_const_exprs(
@@ -592,13 +588,13 @@ mod tests {
                 vec![vec!["a", "c"]],
                 vec!["b"],
                 &schema,
-            )
+            )?
             .with_child_sort_and_const_exprs(
                 // Second child orderings: [b ASC, c ASC], const [a]
                 vec![vec!["b DESC", "c"]],
                 vec!["a"],
                 &schema,
-            )
+            )?
             .with_expected_sort_and_const_exprs(
                 // Union orderings: [
                 //   [a ASC, b ASC, c ASC],
@@ -606,12 +602,12 @@ mod tests {
                 // ], const []
                 vec![vec!["a", "b DESC", "c"], vec!["b DESC", "a", "c"]],
                 vec![],
-            )
+            )?
             .run()
     }
 
     #[test]
-    fn test_union_equivalence_properties_constants_gap_fill_symmetric() {
+    fn test_union_equivalence_properties_constants_gap_fill_symmetric() -> Result<()> {
         let schema = create_test_schema().unwrap();
         UnionEquivalenceTest::new(&schema)
             .with_child_sort_and_const_exprs(
@@ -619,25 +615,25 @@ mod tests {
                 vec![vec!["a", "b", "d"]],
                 vec!["c"],
                 &schema,
-            )
+            )?
             .with_child_sort_and_const_exprs(
                 // Second child: [a ASC, c ASC, d ASC], const [b]
                 vec![vec!["a", "c", "d"]],
                 vec!["b"],
                 &schema,
-            )
+            )?
             .with_expected_sort_and_const_exprs(
                 // Union orderings:
                 // [a, b, c, d]
                 // [a, c, b, d]
                 vec![vec!["a", "c", "b", "d"], vec!["a", "b", "c", "d"]],
                 vec![],
-            )
+            )?
             .run()
     }
 
     #[test]
-    fn test_union_equivalence_properties_constants_gap_fill_and_common() {
+    fn test_union_equivalence_properties_constants_gap_fill_and_common() -> Result<()> {
         let schema = create_test_schema().unwrap();
         UnionEquivalenceTest::new(&schema)
             .with_child_sort_and_const_exprs(
@@ -645,24 +641,24 @@ mod tests {
                 vec![vec!["a DESC", "d"]],
                 vec!["b", "c"],
                 &schema,
-            )
+            )?
             .with_child_sort_and_const_exprs(
                 // Second child: [a DESC, c ASC, d ASC], const [b]
                 vec![vec!["a DESC", "c", "d"]],
                 vec!["b"],
                 &schema,
-            )
+            )?
             .with_expected_sort_and_const_exprs(
                 // Union orderings:
                 // [a DESC, c, d]  [b]
                 vec![vec!["a DESC", "c", "d"]],
                 vec!["b"],
-            )
+            )?
             .run()
     }
 
     #[test]
-    fn test_union_equivalence_properties_constants_middle_desc() {
+    fn test_union_equivalence_properties_constants_middle_desc() -> Result<()> {
         let schema = create_test_schema().unwrap();
         UnionEquivalenceTest::new(&schema)
             .with_child_sort_and_const_exprs(
@@ -672,20 +668,20 @@ mod tests {
                 vec![vec!["a", "b DESC", "d"]],
                 vec!["c"],
                 &schema,
-            )
+            )?
             .with_child_sort_and_const_exprs(
                 // Second child: [a ASC, c ASC, d ASC], const [b]
                 vec![vec!["a", "c", "d"]],
                 vec!["b"],
                 &schema,
-            )
+            )?
             .with_expected_sort_and_const_exprs(
                 // Union orderings:
                 // [a, b, d] (c constant)
                 // [a, c, d] (b constant)
                 vec![vec!["a", "c", "b DESC", "d"], vec!["a", "b DESC", "c", "d"]],
                 vec![],
-            )
+            )?
             .run()
     }
 
@@ -718,10 +714,10 @@ mod tests {
             mut self,
             orderings: Vec<Vec<&str>>,
             schema: &SchemaRef,
-        ) -> Self {
-            let properties = self.make_props(orderings, vec![], schema);
+        ) -> Result<Self> {
+            let properties = self.make_props(orderings, vec![], schema)?;
             self.child_properties.push(properties);
-            self
+            Ok(self)
         }
 
         /// Add a union input with the specified orderings and constant
@@ -734,19 +730,19 @@ mod tests {
             orderings: Vec<Vec<&str>>,
             constants: Vec<&str>,
             schema: &SchemaRef,
-        ) -> Self {
-            let properties = self.make_props(orderings, constants, schema);
+        ) -> Result<Self> {
+            let properties = self.make_props(orderings, constants, schema)?;
             self.child_properties.push(properties);
-            self
+            Ok(self)
         }
 
         /// Set the expected output sort order for the union of the children
         ///
         /// See [`Self::make_props`] for the format of the strings in `orderings`
-        fn with_expected_sort(mut self, orderings: Vec<Vec<&str>>) -> Self {
-            let properties = self.make_props(orderings, vec![], &self.output_schema);
+        fn with_expected_sort(mut self, orderings: Vec<Vec<&str>>) -> Result<Self> {
+            let properties = self.make_props(orderings, vec![], &self.output_schema)?;
             self.expected_properties = Some(properties);
-            self
+            Ok(self)
         }
 
         /// Set the expected output sort order and constant expressions for the
@@ -758,15 +754,16 @@ mod tests {
             mut self,
             orderings: Vec<Vec<&str>>,
             constants: Vec<&str>,
-        ) -> Self {
-            let properties = self.make_props(orderings, constants, &self.output_schema);
+        ) -> Result<Self> {
+            let properties =
+                self.make_props(orderings, constants, &self.output_schema)?;
             self.expected_properties = Some(properties);
-            self
+            Ok(self)
         }
 
         /// compute the union's output equivalence properties from the child
         /// properties, and compare them to the expected properties
-        fn run(self) {
+        fn run(self) -> Result<()> {
             let Self {
                 output_schema,
                 child_properties,
@@ -798,6 +795,7 @@ mod tests {
                     ),
                 );
             }
+            Ok(())
         }
 
         fn assert_eq_properties_same(
@@ -808,9 +806,9 @@ mod tests {
             // Check whether constants are same
             let lhs_constants = lhs.constants();
             let rhs_constants = rhs.constants();
-            for rhs_constant in rhs_constants {
+            for rhs_constant in &rhs_constants {
                 assert!(
-                    const_exprs_contains(lhs_constants, rhs_constant.expr()),
+                    const_exprs_contains(&lhs_constants, &rhs_constant.expr),
                     "{err_msg}\nlhs: {lhs}\nrhs: {rhs}"
                 );
             }
@@ -845,24 +843,19 @@ mod tests {
             orderings: Vec<Vec<&str>>,
             constants: Vec<&str>,
             schema: &SchemaRef,
-        ) -> EquivalenceProperties {
-            let orderings = orderings
-                .iter()
-                .map(|ordering| {
-                    ordering
-                        .iter()
-                        .map(|name| parse_sort_expr(name, schema))
-                        .collect::<LexOrdering>()
-                })
-                .collect::<Vec<_>>();
+        ) -> Result<EquivalenceProperties> {
+            let orderings = orderings.iter().map(|ordering| {
+                ordering.iter().map(|name| parse_sort_expr(name, schema))
+            });
 
             let constants = constants
                 .iter()
-                .map(|col_name| ConstExpr::new(col(col_name, schema).unwrap()))
-                .collect::<Vec<_>>();
+                .map(|col_name| ConstExpr::from(col(col_name, schema).unwrap()));
 
-            EquivalenceProperties::new_with_orderings(Arc::clone(schema), &orderings)
-                .with_constants(constants)
+            let mut props =
+                EquivalenceProperties::new_with_orderings(Arc::clone(schema), orderings);
+            props.add_constants(constants)?;
+            Ok(props)
         }
     }
 
@@ -877,25 +870,29 @@ mod tests {
         let literal_10 = ScalarValue::Int32(Some(10));
 
         // Create first input with a=10
-        let const_expr1 = ConstExpr::new(Arc::clone(&col_a))
-            .with_across_partitions(AcrossPartitions::Uniform(Some(literal_10.clone())));
-        let input1 = EquivalenceProperties::new(Arc::clone(&schema))
-            .with_constants(vec![const_expr1]);
+        let const_expr1 = ConstExpr::new(
+            Arc::clone(&col_a),
+            AcrossPartitions::Uniform(Some(literal_10.clone())),
+        );
+        let mut input1 = EquivalenceProperties::new(Arc::clone(&schema));
+        input1.add_constants(vec![const_expr1])?;
 
         // Create second input with a=10
-        let const_expr2 = ConstExpr::new(Arc::clone(&col_a))
-            .with_across_partitions(AcrossPartitions::Uniform(Some(literal_10.clone())));
-        let input2 = EquivalenceProperties::new(Arc::clone(&schema))
-            .with_constants(vec![const_expr2]);
+        let const_expr2 = ConstExpr::new(
+            Arc::clone(&col_a),
+            AcrossPartitions::Uniform(Some(literal_10.clone())),
+        );
+        let mut input2 = EquivalenceProperties::new(Arc::clone(&schema));
+        input2.add_constants(vec![const_expr2])?;
 
         // Calculate union properties
         let union_props = calculate_union(vec![input1, input2], schema)?;
 
         // Verify column 'a' remains constant with value 10
         let const_a = &union_props.constants()[0];
-        assert!(const_a.expr().eq(&col_a));
+        assert!(const_a.expr.eq(&col_a));
         assert_eq!(
-            const_a.across_partitions(),
+            const_a.across_partitions,
             AcrossPartitions::Uniform(Some(literal_10))
         );
 

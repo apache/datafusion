@@ -90,7 +90,7 @@ impl BatchCoalescer {
     /// # Arguments
     /// - `schema` - the schema of the output batches
     /// - `target_batch_size` - the minimum number of rows for each
-    ///    output batch (until limit reached)
+    ///   output batch (until limit reached)
     /// - `fetch` - the maximum number of rows to fetch, `None` means fetch all rows
     pub fn new(
         schema: SchemaRef,
@@ -228,6 +228,12 @@ fn gc_string_view_batch(batch: &RecordBatch) -> RecordBatch {
             let Some(s) = c.as_string_view_opt() else {
                 return Arc::clone(c);
             };
+
+            // Fast path: if the data buffers are empty, we can return the original array
+            if s.data_buffers().is_empty() {
+                return Arc::clone(c);
+            }
+
             let ideal_buffer_size: usize = s
                 .views()
                 .iter()
@@ -240,7 +246,11 @@ fn gc_string_view_batch(batch: &RecordBatch) -> RecordBatch {
                     }
                 })
                 .sum();
-            let actual_buffer_size = s.get_buffer_memory_size();
+
+            // We don't use get_buffer_memory_size here, because gc is for the contents of the
+            // data buffers, not views and nulls.
+            let actual_buffer_size =
+                s.data_buffers().iter().map(|b| b.capacity()).sum::<usize>();
 
             // Re-creating the array copies data and can be time consuming.
             // We only do it if the array is sparse
@@ -285,7 +295,7 @@ mod tests {
     fn test_coalesce() {
         let batch = uint32_batch(0..8);
         Test::new()
-            .with_batches(std::iter::repeat(batch).take(10))
+            .with_batches(std::iter::repeat_n(batch, 10))
             // expected output is batches of at least 20 rows (except for the final batch)
             .with_target_batch_size(21)
             .with_expected_output_sizes(vec![24, 24, 24, 8])
@@ -296,7 +306,7 @@ mod tests {
     fn test_coalesce_with_fetch_larger_than_input_size() {
         let batch = uint32_batch(0..8);
         Test::new()
-            .with_batches(std::iter::repeat(batch).take(10))
+            .with_batches(std::iter::repeat_n(batch, 10))
             // input is 10 batches x 8 rows (80 rows) with fetch limit of 100
             // expected to behave the same as `test_concat_batches`
             .with_target_batch_size(21)
@@ -309,7 +319,7 @@ mod tests {
     fn test_coalesce_with_fetch_less_than_input_size() {
         let batch = uint32_batch(0..8);
         Test::new()
-            .with_batches(std::iter::repeat(batch).take(10))
+            .with_batches(std::iter::repeat_n(batch, 10))
             // input is 10 batches x 8 rows (80 rows) with fetch limit of 50
             .with_target_batch_size(21)
             .with_fetch(Some(50))
@@ -321,7 +331,7 @@ mod tests {
     fn test_coalesce_with_fetch_less_than_target_and_no_remaining_rows() {
         let batch = uint32_batch(0..8);
         Test::new()
-            .with_batches(std::iter::repeat(batch).take(10))
+            .with_batches(std::iter::repeat_n(batch, 10))
             // input is 10 batches x 8 rows (80 rows) with fetch limit of 48
             .with_target_batch_size(21)
             .with_fetch(Some(48))
@@ -333,7 +343,7 @@ mod tests {
     fn test_coalesce_with_fetch_less_target_batch_size() {
         let batch = uint32_batch(0..8);
         Test::new()
-            .with_batches(std::iter::repeat(batch).take(10))
+            .with_batches(std::iter::repeat_n(batch, 10))
             // input is 10 batches x 8 rows (80 rows) with fetch limit of 10
             .with_target_batch_size(21)
             .with_fetch(Some(10))
@@ -593,7 +603,7 @@ mod tests {
         }
     }
     fn batch_to_pretty_strings(batch: &RecordBatch) -> String {
-        arrow::util::pretty::pretty_format_batches(&[batch.clone()])
+        arrow::util::pretty::pretty_format_batches(std::slice::from_ref(batch))
             .unwrap()
             .to_string()
     }

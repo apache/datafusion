@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::datatypes::{DataType, Field};
+use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion::logical_expr::ColumnarValue;
 use datafusion_common::plan_err;
 use datafusion_expr::function::AccumulatorArgs;
@@ -27,6 +27,7 @@ use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 use std::any::Any;
 use std::fmt::Debug;
+use std::hash::Hash;
 
 mod roundtrip_logical_plan;
 mod roundtrip_physical_plan;
@@ -131,7 +132,7 @@ pub struct MyAggregateUdfNode {
     pub result: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub(in crate::cases) struct CustomUDWF {
     signature: Signature,
     payload: String,
@@ -166,8 +167,11 @@ impl WindowUDFImpl for CustomUDWF {
         Ok(Box::new(CustomUDWFEvaluator {}))
     }
 
-    fn field(&self, field_args: WindowUDFFieldArgs) -> datafusion_common::Result<Field> {
-        Ok(Field::new(field_args.name(), DataType::UInt64, false))
+    fn field(
+        &self,
+        field_args: WindowUDFFieldArgs,
+    ) -> datafusion_common::Result<FieldRef> {
+        Ok(Field::new(field_args.name(), DataType::UInt64, false).into())
     }
 }
 

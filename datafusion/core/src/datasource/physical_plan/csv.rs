@@ -369,7 +369,8 @@ mod tests {
         .build();
 
         // Add partition columns
-        config.table_partition_cols = vec![Field::new("date", DataType::Utf8, false)];
+        config.table_partition_cols =
+            vec![Arc::new(Field::new("date", DataType::Utf8, false))];
         config.file_groups[0][0].partition_values = vec![ScalarValue::from("2021-10-26")];
 
         // We should be able to project on the partition column
@@ -658,7 +659,7 @@ mod tests {
             )
             .await
             .expect_err("should fail because input file does not match inferred schema");
-        assert_eq!(e.strip_backtrace(), "Arrow error: Parser error: Error while parsing value d for column 0 at line 4");
+        assert_eq!(e.strip_backtrace(), "Arrow error: Parser error: Error while parsing value 'd' as type 'Int64' for column 0 at line 4. Row data: '[d,4]'");
         Ok(())
     }
 

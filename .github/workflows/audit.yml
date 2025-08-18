@@ -26,6 +26,8 @@ on:
     paths:
       - "**/Cargo.toml"
       - "**/Cargo.lock"
+    branches:
+      - main
 
   pull_request:
     paths:
@@ -36,8 +38,10 @@ jobs:
   security_audit:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
       - name: Install cargo-audit
         run: cargo install cargo-audit
       - name: Run audit check
-        run: cargo audit
+        # Ignored until https://github.com/apache/datafusion/issues/15571
+        # ignored py03 warning until arrow 55 upgrade
+        run: cargo audit --ignore RUSTSEC-2024-0370 --ignore RUSTSEC-2025-0020

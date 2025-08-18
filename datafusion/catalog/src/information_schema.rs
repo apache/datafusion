@@ -30,6 +30,7 @@ use arrow::{
 use async_trait::async_trait;
 use datafusion_common::config::{ConfigEntry, ConfigOptions};
 use datafusion_common::error::Result;
+use datafusion_common::types::NativeType;
 use datafusion_common::DataFusionError;
 use datafusion_execution::TaskContext;
 use datafusion_expr::{AggregateUDF, ScalarUDF, Signature, TypeSignature, WindowUDF};
@@ -37,7 +38,7 @@ use datafusion_expr::{TableType, Volatility};
 use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion_physical_plan::streaming::PartitionStream;
 use datafusion_physical_plan::SendableRecordBatchStream;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt::Debug;
 use std::{any::Any, sync::Arc};
 
@@ -102,12 +103,14 @@ impl InformationSchemaConfig {
                     // schema name may not exist in the catalog, so we need to check
                     if let Some(schema) = catalog.schema(&schema_name) {
                         for table_name in schema.table_names() {
-                            if let Some(table) = schema.table(&table_name).await? {
+                            if let Some(table_type) =
+                                schema.table_type(&table_name).await?
+                            {
                                 builder.add_table(
                                     &catalog_name,
                                     &schema_name,
                                     &table_name,
-                                    table.table_type(),
+                                    table_type,
                                 );
                             }
                         }
@@ -403,58 +406,63 @@ impl InformationSchemaConfig {
 /// returns a tuple of (arg_types, return_type)
 fn get_udf_args_and_return_types(
     udf: &Arc<ScalarUDF>,
-) -> Result<Vec<(Vec<String>, Option<String>)>> {
+) -> Result<BTreeSet<(Vec<String>, Option<String>)>> {
     let signature = udf.signature();
     let arg_types = signature.type_signature.get_example_types();
     if arg_types.is_empty() {
-        Ok(vec![(vec![], None)])
+        Ok(vec![(vec![], None)].into_iter().collect::<BTreeSet<_>>())
     } else {
         Ok(arg_types
             .into_iter()
             .map(|arg_types| {
                 // only handle the function which implemented [`ScalarUDFImpl::return_type`] method
-                let return_type = udf.return_type(&arg_types).ok().map(|t| t.to_string());
+                let return_type = udf
+                    .return_type(&arg_types)
+                    .map(|t| remove_native_type_prefix(NativeType::from(t)))
+                    .ok();
                 let arg_types = arg_types
                     .into_iter()
-                    .map(|t| t.to_string())
+                    .map(|t| remove_native_type_prefix(NativeType::from(t)))
                     .collect::<Vec<_>>();
                 (arg_types, return_type)
             })
-            .collect::<Vec<_>>())
+            .collect::<BTreeSet<_>>())
     }
 }
 
 fn get_udaf_args_and_return_types(
     udaf: &Arc<AggregateUDF>,
-) -> Result<Vec<(Vec<String>, Option<String>)>> {
+) -> Result<BTreeSet<(Vec<String>, Option<String>)>> {
     let signature = udaf.signature();
     let arg_types = signature.type_signature.get_example_types();
     if arg_types.is_empty() {
-        Ok(vec![(vec![], None)])
+        Ok(vec![(vec![], None)].into_iter().collect::<BTreeSet<_>>())
     } else {
         Ok(arg_types
             .into_iter()
             .map(|arg_types| {
                 // only handle the function which implemented [`ScalarUDFImpl::return_type`] method
-                let return_type =
-                    udaf.return_type(&arg_types).ok().map(|t| t.to_string());
+                let return_type = udaf
+                    .return_type(&arg_types)
+                    .ok()
+                    .map(|t| remove_native_type_prefix(NativeType::from(t)));
                 let arg_types = arg_types
                     .into_iter()
-                    .map(|t| t.to_string())
+                    .map(|t| remove_native_type_prefix(NativeType::from(t)))
                     .collect::<Vec<_>>();
                 (arg_types, return_type)
             })
-            .collect::<Vec<_>>())
+            .collect::<BTreeSet<_>>())
     }
 }
 
 fn get_udwf_args_and_return_types(
     udwf: &Arc<WindowUDF>,
-) -> Result<Vec<(Vec<String>, Option<String>)>> {
+) -> Result<BTreeSet<(Vec<String>, Option<String>)>> {
     let signature = udwf.signature();
     let arg_types = signature.type_signature.get_example_types();
     if arg_types.is_empty() {
-        Ok(vec![(vec![], None)])
+        Ok(vec![(vec![], None)].into_iter().collect::<BTreeSet<_>>())
     } else {
         Ok(arg_types
             .into_iter()
@@ -462,12 +470,17 @@ fn get_udwf_args_and_return_types(
                 // only handle the function which implemented [`ScalarUDFImpl::return_type`] method
                 let arg_types = arg_types
                     .into_iter()
-                    .map(|t| t.to_string())
+                    .map(|t| remove_native_type_prefix(NativeType::from(t)))
                     .collect::<Vec<_>>();
                 (arg_types, None)
             })
-            .collect::<Vec<_>>())
+            .collect::<BTreeSet<_>>())
     }
+}
+
+#[inline]
+fn remove_native_type_prefix(native_type: NativeType) -> String {
+    format!("{native_type:?}")
 }
 
 #[async_trait]
@@ -1346,5 +1359,94 @@ impl PartitionStream for InformationSchemaParameters {
                 Ok(builder.finish())
             }),
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::CatalogProvider;
+
+    #[tokio::test]
+    async fn make_tables_uses_table_type() {
+        let config = InformationSchemaConfig {
+            catalog_list: Arc::new(Fixture),
+        };
+        let mut builder = InformationSchemaTablesBuilder {
+            catalog_names: StringBuilder::new(),
+            schema_names: StringBuilder::new(),
+            table_names: StringBuilder::new(),
+            table_types: StringBuilder::new(),
+            schema: Arc::new(Schema::empty()),
+        };
+
+        assert!(config.make_tables(&mut builder).await.is_ok());
+
+        assert_eq!("BASE TABLE", builder.table_types.finish().value(0));
+    }
+
+    #[derive(Debug)]
+    struct Fixture;
+
+    #[async_trait]
+    impl SchemaProvider for Fixture {
+        // InformationSchemaConfig::make_tables should use this.
+        async fn table_type(&self, _: &str) -> Result<Option<TableType>> {
+            Ok(Some(TableType::Base))
+        }
+
+        // InformationSchemaConfig::make_tables used this before `table_type`
+        // existed but should not, as it may be expensive.
+        async fn table(&self, _: &str) -> Result<Option<Arc<dyn TableProvider>>> {
+            panic!("InformationSchemaConfig::make_tables called SchemaProvider::table instead of table_type")
+        }
+
+        fn as_any(&self) -> &dyn Any {
+            unimplemented!("not required for these tests")
+        }
+
+        fn table_names(&self) -> Vec<String> {
+            vec!["atable".to_string()]
+        }
+
+        fn table_exist(&self, _: &str) -> bool {
+            unimplemented!("not required for these tests")
+        }
+    }
+
+    impl CatalogProviderList for Fixture {
+        fn as_any(&self) -> &dyn Any {
+            unimplemented!("not required for these tests")
+        }
+
+        fn register_catalog(
+            &self,
+            _: String,
+            _: Arc<dyn CatalogProvider>,
+        ) -> Option<Arc<dyn CatalogProvider>> {
+            unimplemented!("not required for these tests")
+        }
+
+        fn catalog_names(&self) -> Vec<String> {
+            vec!["acatalog".to_string()]
+        }
+
+        fn catalog(&self, _: &str) -> Option<Arc<dyn CatalogProvider>> {
+            Some(Arc::new(Self))
+        }
+    }
+
+    impl CatalogProvider for Fixture {
+        fn as_any(&self) -> &dyn Any {
+            unimplemented!("not required for these tests")
+        }
+
+        fn schema_names(&self) -> Vec<String> {
+            vec!["aschema".to_string()]
+        }
+
+        fn schema(&self, _: &str) -> Option<Arc<dyn SchemaProvider>> {
+            Some(Arc::new(Self))
+        }
     }
 }

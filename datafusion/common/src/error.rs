@@ -53,22 +53,22 @@ pub enum DataFusionError {
     /// Error returned by arrow.
     ///
     /// 2nd argument is for optional backtrace
-    ArrowError(ArrowError, Option<String>),
+    ArrowError(Box<ArrowError>, Option<String>),
     /// Error when reading / writing Parquet data.
     #[cfg(feature = "parquet")]
-    ParquetError(ParquetError),
+    ParquetError(Box<ParquetError>),
     /// Error when reading Avro data.
     #[cfg(feature = "avro")]
-    AvroError(AvroError),
+    AvroError(Box<AvroError>),
     /// Error when reading / writing to / from an object_store (e.g. S3 or LocalFile)
     #[cfg(feature = "object_store")]
-    ObjectStore(object_store::Error),
+    ObjectStore(Box<object_store::Error>),
     /// Error when an I/O operation fails
     IoError(io::Error),
     /// Error when SQL is syntactically incorrect.
     ///
     /// 2nd argument is for optional backtrace
-    SQL(ParserError, Option<String>),
+    SQL(Box<ParserError>, Option<String>),
     /// Error when a feature is not yet implemented.
     ///
     /// These errors are sometimes returned for features that are still in
@@ -107,7 +107,7 @@ pub enum DataFusionError {
     ///
     /// 2nd argument is for optional backtrace
     /// Boxing the optional backtrace to prevent <https://rust-lang.github.io/rust-clippy/master/index.html#/result_large_err>
-    SchemaError(SchemaError, Box<Option<String>>),
+    SchemaError(Box<SchemaError>, Box<Option<String>>),
     /// Error during execution of the query.
     ///
     /// This error is returned when an error happens during execution due to a
@@ -118,7 +118,7 @@ pub enum DataFusionError {
     /// [`JoinError`] during execution of the query.
     ///
     /// This error can't occur for unjoined tasks, such as execution shutdown.
-    ExecutionJoin(JoinError),
+    ExecutionJoin(Box<JoinError>),
     /// Error when resources (such as memory of scratch disk space) are exhausted.
     ///
     /// This error is thrown when a consumer cannot acquire additional memory
@@ -164,7 +164,7 @@ macro_rules! context {
 #[derive(Debug)]
 pub enum SchemaError {
     /// Schema contains a (possibly) qualified and unqualified field with same unqualified name
-    AmbiguousReference { field: Column },
+    AmbiguousReference { field: Box<Column> },
     /// Schema contains duplicate qualified field name
     DuplicateQualifiedField {
         qualifier: Box<TableReference>,
@@ -276,14 +276,14 @@ impl From<io::Error> for DataFusionError {
 
 impl From<ArrowError> for DataFusionError {
     fn from(e: ArrowError) -> Self {
-        DataFusionError::ArrowError(e, None)
+        DataFusionError::ArrowError(Box::new(e), Some(DataFusionError::get_back_trace()))
     }
 }
 
 impl From<DataFusionError> for ArrowError {
     fn from(e: DataFusionError) -> Self {
         match e {
-            DataFusionError::ArrowError(e, _) => e,
+            DataFusionError::ArrowError(e, _) => *e,
             DataFusionError::External(e) => ArrowError::ExternalError(e),
             other => ArrowError::ExternalError(Box::new(other)),
         }
@@ -304,34 +304,34 @@ impl From<&Arc<DataFusionError>> for DataFusionError {
 #[cfg(feature = "parquet")]
 impl From<ParquetError> for DataFusionError {
     fn from(e: ParquetError) -> Self {
-        DataFusionError::ParquetError(e)
+        DataFusionError::ParquetError(Box::new(e))
     }
 }
 
 #[cfg(feature = "avro")]
 impl From<AvroError> for DataFusionError {
     fn from(e: AvroError) -> Self {
-        DataFusionError::AvroError(e)
+        DataFusionError::AvroError(Box::new(e))
     }
 }
 
 #[cfg(feature = "object_store")]
 impl From<object_store::Error> for DataFusionError {
     fn from(e: object_store::Error) -> Self {
-        DataFusionError::ObjectStore(e)
+        DataFusionError::ObjectStore(Box::new(e))
     }
 }
 
 #[cfg(feature = "object_store")]
 impl From<object_store::path::Error> for DataFusionError {
     fn from(e: object_store::path::Error) -> Self {
-        DataFusionError::ObjectStore(e.into())
+        DataFusionError::ObjectStore(Box::new(e.into()))
     }
 }
 
 impl From<ParserError> for DataFusionError {
     fn from(e: ParserError) -> Self {
-        DataFusionError::SQL(e, None)
+        DataFusionError::SQL(Box::new(e), None)
     }
 }
 
@@ -361,22 +361,22 @@ impl Display for DataFusionError {
 impl Error for DataFusionError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
-            DataFusionError::ArrowError(e, _) => Some(e),
+            DataFusionError::ArrowError(e, _) => Some(e.as_ref()),
             #[cfg(feature = "parquet")]
-            DataFusionError::ParquetError(e) => Some(e),
+            DataFusionError::ParquetError(e) => Some(e.as_ref()),
             #[cfg(feature = "avro")]
-            DataFusionError::AvroError(e) => Some(e),
+            DataFusionError::AvroError(e) => Some(e.as_ref()),
             #[cfg(feature = "object_store")]
-            DataFusionError::ObjectStore(e) => Some(e),
+            DataFusionError::ObjectStore(e) => Some(e.as_ref()),
             DataFusionError::IoError(e) => Some(e),
-            DataFusionError::SQL(e, _) => Some(e),
+            DataFusionError::SQL(e, _) => Some(e.as_ref()),
             DataFusionError::NotImplemented(_) => None,
             DataFusionError::Internal(_) => None,
             DataFusionError::Configuration(_) => None,
             DataFusionError::Plan(_) => None,
-            DataFusionError::SchemaError(e, _) => Some(e),
+            DataFusionError::SchemaError(e, _) => Some(e.as_ref()),
             DataFusionError::Execution(_) => None,
-            DataFusionError::ExecutionJoin(e) => Some(e),
+            DataFusionError::ExecutionJoin(e) => Some(e.as_ref()),
             DataFusionError::ResourcesExhausted(_) => None,
             DataFusionError::External(e) => Some(e.as_ref()),
             DataFusionError::Context(_, e) => Some(e.as_ref()),
@@ -397,7 +397,7 @@ impl Error for DataFusionError {
 
 impl From<DataFusionError> for io::Error {
     fn from(e: DataFusionError) -> Self {
-        io::Error::new(io::ErrorKind::Other, e)
+        io::Error::other(e)
     }
 }
 
@@ -523,10 +523,10 @@ impl DataFusionError {
         }
     }
 
-    pub fn message(&self) -> Cow<str> {
+    pub fn message(&self) -> Cow<'_, str> {
         match *self {
             DataFusionError::ArrowError(ref desc, ref backtrace) => {
-                let backtrace = backtrace.clone().unwrap_or("".to_owned());
+                let backtrace = backtrace.clone().unwrap_or_else(|| "".to_owned());
                 Cow::Owned(format!("{desc}{backtrace}"))
             }
             #[cfg(feature = "parquet")]
@@ -535,19 +535,21 @@ impl DataFusionError {
             DataFusionError::AvroError(ref desc) => Cow::Owned(desc.to_string()),
             DataFusionError::IoError(ref desc) => Cow::Owned(desc.to_string()),
             DataFusionError::SQL(ref desc, ref backtrace) => {
-                let backtrace: String = backtrace.clone().unwrap_or("".to_owned());
+                let backtrace: String =
+                    backtrace.clone().unwrap_or_else(|| "".to_owned());
                 Cow::Owned(format!("{desc:?}{backtrace}"))
             }
             DataFusionError::Configuration(ref desc) => Cow::Owned(desc.to_string()),
             DataFusionError::NotImplemented(ref desc) => Cow::Owned(desc.to_string()),
             DataFusionError::Internal(ref desc) => Cow::Owned(format!(
-                "{desc}.\nThis was likely caused by a bug in DataFusion's \
-            code and we would welcome that you file an bug report in our issue tracker"
+                "{desc}.\nThis issue was likely caused by a bug in DataFusion's code. \
+                Please help us to resolve this by filing a bug report in our issue tracker: \
+                https://github.com/apache/datafusion/issues"
             )),
             DataFusionError::Plan(ref desc) => Cow::Owned(desc.to_string()),
             DataFusionError::SchemaError(ref desc, ref backtrace) => {
                 let backtrace: &str =
-                    &backtrace.as_ref().clone().unwrap_or("".to_owned());
+                    &backtrace.as_ref().clone().unwrap_or_else(|| "".to_owned());
                 Cow::Owned(format!("{desc}{backtrace}"))
             }
             DataFusionError::Execution(ref desc) => Cow::Owned(desc.to_string()),
@@ -759,23 +761,33 @@ macro_rules! make_error {
             /// Macro wraps `$ERR` to add backtrace feature
             #[macro_export]
             macro_rules! $NAME_DF_ERR {
-                ($d($d args:expr),*) => {
-                    $crate::DataFusionError::$ERR(
+                ($d($d args:expr),* $d(; diagnostic=$d DIAG:expr)?) => {{
+                    let err =$crate::DataFusionError::$ERR(
                         ::std::format!(
                             "{}{}",
                             ::std::format!($d($d args),*),
                             $crate::DataFusionError::get_back_trace(),
                         ).into()
-                    )
+                    );
+                    $d (
+                        let err = err.with_diagnostic($d DIAG);
+                    )?
+                    err
                 }
             }
+        }
 
             /// Macro wraps Err(`$ERR`) to add backtrace feature
             #[macro_export]
             macro_rules! $NAME_ERR {
-                ($d($d args:expr),*) => {
-                    Err($crate::[<_ $NAME_DF_ERR>]!($d($d args),*))
-                }
+                ($d($d args:expr),* $d(; diagnostic = $d DIAG:expr)?) => {{
+                    let err = $crate::[<_ $NAME_DF_ERR>]!($d($d args),*);
+                    $d (
+                        let err = err.with_diagnostic($d DIAG);
+                    )?
+                    Err(err)
+
+                }}
             }
 
 
@@ -816,54 +828,80 @@ make_error!(resources_err, resources_datafusion_err, ResourcesExhausted);
 // Exposes a macro to create `DataFusionError::SQL` with optional backtrace
 #[macro_export]
 macro_rules! sql_datafusion_err {
-    ($ERR:expr) => {
-        DataFusionError::SQL($ERR, Some(DataFusionError::get_back_trace()))
-    };
+    ($ERR:expr $(; diagnostic = $DIAG:expr)?) => {{
+        let err = DataFusionError::SQL(Box::new($ERR), Some(DataFusionError::get_back_trace()));
+        $(
+            let err = err.with_diagnostic($DIAG);
+        )?
+        err
+    }};
 }
 
 // Exposes a macro to create `Err(DataFusionError::SQL)` with optional backtrace
 #[macro_export]
 macro_rules! sql_err {
-    ($ERR:expr) => {
-        Err(datafusion_common::sql_datafusion_err!($ERR))
-    };
+    ($ERR:expr $(; diagnostic = $DIAG:expr)?) => {{
+        let err = datafusion_common::sql_datafusion_err!($ERR);
+        $(
+            let err = err.with_diagnostic($DIAG);
+        )?
+        Err(err)
+    }};
 }
 
 // Exposes a macro to create `DataFusionError::ArrowError` with optional backtrace
 #[macro_export]
 macro_rules! arrow_datafusion_err {
-    ($ERR:expr) => {
-        DataFusionError::ArrowError($ERR, Some(DataFusionError::get_back_trace()))
-    };
+    ($ERR:expr $(; diagnostic = $DIAG:expr)?) => {{
+        let err = DataFusionError::ArrowError(Box::new($ERR), Some(DataFusionError::get_back_trace()));
+        $(
+            let err = err.with_diagnostic($DIAG);
+        )?
+        err
+    }};
 }
 
 // Exposes a macro to create `Err(DataFusionError::ArrowError)` with optional backtrace
 #[macro_export]
 macro_rules! arrow_err {
-    ($ERR:expr) => {
-        Err(datafusion_common::arrow_datafusion_err!($ERR))
-    };
+    ($ERR:expr $(; diagnostic = $DIAG:expr)?) => {
+    {
+        let err = datafusion_common::arrow_datafusion_err!($ERR);
+        $(
+            let err = err.with_diagnostic($DIAG);
+        )?
+        Err(err)
+    }};
 }
 
 // Exposes a macro to create `DataFusionError::SchemaError` with optional backtrace
 #[macro_export]
 macro_rules! schema_datafusion_err {
-    ($ERR:expr) => {
-        $crate::error::DataFusionError::SchemaError(
-            $ERR,
+    ($ERR:expr $(; diagnostic = $DIAG:expr)?) => {{
+        let err = $crate::error::DataFusionError::SchemaError(
+            Box::new($ERR),
             Box::new(Some($crate::error::DataFusionError::get_back_trace())),
-        )
-    };
+        );
+        $(
+            let err = err.with_diagnostic($DIAG);
+        )?
+        err
+    }};
 }
 
 // Exposes a macro to create `Err(DataFusionError::SchemaError)` with optional backtrace
 #[macro_export]
 macro_rules! schema_err {
-    ($ERR:expr) => {
-        Err($crate::error::DataFusionError::SchemaError(
-            $ERR,
+    ($ERR:expr $(; diagnostic = $DIAG:expr)?) => {{
+        let err = $crate::error::DataFusionError::SchemaError(
+            Box::new($ERR),
             Box::new(Some($crate::error::DataFusionError::get_back_trace())),
-        ))
+        );
+        $(
+            let err = err.with_diagnostic($DIAG);
+        )?
+        Err(err)
+    }
     };
 }
 
@@ -908,16 +946,26 @@ pub fn add_possible_columns_to_diag(
         .collect();
 
     for name in field_names {
-        diagnostic.add_note(format!("possible column {}", name), None);
+        diagnostic.add_note(format!("possible column {name}"), None);
     }
 }
 
 #[cfg(test)]
 mod test {
+    use super::*;
+
+    use std::mem::size_of;
     use std::sync::Arc;
 
-    use crate::error::{DataFusionError, GenericError};
     use arrow::error::ArrowError;
+
+    #[test]
+    fn test_error_size() {
+        // Since Errors influence the size of Result which influence the size of the stack
+        // please don't allow this to grow larger
+        assert_eq!(size_of::<SchemaError>(), 40);
+        assert_eq!(size_of::<DataFusionError>(), 40);
+    }
 
     #[test]
     fn datafusion_error_to_arrow() {
@@ -983,8 +1031,8 @@ mod test {
 
         do_root_test(
             DataFusionError::ArrowError(
-                ArrowError::ExternalError(Box::new(DataFusionError::ResourcesExhausted(
-                    "foo".to_string(),
+                Box::new(ArrowError::ExternalError(Box::new(
+                    DataFusionError::ResourcesExhausted("foo".to_string()),
                 ))),
                 None,
             ),
@@ -1007,9 +1055,11 @@ mod test {
 
         do_root_test(
             DataFusionError::ArrowError(
-                ArrowError::ExternalError(Box::new(ArrowError::ExternalError(Box::new(
-                    DataFusionError::ResourcesExhausted("foo".to_string()),
-                )))),
+                Box::new(ArrowError::ExternalError(Box::new(
+                    ArrowError::ExternalError(Box::new(
+                        DataFusionError::ResourcesExhausted("foo".to_string()),
+                    )),
+                ))),
                 None,
             ),
             DataFusionError::ResourcesExhausted("foo".to_string()),
@@ -1083,8 +1133,7 @@ mod test {
         );
 
         // assert wrapping other Error
-        let generic_error: GenericError =
-            Box::new(std::io::Error::new(std::io::ErrorKind::Other, "io error"));
+        let generic_error: GenericError = Box::new(io::Error::other("io error"));
         let datafusion_error: DataFusionError = generic_error.into();
         println!("{}", datafusion_error.strip_backtrace());
         assert_eq!(
@@ -1095,13 +1144,12 @@ mod test {
 
     #[test]
     fn external_error_no_recursive() {
-        let generic_error_1: GenericError =
-            Box::new(std::io::Error::new(std::io::ErrorKind::Other, "io error"));
+        let generic_error_1: GenericError = Box::new(io::Error::other("io error"));
         let external_error_1: DataFusionError = generic_error_1.into();
         let generic_error_2: GenericError = Box::new(external_error_1);
         let external_error_2: DataFusionError = generic_error_2.into();
 
-        println!("{}", external_error_2);
+        println!("{external_error_2}");
         assert!(external_error_2
             .to_string()
             .starts_with("External error: io error"));
@@ -1116,7 +1164,7 @@ mod test {
 
     /// Model what happens when using arrow kernels in DataFusion
     /// code: need to turn an ArrowError into a DataFusionError
-    fn return_datafusion_error() -> crate::error::Result<()> {
+    fn return_datafusion_error() -> Result<()> {
         // Expect the '?' to work
         Err(ArrowError::SchemaError("bar".to_string()).into())
     }

@@ -19,30 +19,21 @@
 //! [`Min`] and [`MinAccumulator`] accumulator for the `min` function
 
 mod min_max_bytes;
+mod min_max_struct;
 
-use arrow::array::{
-    ArrayRef, BinaryArray, BinaryViewArray, BooleanArray, Date32Array, Date64Array,
-    Decimal128Array, Decimal256Array, DurationMicrosecondArray, DurationMillisecondArray,
-    DurationNanosecondArray, DurationSecondArray, Float16Array, Float32Array,
-    Float64Array, Int16Array, Int32Array, Int64Array, Int8Array, IntervalDayTimeArray,
-    IntervalMonthDayNanoArray, IntervalYearMonthArray, LargeBinaryArray,
-    LargeStringArray, StringArray, StringViewArray, Time32MillisecondArray,
-    Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
-    TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
-    TimestampSecondArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
-};
-use arrow::compute;
+use arrow::array::ArrayRef;
 use arrow::datatypes::{
     DataType, Decimal128Type, Decimal256Type, DurationMicrosecondType,
     DurationMillisecondType, DurationNanosecondType, DurationSecondType, Float16Type,
-    Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, IntervalUnit,
-    UInt16Type, UInt32Type, UInt64Type, UInt8Type,
+    Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, UInt16Type,
+    UInt32Type, UInt64Type, UInt8Type,
 };
 use datafusion_common::stats::Precision;
 use datafusion_common::{
-    downcast_value, exec_err, internal_err, ColumnStatistics, DataFusionError, Result,
+    exec_err, internal_err, ColumnStatistics, DataFusionError, Result,
 };
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::prim_op::PrimitiveGroupsAccumulator;
+use datafusion_functions_aggregate_common::min_max::{max_batch, min_batch};
 use datafusion_physical_expr::expressions;
 use std::cmp::Ordering;
 use std::fmt::Debug;
@@ -55,6 +46,7 @@ use arrow::datatypes::{
 };
 
 use crate::min_max::min_max_bytes::MinMaxBytesAccumulator;
+use crate::min_max::min_max_struct::MinMaxStructAccumulator;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{
     function::AccumulatorArgs, Accumulator, AggregateUDFImpl, Documentation,
@@ -102,7 +94,7 @@ fn get_min_max_result_type(input_types: &[DataType]) -> Result<Vec<DataType>> {
     standard_argument(name = "expression",)
 )]
 // MAX aggregate UDF
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct Max {
     signature: Signature,
 }
@@ -231,17 +223,15 @@ impl AggregateUDFImpl for Max {
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::new(MaxAccumulator::try_new(acc_args.return_type)?))
-    }
-
-    fn aliases(&self) -> &[String] {
-        &[]
+        Ok(Box::new(MaxAccumulator::try_new(
+            acc_args.return_field.data_type(),
+        )?))
     }
 
     fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
         use DataType::*;
         matches!(
-            args.return_type,
+            args.return_field.data_type(),
             Int8 | Int16
                 | Int32
                 | Int64
@@ -266,6 +256,7 @@ impl AggregateUDFImpl for Max {
                 | LargeBinary
                 | BinaryView
                 | Duration(_)
+                | Struct(_)
         )
     }
 
@@ -275,7 +266,7 @@ impl AggregateUDFImpl for Max {
     ) -> Result<Box<dyn GroupsAccumulator>> {
         use DataType::*;
         use TimeUnit::*;
-        let data_type = args.return_type;
+        let data_type = args.return_field.data_type();
         match data_type {
             Int8 => primitive_max_accumulator!(data_type, i8, Int8Type),
             Int16 => primitive_max_accumulator!(data_type, i16, Int16Type),
@@ -341,7 +332,9 @@ impl AggregateUDFImpl for Max {
             Utf8 | LargeUtf8 | Utf8View | Binary | LargeBinary | BinaryView => {
                 Ok(Box::new(MinMaxBytesAccumulator::new_max(data_type.clone())))
             }
-
+            Struct(_) => Ok(Box::new(MinMaxStructAccumulator::new_max(
+                data_type.clone(),
+            ))),
             // This is only reached if groups_accumulator_supported is out of sync
             _ => internal_err!("GroupsAccumulator not supported for max({})", data_type),
         }
@@ -351,7 +344,9 @@ impl AggregateUDFImpl for Max {
         &self,
         args: AccumulatorArgs,
     ) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::new(SlidingMaxAccumulator::try_new(args.return_type)?))
+        Ok(Box::new(SlidingMaxAccumulator::try_new(
+            args.return_field.data_type(),
+        )?))
     }
 
     fn is_descending(&self) -> Option<bool> {
@@ -383,278 +378,29 @@ impl AggregateUDFImpl for Max {
     }
 }
 
-// Statically-typed version of min/max(array) -> ScalarValue for string types
-macro_rules! typed_min_max_batch_string {
-    ($VALUES:expr, $ARRAYTYPE:ident, $SCALAR:ident, $OP:ident) => {{
-        let array = downcast_value!($VALUES, $ARRAYTYPE);
-        let value = compute::$OP(array);
-        let value = value.and_then(|e| Some(e.to_string()));
-        ScalarValue::$SCALAR(value)
-    }};
-}
-// Statically-typed version of min/max(array) -> ScalarValue for binary types.
-macro_rules! typed_min_max_batch_binary {
-    ($VALUES:expr, $ARRAYTYPE:ident, $SCALAR:ident, $OP:ident) => {{
-        let array = downcast_value!($VALUES, $ARRAYTYPE);
-        let value = compute::$OP(array);
-        let value = value.and_then(|e| Some(e.to_vec()));
-        ScalarValue::$SCALAR(value)
-    }};
-}
-
-// Statically-typed version of min/max(array) -> ScalarValue for non-string types.
-macro_rules! typed_min_max_batch {
-    ($VALUES:expr, $ARRAYTYPE:ident, $SCALAR:ident, $OP:ident $(, $EXTRA_ARGS:ident)*) => {{
-        let array = downcast_value!($VALUES, $ARRAYTYPE);
-        let value = compute::$OP(array);
-        ScalarValue::$SCALAR(value, $($EXTRA_ARGS.clone()),*)
-    }};
-}
-
-// Statically-typed version of min/max(array) -> ScalarValue  for non-string types.
-// this is a macro to support both operations (min and max).
-macro_rules! min_max_batch {
-    ($VALUES:expr, $OP:ident) => {{
-        match $VALUES.data_type() {
-            DataType::Null => ScalarValue::Null,
-            DataType::Decimal128(precision, scale) => {
-                typed_min_max_batch!(
-                    $VALUES,
-                    Decimal128Array,
-                    Decimal128,
-                    $OP,
-                    precision,
-                    scale
-                )
-            }
-            DataType::Decimal256(precision, scale) => {
-                typed_min_max_batch!(
-                    $VALUES,
-                    Decimal256Array,
-                    Decimal256,
-                    $OP,
-                    precision,
-                    scale
-                )
-            }
-            // all types that have a natural order
-            DataType::Float64 => {
-                typed_min_max_batch!($VALUES, Float64Array, Float64, $OP)
-            }
-            DataType::Float32 => {
-                typed_min_max_batch!($VALUES, Float32Array, Float32, $OP)
-            }
-            DataType::Float16 => {
-                typed_min_max_batch!($VALUES, Float16Array, Float16, $OP)
-            }
-            DataType::Int64 => typed_min_max_batch!($VALUES, Int64Array, Int64, $OP),
-            DataType::Int32 => typed_min_max_batch!($VALUES, Int32Array, Int32, $OP),
-            DataType::Int16 => typed_min_max_batch!($VALUES, Int16Array, Int16, $OP),
-            DataType::Int8 => typed_min_max_batch!($VALUES, Int8Array, Int8, $OP),
-            DataType::UInt64 => typed_min_max_batch!($VALUES, UInt64Array, UInt64, $OP),
-            DataType::UInt32 => typed_min_max_batch!($VALUES, UInt32Array, UInt32, $OP),
-            DataType::UInt16 => typed_min_max_batch!($VALUES, UInt16Array, UInt16, $OP),
-            DataType::UInt8 => typed_min_max_batch!($VALUES, UInt8Array, UInt8, $OP),
-            DataType::Timestamp(TimeUnit::Second, tz_opt) => {
-                typed_min_max_batch!(
-                    $VALUES,
-                    TimestampSecondArray,
-                    TimestampSecond,
-                    $OP,
-                    tz_opt
-                )
-            }
-            DataType::Timestamp(TimeUnit::Millisecond, tz_opt) => typed_min_max_batch!(
-                $VALUES,
-                TimestampMillisecondArray,
-                TimestampMillisecond,
-                $OP,
-                tz_opt
-            ),
-            DataType::Timestamp(TimeUnit::Microsecond, tz_opt) => typed_min_max_batch!(
-                $VALUES,
-                TimestampMicrosecondArray,
-                TimestampMicrosecond,
-                $OP,
-                tz_opt
-            ),
-            DataType::Timestamp(TimeUnit::Nanosecond, tz_opt) => typed_min_max_batch!(
-                $VALUES,
-                TimestampNanosecondArray,
-                TimestampNanosecond,
-                $OP,
-                tz_opt
-            ),
-            DataType::Date32 => typed_min_max_batch!($VALUES, Date32Array, Date32, $OP),
-            DataType::Date64 => typed_min_max_batch!($VALUES, Date64Array, Date64, $OP),
-            DataType::Time32(TimeUnit::Second) => {
-                typed_min_max_batch!($VALUES, Time32SecondArray, Time32Second, $OP)
-            }
-            DataType::Time32(TimeUnit::Millisecond) => {
-                typed_min_max_batch!(
-                    $VALUES,
-                    Time32MillisecondArray,
-                    Time32Millisecond,
-                    $OP
-                )
-            }
-            DataType::Time64(TimeUnit::Microsecond) => {
-                typed_min_max_batch!(
-                    $VALUES,
-                    Time64MicrosecondArray,
-                    Time64Microsecond,
-                    $OP
-                )
-            }
-            DataType::Time64(TimeUnit::Nanosecond) => {
-                typed_min_max_batch!(
-                    $VALUES,
-                    Time64NanosecondArray,
-                    Time64Nanosecond,
-                    $OP
-                )
-            }
-            DataType::Interval(IntervalUnit::YearMonth) => {
-                typed_min_max_batch!(
-                    $VALUES,
-                    IntervalYearMonthArray,
-                    IntervalYearMonth,
-                    $OP
-                )
-            }
-            DataType::Interval(IntervalUnit::DayTime) => {
-                typed_min_max_batch!($VALUES, IntervalDayTimeArray, IntervalDayTime, $OP)
-            }
-            DataType::Interval(IntervalUnit::MonthDayNano) => {
-                typed_min_max_batch!(
-                    $VALUES,
-                    IntervalMonthDayNanoArray,
-                    IntervalMonthDayNano,
-                    $OP
-                )
-            }
-            DataType::Duration(TimeUnit::Second) => {
-                typed_min_max_batch!($VALUES, DurationSecondArray, DurationSecond, $OP)
-            }
-            DataType::Duration(TimeUnit::Millisecond) => {
-                typed_min_max_batch!(
-                    $VALUES,
-                    DurationMillisecondArray,
-                    DurationMillisecond,
-                    $OP
-                )
-            }
-            DataType::Duration(TimeUnit::Microsecond) => {
-                typed_min_max_batch!(
-                    $VALUES,
-                    DurationMicrosecondArray,
-                    DurationMicrosecond,
-                    $OP
-                )
-            }
-            DataType::Duration(TimeUnit::Nanosecond) => {
-                typed_min_max_batch!(
-                    $VALUES,
-                    DurationNanosecondArray,
-                    DurationNanosecond,
-                    $OP
-                )
-            }
-            other => {
-                // This should have been handled before
-                return internal_err!(
-                    "Min/Max accumulator not implemented for type {:?}",
-                    other
-                );
+macro_rules! min_max_generic {
+    ($VALUE:expr, $DELTA:expr, $OP:ident) => {{
+        if $VALUE.is_null() {
+            let mut delta_copy = $DELTA.clone();
+            // When the new value won we want to compact it to
+            // avoid storing the entire input
+            delta_copy.compact();
+            delta_copy
+        } else if $DELTA.is_null() {
+            $VALUE.clone()
+        } else {
+            match $VALUE.partial_cmp(&$DELTA) {
+                Some(choose_min_max!($OP)) => {
+                    // When the new value won we want to compact it to
+                    // avoid storing the entire input
+                    let mut delta_copy = $DELTA.clone();
+                    delta_copy.compact();
+                    delta_copy
+                }
+                _ => $VALUE.clone(),
             }
         }
     }};
-}
-
-/// dynamically-typed min(array) -> ScalarValue
-fn min_batch(values: &ArrayRef) -> Result<ScalarValue> {
-    Ok(match values.data_type() {
-        DataType::Utf8 => {
-            typed_min_max_batch_string!(values, StringArray, Utf8, min_string)
-        }
-        DataType::LargeUtf8 => {
-            typed_min_max_batch_string!(values, LargeStringArray, LargeUtf8, min_string)
-        }
-        DataType::Utf8View => {
-            typed_min_max_batch_string!(
-                values,
-                StringViewArray,
-                Utf8View,
-                min_string_view
-            )
-        }
-        DataType::Boolean => {
-            typed_min_max_batch!(values, BooleanArray, Boolean, min_boolean)
-        }
-        DataType::Binary => {
-            typed_min_max_batch_binary!(&values, BinaryArray, Binary, min_binary)
-        }
-        DataType::LargeBinary => {
-            typed_min_max_batch_binary!(
-                &values,
-                LargeBinaryArray,
-                LargeBinary,
-                min_binary
-            )
-        }
-        DataType::BinaryView => {
-            typed_min_max_batch_binary!(
-                &values,
-                BinaryViewArray,
-                BinaryView,
-                min_binary_view
-            )
-        }
-        _ => min_max_batch!(values, min),
-    })
-}
-
-/// dynamically-typed max(array) -> ScalarValue
-pub fn max_batch(values: &ArrayRef) -> Result<ScalarValue> {
-    Ok(match values.data_type() {
-        DataType::Utf8 => {
-            typed_min_max_batch_string!(values, StringArray, Utf8, max_string)
-        }
-        DataType::LargeUtf8 => {
-            typed_min_max_batch_string!(values, LargeStringArray, LargeUtf8, max_string)
-        }
-        DataType::Utf8View => {
-            typed_min_max_batch_string!(
-                values,
-                StringViewArray,
-                Utf8View,
-                max_string_view
-            )
-        }
-        DataType::Boolean => {
-            typed_min_max_batch!(values, BooleanArray, Boolean, max_boolean)
-        }
-        DataType::Binary => {
-            typed_min_max_batch_binary!(&values, BinaryArray, Binary, max_binary)
-        }
-        DataType::BinaryView => {
-            typed_min_max_batch_binary!(
-                &values,
-                BinaryViewArray,
-                BinaryView,
-                max_binary_view
-            )
-        }
-        DataType::LargeBinary => {
-            typed_min_max_batch_binary!(
-                &values,
-                LargeBinaryArray,
-                LargeBinary,
-                max_binary
-            )
-        }
-        _ => min_max_batch!(values, max),
-    })
 }
 
 // min/max of two non-string scalar values.
@@ -694,6 +440,21 @@ macro_rules! typed_min_max_string {
             (None, Some(b)) => Some(b.clone()),
             (Some(a), Some(b)) => Some((a).$OP(b).clone()),
         })
+    }};
+}
+
+// min/max of two scalar string values with a prefix argument.
+macro_rules! typed_min_max_string_arg {
+    ($VALUE:expr, $DELTA:expr, $SCALAR:ident, $OP:ident, $ARG:expr) => {{
+        ScalarValue::$SCALAR(
+            $ARG,
+            match ($VALUE, $DELTA) {
+                (None, None) => None,
+                (Some(a), None) => Some(a.clone()),
+                (None, Some(b)) => Some(b.clone()),
+                (Some(a), Some(b)) => Some((a).$OP(b).clone()),
+            },
+        )
     }};
 }
 
@@ -799,6 +560,16 @@ macro_rules! min_max {
             }
             (ScalarValue::LargeBinary(lhs), ScalarValue::LargeBinary(rhs)) => {
                 typed_min_max_string!(lhs, rhs, LargeBinary, $OP)
+            }
+            (ScalarValue::FixedSizeBinary(lsize, lhs), ScalarValue::FixedSizeBinary(rsize, rhs)) => {
+                if lsize == rsize {
+                    typed_min_max_string_arg!(lhs, rhs, FixedSizeBinary, $OP, *lsize)
+                }
+                else {
+                    return internal_err!(
+                        "MIN/MAX is not expected to receive FixedSizeBinary of incompatible sizes {:?}",
+                        (lsize, rsize))
+                }
             }
             (ScalarValue::BinaryView(lhs), ScalarValue::BinaryView(rhs)) => {
                 typed_min_max_string!(lhs, rhs, BinaryView, $OP)
@@ -923,6 +694,37 @@ macro_rules! min_max {
             ) => {
                 typed_min_max!(lhs, rhs, DurationNanosecond, $OP)
             }
+
+            (
+                lhs @ ScalarValue::Struct(_),
+                rhs @ ScalarValue::Struct(_),
+            ) => {
+                min_max_generic!(lhs, rhs, $OP)
+            }
+
+            (
+                lhs @ ScalarValue::List(_),
+                rhs @ ScalarValue::List(_),
+            ) => {
+                min_max_generic!(lhs, rhs, $OP)
+            }
+
+
+            (
+                lhs @ ScalarValue::LargeList(_),
+                rhs @ ScalarValue::LargeList(_),
+            ) => {
+                min_max_generic!(lhs, rhs, $OP)
+            }
+
+
+            (
+                lhs @ ScalarValue::FixedSizeList(_),
+                rhs @ ScalarValue::FixedSizeList(_),
+            ) => {
+                min_max_generic!(lhs, rhs, $OP)
+            }
+
             e => {
                 return internal_err!(
                     "MIN/MAX is not expected to receive scalars of incompatible types {:?}",
@@ -1047,7 +849,7 @@ impl Accumulator for SlidingMaxAccumulator {
 ```"#,
     standard_argument(name = "expression",)
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct Min {
     signature: Signature,
 }
@@ -1098,17 +900,15 @@ impl AggregateUDFImpl for Min {
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::new(MinAccumulator::try_new(acc_args.return_type)?))
-    }
-
-    fn aliases(&self) -> &[String] {
-        &[]
+        Ok(Box::new(MinAccumulator::try_new(
+            acc_args.return_field.data_type(),
+        )?))
     }
 
     fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
         use DataType::*;
         matches!(
-            args.return_type,
+            args.return_field.data_type(),
             Int8 | Int16
                 | Int32
                 | Int64
@@ -1133,6 +933,7 @@ impl AggregateUDFImpl for Min {
                 | LargeBinary
                 | BinaryView
                 | Duration(_)
+                | Struct(_)
         )
     }
 
@@ -1142,7 +943,7 @@ impl AggregateUDFImpl for Min {
     ) -> Result<Box<dyn GroupsAccumulator>> {
         use DataType::*;
         use TimeUnit::*;
-        let data_type = args.return_type;
+        let data_type = args.return_field.data_type();
         match data_type {
             Int8 => primitive_min_accumulator!(data_type, i8, Int8Type),
             Int16 => primitive_min_accumulator!(data_type, i16, Int16Type),
@@ -1208,7 +1009,9 @@ impl AggregateUDFImpl for Min {
             Utf8 | LargeUtf8 | Utf8View | Binary | LargeBinary | BinaryView => {
                 Ok(Box::new(MinMaxBytesAccumulator::new_min(data_type.clone())))
             }
-
+            Struct(_) => Ok(Box::new(MinMaxStructAccumulator::new_min(
+                data_type.clone(),
+            ))),
             // This is only reached if groups_accumulator_supported is out of sync
             _ => internal_err!("GroupsAccumulator not supported for min({})", data_type),
         }
@@ -1218,7 +1021,9 @@ impl AggregateUDFImpl for Min {
         &self,
         args: AccumulatorArgs,
     ) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::new(SlidingMinAccumulator::try_new(args.return_type)?))
+        Ok(Box::new(SlidingMinAccumulator::try_new(
+            args.return_field.data_type(),
+        )?))
     }
 
     fn is_descending(&self) -> Option<bool> {
@@ -1627,8 +1432,15 @@ make_udaf_expr_and_func!(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::datatypes::{
-        IntervalDayTimeType, IntervalMonthDayNanoType, IntervalYearMonthType,
+    use arrow::{
+        array::{
+            DictionaryArray, Float32Array, Int32Array, IntervalDayTimeArray,
+            IntervalMonthDayNanoArray, IntervalYearMonthArray, StringArray,
+        },
+        datatypes::{
+            IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit,
+            IntervalYearMonthType,
+        },
     };
     use std::sync::Arc;
 
@@ -1768,10 +1580,10 @@ mod tests {
     use rand::Rng;
 
     fn get_random_vec_i32(len: usize) -> Vec<i32> {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let mut input = Vec::with_capacity(len);
         for _i in 0..len {
-            input.push(rng.gen_range(0..100));
+            input.push(rng.random_range(0..100));
         }
         input
     }
@@ -1854,9 +1666,31 @@ mod tests {
     #[test]
     fn test_get_min_max_return_type_coerce_dictionary() -> Result<()> {
         let data_type =
-            DataType::Dictionary(Box::new(DataType::Utf8), Box::new(DataType::Int32));
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
         let result = get_min_max_result_type(&[data_type])?;
-        assert_eq!(result, vec![DataType::Int32]);
+        assert_eq!(result, vec![DataType::Utf8]);
+        Ok(())
+    }
+
+    #[test]
+    fn test_min_max_dictionary() -> Result<()> {
+        let values = StringArray::from(vec!["b", "c", "a", "🦀", "d"]);
+        let keys = Int32Array::from(vec![Some(0), Some(1), Some(2), None, Some(4)]);
+        let dict_array =
+            DictionaryArray::try_new(keys, Arc::new(values) as ArrayRef).unwrap();
+        let dict_array_ref = Arc::new(dict_array) as ArrayRef;
+        let rt_type =
+            get_min_max_result_type(&[dict_array_ref.data_type().clone()])?[0].clone();
+
+        let mut min_acc = MinAccumulator::try_new(&rt_type)?;
+        min_acc.update_batch(&[Arc::clone(&dict_array_ref)])?;
+        let min_result = min_acc.evaluate()?;
+        assert_eq!(min_result, ScalarValue::Utf8(Some("a".to_string())));
+
+        let mut max_acc = MaxAccumulator::try_new(&rt_type)?;
+        max_acc.update_batch(&[Arc::clone(&dict_array_ref)])?;
+        let max_result = max_acc.evaluate()?;
+        assert_eq!(max_result, ScalarValue::Utf8(Some("🦀".to_string())));
         Ok(())
     }
 }

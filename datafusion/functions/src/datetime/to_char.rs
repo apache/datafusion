@@ -63,7 +63,7 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
         description = "Day to use when making the date. Can be a constant, column or function, and any combination of arithmetic operators."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ToCharFunc {
     signature: Signature,
     aliases: Vec<String>,
@@ -165,6 +165,7 @@ impl ScalarUDFImpl for ToCharFunc {
     fn aliases(&self) -> &[String] {
         &self.aliases
     }
+
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }
@@ -303,8 +304,9 @@ mod tests {
         TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
         TimestampSecondArray,
     };
-    use arrow::datatypes::DataType;
+    use arrow::datatypes::{DataType, Field, TimeUnit};
     use chrono::{NaiveDateTime, Timelike};
+    use datafusion_common::config::ConfigOptions;
     use datafusion_common::ScalarValue;
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
     use std::sync::Arc;
@@ -385,10 +387,16 @@ mod tests {
         ];
 
         for (value, format, expected) in scalar_data {
+            let arg_fields = vec![
+                Field::new("a", value.data_type(), false).into(),
+                Field::new("a", format.data_type(), false).into(),
+            ];
             let args = datafusion_expr::ScalarFunctionArgs {
                 args: vec![ColumnarValue::Scalar(value), ColumnarValue::Scalar(format)],
+                arg_fields,
                 number_rows: 1,
-                return_type: &DataType::Utf8,
+                return_field: Field::new("f", DataType::Utf8, true).into(),
+                config_options: Arc::new(ConfigOptions::default()),
             };
             let result = ToCharFunc::new()
                 .invoke_with_args(args)
@@ -465,13 +473,19 @@ mod tests {
 
         for (value, format, expected) in scalar_array_data {
             let batch_len = format.len();
+            let arg_fields = vec![
+                Field::new("a", value.data_type(), false).into(),
+                Field::new("a", format.data_type().to_owned(), false).into(),
+            ];
             let args = datafusion_expr::ScalarFunctionArgs {
                 args: vec![
                     ColumnarValue::Scalar(value),
                     ColumnarValue::Array(Arc::new(format) as ArrayRef),
                 ],
+                arg_fields,
                 number_rows: batch_len,
-                return_type: &DataType::Utf8,
+                return_field: Field::new("f", DataType::Utf8, true).into(),
+                config_options: Arc::new(ConfigOptions::default()),
             };
             let result = ToCharFunc::new()
                 .invoke_with_args(args)
@@ -596,13 +610,19 @@ mod tests {
 
         for (value, format, expected) in array_scalar_data {
             let batch_len = value.len();
+            let arg_fields = vec![
+                Field::new("a", value.data_type().clone(), false).into(),
+                Field::new("a", format.data_type(), false).into(),
+            ];
             let args = datafusion_expr::ScalarFunctionArgs {
                 args: vec![
                     ColumnarValue::Array(value as ArrayRef),
                     ColumnarValue::Scalar(format),
                 ],
+                arg_fields,
                 number_rows: batch_len,
-                return_type: &DataType::Utf8,
+                return_field: Field::new("f", DataType::Utf8, true).into(),
+                config_options: Arc::new(ConfigOptions::default()),
             };
             let result = ToCharFunc::new()
                 .invoke_with_args(args)
@@ -618,13 +638,19 @@ mod tests {
 
         for (value, format, expected) in array_array_data {
             let batch_len = value.len();
+            let arg_fields = vec![
+                Field::new("a", value.data_type().clone(), false).into(),
+                Field::new("a", format.data_type().clone(), false).into(),
+            ];
             let args = datafusion_expr::ScalarFunctionArgs {
                 args: vec![
                     ColumnarValue::Array(value),
                     ColumnarValue::Array(Arc::new(format) as ArrayRef),
                 ],
+                arg_fields,
                 number_rows: batch_len,
-                return_type: &DataType::Utf8,
+                return_field: Field::new("f", DataType::Utf8, true).into(),
+                config_options: Arc::new(ConfigOptions::default()),
             };
             let result = ToCharFunc::new()
                 .invoke_with_args(args)
@@ -643,10 +669,13 @@ mod tests {
         //
 
         // invalid number of arguments
+        let arg_field = Field::new("a", DataType::Int32, true).into();
         let args = datafusion_expr::ScalarFunctionArgs {
             args: vec![ColumnarValue::Scalar(ScalarValue::Int32(Some(1)))],
+            arg_fields: vec![arg_field],
             number_rows: 1,
-            return_type: &DataType::Utf8,
+            return_field: Field::new("f", DataType::Utf8, true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
         };
         let result = ToCharFunc::new().invoke_with_args(args);
         assert_eq!(
@@ -655,13 +684,19 @@ mod tests {
         );
 
         // invalid type
+        let arg_fields = vec![
+            Field::new("a", DataType::Utf8, true).into(),
+            Field::new("a", DataType::Timestamp(TimeUnit::Nanosecond, None), true).into(),
+        ];
         let args = datafusion_expr::ScalarFunctionArgs {
             args: vec![
                 ColumnarValue::Scalar(ScalarValue::Int32(Some(1))),
                 ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
             ],
+            arg_fields,
             number_rows: 1,
-            return_type: &DataType::Utf8,
+            return_field: Field::new("f", DataType::Utf8, true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
         };
         let result = ToCharFunc::new().invoke_with_args(args);
         assert_eq!(

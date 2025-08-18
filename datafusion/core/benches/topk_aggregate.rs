@@ -33,8 +33,9 @@ async fn create_context(
     sample_cnt: i32,
     asc: bool,
     use_topk: bool,
+    use_view: bool,
 ) -> Result<(Arc<dyn ExecutionPlan>, Arc<TaskContext>)> {
-    let (schema, parts) = make_data(partition_cnt, sample_cnt, asc).unwrap();
+    let (schema, parts) = make_data(partition_cnt, sample_cnt, asc, use_view).unwrap();
     let mem_table = Arc::new(MemTable::try_new(schema, parts).unwrap());
 
     // Create the DataFrame
@@ -55,8 +56,7 @@ async fn create_context(
     Ok((physical_plan, ctx.task_ctx()))
 }
 
-fn run(plan: Arc<dyn ExecutionPlan>, ctx: Arc<TaskContext>, asc: bool) {
-    let rt = Runtime::new().unwrap();
+fn run(rt: &Runtime, plan: Arc<dyn ExecutionPlan>, ctx: Arc<TaskContext>, asc: bool) {
     criterion::black_box(
         rt.block_on(async { aggregate(plan.clone(), ctx.clone(), asc).await }),
     )
@@ -99,40 +99,37 @@ async fn aggregate(
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
+    let rt = Runtime::new().unwrap();
     let limit = 10;
     let partitions = 10;
     let samples = 1_000_000;
 
-    let rt = Runtime::new().unwrap();
-    let topk_real = rt.block_on(async {
-        create_context(limit, partitions, samples, false, true)
-            .await
-            .unwrap()
-    });
-    let topk_asc = rt.block_on(async {
-        create_context(limit, partitions, samples, true, true)
-            .await
-            .unwrap()
-    });
-    let real = rt.block_on(async {
-        create_context(limit, partitions, samples, false, false)
-            .await
-            .unwrap()
-    });
-    let asc = rt.block_on(async {
-        create_context(limit, partitions, samples, true, false)
-            .await
-            .unwrap()
-    });
-
     c.bench_function(
         format!("aggregate {} time-series rows", partitions * samples).as_str(),
-        |b| b.iter(|| run(real.0.clone(), real.1.clone(), false)),
+        |b| {
+            b.iter(|| {
+                let real = rt.block_on(async {
+                    create_context(limit, partitions, samples, false, false, false)
+                        .await
+                        .unwrap()
+                });
+                run(&rt, real.0.clone(), real.1.clone(), false)
+            })
+        },
     );
 
     c.bench_function(
         format!("aggregate {} worst-case rows", partitions * samples).as_str(),
-        |b| b.iter(|| run(asc.0.clone(), asc.1.clone(), true)),
+        |b| {
+            b.iter(|| {
+                let asc = rt.block_on(async {
+                    create_context(limit, partitions, samples, true, false, false)
+                        .await
+                        .unwrap()
+                });
+                run(&rt, asc.0.clone(), asc.1.clone(), true)
+            })
+        },
     );
 
     c.bench_function(
@@ -141,7 +138,16 @@ fn criterion_benchmark(c: &mut Criterion) {
             partitions * samples
         )
         .as_str(),
-        |b| b.iter(|| run(topk_real.0.clone(), topk_real.1.clone(), false)),
+        |b| {
+            b.iter(|| {
+                let topk_real = rt.block_on(async {
+                    create_context(limit, partitions, samples, false, true, false)
+                        .await
+                        .unwrap()
+                });
+                run(&rt, topk_real.0.clone(), topk_real.1.clone(), false)
+            })
+        },
     );
 
     c.bench_function(
@@ -150,7 +156,54 @@ fn criterion_benchmark(c: &mut Criterion) {
             partitions * samples
         )
         .as_str(),
-        |b| b.iter(|| run(topk_asc.0.clone(), topk_asc.1.clone(), true)),
+        |b| {
+            b.iter(|| {
+                let topk_asc = rt.block_on(async {
+                    create_context(limit, partitions, samples, true, true, false)
+                        .await
+                        .unwrap()
+                });
+                run(&rt, topk_asc.0.clone(), topk_asc.1.clone(), true)
+            })
+        },
+    );
+
+    // Utf8View schema，time-series rows
+    c.bench_function(
+        format!(
+            "top k={limit} aggregate {} time-series rows [Utf8View]",
+            partitions * samples
+        )
+        .as_str(),
+        |b| {
+            b.iter(|| {
+                let topk_real = rt.block_on(async {
+                    create_context(limit, partitions, samples, false, true, true)
+                        .await
+                        .unwrap()
+                });
+                run(&rt, topk_real.0.clone(), topk_real.1.clone(), false)
+            })
+        },
+    );
+
+    // Utf8View schema，worst-case rows
+    c.bench_function(
+        format!(
+            "top k={limit} aggregate {} worst-case rows [Utf8View]",
+            partitions * samples
+        )
+        .as_str(),
+        |b| {
+            b.iter(|| {
+                let topk_asc = rt.block_on(async {
+                    create_context(limit, partitions, samples, true, true, true)
+                        .await
+                        .unwrap()
+                });
+                run(&rt, topk_asc.0.clone(), topk_asc.1.clone(), true)
+            })
+        },
     );
 }
 

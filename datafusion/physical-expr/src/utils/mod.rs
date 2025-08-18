@@ -26,15 +26,13 @@ use crate::tree_node::ExprContext;
 use crate::PhysicalExpr;
 use crate::PhysicalSortExpr;
 
-use arrow::datatypes::SchemaRef;
+use arrow::datatypes::Schema;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
 use datafusion_common::{HashMap, HashSet, Result};
 use datafusion_expr::Operator;
 
-use datafusion_physical_expr_common::sort_expr::LexOrdering;
-use itertools::Itertools;
 use petgraph::graph::NodeIndex;
 use petgraph::stable_graph::StableGraph;
 
@@ -45,6 +43,31 @@ pub fn split_conjunction(
     predicate: &Arc<dyn PhysicalExpr>,
 ) -> Vec<&Arc<dyn PhysicalExpr>> {
     split_impl(Operator::And, predicate, vec![])
+}
+
+/// Create a conjunction of the given predicates.
+/// If the input is empty, return a literal true.
+/// If the input contains a single predicate, return the predicate.
+/// Otherwise, return a conjunction of the predicates (e.g. `a AND b AND c`).
+pub fn conjunction(
+    predicates: impl IntoIterator<Item = Arc<dyn PhysicalExpr>>,
+) -> Arc<dyn PhysicalExpr> {
+    conjunction_opt(predicates).unwrap_or_else(|| crate::expressions::lit(true))
+}
+
+/// Create a conjunction of the given predicates.
+/// If the input is empty or the return None.
+/// If the input contains a single predicate, return Some(predicate).
+/// Otherwise, return a Some(..) of a conjunction of the predicates (e.g. `Some(a AND b AND c)`).
+pub fn conjunction_opt(
+    predicates: impl IntoIterator<Item = Arc<dyn PhysicalExpr>>,
+) -> Option<Arc<dyn PhysicalExpr>> {
+    predicates
+        .into_iter()
+        .fold(None, |acc, predicate| match acc {
+            None => Some(predicate),
+            Some(acc) => Some(Arc::new(BinaryExpr::new(acc, Operator::And, predicate))),
+        })
 }
 
 /// Assume the predicate is in the form of DNF, split the predicate to a Vec of PhysicalExprs.
@@ -219,7 +242,7 @@ pub fn collect_columns(expr: &Arc<dyn PhysicalExpr>) -> HashSet<Column> {
 /// This may be helpful when dealing with projections.
 pub fn reassign_predicate_columns(
     pred: Arc<dyn PhysicalExpr>,
-    schema: &SchemaRef,
+    schema: &Schema,
     ignore_not_found: bool,
 ) -> Result<Arc<dyn PhysicalExpr>> {
     pred.transform_down(|expr| {
@@ -241,15 +264,6 @@ pub fn reassign_predicate_columns(
     .data()
 }
 
-/// Merge left and right sort expressions, checking for duplicates.
-pub fn merge_vectors(left: &LexOrdering, right: &LexOrdering) -> LexOrdering {
-    left.iter()
-        .cloned()
-        .chain(right.iter().cloned())
-        .unique()
-        .collect()
-}
-
 #[cfg(test)]
 pub(crate) mod tests {
     use std::any::Any;
@@ -268,7 +282,7 @@ pub(crate) mod tests {
 
     use petgraph::visit::Bfs;
 
-    #[derive(Debug, Clone)]
+    #[derive(Debug, PartialEq, Eq, Hash)]
     pub struct TestScalarUDF {
         pub(crate) signature: Signature,
     }

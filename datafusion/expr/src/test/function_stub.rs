@@ -22,7 +22,7 @@
 use std::any::Any;
 
 use arrow::datatypes::{
-    DataType, Field, DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION,
+    DataType, FieldRef, DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION,
 };
 
 use datafusion_common::{exec_err, not_impl_err, utils::take_function_args, Result};
@@ -60,7 +60,7 @@ pub fn sum(expr: Expr) -> Expr {
         vec![expr],
         false,
         None,
-        None,
+        vec![],
         None,
     ))
 }
@@ -73,7 +73,7 @@ pub fn count(expr: Expr) -> Expr {
         vec![expr],
         false,
         None,
-        None,
+        vec![],
         None,
     ))
 }
@@ -86,13 +86,13 @@ pub fn avg(expr: Expr) -> Expr {
         vec![expr],
         false,
         None,
-        None,
+        vec![],
         None,
     ))
 }
 
 /// Stub `sum` used for optimizer testing
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct Sum {
     signature: Signature,
 }
@@ -175,12 +175,8 @@ impl AggregateUDFImpl for Sum {
         unreachable!("stub should not have accumulate()")
     }
 
-    fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<Field>> {
+    fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         unreachable!("stub should not have state_fields()")
-    }
-
-    fn aliases(&self) -> &[String] {
-        &[]
     }
 
     fn groups_accumulator_supported(&self, _args: AccumulatorArgs) -> bool {
@@ -204,6 +200,7 @@ impl AggregateUDFImpl for Sum {
 }
 
 /// Testing stub implementation of COUNT aggregate
+#[derive(PartialEq, Eq, Hash)]
 pub struct Count {
     signature: Signature,
     aliases: Vec<String>,
@@ -254,7 +251,7 @@ impl AggregateUDFImpl for Count {
         false
     }
 
-    fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<Field>> {
+    fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         not_impl_err!("no impl for stub")
     }
 
@@ -286,12 +283,13 @@ pub fn min(expr: Expr) -> Expr {
         vec![expr],
         false,
         None,
-        None,
+        vec![],
         None,
     ))
 }
 
 /// Testing stub implementation of Min aggregate
+#[derive(PartialEq, Eq, Hash)]
 pub struct Min {
     signature: Signature,
 }
@@ -336,16 +334,12 @@ impl AggregateUDFImpl for Min {
         Ok(DataType::Int64)
     }
 
-    fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<Field>> {
+    fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         not_impl_err!("no impl for stub")
     }
 
     fn accumulator(&self, _acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         not_impl_err!("no impl for stub")
-    }
-
-    fn aliases(&self) -> &[String] {
-        &[]
     }
 
     fn create_groups_accumulator(
@@ -371,12 +365,13 @@ pub fn max(expr: Expr) -> Expr {
         vec![expr],
         false,
         None,
-        None,
+        vec![],
         None,
     ))
 }
 
 /// Testing stub implementation of MAX aggregate
+#[derive(PartialEq, Eq, Hash)]
 pub struct Max {
     signature: Signature,
 }
@@ -421,16 +416,12 @@ impl AggregateUDFImpl for Max {
         Ok(DataType::Int64)
     }
 
-    fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<Field>> {
+    fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         not_impl_err!("no impl for stub")
     }
 
     fn accumulator(&self, _acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         not_impl_err!("no impl for stub")
-    }
-
-    fn aliases(&self) -> &[String] {
-        &[]
     }
 
     fn create_groups_accumulator(
@@ -449,7 +440,7 @@ impl AggregateUDFImpl for Max {
 }
 
 /// Testing stub implementation of avg aggregate
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct Avg {
     signature: Signature,
     aliases: Vec<String>,
@@ -491,9 +482,10 @@ impl AggregateUDFImpl for Avg {
         not_impl_err!("no impl for stub")
     }
 
-    fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<Field>> {
+    fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         not_impl_err!("no impl for stub")
     }
+
     fn aliases(&self) -> &[String] {
         &self.aliases
     }

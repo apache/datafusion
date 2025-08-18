@@ -30,16 +30,18 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{Result, Statistics};
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::{Distribution, LexRequirement, PhysicalSortRequirement};
+use datafusion_physical_expr::Distribution;
+use datafusion_physical_expr_common::sort_expr::OrderingRequirements;
+use datafusion_physical_plan::execution_plan::Boundedness;
 use datafusion_physical_plan::projection::{
-    make_with_child, update_expr, ProjectionExec,
+    make_with_child, update_expr, update_ordering_requirement, ProjectionExec,
 };
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, SendableRecordBatchStream,
+    DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
+    SendableRecordBatchStream,
 };
-use datafusion_physical_plan::{ExecutionPlanProperties, PlanProperties};
 
 /// This rule either adds or removes [`OutputRequirements`]s to/from the physical
 /// plan according to its `mode` attribute, which is set by the constructors
@@ -94,23 +96,26 @@ enum RuleMode {
 #[derive(Debug)]
 pub struct OutputRequirementExec {
     input: Arc<dyn ExecutionPlan>,
-    order_requirement: Option<LexRequirement>,
+    order_requirement: Option<OrderingRequirements>,
     dist_requirement: Distribution,
     cache: PlanProperties,
+    fetch: Option<usize>,
 }
 
 impl OutputRequirementExec {
     pub fn new(
         input: Arc<dyn ExecutionPlan>,
-        requirements: Option<LexRequirement>,
+        requirements: Option<OrderingRequirements>,
         dist_requirement: Distribution,
+        fetch: Option<usize>,
     ) -> Self {
-        let cache = Self::compute_properties(&input);
+        let cache = Self::compute_properties(&input, &fetch);
         Self {
             input,
             order_requirement: requirements,
             dist_requirement,
             cache,
+            fetch,
         }
     }
 
@@ -119,13 +124,27 @@ impl OutputRequirementExec {
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
-    fn compute_properties(input: &Arc<dyn ExecutionPlan>) -> PlanProperties {
+    fn compute_properties(
+        input: &Arc<dyn ExecutionPlan>,
+        fetch: &Option<usize>,
+    ) -> PlanProperties {
+        let boundedness = if fetch.is_some() {
+            Boundedness::Bounded
+        } else {
+            input.boundedness()
+        };
+
         PlanProperties::new(
             input.equivalence_properties().clone(), // Equivalence Properties
             input.output_partitioning().clone(),    // Output Partitioning
             input.pipeline_behavior(),              // Pipeline Behavior
-            input.boundedness(),                    // Boundedness
+            boundedness,                            // Boundedness
         )
+    }
+
+    /// Get fetch
+    pub fn fetch(&self) -> Option<usize> {
+        self.fetch
     }
 }
 
@@ -137,10 +156,35 @@ impl DisplayAs for OutputRequirementExec {
     ) -> std::fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(f, "OutputRequirementExec")
+                let order_cols = self
+                    .order_requirement
+                    .as_ref()
+                    .map(|reqs| reqs.first())
+                    .map(|lex| {
+                        let pairs: Vec<String> = lex
+                            .iter()
+                            .map(|req| {
+                                let direction = req
+                                    .options
+                                    .as_ref()
+                                    .map(
+                                        |opt| if opt.descending { "desc" } else { "asc" },
+                                    )
+                                    .unwrap_or("unspecified");
+                                format!("({}, {direction})", req.expr)
+                            })
+                            .collect();
+                        format!("[{}]", pairs.join(", "))
+                    })
+                    .unwrap_or_else(|| "[]".to_string());
+
+                write!(
+                    f,
+                    "OutputRequirementExec: order_by={}, dist_by={}",
+                    order_cols, self.dist_requirement
+                )
             }
             DisplayFormatType::TreeRender => {
-                // TODO: collect info
                 write!(f, "")
             }
         }
@@ -176,7 +220,7 @@ impl ExecutionPlan for OutputRequirementExec {
         vec![&self.input]
     }
 
-    fn required_input_ordering(&self) -> Vec<Option<LexRequirement>> {
+    fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
         vec![self.order_requirement.clone()]
     }
 
@@ -188,6 +232,7 @@ impl ExecutionPlan for OutputRequirementExec {
             children.remove(0), // has a single child
             self.order_requirement.clone(),
             self.dist_requirement.clone(),
+            self.fetch,
         )))
     }
 
@@ -200,7 +245,11 @@ impl ExecutionPlan for OutputRequirementExec {
     }
 
     fn statistics(&self) -> Result<Statistics> {
-        self.input.statistics()
+        self.input.partition_statistics(None)
+    }
+
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        self.input.partition_statistics(partition)
     }
 
     fn try_swapping_with_projection(
@@ -208,23 +257,23 @@ impl ExecutionPlan for OutputRequirementExec {
         projection: &ProjectionExec,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         // If the projection does not narrow the schema, we should not try to push it down:
-        if projection.expr().len() >= projection.input().schema().fields().len() {
+        let proj_exprs = projection.expr();
+        if proj_exprs.len() >= projection.input().schema().fields().len() {
             return Ok(None);
         }
 
-        let mut updated_sort_reqs = LexRequirement::new(vec![]);
-        // None or empty_vec can be treated in the same way.
-        if let Some(reqs) = &self.required_input_ordering()[0] {
-            for req in &reqs.inner {
-                let Some(new_expr) = update_expr(&req.expr, projection.expr(), false)?
+        let mut requirements = self.required_input_ordering().swap_remove(0);
+        if let Some(reqs) = requirements {
+            let mut updated_reqs = vec![];
+            let (lexes, soft) = reqs.into_alternatives();
+            for lex in lexes.into_iter() {
+                let Some(updated_lex) = update_ordering_requirement(lex, proj_exprs)?
                 else {
                     return Ok(None);
                 };
-                updated_sort_reqs.push(PhysicalSortRequirement {
-                    expr: new_expr,
-                    options: req.options,
-                });
+                updated_reqs.push(updated_lex);
             }
+            requirements = OrderingRequirements::new_alternatives(updated_reqs, soft);
         }
 
         let dist_req = match &self.required_input_distribution()[0] {
@@ -242,15 +291,14 @@ impl ExecutionPlan for OutputRequirementExec {
             dist => dist.clone(),
         };
 
-        make_with_child(projection, &self.input())
-            .map(|input| {
-                OutputRequirementExec::new(
-                    input,
-                    (!updated_sort_reqs.is_empty()).then_some(updated_sort_reqs),
-                    dist_req,
-                )
-            })
-            .map(|e| Some(Arc::new(e) as _))
+        make_with_child(projection, &self.input()).map(|input| {
+            let e = OutputRequirementExec::new(input, requirements, dist_req, self.fetch);
+            Some(Arc::new(e) as _)
+        })
+    }
+
+    fn fetch(&self) -> Option<usize> {
+        self.fetch
     }
 }
 
@@ -298,6 +346,7 @@ fn require_top_ordering(plan: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn Executio
             // there is no ordering requirement
             None,
             Distribution::UnspecifiedDistribution,
+            None,
         )) as _)
     }
 }
@@ -313,27 +362,39 @@ fn require_top_ordering_helper(
     if children.len() != 1 {
         Ok((plan, false))
     } else if let Some(sort_exec) = plan.as_any().downcast_ref::<SortExec>() {
-        // In case of constant columns, output ordering of SortExec would give an empty set.
-        // Therefore; we check the sort expression field of the SortExec to assign the requirements.
+        // In case of constant columns, output ordering of the `SortExec` would
+        // be an empty set. Therefore; we check the sort expression field to
+        // assign the requirements.
+        let req_dist = sort_exec.required_input_distribution().swap_remove(0);
         let req_ordering = sort_exec.expr();
-        let req_dist = sort_exec.required_input_distribution()[0].clone();
-        let reqs = LexRequirement::from(req_ordering.clone());
+        let reqs = OrderingRequirements::from(req_ordering.clone());
+        let fetch = sort_exec.fetch();
+
         Ok((
-            Arc::new(OutputRequirementExec::new(plan, Some(reqs), req_dist)) as _,
+            Arc::new(OutputRequirementExec::new(
+                plan,
+                Some(reqs),
+                req_dist,
+                fetch,
+            )) as _,
             true,
         ))
     } else if let Some(spm) = plan.as_any().downcast_ref::<SortPreservingMergeExec>() {
-        let reqs = LexRequirement::from(spm.expr().clone());
+        let reqs = OrderingRequirements::from(spm.expr().clone());
+        let fetch = spm.fetch();
         Ok((
             Arc::new(OutputRequirementExec::new(
                 plan,
                 Some(reqs),
                 Distribution::SinglePartition,
+                fetch,
             )) as _,
             true,
         ))
     } else if plan.maintains_input_order()[0]
-        && plan.required_input_ordering()[0].is_none()
+        && (plan.required_input_ordering()[0]
+            .as_ref()
+            .is_none_or(|o| matches!(o, OrderingRequirements::Soft(_))))
     {
         // Keep searching for a `SortExec` as long as ordering is maintained,
         // and on-the-way operators do not themselves require an ordering.

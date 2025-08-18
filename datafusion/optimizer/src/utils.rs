@@ -79,45 +79,71 @@ pub fn is_restrict_null_predicate<'a>(
         return Ok(true);
     }
 
+    // If result is single `true`, return false;
+    // If result is single `NULL` or `false`, return true;
+    Ok(
+        match evaluate_expr_with_null_column(predicate, join_cols_of_predicate)? {
+            ColumnarValue::Array(array) => {
+                if array.len() == 1 {
+                    let boolean_array = as_boolean_array(&array)?;
+                    boolean_array.is_null(0) || !boolean_array.value(0)
+                } else {
+                    false
+                }
+            }
+            ColumnarValue::Scalar(scalar) => matches!(
+                scalar,
+                ScalarValue::Boolean(None) | ScalarValue::Boolean(Some(false))
+            ),
+        },
+    )
+}
+
+/// Determines if an expression will always evaluate to null.
+/// `c0 + 8` return true
+/// `c0 IS NULL` return false
+/// `CASE WHEN c0 > 1 then 0 else 1` return false
+pub fn evaluates_to_null<'a>(
+    predicate: Expr,
+    null_columns: impl IntoIterator<Item = &'a Column>,
+) -> Result<bool> {
+    if matches!(predicate, Expr::Column(_)) {
+        return Ok(true);
+    }
+
+    Ok(
+        match evaluate_expr_with_null_column(predicate, null_columns)? {
+            ColumnarValue::Array(_) => false,
+            ColumnarValue::Scalar(scalar) => scalar.is_null(),
+        },
+    )
+}
+
+fn evaluate_expr_with_null_column<'a>(
+    predicate: Expr,
+    null_columns: impl IntoIterator<Item = &'a Column>,
+) -> Result<ColumnarValue> {
     static DUMMY_COL_NAME: &str = "?";
-    let schema = Schema::new(vec![Field::new(DUMMY_COL_NAME, DataType::Null, true)]);
-    let input_schema = DFSchema::try_from(schema.clone())?;
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        DUMMY_COL_NAME,
+        DataType::Null,
+        true,
+    )]));
+    let input_schema = DFSchema::try_from(Arc::clone(&schema))?;
     let column = new_null_array(&DataType::Null, 1);
-    let input_batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![column])?;
+    let input_batch = RecordBatch::try_new(schema, vec![column])?;
     let execution_props = ExecutionProps::default();
     let null_column = Column::from_name(DUMMY_COL_NAME);
 
-    let join_cols_to_replace = join_cols_of_predicate
+    let join_cols_to_replace = null_columns
         .into_iter()
         .map(|column| (column, &null_column))
         .collect::<HashMap<_, _>>();
 
     let replaced_predicate = replace_col(predicate, &join_cols_to_replace)?;
     let coerced_predicate = coerce(replaced_predicate, &input_schema)?;
-    let phys_expr =
-        create_physical_expr(&coerced_predicate, &input_schema, &execution_props)?;
-
-    let result_type = phys_expr.data_type(&schema)?;
-    if !matches!(&result_type, DataType::Boolean) {
-        return Ok(false);
-    }
-
-    // If result is single `true`, return false;
-    // If result is single `NULL` or `false`, return true;
-    Ok(match phys_expr.evaluate(&input_batch)? {
-        ColumnarValue::Array(array) => {
-            if array.len() == 1 {
-                let boolean_array = as_boolean_array(&array)?;
-                boolean_array.is_null(0) || !boolean_array.value(0)
-            } else {
-                false
-            }
-        }
-        ColumnarValue::Scalar(scalar) => matches!(
-            scalar,
-            ScalarValue::Boolean(None) | ScalarValue::Boolean(Some(false))
-        ),
-    })
+    create_physical_expr(&coerced_predicate, &input_schema, &execution_props)?
+        .evaluate(&input_batch)
 }
 
 fn coerce(expr: Expr, schema: &DFSchema) -> Result<Expr> {
@@ -141,7 +167,11 @@ mod tests {
             (Expr::IsNotNull(Box::new(col("a"))), true),
             // a = NULL
             (
-                binary_expr(col("a"), Operator::Eq, Expr::Literal(ScalarValue::Null)),
+                binary_expr(
+                    col("a"),
+                    Operator::Eq,
+                    Expr::Literal(ScalarValue::Null, None),
+                ),
                 true,
             ),
             // a > 8
@@ -204,12 +234,16 @@ mod tests {
             ),
             // a IN (NULL)
             (
-                in_list(col("a"), vec![Expr::Literal(ScalarValue::Null)], false),
+                in_list(
+                    col("a"),
+                    vec![Expr::Literal(ScalarValue::Null, None)],
+                    false,
+                ),
                 true,
             ),
             // a NOT IN (NULL)
             (
-                in_list(col("a"), vec![Expr::Literal(ScalarValue::Null)], true),
+                in_list(col("a"), vec![Expr::Literal(ScalarValue::Null, None)], true),
                 true,
             ),
         ];
@@ -219,7 +253,7 @@ mod tests {
             let join_cols_of_predicate = std::iter::once(&column_a);
             let actual =
                 is_restrict_null_predicate(predicate.clone(), join_cols_of_predicate)?;
-            assert_eq!(actual, expected, "{}", predicate);
+            assert_eq!(actual, expected, "{predicate}");
         }
 
         Ok(())

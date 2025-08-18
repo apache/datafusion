@@ -42,7 +42,6 @@ use datafusion_physical_expr::utils::map_columns_before_projection;
 use datafusion_physical_expr::{
     physical_exprs_equal, EquivalenceProperties, PhysicalExpr, PhysicalExprRef,
 };
-use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
 };
@@ -296,7 +295,7 @@ pub fn adjust_input_keys_ordering(
         join_type,
         projection,
         mode,
-        null_equals_null,
+        null_equality,
         ..
     }) = plan.as_any().downcast_ref::<HashJoinExec>()
     {
@@ -315,7 +314,7 @@ pub fn adjust_input_keys_ordering(
                         // TODO: although projection is not used in the join here, because projection pushdown is after enforce_distribution. Maybe we need to handle it later. Same as filter.
                         projection.clone(),
                         PartitionMode::Partitioned,
-                        *null_equals_null,
+                        *null_equality,
                     )
                     .map(|e| Arc::new(e) as _)
                 };
@@ -335,7 +334,7 @@ pub fn adjust_input_keys_ordering(
                         left.schema().fields().len(),
                     )
                     .unwrap_or_default(),
-                    JoinType::RightSemi | JoinType::RightAnti => {
+                    JoinType::RightSemi | JoinType::RightAnti | JoinType::RightMark => {
                         requirements.data.clone()
                     }
                     JoinType::Left
@@ -365,7 +364,7 @@ pub fn adjust_input_keys_ordering(
         filter,
         join_type,
         sort_options,
-        null_equals_null,
+        null_equality,
         ..
     }) = plan.as_any().downcast_ref::<SortMergeJoinExec>()
     {
@@ -380,7 +379,7 @@ pub fn adjust_input_keys_ordering(
                 filter.clone(),
                 *join_type,
                 new_conditions.1,
-                *null_equals_null,
+                *null_equality,
             )
             .map(|e| Arc::new(e) as _)
         };
@@ -617,7 +616,7 @@ pub fn reorder_join_keys_to_inputs(
         join_type,
         projection,
         mode,
-        null_equals_null,
+        null_equality,
         ..
     }) = plan_any.downcast_ref::<HashJoinExec>()
     {
@@ -643,7 +642,7 @@ pub fn reorder_join_keys_to_inputs(
                     join_type,
                     projection.clone(),
                     PartitionMode::Partitioned,
-                    *null_equals_null,
+                    *null_equality,
                 )?));
             }
         }
@@ -654,7 +653,7 @@ pub fn reorder_join_keys_to_inputs(
         filter,
         join_type,
         sort_options,
-        null_equals_null,
+        null_equality,
         ..
     }) = plan_any.downcast_ref::<SortMergeJoinExec>()
     {
@@ -682,7 +681,7 @@ pub fn reorder_join_keys_to_inputs(
                     filter.clone(),
                     *join_type,
                     new_sort_options,
-                    *null_equals_null,
+                    *null_equality,
                 )
                 .map(|smj| Arc::new(smj) as _);
             }
@@ -837,7 +836,7 @@ fn new_join_conditions(
 ///
 /// * `input`: Current node.
 /// * `n_target`: desired target partition number, if partition number of the
-///    current executor is less than this value. Partition number will be increased.
+///   current executor is less than this value. Partition number will be increased.
 ///
 /// # Returns
 ///
@@ -880,7 +879,7 @@ fn add_roundrobin_on_top(
 /// * `input`: Current node.
 /// * `hash_exprs`: Stores Physical Exprs that are used during hashing.
 /// * `n_target`: desired target partition number, if partition number of the
-///    current executor is less than this value. Partition number will be increased.
+///   current executor is less than this value. Partition number will be increased.
 ///
 /// # Returns
 ///
@@ -926,38 +925,34 @@ fn add_hash_on_top(
     Ok(input)
 }
 
-/// Adds a [`SortPreservingMergeExec`] operator on top of input executor
-/// to satisfy single distribution requirement.
+/// Adds a [`SortPreservingMergeExec`] or a [`CoalescePartitionsExec`] operator
+/// on top of the given plan node to satisfy a single partition requirement
+/// while preserving ordering constraints.
 ///
-/// # Arguments
+/// # Parameters
 ///
 /// * `input`: Current node.
 ///
 /// # Returns
 ///
-/// Updated node with an execution plan, where desired single
-/// distribution is satisfied by adding [`SortPreservingMergeExec`].
-fn add_spm_on_top(input: DistributionContext) -> DistributionContext {
-    // Add SortPreservingMerge only when partition count is larger than 1.
+/// Updated node with an execution plan, where the desired single distribution
+/// requirement is satisfied.
+fn add_merge_on_top(input: DistributionContext) -> DistributionContext {
+    // Apply only when the partition count is larger than one.
     if input.plan.output_partitioning().partition_count() > 1 {
         // When there is an existing ordering, we preserve ordering
         // when decreasing partitions. This will be un-done in the future
         // if any of the following conditions is true
         // - Preserving ordering is not helpful in terms of satisfying ordering requirements
         // - Usage of order preserving variants is not desirable
-        // (determined by flag `config.optimizer.bounded_order_preserving_variants`)
-        let should_preserve_ordering = input.plan.output_ordering().is_some();
-
-        let new_plan = if should_preserve_ordering {
+        // (determined by flag `config.optimizer.prefer_existing_sort`)
+        let new_plan = if let Some(req) = input.plan.output_ordering() {
             Arc::new(SortPreservingMergeExec::new(
-                input
-                    .plan
-                    .output_ordering()
-                    .unwrap_or(&LexOrdering::default())
-                    .clone(),
+                req.clone(),
                 Arc::clone(&input.plan),
             )) as _
         } else {
+            // If there is no input order, we can simply coalesce partitions:
             Arc::new(CoalescePartitionsExec::new(Arc::clone(&input.plan))) as _
         };
 
@@ -1018,7 +1013,7 @@ fn remove_dist_changing_operators(
 /// "    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2",
 /// "      DataSourceExec: file_groups={2 groups: \[\[x], \[y]]}, projection=\[a, b, c, d, e], output_ordering=\[a@0 ASC], file_type=parquet",
 /// ```
-fn replace_order_preserving_variants(
+pub fn replace_order_preserving_variants(
     mut context: DistributionContext,
 ) -> Result<DistributionContext> {
     context.children = context
@@ -1035,7 +1030,9 @@ fn replace_order_preserving_variants(
 
     if is_sort_preserving_merge(&context.plan) {
         let child_plan = Arc::clone(&context.children[0].plan);
-        context.plan = Arc::new(CoalescePartitionsExec::new(child_plan));
+        context.plan = Arc::new(
+            CoalescePartitionsExec::new(child_plan).with_fetch(context.plan.fetch()),
+        );
         return Ok(context);
     } else if let Some(repartition) =
         context.plan.as_any().downcast_ref::<RepartitionExec>()
@@ -1112,7 +1109,8 @@ fn get_repartition_requirement_status(
     {
         // Decide whether adding a round robin is beneficial depending on
         // the statistical information we have on the number of rows:
-        let roundrobin_beneficial_stats = match child.statistics()?.num_rows {
+        let roundrobin_beneficial_stats = match child.partition_statistics(None)?.num_rows
+        {
             Precision::Exact(n_rows) => n_rows > batch_size,
             Precision::Inexact(n_rows) => !should_use_estimates || (n_rows > batch_size),
             Precision::Absent => true,
@@ -1155,6 +1153,10 @@ fn get_repartition_requirement_status(
 /// operators to satisfy distribution requirements. Since this function
 /// takes care of such requirements, we should avoid manually adding data
 /// exchange operators in other places.
+///
+/// This function is intended to be used in a bottom up traversal, as it
+/// can first repartition (or newly partition) at the datasources -- these
+/// source partitions may be later repartitioned with additional data exchange operators.
 pub fn ensure_distribution(
     dist_context: DistributionContext,
     config: &ConfigOptions,
@@ -1244,6 +1246,10 @@ pub fn ensure_distribution(
 
             // When `repartition_file_scans` is set, attempt to increase
             // parallelism at the source.
+            //
+            // If repartitioning is not possible (a.k.a. None is returned from `ExecutionPlan::repartitioned`)
+            // then no repartitioning will have occurred. As the default implementation returns None, it is only
+            // specific physical plan nodes, such as certain datasources, which are repartitioned.
             if repartition_file_scans && roundrobin_beneficial_stats {
                 if let Some(new_child) =
                     child.plan.repartitioned(target_partitions, config)?
@@ -1255,7 +1261,7 @@ pub fn ensure_distribution(
             // Satisfy the distribution requirement if it is unmet.
             match &requirement {
                 Distribution::SinglePartition => {
-                    child = add_spm_on_top(child);
+                    child = add_merge_on_top(child);
                 }
                 Distribution::HashPartitioned(exprs) => {
                     if add_roundrobin {
@@ -1283,10 +1289,12 @@ pub fn ensure_distribution(
                 // Either:
                 // - Ordering requirement cannot be satisfied by preserving ordering through repartitions, or
                 // - using order preserving variant is not desirable.
+                let sort_req = required_input_ordering.into_single();
                 let ordering_satisfied = child
                     .plan
                     .equivalence_properties()
-                    .ordering_satisfy_requirement(&required_input_ordering);
+                    .ordering_satisfy_requirement(sort_req.clone())?;
+
                 if (!ordering_satisfied || !order_preserving_variants_desirable)
                     && child.data
                 {
@@ -1297,9 +1305,12 @@ pub fn ensure_distribution(
                         // Make sure to satisfy ordering requirement:
                         child = add_sort_above_with_check(
                             child,
-                            required_input_ordering.clone(),
-                            None,
-                        );
+                            sort_req,
+                            plan.as_any()
+                                .downcast_ref::<OutputRequirementExec>()
+                                .map(|output| output.fetch())
+                                .unwrap_or(None),
+                        )?;
                     }
                 }
                 // Stop tracking distribution changing operators

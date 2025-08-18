@@ -23,6 +23,7 @@ use arrow::datatypes::{Int32Type, SchemaRef};
 use arrow::util::pretty::pretty_format_batches;
 use async_trait::async_trait;
 use datafusion::catalog::Session;
+use datafusion::common::pruning::PruningStatistics;
 use datafusion::common::{
     internal_datafusion_err, DFSchema, DataFusionError, Result, ScalarValue,
 };
@@ -39,7 +40,7 @@ use datafusion::parquet::arrow::{
     arrow_reader::ParquetRecordBatchReaderBuilder, ArrowWriter,
 };
 use datafusion::physical_expr::PhysicalExpr;
-use datafusion::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
+use datafusion::physical_optimizer::pruning::PruningPredicate;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::*;
 use std::any::Any;
@@ -70,7 +71,7 @@ use url::Url;
 /// (using the same underlying APIs)
 ///
 /// For a more advanced example of using an index to prune row groups within a
-/// file, see the (forthcoming) `advanced_parquet_index` example.
+/// file, see the `advanced_parquet_index` example.
 ///
 /// # Diagram
 ///
@@ -242,8 +243,7 @@ impl TableProvider for IndexTableProvider {
         let files = self.index.get_files(predicate.clone())?;
 
         let object_store_url = ObjectStoreUrl::parse("file://")?;
-        let source =
-            Arc::new(ParquetSource::default().with_predicate(self.schema(), predicate));
+        let source = Arc::new(ParquetSource::default().with_predicate(predicate));
         let mut file_scan_config_builder =
             FileScanConfigBuilder::new(object_store_url, self.schema(), source)
                 .with_projection(projection.cloned())
@@ -313,7 +313,7 @@ impl Display for ParquetMetadataIndex {
             "ParquetMetadataIndex(last_num_pruned: {})",
             self.last_num_pruned()
         )?;
-        let batches = pretty_format_batches(&[self.index.clone()]).unwrap();
+        let batches = pretty_format_batches(std::slice::from_ref(&self.index)).unwrap();
         write!(f, "{batches}",)
     }
 }
@@ -685,7 +685,7 @@ fn make_demo_file(path: impl AsRef<Path>, value_range: Range<i32>) -> Result<()>
 
     let num_values = value_range.len();
     let file_names =
-        StringArray::from_iter_values(std::iter::repeat(&filename).take(num_values));
+        StringArray::from_iter_values(std::iter::repeat_n(&filename, num_values));
     let values = Int32Array::from_iter_values(value_range);
     let batch = RecordBatch::try_from_iter(vec![
         ("file_name", Arc::new(file_names) as ArrayRef),

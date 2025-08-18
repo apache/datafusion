@@ -29,17 +29,18 @@
 /// # Parameters
 ///
 /// * `$UDWF`: The struct which defines the [`Signature`](datafusion_expr::Signature)
-///     of the user-defined window function.
+///   of the user-defined window function.
 /// * `$OUT_FN_NAME`: The basename to generate a unique function name like
-///     `$OUT_FN_NAME_udwf`.
+///   `$OUT_FN_NAME_udwf`.
 /// * `$DOC`: Doc comments for UDWF.
 /// * (optional) `$CTOR`: Pass a custom constructor. When omitted it
-///     automatically resolves to `$UDWF::default()`.
+///   automatically resolves to `$UDWF::default()`.
 ///
 /// # Example
 ///
 /// ```
 /// # use std::any::Any;
+/// use arrow::datatypes::FieldRef;
 /// # use datafusion_common::arrow::datatypes::{DataType, Field};
 /// # use datafusion_expr::{PartitionEvaluator, Signature, Volatility, WindowUDFImpl};
 /// #
@@ -56,7 +57,7 @@
 /// #
 /// # assert_eq!(simple_udwf().name(), "simple_user_defined_window_function");
 /// #
-/// #  #[derive(Debug)]
+/// #  #[derive(Debug, PartialEq, Eq, Hash)]
 /// #  struct SimpleUDWF {
 /// #      signature: Signature,
 /// #  }
@@ -85,8 +86,8 @@
 /// #      ) -> datafusion_common::Result<Box<dyn PartitionEvaluator>> {
 /// #          unimplemented!()
 /// #      }
-/// #      fn field(&self, field_args: WindowUDFFieldArgs) -> datafusion_common::Result<Field> {
-/// #          Ok(Field::new(field_args.name(), DataType::Int64, false))
+/// #      fn field(&self, field_args: WindowUDFFieldArgs) -> datafusion_common::Result<FieldRef> {
+/// #          Ok(Field::new(field_args.name(), DataType::Int64, false).into())
 /// #      }
 /// #  }
 /// #
@@ -122,13 +123,13 @@ macro_rules! get_or_init_udwf {
 /// # Parameters
 ///
 /// * `$UDWF`: The struct which defines the [`Signature`] of the
-///     user-defined window function.
+///   user-defined window function.
 /// * `$OUT_FN_NAME`: The basename to generate a unique function name like
-///     `$OUT_FN_NAME_udwf`.
+///   `$OUT_FN_NAME_udwf`.
 /// * `$DOC`: Doc comments for UDWF.
 /// * (optional) `[$($PARAM:ident),+]`: An array of 1 or more parameters
-///     for the generated function. The type of parameters is [`Expr`].
-///     When omitted this creates a function with zero parameters.
+///   for the generated function. The type of parameters is [`Expr`].
+///   When omitted this creates a function with zero parameters.
 ///
 /// [`Signature`]: datafusion_expr::Signature
 /// [`Expr`]: datafusion_expr::Expr
@@ -138,6 +139,7 @@ macro_rules! get_or_init_udwf {
 /// 1. With Zero Parameters
 /// ```
 /// # use std::any::Any;
+/// use arrow::datatypes::FieldRef;
 /// # use datafusion_common::arrow::datatypes::{DataType, Field};
 /// # use datafusion_expr::{PartitionEvaluator, Signature, Volatility, WindowUDFImpl};
 /// # use datafusion_functions_window::{create_udwf_expr, get_or_init_udwf};
@@ -169,7 +171,7 @@ macro_rules! get_or_init_udwf {
 /// #     "row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING"
 /// # );
 /// #
-/// # #[derive(Debug)]
+/// # #[derive(Debug, PartialEq, Eq, Hash)]
 /// # struct RowNumber {
 /// #     signature: Signature,
 /// # }
@@ -196,8 +198,8 @@ macro_rules! get_or_init_udwf {
 /// #     ) -> datafusion_common::Result<Box<dyn PartitionEvaluator>> {
 /// #         unimplemented!()
 /// #     }
-/// #     fn field(&self, field_args: WindowUDFFieldArgs) -> datafusion_common::Result<Field> {
-/// #         Ok(Field::new(field_args.name(), DataType::UInt64, false))
+/// #     fn field(&self, field_args: WindowUDFFieldArgs) -> datafusion_common::Result<FieldRef> {
+/// #         Ok(Field::new(field_args.name(), DataType::UInt64, false).into())
 /// #     }
 /// # }
 /// ```
@@ -205,6 +207,7 @@ macro_rules! get_or_init_udwf {
 /// 2. With Multiple Parameters
 /// ```
 /// # use std::any::Any;
+/// use arrow::datatypes::FieldRef;
 /// #
 /// # use datafusion_expr::{
 /// #     PartitionEvaluator, Signature, TypeSignature, Volatility, WindowUDFImpl,
@@ -247,7 +250,7 @@ macro_rules! get_or_init_udwf {
 /// #     "lead(a,Int64(1),NULL) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING"
 /// # );
 /// #
-/// # #[derive(Debug)]
+/// # #[derive(Debug, PartialEq, Eq, Hash)]
 /// # struct Lead {
 /// #     signature: Signature,
 /// # }
@@ -283,12 +286,12 @@ macro_rules! get_or_init_udwf {
 /// #     ) -> datafusion_common::Result<Box<dyn PartitionEvaluator>> {
 /// #         unimplemented!()
 /// #     }
-/// #     fn field(&self, field_args: WindowUDFFieldArgs) -> datafusion_common::Result<Field> {
+/// #     fn field(&self, field_args: WindowUDFFieldArgs) -> datafusion_common::Result<FieldRef> {
 /// #         Ok(Field::new(
 /// #             field_args.name(),
-/// #             field_args.get_input_type(0).unwrap(),
+/// #             field_args.get_input_field(0).unwrap().data_type().clone(),
 /// #             false,
-/// #         ))
+/// #         ).into())
 /// #     }
 /// # }
 /// ```
@@ -332,15 +335,15 @@ macro_rules! create_udwf_expr {
 /// # Arguments
 ///
 /// * `$UDWF`: The struct which defines the [`Signature`] of the
-///     user-defined window function.
+///   user-defined window function.
 /// * `$OUT_FN_NAME`: The basename to generate a unique function name like
-///     `$OUT_FN_NAME_udwf`.
+///   `$OUT_FN_NAME_udwf`.
 /// * (optional) `[$($PARAM:ident),+]`: An array of 1 or more parameters
-///     for the generated function. The type of parameters is [`Expr`].
-///     When omitted this creates a function with zero parameters.
+///   for the generated function. The type of parameters is [`Expr`].
+///   When omitted this creates a function with zero parameters.
 /// * `$DOC`: Doc comments for UDWF.
 /// * (optional) `$CTOR`: Pass a custom constructor. When omitted it
-///     automatically resolves to `$UDWF::default()`.
+///   automatically resolves to `$UDWF::default()`.
 ///
 /// [`Signature`]: datafusion_expr::Signature
 /// [`Expr`]: datafusion_expr::Expr
@@ -352,6 +355,7 @@ macro_rules! create_udwf_expr {
 ///
 /// ```
 /// # use std::any::Any;
+/// use arrow::datatypes::FieldRef;
 /// # use datafusion_common::arrow::datatypes::{DataType, Field};
 /// # use datafusion_expr::{PartitionEvaluator, Signature, Volatility, WindowUDFImpl};
 /// #
@@ -375,7 +379,7 @@ macro_rules! create_udwf_expr {
 /// #
 /// # assert_eq!(simple_udwf().name(), "simple_user_defined_window_function");
 /// #
-/// #  #[derive(Debug)]
+/// #  #[derive(Debug, PartialEq, Eq, Hash)]
 /// #  struct SimpleUDWF {
 /// #      signature: Signature,
 /// #  }
@@ -404,8 +408,8 @@ macro_rules! create_udwf_expr {
 /// #      ) -> datafusion_common::Result<Box<dyn PartitionEvaluator>> {
 /// #          unimplemented!()
 /// #      }
-/// #      fn field(&self, field_args: WindowUDFFieldArgs) -> datafusion_common::Result<Field> {
-/// #          Ok(Field::new(field_args.name(), DataType::Int64, false))
+/// #      fn field(&self, field_args: WindowUDFFieldArgs) -> datafusion_common::Result<FieldRef> {
+/// #          Ok(Field::new(field_args.name(), DataType::Int64, false).into())
 /// #      }
 /// #  }
 /// #
@@ -415,6 +419,7 @@ macro_rules! create_udwf_expr {
 ///
 /// ```
 /// # use std::any::Any;
+/// use arrow::datatypes::FieldRef;
 /// # use datafusion_common::arrow::datatypes::{DataType, Field};
 /// # use datafusion_expr::{PartitionEvaluator, Signature, Volatility, WindowUDFImpl};
 /// # use datafusion_functions_window::{create_udwf_expr, define_udwf_and_expr, get_or_init_udwf};
@@ -441,7 +446,7 @@ macro_rules! create_udwf_expr {
 /// #     "row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING"
 /// # );
 /// #
-/// # #[derive(Debug)]
+/// # #[derive(Debug, PartialEq, Eq, Hash)]
 /// # struct RowNumber {
 /// #     signature: Signature,
 /// # }
@@ -468,8 +473,8 @@ macro_rules! create_udwf_expr {
 /// #     ) -> datafusion_common::Result<Box<dyn PartitionEvaluator>> {
 /// #         unimplemented!()
 /// #     }
-/// #     fn field(&self, field_args: WindowUDFFieldArgs) -> datafusion_common::Result<Field> {
-/// #         Ok(Field::new(field_args.name(), DataType::UInt64, false))
+/// #     fn field(&self, field_args: WindowUDFFieldArgs) -> datafusion_common::Result<FieldRef> {
+/// #         Ok(Field::new(field_args.name(), DataType::UInt64, false).into())
 /// #     }
 /// # }
 /// ```
@@ -479,6 +484,7 @@ macro_rules! create_udwf_expr {
 ///
 /// ```
 /// # use std::any::Any;
+/// use arrow::datatypes::FieldRef;
 /// #
 /// # use datafusion_expr::{
 /// #     PartitionEvaluator, Signature, TypeSignature, Volatility, WindowUDFImpl,
@@ -518,7 +524,7 @@ macro_rules! create_udwf_expr {
 /// #     "lead(a,Int64(1),NULL) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING"
 /// # );
 /// #
-/// # #[derive(Debug)]
+/// # #[derive(Debug, PartialEq, Eq, Hash)]
 /// # struct Lead {
 /// #     signature: Signature,
 /// # }
@@ -554,12 +560,12 @@ macro_rules! create_udwf_expr {
 /// #     ) -> datafusion_common::Result<Box<dyn PartitionEvaluator>> {
 /// #         unimplemented!()
 /// #     }
-/// #     fn field(&self, field_args: WindowUDFFieldArgs) -> datafusion_common::Result<Field> {
+/// #     fn field(&self, field_args: WindowUDFFieldArgs) -> datafusion_common::Result<FieldRef> {
 /// #         Ok(Field::new(
 /// #             field_args.name(),
-/// #             field_args.get_input_type(0).unwrap(),
+/// #             field_args.get_input_field(0).unwrap().data_type().clone(),
 /// #             false,
-/// #         ))
+/// #         ).into())
 /// #     }
 /// # }
 /// ```
@@ -567,6 +573,7 @@ macro_rules! create_udwf_expr {
 ///
 /// ```
 /// # use std::any::Any;
+/// use arrow::datatypes::FieldRef;
 /// #
 /// # use datafusion_expr::{
 /// #     PartitionEvaluator, Signature, TypeSignature, Volatility, WindowUDFImpl,
@@ -607,7 +614,7 @@ macro_rules! create_udwf_expr {
 /// #     "lead(a,Int64(1),NULL) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING"
 /// # );
 /// #
-/// # #[derive(Debug)]
+/// # #[derive(Debug, PartialEq, Eq, Hash)]
 /// # struct Lead {
 /// #     signature: Signature,
 /// # }
@@ -643,12 +650,12 @@ macro_rules! create_udwf_expr {
 /// #     ) -> datafusion_common::Result<Box<dyn PartitionEvaluator>> {
 /// #         unimplemented!()
 /// #     }
-/// #     fn field(&self, field_args: WindowUDFFieldArgs) -> datafusion_common::Result<Field> {
+/// #     fn field(&self, field_args: WindowUDFFieldArgs) -> datafusion_common::Result<FieldRef> {
 /// #         Ok(Field::new(
 /// #             field_args.name(),
-/// #             field_args.get_input_type(0).unwrap(),
+/// #             field_args.get_input_field(0).unwrap().data_type().clone(),
 /// #             false,
-/// #         ))
+/// #         ).into())
 /// #     }
 /// # }
 /// ```

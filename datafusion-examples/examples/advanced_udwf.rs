@@ -23,6 +23,7 @@ use arrow::{
     array::{ArrayRef, AsArray, Float64Array},
     datatypes::Float64Type,
 };
+use arrow_schema::FieldRef;
 use datafusion::common::ScalarValue;
 use datafusion::error::Result;
 use datafusion::functions_aggregate::average::avg_udaf;
@@ -42,7 +43,7 @@ use datafusion::prelude::*;
 /// a function `partition_evaluator` that returns the `MyPartitionEvaluator` instance.
 ///
 /// To do so, we must implement the `WindowUDFImpl` trait.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct SmoothItUdf {
     signature: Signature,
 }
@@ -87,8 +88,8 @@ impl WindowUDFImpl for SmoothItUdf {
         Ok(Box::new(MyPartitionEvaluator::new()))
     }
 
-    fn field(&self, field_args: WindowUDFFieldArgs) -> Result<Field> {
-        Ok(Field::new(field_args.name(), DataType::Float64, true))
+    fn field(&self, field_args: WindowUDFFieldArgs) -> Result<FieldRef> {
+        Ok(Field::new(field_args.name(), DataType::Float64, true).into())
     }
 }
 
@@ -148,7 +149,7 @@ impl PartitionEvaluator for MyPartitionEvaluator {
 }
 
 /// This UDWF will show how to use the WindowUDFImpl::simplify() API
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct SimplifySmoothItUdf {
     signature: Signature,
 }
@@ -190,7 +191,7 @@ impl WindowUDFImpl for SimplifySmoothItUdf {
     /// default implementation will not be called (left as `todo!()`)
     fn simplify(&self) -> Option<WindowFunctionSimplification> {
         let simplify = |window_function: WindowFunction, _: &dyn SimplifyInfo| {
-            Ok(Expr::WindowFunction(WindowFunction {
+            Ok(Expr::from(WindowFunction {
                 fun: WindowFunctionDefinition::AggregateUDF(avg_udaf()),
                 params: WindowFunctionParams {
                     args: window_function.params.args,
@@ -198,6 +199,7 @@ impl WindowUDFImpl for SimplifySmoothItUdf {
                     order_by: window_function.params.order_by,
                     window_frame: window_function.params.window_frame,
                     null_treatment: window_function.params.null_treatment,
+                    distinct: window_function.params.distinct,
                 },
             }))
         };
@@ -205,8 +207,8 @@ impl WindowUDFImpl for SimplifySmoothItUdf {
         Some(Box::new(simplify))
     }
 
-    fn field(&self, field_args: WindowUDFFieldArgs) -> Result<Field> {
-        Ok(Field::new(field_args.name(), DataType::Float64, true))
+    fn field(&self, field_args: WindowUDFFieldArgs) -> Result<FieldRef> {
+        Ok(Field::new(field_args.name(), DataType::Float64, true).into())
     }
 }
 

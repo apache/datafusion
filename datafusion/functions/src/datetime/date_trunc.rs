@@ -28,7 +28,7 @@ use arrow::array::types::{
     ArrowTimestampType, TimestampMicrosecondType, TimestampMillisecondType,
     TimestampNanosecondType, TimestampSecondType,
 };
-use arrow::array::{Array, PrimitiveArray};
+use arrow::array::{Array, ArrayRef, Int64Array, PrimitiveArray};
 use arrow::datatypes::DataType::{self, Null, Timestamp, Utf8, Utf8View};
 use arrow::datatypes::TimeUnit::{self, Microsecond, Millisecond, Nanosecond, Second};
 use datafusion_common::cast::as_primitive_array;
@@ -60,6 +60,8 @@ use chrono::{
     - hour / HOUR
     - minute / MINUTE
     - second / SECOND
+    - millisecond / MILLISECOND
+    - microsecond / MICROSECOND
 "#
     ),
     argument(
@@ -67,7 +69,7 @@ use chrono::{
         description = "Time expression to operate on. Can be a constant, column, or function."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct DateTruncFunc {
     signature: Signature,
     aliases: Vec<String>,
@@ -185,6 +187,26 @@ impl ScalarUDFImpl for DateTruncFunc {
         ) -> Result<ColumnarValue> {
             let parsed_tz = parse_tz(tz_opt)?;
             let array = as_primitive_array::<T>(array)?;
+
+            // fast path for fine granularities
+            if matches!(
+                granularity.as_str(),
+                // For morden timezones, it's correct to truncate "minute" in this way.
+                // Both datafusion and arrow are ignoring historical timezone's non-minute granularity
+                // bias (e.g., Asia/Kathmandu before 1919 is UTC+05:41:16).
+                "second" | "minute" | "millisecond" | "microsecond"
+            ) ||
+            // In UTC, "hour" and "day" have uniform durations and can be truncated with simple arithmetic
+            (parsed_tz.is_none() && matches!(granularity.as_str(), "hour" | "day"))
+            {
+                let result = general_date_trunc_array_fine_granularity(
+                    T::UNIT,
+                    array,
+                    granularity.as_str(),
+                )?;
+                return Ok(ColumnarValue::Array(result));
+            }
+
             let array: PrimitiveArray<T> = array
                 .try_unary(|x| {
                     general_date_trunc(T::UNIT, x, parsed_tz, granularity.as_str())
@@ -423,6 +445,55 @@ fn date_trunc_coarse(granularity: &str, value: i64, tz: Option<Tz>) -> Result<i6
     Ok(value.unwrap())
 }
 
+/// Fast path for fine granularities (hour and smaller) that can be handled
+/// with simple arithmetic operations without calendar complexity.
+///
+/// This function is timezone-agnostic and should only be used when:
+/// - No timezone is specified in the input, OR
+/// - The granularity is less than hour as hour can be affected by DST transitions in some cases
+fn general_date_trunc_array_fine_granularity<T: ArrowTimestampType>(
+    tu: TimeUnit,
+    array: &PrimitiveArray<T>,
+    granularity: &str,
+) -> Result<ArrayRef> {
+    let unit = match (tu, granularity) {
+        (Second, "minute") => Some(Int64Array::new_scalar(60)),
+        (Second, "hour") => Some(Int64Array::new_scalar(3600)),
+        (Second, "day") => Some(Int64Array::new_scalar(86400)),
+
+        (Millisecond, "second") => Some(Int64Array::new_scalar(1_000)),
+        (Millisecond, "minute") => Some(Int64Array::new_scalar(60_000)),
+        (Millisecond, "hour") => Some(Int64Array::new_scalar(3_600_000)),
+        (Millisecond, "day") => Some(Int64Array::new_scalar(86_400_000)),
+
+        (Microsecond, "millisecond") => Some(Int64Array::new_scalar(1_000)),
+        (Microsecond, "second") => Some(Int64Array::new_scalar(1_000_000)),
+        (Microsecond, "minute") => Some(Int64Array::new_scalar(60_000_000)),
+        (Microsecond, "hour") => Some(Int64Array::new_scalar(3_600_000_000)),
+        (Microsecond, "day") => Some(Int64Array::new_scalar(86_400_000_000)),
+
+        (Nanosecond, "microsecond") => Some(Int64Array::new_scalar(1_000)),
+        (Nanosecond, "millisecond") => Some(Int64Array::new_scalar(1_000_000)),
+        (Nanosecond, "second") => Some(Int64Array::new_scalar(1_000_000_000)),
+        (Nanosecond, "minute") => Some(Int64Array::new_scalar(60_000_000_000)),
+        (Nanosecond, "hour") => Some(Int64Array::new_scalar(3_600_000_000_000)),
+        (Nanosecond, "day") => Some(Int64Array::new_scalar(86_400_000_000_000)),
+        _ => None,
+    };
+
+    if let Some(unit) = unit {
+        let original_type = array.data_type();
+        let array = arrow::compute::cast(array, &DataType::Int64)?;
+        let array = arrow::compute::kernels::numeric::div(&array, &unit)?;
+        let array = arrow::compute::kernels::numeric::mul(&array, &unit)?;
+        let array = arrow::compute::cast(&array, original_type)?;
+        Ok(array)
+    } else {
+        // truncate to the same or smaller unit
+        Ok(Arc::new(array.clone()))
+    }
+}
+
 // truncates a single value with the given timeunit to the specified granularity
 fn general_date_trunc(
     tu: TimeUnit,
@@ -471,7 +542,7 @@ fn parse_tz(tz: &Option<Arc<str>>) -> Result<Option<Tz>> {
     tz.as_ref()
         .map(|tz| {
             Tz::from_str(tz).map_err(|op| {
-                DataFusionError::Execution(format!("failed on timezone {tz}: {:?}", op))
+                DataFusionError::Execution(format!("failed on timezone {tz}: {op:?}"))
             })
         })
         .transpose()
@@ -487,7 +558,8 @@ mod tests {
     use arrow::array::types::TimestampNanosecondType;
     use arrow::array::{Array, TimestampNanosecondArray};
     use arrow::compute::kernels::cast_utils::string_to_timestamp_nanos;
-    use arrow::datatypes::{DataType, TimeUnit};
+    use arrow::datatypes::{DataType, Field, TimeUnit};
+    use datafusion_common::config::ConfigOptions;
     use datafusion_common::ScalarValue;
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
 
@@ -726,13 +798,24 @@ mod tests {
                 .collect::<TimestampNanosecondArray>()
                 .with_timezone_opt(tz_opt.clone());
             let batch_len = input.len();
+            let arg_fields = vec![
+                Field::new("a", DataType::Utf8, false).into(),
+                Field::new("b", input.data_type().clone(), false).into(),
+            ];
             let args = datafusion_expr::ScalarFunctionArgs {
                 args: vec![
                     ColumnarValue::Scalar(ScalarValue::from("day")),
                     ColumnarValue::Array(Arc::new(input)),
                 ],
+                arg_fields,
                 number_rows: batch_len,
-                return_type: &DataType::Timestamp(TimeUnit::Nanosecond, tz_opt.clone()),
+                return_field: Field::new(
+                    "f",
+                    DataType::Timestamp(TimeUnit::Nanosecond, tz_opt.clone()),
+                    true,
+                )
+                .into(),
+                config_options: Arc::new(ConfigOptions::default()),
             };
             let result = DateTruncFunc::new().invoke_with_args(args).unwrap();
             if let ColumnarValue::Array(result) = result {
@@ -874,6 +957,21 @@ mod tests {
                     "2018-11-04T02:00:00-02",
                 ],
             ),
+            (
+                vec![
+                    "2024-10-26T23:30:00Z",
+                    "2024-10-27T00:30:00Z",
+                    "2024-10-27T01:30:00Z",
+                    "2024-10-27T02:30:00Z",
+                ],
+                Some("Asia/Kathmandu".into()), // UTC+5:45
+                vec![
+                    "2024-10-27T05:00:00+05:45",
+                    "2024-10-27T06:00:00+05:45",
+                    "2024-10-27T07:00:00+05:45",
+                    "2024-10-27T08:00:00+05:45",
+                ],
+            ),
         ];
 
         cases.iter().for_each(|(original, tz_opt, expected)| {
@@ -888,13 +986,24 @@ mod tests {
                 .collect::<TimestampNanosecondArray>()
                 .with_timezone_opt(tz_opt.clone());
             let batch_len = input.len();
+            let arg_fields = vec![
+                Field::new("a", DataType::Utf8, false).into(),
+                Field::new("b", input.data_type().clone(), false).into(),
+            ];
             let args = datafusion_expr::ScalarFunctionArgs {
                 args: vec![
                     ColumnarValue::Scalar(ScalarValue::from("hour")),
                     ColumnarValue::Array(Arc::new(input)),
                 ],
+                arg_fields,
                 number_rows: batch_len,
-                return_type: &DataType::Timestamp(TimeUnit::Nanosecond, tz_opt.clone()),
+                return_field: Field::new(
+                    "f",
+                    DataType::Timestamp(TimeUnit::Nanosecond, tz_opt.clone()),
+                    true,
+                )
+                .into(),
+                config_options: Arc::new(ConfigOptions::default()),
             };
             let result = DateTruncFunc::new().invoke_with_args(args).unwrap();
             if let ColumnarValue::Array(result) = result {

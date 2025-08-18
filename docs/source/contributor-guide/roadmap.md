@@ -17,7 +17,7 @@ specific language governing permissions and limitations
 under the License.
 -->
 
-# Roadmap
+# Roadmap and Improvement Proposals
 
 The [project introduction](../user-guide/introduction) explains the
 overview and goals of DataFusion, and our development efforts largely
@@ -44,83 +44,83 @@ make review efficient and avoid surprises.
 
 [The current list of `EPIC`s can be found here](https://github.com/apache/datafusion/issues?q=is%3Aissue+is%3Aopen+epic).
 
-# Quarterly Roadmap
+## Quarterly Roadmap
 
-A quarterly roadmap will be published to give the DataFusion community
-visibility into the priorities of the projects contributors. This roadmap is not
-binding and we would welcome any/all contributions to help keep this list up to
-date.
+The DataFusion roadmap is driven by the priorities of contributors rather than
+any single organization or coordinating committee. We typically discuss our
+roadmap using GitHub issues, approximately quarterly, and invite you to join the
+discussion.
 
-## 2023 Q4
+For more information:
 
-- Improve data output (`COPY`, `INSERT` and DataFrame) output capability [#6569](https://github.com/apache/datafusion/issues/6569)
-- Implementation of `ARRAY` types and related functions [#6980](https://github.com/apache/datafusion/issues/6980)
-- Write an industrial paper about DataFusion for SIGMOD [#6782](https://github.com/apache/datafusion/issues/6782)
+1. [Search for issues labeled `roadmap`](https://github.com/apache/datafusion/issues?q=is%3Aissue%20%20%20roadmap)
+2. [DataFusion Road Map: Q3-Q4 2025](https://github.com/apache/datafusion/issues/15878)
+3. [2024 Q4 / 2025 Q1 Roadmap](https://github.com/apache/datafusion/issues/13274)
 
-## 2022 Q2
+## Improvement Proposals
 
-### DataFusion Core
+### Discussing New Features
 
-- IO Improvements
-  - Reading, registering, and writing more file formats from both DataFrame API and SQL
-  - Additional options for IO including partitioning and metadata support
-- Work Scheduling
-  - Improve predictability, observability and performance of IO and CPU-bound work
-  - Develop a more explicit story for managing parallelism during plan execution
-- Memory Management
-  - Add more operators for memory limited execution
-- Performance
-  - Incorporate row-format into operators such as aggregate
-  - Add row-format benchmarks
-  - Explore JIT-compiling complex expressions
-  - Explore LLVM for JIT, with inline Rust functions as the primary goal
-  - Improve performance of Sort and Merge using Row Format / JIT expressions
-- Documentation
-  - General improvements to DataFusion website
-  - Publish design documents
-- Streaming
-  - Create `StreamProvider` trait
+If you plan to work on a new feature that doesn't have an existing ticket, it is
+a good idea to open a ticket to discuss the feature. Advanced discussion often
+helps avoid wasted effort by determining early if the feature is a good fit for
+DataFusion before too much time is invested. Discussion on a ticket can help
+gather feedback from the community and is likely easier to discuss than a 1000
+line PR.
 
-### Ballista
+If you open a ticket and it doesn't get any response, you can try `@`-mentioning
+recently active community members in the ticket to get their attention.
 
-- Make production ready
-  - Shuffle file cleanup
-  - Fill functional gaps between DataFusion and Ballista
-  - Improve task scheduling and data exchange efficiency
-  - Better error handling
-    - Task failure
-    - Executor lost
-    - Schedule restart
-  - Improve monitoring and logging
-  - Auto scaling support
-- Support for multi-scheduler deployments. Initially for resiliency and fault tolerance but ultimately to support sharding for scalability and more efficient caching.
-- Executor deployment grouping based on resource allocation
+### What Contributions are Good Fits?
 
-### Extensions ([datafusion-contrib](https://github.com/datafusion-contrib))
+DataFusion is designed to be highly extensible, and many features can be
+implemented as extensions without changes or additions to the core. Support for
+new functions, data formats, and similar functionality can be added using those
+extension APIs, and there are already many existing community supported
+extensions listed in the [extensions list].
 
-### [DataFusion-Python](https://github.com/datafusion-contrib/datafusion-python)
+Query engines are complex pieces of software to develop and maintain. Given our
+limited maintenance bandwidth, we try to keep the DataFusion core as simple and
+focused as possible, while still satisfying the [design goal] of an easy to
+start initial experience.
 
-- Add missing functionality to DataFrame and SessionContext
-- Improve documentation
+With that in mind, contributions that meet the following criteria are more likely
+to be accepted:
 
-### [DataFusion-S3](https://github.com/datafusion-contrib/datafusion-objectstore-s3)
+1. Bug fixes for existing features
+2. Test coverage for existing features
+3. Documentation improvements / examples
+4. Performance improvements to existing features (with benchmarks)
+5. "Small" functional improvements to existing features (if they don't change existing behavior)
+6. Additional APIs for extending DataFusion's capabilities
+7. CI improvements
 
-- Create Python bindings to use with datafusion-python
+Contributions that will likely involve more discussion (see Discussing New
+Features above) prior to acceptance include:
 
-### [DataFusion-Tui](https://github.com/datafusion-contrib/datafusion-tui)
+1. Major new functionality (even if it is part of the "standard SQL")
+2. New functions, especially if they aren't part of "standard SQL"
+3. New data sources (e.g. support for Apache ORC)
 
-- Create multiple SQL editors
-- Expose more Context and query metadata
-- Support new data sources
-  - BigTable, HDFS, HTTP APIs
+[extensions list]: ../library-user-guide/extensions.md
+[design goal]: https://docs.rs/datafusion/latest/datafusion/index.html#design-goals
 
-### [DataFusion-BigTable](https://github.com/datafusion-contrib/datafusion-bigtable)
+### Design Build vs. Big Up Front Design
 
-- Python binding to use with datafusion-python
-- Timestamp range predicate pushdown
-- Multi-threaded partition aware execution
-- Production ready Rust SDK
+Typically, the DataFusion community attacks large problems by solving them bit
+by bit and refining a solution iteratively on the `main` branch as a series of
+Pull Requests. This is different from projects which front-load the effort
+with a more comprehensive design process.
 
-### [DataFusion-Streams](https://github.com/datafusion-contrib/datafusion-streams)
+By "advancing the front" the community always makes tangible progress, and the strategy is
+especially effective in a project that relies on individual contributors who may
+not have the time or resources to invest in a large upfront design effort.
+However, this "bit by bit approach" doesn't always succeed, and sometimes we get
+stuck or go down the wrong path and then change directions.
 
-- Create experimental implementation of `StreamProvider` trait
+Our process necessarily results in imperfect solutions being the "state of the
+code" in some cases, and larger visions are not yet fully realized. However, the
+community is good at driving things to completion in the long run. If you see
+something that needs improvement or an area that is not yet fully realized,
+please consider submitting an issue or PR to improve it. We are always looking
+for more contributions.

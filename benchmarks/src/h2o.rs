@@ -15,9 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::util::{BenchmarkRun, CommonOpt};
+//! H2O benchmark implementation for groupby, join and window operations
+//! Reference:
+//! - [H2O AI Benchmark](https://duckdb.org/2023/04/14/h2oai.html)
+//! - [Extended window function benchmark](https://duckdb.org/2024/06/26/benchmarks-over-time.html#window-functions-benchmark)
+
+use crate::util::{print_memory_stats, BenchmarkRun, CommonOpt};
+use datafusion::logical_expr::{ExplainFormat, ExplainOption};
 use datafusion::{error::Result, prelude::SessionContext};
-use datafusion_common::{exec_datafusion_err, instant::Instant, DataFusionError};
+use datafusion_common::{
+    exec_datafusion_err, instant::Instant, internal_err, DataFusionError, TableReference,
+};
 use std::path::{Path, PathBuf};
 use structopt::StructOpt;
 
@@ -26,7 +34,7 @@ use structopt::StructOpt;
 #[structopt(verbatim_doc_comment)]
 pub struct RunOpt {
     #[structopt(short, long)]
-    query: Option<usize>,
+    pub query: Option<usize>,
 
     /// Common options
     #[structopt(flatten)]
@@ -40,7 +48,7 @@ pub struct RunOpt {
         long = "queries-path",
         default_value = "benchmarks/queries/h2o/groupby.sql"
     )]
-    queries_path: PathBuf,
+    pub queries_path: PathBuf,
 
     /// Path to data file (parquet or csv)
     /// Default value is the G1_1e7_1e7_100_0.csv file in the h2o benchmark
@@ -77,19 +85,28 @@ impl RunOpt {
             None => queries.min_query_id()..=queries.max_query_id(),
         };
 
-        let config = self.common.config();
+        let config = self.common.config()?;
         let rt_builder = self.common.runtime_env_builder()?;
         let ctx = SessionContext::new_with_config_rt(config, rt_builder.build_arc()?);
 
-        if self.queries_path.to_str().unwrap().contains("join") {
+        // Register tables depending on which h2o benchmark is being run
+        // (groupby/join/window)
+        if self.queries_path.to_str().unwrap().ends_with("groupby.sql") {
+            self.register_data("x", self.path.as_os_str().to_str().unwrap(), &ctx)
+                .await?;
+        } else if self.queries_path.to_str().unwrap().ends_with("join.sql") {
             let join_paths: Vec<&str> = self.join_paths.split(',').collect();
             let table_name: Vec<&str> = vec!["x", "small", "medium", "large"];
             for (i, path) in join_paths.iter().enumerate() {
-                ctx.register_csv(table_name[i], path, Default::default())
-                    .await?;
+                self.register_data(table_name[i], path, &ctx).await?;
             }
-        } else if self.queries_path.to_str().unwrap().contains("groupby") {
-            self.register_data(&ctx).await?;
+        } else if self.queries_path.to_str().unwrap().ends_with("window.sql") {
+            // Only register the 'large' table in h2o-join dataset
+            let h2o_join_large_path = self.join_paths.split(',').nth(3).unwrap();
+            self.register_data("large", h2o_join_large_path, &ctx)
+                .await?;
+        } else {
+            return internal_err!("Invalid query file path");
         }
 
         let iterations = self.common.iterations;
@@ -115,8 +132,17 @@ impl RunOpt {
             let avg = millis.iter().sum::<f64>() / millis.len() as f64;
             println!("Query {query_id} avg time: {avg:.2} ms");
 
+            // Print memory usage stats using mimalloc (only when compiled with --features mimalloc_extended)
+            print_memory_stats();
+
             if self.common.debug {
-                ctx.sql(sql).await?.explain(false, false)?.show().await?;
+                ctx.sql(sql)
+                    .await?
+                    .explain_with_options(
+                        ExplainOption::default().with_format(ExplainFormat::Tree),
+                    )?
+                    .show()
+                    .await?;
             }
             benchmark_run.maybe_write_json(self.output_path.as_ref())?;
         }
@@ -124,59 +150,72 @@ impl RunOpt {
         Ok(())
     }
 
-    async fn register_data(&self, ctx: &SessionContext) -> Result<()> {
+    async fn register_data(
+        &self,
+        table_ref: impl Into<TableReference>,
+        table_path: impl AsRef<str>,
+        ctx: &SessionContext,
+    ) -> Result<()> {
         let csv_options = Default::default();
         let parquet_options = Default::default();
-        let path = self.path.as_os_str().to_str().unwrap();
 
-        if self.path.extension().map(|s| s == "csv").unwrap_or(false) {
-            ctx.register_csv("x", path, csv_options)
-                .await
-                .map_err(|e| {
-                    DataFusionError::Context(
-                        format!("Registering 'table' as {path}"),
-                        Box::new(e),
-                    )
-                })
-                .expect("error registering csv");
-        }
+        let table_path_str = table_path.as_ref();
 
-        if self
-            .path
+        let extension = Path::new(table_path_str)
             .extension()
-            .map(|s| s == "parquet")
-            .unwrap_or(false)
-        {
-            ctx.register_parquet("x", path, parquet_options)
-                .await
-                .map_err(|e| {
-                    DataFusionError::Context(
-                        format!("Registering 'table' as {path}"),
-                        Box::new(e),
-                    )
-                })
-                .expect("error registering parquet");
+            .and_then(|s| s.to_str())
+            .unwrap_or("");
+
+        match extension {
+            "csv" => {
+                ctx.register_csv(table_ref, table_path_str, csv_options)
+                    .await
+                    .map_err(|e| {
+                        DataFusionError::Context(
+                            format!("Registering 'table' as {table_path_str}"),
+                            Box::new(e),
+                        )
+                    })
+                    .expect("error registering csv");
+            }
+            "parquet" => {
+                ctx.register_parquet(table_ref, table_path_str, parquet_options)
+                    .await
+                    .map_err(|e| {
+                        DataFusionError::Context(
+                            format!("Registering 'table' as {table_path_str}"),
+                            Box::new(e),
+                        )
+                    })
+                    .expect("error registering parquet");
+            }
+            _ => {
+                return Err(DataFusionError::Plan(format!(
+                    "Unsupported file extension: {extension}",
+                )));
+            }
         }
+
         Ok(())
     }
 }
 
-struct AllQueries {
+pub struct AllQueries {
     queries: Vec<String>,
 }
 
 impl AllQueries {
-    fn try_new(path: &Path) -> Result<Self> {
+    pub fn try_new(path: &Path) -> Result<Self> {
         let all_queries = std::fs::read_to_string(path)
             .map_err(|e| exec_datafusion_err!("Could not open {path:?}: {e}"))?;
 
         Ok(Self {
-            queries: all_queries.lines().map(|s| s.to_string()).collect(),
+            queries: all_queries.split("\n\n").map(|s| s.to_string()).collect(),
         })
     }
 
     /// Returns the text of query `query_id`
-    fn get_query(&self, query_id: usize) -> Result<&str> {
+    pub fn get_query(&self, query_id: usize) -> Result<&str> {
         self.queries
             .get(query_id - 1)
             .ok_or_else(|| {
@@ -189,11 +228,11 @@ impl AllQueries {
             .map(|s| s.as_str())
     }
 
-    fn min_query_id(&self) -> usize {
+    pub fn min_query_id(&self) -> usize {
         1
     }
 
-    fn max_query_id(&self) -> usize {
+    pub fn max_query_id(&self) -> usize {
         self.queries.len()
     }
 }

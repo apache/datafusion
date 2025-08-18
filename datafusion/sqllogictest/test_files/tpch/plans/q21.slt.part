@@ -76,11 +76,11 @@ logical_plan
 16)----------------------------Filter: lineitem.l_receiptdate > lineitem.l_commitdate
 17)------------------------------TableScan: lineitem projection=[l_orderkey, l_suppkey, l_commitdate, l_receiptdate], partial_filters=[lineitem.l_receiptdate > lineitem.l_commitdate]
 18)--------------------Projection: orders.o_orderkey
-19)----------------------Filter: orders.o_orderstatus = Utf8("F")
-20)------------------------TableScan: orders projection=[o_orderkey, o_orderstatus], partial_filters=[orders.o_orderstatus = Utf8("F")]
+19)----------------------Filter: orders.o_orderstatus = Utf8View("F")
+20)------------------------TableScan: orders projection=[o_orderkey, o_orderstatus], partial_filters=[orders.o_orderstatus = Utf8View("F")]
 21)----------------Projection: nation.n_nationkey
-22)------------------Filter: nation.n_name = Utf8("SAUDI ARABIA")
-23)--------------------TableScan: nation projection=[n_nationkey, n_name], partial_filters=[nation.n_name = Utf8("SAUDI ARABIA")]
+22)------------------Filter: nation.n_name = Utf8View("SAUDI ARABIA")
+23)--------------------TableScan: nation projection=[n_nationkey, n_name], partial_filters=[nation.n_name = Utf8View("SAUDI ARABIA")]
 24)------------SubqueryAlias: __correlated_sq_1
 25)--------------SubqueryAlias: l2
 26)----------------TableScan: lineitem projection=[l_orderkey, l_suppkey]

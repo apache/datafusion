@@ -16,10 +16,10 @@
 // under the License.
 
 //! Shared benchmark utilities
-mod access_log;
+mod memory;
 mod options;
 mod run;
 
-pub use access_log::AccessLogOpt;
+pub use memory::print_memory_stats;
 pub use options::CommonOpt;
-pub use run::{BenchQuery, BenchmarkRun};
+pub use run::{BenchQuery, BenchmarkRun, QueryResult};
