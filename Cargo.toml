@@ -76,7 +76,7 @@ license = "Apache-2.0"
 readme = "README.md"
 repository = "https://github.com/apache/datafusion"
 # Define Minimum Supported Rust Version (MSRV)
-rust-version = "1.85.1"
+rust-version = "1.86.1"
 # Define DataFusion version
 version = "49.0.1"
 
