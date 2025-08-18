@@ -51,7 +51,10 @@ use arrow::array::{Array, RecordBatch, RecordBatchOptions, StringViewArray};
 use arrow::compute::{concat_batches, lexsort_to_indices, take_arrays};
 use arrow::datatypes::SchemaRef;
 use datafusion_common::config::SpillCompression;
-use datafusion_common::{internal_datafusion_err, internal_err, DataFusionError, Result};
+use datafusion_common::{
+    internal_datafusion_err, internal_err, unwrap_or_internal_err, DataFusionError,
+    Result,
+};
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_execution::TaskContext;
@@ -1192,6 +1195,7 @@ impl ExecutionPlan for SortExec {
             ))),
             (true, None) => Ok(input),
             (false, Some(fetch)) => {
+                let filter = self.filter.clone();
                 let mut topk = TopK::try_new(
                     partition,
                     input.schema(),
@@ -1201,10 +1205,7 @@ impl ExecutionPlan for SortExec {
                     context.session_config().batch_size(),
                     context.runtime_env(),
                     &self.metrics_set,
-                    self.filter
-                        .as_ref()
-                        .expect("Filter should be set when fetch is Some")
-                        .clone(),
+                    unwrap_or_internal_err!(filter),
                 )?;
                 Ok(Box::pin(RecordBatchStreamAdapter::new(
                     self.schema(),
