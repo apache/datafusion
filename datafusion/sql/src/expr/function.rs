@@ -94,7 +94,7 @@ struct FunctionArgs {
     /// WITHIN GROUP clause, if any
     within_group: Vec<OrderByExpr>,
     /// Was the function called without parenthesis, i.e. could this also be a column reference?
-    function_without_parenthesis: bool,
+    function_without_parentheses: bool,
 }
 
 impl FunctionArgs {
