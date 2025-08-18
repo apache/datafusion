@@ -35,7 +35,8 @@ pub(crate) fn varchar_to_str(value: &str) -> String {
     if value.is_empty() {
         "(empty)".to_string()
     } else {
-        value.trim_end_matches('\n').to_string()
+        // Escape nulls so that github renders them correctly in the webui
+        value.trim_end_matches('\n').replace("\u{0000}", "\\0")
     }
 }
 

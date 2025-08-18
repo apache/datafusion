@@ -37,7 +37,7 @@ use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Volatili
 use std::fmt::Write;
 
 /// <https://spark.apache.org/docs/latest/api/sql/index.html#hex>
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkHex {
     signature: Signature,
     aliases: Vec<String>,

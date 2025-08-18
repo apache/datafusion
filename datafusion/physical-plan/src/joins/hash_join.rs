@@ -716,7 +716,14 @@ impl DisplayAs for HashJoinExec {
                 if *self.join_type() != JoinType::Inner {
                     writeln!(f, "join_type={:?}", self.join_type)?;
                 }
-                writeln!(f, "on={on}")
+
+                writeln!(f, "on={on}")?;
+
+                if let Some(filter) = self.filter.as_ref() {
+                    writeln!(f, "filter={filter}")?;
+                }
+
+                Ok(())
             }
         }
     }

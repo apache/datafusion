@@ -74,7 +74,7 @@ fn starts_with(args: &[ArrayRef]) -> Result<ArrayRef> {
     standard_argument(name = "str", prefix = "String"),
     argument(name = "substr", description = "Substring to test for.")
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct StartsWithFunc {
     signature: Signature,
 }

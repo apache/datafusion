@@ -320,7 +320,7 @@ async fn run_aggregate_test(input1: Vec<RecordBatch>, group_by_columns: Vec<&str
     .unwrap();
 
     let running_source = DataSourceExec::from_data_source(
-        MemorySourceConfig::try_new(&[input1.clone()], schema.clone(), None)
+        MemorySourceConfig::try_new(std::slice::from_ref(&input1), schema.clone(), None)
             .unwrap()
             .try_with_sort_information(vec![sort_keys.into()])
             .unwrap(),

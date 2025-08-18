@@ -46,7 +46,7 @@ use std::any::Any;
         description = "Expression to use if previous expressions are _null_. Can be a constant, column, or function, and any combination of arithmetic operators. Pass as many expression arguments as necessary."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct CoalesceFunc {
     signature: Signature,
 }
