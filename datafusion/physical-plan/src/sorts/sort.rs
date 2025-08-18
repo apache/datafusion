@@ -263,8 +263,10 @@ struct ExternalSorter {
     /// prior to spilling.
     sort_spill_reservation_bytes: usize,
 
-    /// For precise memory calculation
-    ratio: Option<f64>,
+    /// Ratio of memory used by cursor batch to the original input RecordBatch.
+    /// Used in `get_reserved_byte_for_record_batch_size` to estimate required memory for merge phase.
+    /// Initialized when the first batch is inserted.
+    cursor_batch_ratio: Option<f64>,
 }
 
 impl ExternalSorter {
@@ -299,7 +301,7 @@ impl ExternalSorter {
         )
         .with_compression_type(spill_compression);
 
-        let ratio = None;
+        let cursor_batch_ratio = None;
 
         Ok(Self {
             schema,
@@ -315,22 +317,23 @@ impl ExternalSorter {
             batch_size,
             sort_spill_reservation_bytes,
             sort_in_place_threshold_bytes,
-            ratio,
+            cursor_batch_ratio,
         })
     }
 
+    /// Calculates the ratio of memory used by the sort cursor to the original `RecordBatch`.
+    /// Returns the ratio `(cursor_size / batch_size) + 1.0`, representing the expected memory multiplier
+    /// when allocating space for both the original batch and its associated cursor.
+    ///
+    /// Mirrors the cursor selection logic in `StreamingMerge::build`
+    /// Performs the same conversion for ratio estimation, but discards the result.
     fn calculate_ratio(&self, batch: &RecordBatch) -> Result<f64> {
         let batch_size = get_record_batch_memory_size(batch);
-        // println!("[calculate_ratio] {batch_size}");
         if self.expr.len() == 1 {
-            // Single sort column → use ArrayValues-like logic
             let value = self.expr.first().expr.evaluate(batch)?;
             let array = value.into_array(batch.num_rows())?;
             let size_in_mem = array.get_buffer_memory_size();
-            // println!(
-            //     "[calculate_ratio] 1col:{size_in_mem}, ratio:{}",
-            //     size_in_mem as f64 / batch_size as f64
-            // );
+
             Ok(size_in_mem as f64 / batch_size as f64 + 1.0)
         } else {
             let sort_fields = self
@@ -356,11 +359,7 @@ impl ExternalSorter {
             converter.append(&mut rows, &cols)?;
 
             let rows = Arc::new(rows);
-            // println!(
-            //     "[calculate_ratio] >=2 col:{}, ratio:{}",
-            //     rows.size(),
-            //     rows.size() as f64 / batch_size as f64
-            // );
+
             Ok(rows.size() as f64 / batch_size as f64 + 1.0)
         }
     }
@@ -370,9 +369,10 @@ impl ExternalSorter {
     /// Updates memory usage metrics, and possibly triggers spilling to disk
     async fn insert_batch(&mut self, input: RecordBatch) -> Result<()> {
         // Only for first time
-        if self.ratio.is_none() {
+        if self.cursor_batch_ratio.is_none() {
             let ratio = self.calculate_ratio(&input)?;
-            self.ratio = Some(ratio);
+            println!("ratio:{ratio}");
+            self.cursor_batch_ratio = Some(ratio);
         }
 
         if input.num_rows() == 0 {
@@ -416,6 +416,7 @@ impl ExternalSorter {
 
             StreamingMergeBuilder::new()
                 .with_sorted_spill_files(std::mem::take(&mut self.finished_spill_files))
+                .with_cursor_batch_ratio(self.cursor_batch_ratio)
                 .with_spill_manager(self.spill_manager.clone())
                 .with_schema(Arc::clone(&self.schema))
                 .with_expressions(&self.expr.clone())
@@ -605,7 +606,8 @@ impl ExternalSorter {
 
         while let Some(batch) = sorted_stream.next().await {
             let batch = batch?;
-            let sorted_size = get_reserved_byte_for_record_batch(&batch, self.ratio);
+            let sorted_size =
+                get_reserved_byte_for_record_batch(&batch, self.cursor_batch_ratio);
             if self.reservation.try_grow(sorted_size).is_err() {
                 // Although the reservation is not enough, the batch is
                 // already in memory, so it's okay to combine it with previously
@@ -732,7 +734,10 @@ impl ExternalSorter {
             let batch = concat_batches(&self.schema, &self.in_mem_batches)?;
             self.in_mem_batches.clear();
             self.reservation
-                .try_resize(get_reserved_byte_for_record_batch(&batch, self.ratio))
+                .try_resize(get_reserved_byte_for_record_batch(
+                    &batch,
+                    self.cursor_batch_ratio,
+                ))
                 .map_err(Self::err_with_oom_context)?;
             let reservation = self.reservation.take();
             return self.sort_batch_stream(batch, metrics, reservation, true);
@@ -783,7 +788,7 @@ impl ExternalSorter {
         mut split: bool,
     ) -> Result<SendableRecordBatchStream> {
         assert_eq!(
-            get_reserved_byte_for_record_batch(&batch, self.ratio),
+            get_reserved_byte_for_record_batch(&batch, self.cursor_batch_ratio),
             reservation.size()
         );
 
@@ -840,7 +845,7 @@ impl ExternalSorter {
         &mut self,
         input: &RecordBatch,
     ) -> Result<()> {
-        let size = get_reserved_byte_for_record_batch(input, self.ratio);
+        let size = get_reserved_byte_for_record_batch(input, self.cursor_batch_ratio);
         match self.reservation.try_grow(size) {
             Ok(_) => Ok(()),
             Err(e) => {

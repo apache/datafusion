@@ -137,6 +137,7 @@ pub(crate) struct MultiLevelMergeBuilder {
     reservation: MemoryReservation,
     fetch: Option<usize>,
     enable_round_robin_tie_breaker: bool,
+    cursor_batch_ratio: Option<f64>,
 }
 
 impl Debug for MultiLevelMergeBuilder {
@@ -158,6 +159,7 @@ impl MultiLevelMergeBuilder {
         reservation: MemoryReservation,
         fetch: Option<usize>,
         enable_round_robin_tie_breaker: bool,
+        cursor_batch_ratio: Option<f64>,
     ) -> Self {
         Self {
             spill_manager,
@@ -170,6 +172,7 @@ impl MultiLevelMergeBuilder {
             reservation,
             enable_round_robin_tie_breaker,
             fetch,
+            cursor_batch_ratio,
         }
     }
 
@@ -356,7 +359,7 @@ impl MultiLevelMergeBuilder {
             // and there should be some upper limit to memory reservation so we won't starve the system
             match reservation.try_grow(get_reserved_byte_for_record_batch_size(
                 spill.max_record_batch_memory * buffer_len,
-                None, // Tmp ratio
+                self.cursor_batch_ratio,
             )) {
                 Ok(_) => {
                     number_of_spills_to_read_for_current_phase += 1;

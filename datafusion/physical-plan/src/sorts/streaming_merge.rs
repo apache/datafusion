@@ -88,6 +88,10 @@ pub struct StreamingMergeBuilder<'a> {
     fetch: Option<usize>,
     reservation: Option<MemoryReservation>,
     enable_round_robin_tie_breaker: bool,
+    /// Ratio of memory used by cursor batch to the original input RecordBatch.
+    /// Used in `get_reserved_byte_for_record_batch_size` to estimate required memory for merge phase.
+    /// Only passed when constructing MultiLevelMergeBuilder
+    cursor_batch_ratio: Option<f64>,
 }
 
 impl<'a> StreamingMergeBuilder<'a> {
@@ -146,6 +150,11 @@ impl<'a> StreamingMergeBuilder<'a> {
         self
     }
 
+    pub fn with_cursor_batch_ratio(mut self, ratio: Option<f64>) -> Self {
+        self.cursor_batch_ratio = ratio;
+        self
+    }
+
     /// See [SortPreservingMergeExec::with_round_robin_repartition] for more
     /// information.
     ///
@@ -181,6 +190,7 @@ impl<'a> StreamingMergeBuilder<'a> {
             fetch,
             expressions,
             enable_round_robin_tie_breaker,
+            cursor_batch_ratio,
         } = self;
 
         // Early return if expressions are empty:
@@ -208,6 +218,7 @@ impl<'a> StreamingMergeBuilder<'a> {
                 reservation,
                 fetch,
                 enable_round_robin_tie_breaker,
+                cursor_batch_ratio,
             )
             .create_spillable_merge_stream());
         }
