@@ -1200,13 +1200,13 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                             ast::CreateFunctionBody::Return(expr) => expr,
                             ast::CreateFunctionBody::AsBeginEnd(_) => {
                                 return not_impl_err!(
-                                    "Qualified functions (AsBeginEnd) are not supported"
+                                    "BEGIN/END enclosed function body syntax is not supported"
                                 )?;
                             }
                             ast::CreateFunctionBody::AsReturnExpr(_)
                             | ast::CreateFunctionBody::AsReturnSelect(_) => {
                                 return not_impl_err!(
-                                    "AS RETURN function syntax are not supported"
+                                    "AS RETURN function syntax is not supported"
                                 )?
                             }
                         },
