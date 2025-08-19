@@ -1631,6 +1631,45 @@ async fn roundtrip_coalesce() -> Result<()> {
 }
 
 #[tokio::test]
+async fn roundtrip_generate_series() -> Result<()> {
+    let ctx = SessionContext::new();
+    ctx.register_table(
+        "t",
+        Arc::new(EmptyTable::new(Arc::new(Schema::new(Fields::from([
+            Arc::new(Field::new("f", DataType::Int64, false)),
+        ]))))),
+    )?;
+    let df = ctx.sql("select * from generate_series(1, 10000)").await?;
+    let plan = df.create_physical_plan().await?;
+
+    let node = PhysicalPlanNode::try_from_physical_plan(
+        plan.clone(),
+        &DefaultPhysicalExtensionCodec {},
+    )?;
+    let node = PhysicalPlanNode::decode(node.encode_to_vec().as_slice())
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    let restored = node.try_into_physical_plan(
+        &ctx,
+        ctx.runtime_env().as_ref(),
+        &DefaultPhysicalExtensionCodec {},
+    )?;
+
+    assert_eq!(
+        plan.schema(),
+        restored.schema(),
+        "Schema mismatch for plans:\n>> initial:\n{}>> final: \n{}",
+        displayable(plan.as_ref())
+            .set_show_schema(true)
+            .indent(true),
+        displayable(restored.as_ref())
+            .set_show_schema(true)
+            .indent(true),
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn roundtrip_projection_source() -> Result<()> {
     let schema = Arc::new(Schema::new(Fields::from([
         Arc::new(Field::new("a", DataType::Utf8, false)),

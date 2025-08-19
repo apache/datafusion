@@ -3051,9 +3051,7 @@ mod tests {
         let table_scan = LogicalPlan::TableScan(TableScan {
             table_name: "test".into(),
             filters,
-            projected_schema: Arc::new(DFSchema::try_from(
-                (*test_provider.schema()).clone(),
-            )?),
+            projected_schema: Arc::new(DFSchema::try_from(test_provider.schema())?),
             projection,
             source: Arc::new(test_provider),
             fetch: None,
@@ -3856,7 +3854,7 @@ mod tests {
         )
     }
 
-    #[derive(Debug)]
+    #[derive(Debug, PartialEq, Eq, Hash)]
     struct TestScalarUDF {
         signature: Signature,
     }

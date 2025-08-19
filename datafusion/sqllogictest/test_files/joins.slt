@@ -4148,9 +4148,9 @@ logical_plan
 03)----TableScan: left_table projection=[a, b, c]
 04)----TableScan: right_table projection=[x, y, z]
 physical_plan
-01)NestedLoopJoinExec: join_type=Inner, filter=a@0 < x@1
-02)--DataSourceExec: partitions=1, partition_sizes=[0]
-03)--SortExec: expr=[x@0 ASC NULLS LAST], preserve_partitioning=[false]
+01)SortExec: expr=[x@3 ASC NULLS LAST], preserve_partitioning=[false]
+02)--NestedLoopJoinExec: join_type=Inner, filter=a@0 < x@1
+03)----DataSourceExec: partitions=1, partition_sizes=[0]
 04)----DataSourceExec: partitions=1, partition_sizes=[0]
 
 query TT

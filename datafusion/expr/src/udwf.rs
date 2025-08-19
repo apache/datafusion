@@ -565,6 +565,7 @@ mod test {
     use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
     use std::any::Any;
     use std::cmp::Ordering;
+    use std::hash::{DefaultHasher, Hash, Hasher};
 
     #[derive(Debug, Clone, PartialEq, Eq, Hash)]
     struct AWindowUDF {
@@ -651,6 +652,7 @@ mod test {
         let eq = a1 == a2;
         assert!(eq);
         assert_eq!(a1, a2);
+        assert_eq!(hash(a1), hash(a2));
     }
 
     #[test]
@@ -662,5 +664,11 @@ mod test {
         let b1 = WindowUDF::from(BWindowUDF::new());
         assert!(a1 < b1);
         assert!(!(a1 == b1));
+    }
+
+    fn hash<T: Hash>(value: T) -> u64 {
+        let hasher = &mut DefaultHasher::new();
+        value.hash(hasher);
+        hasher.finish()
     }
 }

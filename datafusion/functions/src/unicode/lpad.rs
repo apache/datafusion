@@ -56,7 +56,7 @@ use datafusion_macros::user_doc;
     ),
     related_udf(name = "rpad")
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct LPadFunc {
     signature: Signature,
 }

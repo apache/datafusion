@@ -51,7 +51,7 @@ use datafusion_macros::user_doc;
         description = "Number of times to repeat the input string."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct RepeatFunc {
     signature: Signature,
 }

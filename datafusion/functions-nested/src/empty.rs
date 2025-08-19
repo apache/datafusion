@@ -58,7 +58,7 @@ make_udf_expr_and_func!(
         description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ArrayEmpty {
     signature: Signature,
     aliases: Vec<String>,
