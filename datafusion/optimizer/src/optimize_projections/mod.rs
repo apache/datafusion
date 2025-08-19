@@ -55,6 +55,24 @@ use datafusion_common::tree_node::{
 /// The rule analyzes the input logical plan, determines the necessary column
 /// indices, and then removes any unnecessary columns. It also removes any
 /// unnecessary projections from the plan tree.
+///
+/// ## Schema, Field Properties, and Metadata Handling
+///
+/// The `OptimizeProjections` rule preserves schema and field metadata in most optimization scenarios:
+///
+/// **Schema-level metadata preservation by plan type**:
+/// - **Window and Aggregate plans**: Schema metadata is preserved
+/// - **Projection plans**: Schema metadata is preserved per [`projection_schema`](datafusion_expr::logical_plan::projection_schema).
+/// - **Other logical plans**: Schema metadata is preserved unless [`LogicalPlan::recompute_schema`]
+///   is called on plan types that drop metadata
+///
+/// **Field-level properties and metadata**: Individual field properties are preserved when fields
+/// are retained in the optimized plan, determined by [`exprlist_to_fields`](datafusion_expr::utils::exprlist_to_fields)
+/// and [`ExprSchemable::to_field`](datafusion_expr::expr_schema::ExprSchemable::to_field).
+///
+/// **Field precedence**: When the same field appears multiple times, the optimizer
+/// maintains one occurrence and removes duplicates (refer to `RequiredIndices::compact()`),
+/// preserving the properties and metadata of that occurrence.
 #[derive(Default, Debug)]
 pub struct OptimizeProjections {}
 
