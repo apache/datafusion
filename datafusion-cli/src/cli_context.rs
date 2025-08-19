@@ -18,7 +18,7 @@
 use std::num::NonZeroUsize;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Arc, RwLock,
+    Arc,
 };
 
 use datafusion::{
@@ -164,9 +164,7 @@ impl CliSessionContext for SessionContext {
 pub struct ReplSessionContext {
     ctx: SessionContext,
     memory_profiling: AtomicBool,
-    base_memory_pool: Arc<dyn MemoryPool>,
-    tracked_memory_pool: RwLock<Option<Arc<dyn TrackedPool>>>,
-    top_memory_consumers: usize,
+    tracked_memory_pool: Option<Arc<dyn TrackedPool>>,
 }
 
 impl ReplSessionContext {
@@ -175,12 +173,33 @@ impl ReplSessionContext {
         base_memory_pool: Arc<dyn MemoryPool>,
         top_memory_consumers: usize,
     ) -> Self {
+        let tracked_memory_pool = if top_memory_consumers > 0 {
+            let tracked = Arc::new(TrackConsumersPool::new(
+                SharedMemoryPool(base_memory_pool.clone()),
+                NonZeroUsize::new(top_memory_consumers).unwrap(),
+            ));
+            let runtime = ctx.runtime_env();
+            let builder = RuntimeEnvBuilder::from_runtime_env(runtime.as_ref());
+            let runtime = Arc::new(
+                builder
+                    .with_memory_pool(tracked.clone() as Arc<dyn MemoryPool>)
+                    .build()
+                    .unwrap(),
+            );
+            let state_ref = ctx.state_ref();
+            let mut state = state_ref.write();
+            *state = SessionStateBuilder::from(state.clone())
+                .with_runtime_env(runtime)
+                .build();
+            Some(tracked as Arc<dyn TrackedPool>)
+        } else {
+            None
+        };
+
         Self {
             ctx,
             memory_profiling: AtomicBool::new(false),
-            base_memory_pool,
-            tracked_memory_pool: RwLock::new(None),
-            top_memory_consumers,
+            tracked_memory_pool,
         }
     }
 }
@@ -230,54 +249,13 @@ impl CliSessionContext for ReplSessionContext {
     }
 
     fn set_memory_profiling(&self, enable: bool) {
-        if enable {
-            if self.top_memory_consumers == 0 {
-                return;
-            }
-            if self.memory_profiling.swap(true, Ordering::Relaxed) {
-                return;
-            }
-            let tracked = Arc::new(TrackConsumersPool::new(
-                SharedMemoryPool(self.base_memory_pool.clone()),
-                NonZeroUsize::new(self.top_memory_consumers).unwrap(),
-            ));
-            let runtime = self.ctx.runtime_env();
-            let builder = RuntimeEnvBuilder::from_runtime_env(runtime.as_ref());
-            let runtime = Arc::new(
-                builder
-                    .with_memory_pool(tracked.clone() as Arc<dyn MemoryPool>)
-                    .build()
-                    .unwrap(),
-            );
-            let state_ref = self.ctx.state_ref();
-            let mut state = state_ref.write();
-            *state = SessionStateBuilder::from(state.clone())
-                .with_runtime_env(runtime)
-                .build();
-            *self.tracked_memory_pool.write().unwrap() =
-                Some(tracked as Arc<dyn TrackedPool>);
-        } else {
-            if !self.memory_profiling.swap(false, Ordering::Relaxed) {
-                return;
-            }
-            let runtime = self.ctx.runtime_env();
-            let builder = RuntimeEnvBuilder::from_runtime_env(runtime.as_ref());
-            let runtime = Arc::new(
-                builder
-                    .with_memory_pool(self.base_memory_pool.clone())
-                    .build()
-                    .unwrap(),
-            );
-            let state_ref = self.ctx.state_ref();
-            let mut state = state_ref.write();
-            *state = SessionStateBuilder::from(state.clone())
-                .with_runtime_env(runtime)
-                .build();
-            *self.tracked_memory_pool.write().unwrap() = None;
+        if self.tracked_memory_pool.is_none() {
+            return;
         }
+        self.memory_profiling.store(enable, Ordering::Relaxed);
     }
 
     fn tracked_memory_pool(&self) -> Option<Arc<dyn TrackedPool>> {
-        self.tracked_memory_pool.read().unwrap().clone()
+        self.tracked_memory_pool.clone()
     }
 }
