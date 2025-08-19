@@ -13,5 +13,10 @@ success: true
 exit_code: 0
 ----- stdout -----
 [{"Utf8(\"\\\")":"\\","Utf8(\"\\\\\")":"\\\\","Utf8(\"\\\\\\\\\\\")":"\\\\\\\\\\","Utf8(\"dsdsds\\\\\\\\\")":"dsdsds\\\\\\\\","Utf8(\"\\t\")":"\\t","Utf8(\"\\0\")":"\\0","Utf8(\"\\n\")":"\\n"}]
+Peak memory usage: 896.0 B
+Cumulative allocations: 896.0 B
+Memory usage by operator:
+Other: 896.0 B
+
 
 ----- stderr -----

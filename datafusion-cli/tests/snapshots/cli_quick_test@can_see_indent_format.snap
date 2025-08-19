@@ -22,5 +22,10 @@ exit_code: 0
 2 row(s) fetched. 
 [ELAPSED]
 
+Peak memory usage: 2.5 KB
+Cumulative allocations: 2.5 KB
+Memory usage by operator:
+Other: 2.5 KB
+
 
 ----- stderr -----

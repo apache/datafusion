@@ -7,7 +7,6 @@ info:
     - EXPLAIN SELECT 123
   env:
     DATAFUSION_EXPLAIN_FORMAT: pgjson
-snapshot_kind: text
 ---
 success: true
 exit_code: 0
@@ -39,6 +38,11 @@ exit_code: 0
 +--------------+-----------------------------------------+
 1 row(s) fetched. 
 [ELAPSED]
+
+Peak memory usage: 2.1 KB
+Cumulative allocations: 2.1 KB
+Memory usage by operator:
+Other: 2.1 KB
 
 
 ----- stderr -----

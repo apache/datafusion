@@ -4,7 +4,7 @@ info:
   program: datafusion-cli
   args:
     - "-q"
-  stdin: "\\memory_profiling enable\nselect 1;\n\\memory_profiling disable\nselect 1;\n"
+  stdin: "\\\n\\memory_profiling enable\nselect 1;\n\\memory_profiling disable\nselect 1;\n"
 ---
 success: true
 exit_code: 0
@@ -20,12 +20,13 @@ Cumulative allocations: XB
 Memory usage by operator:
 Other: XB
 
+Memory profiling disabled
 +----------+
 | Int64(1) |
 +----------+
 | 1        |
 +----------+
-
 \q
 
 ----- stderr -----
+'\' is not a valid command

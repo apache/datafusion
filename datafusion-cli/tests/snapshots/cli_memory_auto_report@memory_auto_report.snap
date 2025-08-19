@@ -4,7 +4,7 @@ info:
   program: datafusion-cli
   args:
     - "-q"
-  stdin: "\\memory_profiling enable\nselect 1;\nselect * from generate_series(1,10000) as t1(v1) order by v1;\n"
+  stdin: "\\\n\\memory_profiling enable\nselect 1;\nselect * from generate_series(1,10000) as t1(v1) order by v1;\n"
 ---
 success: true
 exit_code: 0
@@ -76,3 +76,4 @@ Sorting: XB
 \q
 
 ----- stderr -----
+'\' is not a valid command

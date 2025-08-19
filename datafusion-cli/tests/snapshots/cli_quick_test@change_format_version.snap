@@ -10,11 +10,21 @@ info:
 success: true
 exit_code: 0
 ----- stdout -----
+Peak memory usage: 0.0 B
+Cumulative allocations: 0.0 B
+Memory usage by operator:
+Other: 0.0 B
+
 +-----------+
 | Int64(54) |
 | Int64     |
 +-----------+
 | 54        |
 +-----------+
+Peak memory usage: 8.0 B
+Cumulative allocations: 8.0 B
+Memory usage by operator:
+Other: 8.0 B
+
 
 ----- stderr -----

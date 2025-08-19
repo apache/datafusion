@@ -1,5 +1,5 @@
 ---
-source: tests/cli_integration.rs
+source: datafusion-cli/tests/cli_integration.rs
 info:
   program: datafusion-cli
   args:
@@ -13,5 +13,10 @@ success: true
 exit_code: 0
 ----- stdout -----
 [{"Int64(1)":1}]
+Peak memory usage: 8.0 B
+Cumulative allocations: 8.0 B
+Memory usage by operator:
+Other: 8.0 B
+
 
 ----- stderr -----
