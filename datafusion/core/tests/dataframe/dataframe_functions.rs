@@ -1215,7 +1215,7 @@ async fn test_fn_decode() -> Result<()> {
     // Note that the decode function returns binary, and the default display of
     // binary is "hexadecimal" and therefore the output looks like decode did
     // nothing. So compare to a constant.
-    let df_schema = DFSchema::try_from(test_schema().as_ref().clone())?;
+    let df_schema = DFSchema::try_from(test_schema())?;
     let expr = decode(encode(col("a"), lit("hex")), lit("hex"))
         // need to cast to utf8 otherwise the default display of binary array is hex
         // so it looks like nothing is done

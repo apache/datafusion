@@ -728,6 +728,7 @@ message PhysicalPlanNode {
     UnnestExecNode unnest = 30;
     JsonScanExecNode json_scan = 31;
     CooperativeExecNode cooperative = 32;
+    GenerateSeriesNode generate_series = 33;
   }
 }
 
@@ -1293,4 +1294,50 @@ message RecursiveQueryNode {
 message CteWorkTableScanNode {
     string name = 1;
     datafusion_common.Schema schema = 2;
+}
+
+enum GenerateSeriesName {
+  GS_GENERATE_SERIES = 0;
+  GS_RANGE = 1;
+}
+
+message GenerateSeriesArgsContainsNull {
+    GenerateSeriesName name = 1;
+}
+
+message GenerateSeriesArgsInt64 {
+    int64 start = 1;
+    int64 end = 2;
+    int64 step = 3;
+    bool include_end = 4;
+    GenerateSeriesName name = 5;
+}
+
+message GenerateSeriesArgsTimestamp {
+    int64 start = 1;
+    int64 end = 2;
+    datafusion_common.IntervalMonthDayNanoValue step = 3;
+    optional string tz = 4;
+    bool include_end = 5;
+    GenerateSeriesName name = 6;
+}
+
+message GenerateSeriesArgsDate {
+    int64 start = 1;
+    int64 end = 2;
+    datafusion_common.IntervalMonthDayNanoValue step = 3;
+    bool include_end = 4;
+    GenerateSeriesName name = 5;
+}
+
+message GenerateSeriesNode {
+    datafusion_common.Schema schema = 1;
+    uint32 target_batch_size = 2;
+
+    oneof args {
+        GenerateSeriesArgsContainsNull contains_null = 3;
+        GenerateSeriesArgsInt64 int64_args = 4;
+        GenerateSeriesArgsTimestamp timestamp_args = 5;
+        GenerateSeriesArgsDate date_args = 6;
+    }
 }

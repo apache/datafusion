@@ -36,8 +36,8 @@ use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::type_coercion::aggregates::INTEGERS;
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
-    udf_equals_hash, Accumulator, AggregateUDFImpl, Documentation, GroupsAccumulator,
-    ReversedUDAF, Signature, Volatility,
+    Accumulator, AggregateUDFImpl, Documentation, GroupsAccumulator, ReversedUDAF,
+    Signature, Volatility,
 };
 
 use datafusion_expr::aggregate_doc_sections::DOC_SECTION_GENERAL;
@@ -313,8 +313,6 @@ impl AggregateUDFImpl for BitwiseOperation {
     fn documentation(&self) -> Option<&Documentation> {
         Some(self.documentation)
     }
-
-    udf_equals_hash!(AggregateUDFImpl);
 }
 
 struct BitAndAccumulator<T: ArrowNumericType> {

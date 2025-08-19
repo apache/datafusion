@@ -17,15 +17,15 @@
 
 //! Expression simplification API
 
-use std::borrow::Cow;
-use std::collections::HashSet;
-use std::ops::Not;
-
 use arrow::{
     array::{new_null_array, AsArray},
     datatypes::{DataType, Field, Schema},
     record_batch::RecordBatch,
 };
+use std::borrow::Cow;
+use std::collections::HashSet;
+use std::ops::Not;
+use std::sync::Arc;
 
 use datafusion_common::{
     cast::{as_large_list_array, as_list_array},
@@ -589,11 +589,15 @@ impl<'a> ConstEvaluator<'a> {
         // The dummy column name is unused and doesn't matter as only
         // expressions without column references can be evaluated
         static DUMMY_COL_NAME: &str = ".";
-        let schema = Schema::new(vec![Field::new(DUMMY_COL_NAME, DataType::Null, true)]);
-        let input_schema = DFSchema::try_from(schema.clone())?;
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            DUMMY_COL_NAME,
+            DataType::Null,
+            true,
+        )]));
+        let input_schema = DFSchema::try_from(Arc::clone(&schema))?;
         // Need a single "input" row to produce a single output row
         let col = new_null_array(&DataType::Null, 1);
-        let input_batch = RecordBatch::try_new(std::sync::Arc::new(schema), vec![col])?;
+        let input_batch = RecordBatch::try_new(schema, vec![col])?;
 
         Ok(Self {
             can_evaluate: vec![],
@@ -1888,7 +1892,7 @@ fn are_inlist_and_eq(left: &Expr, right: &Expr) -> bool {
 }
 
 /// Try to convert an expression to an in-list expression
-fn as_inlist(expr: &Expr) -> Option<Cow<InList>> {
+fn as_inlist(expr: &'_ Expr) -> Option<Cow<'_, InList>> {
     match expr {
         Expr::InList(inlist) => Some(Cow::Borrowed(inlist)),
         Expr::BinaryExpr(BinaryExpr { left, op, right }) if *op == Operator::Eq => {
@@ -4313,8 +4317,6 @@ mod tests {
                 None
             }
         }
-
-        udf_equals_hash!(AggregateUDFImpl);
     }
 
     #[test]
@@ -4386,7 +4388,7 @@ mod tests {
             unimplemented!("not needed for tests")
         }
     }
-    #[derive(Debug)]
+    #[derive(Debug, PartialEq, Eq, Hash)]
     struct VolatileUdf {
         signature: Signature,
     }

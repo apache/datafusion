@@ -53,8 +53,8 @@ use datafusion_execution::{
     object_store::ObjectStoreUrl, SendableRecordBatchStream, TaskContext,
 };
 use datafusion_physical_expr::expressions::Column;
-use datafusion_physical_expr::schema_rewriter::PhysicalExprAdapterFactory;
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
+use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion_physical_plan::filter_pushdown::FilterPushdownPropagation;
@@ -1995,7 +1995,7 @@ mod tests {
                     .map(|expr| {
                         create_physical_sort_expr(
                             &expr,
-                            &DFSchema::try_from(table_schema.as_ref().clone())?,
+                            &DFSchema::try_from(Arc::clone(&table_schema))?,
                             &ExecutionProps::default(),
                         )
                     })
@@ -2009,7 +2009,7 @@ mod tests {
             );
             let result = FileScanConfig::split_groups_by_statistics(
                 &table_schema,
-                &[partitioned_files.clone()],
+                std::slice::from_ref(&partitioned_files),
                 &sort_order,
             );
             let results_by_name = result

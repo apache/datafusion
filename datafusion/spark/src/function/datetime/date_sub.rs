@@ -31,7 +31,7 @@ use datafusion_expr::{
 };
 use datafusion_functions::utils::make_scalar_function;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkDateSub {
     signature: Signature,
 }
