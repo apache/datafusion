@@ -15,11 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{cmp::Ordering, sync::Arc, vec};
+use std::{any::Any, cmp::Ordering, sync::Arc, vec};
 
 use super::{
     dialect::CharacterLengthStyle, dialect::DateFieldExtractStyle,
     rewrite::TableAliasRewriter, Unparser,
+};
+use arrow::{
+    array::{Array, Int32Array},
+    datatypes::DataType,
 };
 use datafusion_common::{
     internal_err,
@@ -27,13 +31,52 @@ use datafusion_common::{
     Column, DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::{
-    expr, utils::grouping_set_to_exprlist, Aggregate, Expr, LogicalPlan,
-    LogicalPlanBuilder, Projection, SortExpr, Unnest, Window,
+    expr::{self, AggregateFunction},
+    function::AccumulatorArgs,
+    utils::grouping_set_to_exprlist,
+    Accumulator, Aggregate, AggregateUDF, AggregateUDFImpl, Expr, LogicalPlan,
+    LogicalPlanBuilder, Projection, Signature, SortExpr, Unnest, Volatility, Window,
 };
 
 use indexmap::IndexSet;
 use sqlparser::ast;
 use sqlparser::tokenizer::Span;
+
+// To avoid adding datafusion-functions-aggregate dependency, implement a DummyGroupingUDAF here
+#[derive(Debug)]
+struct DummyGroupingUDAF {
+    signature: Signature,
+}
+
+impl DummyGroupingUDAF {
+    fn new() -> Self {
+        Self {
+            signature: Signature::variadic_any(Volatility::Immutable),
+        }
+    }
+}
+
+impl AggregateUDFImpl for DummyGroupingUDAF {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        "grouping"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(DataType::Int32)
+    }
+
+    fn accumulator(&self, _acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+        todo!()
+    }
+}
 
 /// Recursively searches children of [LogicalPlan] to find an Aggregate node if exists
 /// prior to encountering a Join, TableScan, or a nested subquery (derived table factor).
@@ -195,6 +238,32 @@ pub(crate) fn unproject_agg_exprs(
     agg: &Aggregate,
     windows: Option<&[&Window]>,
 ) -> Result<Expr> {
+    // replace grouping function
+    let expr = expr.transform(|sub_expr| {
+        match sub_expr {
+            Expr::ScalarFunction(grouping) if grouping.name() == "grouping" => {
+                if grouping.args.len() != 1 && grouping.args.len() != 2 {
+                    return internal_err!("Grouping function must have one or two arguments");
+                }
+                let grouping_expr = grouping_set_to_exprlist(&agg.group_expr)?;
+                let args = if grouping.args.len() == 1 {
+                    grouping_expr.iter().map(|e| (*e).clone()).collect()
+                } else if let Expr::Literal(ScalarValue::List(list), _) = &grouping.args[1] {
+                    if list.len() != 1 {
+                        return internal_err!("The second argument of grouping function must be a list with exactly one element");
+                    }
+                    let values = list.value(0).as_any().downcast_ref::<Int32Array>().unwrap().values().to_vec();
+                    values.iter().map(|i: &i32| grouping_expr[*i as usize].clone()).collect()
+                } else {
+                    return internal_err!("The second argument of grouping function must be a list");
+                };
+                Ok(Transformed::yes(Expr::AggregateFunction(AggregateFunction::new_udf(
+                    Arc::new(AggregateUDF::from(DummyGroupingUDAF::new())), args, false, None, vec![], None))))
+            }
+            _ => Ok(Transformed::no(sub_expr))
+        }
+    })
+    .map(|e| e.data)?;
     expr.transform(|sub_expr| {
             if let Expr::Column(c) = sub_expr {
                 if let Some(unprojected_expr) = find_agg_expr(agg, &c)? {
