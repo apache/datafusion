@@ -435,6 +435,18 @@ fn optimize_projections(
 /// appear more than once in its input fields. This can act as a caching mechanism
 /// for non-trivial computations.
 ///
+/// ## Metadata Handling During Projection Merging
+///
+/// **Alias metadata preservation**: When merging projections, alias metadata from both
+/// the current and previous projections is carefully preserved. The presence of metadata
+/// precludes alias trimming.
+///
+/// **Schema, Fields, and metadata**: If a projection is rewritten, the schema and metadata
+/// are preserved. Individual field properties and metadata flows through expression rewriting
+/// and are preserved when fields are referenced in the merged projection.
+/// Refer to [`projection_schema`](datafusion_expr::logical_plan::projection_schema)
+/// for more details.
+///
 /// # Parameters
 ///
 /// * `proj` - A reference to the `Projection` to be merged.
