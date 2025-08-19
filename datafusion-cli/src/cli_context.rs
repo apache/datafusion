@@ -135,9 +135,12 @@ impl ReplSessionContext {
     ) -> Self {
         let tracked_memory_pool = if top_memory_consumers > 0 {
             let tracked = Arc::new(TrackConsumersPool::new(
-                SharedMemoryPool(base_memory_pool.clone()),
+                base_memory_pool.clone(),
                 NonZeroUsize::new(top_memory_consumers).unwrap(),
             ));
+            // tracking is disabled by default and enabled only when
+            // `set_memory_profiling(true)` is called
+            tracked.disable_tracking();
             let runtime = ctx.runtime_env();
             let builder = RuntimeEnvBuilder::from_runtime_env(runtime.as_ref());
             let runtime = Arc::new(
@@ -209,50 +212,20 @@ impl CliSessionContext for ReplSessionContext {
     }
 
     fn set_memory_profiling(&self, enable: bool) {
+        let Some(pool) = &self.tracked_memory_pool else {
+            return;
+        };
+
         if enable {
-            if self.top_memory_consumers == 0 {
-                return;
-            }
             if self.memory_profiling.swap(true, Ordering::Relaxed) {
                 return;
             }
-            let tracked = Arc::new(TrackConsumersPool::new(
-                Arc::clone(&self.base_memory_pool),
-                NonZeroUsize::new(self.top_memory_consumers).unwrap(),
-            ));
-            let runtime = self.ctx.runtime_env();
-            let builder = RuntimeEnvBuilder::from_runtime_env(runtime.as_ref());
-            let runtime = Arc::new(
-                builder
-                    .with_memory_pool(tracked.clone() as Arc<dyn MemoryPool>)
-                    .build()
-                    .unwrap(),
-            );
-            let state_ref = self.ctx.state_ref();
-            let mut state = state_ref.write();
-            *state = SessionStateBuilder::from(state.clone())
-                .with_runtime_env(runtime)
-                .build();
-            *self.tracked_memory_pool.write().unwrap() =
-                Some(tracked as Arc<dyn TrackedPool>);
+            pool.enable_tracking();
         } else {
             if !self.memory_profiling.swap(false, Ordering::Relaxed) {
                 return;
             }
-            let runtime = self.ctx.runtime_env();
-            let builder = RuntimeEnvBuilder::from_runtime_env(runtime.as_ref());
-            let runtime = Arc::new(
-                builder
-                    .with_memory_pool(self.base_memory_pool.clone())
-                    .build()
-                    .unwrap(),
-            );
-            let state_ref = self.ctx.state_ref();
-            let mut state = state_ref.write();
-            *state = SessionStateBuilder::from(state.clone())
-                .with_runtime_env(runtime)
-                .build();
-            *self.tracked_memory_pool.write().unwrap() = None;
+            pool.disable_tracking();
         }
     }
 
