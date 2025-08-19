@@ -33,7 +33,7 @@ mod tests {
     use datafusion_common::ScalarValue;
     use datafusion_expr::{AggregateUDF, AggregateUDFImpl, Signature, Volatility};
     use std::{any::Any, sync::Arc};
-    #[derive(Debug)]
+    #[derive(Debug, PartialEq, Eq, Hash)]
     struct DummyUdf {
         signature: Signature,
     }
