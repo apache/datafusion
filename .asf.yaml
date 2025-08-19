@@ -78,7 +78,6 @@ github:
           - "check-files"
           - "cargo test datafusion-cli (amd64)"
           - "check configs.md and ***_functions.md is up-to-date"
-          - "Process"
     # needs to be updated as part of the release process
     # .asf.yaml doesn't support wildcard branch protection rules, only exact branch names
     # https://github.com/apache/infrastructure-asfyaml?tab=readme-ov-file#branch-protection
