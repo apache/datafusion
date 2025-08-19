@@ -813,4 +813,33 @@ mod test {
 
         Ok(())
     }
+
+    #[tokio::test]
+    async fn test_statistic_by_partition_of_repartition_zero_partitions() -> Result<()> {
+        let scan = create_scan_exec_with_statistics(None, Some(2)).await;
+        let scan_schema = scan.schema();
+
+        // Create a repartition with 0 partitions
+        let repartition = Arc::new(RepartitionExec::try_new(
+            Arc::new(EmptyExec::new(scan_schema.clone())),
+            Partitioning::RoundRobinBatch(0),
+        )?);
+
+        // This should return an error because there are 0 partitions
+        let result = repartition.partition_statistics(Some(0));
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("RepartitionExec invalid partition 0 (expected less than 0)"));
+
+        // Verify that the result has exactly 0 partitions
+        let partitions = execute_stream_partitioned(
+            repartition.clone(),
+            Arc::new(TaskContext::default()),
+        )?;
+        assert_eq!(0, partitions.len());
+
+        Ok(())
+    }
 }
