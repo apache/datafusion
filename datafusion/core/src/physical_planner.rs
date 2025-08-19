@@ -1782,10 +1782,17 @@ pub fn create_aggregate_expr_and_maybe_filter(
     physical_input_schema: &Schema,
     execution_props: &ExecutionProps,
 ) -> Result<AggregateExprWithOptionalArgs> {
-    // unpack (nested) aliased logical expressions, e.g. "sum(col) as total"
+    // Unpack (potentially nested) aliased logical expressions, e.g. "sum(col) as total"
+    // Some functions like count(*) create internal aliases, so user aliases can create nested structures
+    // We need to unwrap all alias layers to get to the underlying aggregate function
     let (name, human_display, e) = match e {
         Expr::Alias(Alias { expr, name, .. }) => {
-            (Some(name.clone()), String::default(), expr.as_ref())
+            // Recursively unwrap nested aliases to reach the inner expression
+            let mut current_expr = expr.as_ref();
+            while let Expr::Alias(Alias { expr, .. }) = current_expr {
+                current_expr = expr.as_ref();
+            }
+            (Some(name.clone()), String::default(), current_expr)
         }
         Expr::AggregateFunction(_) => (
             Some(e.schema_name().to_string()),
