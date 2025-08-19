@@ -276,7 +276,7 @@ impl From<io::Error> for DataFusionError {
 
 impl From<ArrowError> for DataFusionError {
     fn from(e: ArrowError) -> Self {
-        DataFusionError::ArrowError(Box::new(e), None)
+        DataFusionError::ArrowError(Box::new(e), Some(DataFusionError::get_back_trace()))
     }
 }
 
