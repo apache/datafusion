@@ -228,8 +228,8 @@ pub enum MemoryLimit {
     Unknown,
 }
 
-/// Implement MemoryPool for `Arc<T>` where T: MemoryPool
-impl<T: MemoryPool + ?Sized> MemoryPool for Arc<T> {
+/// Implement MemoryPool for `Arc<dyn MemoryPool>`
+impl MemoryPool for Arc<dyn MemoryPool> {
     fn register(&self, consumer: &MemoryConsumer) {
         (**self).register(consumer)
     }
