@@ -146,3 +146,10 @@ query R
 SELECT if(false, 10.5, 20);
 ----
 20
+
+statement error Int64 is not a boolean or null
+SELECT if(1, 10.5, 20);
+
+
+statement error Utf8 is not a boolean or null
+SELECT if('x', 10.5, 20);

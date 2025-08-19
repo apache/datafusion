@@ -65,6 +65,14 @@ impl ScalarUDFImpl for SparkIf {
                 arg_types.len()
             );
         }
+
+        if arg_types[0] != DataType::Boolean && arg_types[0] != DataType::Null {
+            return plan_err!(
+                "For function 'if' {} is not a boolean or null",
+                arg_types[0]
+            );
+        }
+
         let Some(target_type) = comparison_coercion_numeric(&arg_types[1], &arg_types[2])
         else {
             return plan_err!(
