@@ -16,9 +16,9 @@
 // under the License.
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
-use datafusion_common::{internal_datafusion_err, plan_err};
+use datafusion_common::{not_impl_err, plan_err};
 use datafusion_common::{DFSchema, Result, ScalarValue};
-use datafusion_expr::{expr::ScalarFunction, planner::PlannerResult, Expr};
+use datafusion_expr::{planner::PlannerResult, Expr};
 
 use sqlparser::ast::Expr as SQLExpr;
 
@@ -69,6 +69,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             }
         };
 
+        // Try to plan the substring expression using one of the registered planners
         for planner in self.context_provider.get_expr_planners() {
             match planner.plan_substring(substring_args)? {
                 PlannerResult::Planned(expr) => return Ok(expr),
@@ -78,16 +79,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             }
         }
 
-        let fun = self
-            .context_provider
-            .get_function_meta("substr")
-            .ok_or_else(|| {
-                internal_datafusion_err!("Unable to find expected 'substr' function")
-            })?;
-
-        Ok(Expr::ScalarFunction(ScalarFunction::new_udf(
-            fun,
-            substring_args,
-        )))
+        not_impl_err!("Substring could not be planned by registered expr planner. Hint: enable the `unicode_expressions" )
     }
 }
