@@ -122,7 +122,7 @@ pub struct TopK {
     /// Common sort prefix between the input and the sort expressions to allow early exit optimization
     common_sort_prefix: Arc<[PhysicalSortExpr]>,
     /// Filter matching the state of the `TopK` heap used for dynamic filter pushdown
-    filter: TopKDynamicFilters,
+    filter: Arc<RwLock<TopKDynamicFilters>>,
     /// If true, indicates that all rows of subsequent batches are guaranteed
     /// to be greater (by byte order, after row conversion) than the top K,
     /// which means the top K won't change and the computation can be finished early.
@@ -134,7 +134,7 @@ pub struct TopKDynamicFilters {
     /// The current *global* threshold for the dynamic filter.
     /// This is shared across all partitions and is updated by any of them.
     /// Stored as row bytes for efficient comparison.
-    threshold_row: Arc<RwLock<Option<Vec<u8>>>>,
+    threshold_row: Option<Vec<u8>>,
     /// The expression used to evaluate the dynamic filter
     /// Only updated when lock held for the duration of the update
     expr: Arc<DynamicFilterPhysicalExpr>,
@@ -144,7 +144,7 @@ impl TopKDynamicFilters {
     /// Create a new `TopKDynamicFilters` with the given expression
     pub fn new(expr: Arc<DynamicFilterPhysicalExpr>) -> Self {
         Self {
-            threshold_row: Arc::new(RwLock::new(None)),
+            threshold_row: None,
             expr,
         }
     }
@@ -186,7 +186,7 @@ impl TopK {
         batch_size: usize,
         runtime: Arc<RuntimeEnv>,
         metrics: &ExecutionPlanMetricsSet,
-        filter: TopKDynamicFilters,
+        filter: Arc<RwLock<TopKDynamicFilters>>,
     ) -> Result<Self> {
         let reservation = MemoryConsumer::new(format!("TopK[{partition_id}]"))
             .register(&runtime.memory_pool);
@@ -241,7 +241,7 @@ impl TopK {
         let mut selected_rows = None;
 
         // If a filter is provided, update it with the new rows
-        let filter = self.filter.expr.current()?;
+        let filter = self.filter.read().expr.current()?;
         let filtered = filter.evaluate(&batch)?;
         let num_rows = batch.num_rows();
         let array = filtered.into_array(num_rows)?;
@@ -360,8 +360,8 @@ impl TopK {
         // currently set in the filter with a read only lock
         let needs_update = self
             .filter
-            .threshold_row
             .read()
+            .threshold_row
             .as_ref()
             .map(|current_row| {
                 // new < current means new threshold is more selective
@@ -380,8 +380,8 @@ impl TopK {
 
         // update the threshold. Since there was a lock gap, we must check if it is still the best
         // may have changed while we were building the expression without the lock
-        let mut current_threshold = self.filter.threshold_row.write();
-        let old_threshold = current_threshold.take();
+        let mut filter = self.filter.write();
+        let old_threshold = filter.threshold_row.take();
 
         // Update filter if we successfully updated the threshold
         // (or if there was no previous threshold and we're the first)
@@ -389,25 +389,25 @@ impl TopK {
             Some(old_threshold) => {
                 // new threshold is still better than the old one
                 if new_threshold.as_slice() < old_threshold.as_slice() {
-                    *current_threshold = Some(new_threshold);
+                    filter.threshold_row = Some(new_threshold);
                 } else {
                     // some other thread updated the threshold to a better
                     // one while we were building so there is no need to
                     // update the filter
-                    *current_threshold = Some(old_threshold);
+                    filter.threshold_row = Some(old_threshold);
                     return Ok(());
                 }
             }
             None => {
                 // No previous threshold, so we can set the new one
-                *current_threshold = Some(new_threshold);
+                filter.threshold_row = Some(new_threshold);
             }
         };
 
         // Update the filter expression
         if let Some(pred) = predicate {
             if !pred.eq(&lit(true)) {
-                self.filter.expr.update(pred)?;
+                filter.expr.update(pred)?;
             }
         }
 
@@ -1141,10 +1141,9 @@ mod tests {
             2,
             runtime,
             &metrics,
-            TopKDynamicFilters::new(Arc::new(DynamicFilterPhysicalExpr::new(
-                vec![],
-                lit(true),
-            ))),
+            Arc::new(RwLock::new(TopKDynamicFilters::new(Arc::new(
+                DynamicFilterPhysicalExpr::new(vec![], lit(true)),
+            )))),
         )?;
 
         // Create the first batch with two columns:

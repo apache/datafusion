@@ -24,6 +24,8 @@ use std::fmt;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
+use parking_lot::RwLock;
+
 use crate::common::spawn_buffered;
 use crate::execution_plan::{Boundedness, CardinalityEffect, EmissionType};
 use crate::expressions::PhysicalSortExpr;
@@ -895,7 +897,7 @@ pub struct SortExec {
     /// Filter matching the state of the sort for dynamic filter pushdown.
     /// If `fetch` is `Some`, this will also be set and a TopK operator may be used.
     /// If `fetch` is `None`, this will be `None`.
-    filter: Option<TopKDynamicFilters>,
+    filter: Option<Arc<RwLock<TopKDynamicFilters>>>,
 }
 
 impl SortExec {
@@ -942,16 +944,15 @@ impl SortExec {
     }
 
     /// Add or reset `self.filter` to a new `TopKDynamicFilters`.
-    fn create_filter(&self) -> TopKDynamicFilters {
+    fn create_filter(&self) -> Arc<RwLock<TopKDynamicFilters>> {
         let children = self
             .expr
             .iter()
             .map(|sort_expr| Arc::clone(&sort_expr.expr))
             .collect::<Vec<_>>();
-        TopKDynamicFilters::new(Arc::new(DynamicFilterPhysicalExpr::new(
-            children,
-            lit(true),
-        )))
+        Arc::new(RwLock::new(TopKDynamicFilters::new(Arc::new(
+            DynamicFilterPhysicalExpr::new(children, lit(true)),
+        ))))
     }
 
     fn cloned(&self) -> Self {
@@ -1090,7 +1091,7 @@ impl DisplayAs for SortExec {
                     Some(fetch) => {
                         write!(f, "SortExec: TopK(fetch={fetch}), expr=[{}], preserve_partitioning=[{preserve_partitioning}]", self.expr)?;
                         if let Some(filter) = &self.filter {
-                            if let Ok(current) = filter.expr().current() {
+                            if let Ok(current) = filter.read().expr().current() {
                                 if !current.eq(&lit(true)) {
                                     write!(f, ", filter=[{current}]")?;
                                 }
@@ -1236,7 +1237,7 @@ impl ExecutionPlan for SortExec {
                     context.session_config().batch_size(),
                     context.runtime_env(),
                     &self.metrics_set,
-                    unwrap_or_internal_err!(filter),
+                    Arc::clone(&unwrap_or_internal_err!(filter)),
                 )?;
                 Ok(Box::pin(RecordBatchStreamAdapter::new(
                     self.schema(),
@@ -1360,7 +1361,7 @@ impl ExecutionPlan for SortExec {
 
         if let Some(filter) = &self.filter {
             if config.optimizer.enable_dynamic_filter_pushdown {
-                child = child.with_self_filter(filter.expr());
+                child = child.with_self_filter(filter.read().expr());
             }
         }
 
