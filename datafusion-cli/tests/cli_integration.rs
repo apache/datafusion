@@ -340,6 +340,7 @@ SELECT COUNT(*) FROM hits;
 #[rstest]
 #[case("SELECT pow(1,'foo')")]
 #[case("SELECT CAST('not_a_number' AS INTEGER);")]
+#[cfg(backtrace)]
 fn test_backtrace_output(#[case] query: &str) {
     let mut cmd = cli();
     // Use a command that will cause an error and trigger backtrace
