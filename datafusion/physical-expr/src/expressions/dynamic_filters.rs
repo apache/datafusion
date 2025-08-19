@@ -15,14 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{
-    any::Any,
-    fmt::Display,
-    hash::Hash,
-    sync::{Arc, RwLock},
-};
-
-use arc_swap::ArcSwap;
+use parking_lot::RwLock;
+use std::{any::Any, fmt::Display, hash::Hash, sync::Arc};
 
 use crate::PhysicalExpr;
 use arrow::datatypes::{DataType, Schema};
@@ -49,7 +43,7 @@ pub struct DynamicFilterPhysicalExpr {
     /// so that when we update `current()` in subsequent iterations we can re-apply the replacements.
     remapped_children: Option<Vec<Arc<dyn PhysicalExpr>>>,
     /// The source of dynamic filters.
-    inner: Arc<ArcSwap<Inner>>,
+    inner: Arc<RwLock<Inner>>,
     /// For testing purposes track the data type and nullability to make sure they don't change.
     /// If they do, there's a bug in the implementation.
     /// But this can have overhead in production, so it's only included in our tests.
@@ -73,6 +67,11 @@ impl Inner {
             generation: 1,
             expr,
         }
+    }
+
+    /// Clone the inner expression.
+    fn expr(&self) -> &Arc<dyn PhysicalExpr> {
+        &self.expr
     }
 }
 
@@ -139,7 +138,7 @@ impl DynamicFilterPhysicalExpr {
         Self {
             children,
             remapped_children: None, // Initially no remapped children
-            inner: Arc::new(ArcSwap::from_pointee(Inner::new(inner))),
+            inner: Arc::new(RwLock::new(Inner::new(inner))),
             data_type: Arc::new(RwLock::new(None)),
             nullable: Arc::new(RwLock::new(None)),
         }
@@ -178,11 +177,8 @@ impl DynamicFilterPhysicalExpr {
     /// This will return the current expression with any children
     /// remapped to match calls to [`PhysicalExpr::with_new_children`].
     pub fn current(&self) -> Result<Arc<dyn PhysicalExpr>> {
-        let inner_ref = self.inner.load();
-        let inner = Arc::clone(&inner_ref.expr);
-        let inner =
-            Self::remap_children(&self.children, self.remapped_children.as_ref(), inner)?;
-        Ok(inner)
+        let expr = Arc::clone(self.inner.read().expr());
+        Self::remap_children(&self.children, self.remapped_children.as_ref(), expr)
     }
 
     /// Update the current expression.
@@ -203,12 +199,11 @@ impl DynamicFilterPhysicalExpr {
         )?;
 
         // Load the current inner, increment generation, and store the new one
-        let current = self.inner.load();
-        let new_inner = Inner {
+        let mut current = self.inner.write();
+        *current = Inner {
             generation: current.generation + 1,
             expr: new_expr,
         };
-        self.inner.store(Arc::new(new_inner));
         Ok(())
     }
 }
@@ -245,10 +240,8 @@ impl PhysicalExpr for DynamicFilterPhysicalExpr {
         {
             use datafusion_common::internal_err;
             // Check if the data type has changed.
-            let mut data_type_lock = self
-                .data_type
-                .write()
-                .expect("Failed to acquire write lock for data_type");
+            let mut data_type_lock = self.data_type.write();
+
             if let Some(existing) = &*data_type_lock {
                 if existing != &res {
                     // If the data type has changed, we have a bug.
@@ -270,10 +263,7 @@ impl PhysicalExpr for DynamicFilterPhysicalExpr {
         {
             use datafusion_common::internal_err;
             // Check if the nullability has changed.
-            let mut nullable_lock = self
-                .nullable
-                .write()
-                .expect("Failed to acquire write lock for nullable");
+            let mut nullable_lock = self.nullable.write();
             if let Some(existing) = *nullable_lock {
                 if existing != res {
                     // If the nullability has changed, we have a bug.
@@ -316,7 +306,7 @@ impl PhysicalExpr for DynamicFilterPhysicalExpr {
 
     fn snapshot_generation(&self) -> u64 {
         // Return the current generation of the expression.
-        self.inner.load().generation
+        self.inner.read().generation
     }
 }
 

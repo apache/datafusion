@@ -39,7 +39,6 @@ name = "datafusion_physical_expr"
 
 [dependencies]
 ahash = { workspace = true }
-arc-swap = { workspace = true }
 arrow = { workspace = true }
 datafusion-common = { workspace = true, default-features = true }
 datafusion-expr = { workspace = true }
@@ -50,6 +49,7 @@ half = { workspace = true }
 hashbrown = { workspace = true }
 indexmap = { workspace = true }
 itertools = { workspace = true, features = ["use_std"] }
+parking_lot = { workspace = true }
 log = { workspace = true }
 paste = "^1.0"
 petgraph = "0.8.2"
