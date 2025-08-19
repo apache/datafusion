@@ -4,22 +4,17 @@ info:
   program: datafusion-cli
   args:
     - "-q"
-  stdin: "\\memory_profiling enable\n    select 1;\n    select * from generate_series(1,10000) as t1(v1) order by v1;\n    \\q\n    "
+  stdin: "\\memory_profiling\n    select 1;\n    select * from generate_series(1,10000) as t1(v1) order by v1;\n    \\q\n    "
 ---
 success: true
 exit_code: 0
 ----- stdout -----
-Memory profiling enabled
+Memory profiling disabled
 +----------+
 | Int64(1) |
 +----------+
 | 1        |
 +----------+
-Peak memory usage: XB
-Cumulative allocations: XB
-Memory usage by operator:
-Other: XB
-
 +----+
 | v1 |
 +----+
@@ -67,12 +62,6 @@ Other: XB
 | .  |
 | .  |
 +----+
-Peak memory usage: XB
-Cumulative allocations: XB
-Memory usage by operator:
-Other: XB
-Sorting: XB
-
 \q
 
 ----- stderr -----

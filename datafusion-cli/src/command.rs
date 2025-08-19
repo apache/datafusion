@@ -128,9 +128,14 @@ impl Command {
                         ctx.set_memory_profiling(false);
                         println!("Memory profiling disabled");
                     }
-                    None => println!(
-                        "Usage: \\memory_profiling [enable|disable] (aliases: on|off)"
-                    ),
+                    None => {
+                        let enable = !ctx.memory_profiling();
+                        ctx.set_memory_profiling(enable);
+                        println!(
+                            "Memory profiling {}",
+                            if enable { "enabled" } else { "disabled" }
+                        );
+                    }
                 }
                 Ok(())
             }
@@ -167,8 +172,8 @@ impl Command {
                 ("\\pset [NAME [VALUE]]", "set table output option\n(format)")
             }
             Self::MemoryProfiling(_) => (
-                "\\memory_profiling [enable|disable] (aliases: on|off)",
-                "enable or disable profiling (requires --top-memory-consumers N at startup for metrics)",
+                "\\memory_profiling",
+                "toggle memory profiling (requires --top-memory-consumers N at startup for metrics)",
             ),
         }
     }

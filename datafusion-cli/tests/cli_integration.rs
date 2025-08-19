@@ -258,7 +258,7 @@ fn cli_memory_auto_report() {
     let _bound = settings.bind_to_scope();
 
     let input = "\
-    \\memory_profiling enable
+    \\memory_profiling
     select 1;
     select * from generate_series(1,10000) as t1(v1) order by v1;
     \\q
@@ -280,10 +280,10 @@ fn cli_memory_disable_stops_report() {
     settings.add_filter(r"Sorting: .*?B", "Sorting: XB");
     let _bound = settings.bind_to_scope();
 
-    let input = "\\
-\\memory_profiling enable
+    let input = "\
+\\memory_profiling
 select 1;
-\\memory_profiling disable
+\\memory_profiling
 select 1;
 ";
 

@@ -38,7 +38,7 @@ See the [`datafusion-cli` documentation](https://datafusion.apache.org/user-guid
 Enable memory tracking; a usage report will print automatically after each subsequent query:
 
 ```text
-> \memory_profiling enable
+> \memory_profiling
 Memory profiling enabled
 > SELECT v % 100 AS group_key, COUNT(*) AS cnt, SUM(v) AS sum_v FROM generate_series(1,100000) AS t(v) GROUP BY group_key ORDER BY group_key;
 
@@ -56,5 +56,5 @@ Aggregation: 762.2 KB
 Repartition: 884.8 KB
 Sorting: 100.0 MB
 
-\memory_profiling disable   # optional
+\memory_profiling   # optional toggle to disable
 ```
