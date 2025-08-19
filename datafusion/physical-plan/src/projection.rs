@@ -285,6 +285,9 @@ impl ExecutionPlan for ProjectionExec {
         parent_filters: Vec<Arc<dyn PhysicalExpr>>,
         _config: &ConfigOptions,
     ) -> Result<FilterDescription> {
+        // TODO: In future, we can try to handle inverting aliases here.
+        // For the time being, we pass through untransformed filters, so filters on aliases are not handled.
+        // https://github.com/apache/datafusion/issues/17246
         FilterDescription::from_children(parent_filters, &self.children())
     }
 
