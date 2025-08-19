@@ -2449,7 +2449,6 @@ name = "datafusion-physical-expr"
 version = "49.0.1"
 dependencies = [
  "ahash 0.8.12",
- "arc-swap",
  "arrow",
  "criterion",
  "datafusion-common",
@@ -2464,6 +2463,7 @@ dependencies = [
  "insta",
  "itertools 0.14.0",
  "log",
+ "parking_lot",
  "paste",
  "petgraph 0.8.2",
  "rand 0.9.2",
