@@ -558,7 +558,8 @@ fn is_expr_trivial(expr: &Expr) -> bool {
 /// - `Err(error)`: An error occurred during the function call.
 ///
 /// # Notes
-/// This rewrite also removes any unnecessary layers of aliasing.
+/// This rewrite also removes any unnecessary layers of aliasing. "Unnecessary" is
+/// defined as not contributing new information, such as metadata.
 ///
 /// Without trimming, we can end up with unnecessary indirections inside expressions
 /// during projection merges.
