@@ -118,15 +118,14 @@ impl AggregateUDFImpl for Avg {
         let data_type = acc_args.exprs[0].data_type(acc_args.schema)?;
         use DataType::*;
 
+        // instantiate specialized accumulator based for the type
         if acc_args.is_distinct {
-            // instantiate specialized accumulator based for the type
             match &data_type {
                 // Numeric types are converted to Float64 via `coerce_avg_type` during logical plan creation
-                Float64 => Ok(Box::new(Float64DistinctAvgAccumulator::new()?)),
+                Float64 => Ok(Box::new(Float64DistinctAvgAccumulator::default())),
                 _ => exec_err!("AVG(DISTINCT) for {} not supported", data_type),
             }
         } else {
-            // instantiate specialized accumulator based for the type
             match (&data_type, acc_args.return_field.data_type()) {
                 (Float64, Float64) => Ok(Box::<AvgAccumulator>::default()),
                 (
@@ -172,21 +171,32 @@ impl AggregateUDFImpl for Avg {
     }
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
-        Ok(vec![
-            Field::new(
-                format_state_name(args.name, "count"),
-                DataType::UInt64,
-                true,
-            ),
-            Field::new(
-                format_state_name(args.name, "sum"),
-                args.input_fields[0].data_type().clone(),
-                true,
-            ),
-        ]
-        .into_iter()
-        .map(Arc::new)
-        .collect())
+        if args.is_distinct {
+            // Copied from datafusion_functions_aggregate::sum::Sum::state_fields
+            // since the accumulator uses DistinctSumAccumulator internally.
+            Ok(vec![Field::new_list(
+                format_state_name(args.name, "sum distinct"),
+                Field::new_list_field(args.return_type().clone(), true),
+                false,
+            )
+            .into()])
+        } else {
+            Ok(vec![
+                Field::new(
+                    format_state_name(args.name, "count"),
+                    DataType::UInt64,
+                    true,
+                ),
+                Field::new(
+                    format_state_name(args.name, "sum"),
+                    args.input_fields[0].data_type().clone(),
+                    true,
+                ),
+            ]
+            .into_iter()
+            .map(Arc::new)
+            .collect())
+        }
     }
 
     fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {

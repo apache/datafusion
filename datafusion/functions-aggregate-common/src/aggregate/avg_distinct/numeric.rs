@@ -19,7 +19,7 @@ use std::fmt::Debug;
 
 use arrow::array::ArrayRef;
 use arrow::datatypes::{DataType, Float64Type};
-use datafusion_common::ScalarValue;
+use datafusion_common::{Result, ScalarValue};
 use datafusion_expr_common::accumulator::Accumulator;
 
 use crate::aggregate::sum_distinct::DistinctSumAccumulator;
@@ -32,30 +32,30 @@ pub struct Float64DistinctAvgAccumulator {
     sum_accumulator: DistinctSumAccumulator<Float64Type>,
 }
 
-impl Float64DistinctAvgAccumulator {
-    pub fn new() -> datafusion_common::Result<Self> {
-        Ok(Self {
-            sum_accumulator: DistinctSumAccumulator::<Float64Type>::try_new(
+impl Default for Float64DistinctAvgAccumulator {
+    fn default() -> Self {
+        Self {
+            sum_accumulator: DistinctSumAccumulator::<Float64Type>::new(
                 &DataType::Float64,
-            )?,
-        })
+            ),
+        }
     }
 }
 
 impl Accumulator for Float64DistinctAvgAccumulator {
-    fn state(&mut self) -> datafusion_common::Result<Vec<ScalarValue>> {
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
         self.sum_accumulator.state()
     }
 
-    fn update_batch(&mut self, values: &[ArrayRef]) -> datafusion_common::Result<()> {
+    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         self.sum_accumulator.update_batch(values)
     }
 
-    fn merge_batch(&mut self, states: &[ArrayRef]) -> datafusion_common::Result<()> {
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
         self.sum_accumulator.merge_batch(states)
     }
 
-    fn evaluate(&mut self) -> datafusion_common::Result<ScalarValue> {
+    fn evaluate(&mut self) -> Result<ScalarValue> {
         // Get the sum from the DistinctSumAccumulator
         let sum_result = self.sum_accumulator.evaluate()?;
 
