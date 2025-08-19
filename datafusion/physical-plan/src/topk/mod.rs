@@ -17,7 +17,6 @@
 
 //! TopK: Combination of Sort / LIMIT
 
-use arc_swap::ArcSwapOption;
 use arrow::{
     array::{Array, AsArray},
     compute::{interleave_record_batch, prep_null_mask_filter, FilterBuilder},
@@ -45,6 +44,7 @@ use datafusion_physical_expr::{
     PhysicalExpr,
 };
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
+use parking_lot::RwLock;
 
 /// Global TopK
 ///
@@ -134,8 +134,9 @@ pub struct TopKDynamicFilters {
     /// The current *global* threshold for the dynamic filter.
     /// This is shared across all partitions and is updated by any of them.
     /// Stored as row bytes for efficient comparison.
-    threshold_row: Arc<ArcSwapOption<Vec<u8>>>,
+    threshold_row: Arc<RwLock<Option<Vec<u8>>>>,
     /// The expression used to evaluate the dynamic filter
+    /// Only updated when lock held for the duration of the update
     expr: Arc<DynamicFilterPhysicalExpr>,
 }
 
@@ -143,7 +144,7 @@ impl TopKDynamicFilters {
     /// Create a new `TopKDynamicFilters` with the given expression
     pub fn new(expr: Arc<DynamicFilterPhysicalExpr>) -> Self {
         Self {
-            threshold_row: Arc::new(ArcSwapOption::from(None)),
+            threshold_row: Arc::new(RwLock::new(None)),
             expr,
         }
     }
@@ -355,53 +356,58 @@ impl TopK {
             None => return Ok(()),
         };
 
-        // Extract filter expression reference before entering critical section
-        let filter_expr = Arc::clone(&self.filter.expr);
-
-        // Check if we need to update the threshold (lock-free read)
-        let current_threshold = self.filter.threshold_row.load();
-        let needs_update = match current_threshold.as_ref() {
-            Some(current_row) => {
+        // Fast path: check if the current value in topk is better than what is
+        // currently set in the filter with a read only lock
+        let needs_update = self
+            .filter
+            .threshold_row
+            .read()
+            .as_ref()
+            .map(|current_row| {
                 // new < current means new threshold is more selective
-                current_row.as_slice().cmp(new_threshold_row) == Ordering::Greater
+                new_threshold_row < current_row
+            })
+            .unwrap_or(true); // No current threshold, so we need to set one
+
+        // exit early if the current values are better
+        if !needs_update {
+            return Ok(());
+        }
+
+        // Build the filter expression OUTSIDE any synchronization
+        let predicate = Self::build_filter_expression(&self.expr, thresholds)?;
+        let new_threshold = new_threshold_row.to_vec();
+
+        // update the threshold. Since there was a lock gap, we must check if it is still the best
+        // may have changed while we were building the expression without the lock
+        let mut current_threshold = self.filter.threshold_row.write();
+        let old_threshold = current_threshold.take();
+
+        // Update filter if we successfully updated the threshold
+        // (or if there was no previous threshold and we're the first)
+        match old_threshold {
+            Some(old_threshold) => {
+                // new threshold is still better than the old one
+                if new_threshold.as_slice() < old_threshold.as_slice() {
+                    *current_threshold = Some(new_threshold);
+                } else {
+                    // some other thread updated the threshold to a better
+                    // one while we were building so there is no need to
+                    // update the filter
+                    *current_threshold = Some(old_threshold);
+                    return Ok(());
+                }
             }
-            None => true, // No current threshold, so we need to set one
+            None => {
+                // No previous threshold, so we can set the new one
+                *current_threshold = Some(new_threshold);
+            }
         };
 
-        // Only proceed if we need to update
-        if needs_update {
-            // Build the filter expression OUTSIDE any synchronization
-            let predicate = Self::build_filter_expression(&self.expr, thresholds)?;
-            let new_threshold_arc = Arc::new(new_threshold_row.to_vec());
-
-            // Atomically update the threshold using compare-and-swap
-            let old_threshold = self.filter.threshold_row.compare_and_swap(
-                &current_threshold,
-                Some(Arc::clone(&new_threshold_arc)),
-            );
-
-            // Only update filter if we successfully updated the threshold
-            // (or if there was no previous threshold and we're the first)
-            let should_update_filter =
-                match (old_threshold.as_ref(), current_threshold.as_ref()) {
-                    // We successfully swapped
-                    (Some(old), Some(expected)) if Arc::ptr_eq(old, expected) => true,
-                    // We were the first to set it
-                    (None, None) => true,
-                    // Another thread updated before us, check if our threshold is still better
-                    (Some(actual_old), _) => {
-                        actual_old.as_slice().cmp(new_threshold_row) == Ordering::Greater
-                    }
-                    _ => false,
-                };
-
-            if should_update_filter {
-                // Update the filter expression
-                if let Some(pred) = predicate {
-                    if !pred.eq(&lit(true)) {
-                        filter_expr.update(pred)?;
-                    }
-                }
+        // Update the filter expression
+        if let Some(pred) = predicate {
+            if !pred.eq(&lit(true)) {
+                self.filter.expr.update(pred)?;
             }
         }
 
