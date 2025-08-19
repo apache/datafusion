@@ -102,7 +102,7 @@ impl TableProvider for StreamingTable {
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let physical_sort = if !self.sort_order.is_empty() {
-            let df_schema = DFSchema::try_from(self.schema.as_ref().clone())?;
+            let df_schema = DFSchema::try_from(Arc::clone(&self.schema))?;
             let eqp = state.execution_props();
 
             create_physical_sort_exprs(&self.sort_order, &df_schema, eqp)?

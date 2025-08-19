@@ -246,11 +246,11 @@ impl ExecutionPlan for ProjectionExec {
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
         let input_stats = self.input.partition_statistics(partition)?;
-        Ok(stats_projection(
+        stats_projection(
             input_stats,
             self.expr.iter().map(|(e, _)| Arc::clone(e)),
             Arc::clone(&self.input.schema()),
-        ))
+        )
     }
 
     fn supports_limit_pushdown(&self) -> bool {
@@ -279,7 +279,7 @@ fn stats_projection(
     mut stats: Statistics,
     exprs: impl Iterator<Item = Arc<dyn PhysicalExpr>>,
     schema: SchemaRef,
-) -> Statistics {
+) -> Result<Statistics> {
     let mut primitive_row_size = 0;
     let mut primitive_row_size_possible = true;
     let mut column_statistics = vec![];
@@ -292,11 +292,10 @@ fn stats_projection(
             ColumnStatistics::new_unknown()
         };
         column_statistics.push(col_stats);
-        if let Ok(data_type) = expr.data_type(&schema) {
-            if let Some(value) = data_type.primitive_width() {
-                primitive_row_size += value;
-                continue;
-            }
+        let data_type = expr.data_type(&schema)?;
+        if let Some(value) = data_type.primitive_width() {
+            primitive_row_size += value;
+            continue;
         }
         primitive_row_size_possible = false;
     }
@@ -306,7 +305,7 @@ fn stats_projection(
             Precision::Exact(primitive_row_size).multiply(&stats.num_rows);
     }
     stats.column_statistics = column_statistics;
-    stats
+    Ok(stats)
 }
 
 impl ProjectionStream {
@@ -1171,7 +1170,8 @@ mod tests {
             Arc::new(Column::new("col0", 0)),
         ];
 
-        let result = stats_projection(source, exprs.into_iter(), Arc::new(schema));
+        let result =
+            stats_projection(source, exprs.into_iter(), Arc::new(schema)).unwrap();
 
         let expected = Statistics {
             num_rows: Precision::Exact(5),
@@ -1207,7 +1207,8 @@ mod tests {
             Arc::new(Column::new("col0", 0)),
         ];
 
-        let result = stats_projection(source, exprs.into_iter(), Arc::new(schema));
+        let result =
+            stats_projection(source, exprs.into_iter(), Arc::new(schema)).unwrap();
 
         let expected = Statistics {
             num_rows: Precision::Exact(5),

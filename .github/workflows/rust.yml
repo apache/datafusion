@@ -325,7 +325,7 @@ jobs:
           AWS_SECRET_ACCESS_KEY: TEST-DataFusionPassword
           TEST_STORAGE_INTEGRATION: 1
           AWS_ALLOW_HTTP: true
-        run: cargo test --profile ci -p datafusion-cli  --lib --tests --bins
+        run: cargo test --features backtrace --profile ci -p datafusion-cli  --lib --tests --bins
       - name: Verify Working Directory Clean
         run: git diff --exit-code
 

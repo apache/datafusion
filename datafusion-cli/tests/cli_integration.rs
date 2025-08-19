@@ -332,3 +332,30 @@ SELECT COUNT(*) FROM hits;
         .env_remove("AWS_ENDPOINT")
         .pass_stdin(input));
 }
+
+/// Ensure backtrace will be printed, if executing `datafusion-cli` with a query
+/// that triggers error.
+/// Example:
+///     RUST_BACKTRACE=1 cargo run --features backtrace -- -c 'select pow(1,'foo');'
+#[rstest]
+#[case("SELECT pow(1,'foo')")]
+#[case("SELECT CAST('not_a_number' AS INTEGER);")]
+fn test_backtrace_output(#[case] query: &str) {
+    let mut cmd = cli();
+    // Use a command that will cause an error and trigger backtrace
+    cmd.args(["--command", query, "-q"])
+        .env("RUST_BACKTRACE", "1"); // Enable backtrace
+
+    let output = cmd.output().expect("Failed to execute command");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let combined_output = format!("{}{}", stdout, stderr);
+
+    // Assert that the output includes literal 'backtrace'
+    assert!(
+        combined_output.to_lowercase().contains("backtrace"),
+        "Expected output to contain 'backtrace', but got stdout: '{}' stderr: '{}'",
+        stdout,
+        stderr
+    );
+}
