@@ -1390,9 +1390,9 @@ logical_plan
 02)--Projection: CASE WHEN name = Utf8("name1") THEN Float64(0) WHEN name = Utf8("name2") THEN Float64(0.5) END AS a
 03)----Union
 04)------Projection: Utf8("name1") AS name
-05)--------EmptyRelation
+05)--------EmptyRelation: rows=1
 06)------Projection: Utf8("name2") AS name
-07)--------EmptyRelation
+07)--------EmptyRelation: rows=1
 physical_plan
 01)SortPreservingMergeExec: [a@0 DESC]
 02)--ProjectionExec: expr=[CASE WHEN name@0 = name1 THEN 0 WHEN name@0 = name2 THEN 0.5 END as a]

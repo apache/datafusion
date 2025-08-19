@@ -1970,8 +1970,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         // Do a table lookup to verify the table exists
         let table_name = self.object_name_to_table_reference(table_name)?;
         let table_source = self.context_provider.get_table_source(table_name.clone())?;
-        let arrow_schema = (*table_source.schema()).clone();
-        let table_schema = DFSchema::try_from(arrow_schema)?;
+        let table_schema = DFSchema::try_from(table_source.schema())?;
 
         // Get insert fields and target table's value indices
         //

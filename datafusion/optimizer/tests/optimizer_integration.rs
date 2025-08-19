@@ -320,9 +320,7 @@ fn propagate_empty_relation() {
 
     assert_snapshot!(
     format!("{plan}"),
-    @r#"
-        EmptyRelation
-        "#
+    @"EmptyRelation: rows=0"
     );
 }
 
