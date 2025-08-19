@@ -1294,7 +1294,7 @@ impl ExecutionPlan for HashJoinExec {
                     column_indices: self.column_indices.clone(),
                     null_equality: self.null_equality,
                     cache: self.cache.clone(),
-                    dynamic_filter: dynamic_filter,
+                    dynamic_filter,
                     bounds_accumulator: Arc::new(OnceLock::new()),
                 });
                 result = result.with_updated_node(new_node as Arc<dyn ExecutionPlan>);
