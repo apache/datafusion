@@ -176,7 +176,7 @@ impl SharedBoundsAccumulator {
             PartitionMode::Auto => 1,
         };
         Self {
-            bounds: Mutex::new(Vec::new()),
+            bounds: Mutex::new(Vec::with_capacity(expected_calls)),
             completed_partitions: AtomicUsize::new(0),
             total_partitions: expected_calls,
         }
