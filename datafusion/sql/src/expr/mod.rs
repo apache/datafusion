@@ -830,7 +830,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             Some(Value::SingleQuotedString(char)) if char.len() == 1 => {
                 Some(char.chars().next().unwrap())
             }
-            Some(_) => return plan_err!("Invalid escape character in LIKE expression"),
+            Some(value) => return plan_err!("Invalid escape character in LIKE expression. Expected a single character wrapped with single quotes, got {value}"),
             None => None,
         };
         Ok(Expr::Like(Like::new(
@@ -860,9 +860,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             Some(Value::SingleQuotedString(char)) if char.len() == 1 => {
                 Some(char.chars().next().unwrap())
             }
-            Some(_) => {
-                return plan_err!("Invalid escape character in SIMILAR TO expression")
-            }
+            Some(value) => return plan_err!("Invalid escape character in SIMILAR TO expression. Expected a single character wrapped with single quotes, got {value}"),
             None => None,
         };
         Ok(Expr::SimilarTo(Like::new(
