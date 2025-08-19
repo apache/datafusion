@@ -1948,3 +1948,40 @@ async fn test_round_trip_date_part_display() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+/// Tests that we can serialize an unoptimized "analyze" plan and it will work on the other end
+async fn analyze_roundtrip_unoptimized() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    // No optimizations
+    let session_state =
+        datafusion::execution::SessionStateBuilder::new_from_existing(ctx.state())
+            .with_physical_optimizer_rules(vec![])
+            .build();
+
+    let logical_plan = session_state
+        .create_logical_plan("explain analyze select 1")
+        .await?;
+    let plan = session_state.create_physical_plan(&logical_plan).await?;
+
+    let node = PhysicalPlanNode::try_from_physical_plan(
+        plan.clone(),
+        &DefaultPhysicalExtensionCodec {},
+    )?;
+
+    let node = PhysicalPlanNode::decode(node.encode_to_vec().as_slice())
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+    let unoptimized = node.try_into_physical_plan(
+        &ctx,
+        ctx.runtime_env().as_ref(),
+        &DefaultPhysicalExtensionCodec {},
+    )?;
+
+    let physical_planner =
+        datafusion::physical_planner::DefaultPhysicalPlanner::default();
+    physical_planner.optimize_physical_plan(unoptimized, &session_state, |_, _| {})?;
+
+    Ok(())
+}
