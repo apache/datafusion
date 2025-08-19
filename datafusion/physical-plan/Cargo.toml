@@ -44,7 +44,6 @@ name = "datafusion_physical_plan"
 
 [dependencies]
 ahash = { workspace = true }
-arc-swap = "1.7.1"
 arrow = { workspace = true }
 arrow-ord = { workspace = true }
 arrow-schema = { workspace = true }

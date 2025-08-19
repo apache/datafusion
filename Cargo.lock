@@ -233,12 +233,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "arc-swap"
-version = "1.7.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "69f7f8c3906b62b754cd5326047894316021dcfe5a194c8ea52bdd94934a3457"
-
-[[package]]
 name = "arrayref"
 version = "0.3.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2523,7 +2517,6 @@ name = "datafusion-physical-plan"
 version = "49.0.1"
 dependencies = [
  "ahash 0.8.12",
- "arc-swap",
  "arrow",
  "arrow-ord",
  "arrow-schema",
