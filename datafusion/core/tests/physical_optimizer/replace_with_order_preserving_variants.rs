@@ -667,7 +667,7 @@ async fn test_not_replacing_when_no_need_to_preserve_sorting(
 
 #[rstest]
 #[tokio::test]
-async fn test_with_multiple_replacable_repartitions(
+async fn test_with_multiple_replaceable_repartitions(
     #[values(false, true)] source_unbounded: bool,
     #[values(false, true)] prefer_existing_sort: bool,
 ) -> Result<()> {

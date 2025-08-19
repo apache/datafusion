@@ -1520,7 +1520,7 @@ impl ValuesFields {
 // `name_map` tracks a mapping between a field name and the number of appearances of that field.
 //
 // Some field names might already come to this function with the count (number of times it appeared)
-// as a sufix e.g. id:1, so there's still a chance of name collisions, for example,
+// as a suffix e.g. id:1, so there's still a chance of name collisions, for example,
 // if these three fields passed to this function: "col:1", "col" and "col", the function
 // would rename them to -> col:1, col, col:1 causing a posteriror error when building the DFSchema.
 // that's why we need the `seen` set, so the fields are always unique.

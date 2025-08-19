@@ -35,7 +35,7 @@ fn rewrite(
   plan: LogicalPlan,
   _config: &dyn OptimizerConfig,
 ) -> Result<Transformed<LogicalPlan>> {
-    // Attemps to rewrite a logical plan to a uwheel-based plan that either provides
+    // Attempts to rewrite a logical plan to a uwheel-based plan that either provides
     // plan-time aggregates or skips execution based on min/max pruning.
     if let Some(rewritten) = self.try_rewrite(&plan) {
         Ok(Transformed::yes(rewritten))

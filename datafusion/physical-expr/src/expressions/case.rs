@@ -413,7 +413,7 @@ impl CaseExpr {
     fn expr_or_expr(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
         let return_type = self.data_type(&batch.schema())?;
 
-        // evalute when condition on batch
+        // evaluate when condition on batch
         let when_value = self.when_then_expr[0].0.evaluate(batch)?;
         let when_value = when_value.into_array(batch.num_rows())?;
         let when_value = as_boolean_array(&when_value).map_err(|e| {

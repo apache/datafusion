@@ -281,7 +281,7 @@ impl<T> FilterPushdownPropagation<T> {
     }
 
     /// Bind an updated node to the [`FilterPushdownPropagation`].
-    /// Use this when the current node wants to update iself in the tree or replace itself with a new node (e.g. one of it's children).
+    /// Use this when the current node wants to update itself in the tree or replace itself with a new node (e.g. one of it's children).
     /// You do not need to call this if one of the children of the current node may have updated itself, that is handled by the optimizer.
     pub fn with_updated_node(mut self, updated_node: T) -> Self {
         self.updated_node = Some(updated_node);

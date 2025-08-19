@@ -180,7 +180,7 @@ for more details.
 
 ### Added `ExecutionPlan::reset_state`
 
-In order to fix a bug in DataFusion `49.0.0` where dynamic filters (currently only generated in the precense of a query such as `ORDER BY ... LIMIT ...`)
+In order to fix a bug in DataFusion `49.0.0` where dynamic filters (currently only generated in the presence of a query such as `ORDER BY ... LIMIT ...`)
 produced incorrect results in recursive queries, a new method `reset_state` has been added to the `ExecutionPlan` trait.
 
 Any `ExecutionPlan` that needs to maintain internal state or references to other nodes in the execution plan tree should implement this method to reset that state.
@@ -614,7 +614,7 @@ to access the metadata associated with the columnar values during invocation.
 To upgrade user defined aggregate functions, there is now a function
 `return_field` that will allow you to specify both metadata and nullability of
 your function. You are not required to implement this if you do not need to
-handle metatdata.
+handle metadata.
 
 The largest change to aggregate functions happens in the accumulator arguments.
 Both the `AccumulatorArgs` and `StateFieldsArgs` now contain `FieldRef` rather
@@ -976,8 +976,8 @@ Elapsed 0.005 seconds.
 DataFusion 46 has changed the way scalar array function signatures are
 declared. Previously, functions needed to select from a list of predefined
 signatures within the `ArrayFunctionSignature` enum. Now the signatures
-can be defined via a `Vec` of psuedo-types, which each correspond to a
-single argument. Those psuedo-types are the variants of the
+can be defined via a `Vec` of pseudo-types, which each correspond to a
+single argument. Those pseudo-types are the variants of the
 `ArrayFunctionArgument` enum and are as follows:
 
 - `Array`: An argument of type List/LargeList/FixedSizeList. All Array

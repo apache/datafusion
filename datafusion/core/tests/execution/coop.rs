@@ -434,7 +434,7 @@ async fn interleave_then_filter_all_yields(
     let mut infinite_children = vec![];
 
     // Use 32 distinct thresholds (each >0 and <8 192) to force 32 infinite inputs
-    for thr in 1..32 {
+    for threshold in 1..32 {
         // One infinite exec:
         let mut inf = make_lazy_exec_with_range("value", 0..i64::MAX, pretend_infinite);
 
@@ -444,7 +444,7 @@ async fn interleave_then_filter_all_yields(
         let partitioning = Partitioning::Hash(exprs, 1);
         inf.try_set_partitioning(partitioning)?;
 
-        // Apply a FilterExec: “(value / 8192) % thr == 0”.
+        // Apply a FilterExec: “(value / 8192) % threshold == 0”.
         let filter_expr = binary(
             binary(
                 binary(
@@ -454,7 +454,7 @@ async fn interleave_then_filter_all_yields(
                     &inf.schema(),
                 )?,
                 Modulo,
-                lit(thr as i64),
+                lit(threshold as i64),
                 &inf.schema(),
             )?,
             Eq,
@@ -490,7 +490,7 @@ async fn interleave_then_aggregate_yields(
     let mut infinite_children = vec![];
 
     // Use 32 distinct thresholds (each >0 and <8 192) to force 32 infinite inputs
-    for thr in 1..32 {
+    for threshold in 1..32 {
         // One infinite exec:
         let mut inf = make_lazy_exec_with_range("value", 0..i64::MAX, pretend_infinite);
 
@@ -500,7 +500,7 @@ async fn interleave_then_aggregate_yields(
         let partitioning = Partitioning::Hash(exprs, 1);
         inf.try_set_partitioning(partitioning)?;
 
-        // Apply a FilterExec: “(value / 8192) % thr == 0”.
+        // Apply a FilterExec: “(value / 8192) % threshold == 0”.
         let filter_expr = binary(
             binary(
                 binary(
@@ -510,7 +510,7 @@ async fn interleave_then_aggregate_yields(
                     &inf.schema(),
                 )?,
                 Modulo,
-                lit(thr as i64),
+                lit(threshold as i64),
                 &inf.schema(),
             )?,
             Eq,

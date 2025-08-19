@@ -173,15 +173,15 @@ impl SpillMetrics {
 #[derive(Debug, Clone)]
 pub struct SplitMetrics {
     /// Number of times an input [`RecordBatch`] was split
-    pub batches_splitted: Count,
+    pub batches_split: Count,
 }
 
 impl SplitMetrics {
     /// Create a new [`SplitMetrics`]
     pub fn new(metrics: &ExecutionPlanMetricsSet, partition: usize) -> Self {
         Self {
-            batches_splitted: MetricBuilder::new(metrics)
-                .counter("batches_splitted", partition),
+            batches_split: MetricBuilder::new(metrics)
+                .counter("batches_split", partition),
         }
     }
 }
