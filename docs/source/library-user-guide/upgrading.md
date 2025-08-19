@@ -198,6 +198,26 @@ See [#16996] for details.
 
 [#16996]: https://github.com/apache/datafusion/pull/16996
 
+### Add `as_any()` method to `LazyBatchGenerator`
+
+To help with protobuf serialization, the `as_any()` method has been added to the `LazyBatchGenerator` trait. This means you will need to add `as_any()` to your implementation of `LazyBatchGenerator`:
+
+```rust
+# /* comment to avoid running
+
+impl LazyBatchGenerator for MyBatchGenerator {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    ...
+}
+
+# */
+```
+
+See [#17200](https://github.com/apache/datafusion/pull/17200) for details.
+
 ## DataFusion `49.0.0`
 
 ### `MSRV` updated to 1.85.1
