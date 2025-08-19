@@ -26,10 +26,7 @@ use datafusion::{
     error::DataFusionError,
     execution::{
         context::SessionState,
-        memory_pool::{
-            MemoryConsumer, MemoryLimit, MemoryPool, MemoryReservation,
-            TrackConsumersPool, TrackedPool,
-        },
+        memory_pool::{MemoryPool, TrackConsumersPool, TrackedPool},
         runtime_env::RuntimeEnvBuilder,
         session_state::SessionStateBuilder,
         TaskContext,
@@ -40,43 +37,6 @@ use datafusion::{
 use object_store::ObjectStore;
 
 use crate::object_storage::{AwsOptions, GcpOptions};
-
-#[derive(Debug)]
-struct SharedMemoryPool(Arc<dyn MemoryPool>);
-
-impl MemoryPool for SharedMemoryPool {
-    fn register(&self, consumer: &MemoryConsumer) {
-        self.0.register(consumer)
-    }
-
-    fn unregister(&self, consumer: &MemoryConsumer) {
-        self.0.unregister(consumer)
-    }
-
-    fn grow(&self, reservation: &MemoryReservation, additional: usize) {
-        self.0.grow(reservation, additional)
-    }
-
-    fn shrink(&self, reservation: &MemoryReservation, shrink: usize) {
-        self.0.shrink(reservation, shrink)
-    }
-
-    fn try_grow(
-        &self,
-        reservation: &MemoryReservation,
-        additional: usize,
-    ) -> datafusion::error::Result<()> {
-        self.0.try_grow(reservation, additional)
-    }
-
-    fn reserved(&self) -> usize {
-        self.0.reserved()
-    }
-
-    fn memory_limit(&self) -> MemoryLimit {
-        self.0.memory_limit()
-    }
-}
 
 #[async_trait::async_trait]
 /// The CLI session context trait provides a way to have a session context that can be used with datafusion's CLI code.
@@ -249,10 +209,51 @@ impl CliSessionContext for ReplSessionContext {
     }
 
     fn set_memory_profiling(&self, enable: bool) {
-        if self.tracked_memory_pool.is_none() {
-            return;
+        if enable {
+            if self.top_memory_consumers == 0 {
+                return;
+            }
+            if self.memory_profiling.swap(true, Ordering::Relaxed) {
+                return;
+            }
+            let tracked = Arc::new(TrackConsumersPool::new(
+                Arc::clone(&self.base_memory_pool),
+                NonZeroUsize::new(self.top_memory_consumers).unwrap(),
+            ));
+            let runtime = self.ctx.runtime_env();
+            let builder = RuntimeEnvBuilder::from_runtime_env(runtime.as_ref());
+            let runtime = Arc::new(
+                builder
+                    .with_memory_pool(tracked.clone() as Arc<dyn MemoryPool>)
+                    .build()
+                    .unwrap(),
+            );
+            let state_ref = self.ctx.state_ref();
+            let mut state = state_ref.write();
+            *state = SessionStateBuilder::from(state.clone())
+                .with_runtime_env(runtime)
+                .build();
+            *self.tracked_memory_pool.write().unwrap() =
+                Some(tracked as Arc<dyn TrackedPool>);
+        } else {
+            if !self.memory_profiling.swap(false, Ordering::Relaxed) {
+                return;
+            }
+            let runtime = self.ctx.runtime_env();
+            let builder = RuntimeEnvBuilder::from_runtime_env(runtime.as_ref());
+            let runtime = Arc::new(
+                builder
+                    .with_memory_pool(self.base_memory_pool.clone())
+                    .build()
+                    .unwrap(),
+            );
+            let state_ref = self.ctx.state_ref();
+            let mut state = state_ref.write();
+            *state = SessionStateBuilder::from(state.clone())
+                .with_runtime_env(runtime)
+                .build();
+            *self.tracked_memory_pool.write().unwrap() = None;
         }
-        self.memory_profiling.store(enable, Ordering::Relaxed);
     }
 
     fn tracked_memory_pool(&self) -> Option<Arc<dyn TrackedPool>> {

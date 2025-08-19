@@ -228,6 +228,37 @@ pub enum MemoryLimit {
     Unknown,
 }
 
+/// Implement MemoryPool for Arc<T> where T: MemoryPool
+impl<T: MemoryPool + ?Sized> MemoryPool for Arc<T> {
+    fn register(&self, consumer: &MemoryConsumer) {
+        (**self).register(consumer)
+    }
+
+    fn unregister(&self, consumer: &MemoryConsumer) {
+        (**self).unregister(consumer)
+    }
+
+    fn grow(&self, reservation: &MemoryReservation, additional: usize) {
+        (**self).grow(reservation, additional)
+    }
+
+    fn shrink(&self, reservation: &MemoryReservation, shrink: usize) {
+        (**self).shrink(reservation, shrink)
+    }
+
+    fn try_grow(&self, reservation: &MemoryReservation, additional: usize) -> Result<()> {
+        (**self).try_grow(reservation, additional)
+    }
+
+    fn reserved(&self) -> usize {
+        (**self).reserved()
+    }
+
+    fn memory_limit(&self) -> MemoryLimit {
+        (**self).memory_limit()
+    }
+}
+
 /// A memory consumer is a named allocation traced by a particular
 /// [`MemoryReservation`] in a [`MemoryPool`]. All allocations are registered to
 /// a particular `MemoryConsumer`;
