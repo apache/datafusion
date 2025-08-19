@@ -111,6 +111,63 @@ impl JoinType {
                 | JoinType::RightAnti
         )
     }
+    /// Returns true if the left side of this join preserves its input rows
+    /// for filters applied *after* the join.
+    #[inline]
+    pub const fn preserves_left_for_output_filters(self) -> bool {
+        matches!(
+            self,
+            JoinType::Inner
+                | JoinType::Left
+                | JoinType::LeftSemi
+                | JoinType::LeftAnti
+                | JoinType::LeftMark,
+        )
+    }
+
+    /// Returns true if the right side of this join preserves its input rows
+    /// for filters applied *after* the join.
+    #[inline]
+    pub const fn preserves_right_for_output_filters(self) -> bool {
+        matches!(
+            self,
+            JoinType::Inner
+                | JoinType::Right
+                | JoinType::RightSemi
+                | JoinType::RightAnti
+                | JoinType::RightMark,
+        )
+    }
+
+    /// Returns true if the left side of this join preserves its input rows
+    /// for filters in the join condition (ON-clause filters).
+    #[inline]
+    pub const fn preserves_left_for_on_filters(self) -> bool {
+        matches!(
+            self,
+            JoinType::Inner
+                | JoinType::Right
+                | JoinType::LeftSemi
+                | JoinType::RightSemi
+                | JoinType::RightAnti
+                | JoinType::RightMark,
+        )
+    }
+
+    /// Returns true if the right side of this join preserves its input rows
+    /// for filters in the join condition (ON-clause filters).
+    #[inline]
+    pub const fn preserves_right_for_on_filters(self) -> bool {
+        matches!(
+            self,
+            JoinType::Inner
+                | JoinType::Left
+                | JoinType::LeftSemi
+                | JoinType::RightSemi
+                | JoinType::LeftAnti
+                | JoinType::LeftMark,
+        )
+    }
 }
 
 impl Display for JoinType {

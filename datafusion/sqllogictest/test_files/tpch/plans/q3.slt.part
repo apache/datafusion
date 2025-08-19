@@ -66,11 +66,11 @@ physical_plan
 06)----------RepartitionExec: partitioning=Hash([l_orderkey@0, o_orderdate@1, o_shippriority@2], 4), input_partitions=4
 07)------------AggregateExec: mode=Partial, gby=[l_orderkey@2 as l_orderkey, o_orderdate@0 as o_orderdate, o_shippriority@1 as o_shippriority], aggr=[sum(lineitem.l_extendedprice * Int64(1) - lineitem.l_discount)]
 08)--------------CoalesceBatchesExec: target_batch_size=8192
-09)----------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(o_orderkey@0, l_orderkey@0)], projection=[o_orderdate@1, o_shippriority@2, l_orderkey@3, l_extendedprice@4, l_discount@5]
+09)----------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(o_orderkey@0, l_orderkey@0)], projection=[o_orderdate@1, o_shippriority@2, l_orderkey@3, l_extendedprice@4, l_discount@5], probe_side=Right, probe_keys=0
 10)------------------CoalesceBatchesExec: target_batch_size=8192
 11)--------------------RepartitionExec: partitioning=Hash([o_orderkey@0], 4), input_partitions=4
 12)----------------------CoalesceBatchesExec: target_batch_size=8192
-13)------------------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(c_custkey@0, o_custkey@1)], projection=[o_orderkey@1, o_orderdate@3, o_shippriority@4]
+13)------------------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(c_custkey@0, o_custkey@1)], projection=[o_orderkey@1, o_orderdate@3, o_shippriority@4], probe_side=Right, probe_keys=0
 14)--------------------------CoalesceBatchesExec: target_batch_size=8192
 15)----------------------------RepartitionExec: partitioning=Hash([c_custkey@0], 4), input_partitions=4
 16)------------------------------CoalesceBatchesExec: target_batch_size=8192

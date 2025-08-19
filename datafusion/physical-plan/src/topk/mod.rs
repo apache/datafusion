@@ -404,9 +404,11 @@ impl TopK {
             .reduce(|a, b| Arc::new(BinaryExpr::new(a, Operator::Or, b)));
 
         if let Some(predicate) = dynamic_predicate {
-            if !predicate.eq(&lit(true)) {
-                filter.update(predicate)?;
-            }
+            filter.update(predicate, self.heap.len())?;
+        } else {
+            // Even when the dynamic predicate is a tautology we still update
+            // `key_count` for observability.
+            filter.update(lit(true), self.heap.len())?;
         }
 
         Ok(())
@@ -608,6 +610,11 @@ impl TopKHeap {
         } else {
             self.inner.peek()
         }
+    }
+
+    /// Return number of rows currently stored in the heap.
+    fn len(&self) -> usize {
+        self.inner.len()
     }
 
     /// Adds `row` to this heap. If inserting this new item would

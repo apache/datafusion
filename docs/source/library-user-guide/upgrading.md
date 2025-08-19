@@ -48,6 +48,59 @@ In order to enable single value optimizations and be consistent with other
 user defined function APIs, the `AsyncScalarUDFImpl::invoke_async_with_args` method now
 returns a `ColumnarValue` instead of a `ArrayRef`.
 
+### Dynamic filter pushdown for joins
+
+Dynamic filter pushdown now applies to `LEFT`, `RIGHT`, `SEMI` and `ANTI` joins,
+allowing DataFusion to prune the probe side as join keys are discovered at
+runtime. `HashJoinExec` builds from its left child and probes with its right
+child (Left = left child, Right = right child). Full joins are not supported and
+only equi-join keys contribute. Non-equi predicates require range analysis and
+cross-conjunct reasoning (future work). Rows with `NULL` join keys do not
+produce dynamic filter values (`NullEqualsNothing`). Consider enabling
+`datafusion.optimizer.filter_null_join_keys` to remove nulls early. This
+behavior is controlled by the
+`datafusion.optimizer.enable_dynamic_filter_pushdown` configuration option (on
+by default).
+
+Dynamic filter pushdown requires file formats that support predicate pushdown;
+for Parquet this means enabling
+`datafusion.execution.parquet.pushdown_filters`. Formats such as CSV or JSON do
+not benefit.
+
+| JoinType                 | Probe side pruned |
+| ------------------------ | ----------------- |
+| `Inner`, `Left`          | Right input       |
+| `Right`                  | Left input        |
+| `LeftSemi`, `LeftAnti`   | Left input        |
+| `RightSemi`, `RightAnti` | Right input       |
+
+See [join preservation tables](join-preservation.md) for more detail on which
+inputs survive each join type.
+
+Dynamic filters are most effective when the join keys are highly selective.
+You can disable the feature by setting
+`datafusion.optimizer.enable_dynamic_filter_pushdown=false`.
+
+```rust
+use datafusion::prelude::SessionConfig;
+
+let config = SessionConfig::new()
+    .with_optimizer_enable_dynamic_filter_pushdown(false);
+```
+
+For example:
+
+```sql
+SELECT *
+FROM fact LEFT JOIN dim
+  ON fact.id = dim.id
+WHERE dim.region = 'US';
+```
+
+As rows from `dim` with `region = 'US'` are processed, a dynamic filter is
+generated that skips `fact` partitions without matching `id` values.
+Plan effect: the `fact` scan receives `DynamicFilter{fact.id}`.
+
 To upgrade, change the return type of your implementation
 
 ```rust
