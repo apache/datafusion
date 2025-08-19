@@ -465,36 +465,35 @@ impl ExternalSorter {
                 Some((self.spill_manager.create_in_progress_file("Sorting")?, 0));
         }
 
+        // Slice only the last batch if it's too large.
+        // This prevents an oversized batch from inflating `max_record_batch_size`,
+        // ensuring more consistent memory usage when reading back spilled batches.
+        if let Some(last_batch) = globally_sorted_batches.pop() {
+            let total_rows = last_batch.num_rows();
+            let mut offset = 0;
+
+            if total_rows <= self.batch_size {
+                globally_sorted_batches.push(last_batch);
+            } else {
+                while offset < total_rows {
+                    let length = std::cmp::min(total_rows - offset, self.batch_size);
+                    let sliced_batch = last_batch.slice(offset, length);
+                    globally_sorted_batches.push(sliced_batch);
+                    offset += length;
+                }
+            }
+        }
+
         Self::organize_stringview_arrays(globally_sorted_batches)?;
 
         debug!("Spilling sort data of ExternalSorter to disk whilst inserting");
 
-        let mut batches_to_spill = std::mem::take(globally_sorted_batches);
-        self.reservation.free();
+        let batches_to_spill = std::mem::take(globally_sorted_batches);
 
         let (in_progress_file, max_record_batch_size) =
             self.in_progress_spill_file.as_mut().ok_or_else(|| {
                 internal_datafusion_err!("In-progress spill file should be initialized")
             })?;
-
-        // Slice only the last batch if it's too large.
-        // This prevents an oversized batch from inflating `max_record_batch_size`,
-        // ensuring more consistent memory usage when reading back spilled batches.
-        if let Some(last_batch) = batches_to_spill.pop() {
-            let total_rows = last_batch.num_rows();
-            let mut offset = 0;
-
-            if total_rows <= self.batch_size {
-                batches_to_spill.push(last_batch);
-            } else {
-                while offset < total_rows {
-                    let length = std::cmp::min(total_rows - offset, self.batch_size);
-                    let sliced_batch = last_batch.slice(offset, length);
-                    batches_to_spill.push(sliced_batch);
-                    offset += length;
-                }
-            }
-        }
 
         for batch in batches_to_spill {
             in_progress_file.append_batch(&batch)?;
@@ -502,6 +501,8 @@ impl ExternalSorter {
             *max_record_batch_size =
                 (*max_record_batch_size).max(batch.get_sliced_size()?);
         }
+
+        self.reservation.free();
 
         if !globally_sorted_batches.is_empty() {
             return internal_err!("This function consumes globally_sorted_batches, so it should be empty after taking.");
