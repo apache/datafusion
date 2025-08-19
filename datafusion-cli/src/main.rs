@@ -176,15 +176,13 @@ async fn main_inner() -> Result<()> {
     let session_config = get_session_config(&args)?;
 
     let mut rt_builder = RuntimeEnvBuilder::new();
-    let mut base_pool: Option<Arc<dyn MemoryPool>> = None;
     if let Some(memory_limit) = args.memory_limit {
         // set memory pool type
         let pool: Arc<dyn MemoryPool> = match args.mem_pool_type {
             PoolType::Fair => Arc::new(FairSpillPool::new(memory_limit)),
             PoolType::Greedy => Arc::new(GreedyMemoryPool::new(memory_limit)),
         };
-        rt_builder = rt_builder.with_memory_pool(pool.clone());
-        base_pool = Some(pool);
+        rt_builder = rt_builder.with_memory_pool(pool);
     }
 
     // set disk limit
@@ -196,7 +194,7 @@ async fn main_inner() -> Result<()> {
     }
 
     let runtime_env = rt_builder.build_arc()?;
-    let pool = base_pool.unwrap_or_else(|| runtime_env.memory_pool.clone());
+    let pool = runtime_env.memory_pool.clone();
 
     // enable dynamic file query
     let session_ctx = SessionContext::new_with_config_rt(session_config, runtime_env)
