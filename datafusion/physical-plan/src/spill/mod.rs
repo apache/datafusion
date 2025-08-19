@@ -304,7 +304,7 @@ impl IPCStreamWriter {
         compression_type: SpillCompression,
     ) -> Result<Self> {
         let file = File::create(path).map_err(|e| {
-            exec_datafusion_err!("Failed to create partition file at {path:?}: {e:?}")
+            exec_datafusion_err!("(Hint: you may increase the file descriptor limit with shell command 'ulimit -n 4096') Failed to create partition file at {path:?}: {e:?}")
         })?;
 
         let metadata_version = MetadataVersion::V5;
