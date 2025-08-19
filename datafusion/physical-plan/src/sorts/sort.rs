@@ -2139,7 +2139,7 @@ mod tests {
         // Not evenly divisible by batch size
         test_sort_output_batch_size(10, batch_size + 7, create_task_ctx).await?;
 
-        // Evenly divisible by batch size and is larger than 2 batches
+        // Evenly divisible by batch size and is larger than 2 output batches
         test_sort_output_batch_size(10, batch_size * 3, create_task_ctx).await?;
 
         Ok(())
@@ -2154,7 +2154,7 @@ mod tests {
             TaskContext::default().with_session_config(
                 SessionConfig::new()
                     .with_batch_size(batch_size)
-                    .with_sort_in_place_threshold_bytes(usize::MAX),
+                    .with_sort_in_place_threshold_bytes(usize::MAX - 1),
             )
         };
 
@@ -2182,7 +2182,7 @@ mod tests {
             );
         }
 
-        // Evenly divisible by batch size and is larger than 2 batches
+        // Evenly divisible by batch size and is larger than 2 output batches
         {
             let metrics =
                 test_sort_output_batch_size(10, batch_size * 3, create_task_ctx).await?;
@@ -2241,7 +2241,7 @@ mod tests {
             );
         }
 
-        // Evenly divisible by batch size and is larger than 2 batches
+        // Evenly divisible by batch size and is larger than 2 output batches
         {
             let metrics = test_sort_output_batch_size(
                 // Single batch
