@@ -74,7 +74,7 @@ pub fn assert_executable_invariants(plan: &LogicalPlan) -> Result<()> {
 fn assert_valid_extension_nodes(plan: &LogicalPlan, check: InvariantLevel) -> Result<()> {
     plan.apply_with_subqueries(|plan: &LogicalPlan| {
         if let LogicalPlan::Extension(Extension { node }) = plan {
-            node.check_invariants(check, plan)?;
+            node.check_invariants(check)?;
         }
         plan.apply_expressions(|expr| {
             // recursively look for subqueries

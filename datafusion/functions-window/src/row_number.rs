@@ -67,7 +67,7 @@ FROM employees;
 ```
 "#
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct RowNumber {
     signature: Signature,
 }

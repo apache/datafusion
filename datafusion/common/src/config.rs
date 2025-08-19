@@ -1918,6 +1918,43 @@ impl TableParquetOptions {
             ..self
         }
     }
+
+    /// Retrieves all configuration entries from this `TableParquetOptions`.
+    ///
+    /// # Returns
+    ///
+    /// A vector of `ConfigEntry` instances, representing all the configuration options within this
+    pub fn entries(self: &TableParquetOptions) -> Vec<ConfigEntry> {
+        struct Visitor(Vec<ConfigEntry>);
+
+        impl Visit for Visitor {
+            fn some<V: Display>(
+                &mut self,
+                key: &str,
+                value: V,
+                description: &'static str,
+            ) {
+                self.0.push(ConfigEntry {
+                    key: key[1..].to_string(),
+                    value: Some(value.to_string()),
+                    description,
+                })
+            }
+
+            fn none(&mut self, key: &str, description: &'static str) {
+                self.0.push(ConfigEntry {
+                    key: key[1..].to_string(),
+                    value: None,
+                    description,
+                })
+            }
+        }
+
+        let mut v = Visitor(vec![]);
+        self.visit(&mut v, "", "");
+
+        v.0
+    }
 }
 
 impl ConfigField for TableParquetOptions {
@@ -2146,6 +2183,8 @@ impl ConfigField for ConfigFileEncryptionProperties {
         let key = format!("{key_prefix}.footer_key_metadata_as_hex");
         let desc = "Metadata to use for the parquet footer";
         self.footer_key_metadata_as_hex.visit(v, key.as_str(), desc);
+
+        self.column_encryption_properties.visit(v, key_prefix, desc);
 
         let key = format!("{key_prefix}.aad_prefix_as_hex");
         let desc = "AAD prefix to use";
@@ -2626,7 +2665,7 @@ impl Display for OutputFormat {
 mod tests {
     use crate::config::{
         ConfigEntry, ConfigExtension, ConfigField, ConfigFileType, ExtensionOptions,
-        Extensions, TableOptions,
+        Extensions, TableOptions, TableParquetOptions,
     };
     use std::any::Any;
     use std::collections::HashMap;
@@ -2884,7 +2923,7 @@ mod tests {
     #[cfg(feature = "parquet_encryption")]
     #[test]
     fn parquet_encryption_factory_config() {
-        let mut parquet_options = crate::config::TableParquetOptions::default();
+        let mut parquet_options = TableParquetOptions::default();
 
         assert_eq!(parquet_options.crypto.factory_id, None);
         assert_eq!(parquet_options.crypto.factory_options.options.len(), 0);
@@ -2923,6 +2962,23 @@ mod tests {
         assert!(entries
             .iter()
             .any(|item| item.key == "format.bloom_filter_enabled::col1"))
+    }
+
+    #[cfg(feature = "parquet")]
+    #[test]
+    fn parquet_table_parquet_options_config_entry() {
+        let mut table_parquet_options = TableParquetOptions::new();
+        table_parquet_options
+            .set(
+                "crypto.file_encryption.column_key_as_hex::double_field",
+                "31323334353637383930313233343530",
+            )
+            .unwrap();
+        let entries = table_parquet_options.entries();
+        assert!(entries
+            .iter()
+            .any(|item| item.key
+                == "crypto.file_encryption.column_key_as_hex::double_field"))
     }
 
     #[cfg(feature = "parquet")]

@@ -55,7 +55,7 @@ use DataType::{LargeUtf8, Utf8, Utf8View};
     ),
     related_udf(name = "lpad")
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct RPadFunc {
     signature: Signature,
 }

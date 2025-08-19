@@ -187,10 +187,10 @@ impl PruningStatistics for MyCatalog {
 }
 
 fn create_pruning_predicate(expr: Expr, schema: &SchemaRef) -> PruningPredicate {
-    let df_schema = DFSchema::try_from(schema.as_ref().clone()).unwrap();
+    let df_schema = DFSchema::try_from(Arc::clone(schema)).unwrap();
     let props = ExecutionProps::new();
     let physical_expr = create_physical_expr(&expr, &df_schema, &props).unwrap();
-    PruningPredicate::try_new(physical_expr, schema.clone()).unwrap()
+    PruningPredicate::try_new(physical_expr, Arc::clone(schema)).unwrap()
 }
 
 fn i32_array<'a>(values: impl Iterator<Item = &'a Option<i32>>) -> ArrayRef {

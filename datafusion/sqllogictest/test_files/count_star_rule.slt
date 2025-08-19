@@ -34,7 +34,7 @@ logical_plan
 01)Projection: count(Int64(1)) AS count()
 02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
 03)----SubqueryAlias: t
-04)------EmptyRelation
+04)------EmptyRelation: rows=1
 physical_plan
 01)ProjectionExec: expr=[1 as count()]
 02)--PlaceholderRowExec

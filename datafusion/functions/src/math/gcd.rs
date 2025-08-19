@@ -37,7 +37,7 @@ use datafusion_macros::user_doc;
     standard_argument(name = "expression_x", prefix = "First numeric"),
     standard_argument(name = "expression_y", prefix = "Second numeric")
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct GcdFunc {
     signature: Signature,
 }

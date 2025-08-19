@@ -70,7 +70,7 @@ make_udaf_expr_and_func!(
     standard_argument(name = "expression1", prefix = "First"),
     standard_argument(name = "expression2", prefix = "Second")
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct Correlation {
     signature: Signature,
 }

@@ -147,7 +147,7 @@ mod tests {
         }};
     }
 
-    #[derive(Debug)]
+    #[derive(Debug, PartialEq, Eq, Hash)]
     struct ScalarUDFMock {
         signature: Signature,
     }

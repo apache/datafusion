@@ -51,7 +51,7 @@ use datafusion_macros::user_doc;
 +-----------------------------------------------+
 ```
 
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/make_date.rs)
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/date_time_functions.rs)
 "#,
     argument(
         name = "year",
@@ -66,7 +66,7 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
         description = "Day to use when making the date. Can be a constant, column or function, and any combination of arithmetic operators."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct MakeDateFunc {
     signature: Signature,
 }

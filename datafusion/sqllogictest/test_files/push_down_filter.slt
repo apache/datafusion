@@ -175,7 +175,7 @@ CREATE TABLE src_table (
 # File 1:
 query I
 COPY (SELECT * FROM src_table where part_key = 1)
-TO 'test_files/scratch/parquet/test_filter_with_limit/part-0.parquet'
+TO 'test_files/scratch/push_down_filter/test_filter_with_limit/part-0.parquet'
 STORED AS PARQUET;
 ----
 3
@@ -183,7 +183,7 @@ STORED AS PARQUET;
 # File 2:
 query I
 COPY (SELECT * FROM src_table where part_key = 2)
-TO 'test_files/scratch/parquet/test_filter_with_limit/part-1.parquet'
+TO 'test_files/scratch/push_down_filter/test_filter_with_limit/part-1.parquet'
 STORED AS PARQUET;
 ----
 4
@@ -191,7 +191,7 @@ STORED AS PARQUET;
 # File 3:
 query I
 COPY (SELECT * FROM src_table where part_key = 3)
-TO 'test_files/scratch/parquet/test_filter_with_limit/part-2.parquet'
+TO 'test_files/scratch/push_down_filter/test_filter_with_limit/part-2.parquet'
 STORED AS PARQUET;
 ----
 3
@@ -203,14 +203,14 @@ CREATE EXTERNAL TABLE test_filter_with_limit
   value INT
 )
 STORED AS PARQUET
-LOCATION 'test_files/scratch/parquet/test_filter_with_limit/';
+LOCATION 'test_files/scratch/push_down_filter/test_filter_with_limit/';
 
 query TT
 explain select * from test_filter_with_limit where value = 2 limit 1;
 ----
 physical_plan
 01)CoalescePartitionsExec: fetch=1
-02)--DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_filter_with_limit/part-0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_filter_with_limit/part-1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_filter_with_limit/part-2.parquet]]}, projection=[part_key, value], limit=1, file_type=parquet, predicate=value@1 = 2, pruning_predicate=value_null_count@2 != row_count@3 AND value_min@0 <= 2 AND 2 <= value_max@1, required_guarantees=[value in (2)]
+02)--DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter/test_filter_with_limit/part-0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter/test_filter_with_limit/part-1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter/test_filter_with_limit/part-2.parquet]]}, projection=[part_key, value], limit=1, file_type=parquet, predicate=value@1 = 2, pruning_predicate=value_null_count@2 != row_count@3 AND value_min@0 <= 2 AND 2 <= value_max@1, required_guarantees=[value in (2)]
 
 query II
 select * from test_filter_with_limit where value = 2 limit 1;
@@ -285,6 +285,38 @@ explain select a from t where CAST(a AS string) = '0123';
 ----
 physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter/t.parquet]]}, projection=[a], file_type=parquet, predicate=CAST(a@0 AS Utf8View) = 0123
 
+
+# Test dynamic filter pushdown with swapped join inputs (issue #17196)
+# Create tables with different sizes to force join input swapping
+statement ok
+copy (select i as k from generate_series(1, 100) t(i)) to 'test_files/scratch/push_down_filter/small_table.parquet';
+
+statement ok
+copy (select i as k, i as v from generate_series(1, 1000) t(i)) to 'test_files/scratch/push_down_filter/large_table.parquet';
+
+statement ok
+create external table small_table stored as parquet location 'test_files/scratch/push_down_filter/small_table.parquet';
+
+statement ok
+create external table large_table stored as parquet location 'test_files/scratch/push_down_filter/large_table.parquet';
+
+# Test that dynamic filter is applied to the correct table after join input swapping
+# The small_table should be the build side, large_table should be the probe side with dynamic filter
+query TT
+explain select * from small_table join large_table on small_table.k = large_table.k where large_table.v >= 50;
+----
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=8192
+02)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(k@0, k@0)]
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter/small_table.parquet]]}, projection=[k], file_type=parquet
+04)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+05)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter/large_table.parquet]]}, projection=[k, v], file_type=parquet, predicate=v@1 >= 50 AND DynamicFilterPhysicalExpr [ true ], pruning_predicate=v_null_count@1 != row_count@2 AND v_max@0 >= 50, required_guarantees=[]
+
+statement ok
+drop table small_table;
+
+statement ok
+drop table large_table;
 
 statement ok
 drop table t;

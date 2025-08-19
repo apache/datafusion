@@ -1720,7 +1720,10 @@ impl LogicalPlan {
         impl Display for Wrapper<'_> {
             fn fmt(&self, f: &mut Formatter) -> fmt::Result {
                 match self.0 {
-                    LogicalPlan::EmptyRelation(_) => write!(f, "EmptyRelation"),
+                    LogicalPlan::EmptyRelation(EmptyRelation { produce_one_row, schema: _ }) => {
+                        let rows = if *produce_one_row { 1 } else { 0 };
+                        write!(f, "EmptyRelation: rows={rows}")
+                    },
                     LogicalPlan::RecursiveQuery(RecursiveQuery {
                         is_distinct, ..
                     }) => {
@@ -2040,7 +2043,9 @@ impl ToStringifiedPlan for LogicalPlan {
     }
 }
 
-/// Produces no rows: An empty relation with an empty schema
+/// Relationship produces 0 or 1 placeholder rows with specified output schema
+/// In most cases the output schema for `EmptyRelation` would be empty,
+/// however, it can be non-empty typically for optimizer rules
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct EmptyRelation {
     /// Whether to produce a placeholder row
@@ -3522,7 +3527,10 @@ impl Aggregate {
     ) -> Result<Self> {
         if group_expr.is_empty() && aggr_expr.is_empty() {
             return plan_err!(
-                "Aggregate requires at least one grouping or aggregate expression"
+                "Aggregate requires at least one grouping or aggregate expression. \
+                Aggregate without grouping expressions nor aggregate expressions is \
+                logically equivalent to, but less efficient than, VALUES producing \
+                single row. Please use VALUES instead."
             );
         }
         let group_expr_count = grouping_set_expr_count(&group_expr)?;

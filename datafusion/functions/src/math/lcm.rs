@@ -42,7 +42,7 @@ use crate::utils::make_scalar_function;
     standard_argument(name = "expression_x", prefix = "First numeric"),
     standard_argument(name = "expression_y", prefix = "Second numeric")
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct LcmFunc {
     signature: Signature,
 }

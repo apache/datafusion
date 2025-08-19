@@ -29,7 +29,7 @@ use datafusion_expr::{
 
 /// Spark-compatible `luhn_check` expression
 /// <https://spark.apache.org/docs/latest/api/sql/index.html#luhn_check>
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkLuhnCheck {
     signature: Signature,
 }

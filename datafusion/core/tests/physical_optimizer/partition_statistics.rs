@@ -746,8 +746,11 @@ mod test {
         for (i, partition_stream) in partitions.into_iter().enumerate() {
             let batches: Vec<RecordBatch> = partition_stream.try_collect().await?;
             let actual = plan.partition_statistics(Some(i))?;
-            let expected =
-                compute_record_batch_statistics(&[batches.clone()], &schema, None);
+            let expected = compute_record_batch_statistics(
+                std::slice::from_ref(&batches),
+                &schema,
+                None,
+            );
             assert_eq!(actual, expected);
             all_batches.push(batches);
         }

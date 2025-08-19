@@ -26,8 +26,8 @@ use datafusion_common::{exec_datafusion_err, exec_err, Result, ScalarValue};
 use datafusion_expr::window_doc_sections::DOC_SECTION_ANALYTICAL;
 use datafusion_expr::window_state::WindowAggState;
 use datafusion_expr::{
-    udf_equals_hash, Documentation, Literal, PartitionEvaluator, ReversedUDWF, Signature,
-    TypeSignature, Volatility, WindowUDFImpl,
+    Documentation, Literal, PartitionEvaluator, ReversedUDWF, Signature, TypeSignature,
+    Volatility, WindowUDFImpl,
 };
 use datafusion_functions_window_common::field;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
@@ -337,8 +337,6 @@ impl WindowUDFImpl for NthValue {
             NthValueKind::Nth => Some(get_nth_value_doc()),
         }
     }
-
-    udf_equals_hash!(WindowUDFImpl);
 }
 
 #[derive(Debug, Clone)]

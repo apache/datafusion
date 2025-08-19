@@ -56,7 +56,7 @@ use datafusion_macros::user_doc;
         description = "Number of characters to extract. If not specified, returns the rest of the string after the start position."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SubstrFunc {
     signature: Signature,
     aliases: Vec<String>,

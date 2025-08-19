@@ -978,6 +978,7 @@ impl<'a> PruningExpressionBuilder<'a> {
                 }
             };
 
+        // TODO pass in SchemaRef so we don't need to clone the schema
         let df_schema = DFSchema::try_from(schema.clone())?;
         let (column_expr, correct_operator, scalar_expr) = rewrite_expr_to_prunable(
             column_expr,

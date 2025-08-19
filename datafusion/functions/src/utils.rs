@@ -130,18 +130,18 @@ pub mod test {
     /// $ARRAY_TYPE is the column type after function applied
     /// $CONFIG_OPTIONS config options to pass to function
     macro_rules! test_function {
-        ($FUNC:expr, $ARGS:expr, $EXPECTED:expr, $EXPECTED_TYPE:ty, $EXPECTED_DATA_TYPE:expr, $ARRAY_TYPE:ident, $CONFIG_OPTIONS:expr) => {
-            let expected: Result<Option<$EXPECTED_TYPE>> = $EXPECTED;
-            let func = $FUNC;
+    ($FUNC:expr, $ARGS:expr, $EXPECTED:expr, $EXPECTED_TYPE:ty, $EXPECTED_DATA_TYPE:expr, $ARRAY_TYPE:ident, $CONFIG_OPTIONS:expr) => {
+        let expected: Result<Option<$EXPECTED_TYPE>> = $EXPECTED;
+        let func = $FUNC;
 
-            let data_array = $ARGS.iter().map(|arg| arg.data_type()).collect::<Vec<_>>();
-            let cardinality = $ARGS
-                .iter()
-                .fold(Option::<usize>::None, |acc, arg| match arg {
-                    ColumnarValue::Scalar(_) => acc,
-                    ColumnarValue::Array(a) => Some(a.len()),
-                })
-                .unwrap_or(1);
+        let data_array = $ARGS.iter().map(|arg| arg.data_type()).collect::<Vec<_>>();
+        let cardinality = $ARGS
+            .iter()
+            .fold(Option::<usize>::None, |acc, arg| match arg {
+                ColumnarValue::Scalar(_) => acc,
+                ColumnarValue::Array(a) => Some(a.len()),
+            })
+            .unwrap_or(1);
 
             let scalar_arguments = $ARGS.iter().map(|arg| match arg {
                 ColumnarValue::Scalar(scalar) => Some(scalar.clone()),
@@ -156,71 +156,70 @@ pub mod test {
 
             let field_array = data_array.into_iter().zip(nullables).enumerate()
                 .map(|(idx, (data_type, nullable))| arrow::datatypes::Field::new(format!("field_{idx}"), data_type, nullable))
-                .map(std::sync::Arc::new)
-                .collect::<Vec<_>>();
+            .map(std::sync::Arc::new)
+            .collect::<Vec<_>>();
 
-            let return_field = func.return_field_from_args(datafusion_expr::ReturnFieldArgs {
-                arg_fields: &field_array,
-                scalar_arguments: &scalar_arguments_refs,
-            });
+        let return_field = func.return_field_from_args(datafusion_expr::ReturnFieldArgs {
+            arg_fields: &field_array,
+            scalar_arguments: &scalar_arguments_refs,
+        });
             let arg_fields = $ARGS.iter()
-                .enumerate()
+            .enumerate()
                 .map(|(idx, arg)| arrow::datatypes::Field::new(format!("f_{idx}"), arg.data_type(), true).into())
-                .collect::<Vec<_>>();
+            .collect::<Vec<_>>();
 
-            match expected {
-                Ok(expected) => {
-                    assert_eq!(return_field.is_ok(), true);
-                    let return_field = return_field.unwrap();
-                    let return_type = return_field.data_type();
-                    assert_eq!(return_type, &$EXPECTED_DATA_TYPE);
+        match expected {
+            Ok(expected) => {
+                assert_eq!(return_field.is_ok(), true);
+                let return_field = return_field.unwrap();
+                let return_type = return_field.data_type();
+                assert_eq!(return_type, &$EXPECTED_DATA_TYPE);
 
                     let result = func.invoke_with_args(datafusion_expr::ScalarFunctionArgs{
-                        args: $ARGS,
-                        arg_fields,
-                        number_rows: cardinality,
-                        return_field,
+                    args: $ARGS,
+                    arg_fields,
+                    number_rows: cardinality,
+                    return_field,
                         config_options: $CONFIG_OPTIONS
-                    });
+                });
                     assert_eq!(result.is_ok(), true, "function returned an error: {}", result.unwrap_err());
 
                     let result = result.unwrap().to_array(cardinality).expect("Failed to convert to array");
                     let result = result.as_any().downcast_ref::<$ARRAY_TYPE>().expect("Failed to convert to type");
-                    assert_eq!(result.data_type(), &$EXPECTED_DATA_TYPE);
+                assert_eq!(result.data_type(), &$EXPECTED_DATA_TYPE);
 
-                    // value is correct
-                    match expected {
-                        Some(v) => assert_eq!(result.value(0), v),
-                        None => assert!(result.is_null(0)),
-                    };
-                }
-                Err(expected_error) => {
-                    if return_field.is_err() {
-                        match return_field {
-                            Ok(_) => assert!(false, "expected error"),
-                            Err(error) => { datafusion_common::assert_contains!(expected_error.strip_backtrace(), error.strip_backtrace()); }
+                // value is correct
+                match expected {
+                    Some(v) => assert_eq!(result.value(0), v),
+                    None => assert!(result.is_null(0)),
+                };
+            }
+            Err(expected_error) => {
+                if let Ok(return_field) = return_field {
+                    // invoke is expected error - cannot use .expect_err() due to Debug not being implemented
+                    match func.invoke_with_args(datafusion_expr::ScalarFunctionArgs {
+                        args: $ARGS,
+                        arg_fields,
+                        number_rows: cardinality,
+                        return_field,
+                        config_options: $CONFIG_OPTIONS,
+                    }) {
+                        Ok(_) => assert!(false, "expected error"),
+                        Err(error) => {
+                            assert!(expected_error
+                                .strip_backtrace()
+                                .starts_with(&error.strip_backtrace()));
                         }
                     }
-                    else {
-                        let return_field = return_field.unwrap();
-
-                        // invoke is expected error - cannot use .expect_err() due to Debug not being implemented
-                        match func.invoke_with_args(datafusion_expr::ScalarFunctionArgs{
-                            args: $ARGS,
-                            arg_fields,
-                            number_rows: cardinality,
-                            return_field,
-                            config_options: $CONFIG_OPTIONS})
-                        {
-                            Ok(_) => assert!(false, "expected error"),
-                            Err(error) => {
-                                assert!(expected_error.strip_backtrace().starts_with(&error.strip_backtrace()));
-                            }
-                        }
-                    }
+                } else if let Err(error) = return_field {
+                    datafusion_common::assert_contains!(
+                        expected_error.strip_backtrace(),
+                        error.strip_backtrace()
+                    );
                 }
-            };
+            }
         };
+    };
 
         ($FUNC:expr, $ARGS:expr, $EXPECTED:expr, $EXPECTED_TYPE:ty, $EXPECTED_DATA_TYPE:expr, $ARRAY_TYPE:ident) => {
             test_function!(

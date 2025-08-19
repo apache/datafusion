@@ -39,7 +39,7 @@ use std::any::Any;
 +--------------------------------------------+
 ```"#
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct VersionFunc {
     signature: Signature,
 }

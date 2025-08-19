@@ -64,7 +64,7 @@ select struct(a as field_a, b) from t;
         description = "Expression to include in the output struct. Can be a constant, column, or function, any combination of arithmetic or string operators."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct StructFunc {
     signature: Signature,
     aliases: Vec<String>,

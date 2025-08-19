@@ -53,7 +53,7 @@ use datafusion_macros::user_doc;
     argument(name = "n", description = "Number of characters to return."),
     related_udf(name = "left")
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct RightFunc {
     signature: Signature,
 }

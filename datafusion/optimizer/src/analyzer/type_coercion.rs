@@ -744,7 +744,7 @@ fn extract_window_frame_target_type(col_type: &DataType) -> Result<DataType> {
     } else if let DataType::Dictionary(_, value_type) = col_type {
         extract_window_frame_target_type(value_type)
     } else {
-        return internal_err!("Cannot run range queries on datatype: {col_type:?}");
+        internal_err!("Cannot run range queries on datatype: {col_type:?}")
     }
 }
 
@@ -1188,7 +1188,7 @@ mod test {
             plan,
             @r"
         Projection: a < CAST(UInt32(2) AS Float64)
-          EmptyRelation
+          EmptyRelation: rows=0
         "
         )
     }
@@ -1231,8 +1231,8 @@ mod test {
         Projection: a
           Union
             Projection: CAST(datafusion.test.foo.a AS Int64) AS a
-              EmptyRelation
-            EmptyRelation
+              EmptyRelation: rows=0
+            EmptyRelation: rows=0
         "
         )
     }
@@ -1254,7 +1254,7 @@ mod test {
             plan.clone(),
             @r"
         Projection: a
-          EmptyRelation
+          EmptyRelation: rows=0
         "
         )?;
 
@@ -1264,7 +1264,7 @@ mod test {
             plan.clone(),
             @r"
         Projection: CAST(a AS LargeUtf8)
-          EmptyRelation
+          EmptyRelation: rows=0
         "
         )?;
 
@@ -1281,7 +1281,7 @@ mod test {
             bool_plan.clone(),
             @r#"
         Projection: a < CAST(Utf8("foo") AS Utf8View)
-          EmptyRelation
+          EmptyRelation: rows=0
         "#
         )?;
 
@@ -1290,7 +1290,7 @@ mod test {
             plan.clone(),
             @r"
         Projection: a
-          EmptyRelation
+          EmptyRelation: rows=0
         "
         )?;
 
@@ -1300,7 +1300,7 @@ mod test {
             plan.clone(),
             @r"
         Projection: CAST(a AS LargeUtf8)
-          EmptyRelation
+          EmptyRelation: rows=0
         "
         )?;
 
@@ -1320,7 +1320,7 @@ mod test {
             @r"
         Sort: a ASC NULLS FIRST
           Projection: a
-            EmptyRelation
+            EmptyRelation: rows=0
         "
         )?;
 
@@ -1332,7 +1332,7 @@ mod test {
         Projection: CAST(a AS LargeUtf8)
           Sort: a ASC NULLS FIRST
             Projection: a
-              EmptyRelation
+              EmptyRelation: rows=0
         "
         )?;
 
@@ -1350,7 +1350,7 @@ mod test {
         Projection: a
           Sort: a ASC NULLS FIRST
             Projection: a
-              EmptyRelation
+              EmptyRelation: rows=0
         "
         )?;
         // Plan B: coerce requested: Utf8View => LargeUtf8 only on outermost
@@ -1361,7 +1361,7 @@ mod test {
         Projection: CAST(a AS LargeUtf8)
           Sort: a ASC NULLS FIRST
             Projection: a
-              EmptyRelation
+              EmptyRelation: rows=0
         "
         )?;
 
@@ -1385,7 +1385,7 @@ mod test {
             plan.clone(),
             @r"
         Projection: a
-          EmptyRelation
+          EmptyRelation: rows=0
         "
         )?;
 
@@ -1395,7 +1395,7 @@ mod test {
             plan.clone(),
             @r"
         Projection: CAST(a AS LargeBinary)
-          EmptyRelation
+          EmptyRelation: rows=0
         "
         )?;
 
@@ -1413,7 +1413,7 @@ mod test {
             bool_plan.clone(),
             @r#"
         Projection: a < CAST(Binary("8,1,8,1") AS BinaryView)
-          EmptyRelation
+          EmptyRelation: rows=0
         "#
         )?;
 
@@ -1423,7 +1423,7 @@ mod test {
             bool_plan.clone(),
             @r#"
         Projection: a < CAST(Binary("8,1,8,1") AS BinaryView)
-          EmptyRelation
+          EmptyRelation: rows=0
         "#
         )?;
 
@@ -1443,7 +1443,7 @@ mod test {
             @r"
         Sort: a ASC NULLS FIRST
           Projection: a
-            EmptyRelation
+            EmptyRelation: rows=0
         "
         )?;
         // Plan C: coerce requested: BinaryView => LargeBinary
@@ -1454,7 +1454,7 @@ mod test {
         Projection: CAST(a AS LargeBinary)
           Sort: a ASC NULLS FIRST
             Projection: a
-              EmptyRelation
+              EmptyRelation: rows=0
         "
         )?;
 
@@ -1473,7 +1473,7 @@ mod test {
         Projection: a
           Sort: a ASC NULLS FIRST
             Projection: a
-              EmptyRelation
+              EmptyRelation: rows=0
         "
         )?;
 
@@ -1485,7 +1485,7 @@ mod test {
         Projection: CAST(a AS LargeBinary)
           Sort: a ASC NULLS FIRST
             Projection: a
-              EmptyRelation
+              EmptyRelation: rows=0
         "
         )?;
 
@@ -1506,12 +1506,12 @@ mod test {
             plan,
             @r"
         Projection: a < CAST(UInt32(2) AS Float64) OR a < CAST(UInt32(2) AS Float64)
-          EmptyRelation
+          EmptyRelation: rows=0
         "
         )
     }
 
-    #[derive(Debug, Clone)]
+    #[derive(Debug, PartialEq, Eq, Hash)]
     struct TestScalarUDF {
         signature: Signature,
     }
@@ -1552,7 +1552,7 @@ mod test {
             plan,
             @r"
         Projection: TestScalarUDF(CAST(Int32(123) AS Float32))
-          EmptyRelation
+          EmptyRelation: rows=0
         "
         )
     }
@@ -1589,7 +1589,7 @@ mod test {
             plan,
             @r"
         Projection: TestScalarUDF(CAST(Int64(10) AS Float32))
-          EmptyRelation
+          EmptyRelation: rows=0
         "
         )
     }
@@ -1619,7 +1619,7 @@ mod test {
             plan,
             @r"
         Projection: MY_AVG(CAST(Int64(10) AS Float64))
-          EmptyRelation
+          EmptyRelation: rows=0
         "
         )
     }
@@ -1673,7 +1673,7 @@ mod test {
             plan,
             @r"
         Projection: avg(Float64(12))
-          EmptyRelation
+          EmptyRelation: rows=0
         "
         )?;
 
@@ -1692,7 +1692,7 @@ mod test {
             plan,
             @r"
         Projection: avg(CAST(a AS Float64))
-          EmptyRelation
+          EmptyRelation: rows=0
         "
         )
     }
@@ -1728,7 +1728,7 @@ mod test {
             plan,
             @r#"
         Projection: CAST(Utf8("1998-03-18") AS Date32) + IntervalDayTime("IntervalDayTime { days: 123, milliseconds: 456 }")
-          EmptyRelation
+          EmptyRelation: rows=0
         "#
         )
     }
@@ -1743,7 +1743,7 @@ mod test {
             plan,
             @r"
         Projection: a IN ([CAST(Int32(1) AS Int64), CAST(Int8(4) AS Int64), Int64(8)])
-          EmptyRelation
+          EmptyRelation: rows=0
         ")?;
 
         // a in (1,4,8), a is decimal
@@ -1760,7 +1760,7 @@ mod test {
             plan,
             @r"
         Projection: CAST(a AS Decimal128(24, 4)) IN ([CAST(Int32(1) AS Decimal128(24, 4)), CAST(Int8(4) AS Decimal128(24, 4)), CAST(Int64(8) AS Decimal128(24, 4))])
-          EmptyRelation
+          EmptyRelation: rows=0
         ")
     }
 
@@ -1779,7 +1779,7 @@ mod test {
             plan,
             @r#"
         Filter: CAST(a AS Date32) BETWEEN CAST(Utf8("2002-05-08") AS Date32) AND CAST(Utf8("2002-05-08") AS Date32) + IntervalYearMonth("1")
-          EmptyRelation
+          EmptyRelation: rows=0
         "#
         )
     }
@@ -1800,7 +1800,7 @@ mod test {
             plan,
             @r#"
         Filter: CAST(a AS Date32) BETWEEN CAST(Utf8("2002-05-08") AS Date32) + IntervalYearMonth("1") AND CAST(Utf8("2002-12-08") AS Date32)
-          EmptyRelation
+          EmptyRelation: rows=0
         "#
         )
     }
@@ -1815,7 +1815,7 @@ mod test {
             plan,
             @r"
         Filter: CAST(NULL AS Int64) BETWEEN CAST(NULL AS Int64) AND Int64(2)
-          EmptyRelation
+          EmptyRelation: rows=0
         "
         )
     }
@@ -1832,7 +1832,7 @@ mod test {
             plan,
             @r"
         Projection: a IS TRUE
-          EmptyRelation
+          EmptyRelation: rows=0
         "
         )?;
 
@@ -1852,7 +1852,7 @@ mod test {
             plan,
             @r"
         Projection: a IS NOT TRUE
-          EmptyRelation
+          EmptyRelation: rows=0
         "
         )?;
 
@@ -1865,7 +1865,7 @@ mod test {
             plan,
             @r"
         Projection: a IS FALSE
-          EmptyRelation
+          EmptyRelation: rows=0
         "
         )?;
 
@@ -1878,7 +1878,7 @@ mod test {
             plan,
             @r"
         Projection: a IS NOT FALSE
-          EmptyRelation
+          EmptyRelation: rows=0
         "
         )
     }
@@ -1896,7 +1896,7 @@ mod test {
             plan,
             @r#"
         Projection: a LIKE Utf8("abc")
-          EmptyRelation
+          EmptyRelation: rows=0
         "#
         )?;
 
@@ -1910,7 +1910,7 @@ mod test {
             plan,
             @r"
         Projection: a LIKE CAST(NULL AS Utf8)
-          EmptyRelation
+          EmptyRelation: rows=0
         "
         )?;
 
@@ -1935,7 +1935,7 @@ mod test {
             plan,
             @r#"
         Projection: a ILIKE Utf8("abc")
-          EmptyRelation
+          EmptyRelation: rows=0
         "#
         )?;
 
@@ -1949,7 +1949,7 @@ mod test {
             plan,
             @r"
         Projection: a ILIKE CAST(NULL AS Utf8)
-          EmptyRelation
+          EmptyRelation: rows=0
         "
         )?;
 
@@ -1978,7 +1978,7 @@ mod test {
             plan,
             @r"
         Projection: a IS UNKNOWN
-          EmptyRelation
+          EmptyRelation: rows=0
         "
         )?;
 
@@ -1998,7 +1998,7 @@ mod test {
             plan,
             @r"
         Projection: a IS NOT UNKNOWN
-          EmptyRelation
+          EmptyRelation: rows=0
         "
         )
     }
@@ -2019,7 +2019,7 @@ mod test {
             plan,
             @r#"
         Projection: TestScalarUDF(a, Utf8("b"), CAST(Boolean(true) AS Utf8), CAST(Boolean(false) AS Utf8), CAST(Int32(13) AS Utf8))
-          EmptyRelation
+          EmptyRelation: rows=0
         "#
         )
     }
@@ -2076,7 +2076,7 @@ mod test {
             plan,
             @r#"
         Projection: CAST(Utf8("1998-03-18") AS Timestamp(Nanosecond, None)) = CAST(CAST(Utf8("1998-03-18") AS Date32) AS Timestamp(Nanosecond, None))
-          EmptyRelation
+          EmptyRelation: rows=0
         "#
         )
     }
@@ -2424,7 +2424,7 @@ mod test {
             plan,
             @r#"
         Projection: a = CAST(CAST(a AS Map(Field { name: "key_value", data_type: Struct([Field { name: "key", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "value", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, false)) AS Map(Field { name: "entries", data_type: Struct([Field { name: "key", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "value", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, false))
-          EmptyRelation
+          EmptyRelation: rows=0
         "#
         )
     }
@@ -2447,7 +2447,7 @@ mod test {
             plan,
             @r#"
         Projection: IntervalYearMonth("12") + CAST(Utf8("2000-01-01T00:00:00") AS Timestamp(Nanosecond, None))
-          EmptyRelation
+          EmptyRelation: rows=0
         "#
         )
     }
@@ -2472,7 +2472,7 @@ mod test {
             plan,
             @r#"
         Projection: CAST(Utf8("1998-03-18") AS Timestamp(Nanosecond, None)) - CAST(Utf8("1998-03-18") AS Timestamp(Nanosecond, None))
-          EmptyRelation
+          EmptyRelation: rows=0
         "#
         )
     }
@@ -2500,8 +2500,8 @@ mod test {
         Filter: a IN (<subquery>)
           Subquery:
             Projection: CAST(a AS Int64)
-              EmptyRelation
-          EmptyRelation
+              EmptyRelation: rows=0
+          EmptyRelation: rows=0
         "
         )
     }
@@ -2528,8 +2528,8 @@ mod test {
             @r"
         Filter: CAST(a AS Int64) IN (<subquery>)
           Subquery:
-            EmptyRelation
-          EmptyRelation
+            EmptyRelation: rows=0
+          EmptyRelation: rows=0
         "
         )
     }
@@ -2557,8 +2557,8 @@ mod test {
         Filter: CAST(a AS Decimal128(13, 8)) IN (<subquery>)
           Subquery:
             Projection: CAST(a AS Decimal128(13, 8))
-              EmptyRelation
-          EmptyRelation
+              EmptyRelation: rows=0
+          EmptyRelation: rows=0
         "
         )
     }

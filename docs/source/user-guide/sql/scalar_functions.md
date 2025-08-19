@@ -768,7 +768,7 @@ nvl2(expression1, expression2, expression3)
 
 ### `ascii`
 
-Returns the Unicode character code of the first character in a string.
+Returns the first Unicode scalar value of a string.
 
 ```sql
 ascii(str)
@@ -909,7 +909,7 @@ character_length(str)
 
 ### `chr`
 
-Returns the character with the specified ASCII or Unicode code value.
+Returns a string containing the character with the specified Unicode scalar value.
 
 ```sql
 chr(expression)
@@ -2114,9 +2114,10 @@ date_part(part, expression)
   - millisecond
   - microsecond
   - nanosecond
-  - dow (day of the week)
+  - dow (day of the week where Sunday is 0)
   - doy (day of the year)
   - epoch (seconds since Unix epoch)
+  - isodow (day of the week where Monday is 0)
 
 - **expression**: Time expression to operate on. Can be a constant, column, or function.
 
@@ -2222,7 +2223,7 @@ make_date(year, month, day)
 +-----------------------------------------------+
 ```
 
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/make_date.rs)
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/date_time_functions.rs)
 
 ### `now`
 
@@ -2263,7 +2264,7 @@ to_char(expression, format)
 +----------------------------------------------+
 ```
 
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/to_char.rs)
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/date_time_functions.rs)
 
 #### Aliases
 
@@ -2307,7 +2308,7 @@ to_date('2017-05-31', '%Y-%m-%d')
 +---------------------------------------------------------------------+
 ```
 
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/to_date.rs)
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/date_time_functions.rs)
 
 ### `to_local_time`
 
@@ -2402,7 +2403,7 @@ to_timestamp(expression[, ..., format_n])
 +--------------------------------------------------------------------------------------------------------+
 ```
 
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs)
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/date_time_functions.rs)
 
 ### `to_timestamp_micros`
 
@@ -2434,7 +2435,7 @@ to_timestamp_micros(expression[, ..., format_n])
 +---------------------------------------------------------------------------------------------------------------+
 ```
 
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs)
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/date_time_functions.rs)
 
 ### `to_timestamp_millis`
 
@@ -2466,7 +2467,7 @@ to_timestamp_millis(expression[, ..., format_n])
 +---------------------------------------------------------------------------------------------------------------+
 ```
 
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs)
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/date_time_functions.rs)
 
 ### `to_timestamp_nanos`
 
@@ -2498,7 +2499,7 @@ to_timestamp_nanos(expression[, ..., format_n])
 +---------------------------------------------------------------------------------------------------------------+
 ```
 
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs)
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/date_time_functions.rs)
 
 ### `to_timestamp_seconds`
 
@@ -2530,7 +2531,7 @@ to_timestamp_seconds(expression[, ..., format_n])
 +----------------------------------------------------------------------------------------------------------------+
 ```
 
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs)
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/date_time_functions.rs)
 
 ### `to_unixtime`
 

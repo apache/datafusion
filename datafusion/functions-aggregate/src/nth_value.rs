@@ -89,7 +89,7 @@ pub fn nth_value(
 /// Expression for a `NTH_VALUE(..., ... ORDER BY ...)` aggregation. In a multi
 /// partition setting, partial aggregations are computed for every partition,
 /// and then their results are merged.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct NthValueAgg {
     signature: Signature,
 }

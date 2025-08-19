@@ -128,7 +128,7 @@ fn inline_scan_projection_test() -> Result<()> {
         @r"
     SubqueryAlias: ?table?
       Projection: a
-        EmptyRelation
+        EmptyRelation: rows=0
     "
     );
 

@@ -914,7 +914,7 @@ impl SessionContext {
             ..
         } = cmd;
 
-        // sqlparser doesnt accept database / catalog as parameter to CREATE SCHEMA
+        // sqlparser doesn't accept database / catalog as parameter to CREATE SCHEMA
         // so for now, we default to default catalog
         let tokens: Vec<&str> = schema_name.split('.').collect();
         let (catalog, schema_name) = match tokens.len() {

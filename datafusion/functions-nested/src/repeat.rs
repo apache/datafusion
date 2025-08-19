@@ -74,7 +74,7 @@ make_udf_expr_and_func!(
         description = "Value of how many times to repeat the element."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ArrayRepeat {
     signature: Signature,
     aliases: Vec<String>,

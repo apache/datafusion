@@ -27,7 +27,7 @@ use std::sync::Arc;
 
 /// LIKE function for case-sensitive pattern matching
 /// <https://spark.apache.org/docs/latest/api/sql/index.html#like>
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkLike {
     signature: Signature,
 }

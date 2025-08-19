@@ -47,7 +47,7 @@ use datafusion_macros::user_doc;
   integer, replaces digits to the left of the decimal point with `0`."#
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct TruncFunc {
     signature: Signature,
 }

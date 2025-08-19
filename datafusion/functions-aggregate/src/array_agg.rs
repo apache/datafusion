@@ -36,7 +36,7 @@ use datafusion_common::{exec_err, internal_err, Result, ScalarValue};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
-    udf_equals_hash, Accumulator, AggregateUDFImpl, Documentation, Signature, Volatility,
+    Accumulator, AggregateUDFImpl, Documentation, Signature, Volatility,
 };
 use datafusion_functions_aggregate_common::merge_arrays::merge_ordered_arrays;
 use datafusion_functions_aggregate_common::order::AggregateOrderSensitivity;
@@ -227,8 +227,6 @@ impl AggregateUDFImpl for ArrayAgg {
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }
-
-    udf_equals_hash!(AggregateUDFImpl);
 }
 
 #[derive(Debug)]

@@ -32,7 +32,7 @@ use datafusion_functions::utils::make_scalar_function;
 use sha1::{Digest, Sha1};
 
 /// <https://spark.apache.org/docs/latest/api/sql/index.html#sha1>
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkSha1 {
     signature: Signature,
     aliases: Vec<String>,

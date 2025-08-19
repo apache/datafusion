@@ -46,7 +46,7 @@ use datafusion_macros::user_doc;
         description = "Optional timezone to use when converting the integer to a timestamp. If not provided, the default timezone is UTC."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct FromUnixtimeFunc {
     signature: Signature,
 }

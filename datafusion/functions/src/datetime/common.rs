@@ -412,8 +412,8 @@ where
                     }?;
 
                     let r = op(x, v);
-                    if r.is_ok() {
-                        val = Some(Ok(op2(r.unwrap())));
+                    if let Ok(inner) = r {
+                        val = Some(Ok(op2(inner)));
                         break;
                     } else {
                         val = Some(r);

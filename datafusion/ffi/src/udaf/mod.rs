@@ -49,7 +49,6 @@ use crate::{
     util::{rvec_wrapped_to_vec_datatype, vec_datatype_to_rvec_wrapped},
     volatility::FFI_Volatility,
 };
-use datafusion::logical_expr::udf_equals_hash;
 use prost::{DecodeError, Message};
 
 mod accumulator;
@@ -567,8 +566,6 @@ impl AggregateUDFImpl for ForeignAggregateUDF {
             Ok(rvec_wrapped_to_vec_datatype(&result_types)?)
         }
     }
-
-    udf_equals_hash!(AggregateUDFImpl);
 }
 
 #[repr(C)]

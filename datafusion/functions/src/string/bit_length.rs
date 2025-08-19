@@ -45,7 +45,7 @@ use datafusion_macros::user_doc;
     related_udf(name = "length"),
     related_udf(name = "octet_length")
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct BitLengthFunc {
     signature: Signature,
 }

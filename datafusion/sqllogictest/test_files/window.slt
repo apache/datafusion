@@ -263,13 +263,13 @@ logical_plan
 07)------------SubqueryAlias: _sample_data
 08)--------------Union
 09)----------------Projection: Int64(1) AS a, Utf8("aa") AS b
-10)------------------EmptyRelation
+10)------------------EmptyRelation: rows=1
 11)----------------Projection: Int64(3) AS a, Utf8("aa") AS b
-12)------------------EmptyRelation
+12)------------------EmptyRelation: rows=1
 13)----------------Projection: Int64(5) AS a, Utf8("bb") AS b
-14)------------------EmptyRelation
+14)------------------EmptyRelation: rows=1
 15)----------------Projection: Int64(7) AS a, Utf8("bb") AS b
-16)------------------EmptyRelation
+16)------------------EmptyRelation: rows=1
 physical_plan
 01)SortPreservingMergeExec: [b@0 ASC NULLS LAST]
 02)--SortExec: expr=[b@0 ASC NULLS LAST], preserve_partitioning=[true]
@@ -348,13 +348,13 @@ logical_plan
 09)----------------SubqueryAlias: _sample_data
 10)------------------Union
 11)--------------------Projection: Int64(1) AS a, Utf8("aa") AS b
-12)----------------------EmptyRelation
+12)----------------------EmptyRelation: rows=1
 13)--------------------Projection: Int64(3) AS a, Utf8("aa") AS b
-14)----------------------EmptyRelation
+14)----------------------EmptyRelation: rows=1
 15)--------------------Projection: Int64(5) AS a, Utf8("bb") AS b
-16)----------------------EmptyRelation
+16)----------------------EmptyRelation: rows=1
 17)--------------------Projection: Int64(7) AS a, Utf8("bb") AS b
-18)----------------------EmptyRelation
+18)----------------------EmptyRelation: rows=1
 physical_plan
 01)SortPreservingMergeExec: [b@0 ASC NULLS LAST]
 02)--ProjectionExec: expr=[b@0 as b, max(d.a)@1 as max_a, max(d.seq)@2 as max(d.seq)]

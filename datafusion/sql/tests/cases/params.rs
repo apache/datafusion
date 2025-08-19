@@ -266,7 +266,7 @@ fn test_prepare_statement_to_plan_params_as_constants() {
         @r#"
     Prepare: "my_plan" [Int32]
       Projection: $1
-        EmptyRelation
+        EmptyRelation: rows=1
     "#
     );
     assert_snapshot!(dt, @r#"[Int32]"#);
@@ -279,7 +279,7 @@ fn test_prepare_statement_to_plan_params_as_constants() {
         plan_with_params,
         @r"
     Projection: Int32(10) AS $1
-      EmptyRelation
+      EmptyRelation: rows=1
     "
     );
 
@@ -291,7 +291,7 @@ fn test_prepare_statement_to_plan_params_as_constants() {
         @r#"
     Prepare: "my_plan" [Int32]
       Projection: Int64(1) + $1
-        EmptyRelation
+        EmptyRelation: rows=1
     "#
     );
     assert_snapshot!(dt, @r#"[Int32]"#);
@@ -304,7 +304,7 @@ fn test_prepare_statement_to_plan_params_as_constants() {
         plan_with_params,
         @r"
     Projection: Int64(1) + Int32(10) AS Int64(1) + $1
-      EmptyRelation
+      EmptyRelation: rows=1
     "
     );
 
@@ -316,7 +316,7 @@ fn test_prepare_statement_to_plan_params_as_constants() {
         @r#"
     Prepare: "my_plan" [Int32, Float64]
       Projection: Int64(1) + $1 + $2
-        EmptyRelation
+        EmptyRelation: rows=1
     "#
     );
     assert_snapshot!(dt, @r#"[Int32, Float64]"#);
@@ -332,7 +332,7 @@ fn test_prepare_statement_to_plan_params_as_constants() {
         plan_with_params,
         @r"
     Projection: Int64(1) + Int32(10) + Float64(10) AS Int64(1) + $1 + $2
-      EmptyRelation
+      EmptyRelation: rows=1
     "
     );
 }

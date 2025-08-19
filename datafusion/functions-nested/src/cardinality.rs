@@ -80,7 +80,7 @@ impl Cardinality {
         description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct Cardinality {
     signature: Signature,
     aliases: Vec<String>,

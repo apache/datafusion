@@ -43,7 +43,7 @@ use std::sync::Arc;
 ```"#,
     standard_argument(name = "union", prefix = "Union")
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct UnionTagFunc {
     signature: Signature,
 }

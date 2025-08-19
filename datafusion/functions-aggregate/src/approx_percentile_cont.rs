@@ -39,8 +39,8 @@ use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::type_coercion::aggregates::{INTEGERS, NUMERICS};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
-    udf_equals_hash, Accumulator, AggregateUDFImpl, ColumnarValue, Documentation, Expr,
-    Signature, TypeSignature, Volatility,
+    Accumulator, AggregateUDFImpl, ColumnarValue, Documentation, Expr, Signature,
+    TypeSignature, Volatility,
 };
 use datafusion_functions_aggregate_common::tdigest::{
     TDigest, TryIntoF64, DEFAULT_MAX_SIZE,
@@ -91,7 +91,24 @@ pub fn approx_percentile_cont(
 +-----------------------------------------------------------------------+
 | 65.0                                                                  |
 +-----------------------------------------------------------------------+
-```"#,
+```
+An alternate syntax is also supported:
+```sql
+> SELECT approx_percentile_cont(column_name, 0.75) FROM table_name;
++-----------------------------------------------+
+| approx_percentile_cont(column_name, 0.75)     |
++-----------------------------------------------+
+| 65.0                                          |
++-----------------------------------------------+
+
+> SELECT approx_percentile_cont(column_name, 0.75, 100) FROM table_name;
++----------------------------------------------------------+
+| approx_percentile_cont(column_name, 0.75, 100)           |
++----------------------------------------------------------+
+| 65.0                                                     |
++----------------------------------------------------------+
+```
+"#,
     standard_argument(name = "expression",),
     argument(
         name = "percentile",
@@ -337,8 +354,6 @@ impl AggregateUDFImpl for ApproxPercentileCont {
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }
-
-    udf_equals_hash!(AggregateUDFImpl);
 }
 
 #[derive(Debug)]

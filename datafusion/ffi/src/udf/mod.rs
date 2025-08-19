@@ -33,7 +33,7 @@ use arrow::{
 };
 use arrow_schema::FieldRef;
 use datafusion::config::ConfigOptions;
-use datafusion::logical_expr::{udf_equals_hash, ReturnFieldArgs};
+use datafusion::logical_expr::ReturnFieldArgs;
 use datafusion::{
     error::DataFusionError,
     logical_expr::type_coercion::functions::data_types_with_scalar_udf,
@@ -444,8 +444,6 @@ impl ScalarUDFImpl for ForeignScalarUDF {
             Ok(rvec_wrapped_to_vec_datatype(&result_types)?)
         }
     }
-
-    udf_equals_hash!(ScalarUDFImpl);
 }
 
 #[cfg(test)]

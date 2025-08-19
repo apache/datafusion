@@ -81,7 +81,7 @@ make_udf_expr_and_func!(ArrayHasAny,
         description = "Scalar or Array expression. Can be a constant, column, or function, and any combination of array operators."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ArrayHas {
     signature: Signature,
     aliases: Vec<String>,
@@ -482,7 +482,7 @@ fn array_has_any_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ArrayHasAll {
     signature: Signature,
     aliases: Vec<String>,
@@ -556,7 +556,7 @@ impl ScalarUDFImpl for ArrayHasAll {
         description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ArrayHasAny {
     signature: Signature,
     aliases: Vec<String>,

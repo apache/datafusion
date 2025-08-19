@@ -75,7 +75,7 @@ make_udaf_expr_and_func!(
 ```"#,
     standard_argument(name = "expression",)
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct Avg {
     signature: Signature,
     aliases: Vec<String>,

@@ -133,7 +133,7 @@ fn animal() -> Result<RecordBatch> {
 ///
 /// Since this is a simplified example, it does not call an LLM service, but
 /// could be extended to do so in a real-world scenario.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 struct AskLLM {
     signature: Signature,
 }

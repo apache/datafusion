@@ -43,7 +43,7 @@ use std::any::Any;
     related_udf(name = "initcap"),
     related_udf(name = "lower")
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct UpperFunc {
     signature: Signature,
 }

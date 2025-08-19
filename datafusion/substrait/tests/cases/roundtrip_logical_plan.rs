@@ -112,11 +112,7 @@ impl UserDefinedLogicalNode for MockUserDefinedLogicalPlan {
         &self.empty_schema
     }
 
-    fn check_invariants(
-        &self,
-        _check: InvariantLevel,
-        _plan: &LogicalPlan,
-    ) -> Result<()> {
+    fn check_invariants(&self, _check: InvariantLevel) -> Result<()> {
         Ok(())
     }
 
@@ -348,7 +344,7 @@ async fn decimal_literal() -> Result<()> {
 
 #[tokio::test]
 async fn null_decimal_literal() -> Result<()> {
-    roundtrip("SELECT * FROM data WHERE b = NULL").await
+    roundtrip("SELECT *, CAST(NULL AS decimal(10, 2)) FROM data").await
 }
 
 #[tokio::test]

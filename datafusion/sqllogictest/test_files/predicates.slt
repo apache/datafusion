@@ -777,6 +777,52 @@ physical_plan
 16)--------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 17)----------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/tpch-csv/part.csv]]}, projection=[p_partkey, p_brand], file_type=csv, has_header=true
 
+# Simplification of a binary operator with a NULL value
+
+statement ok
+create table t(x int) as values (1), (2), (3);
+
+query TT
+EXPLAIN FORMAT INDENT SELECT x > NULL FROM t;
+----
+logical_plan
+01)Projection: Boolean(NULL) AS t.x > NULL
+02)--TableScan: t projection=[]
+physical_plan
+01)ProjectionExec: expr=[NULL as t.x > NULL]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query TT
+EXPLAIN FORMAT INDENT SELECT * FROM t WHERE x > NULL;
+----
+logical_plan EmptyRelation: rows=0
+physical_plan EmptyExec
+
+query TT
+EXPLAIN FORMAT INDENT SELECT * FROM t WHERE x < 5 AND (10 * NULL < x);
+----
+logical_plan
+01)Filter: t.x < Int32(5) AND Boolean(NULL)
+02)--TableScan: t projection=[x]
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=8192
+02)--FilterExec: x@0 < 5 AND NULL
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+query TT
+EXPLAIN FORMAT INDENT SELECT * FROM t WHERE x < 5 OR (10 * NULL < x);
+----
+logical_plan
+01)Filter: t.x < Int32(5) OR Boolean(NULL)
+02)--TableScan: t projection=[x]
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=8192
+02)--FilterExec: x@0 < 5 OR NULL
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+drop table t;
+
 # Inlist simplification
 
 statement ok
@@ -785,7 +831,7 @@ create table t(x int) as values (1), (2), (3);
 query TT
 explain select x from t where x IN (1,2,3) AND x IN (4,5);
 ----
-logical_plan EmptyRelation
+logical_plan EmptyRelation: rows=0
 physical_plan EmptyExec
 
 query TT
@@ -808,8 +854,29 @@ physical_plan
 query TT
 explain select x from t where x NOT IN (1,2,3,4,5) AND x IN (1,2,3);
 ----
-logical_plan EmptyRelation
+logical_plan EmptyRelation: rows=0
 physical_plan EmptyExec
+
+query error DataFusion error: This feature is not implemented: Physical plan does not support logical expression InSubquery\(InSubquery \{ expr: Literal\(Int64\(NULL\), None\), subquery: <subquery>, negated: false \}\)
+WITH empty AS (SELECT 10 WHERE false)
+SELECT
+    NULL IN (SELECT * FROM empty), -- should be false, as the right side is empty relation
+    NULL NOT IN (SELECT * FROM empty) -- should be true, as the right side is empty relation
+FROM (SELECT 1) t;
+
+query I
+WITH empty AS (SELECT 10 WHERE false)
+SELECT * FROM (SELECT 1) t
+WHERE NOT (NULL IN (SELECT * FROM empty)); -- all rows should be returned
+----
+1
+
+query I
+WITH empty AS (SELECT 10 WHERE false)
+SELECT * FROM (SELECT 1) t
+WHERE NULL NOT IN (SELECT * FROM empty); -- all rows should be returned
+----
+1
 
 statement ok
 drop table t;

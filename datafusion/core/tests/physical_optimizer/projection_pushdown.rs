@@ -63,7 +63,7 @@ use insta::assert_snapshot;
 use itertools::Itertools;
 
 /// Mocked UDF
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 struct DummyUDF {
     signature: Signature,
 }

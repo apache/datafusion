@@ -30,8 +30,7 @@ use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::type_coercion::aggregates::{INTEGERS, NUMERICS};
 use datafusion_expr::Volatility::Immutable;
 use datafusion_expr::{
-    udf_equals_hash, Accumulator, AggregateUDFImpl, Documentation, Expr, Signature,
-    TypeSignature,
+    Accumulator, AggregateUDFImpl, Documentation, Expr, Signature, TypeSignature,
 };
 use datafusion_functions_aggregate_common::tdigest::{Centroid, TDigest};
 use datafusion_macros::user_doc;
@@ -86,6 +85,16 @@ pub fn approx_percentile_cont_with_weight(
 +--------------------------------------------------------------------------------------------------+
 | 78.5                                                                                             |
 +--------------------------------------------------------------------------------------------------+
+```
+An alternative syntax is also supported:
+
+```sql
+> SELECT approx_percentile_cont_with_weight(column_name, weight_column, 0.90) FROM table_name;
++--------------------------------------------------+
+| approx_percentile_cont_with_weight(column_name, weight_column, 0.90) |
++--------------------------------------------------+
+| 78.5                                             |
++--------------------------------------------------+
 ```"#,
     standard_argument(name = "expression", prefix = "The"),
     argument(
@@ -238,8 +247,6 @@ impl AggregateUDFImpl for ApproxPercentileContWithWeight {
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }
-
-    udf_equals_hash!(AggregateUDFImpl);
 }
 
 #[derive(Debug)]

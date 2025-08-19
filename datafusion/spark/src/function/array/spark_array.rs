@@ -35,7 +35,7 @@ use crate::function::functions_nested_utils::make_scalar_function;
 
 const ARRAY_FIELD_DEFAULT_NAME: &str = "element";
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkArray {
     signature: Signature,
     aliases: Vec<String>,

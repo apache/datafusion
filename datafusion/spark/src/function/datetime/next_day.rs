@@ -27,7 +27,7 @@ use datafusion_expr::{
 };
 
 /// <https://spark.apache.org/docs/latest/api/sql/index.html#next_day>
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkNextDay {
     signature: Signature,
 }

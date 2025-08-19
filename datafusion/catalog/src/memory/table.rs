@@ -242,7 +242,7 @@ impl TableProvider for MemTable {
         // add sort information if present
         let sort_order = self.sort_order.lock();
         if !sort_order.is_empty() {
-            let df_schema = DFSchema::try_from(self.schema.as_ref().clone())?;
+            let df_schema = DFSchema::try_from(Arc::clone(&self.schema))?;
 
             let eqp = state.execution_props();
             let mut file_sort_order = vec![];

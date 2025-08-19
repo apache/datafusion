@@ -88,7 +88,7 @@ make_udf_expr_and_func!(
         description = "Increase by step (cannot be 0). Steps less than a day are supported only for timestamp ranges."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct Range {
     signature: Signature,
     aliases: Vec<String>,
@@ -218,7 +218,7 @@ make_udf_expr_and_func!(
         description = "Increase by step (can not be 0). Steps less than a day are supported only for timestamp ranges."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub(super) struct GenSeries {
     signature: Signature,
     aliases: Vec<String>,

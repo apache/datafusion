@@ -20,13 +20,14 @@
 use std::any::Any;
 use std::cmp::Ordering;
 use std::fmt::{self, Debug, Formatter, Write};
-use std::hash::{DefaultHasher, Hash, Hasher};
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::vec;
 
 use arrow::datatypes::{DataType, Field, FieldRef};
 
 use datafusion_common::{exec_err, not_impl_err, Result, ScalarValue, Statistics};
+use datafusion_expr_common::dyn_eq::{DynEq, DynHash};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 
 use crate::expr::{
@@ -41,7 +42,7 @@ use crate::groups_accumulator::GroupsAccumulator;
 use crate::udf_eq::UdfEq;
 use crate::utils::format_state_name;
 use crate::utils::AggregateOrderSensitivity;
-use crate::{expr_vec_fmt, udf_equals_hash, Accumulator, Expr};
+use crate::{expr_vec_fmt, Accumulator, Expr};
 use crate::{Documentation, Signature};
 
 /// Logical representation of a user-defined [aggregate function] (UDAF).
@@ -82,7 +83,7 @@ pub struct AggregateUDF {
 
 impl PartialEq for AggregateUDF {
     fn eq(&self, other: &Self) -> bool {
-        self.inner.equals(other.inner.as_ref())
+        self.inner.dyn_eq(other.inner.as_any())
     }
 }
 
@@ -90,7 +91,7 @@ impl Eq for AggregateUDF {}
 
 impl Hash for AggregateUDF {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.inner.hash_value().hash(state)
+        self.inner.dyn_hash(state)
     }
 }
 
@@ -373,7 +374,7 @@ where
 /// # use arrow::datatypes::Schema;
 /// # use arrow::datatypes::Field;
 ///
-/// #[derive(Debug, Clone)]
+/// #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 /// struct GeoMeanUdf {
 ///   signature: Signature,
 /// }
@@ -426,7 +427,7 @@ where
 /// // Call the function `geo_mean(col)`
 /// let expr = geometric_mean.call(vec![col("a")]);
 /// ```
-pub trait AggregateUDFImpl: Debug + Send + Sync {
+pub trait AggregateUDFImpl: Debug + DynEq + DynHash + Send + Sync {
     /// Returns this object as an [`Any`] trait object
     fn as_any(&self) -> &dyn Any;
 
@@ -914,41 +915,6 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
         not_impl_err!("Function {} does not implement coerce_types", self.name())
     }
 
-    /// Return true if this aggregate UDF is equal to the other.
-    ///
-    /// Allows customizing the equality of aggregate UDFs.
-    /// *Must* be implemented explicitly if the UDF type has internal state.
-    /// Must be consistent with [`Self::hash_value`] and follow the same rules as [`Eq`]:
-    ///
-    /// - reflexive: `a.equals(a)`;
-    /// - symmetric: `a.equals(b)` implies `b.equals(a)`;
-    /// - transitive: `a.equals(b)` and `b.equals(c)` implies `a.equals(c)`.
-    ///
-    /// By default, compares type, [`Self::name`], [`Self::aliases`] and [`Self::signature`].
-    fn equals(&self, other: &dyn AggregateUDFImpl) -> bool {
-        self.as_any().type_id() == other.as_any().type_id()
-            && self.name() == other.name()
-            && self.aliases() == other.aliases()
-            && self.signature() == other.signature()
-    }
-
-    /// Returns a hash value for this aggregate UDF.
-    ///
-    /// Allows customizing the hash code of aggregate UDFs.
-    /// *Must* be implemented explicitly whenever [`Self::equals`] is implemented.
-    ///
-    /// Similarly to [`Hash`] and [`Eq`], if [`Self::equals`] returns true for two UDFs,
-    /// their `hash_value`s must be the same.
-    ///
-    /// By default, it only hashes the type. The other fields are not hashed, as usually the
-    /// name, signature, and aliases are implied by the UDF type. Recall that UDFs with state
-    /// (and thus possibly changing fields) must override [`Self::equals`] and [`Self::hash_value`].
-    fn hash_value(&self) -> u64 {
-        let hasher = &mut DefaultHasher::new();
-        self.as_any().type_id().hash(hasher);
-        hasher.finish()
-    }
-
     /// If this function is max, return true
     /// If the function is min, return false
     /// Otherwise return None (the default)
@@ -1008,10 +974,11 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
 
 impl PartialEq for dyn AggregateUDFImpl {
     fn eq(&self, other: &Self) -> bool {
-        self.equals(other)
+        self.dyn_eq(other.as_any())
     }
 }
 
+// TODO (https://github.com/apache/datafusion/issues/17064) PartialOrd is not consistent with PartialEq for `dyn AggregateUDFImpl` and it should be
 // Manual implementation of `PartialOrd`
 // There might be some wackiness with it, but this is based on the impl of eq for AggregateUDFImpl
 // https://users.rust-lang.org/t/how-to-compare-two-trait-objects-for-equality/88063/5
@@ -1194,8 +1161,6 @@ impl AggregateUDFImpl for AliasedAggregateUDFImpl {
         self.inner.set_monotonicity(data_type)
     }
 
-    udf_equals_hash!(AggregateUDFImpl);
-
     fn documentation(&self) -> Option<&Documentation> {
         self.inner.documentation()
     }
@@ -1265,8 +1230,9 @@ mod test {
     };
     use std::any::Any;
     use std::cmp::Ordering;
+    use std::hash::{DefaultHasher, Hash, Hasher};
 
-    #[derive(Debug, Clone)]
+    #[derive(Debug, Clone, PartialEq, Eq, Hash)]
     struct AMeanUdf {
         signature: Signature,
     }
@@ -1307,7 +1273,7 @@ mod test {
         }
     }
 
-    #[derive(Debug, Clone)]
+    #[derive(Debug, Clone, PartialEq, Eq, Hash)]
     struct BMeanUdf {
         signature: Signature,
     }
@@ -1348,6 +1314,16 @@ mod test {
     }
 
     #[test]
+    fn test_partial_eq() {
+        let a1 = AggregateUDF::from(AMeanUdf::new());
+        let a2 = AggregateUDF::from(AMeanUdf::new());
+        let eq = a1 == a2;
+        assert!(eq);
+        assert_eq!(a1, a2);
+        assert_eq!(hash(a1), hash(a2));
+    }
+
+    #[test]
     fn test_partial_ord() {
         // Test validates that partial ord is defined for AggregateUDF using the name and signature,
         // not intended to exhaustively test all possibilities
@@ -1358,5 +1334,11 @@ mod test {
         let b1 = AggregateUDF::from(BMeanUdf::new());
         assert!(a1 < b1);
         assert!(!(a1 == b1));
+    }
+
+    fn hash<T: Hash>(value: T) -> u64 {
+        let hasher = &mut DefaultHasher::new();
+        value.hash(hasher);
+        hasher.finish()
     }
 }

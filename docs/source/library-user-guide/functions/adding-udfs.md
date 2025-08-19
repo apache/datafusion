@@ -83,7 +83,7 @@ use datafusion_doc::Documentation;
     description = "Add one udf",
     syntax_example = "add_one(1)"
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 struct AddOne {
   signature: Signature,
 }
@@ -146,7 +146,7 @@ We now need to register the function with DataFusion so that it can be used in t
 #     description = "Add one udf",
 #     syntax_example = "add_one(1)"
 # )]
-# #[derive(Debug)]
+# #[derive(Debug, PartialEq, Eq, Hash)]
 # struct AddOne {
 #   signature: Signature,
 # }
@@ -384,7 +384,7 @@ To add a Scalar Async UDF, you need to:
 # use std::any::Any;
 # use std::sync::Arc;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct AsyncUpper {
     signature: Signature,
 }
@@ -488,7 +488,7 @@ We can now transfer the async UDF into the normal scalar using `into_scalar_udf`
 # use std::any::Any;
 # use std::sync::Arc;
 #
-# #[derive(Debug)]
+# #[derive(Debug, PartialEq, Eq, Hash)]
 # pub struct AsyncUpper {
 #     signature: Signature,
 # }

@@ -52,7 +52,7 @@ use datafusion_macros::user_doc;
     ),
     standard_argument(name = "replacement", prefix = "Replacement substring")
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ReplaceFunc {
     signature: Signature,
 }

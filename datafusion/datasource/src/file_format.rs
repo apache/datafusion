@@ -48,7 +48,7 @@ pub const DEFAULT_SCHEMA_INFER_MAX_RECORD: usize = 1000;
 /// [`TableProvider`]: https://docs.rs/datafusion/latest/datafusion/catalog/trait.TableProvider.html
 #[async_trait]
 pub trait FileFormat: Send + Sync + fmt::Debug {
-    /// Returns the table provider as [`Any`](std::any::Any) so that it can be
+    /// Returns the table provider as [`Any`] so that it can be
     /// downcast to a specific implementation.
     fn as_any(&self) -> &dyn Any;
 

@@ -82,7 +82,7 @@ fn convert_to_state_bench(
         b.iter(|| {
             black_box(
                 accumulator
-                    .convert_to_state(&[values.clone()], opt_filter)
+                    .convert_to_state(std::slice::from_ref(&values), opt_filter)
                     .unwrap(),
             )
         })
@@ -125,7 +125,11 @@ fn count_benchmark(c: &mut Criterion) {
     c.bench_function("count low cardinality dict 20% nulls, no filter", |b| {
         b.iter(|| {
             #[allow(clippy::unit_arg)]
-            black_box(accumulator.update_batch(&[values.clone()]).unwrap())
+            black_box(
+                accumulator
+                    .update_batch(std::slice::from_ref(&values))
+                    .unwrap(),
+            )
         })
     });
 }

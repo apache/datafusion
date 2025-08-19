@@ -313,17 +313,17 @@
 //! ```
 //!
 //! A [`TableProvider`] provides information for planning and
-//! an [`ExecutionPlan`] for execution. DataFusion includes [`ListingTable`],
-//! a [`TableProvider`] which reads individual files or directories of files
-//! ("partitioned datasets") of the same file format. Users can add
-//! support for new file formats by implementing the [`TableProvider`]
-//! trait.
+//! an [`ExecutionPlan`] for execution. DataFusion includes two built-in
+//! table providers that support common file formats and require no runtime services,
+//! [`ListingTable`] and [`MemTable`]. You can add support for any other data
+//! source and/or file formats by implementing the [`TableProvider`] trait.
 //!
 //! See also:
 //!
 //! 1. [`ListingTable`]: Reads data from one or more Parquet, JSON, CSV, or AVRO
-//!    files supporting HIVE style partitioning, optional compression, directly
-//!    reading from remote object store and more.
+//!    files in one or more local or remote directories. Supports HIVE style
+//!    partitioning, optional compression, directly reading from remote
+//!    object store, file metadata caching, and more.
 //!
 //! 2. [`MemTable`]: Reads data from in memory [`RecordBatch`]es.
 //!

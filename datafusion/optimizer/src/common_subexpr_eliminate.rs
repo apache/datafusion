@@ -1646,7 +1646,7 @@ mod test {
         Ok(())
     }
 
-    #[derive(Debug)]
+    #[derive(Debug, PartialEq, Eq, Hash)]
     pub struct TestUdf {
         signature: Signature,
     }
@@ -1773,7 +1773,7 @@ mod test {
         ScalarUDF::new_from_impl(RandomStub::new())
     }
 
-    #[derive(Debug)]
+    #[derive(Debug, PartialEq, Eq, Hash)]
     struct RandomStub {
         signature: Signature,
     }

@@ -1783,7 +1783,7 @@ mod tests {
     use super::*;
 
     /// Mocked UDF
-    #[derive(Debug)]
+    #[derive(Debug, PartialEq, Eq, Hash)]
     struct DummyUDF {
         signature: Signature,
     }

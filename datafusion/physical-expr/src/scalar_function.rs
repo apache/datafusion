@@ -165,6 +165,29 @@ impl ScalarFunctionExpr {
     pub fn config_options(&self) -> &ConfigOptions {
         &self.config_options
     }
+
+    /// Given an arbitrary PhysicalExpr attempt to downcast it to a ScalarFunctionExpr
+    /// and verify that its inner function is of type T.
+    /// If the downcast fails, or the function is not of type T, returns `None`.
+    /// Otherwise returns `Some(ScalarFunctionExpr)`.
+    pub fn try_downcast_func<T>(expr: &dyn PhysicalExpr) -> Option<&ScalarFunctionExpr>
+    where
+        T: 'static,
+    {
+        match expr.as_any().downcast_ref::<ScalarFunctionExpr>() {
+            Some(scalar_expr)
+                if scalar_expr
+                    .fun()
+                    .inner()
+                    .as_any()
+                    .downcast_ref::<T>()
+                    .is_some() =>
+            {
+                Some(scalar_expr)
+            }
+            _ => None,
+        }
+    }
 }
 
 impl fmt::Display for ScalarFunctionExpr {
@@ -203,13 +226,12 @@ impl Hash for ScalarFunctionExpr {
             name,
             args,
             return_field,
-            config_options,
+            config_options: _, // expensive to hash, and often equal
         } = self;
         fun.hash(state);
         name.hash(state);
         args.hash(state);
         return_field.hash(state);
-        sorted_config_entries(config_options).hash(state);
     }
 }
 

@@ -29,7 +29,7 @@ use datafusion_expr::{
 
 /// Spark-compatible `char` expression
 /// <https://spark.apache.org/docs/latest/api/sql/index.html#char>
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct CharFunc {
     signature: Signature,
 }

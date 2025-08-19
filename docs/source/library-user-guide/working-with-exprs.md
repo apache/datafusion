@@ -322,7 +322,7 @@ async fn main() -> Result<()> {
     let plan = ctx.sql(sql).await?.into_optimized_plan()?.clone();
 
     let expected = r#"Projection: Int64(6) AS added_one
-  EmptyRelation"#;
+  EmptyRelation: rows=1"#;
 
     assert_eq!(plan.to_string(), expected);
 

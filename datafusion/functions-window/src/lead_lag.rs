@@ -25,8 +25,8 @@ use datafusion_common::arrow::datatypes::Field;
 use datafusion_common::{arrow_datafusion_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::window_doc_sections::DOC_SECTION_ANALYTICAL;
 use datafusion_expr::{
-    udf_equals_hash, Documentation, Literal, PartitionEvaluator, ReversedUDWF, Signature,
-    TypeSignature, Volatility, WindowUDFImpl,
+    Documentation, Literal, PartitionEvaluator, ReversedUDWF, Signature, TypeSignature,
+    Volatility, WindowUDFImpl,
 };
 use datafusion_functions_window_common::expr::ExpressionArgs;
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
@@ -299,8 +299,6 @@ impl WindowUDFImpl for WindowShift {
             WindowShiftKind::Lead => Some(get_lead_doc()),
         }
     }
-
-    udf_equals_hash!(WindowUDFImpl);
 }
 
 /// When `lead`/`lag` is evaluated on a `NULL` expression we attempt to

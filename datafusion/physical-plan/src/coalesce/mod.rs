@@ -603,7 +603,7 @@ mod tests {
         }
     }
     fn batch_to_pretty_strings(batch: &RecordBatch) -> String {
-        arrow::util::pretty::pretty_format_batches(&[batch.clone()])
+        arrow::util::pretty::pretty_format_batches(std::slice::from_ref(batch))
             .unwrap()
             .to_string()
     }

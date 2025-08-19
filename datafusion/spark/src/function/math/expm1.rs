@@ -28,7 +28,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 /// <https://spark.apache.org/docs/latest/api/sql/index.html#expm1>
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkExpm1 {
     signature: Signature,
     aliases: Vec<String>,

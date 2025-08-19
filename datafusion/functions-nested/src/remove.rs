@@ -63,7 +63,7 @@ make_udf_expr_and_func!(
         description = "Element to be removed from the array."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ArrayRemove {
     signature: Signature,
     aliases: Vec<String>,
@@ -147,7 +147,7 @@ make_udf_expr_and_func!(
     ),
     argument(name = "max", description = "Number of first occurrences to remove.")
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub(super) struct ArrayRemoveN {
     signature: Signature,
     aliases: Vec<String>,
@@ -224,7 +224,7 @@ make_udf_expr_and_func!(
         description = "Element to be removed from the array."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub(super) struct ArrayRemoveAll {
     signature: Signature,
     aliases: Vec<String>,
