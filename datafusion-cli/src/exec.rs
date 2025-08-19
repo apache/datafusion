@@ -31,7 +31,7 @@ use datafusion::common::{plan_datafusion_err, plan_err};
 use datafusion::config::ConfigFileType;
 use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::error::{DataFusionError, Result};
-use datafusion::execution::memory_pool::MemoryConsumer;
+use datafusion::execution::memory_pool::{format_metrics, MemoryConsumer};
 use datafusion::logical_expr::{DdlStatement, LogicalPlan};
 use datafusion::physical_plan::execution_plan::EmissionType;
 use datafusion::physical_plan::spill::get_record_batch_memory_size;
@@ -312,6 +312,14 @@ impl StatementExecutor {
                 &options.format,
             )?;
             reservation.free();
+        }
+        if ctx.memory_profiling() {
+            if let Some(pool) = ctx.tracked_memory_pool() {
+                let metrics = pool.consumer_metrics();
+                println!("{}", format_metrics(&metrics));
+            } else {
+                println!("{}", format_metrics(&[]));
+            }
         }
 
         Ok(())

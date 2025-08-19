@@ -32,7 +32,6 @@ use datafusion::{
     },
     common::{exec_err, instant::Instant},
     error::{DataFusionError, Result},
-    execution::memory_pool::format_metrics,
 };
 use std::{fs::File, io::BufReader, str::FromStr, sync::Arc};
 
@@ -40,7 +39,6 @@ use std::{fs::File, io::BufReader, str::FromStr, sync::Arc};
 pub enum MemoryProfilingCommand {
     Enable,
     Disable,
-    Show,
 }
 
 /// Command
@@ -130,15 +128,9 @@ impl Command {
                         ctx.set_memory_profiling(false);
                         println!("Memory profiling disabled");
                     }
-                    Some(MemoryProfilingCommand::Show) => {
-                        if let Some(pool) = ctx.tracked_memory_pool() {
-                            let metrics = pool.consumer_metrics();
-                            println!("{}", format_metrics(&metrics));
-                        } else {
-                            println!("{}", format_metrics(&[]));
-                        }
-                    }
-                    None => println!("Usage: \\memory_profiling [enable|disable|show] (aliases: on|off)"),
+                    None => println!(
+                        "Usage: \\memory_profiling [enable|disable] (aliases: on|off)"
+                    ),
                 }
                 Ok(())
             }
@@ -175,8 +167,8 @@ impl Command {
                 ("\\pset [NAME [VALUE]]", "set table output option\n(format)")
             }
             Self::MemoryProfiling(_) => (
-                "\\memory_profiling [enable|disable|show] (aliases: on|off)",
-                "enable profiling, disable it, or display the last report (requires --top-memory-consumers N at startup for metrics)",
+                "\\memory_profiling [enable|disable] (aliases: on|off)",
+                "enable or disable profiling (requires --top-memory-consumers N at startup for metrics)",
             ),
         }
     }
@@ -262,7 +254,6 @@ impl FromStr for MemoryProfilingCommand {
         match s {
             "enable" | "on" => Ok(Self::Enable),
             "disable" | "off" => Ok(Self::Disable),
-            "show" => Ok(Self::Show),
             _ => Err(()),
         }
     }

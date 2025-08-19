@@ -130,16 +130,19 @@ Available commands inside DataFusion CLI are:
 ```
 
 ```bash
-> \memory_profiling show
+> SELECT 1;
 ```
 
 ```text
++---+
+| 1 |
++---+
+| 1 |
++---+
 Peak memory usage: 10.0 MB
 Cumulative allocations: 101.6 MB
 Memory usage by operator:
-Aggregation: 762.2 KB
-Repartition: 884.8 KB
-Sorting: 100.0 MB
+Other: 100.0 MB
 ```
 
 ```bash
