@@ -201,11 +201,16 @@ impl<K: Eq + Hash + Clone, V> LruQueue<K, V> {
         self.data.is_empty()
     }
 
-    // Removes all entries from the queue.
+    /// Removes all entries from the queue.
     pub fn clear(&mut self) {
         self.queue.head = None;
         self.queue.tail = None;
         self.data.clear();
+    }
+
+    /// Returns a reference to the entries currently in the queue.
+    pub fn list_entries(&self) -> HashMap<&K, &V> {
+        self.data.iter().map(|(k, (_, v))| (k, v)).collect()
     }
 }
 

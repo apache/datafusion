@@ -29,8 +29,8 @@ use crate::ptr_eq::PtrEq;
 use crate::select_expr::SelectExpr;
 use crate::{
     conditional_expressions::CaseBuilder, expr::Sort, logical_plan::Subquery,
-    udf_equals_hash, AggregateUDF, Expr, LogicalPlan, Operator, PartitionEvaluator,
-    ScalarFunctionArgs, ScalarFunctionImplementation, ScalarUDF, Signature, Volatility,
+    AggregateUDF, Expr, LogicalPlan, Operator, PartitionEvaluator, ScalarFunctionArgs,
+    ScalarFunctionImplementation, ScalarUDF, Signature, Volatility,
 };
 use crate::{
     AggregateUDFImpl, ColumnarValue, ScalarUDFImpl, WindowFrame, WindowUDF, WindowUDFImpl,
@@ -477,8 +477,6 @@ impl ScalarUDFImpl for SimpleScalarUDF {
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         (self.fun)(&args.args)
     }
-
-    udf_equals_hash!(ScalarUDFImpl);
 }
 
 /// Creates a new UDAF with a specific signature, state type and return type.
@@ -600,8 +598,6 @@ impl AggregateUDFImpl for SimpleAggregateUDF {
     fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         Ok(self.state_fields.clone())
     }
-
-    udf_equals_hash!(AggregateUDFImpl);
 }
 
 /// Creates a new UDWF with a specific signature, state type and return type.

@@ -73,4 +73,3 @@ query I
 SELECT getbit(11, NULL);
 ----
 NULL
-

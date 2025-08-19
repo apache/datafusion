@@ -32,6 +32,10 @@ on:
   push:
     branches:
       - main
+      # support extended test suite for release candidate branches,
+      # it is not expected to have many changes in these branches,
+      # so running extended tests is not a burden
+      - 'branch-*'
   workflow_dispatch:
     inputs:
       pr_number:
@@ -56,7 +60,7 @@ jobs:
     runs-on: ubuntu-latest
     # note: do not use amd/rust container to preserve disk space
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
         with:
           ref: ${{ github.event.inputs.pr_head_sha }} # will be empty if triggered by push
           submodules: true
@@ -80,7 +84,7 @@ jobs:
     runs-on: ubuntu-latest
     # note: do not use amd/rust container to preserve disk space
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
         with:
           ref: ${{ github.event.inputs.pr_head_sha }} # will be empty if triggered by push
           submodules: true
@@ -124,7 +128,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
         with:
           ref: ${{ github.event.inputs.pr_head_sha }} # will be empty if triggered by push
           submodules: true
@@ -145,7 +149,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
         with:
           ref: ${{ github.event.inputs.pr_head_sha }} # will be empty if triggered by push
           submodules: true

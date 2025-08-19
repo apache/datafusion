@@ -48,7 +48,7 @@ use datafusion_execution::{
 use datafusion_expr::{
     dml::InsertOp, Expr, SortExpr, TableProviderFilterPushDown, TableType,
 };
-use datafusion_physical_expr::schema_rewriter::PhysicalExprAdapterFactory;
+use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::{empty::EmptyExec, ExecutionPlan, Statistics};
 use futures::{future, stream, Stream, StreamExt, TryStreamExt};
@@ -819,13 +819,26 @@ impl ListingOptions {
     }
 }
 
-/// Reads data from one or more files as a single table.
+/// Built in [`TableProvider`] that reads data from one or more files as a single table.
 ///
-/// Implements [`TableProvider`], a DataFusion data source. The files are read
-/// using an  [`ObjectStore`] instance, for example from local files or objects
-/// from AWS S3.
+/// The files are read using an  [`ObjectStore`] instance, for example from
+/// local files or objects from AWS S3.
 ///
-/// # Reading Directories
+/// # Features:
+/// * Reading multiple files as a single table
+/// * Hive style partitioning (e.g., directories named `date=2024-06-01`)
+/// * Merges schemas from files with compatible but not identical schemas (see [`ListingTableConfig::file_schema`])
+/// * `limit`, `filter` and `projection` pushdown for formats that support it (e.g.,
+///   Parquet)
+/// * Statistics collection and pruning based on file metadata
+/// * Pre-existing sort order (see [`ListingOptions::file_sort_order`])
+/// * Metadata caching to speed up repeated queries (see [`FileMetadataCache`])
+/// * Statistics caching (see [`FileStatisticsCache`])
+///
+/// [`FileMetadataCache`]: datafusion_execution::cache::cache_manager::FileMetadataCache
+///
+/// # Reading Directories and Hive Style Partitioning
+///
 /// For example, given the `table1` directory (or object store prefix)
 ///
 /// ```text
@@ -861,15 +874,22 @@ impl ListingOptions {
 /// If the query has a predicate like `WHERE date = '2024-06-01'`
 /// only the corresponding directory will be read.
 ///
-/// `ListingTable` also supports limit, filter and projection pushdown for formats that
-/// support it as such as Parquet.
-///
 /// # See Also
 ///
 /// 1. [`ListingTableConfig`]: Configuration options
 /// 1. [`DataSourceExec`]: `ExecutionPlan` used by `ListingTable`
 ///
 /// [`DataSourceExec`]: crate::datasource::source::DataSourceExec
+///
+/// # Caching Metadata
+///
+/// Some formats, such as Parquet, use the `FileMetadataCache` to cache file
+/// metadata that is needed to execute but expensive to read, such as row
+/// groups and statistics. The cache is scoped to the [`SessionContext`] and can
+/// be configured via the [runtime config options].
+///
+/// [`SessionContext`]: crate::prelude::SessionContext
+/// [runtime config options]: https://datafusion.apache.org/user-guide/configs.html#runtime-configuration-settings
 ///
 /// # Example: Read a directory of parquet files using a [`ListingTable`]
 ///
@@ -931,10 +951,16 @@ pub struct ListingTable {
     table_schema: SchemaRef,
     /// Indicates how the schema was derived (inferred or explicitly specified)
     schema_source: SchemaSource,
+    /// Options used to configure the listing table such as the file format
+    /// and partitioning information
     options: ListingOptions,
+    /// The SQL definition for this table, if any
     definition: Option<String>,
+    /// Cache for collected file statistics
     collected_statistics: FileStatisticsCache,
+    /// Constraints applied to this table
     constraints: Constraints,
+    /// Column default expressions for columns that are not physically present in the data files
     column_defaults: HashMap<String, Expr>,
     /// Optional [`SchemaAdapterFactory`] for creating schema adapters
     schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
