@@ -15,10 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::num::NonZeroUsize;
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc,
+use std::{
+    num::NonZeroUsize,
+    sync::atomic::{AtomicBool, Ordering},
+    sync::Arc,
 };
 
 use datafusion::{
