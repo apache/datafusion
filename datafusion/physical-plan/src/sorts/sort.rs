@@ -2124,17 +2124,23 @@ mod tests {
     #[tokio::test]
     async fn should_return_stream_with_batches_in_the_requested_size() -> Result<()> {
         let batch_size = 100;
-        let task_ctx = TaskContext::default()
-            .with_session_config(SessionConfig::new().with_batch_size(batch_size));
-        let batches = (0..10)
-            .map(|_| make_partition(batch_size as i32 * 2))
-            .collect::<Vec<_>>();
 
-        let (output_batches, _) = run_sort_on_input(task_ctx, "i", batches).await?;
+        let create_task_ctx = |_: &[RecordBatch]| {
+            TaskContext::default().with_session_config(
+                SessionConfig::new()
+                    .with_batch_size(batch_size)
+                    .with_sort_in_place_threshold_bytes(usize::MAX),
+            )
+        };
 
-        for batch in output_batches {
-            assert_eq!(batch.num_rows(), batch_size);
-        }
+        // Smaller than batch size and require more than a single batch to get the requested batch size
+        test_sort_output_batch_size(10, batch_size / 4, create_task_ctx).await?;
+
+        // Not evenly divisible by batch size
+        test_sort_output_batch_size(10, batch_size + 7, create_task_ctx).await?;
+
+        // Evenly divisible by batch size and is larger than 2 batches
+        test_sort_output_batch_size(10, batch_size * 3, create_task_ctx).await?;
 
         Ok(())
     }
@@ -2152,6 +2158,19 @@ mod tests {
             )
         };
 
+        // Smaller than batch size and require more than a single batch to get the requested batch size
+        {
+            let metrics =
+                test_sort_output_batch_size(10, batch_size / 4, create_task_ctx).await?;
+
+            assert_eq!(
+                metrics.spill_count(),
+                Some(0),
+                "Expected no spills when sorting in place"
+            );
+        }
+
+        // Not evenly divisible by batch size
         {
             let metrics =
                 test_sort_output_batch_size(10, batch_size + 7, create_task_ctx).await?;
@@ -2163,9 +2182,10 @@ mod tests {
             );
         }
 
+        // Evenly divisible by batch size and is larger than 2 batches
         {
             let metrics =
-                test_sort_output_batch_size(10, batch_size * 2, create_task_ctx).await?;
+                test_sort_output_batch_size(10, batch_size * 3, create_task_ctx).await?;
 
             assert_eq!(
                 metrics.spill_count(),
@@ -2187,6 +2207,24 @@ mod tests {
                 .with_session_config(SessionConfig::new().with_batch_size(batch_size))
         };
 
+        // Smaller than batch size and require more than a single batch to get the requested batch size
+        {
+            let metrics = test_sort_output_batch_size(
+                // Single batch
+                1,
+                batch_size / 4,
+                create_task_ctx,
+            )
+            .await?;
+
+            assert_eq!(
+                metrics.spill_count(),
+                Some(0),
+                "Expected no spills when sorting in place"
+            );
+        }
+
+        // Not evenly divisible by batch size
         {
             let metrics = test_sort_output_batch_size(
                 // Single batch
@@ -2199,15 +2237,16 @@ mod tests {
             assert_eq!(
                 metrics.spill_count(),
                 Some(0),
-                "Expected no spills when having a single batch"
+                "Expected no spills when sorting in place"
             );
         }
 
+        // Evenly divisible by batch size and is larger than 2 batches
         {
             let metrics = test_sort_output_batch_size(
                 // Single batch
                 1,
-                batch_size * 2,
+                batch_size * 3,
                 create_task_ctx,
             )
             .await?;
@@ -2215,7 +2254,7 @@ mod tests {
             assert_eq!(
                 metrics.spill_count(),
                 Some(0),
-                "Expected no spills when having a single batch"
+                "Expected no spills when sorting in place"
             );
         }
 
@@ -2249,6 +2288,15 @@ mod tests {
                 )
         };
 
+        // Smaller than batch size and require more than a single batch to get the requested batch size
+        {
+            let metrics =
+                test_sort_output_batch_size(10, batch_size / 4, create_task_ctx).await?;
+
+            assert_ne!(metrics.spill_count().unwrap(), 0, "expected to spill");
+        }
+
+        // Not evenly divisible by batch size
         {
             let metrics =
                 test_sort_output_batch_size(10, batch_size + 7, create_task_ctx).await?;
@@ -2256,9 +2304,10 @@ mod tests {
             assert_ne!(metrics.spill_count().unwrap(), 0, "expected to spill");
         }
 
+        // Evenly divisible by batch size and is larger than 2 batches
         {
             let metrics =
-                test_sort_output_batch_size(10, batch_size * 2, create_task_ctx).await?;
+                test_sort_output_batch_size(10, batch_size * 3, create_task_ctx).await?;
 
             assert_ne!(metrics.spill_count().unwrap(), 0, "expected to spill");
         }
