@@ -2282,7 +2282,7 @@ mod tests {
                 )
                 .with_runtime(
                     RuntimeEnvBuilder::default()
-                        .with_memory_limit(batches_memory / 2, 1.0)
+                        .with_memory_limit(batches_memory, 1.0)
                         .build_arc()
                         .unwrap(),
                 )
@@ -2355,22 +2355,35 @@ mod tests {
 
         // let task_ctx = env.
         let schema = batches[0].schema();
+        let ordering: LexOrdering = [PhysicalSortExpr {
+            expr: col(order_by_col, &schema)?,
+            options: SortOptions {
+                descending: false,
+                nulls_first: true,
+            },
+        }]
+        .into();
         let sort_exec: Arc<dyn ExecutionPlan> = Arc::new(SortExec::new(
-            [PhysicalSortExpr {
-                expr: col(order_by_col, &schema)?,
-                options: SortOptions {
-                    descending: false,
-                    nulls_first: true,
-                },
-            }]
-            .into(),
-            TestMemoryExec::try_new_exec(&[batches], schema, None)?,
+            ordering.clone(),
+            TestMemoryExec::try_new_exec(std::slice::from_ref(&batches), schema, None)?,
         ));
 
-        let res = collect(Arc::clone(&sort_exec), Arc::clone(&task_ctx)).await?;
+        let sorted_batches =
+            collect(Arc::clone(&sort_exec), Arc::clone(&task_ctx)).await?;
 
         let metrics = sort_exec.metrics().expect("sort have metrics");
 
-        Ok((res, metrics))
+        // assert output
+        {
+            let input_batches_concat = concat_batches(batches[0].schema_ref(), &batches)?;
+            let sorted_input_batch = sort_batch(&input_batches_concat, &ordering, None)?;
+
+            let sorted_batches_concat =
+                concat_batches(sorted_batches[0].schema_ref(), &sorted_batches)?;
+
+            assert_eq!(sorted_input_batch, sorted_batches_concat);
+        }
+
+        Ok((sorted_batches, metrics))
     }
 }
