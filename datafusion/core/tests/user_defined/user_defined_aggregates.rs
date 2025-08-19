@@ -1010,7 +1010,7 @@ impl Accumulator for MetadataBasedAccumulator {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 struct SchemaBasedAggregateUdf {
     signature: Signature,
 }
