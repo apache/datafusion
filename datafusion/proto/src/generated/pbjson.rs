@@ -16966,6 +16966,12 @@ impl serde::Serialize for PhysicalWindowExprNode {
         if self.fun_definition.is_some() {
             len += 1;
         }
+        if self.ignore_nulls {
+            len += 1;
+        }
+        if self.distinct {
+            len += 1;
+        }
         if self.window_function.is_some() {
             len += 1;
         }
@@ -16989,6 +16995,12 @@ impl serde::Serialize for PhysicalWindowExprNode {
             #[allow(clippy::needless_borrow)]
             #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("funDefinition", pbjson::private::base64::encode(&v).as_str())?;
+        }
+        if self.ignore_nulls {
+            struct_ser.serialize_field("ignoreNulls", &self.ignore_nulls)?;
+        }
+        if self.distinct {
+            struct_ser.serialize_field("distinct", &self.distinct)?;
         }
         if let Some(v) = self.window_function.as_ref() {
             match v {
@@ -17020,6 +17032,9 @@ impl<'de> serde::Deserialize<'de> for PhysicalWindowExprNode {
             "name",
             "fun_definition",
             "funDefinition",
+            "ignore_nulls",
+            "ignoreNulls",
+            "distinct",
             "user_defined_aggr_function",
             "userDefinedAggrFunction",
             "user_defined_window_function",
@@ -17034,6 +17049,8 @@ impl<'de> serde::Deserialize<'de> for PhysicalWindowExprNode {
             WindowFrame,
             Name,
             FunDefinition,
+            IgnoreNulls,
+            Distinct,
             UserDefinedAggrFunction,
             UserDefinedWindowFunction,
         }
@@ -17063,6 +17080,8 @@ impl<'de> serde::Deserialize<'de> for PhysicalWindowExprNode {
                             "windowFrame" | "window_frame" => Ok(GeneratedField::WindowFrame),
                             "name" => Ok(GeneratedField::Name),
                             "funDefinition" | "fun_definition" => Ok(GeneratedField::FunDefinition),
+                            "ignoreNulls" | "ignore_nulls" => Ok(GeneratedField::IgnoreNulls),
+                            "distinct" => Ok(GeneratedField::Distinct),
                             "userDefinedAggrFunction" | "user_defined_aggr_function" => Ok(GeneratedField::UserDefinedAggrFunction),
                             "userDefinedWindowFunction" | "user_defined_window_function" => Ok(GeneratedField::UserDefinedWindowFunction),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
@@ -17090,6 +17109,8 @@ impl<'de> serde::Deserialize<'de> for PhysicalWindowExprNode {
                 let mut window_frame__ = None;
                 let mut name__ = None;
                 let mut fun_definition__ = None;
+                let mut ignore_nulls__ = None;
+                let mut distinct__ = None;
                 let mut window_function__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
@@ -17131,6 +17152,18 @@ impl<'de> serde::Deserialize<'de> for PhysicalWindowExprNode {
                                 map_.next_value::<::std::option::Option<::pbjson::private::BytesDeserialize<_>>>()?.map(|x| x.0)
                             ;
                         }
+                        GeneratedField::IgnoreNulls => {
+                            if ignore_nulls__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("ignoreNulls"));
+                            }
+                            ignore_nulls__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Distinct => {
+                            if distinct__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("distinct"));
+                            }
+                            distinct__ = Some(map_.next_value()?);
+                        }
                         GeneratedField::UserDefinedAggrFunction => {
                             if window_function__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("userDefinedAggrFunction"));
@@ -17152,6 +17185,8 @@ impl<'de> serde::Deserialize<'de> for PhysicalWindowExprNode {
                     window_frame: window_frame__,
                     name: name__.unwrap_or_default(),
                     fun_definition: fun_definition__,
+                    ignore_nulls: ignore_nulls__.unwrap_or_default(),
+                    distinct: distinct__.unwrap_or_default(),
                     window_function: window_function__,
                 })
             }

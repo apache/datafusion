@@ -1354,6 +1354,10 @@ pub struct PhysicalWindowExprNode {
     pub name: ::prost::alloc::string::String,
     #[prost(bytes = "vec", optional, tag = "9")]
     pub fun_definition: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
+    #[prost(bool, tag = "11")]
+    pub ignore_nulls: bool,
+    #[prost(bool, tag = "12")]
+    pub distinct: bool,
     #[prost(oneof = "physical_window_expr_node::WindowFunction", tags = "3, 10")]
     pub window_function: ::core::option::Option<
         physical_window_expr_node::WindowFunction,
