@@ -30,7 +30,7 @@ use twox_hash::XxHash64;
 use crate::function::hash::utils::SparkHasher;
 
 /// <https://spark.apache.org/docs/latest/api/sql/index.html#xxhash64>
-#[derive(Debug)]
+#[derive(Debug, Hash, Eq, PartialEq)]
 pub struct SparkXxHash64 {
     signature: Signature,
     seed: i64,

@@ -29,7 +29,7 @@ use std::sync::Arc;
 use crate::function::hash::utils::SparkHasher;
 
 /// <https://spark.apache.org/docs/latest/api/sql/index.html#hash>
-#[derive(Debug)]
+#[derive(Debug, Hash, Eq, PartialEq)]
 pub struct SparkMurmur3Hash {
     signature: Signature,
     seed: i64,
