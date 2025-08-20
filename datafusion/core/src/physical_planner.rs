@@ -2885,7 +2885,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_dataframe_aggregate_count_all_with_alias() -> Result<()> {
+    async fn test_aggregate_count_all_with_alias() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![
             Field::new("c1", DataType::Utf8, false),
             Field::new("c2", DataType::UInt32, false),
