@@ -68,6 +68,7 @@ dashmap = { workspace = true }
 base64 = "0.22.1"
 datafusion = { workspace = true, default-features = true }
 datafusion-ffi = { workspace = true }
+datafusion-physical-expr-adapter = { workspace = true }
 datafusion-proto = { workspace = true }
 env_logger = { workspace = true }
 futures = { workspace = true }

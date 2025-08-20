@@ -736,7 +736,7 @@ macro_rules! min_max {
 }
 
 /// An accumulator to compute the maximum value
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MaxAccumulator {
     max: ScalarValue,
 }
@@ -1057,7 +1057,7 @@ impl AggregateUDFImpl for Min {
 }
 
 /// An accumulator to compute the minimum value
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MinAccumulator {
     min: ScalarValue,
 }
