@@ -70,7 +70,7 @@ make_udf_expr_and_func!(
     ),
     argument(name = "element", description = "Element to append to the array.")
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ArrayAppend {
     signature: Signature,
     aliases: Vec<String>,
@@ -159,7 +159,7 @@ make_udf_expr_and_func!(
     ),
     argument(name = "element", description = "Element to prepend to the array.")
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ArrayPrepend {
     signature: Signature,
     aliases: Vec<String>,
@@ -250,7 +250,7 @@ make_udf_expr_and_func!(
         description = "Subsequent array column or literal array to concatenate."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ArrayConcat {
     signature: Signature,
     aliases: Vec<String>,

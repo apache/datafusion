@@ -2904,6 +2904,18 @@ select date_format(dates, date_format) from formats;
 05:04:2003
 
 query T
+select date_format(dates, time_format) from formats;
+----
+00-00-00
+00::00::00
+
+query T
+select date_format(dates, timestamp_format) from formats;
+----
+01:01:2000 00-00-00
+05:04:2003 00-00-00
+
+query T
 select to_char(times, time_format) from formats;
 ----
 23-45-01

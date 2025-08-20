@@ -19,13 +19,13 @@
 
 use std::any::Any;
 use std::cell::RefCell;
-use std::fmt;
 use std::fmt::Debug;
 use std::ops::Range;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::{fmt, vec};
 
-use arrow::array::RecordBatch;
+use arrow::array::{ArrayRef, BooleanArray, RecordBatch};
 use arrow::datatypes::{Fields, Schema, SchemaRef, TimeUnit};
 use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_sink_config::{FileSink, FileSinkConfig};
@@ -36,17 +36,18 @@ use datafusion_datasource::write::{
 use datafusion_datasource::file_format::{FileFormat, FileFormatFactory};
 use datafusion_datasource::write::demux::DemuxedStreamReceiver;
 
-use arrow::compute::sum;
+use arrow::compute::kernels::cmp::eq;
+use arrow::compute::{and, sum};
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::config::{ConfigField, ConfigFileType, TableParquetOptions};
-use datafusion_common::encryption::{
-    map_config_decryption_to_decryption, FileDecryptionProperties,
-};
+#[cfg(feature = "parquet_encryption")]
+use datafusion_common::encryption::map_config_decryption_to_decryption;
+use datafusion_common::encryption::FileDecryptionProperties;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
     internal_datafusion_err, internal_err, not_impl_err, ColumnStatistics,
-    DataFusionError, GetExt, HashSet, Result, DEFAULT_PARQUET_EXTENSION,
+    DataFusionError, GetExt, HashSet, Result, ScalarValue, DEFAULT_PARQUET_EXTENSION,
 };
 use datafusion_common::{HashMap, Statistics};
 use datafusion_common_runtime::{JoinSet, SpawnedTask};
@@ -63,11 +64,12 @@ use datafusion_physical_plan::Accumulator;
 use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
 use datafusion_session::Session;
 
-use crate::reader::CachedParquetFileReaderFactory;
+use crate::reader::{CachedParquetFileReaderFactory, CachedParquetMetaData};
 use crate::source::{parse_coerce_int96_string, ParquetSource};
 use async_trait::async_trait;
 use bytes::Bytes;
 use datafusion_datasource::source::DataSourceExec;
+use datafusion_execution::runtime_env::RuntimeEnv;
 use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use log::debug;
@@ -83,6 +85,7 @@ use parquet::arrow::async_reader::MetadataFetch;
 use parquet::arrow::{parquet_to_arrow_schema, ArrowSchemaConverter, AsyncArrowWriter};
 use parquet::basic::Type;
 
+use datafusion_execution::cache::cache_manager::FileMetadataCache;
 use parquet::errors::ParquetError;
 use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader, RowGroupMetaData};
 use parquet::file::properties::{WriterProperties, WriterPropertiesBuilder};
@@ -305,22 +308,60 @@ fn clear_metadata(
 }
 
 async fn fetch_schema_with_location(
+    state: &dyn Session,
     store: &dyn ObjectStore,
+    options: &TableParquetOptions,
     file: &ObjectMeta,
     metadata_size_hint: Option<usize>,
-    file_decryption_properties: Option<&FileDecryptionProperties>,
     coerce_int96: Option<TimeUnit>,
+    file_metadata_cache: Option<Arc<dyn FileMetadataCache>>,
 ) -> Result<(Path, Schema)> {
+    let file_decryption_properties =
+        get_file_decryption_properties(state, options, &file.location)?;
     let loc_path = file.location.clone();
     let schema = fetch_schema(
         store,
         file,
         metadata_size_hint,
-        file_decryption_properties,
+        file_decryption_properties.as_ref(),
         coerce_int96,
+        file_metadata_cache,
     )
     .await?;
     Ok((loc_path, schema))
+}
+
+#[cfg(feature = "parquet_encryption")]
+fn get_file_decryption_properties(
+    state: &dyn Session,
+    options: &TableParquetOptions,
+    file_path: &Path,
+) -> Result<Option<FileDecryptionProperties>> {
+    let file_decryption_properties: Option<FileDecryptionProperties> =
+        match &options.crypto.file_decryption {
+            Some(cfd) => Some(map_config_decryption_to_decryption(cfd)),
+            None => match &options.crypto.factory_id {
+                Some(factory_id) => {
+                    let factory =
+                        state.runtime_env().parquet_encryption_factory(factory_id)?;
+                    factory.get_file_decryption_properties(
+                        &options.crypto.factory_options,
+                        file_path,
+                    )?
+                }
+                None => None,
+            },
+        };
+    Ok(file_decryption_properties)
+}
+
+#[cfg(not(feature = "parquet_encryption"))]
+fn get_file_decryption_properties(
+    _state: &dyn Session,
+    _options: &TableParquetOptions,
+    _file_path: &Path,
+) -> Result<Option<FileDecryptionProperties>> {
+    Ok(None)
 }
 
 #[async_trait]
@@ -358,19 +399,17 @@ impl FileFormat for ParquetFormat {
             Some(time_unit) => Some(parse_coerce_int96_string(time_unit.as_str())?),
             None => None,
         };
-        let file_decryption_properties: Option<FileDecryptionProperties> =
-            map_config_decryption_to_decryption(
-                self.options.crypto.file_decryption.as_ref(),
-            );
 
         let mut schemas: Vec<_> = futures::stream::iter(objects)
             .map(|object| {
                 fetch_schema_with_location(
+                    state,
                     store.as_ref(),
+                    &self.options,
                     object,
                     self.metadata_size_hint(),
-                    file_decryption_properties.as_ref(),
                     coerce_int96,
+                    Some(state.runtime_env().cache_manager.get_file_metadata_cache()),
                 )
             })
             .boxed() // Workaround https://github.com/rust-lang/rust/issues/64552
@@ -414,21 +453,20 @@ impl FileFormat for ParquetFormat {
 
     async fn infer_stats(
         &self,
-        _state: &dyn Session,
+        state: &dyn Session,
         store: &Arc<dyn ObjectStore>,
         table_schema: SchemaRef,
         object: &ObjectMeta,
     ) -> Result<Statistics> {
-        let file_decryption_properties: Option<FileDecryptionProperties> =
-            map_config_decryption_to_decryption(
-                self.options.crypto.file_decryption.as_ref(),
-            );
+        let file_decryption_properties =
+            get_file_decryption_properties(state, &self.options, &object.location)?;
         let stats = fetch_statistics(
             store.as_ref(),
             table_schema,
             object,
             self.metadata_size_hint(),
             file_decryption_properties.as_ref(),
+            Some(state.runtime_env().cache_manager.get_file_metadata_cache()),
         )
         .await?;
         Ok(stats)
@@ -459,6 +497,9 @@ impl FileFormat for ParquetFormat {
         if let Some(metadata_size_hint) = metadata_size_hint {
             source = source.with_metadata_size_hint(metadata_size_hint)
         }
+
+        source = self.set_source_encryption_factory(source, state)?;
+
         // Apply schema adapter factory before building the new config
         let file_source = source.apply_schema_adapter(&conf)?;
 
@@ -486,6 +527,41 @@ impl FileFormat for ParquetFormat {
 
     fn file_source(&self) -> Arc<dyn FileSource> {
         Arc::new(ParquetSource::default())
+    }
+}
+
+#[cfg(feature = "parquet_encryption")]
+impl ParquetFormat {
+    fn set_source_encryption_factory(
+        &self,
+        source: ParquetSource,
+        state: &dyn Session,
+    ) -> Result<ParquetSource> {
+        if let Some(encryption_factory_id) = &self.options.crypto.factory_id {
+            Ok(source.with_encryption_factory(
+                state
+                    .runtime_env()
+                    .parquet_encryption_factory(encryption_factory_id)?,
+            ))
+        } else {
+            Ok(source)
+        }
+    }
+}
+
+#[cfg(not(feature = "parquet_encryption"))]
+impl ParquetFormat {
+    fn set_source_encryption_factory(
+        &self,
+        source: ParquetSource,
+        _state: &dyn Session,
+    ) -> Result<ParquetSource> {
+        if let Some(encryption_factory_id) = &self.options.crypto.factory_id {
+            Err(DataFusionError::Configuration(
+                format!("Parquet encryption factory id is set to '{encryption_factory_id}' but the parquet_encryption feature is disabled")))
+        } else {
+            Ok(source)
+        }
     }
 }
 
@@ -934,13 +1010,13 @@ pub fn transform_binary_to_string(schema: &Schema) -> Schema {
 }
 
 /// [`MetadataFetch`] adapter for reading bytes from an [`ObjectStore`]
-struct ObjectStoreFetch<'a> {
+pub struct ObjectStoreFetch<'a> {
     store: &'a dyn ObjectStore,
     meta: &'a ObjectMeta,
 }
 
 impl<'a> ObjectStoreFetch<'a> {
-    fn new(store: &'a dyn ObjectStore, meta: &'a ObjectMeta) -> Self {
+    pub fn new(store: &'a dyn ObjectStore, meta: &'a ObjectMeta) -> Self {
         Self { store, meta }
     }
 }
@@ -963,24 +1039,62 @@ impl MetadataFetch for ObjectStoreFetch<'_> {
 /// through [`ParquetFileReaderFactory`].
 ///
 /// [`ParquetFileReaderFactory`]: crate::ParquetFileReaderFactory
-pub async fn fetch_parquet_metadata(
-    store: &dyn ObjectStore,
-    meta: &ObjectMeta,
+pub async fn fetch_parquet_metadata<F: MetadataFetch>(
+    fetch: F,
+    object_meta: &ObjectMeta,
     size_hint: Option<usize>,
     #[allow(unused)] decryption_properties: Option<&FileDecryptionProperties>,
-) -> Result<ParquetMetaData> {
-    let file_size = meta.size;
-    let fetch = ObjectStoreFetch::new(store, meta);
+    file_metadata_cache: Option<Arc<dyn FileMetadataCache>>,
+) -> Result<Arc<ParquetMetaData>> {
+    let cache_metadata =
+        !cfg!(feature = "parquet_encryption") || decryption_properties.is_none();
 
-    let reader = ParquetMetaDataReader::new().with_prefetch_hint(size_hint);
+    if cache_metadata {
+        if let Some(parquet_metadata) = file_metadata_cache
+            .as_ref()
+            .and_then(|file_metadata_cache| file_metadata_cache.get(object_meta))
+            .and_then(|file_metadata| {
+                file_metadata
+                    .as_any()
+                    .downcast_ref::<CachedParquetMetaData>()
+                    .map(|cached_parquet_metadata| {
+                        Arc::clone(cached_parquet_metadata.parquet_metadata())
+                    })
+            })
+        {
+            return Ok(parquet_metadata);
+        }
+    }
+
+    let mut reader = ParquetMetaDataReader::new().with_prefetch_hint(size_hint);
 
     #[cfg(feature = "parquet_encryption")]
-    let reader = reader.with_decryption_properties(decryption_properties);
+    if let Some(decryption_properties) = decryption_properties {
+        reader = reader.with_decryption_properties(Some(decryption_properties));
+    }
 
-    reader
-        .load_and_finish(fetch, file_size)
-        .await
-        .map_err(DataFusionError::from)
+    if cache_metadata && file_metadata_cache.is_some() {
+        // Need to retrieve the entire metadata for the caching to be effective.
+        reader = reader.with_page_indexes(true);
+    }
+
+    let metadata = Arc::new(
+        reader
+            .load_and_finish(fetch, object_meta.size)
+            .await
+            .map_err(DataFusionError::from)?,
+    );
+
+    if cache_metadata {
+        if let Some(file_metadata_cache) = file_metadata_cache {
+            file_metadata_cache.put(
+                object_meta,
+                Arc::new(CachedParquetMetaData::new(Arc::clone(&metadata))),
+            );
+        }
+    }
+
+    Ok(metadata)
 }
 
 /// Read and parse the schema of the Parquet file at location `path`
@@ -990,12 +1104,15 @@ async fn fetch_schema(
     metadata_size_hint: Option<usize>,
     file_decryption_properties: Option<&FileDecryptionProperties>,
     coerce_int96: Option<TimeUnit>,
+    file_metadata_cache: Option<Arc<dyn FileMetadataCache>>,
 ) -> Result<Schema> {
+    let fetch = ObjectStoreFetch::new(store, file);
     let metadata = fetch_parquet_metadata(
-        store,
+        fetch,
         file,
         metadata_size_hint,
         file_decryption_properties,
+        file_metadata_cache,
     )
     .await?;
     let file_metadata = metadata.file_metadata();
@@ -1020,10 +1137,17 @@ pub async fn fetch_statistics(
     file: &ObjectMeta,
     metadata_size_hint: Option<usize>,
     decryption_properties: Option<&FileDecryptionProperties>,
+    file_metadata_cache: Option<Arc<dyn FileMetadataCache>>,
 ) -> Result<Statistics> {
-    let metadata =
-        fetch_parquet_metadata(store, file, metadata_size_hint, decryption_properties)
-            .await?;
+    let fetch = ObjectStoreFetch::new(store, file);
+    let metadata = fetch_parquet_metadata(
+        fetch,
+        file,
+        metadata_size_hint,
+        decryption_properties,
+        file_metadata_cache,
+    )
+    .await?;
     statistics_from_parquet_meta_calc(&metadata, table_schema)
 }
 
@@ -1047,7 +1171,8 @@ pub async fn fetch_statistics(
 /// # When only some columns have statistics:
 ///
 /// For columns with statistics:
-/// - Min/max values are properly extracted and represented as Precision::Exact
+/// - Min/max values are properly extracted and represented as [Precision::Exact] or [Precision::Inexact]
+///   depending on the `is_max_value_exact` and `is_min_value_exact` flags.
 /// - Null counts are calculated by summing across row groups
 ///
 /// For columns without statistics,
@@ -1093,6 +1218,8 @@ pub fn statistics_from_parquet_meta_calc(
         let (mut max_accs, mut min_accs) = create_max_min_accs(&table_schema);
         let mut null_counts_array =
             vec![Precision::Exact(0); table_schema.fields().len()];
+        let mut is_max_value_exact = vec![Some(true); table_schema.fields().len()];
+        let mut is_min_value_exact = vec![Some(true); table_schema.fields().len()];
 
         table_schema
             .fields()
@@ -1105,10 +1232,15 @@ pub fn statistics_from_parquet_meta_calc(
                     file_metadata.schema_descr(),
                 ) {
                     Ok(stats_converter) => {
+                        let mut accumulators = StatisticsAccumulators {
+                            min_accs: &mut min_accs,
+                            max_accs: &mut max_accs,
+                            null_counts_array: &mut null_counts_array,
+                            is_min_value_exact: &mut is_min_value_exact,
+                            is_max_value_exact: &mut is_max_value_exact,
+                        };
                         summarize_min_max_null_counts(
-                            &mut min_accs,
-                            &mut max_accs,
-                            &mut null_counts_array,
+                            &mut accumulators,
                             idx,
                             num_rows,
                             &stats_converter,
@@ -1128,6 +1260,8 @@ pub fn statistics_from_parquet_meta_calc(
             null_counts_array,
             &mut max_accs,
             &mut min_accs,
+            &mut is_max_value_exact,
+            &mut is_min_value_exact,
         )
     } else {
         Statistics::unknown_column(&table_schema)
@@ -1141,21 +1275,39 @@ fn get_col_stats(
     null_counts: Vec<Precision<usize>>,
     max_values: &mut [Option<MaxAccumulator>],
     min_values: &mut [Option<MinAccumulator>],
+    is_max_value_exact: &mut [Option<bool>],
+    is_min_value_exact: &mut [Option<bool>],
 ) -> Vec<ColumnStatistics> {
     (0..schema.fields().len())
         .map(|i| {
-            let max_value = match max_values.get_mut(i).unwrap() {
-                Some(max_value) => max_value.evaluate().ok(),
-                None => None,
+            let max_value = match (
+                max_values.get_mut(i).unwrap(),
+                is_max_value_exact.get(i).unwrap(),
+            ) {
+                (Some(max_value), Some(true)) => {
+                    max_value.evaluate().ok().map(Precision::Exact)
+                }
+                (Some(max_value), Some(false)) | (Some(max_value), None) => {
+                    max_value.evaluate().ok().map(Precision::Inexact)
+                }
+                (None, _) => None,
             };
-            let min_value = match min_values.get_mut(i).unwrap() {
-                Some(min_value) => min_value.evaluate().ok(),
-                None => None,
+            let min_value = match (
+                min_values.get_mut(i).unwrap(),
+                is_min_value_exact.get(i).unwrap(),
+            ) {
+                (Some(min_value), Some(true)) => {
+                    min_value.evaluate().ok().map(Precision::Exact)
+                }
+                (Some(min_value), Some(false)) | (Some(min_value), None) => {
+                    min_value.evaluate().ok().map(Precision::Inexact)
+                }
+                (None, _) => None,
             };
             ColumnStatistics {
                 null_count: null_counts[i],
-                max_value: max_value.map(Precision::Exact).unwrap_or(Precision::Absent),
-                min_value: min_value.map(Precision::Exact).unwrap_or(Precision::Absent),
+                max_value: max_value.unwrap_or(Precision::Absent),
+                min_value: min_value.unwrap_or(Precision::Absent),
                 sum_value: Precision::Absent,
                 distinct_count: Precision::Absent,
             }
@@ -1163,10 +1315,17 @@ fn get_col_stats(
         .collect()
 }
 
+/// Holds the accumulator state for collecting statistics from row groups
+struct StatisticsAccumulators<'a> {
+    min_accs: &'a mut [Option<MinAccumulator>],
+    max_accs: &'a mut [Option<MaxAccumulator>],
+    null_counts_array: &'a mut [Precision<usize>],
+    is_min_value_exact: &'a mut [Option<bool>],
+    is_max_value_exact: &'a mut [Option<bool>],
+}
+
 fn summarize_min_max_null_counts(
-    min_accs: &mut [Option<MinAccumulator>],
-    max_accs: &mut [Option<MaxAccumulator>],
-    null_counts_array: &mut [Precision<usize>],
+    accumulators: &mut StatisticsAccumulators,
     arrow_schema_index: usize,
     num_rows: usize,
     stats_converter: &StatisticsConverter,
@@ -1175,19 +1334,36 @@ fn summarize_min_max_null_counts(
     let max_values = stats_converter.row_group_maxes(row_groups_metadata)?;
     let min_values = stats_converter.row_group_mins(row_groups_metadata)?;
     let null_counts = stats_converter.row_group_null_counts(row_groups_metadata)?;
+    let is_max_value_exact_stat =
+        stats_converter.row_group_is_max_value_exact(row_groups_metadata)?;
+    let is_min_value_exact_stat =
+        stats_converter.row_group_is_min_value_exact(row_groups_metadata)?;
 
-    if let Some(max_acc) = &mut max_accs[arrow_schema_index] {
-        max_acc.update_batch(&[max_values])?;
+    if let Some(max_acc) = &mut accumulators.max_accs[arrow_schema_index] {
+        max_acc.update_batch(&[Arc::clone(&max_values)])?;
+        let mut cur_max_acc = max_acc.clone();
+        accumulators.is_max_value_exact[arrow_schema_index] = has_any_exact_match(
+            cur_max_acc.evaluate()?,
+            max_values,
+            is_max_value_exact_stat,
+        );
     }
 
-    if let Some(min_acc) = &mut min_accs[arrow_schema_index] {
-        min_acc.update_batch(&[min_values])?;
+    if let Some(min_acc) = &mut accumulators.min_accs[arrow_schema_index] {
+        min_acc.update_batch(&[Arc::clone(&min_values)])?;
+        let mut cur_min_acc = min_acc.clone();
+        accumulators.is_min_value_exact[arrow_schema_index] = has_any_exact_match(
+            cur_min_acc.evaluate()?,
+            min_values,
+            is_min_value_exact_stat,
+        );
     }
 
-    null_counts_array[arrow_schema_index] = Precision::Exact(match sum(&null_counts) {
-        Some(null_count) => null_count as usize,
-        None => num_rows,
-    });
+    accumulators.null_counts_array[arrow_schema_index] =
+        Precision::Exact(match sum(&null_counts) {
+            Some(null_count) => null_count as usize,
+            None => num_rows,
+        });
 
     Ok(())
 }
@@ -1243,7 +1419,11 @@ impl ParquetSink {
 
     /// Create writer properties based upon configuration settings,
     /// including partitioning and the inclusion of arrow schema metadata.
-    fn create_writer_props(&self) -> Result<WriterProperties> {
+    fn create_writer_props(
+        &self,
+        runtime: &Arc<RuntimeEnv>,
+        path: &Path,
+    ) -> Result<WriterProperties> {
         let schema = if self.parquet_options.global.allow_single_file_parallelism {
             // If parallelizing writes, we may be also be doing hive style partitioning
             // into multiple files which impacts the schema per file.
@@ -1260,7 +1440,15 @@ impl ParquetSink {
             parquet_opts.arrow_schema(schema);
         }
 
-        Ok(WriterPropertiesBuilder::try_from(&parquet_opts)?.build())
+        let mut builder = WriterPropertiesBuilder::try_from(&parquet_opts)?;
+        builder = set_writer_encryption_properties(
+            builder,
+            runtime,
+            &parquet_opts,
+            schema,
+            path,
+        )?;
+        Ok(builder.build())
     }
 
     /// Creates an AsyncArrowWriter which serializes a parquet file to an ObjectStore
@@ -1299,6 +1487,48 @@ impl ParquetSink {
     }
 }
 
+#[cfg(feature = "parquet_encryption")]
+fn set_writer_encryption_properties(
+    builder: WriterPropertiesBuilder,
+    runtime: &Arc<RuntimeEnv>,
+    parquet_opts: &TableParquetOptions,
+    schema: &Arc<Schema>,
+    path: &Path,
+) -> Result<WriterPropertiesBuilder> {
+    if let Some(file_encryption_properties) = &parquet_opts.crypto.file_encryption {
+        // Encryption properties have been specified directly
+        return Ok(builder
+            .with_file_encryption_properties(file_encryption_properties.clone().into()));
+    } else if let Some(encryption_factory_id) = &parquet_opts.crypto.factory_id.as_ref() {
+        // Encryption properties will be generated by an encryption factory
+        let encryption_factory =
+            runtime.parquet_encryption_factory(encryption_factory_id)?;
+        let file_encryption_properties = encryption_factory
+            .get_file_encryption_properties(
+                &parquet_opts.crypto.factory_options,
+                schema,
+                path,
+            )?;
+        if let Some(file_encryption_properties) = file_encryption_properties {
+            return Ok(
+                builder.with_file_encryption_properties(file_encryption_properties)
+            );
+        }
+    }
+    Ok(builder)
+}
+
+#[cfg(not(feature = "parquet_encryption"))]
+fn set_writer_encryption_properties(
+    builder: WriterPropertiesBuilder,
+    _runtime: &Arc<RuntimeEnv>,
+    _parquet_opts: &TableParquetOptions,
+    _schema: &Arc<Schema>,
+    _path: &Path,
+) -> Result<WriterPropertiesBuilder> {
+    Ok(builder)
+}
+
 #[async_trait]
 impl FileSink for ParquetSink {
     fn config(&self) -> &FileSinkConfig {
@@ -1316,7 +1546,9 @@ impl FileSink for ParquetSink {
         let mut allow_single_file_parallelism =
             parquet_opts.global.allow_single_file_parallelism;
 
-        if parquet_opts.crypto.file_encryption.is_some() {
+        if parquet_opts.crypto.file_encryption.is_some()
+            || parquet_opts.crypto.factory_id.is_some()
+        {
             // For now, arrow-rs does not support parallel writes with encryption
             // See https://github.com/apache/arrow-rs/issues/7359
             allow_single_file_parallelism = false;
@@ -1326,7 +1558,7 @@ impl FileSink for ParquetSink {
             std::result::Result<(Path, FileMetaData), DataFusionError>,
         > = JoinSet::new();
 
-        let parquet_props = self.create_writer_props()?;
+        let runtime = context.runtime_env();
         let parallel_options = ParallelParquetWriterOptions {
             max_parallel_row_groups: parquet_opts
                 .global
@@ -1337,6 +1569,7 @@ impl FileSink for ParquetSink {
         };
 
         while let Some((path, mut rx)) = file_stream_rx.recv().await {
+            let parquet_props = self.create_writer_props(&runtime, &path)?;
             if !allow_single_file_parallelism {
                 let mut writer = self
                     .create_async_arrow_writer(
@@ -1787,12 +2020,38 @@ fn create_max_min_accs(
     (max_values, min_values)
 }
 
+/// Checks if any occurrence of `value` in `array` corresponds to a `true`
+/// entry in the `exactness` array.
+///
+/// This is used to determine if a calculated statistic (e.g., min or max)
+/// is exact, by checking if at least one of its source values was exact.
+///
+/// # Example
+/// - `value`: `0`
+/// - `array`: `[0, 1, 0, 3, 0, 5]`
+/// - `exactness`: `[true, false, false, false, false, false]`
+///
+/// The value `0` appears at indices `[0, 2, 4]`. The corresponding exactness
+/// values are `[true, false, false]`. Since at least one is `true`, the
+/// function returns `Some(true)`.
+fn has_any_exact_match(
+    value: ScalarValue,
+    array: ArrayRef,
+    exactness: BooleanArray,
+) -> Option<bool> {
+    let scalar_array = value.to_scalar().ok()?;
+    let eq_mask = eq(&scalar_array, &array).ok()?;
+    let combined_mask = and(&eq_mask, &exactness).ok()?;
+    Some(combined_mask.true_count() > 0)
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
 
     use super::*;
 
+    use arrow::array::{BooleanArray, Int32Array};
     use arrow::datatypes::DataType;
     use parquet::schema::parser::parse_message_type;
 
@@ -2001,5 +2260,52 @@ mod tests {
         ]);
 
         assert_eq!(result, expected_schema);
+    }
+
+    #[test]
+    fn test_has_any_exact_match() {
+        // Case 1: Mixed exact and inexact matches
+        {
+            let computed_min = ScalarValue::Int32(Some(0));
+            let row_group_mins =
+                Arc::new(Int32Array::from(vec![0, 1, 0, 3, 0, 5])) as ArrayRef;
+            let exactness =
+                BooleanArray::from(vec![true, false, false, false, false, false]);
+
+            let result = has_any_exact_match(computed_min, row_group_mins, exactness);
+            assert_eq!(result, Some(true));
+        }
+        // Case 2: All inexact matches
+        {
+            let computed_min = ScalarValue::Int32(Some(0));
+            let row_group_mins =
+                Arc::new(Int32Array::from(vec![0, 1, 0, 3, 0, 5])) as ArrayRef;
+            let exactness =
+                BooleanArray::from(vec![false, false, false, false, false, false]);
+
+            let result = has_any_exact_match(computed_min, row_group_mins, exactness);
+            assert_eq!(result, Some(false));
+        }
+        // Case 3: All exact matches
+        {
+            let computed_max = ScalarValue::Int32(Some(5));
+            let row_group_maxes =
+                Arc::new(Int32Array::from(vec![1, 5, 3, 5, 2, 5])) as ArrayRef;
+            let exactness =
+                BooleanArray::from(vec![false, true, true, true, false, true]);
+
+            let result = has_any_exact_match(computed_max, row_group_maxes, exactness);
+            assert_eq!(result, Some(true));
+        }
+        // Case 4: All maxes are null values
+        {
+            let computed_max = ScalarValue::Int32(None);
+            let row_group_maxes =
+                Arc::new(Int32Array::from(vec![None, None, None, None])) as ArrayRef;
+            let exactness = BooleanArray::from(vec![None, Some(true), None, Some(false)]);
+
+            let result = has_any_exact_match(computed_max, row_group_maxes, exactness);
+            assert_eq!(result, Some(false));
+        }
     }
 }

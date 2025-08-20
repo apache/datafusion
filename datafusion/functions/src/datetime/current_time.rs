@@ -36,7 +36,7 @@ The `current_time()` return value is determined at query time and will return th
 "#,
     syntax_example = "current_time()"
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct CurrentTimeFunc {
     signature: Signature,
 }

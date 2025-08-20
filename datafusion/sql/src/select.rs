@@ -66,9 +66,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         if !select.lateral_views.is_empty() {
             return not_impl_err!("LATERAL VIEWS");
         }
-        if select.qualify.is_some() {
-            return not_impl_err!("QUALIFY");
-        }
+
         if select.top.is_some() {
             return not_impl_err!("TOP");
         }
@@ -145,6 +143,33 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 //
                 let having_expr = resolve_aliases_to_exprs(having_expr, &alias_map)?;
                 normalize_col(having_expr, &projected_plan)
+            })
+            .transpose()?;
+
+        // Optionally the QUALIFY expression.
+        let qualify_expr_opt = select
+            .qualify
+            .map::<Result<Expr>, _>(|qualify_expr| {
+                let qualify_expr = self.sql_expr_to_logical_expr(
+                    qualify_expr,
+                    &combined_schema,
+                    planner_context,
+                )?;
+                // This step "dereferences" any aliases in the QUALIFY clause.
+                //
+                // This is how we support queries with QUALIFY expressions that
+                // refer to aliased columns.
+                //
+                // For example:
+                //
+                //   select row_number() over (PARTITION BY id) as rk from users qualify rk > 1;
+                //
+                // are rewritten as, respectively:
+                //
+                //   select row_number() over (PARTITION BY id) as rk from users qualify row_number() over (PARTITION BY id) > 1;
+                //
+                let qualify_expr = resolve_aliases_to_exprs(qualify_expr, &alias_map)?;
+                normalize_col(qualify_expr, &projected_plan)
             })
             .transpose()?;
 
@@ -225,8 +250,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             plan
         };
 
-        // Process window function
-        let window_func_exprs = find_window_exprs(&select_exprs_post_aggr);
+        // The outer expressions we will search through for window functions.
+        // Window functions may be sourced from the SELECT list or from the QUALIFY expression.
+        let windows_expr_haystack =
+            select_exprs_post_aggr.iter().chain(qualify_expr_opt.iter());
+        // All of the window expressions (deduplicated).
+        let window_func_exprs = find_window_exprs(windows_expr_haystack);
 
         let plan = if window_func_exprs.is_empty() {
             plan
@@ -239,6 +268,39 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 .map(|expr| rebase_expr(expr, &window_func_exprs, &plan))
                 .collect::<Result<Vec<Expr>>>()?;
 
+            plan
+        };
+
+        // Process QUALIFY clause after window functions
+        // QUALIFY filters the results of window functions, similar to how HAVING filters aggregates
+        let plan = if let Some(qualify_expr) = qualify_expr_opt {
+            // Validate that QUALIFY is used with window functions
+            if window_func_exprs.is_empty() {
+                return plan_err!(
+                    "QUALIFY clause requires window functions in the SELECT list or QUALIFY clause"
+                );
+            }
+
+            // now attempt to resolve columns and replace with fully-qualified columns
+            let windows_projection_exprs = window_func_exprs
+                .iter()
+                .map(|expr| resolve_columns(expr, &plan))
+                .collect::<Result<Vec<Expr>>>()?;
+
+            // Rewrite the qualify expression to reference columns from the window plan
+            let qualify_expr_post_window =
+                rebase_expr(&qualify_expr, &windows_projection_exprs, &plan)?;
+
+            // Validate that the qualify expression can be resolved from the window plan schema
+            self.validate_schema_satisfies_exprs(
+                plan.schema(),
+                std::slice::from_ref(&qualify_expr_post_window),
+            )?;
+
+            LogicalPlanBuilder::from(plan)
+                .filter(qualify_expr_post_window)?
+                .build()?
+        } else {
             plan
         };
 
