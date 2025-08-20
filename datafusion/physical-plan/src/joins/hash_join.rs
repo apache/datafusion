@@ -975,16 +975,14 @@ impl DisplayAs for HashJoinExec {
                     .map(|(c1, c2)| format!("({c1}, {c2})"))
                     .collect::<Vec<String>>()
                     .join(", ");
-                let dynamic_filter_display = "".to_string();
                 write!(
                     f,
-                    "HashJoinExec: mode={:?}, join_type={:?}, on=[{}]{}{}{}",
+                    "HashJoinExec: mode={:?}, join_type={:?}, on=[{}]{}{}",
                     self.mode,
                     self.join_type,
                     on,
                     display_filter,
                     display_projections,
-                    dynamic_filter_display
                 )
             }
             DisplayFormatType::TreeRender => {
