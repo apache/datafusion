@@ -61,7 +61,6 @@ arrow = { workspace = true }
 # arrow_schema is required for record_batch! macro :sad:
 arrow-flight = { workspace = true }
 arrow-schema = { workspace = true }
-async-stream = "0.3"
 async-trait = { workspace = true }
 bytes = { workspace = true }
 dashmap = { workspace = true }

@@ -61,7 +61,7 @@ async fn automatic_usage_example() -> datafusion::error::Result<()> {
     // Success case: Create a runtime with reasonable memory limit
     println!("Success case: Normal operation with sufficient memory");
     let runtime = RuntimeEnvBuilder::new()
-        .with_memory_limit(50_000_000, 1.0) // 50MB, 100% utilization
+        .with_memory_limit(5_000_000, 1.0) // 5MB, 100% utilization
         .build_arc()?;
 
     let config = SessionConfig::new();
