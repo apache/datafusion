@@ -1269,7 +1269,7 @@ impl BatchProcessState {
         }
     }
 
-    pub fn reset(&mut self) {
+    fn reset(&mut self) {
         self.start_idx = 0;
         self.num_rows = 0;
         self.pivot = 0;
@@ -1279,23 +1279,23 @@ impl BatchProcessState {
         self.buffered_indices = None;
     }
 
-    pub fn pivot(&self) -> usize {
+    fn pivot(&self) -> usize {
         self.pivot
     }
 
-    pub fn set_pivot(&mut self, pivot: usize) {
+    fn set_pivot(&mut self, pivot: usize) {
         self.pivot += pivot;
     }
 
-    pub fn set_start_idx(&mut self, start_idx: usize) {
+    fn set_start_idx(&mut self, start_idx: usize) {
         self.start_idx = start_idx;
     }
 
-    pub fn set_rows(&mut self, num_rows: usize) {
+    fn set_rows(&mut self, num_rows: usize) {
         self.num_rows = num_rows;
     }
 
-    pub fn set_process_rest(&mut self, process_rest: Option<usize>) {
+    fn set_process_rest(&mut self, process_rest: Option<usize>) {
         self.process_rest = process_rest;
     }
 }
