@@ -28,24 +28,7 @@ pub struct FileDecryptionProperties;
 #[cfg(not(feature = "parquet_encryption"))]
 pub struct FileEncryptionProperties;
 
-#[cfg(feature = "parquet")]
-use crate::config::ParquetEncryptionOptions;
 pub use crate::config::{ConfigFileDecryptionProperties, ConfigFileEncryptionProperties};
-#[cfg(feature = "parquet")]
-use parquet::file::properties::WriterPropertiesBuilder;
-
-#[cfg(feature = "parquet")]
-pub fn add_crypto_to_writer_properties(
-    #[allow(unused)] crypto: &ParquetEncryptionOptions,
-    #[allow(unused_mut)] mut builder: WriterPropertiesBuilder,
-) -> WriterPropertiesBuilder {
-    #[cfg(feature = "parquet_encryption")]
-    if let Some(file_encryption_properties) = &crypto.file_encryption {
-        builder = builder
-            .with_file_encryption_properties(file_encryption_properties.clone().into());
-    }
-    builder
-}
 
 #[cfg(feature = "parquet_encryption")]
 pub fn map_encryption_to_config_encryption(
@@ -63,14 +46,14 @@ pub fn map_encryption_to_config_encryption(
 
 #[cfg(feature = "parquet_encryption")]
 pub fn map_config_decryption_to_decryption(
-    decryption: Option<&ConfigFileDecryptionProperties>,
-) -> Option<FileDecryptionProperties> {
-    decryption.map(|fd| fd.clone().into())
+    decryption: &ConfigFileDecryptionProperties,
+) -> FileDecryptionProperties {
+    decryption.clone().into()
 }
 
 #[cfg(not(feature = "parquet_encryption"))]
 pub fn map_config_decryption_to_decryption(
-    _decryption: Option<&ConfigFileDecryptionProperties>,
-) -> Option<FileDecryptionProperties> {
-    None
+    _decryption: &ConfigFileDecryptionProperties,
+) -> FileDecryptionProperties {
+    FileDecryptionProperties {}
 }

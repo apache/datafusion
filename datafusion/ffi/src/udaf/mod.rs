@@ -39,7 +39,7 @@ use datafusion::{
 };
 use datafusion_proto_common::from_proto::parse_proto_fields_to_fields;
 use groups_accumulator::{FFI_GroupsAccumulator, ForeignGroupsAccumulator};
-use std::hash::{DefaultHasher, Hash, Hasher};
+use std::hash::{Hash, Hasher};
 use std::{ffi::c_void, sync::Arc};
 
 use crate::util::{rvec_wrapped_to_vec_fieldref, vec_fieldref_to_rvec_wrapped};
@@ -384,6 +384,19 @@ pub struct ForeignAggregateUDF {
 unsafe impl Send for ForeignAggregateUDF {}
 unsafe impl Sync for ForeignAggregateUDF {}
 
+impl PartialEq for ForeignAggregateUDF {
+    fn eq(&self, other: &Self) -> bool {
+        // FFI_AggregateUDF cannot be compared, so identity equality is the best we can do.
+        std::ptr::eq(self, other)
+    }
+}
+impl Eq for ForeignAggregateUDF {}
+impl Hash for ForeignAggregateUDF {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        std::ptr::hash(self, state)
+    }
+}
+
 impl TryFrom<&FFI_AggregateUDF> for ForeignAggregateUDF {
     type Error = DataFusionError;
 
@@ -552,34 +565,6 @@ impl AggregateUDFImpl for ForeignAggregateUDF {
                 df_result!((self.udaf.coerce_types)(&self.udaf, arg_types))?;
             Ok(rvec_wrapped_to_vec_datatype(&result_types)?)
         }
-    }
-
-    fn equals(&self, other: &dyn AggregateUDFImpl) -> bool {
-        let Some(other) = other.as_any().downcast_ref::<Self>() else {
-            return false;
-        };
-        let Self {
-            signature,
-            aliases,
-            udaf,
-        } = self;
-        signature == &other.signature
-            && aliases == &other.aliases
-            && std::ptr::eq(udaf, &other.udaf)
-    }
-
-    fn hash_value(&self) -> u64 {
-        let Self {
-            signature,
-            aliases,
-            udaf,
-        } = self;
-        let mut hasher = DefaultHasher::new();
-        std::any::type_name::<Self>().hash(&mut hasher);
-        signature.hash(&mut hasher);
-        aliases.hash(&mut hasher);
-        std::ptr::hash(udaf, &mut hasher);
-        hasher.finish()
     }
 }
 

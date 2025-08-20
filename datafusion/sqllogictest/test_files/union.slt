@@ -495,13 +495,13 @@ logical_plan
 11)--------------------TableScan: aggregate_test_100 projection=[c1, c13], partial_filters=[aggregate_test_100.c13 != Utf8View("C2GT5KVyOPZpgKVl110TyZO0NcJ434")]
 12)----Projection: Int64(1) AS cnt
 13)------Limit: skip=0, fetch=3
-14)--------EmptyRelation
+14)--------EmptyRelation: rows=1
 15)----Projection: lead(b.c1,Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS cnt
 16)------Limit: skip=0, fetch=3
 17)--------WindowAggr: windowExpr=[[lead(b.c1, Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
 18)----------SubqueryAlias: b
 19)------------Projection: Int64(1) AS c1
-20)--------------EmptyRelation
+20)--------------EmptyRelation: rows=1
 physical_plan
 01)CoalescePartitionsExec: fetch=3
 02)--UnionExec
@@ -620,11 +620,11 @@ logical_plan
 01)Union
 02)--Projection: Int64(1) AS a
 03)----Aggregate: groupBy=[[Int64(1)]], aggr=[[]]
-04)------EmptyRelation
+04)------EmptyRelation: rows=1
 05)--Projection: Int64(2) AS a
-06)----EmptyRelation
+06)----EmptyRelation: rows=1
 07)--Projection: Int64(3) AS a
-08)----EmptyRelation
+08)----EmptyRelation: rows=1
 physical_plan
 01)UnionExec
 02)--ProjectionExec: expr=[Int64(1)@0 as a]
@@ -647,12 +647,12 @@ logical_plan
 03)----Aggregate: groupBy=[[a.n]], aggr=[[count(Int64(1))]]
 04)------SubqueryAlias: a
 05)--------Projection: Int64(5) AS n
-06)----------EmptyRelation
+06)----------EmptyRelation: rows=1
 07)--Projection: b.x AS count, b.y AS n
 08)----SubqueryAlias: b
 09)------Projection: Int64(1) AS x, max(Int64(10)) AS y
 10)--------Aggregate: groupBy=[[]], aggr=[[max(Int64(10))]]
-11)----------EmptyRelation
+11)----------EmptyRelation: rows=1
 physical_plan
 01)UnionExec
 02)--ProjectionExec: expr=[count(Int64(1))@1 as count, n@0 as n]

@@ -68,7 +68,7 @@ pub type PhysicalExprRef = Arc<dyn PhysicalExpr>;
 /// [`Expr`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/enum.Expr.html
 /// [`create_physical_expr`]: https://docs.rs/datafusion/latest/datafusion/physical_expr/fn.create_physical_expr.html
 /// [`Column`]: https://docs.rs/datafusion/latest/datafusion/physical_expr/expressions/struct.Column.html
-pub trait PhysicalExpr: Send + Sync + Display + Debug + DynEq + DynHash {
+pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
     /// Returns the physical expression as [`Any`] so that it can be
     /// downcast to a specific implementation.
     fn as_any(&self) -> &dyn Any;
@@ -110,15 +110,13 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + DynEq + DynHash {
             // When the scalar is true or false, skip the scatter process
             if let Some(v) = value {
                 if *v {
-                    return Ok(ColumnarValue::from(
-                        Arc::new(selection.clone()) as ArrayRef
-                    ));
+                    Ok(ColumnarValue::from(Arc::new(selection.clone()) as ArrayRef))
                 } else {
-                    return Ok(tmp_result);
+                    Ok(tmp_result)
                 }
             } else {
                 let array = BooleanArray::from(vec![None; batch.num_rows()]);
-                return scatter(selection, &array).map(ColumnarValue::Array);
+                scatter(selection, &array).map(ColumnarValue::Array)
             }
         } else {
             Ok(tmp_result)
@@ -381,39 +379,18 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + DynEq + DynHash {
     }
 }
 
-/// [`PhysicalExpr`] can't be constrained by [`Eq`] directly because it must remain object
-/// safe. To ease implementation, blanket implementation is provided for [`Eq`] types.
-pub trait DynEq {
-    fn dyn_eq(&self, other: &dyn Any) -> bool;
-}
-
-impl<T: Eq + Any> DynEq for T {
-    fn dyn_eq(&self, other: &dyn Any) -> bool {
-        other.downcast_ref::<Self>() == Some(self)
-    }
-}
+#[deprecated(
+    since = "50.0.0",
+    note = "Use `datafusion_expr_common::dyn_eq` instead"
+)]
+pub use datafusion_expr_common::dyn_eq::{DynEq, DynHash};
 
 impl PartialEq for dyn PhysicalExpr {
     fn eq(&self, other: &Self) -> bool {
         self.dyn_eq(other.as_any())
     }
 }
-
 impl Eq for dyn PhysicalExpr {}
-
-/// [`PhysicalExpr`] can't be constrained by [`Hash`] directly because it must remain
-/// object safe. To ease implementation blanket implementation is provided for [`Hash`]
-/// types.
-pub trait DynHash {
-    fn dyn_hash(&self, _state: &mut dyn Hasher);
-}
-
-impl<T: Hash + Any> DynHash for T {
-    fn dyn_hash(&self, mut state: &mut dyn Hasher) {
-        self.type_id().hash(&mut state);
-        self.hash(&mut state)
-    }
-}
 
 impl Hash for dyn PhysicalExpr {
     fn hash<H: Hasher>(&self, state: &mut H) {
@@ -439,21 +416,6 @@ pub fn with_new_children_if_necessary(
         Ok(expr.with_new_children(children)?)
     } else {
         Ok(expr)
-    }
-}
-
-#[deprecated(since = "44.0.0")]
-pub fn down_cast_any_ref(any: &dyn Any) -> &dyn Any {
-    if any.is::<Arc<dyn PhysicalExpr>>() {
-        any.downcast_ref::<Arc<dyn PhysicalExpr>>()
-            .unwrap()
-            .as_any()
-    } else if any.is::<Box<dyn PhysicalExpr>>() {
-        any.downcast_ref::<Box<dyn PhysicalExpr>>()
-            .unwrap()
-            .as_any()
-    } else {
-        any
     }
 }
 
@@ -497,7 +459,7 @@ where
 ///
 /// # Example
 /// ```
-/// # // The boiler plate needed to create a `PhysicalExpr` for the example
+/// # // The boilerplate needed to create a `PhysicalExpr` for the example
 /// # use std::any::Any;
 /// use std::collections::HashMap;
 /// # use std::fmt::Formatter;
@@ -507,7 +469,7 @@ where
 /// # use datafusion_common::Result;
 /// # use datafusion_expr_common::columnar_value::ColumnarValue;
 /// # use datafusion_physical_expr_common::physical_expr::{fmt_sql, DynEq, PhysicalExpr};
-/// # #[derive(Debug, Hash, PartialOrd, PartialEq)]
+/// # #[derive(Debug, PartialEq, Eq, Hash)]
 /// # struct MyExpr {}
 /// # impl PhysicalExpr for MyExpr {fn as_any(&self) -> &dyn Any { unimplemented!() }
 /// # fn data_type(&self, input_schema: &Schema) -> Result<DataType> { unimplemented!() }
@@ -519,7 +481,6 @@ where
 /// # fn fmt_sql(&self, f: &mut Formatter<'_>) -> std::fmt::Result { write!(f, "CASE a > b THEN 1 ELSE 0 END") }
 /// # }
 /// # impl std::fmt::Display for MyExpr {fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result { unimplemented!() } }
-/// # impl DynEq for MyExpr {fn dyn_eq(&self, other: &dyn Any) -> bool { unimplemented!() } }
 /// # fn make_physical_expr() -> Arc<dyn PhysicalExpr> { Arc::new(MyExpr{}) }
 /// let expr: Arc<dyn PhysicalExpr> = make_physical_expr();
 /// // wrap the expression in `sql_fmt` which can be used with
