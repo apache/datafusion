@@ -45,6 +45,8 @@ impl Extensions {
         // Rename those to match the Substrait extensions for interoperability
         let function_name = match function_name.as_str() {
             "substr" => "substring".to_string(),
+            "log" => "logb".to_string(),
+            "isnan" => "is_nan".to_string(),
             _ => function_name,
         };
 

@@ -63,7 +63,7 @@ use insta::assert_snapshot;
 use itertools::Itertools;
 
 /// Mocked UDF
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 struct DummyUDF {
     signature: Signature,
 }
@@ -128,6 +128,7 @@ fn test_update_matching_exprs() -> Result<()> {
                 )),
             ],
             Field::new("f", DataType::Int32, true).into(),
+            Arc::new(ConfigOptions::default()),
         )),
         Arc::new(CaseExpr::try_new(
             Some(Arc::new(Column::new("d", 2))),
@@ -193,6 +194,7 @@ fn test_update_matching_exprs() -> Result<()> {
                 )),
             ],
             Field::new("f", DataType::Int32, true).into(),
+            Arc::new(ConfigOptions::default()),
         )),
         Arc::new(CaseExpr::try_new(
             Some(Arc::new(Column::new("d", 3))),
@@ -261,6 +263,7 @@ fn test_update_projected_exprs() -> Result<()> {
                 )),
             ],
             Field::new("f", DataType::Int32, true).into(),
+            Arc::new(ConfigOptions::default()),
         )),
         Arc::new(CaseExpr::try_new(
             Some(Arc::new(Column::new("d", 2))),
@@ -326,6 +329,7 @@ fn test_update_projected_exprs() -> Result<()> {
                 )),
             ],
             Field::new("f", DataType::Int32, true).into(),
+            Arc::new(ConfigOptions::default()),
         )),
         Arc::new(CaseExpr::try_new(
             Some(Arc::new(Column::new("d_new", 3))),
@@ -712,6 +716,7 @@ fn test_output_req_after_projection() -> Result<()> {
             Arc::new(Column::new("a", 0)),
             Arc::new(Column::new("b", 1)),
         ]),
+        None,
     ));
     let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
         vec![

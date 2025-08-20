@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+pub mod bit_count;
+pub mod bit_get;
 pub mod bit_shift;
 
 use datafusion_expr::ScalarUDF;
@@ -24,10 +26,18 @@ use std::sync::Arc;
 make_udf_function!(bit_shift::SparkShiftLeft, shiftleft);
 make_udf_function!(bit_shift::SparkShiftRight, shiftright);
 make_udf_function!(bit_shift::SparkShiftRightUnsigned, shiftrightunsigned);
+make_udf_function!(bit_get::SparkBitGet, bit_get);
+make_udf_function!(bit_count::SparkBitCount, bit_count);
 
 pub mod expr_fn {
     use datafusion_functions::export_functions;
 
+    export_functions!((bit_get, "Returns the value of the bit (0 or 1) at the specified position.", col pos));
+    export_functions!((
+        bit_count,
+        "Returns the number of bits set in the binary representation of the argument.",
+        col
+    ));
     export_functions!((
         shiftleft,
         "Shifts the bits of the first argument left by the number of positions specified by the second argument.",
@@ -46,5 +56,11 @@ pub mod expr_fn {
 }
 
 pub fn functions() -> Vec<Arc<ScalarUDF>> {
-    vec![shiftleft(), shiftright(), shiftrightunsigned()]
+    vec![
+        bit_get(),
+        bit_count(),
+        shiftleft(),
+        shiftright(),
+        shiftrightunsigned(),
+    ]
 }

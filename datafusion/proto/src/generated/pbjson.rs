@@ -6697,6 +6697,877 @@ impl<'de> serde::Deserialize<'de> for FullTableReference {
         deserializer.deserialize_struct("datafusion.FullTableReference", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for GenerateSeriesArgsContainsNull {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.name != 0 {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion.GenerateSeriesArgsContainsNull", len)?;
+        if self.name != 0 {
+            let v = GenerateSeriesName::try_from(self.name)
+                .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {}", self.name)))?;
+            struct_ser.serialize_field("name", &v)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for GenerateSeriesArgsContainsNull {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "name",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Name,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "name" => Ok(GeneratedField::Name),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = GenerateSeriesArgsContainsNull;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion.GenerateSeriesArgsContainsNull")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<GenerateSeriesArgsContainsNull, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut name__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Name => {
+                            if name__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("name"));
+                            }
+                            name__ = Some(map_.next_value::<GenerateSeriesName>()? as i32);
+                        }
+                    }
+                }
+                Ok(GenerateSeriesArgsContainsNull {
+                    name: name__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion.GenerateSeriesArgsContainsNull", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for GenerateSeriesArgsDate {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.start != 0 {
+            len += 1;
+        }
+        if self.end != 0 {
+            len += 1;
+        }
+        if self.step.is_some() {
+            len += 1;
+        }
+        if self.include_end {
+            len += 1;
+        }
+        if self.name != 0 {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion.GenerateSeriesArgsDate", len)?;
+        if self.start != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("start", ToString::to_string(&self.start).as_str())?;
+        }
+        if self.end != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("end", ToString::to_string(&self.end).as_str())?;
+        }
+        if let Some(v) = self.step.as_ref() {
+            struct_ser.serialize_field("step", v)?;
+        }
+        if self.include_end {
+            struct_ser.serialize_field("includeEnd", &self.include_end)?;
+        }
+        if self.name != 0 {
+            let v = GenerateSeriesName::try_from(self.name)
+                .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {}", self.name)))?;
+            struct_ser.serialize_field("name", &v)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for GenerateSeriesArgsDate {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "start",
+            "end",
+            "step",
+            "include_end",
+            "includeEnd",
+            "name",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Start,
+            End,
+            Step,
+            IncludeEnd,
+            Name,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "start" => Ok(GeneratedField::Start),
+                            "end" => Ok(GeneratedField::End),
+                            "step" => Ok(GeneratedField::Step),
+                            "includeEnd" | "include_end" => Ok(GeneratedField::IncludeEnd),
+                            "name" => Ok(GeneratedField::Name),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = GenerateSeriesArgsDate;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion.GenerateSeriesArgsDate")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<GenerateSeriesArgsDate, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut start__ = None;
+                let mut end__ = None;
+                let mut step__ = None;
+                let mut include_end__ = None;
+                let mut name__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Start => {
+                            if start__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("start"));
+                            }
+                            start__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::End => {
+                            if end__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("end"));
+                            }
+                            end__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::Step => {
+                            if step__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("step"));
+                            }
+                            step__ = map_.next_value()?;
+                        }
+                        GeneratedField::IncludeEnd => {
+                            if include_end__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("includeEnd"));
+                            }
+                            include_end__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Name => {
+                            if name__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("name"));
+                            }
+                            name__ = Some(map_.next_value::<GenerateSeriesName>()? as i32);
+                        }
+                    }
+                }
+                Ok(GenerateSeriesArgsDate {
+                    start: start__.unwrap_or_default(),
+                    end: end__.unwrap_or_default(),
+                    step: step__,
+                    include_end: include_end__.unwrap_or_default(),
+                    name: name__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion.GenerateSeriesArgsDate", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for GenerateSeriesArgsInt64 {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.start != 0 {
+            len += 1;
+        }
+        if self.end != 0 {
+            len += 1;
+        }
+        if self.step != 0 {
+            len += 1;
+        }
+        if self.include_end {
+            len += 1;
+        }
+        if self.name != 0 {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion.GenerateSeriesArgsInt64", len)?;
+        if self.start != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("start", ToString::to_string(&self.start).as_str())?;
+        }
+        if self.end != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("end", ToString::to_string(&self.end).as_str())?;
+        }
+        if self.step != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("step", ToString::to_string(&self.step).as_str())?;
+        }
+        if self.include_end {
+            struct_ser.serialize_field("includeEnd", &self.include_end)?;
+        }
+        if self.name != 0 {
+            let v = GenerateSeriesName::try_from(self.name)
+                .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {}", self.name)))?;
+            struct_ser.serialize_field("name", &v)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for GenerateSeriesArgsInt64 {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "start",
+            "end",
+            "step",
+            "include_end",
+            "includeEnd",
+            "name",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Start,
+            End,
+            Step,
+            IncludeEnd,
+            Name,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "start" => Ok(GeneratedField::Start),
+                            "end" => Ok(GeneratedField::End),
+                            "step" => Ok(GeneratedField::Step),
+                            "includeEnd" | "include_end" => Ok(GeneratedField::IncludeEnd),
+                            "name" => Ok(GeneratedField::Name),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = GenerateSeriesArgsInt64;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion.GenerateSeriesArgsInt64")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<GenerateSeriesArgsInt64, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut start__ = None;
+                let mut end__ = None;
+                let mut step__ = None;
+                let mut include_end__ = None;
+                let mut name__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Start => {
+                            if start__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("start"));
+                            }
+                            start__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::End => {
+                            if end__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("end"));
+                            }
+                            end__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::Step => {
+                            if step__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("step"));
+                            }
+                            step__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::IncludeEnd => {
+                            if include_end__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("includeEnd"));
+                            }
+                            include_end__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Name => {
+                            if name__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("name"));
+                            }
+                            name__ = Some(map_.next_value::<GenerateSeriesName>()? as i32);
+                        }
+                    }
+                }
+                Ok(GenerateSeriesArgsInt64 {
+                    start: start__.unwrap_or_default(),
+                    end: end__.unwrap_or_default(),
+                    step: step__.unwrap_or_default(),
+                    include_end: include_end__.unwrap_or_default(),
+                    name: name__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion.GenerateSeriesArgsInt64", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for GenerateSeriesArgsTimestamp {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.start != 0 {
+            len += 1;
+        }
+        if self.end != 0 {
+            len += 1;
+        }
+        if self.step.is_some() {
+            len += 1;
+        }
+        if self.tz.is_some() {
+            len += 1;
+        }
+        if self.include_end {
+            len += 1;
+        }
+        if self.name != 0 {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion.GenerateSeriesArgsTimestamp", len)?;
+        if self.start != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("start", ToString::to_string(&self.start).as_str())?;
+        }
+        if self.end != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("end", ToString::to_string(&self.end).as_str())?;
+        }
+        if let Some(v) = self.step.as_ref() {
+            struct_ser.serialize_field("step", v)?;
+        }
+        if let Some(v) = self.tz.as_ref() {
+            struct_ser.serialize_field("tz", v)?;
+        }
+        if self.include_end {
+            struct_ser.serialize_field("includeEnd", &self.include_end)?;
+        }
+        if self.name != 0 {
+            let v = GenerateSeriesName::try_from(self.name)
+                .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {}", self.name)))?;
+            struct_ser.serialize_field("name", &v)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for GenerateSeriesArgsTimestamp {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "start",
+            "end",
+            "step",
+            "tz",
+            "include_end",
+            "includeEnd",
+            "name",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Start,
+            End,
+            Step,
+            Tz,
+            IncludeEnd,
+            Name,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "start" => Ok(GeneratedField::Start),
+                            "end" => Ok(GeneratedField::End),
+                            "step" => Ok(GeneratedField::Step),
+                            "tz" => Ok(GeneratedField::Tz),
+                            "includeEnd" | "include_end" => Ok(GeneratedField::IncludeEnd),
+                            "name" => Ok(GeneratedField::Name),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = GenerateSeriesArgsTimestamp;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion.GenerateSeriesArgsTimestamp")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<GenerateSeriesArgsTimestamp, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut start__ = None;
+                let mut end__ = None;
+                let mut step__ = None;
+                let mut tz__ = None;
+                let mut include_end__ = None;
+                let mut name__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Start => {
+                            if start__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("start"));
+                            }
+                            start__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::End => {
+                            if end__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("end"));
+                            }
+                            end__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::Step => {
+                            if step__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("step"));
+                            }
+                            step__ = map_.next_value()?;
+                        }
+                        GeneratedField::Tz => {
+                            if tz__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("tz"));
+                            }
+                            tz__ = map_.next_value()?;
+                        }
+                        GeneratedField::IncludeEnd => {
+                            if include_end__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("includeEnd"));
+                            }
+                            include_end__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Name => {
+                            if name__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("name"));
+                            }
+                            name__ = Some(map_.next_value::<GenerateSeriesName>()? as i32);
+                        }
+                    }
+                }
+                Ok(GenerateSeriesArgsTimestamp {
+                    start: start__.unwrap_or_default(),
+                    end: end__.unwrap_or_default(),
+                    step: step__,
+                    tz: tz__,
+                    include_end: include_end__.unwrap_or_default(),
+                    name: name__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion.GenerateSeriesArgsTimestamp", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for GenerateSeriesName {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let variant = match self {
+            Self::GsGenerateSeries => "GS_GENERATE_SERIES",
+            Self::GsRange => "GS_RANGE",
+        };
+        serializer.serialize_str(variant)
+    }
+}
+impl<'de> serde::Deserialize<'de> for GenerateSeriesName {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "GS_GENERATE_SERIES",
+            "GS_RANGE",
+        ];
+
+        struct GeneratedVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = GenerateSeriesName;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(formatter, "expected one of: {:?}", &FIELDS)
+            }
+
+            fn visit_i64<E>(self, v: i64) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                i32::try_from(v)
+                    .ok()
+                    .and_then(|x| x.try_into().ok())
+                    .ok_or_else(|| {
+                        serde::de::Error::invalid_value(serde::de::Unexpected::Signed(v), &self)
+                    })
+            }
+
+            fn visit_u64<E>(self, v: u64) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                i32::try_from(v)
+                    .ok()
+                    .and_then(|x| x.try_into().ok())
+                    .ok_or_else(|| {
+                        serde::de::Error::invalid_value(serde::de::Unexpected::Unsigned(v), &self)
+                    })
+            }
+
+            fn visit_str<E>(self, value: &str) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                match value {
+                    "GS_GENERATE_SERIES" => Ok(GenerateSeriesName::GsGenerateSeries),
+                    "GS_RANGE" => Ok(GenerateSeriesName::GsRange),
+                    _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
+                }
+            }
+        }
+        deserializer.deserialize_any(GeneratedVisitor)
+    }
+}
+impl serde::Serialize for GenerateSeriesNode {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.schema.is_some() {
+            len += 1;
+        }
+        if self.target_batch_size != 0 {
+            len += 1;
+        }
+        if self.args.is_some() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion.GenerateSeriesNode", len)?;
+        if let Some(v) = self.schema.as_ref() {
+            struct_ser.serialize_field("schema", v)?;
+        }
+        if self.target_batch_size != 0 {
+            struct_ser.serialize_field("targetBatchSize", &self.target_batch_size)?;
+        }
+        if let Some(v) = self.args.as_ref() {
+            match v {
+                generate_series_node::Args::ContainsNull(v) => {
+                    struct_ser.serialize_field("containsNull", v)?;
+                }
+                generate_series_node::Args::Int64Args(v) => {
+                    struct_ser.serialize_field("int64Args", v)?;
+                }
+                generate_series_node::Args::TimestampArgs(v) => {
+                    struct_ser.serialize_field("timestampArgs", v)?;
+                }
+                generate_series_node::Args::DateArgs(v) => {
+                    struct_ser.serialize_field("dateArgs", v)?;
+                }
+            }
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for GenerateSeriesNode {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "schema",
+            "target_batch_size",
+            "targetBatchSize",
+            "contains_null",
+            "containsNull",
+            "int64_args",
+            "int64Args",
+            "timestamp_args",
+            "timestampArgs",
+            "date_args",
+            "dateArgs",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Schema,
+            TargetBatchSize,
+            ContainsNull,
+            Int64Args,
+            TimestampArgs,
+            DateArgs,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "schema" => Ok(GeneratedField::Schema),
+                            "targetBatchSize" | "target_batch_size" => Ok(GeneratedField::TargetBatchSize),
+                            "containsNull" | "contains_null" => Ok(GeneratedField::ContainsNull),
+                            "int64Args" | "int64_args" => Ok(GeneratedField::Int64Args),
+                            "timestampArgs" | "timestamp_args" => Ok(GeneratedField::TimestampArgs),
+                            "dateArgs" | "date_args" => Ok(GeneratedField::DateArgs),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = GenerateSeriesNode;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion.GenerateSeriesNode")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<GenerateSeriesNode, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut schema__ = None;
+                let mut target_batch_size__ = None;
+                let mut args__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Schema => {
+                            if schema__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("schema"));
+                            }
+                            schema__ = map_.next_value()?;
+                        }
+                        GeneratedField::TargetBatchSize => {
+                            if target_batch_size__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("targetBatchSize"));
+                            }
+                            target_batch_size__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::ContainsNull => {
+                            if args__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("containsNull"));
+                            }
+                            args__ = map_.next_value::<::std::option::Option<_>>()?.map(generate_series_node::Args::ContainsNull)
+;
+                        }
+                        GeneratedField::Int64Args => {
+                            if args__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("int64Args"));
+                            }
+                            args__ = map_.next_value::<::std::option::Option<_>>()?.map(generate_series_node::Args::Int64Args)
+;
+                        }
+                        GeneratedField::TimestampArgs => {
+                            if args__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("timestampArgs"));
+                            }
+                            args__ = map_.next_value::<::std::option::Option<_>>()?.map(generate_series_node::Args::TimestampArgs)
+;
+                        }
+                        GeneratedField::DateArgs => {
+                            if args__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("dateArgs"));
+                            }
+                            args__ = map_.next_value::<::std::option::Option<_>>()?.map(generate_series_node::Args::DateArgs)
+;
+                        }
+                    }
+                }
+                Ok(GenerateSeriesNode {
+                    schema: schema__,
+                    target_batch_size: target_batch_size__.unwrap_or_default(),
+                    args: args__,
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion.GenerateSeriesNode", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for GlobalLimitExecNode {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -9907,6 +10778,9 @@ impl serde::Serialize for ListingTableScanNode {
                 listing_table_scan_node::FileFormatType::Json(v) => {
                     struct_ser.serialize_field("json", v)?;
                 }
+                listing_table_scan_node::FileFormatType::Arrow(v) => {
+                    struct_ser.serialize_field("arrow", v)?;
+                }
             }
         }
         struct_ser.end()
@@ -9939,6 +10813,7 @@ impl<'de> serde::Deserialize<'de> for ListingTableScanNode {
             "parquet",
             "avro",
             "json",
+            "arrow",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -9957,6 +10832,7 @@ impl<'de> serde::Deserialize<'de> for ListingTableScanNode {
             Parquet,
             Avro,
             Json,
+            Arrow,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -9992,6 +10868,7 @@ impl<'de> serde::Deserialize<'de> for ListingTableScanNode {
                             "parquet" => Ok(GeneratedField::Parquet),
                             "avro" => Ok(GeneratedField::Avro),
                             "json" => Ok(GeneratedField::Json),
+                            "arrow" => Ok(GeneratedField::Arrow),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -10112,6 +10989,13 @@ impl<'de> serde::Deserialize<'de> for ListingTableScanNode {
                                 return Err(serde::de::Error::duplicate_field("json"));
                             }
                             file_format_type__ = map_.next_value::<::std::option::Option<_>>()?.map(listing_table_scan_node::FileFormatType::Json)
+;
+                        }
+                        GeneratedField::Arrow => {
+                            if file_format_type__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("arrow"));
+                            }
+                            file_format_type__ = map_.next_value::<::std::option::Option<_>>()?.map(listing_table_scan_node::FileFormatType::Arrow)
 ;
                         }
                     }
@@ -13619,6 +14503,9 @@ impl serde::Serialize for PhysicalAggregateExprNode {
         if self.fun_definition.is_some() {
             len += 1;
         }
+        if !self.human_display.is_empty() {
+            len += 1;
+        }
         if self.aggregate_function.is_some() {
             len += 1;
         }
@@ -13639,6 +14526,9 @@ impl serde::Serialize for PhysicalAggregateExprNode {
             #[allow(clippy::needless_borrow)]
             #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("funDefinition", pbjson::private::base64::encode(&v).as_str())?;
+        }
+        if !self.human_display.is_empty() {
+            struct_ser.serialize_field("humanDisplay", &self.human_display)?;
         }
         if let Some(v) = self.aggregate_function.as_ref() {
             match v {
@@ -13665,6 +14555,8 @@ impl<'de> serde::Deserialize<'de> for PhysicalAggregateExprNode {
             "ignoreNulls",
             "fun_definition",
             "funDefinition",
+            "human_display",
+            "humanDisplay",
             "user_defined_aggr_function",
             "userDefinedAggrFunction",
         ];
@@ -13676,6 +14568,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalAggregateExprNode {
             Distinct,
             IgnoreNulls,
             FunDefinition,
+            HumanDisplay,
             UserDefinedAggrFunction,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -13703,6 +14596,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalAggregateExprNode {
                             "distinct" => Ok(GeneratedField::Distinct),
                             "ignoreNulls" | "ignore_nulls" => Ok(GeneratedField::IgnoreNulls),
                             "funDefinition" | "fun_definition" => Ok(GeneratedField::FunDefinition),
+                            "humanDisplay" | "human_display" => Ok(GeneratedField::HumanDisplay),
                             "userDefinedAggrFunction" | "user_defined_aggr_function" => Ok(GeneratedField::UserDefinedAggrFunction),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
@@ -13728,6 +14622,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalAggregateExprNode {
                 let mut distinct__ = None;
                 let mut ignore_nulls__ = None;
                 let mut fun_definition__ = None;
+                let mut human_display__ = None;
                 let mut aggregate_function__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
@@ -13763,6 +14658,12 @@ impl<'de> serde::Deserialize<'de> for PhysicalAggregateExprNode {
                                 map_.next_value::<::std::option::Option<::pbjson::private::BytesDeserialize<_>>>()?.map(|x| x.0)
                             ;
                         }
+                        GeneratedField::HumanDisplay => {
+                            if human_display__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("humanDisplay"));
+                            }
+                            human_display__ = Some(map_.next_value()?);
+                        }
                         GeneratedField::UserDefinedAggrFunction => {
                             if aggregate_function__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("userDefinedAggrFunction"));
@@ -13777,6 +14678,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalAggregateExprNode {
                     distinct: distinct__.unwrap_or_default(),
                     ignore_nulls: ignore_nulls__.unwrap_or_default(),
                     fun_definition: fun_definition__,
+                    human_display: human_display__.unwrap_or_default(),
                     aggregate_function: aggregate_function__,
                 })
             }
@@ -15894,6 +16796,9 @@ impl serde::Serialize for PhysicalPlanNode {
                 physical_plan_node::PhysicalPlanType::Cooperative(v) => {
                     struct_ser.serialize_field("cooperative", v)?;
                 }
+                physical_plan_node::PhysicalPlanType::GenerateSeries(v) => {
+                    struct_ser.serialize_field("generateSeries", v)?;
+                }
             }
         }
         struct_ser.end()
@@ -15953,6 +16858,8 @@ impl<'de> serde::Deserialize<'de> for PhysicalPlanNode {
             "json_scan",
             "jsonScan",
             "cooperative",
+            "generate_series",
+            "generateSeries",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -15988,6 +16895,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalPlanNode {
             Unnest,
             JsonScan,
             Cooperative,
+            GenerateSeries,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -16040,6 +16948,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalPlanNode {
                             "unnest" => Ok(GeneratedField::Unnest),
                             "jsonScan" | "json_scan" => Ok(GeneratedField::JsonScan),
                             "cooperative" => Ok(GeneratedField::Cooperative),
+                            "generateSeries" | "generate_series" => Ok(GeneratedField::GenerateSeries),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -16279,6 +17188,13 @@ impl<'de> serde::Deserialize<'de> for PhysicalPlanNode {
                             physical_plan_type__ = map_.next_value::<::std::option::Option<_>>()?.map(physical_plan_node::PhysicalPlanType::Cooperative)
 ;
                         }
+                        GeneratedField::GenerateSeries => {
+                            if physical_plan_type__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("generateSeries"));
+                            }
+                            physical_plan_type__ = map_.next_value::<::std::option::Option<_>>()?.map(physical_plan_node::PhysicalPlanType::GenerateSeries)
+;
+                        }
                     }
                 }
                 Ok(PhysicalPlanNode {
@@ -16312,6 +17228,9 @@ impl serde::Serialize for PhysicalScalarUdfNode {
         if self.nullable {
             len += 1;
         }
+        if !self.return_field_name.is_empty() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.PhysicalScalarUdfNode", len)?;
         if !self.name.is_empty() {
             struct_ser.serialize_field("name", &self.name)?;
@@ -16330,6 +17249,9 @@ impl serde::Serialize for PhysicalScalarUdfNode {
         if self.nullable {
             struct_ser.serialize_field("nullable", &self.nullable)?;
         }
+        if !self.return_field_name.is_empty() {
+            struct_ser.serialize_field("returnFieldName", &self.return_field_name)?;
+        }
         struct_ser.end()
     }
 }
@@ -16347,6 +17269,8 @@ impl<'de> serde::Deserialize<'de> for PhysicalScalarUdfNode {
             "return_type",
             "returnType",
             "nullable",
+            "return_field_name",
+            "returnFieldName",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -16356,6 +17280,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalScalarUdfNode {
             FunDefinition,
             ReturnType,
             Nullable,
+            ReturnFieldName,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -16382,6 +17307,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalScalarUdfNode {
                             "funDefinition" | "fun_definition" => Ok(GeneratedField::FunDefinition),
                             "returnType" | "return_type" => Ok(GeneratedField::ReturnType),
                             "nullable" => Ok(GeneratedField::Nullable),
+                            "returnFieldName" | "return_field_name" => Ok(GeneratedField::ReturnFieldName),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -16406,6 +17332,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalScalarUdfNode {
                 let mut fun_definition__ = None;
                 let mut return_type__ = None;
                 let mut nullable__ = None;
+                let mut return_field_name__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Name => {
@@ -16440,6 +17367,12 @@ impl<'de> serde::Deserialize<'de> for PhysicalScalarUdfNode {
                             }
                             nullable__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::ReturnFieldName => {
+                            if return_field_name__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("returnFieldName"));
+                            }
+                            return_field_name__ = Some(map_.next_value()?);
+                        }
                     }
                 }
                 Ok(PhysicalScalarUdfNode {
@@ -16448,6 +17381,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalScalarUdfNode {
                     fun_definition: fun_definition__,
                     return_type: return_type__,
                     nullable: nullable__.unwrap_or_default(),
+                    return_field_name: return_field_name__.unwrap_or_default(),
                 })
             }
         }
@@ -16917,6 +17851,12 @@ impl serde::Serialize for PhysicalWindowExprNode {
         if self.fun_definition.is_some() {
             len += 1;
         }
+        if self.ignore_nulls {
+            len += 1;
+        }
+        if self.distinct {
+            len += 1;
+        }
         if self.window_function.is_some() {
             len += 1;
         }
@@ -16940,6 +17880,12 @@ impl serde::Serialize for PhysicalWindowExprNode {
             #[allow(clippy::needless_borrow)]
             #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("funDefinition", pbjson::private::base64::encode(&v).as_str())?;
+        }
+        if self.ignore_nulls {
+            struct_ser.serialize_field("ignoreNulls", &self.ignore_nulls)?;
+        }
+        if self.distinct {
+            struct_ser.serialize_field("distinct", &self.distinct)?;
         }
         if let Some(v) = self.window_function.as_ref() {
             match v {
@@ -16971,6 +17917,9 @@ impl<'de> serde::Deserialize<'de> for PhysicalWindowExprNode {
             "name",
             "fun_definition",
             "funDefinition",
+            "ignore_nulls",
+            "ignoreNulls",
+            "distinct",
             "user_defined_aggr_function",
             "userDefinedAggrFunction",
             "user_defined_window_function",
@@ -16985,6 +17934,8 @@ impl<'de> serde::Deserialize<'de> for PhysicalWindowExprNode {
             WindowFrame,
             Name,
             FunDefinition,
+            IgnoreNulls,
+            Distinct,
             UserDefinedAggrFunction,
             UserDefinedWindowFunction,
         }
@@ -17014,6 +17965,8 @@ impl<'de> serde::Deserialize<'de> for PhysicalWindowExprNode {
                             "windowFrame" | "window_frame" => Ok(GeneratedField::WindowFrame),
                             "name" => Ok(GeneratedField::Name),
                             "funDefinition" | "fun_definition" => Ok(GeneratedField::FunDefinition),
+                            "ignoreNulls" | "ignore_nulls" => Ok(GeneratedField::IgnoreNulls),
+                            "distinct" => Ok(GeneratedField::Distinct),
                             "userDefinedAggrFunction" | "user_defined_aggr_function" => Ok(GeneratedField::UserDefinedAggrFunction),
                             "userDefinedWindowFunction" | "user_defined_window_function" => Ok(GeneratedField::UserDefinedWindowFunction),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
@@ -17041,6 +17994,8 @@ impl<'de> serde::Deserialize<'de> for PhysicalWindowExprNode {
                 let mut window_frame__ = None;
                 let mut name__ = None;
                 let mut fun_definition__ = None;
+                let mut ignore_nulls__ = None;
+                let mut distinct__ = None;
                 let mut window_function__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
@@ -17082,6 +18037,18 @@ impl<'de> serde::Deserialize<'de> for PhysicalWindowExprNode {
                                 map_.next_value::<::std::option::Option<::pbjson::private::BytesDeserialize<_>>>()?.map(|x| x.0)
                             ;
                         }
+                        GeneratedField::IgnoreNulls => {
+                            if ignore_nulls__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("ignoreNulls"));
+                            }
+                            ignore_nulls__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Distinct => {
+                            if distinct__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("distinct"));
+                            }
+                            distinct__ = Some(map_.next_value()?);
+                        }
                         GeneratedField::UserDefinedAggrFunction => {
                             if window_function__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("userDefinedAggrFunction"));
@@ -17103,6 +18070,8 @@ impl<'de> serde::Deserialize<'de> for PhysicalWindowExprNode {
                     window_frame: window_frame__,
                     name: name__.unwrap_or_default(),
                     fun_definition: fun_definition__,
+                    ignore_nulls: ignore_nulls__.unwrap_or_default(),
+                    distinct: distinct__.unwrap_or_default(),
                     window_function: window_function__,
                 })
             }

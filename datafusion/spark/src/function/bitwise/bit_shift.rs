@@ -154,7 +154,7 @@ fn bit_shift_coerce_types(arg_types: &[DataType], func: &str) -> Result<Vec<Data
     Ok(vec![coerced_first, DataType::Int32])
 }
 
-#[derive(Debug)]
+#[derive(Debug, Hash, Eq, PartialEq)]
 pub struct SparkShiftLeft {
     signature: Signature,
 }
@@ -243,7 +243,7 @@ fn spark_shift_left(arrays: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Hash, Eq, PartialEq)]
 pub struct SparkShiftRightUnsigned {
     signature: Signature,
 }
@@ -332,7 +332,7 @@ fn spark_shift_right_unsigned(arrays: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Hash, Eq, PartialEq)]
 pub struct SparkShiftRight {
     signature: Signature,
 }
