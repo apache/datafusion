@@ -339,13 +339,12 @@ impl SharedBoundsAccumulator {
         // Critical synchronization point: Only update the filter when ALL partitions are complete
         // Troubleshooting: If you see "completed > total_partitions", check partition
         // count calculation in new_from_partition_mode() - it may not match actual execution calls
-        if completed == total_partitions {
-            if !inner.bounds.is_empty() {
+        if completed == total_partitions
+            && !inner.bounds.is_empty() {
                 let filter_expr =
                     self.create_filter_from_partition_bounds(&inner.bounds)?;
                 self.dynamic_filter.update(filter_expr)?;
             }
-        }
 
         Ok(())
     }
