@@ -98,6 +98,45 @@ use parking_lot::Mutex;
 const HASH_JOIN_SEED: RandomState =
     RandomState::with_seeds('J' as u64, 'O' as u64, 'I' as u64, 'N' as u64);
 
+/// Represents the minimum and maximum values for a specific column.
+/// Used in dynamic filter pushdown to establish value boundaries.
+#[derive(Debug, Clone, PartialEq)]
+struct ColumnBounds {
+    /// The minimum value observed for this column
+    min: ScalarValue,
+    /// The maximum value observed for this column  
+    max: ScalarValue,
+}
+
+impl ColumnBounds {
+    fn new(min: ScalarValue, max: ScalarValue) -> Self {
+        Self { min, max }
+    }
+}
+
+/// Represents the bounds for all join key columns from a single partition.
+/// This contains the min/max values computed from one partition's build-side data.
+#[derive(Debug, Clone)]
+struct PartitionBounds {
+    /// Min/max bounds for each join key column in this partition.
+    /// Index corresponds to the join key expression index.
+    column_bounds: Vec<ColumnBounds>,
+}
+
+impl PartitionBounds {
+    fn new(column_bounds: Vec<ColumnBounds>) -> Self {
+        Self { column_bounds }
+    }
+
+    fn len(&self) -> usize {
+        self.column_bounds.len()
+    }
+
+    fn get(&self, index: usize) -> Option<&ColumnBounds> {
+        self.column_bounds.get(index)
+    }
+}
+
 /// Coordinates dynamic filter bounds collection across multiple partitions
 ///
 /// This structure ensures that dynamic filters are built with complete information from all
@@ -123,13 +162,18 @@ const HASH_JOIN_SEED: RandomState =
 /// partition executions.
 struct SharedBoundsAccumulator {
     /// Bounds from completed partitions.
-    bounds: Mutex<Vec<Vec<(ScalarValue, ScalarValue)>>>,
+    /// Each element represents the column bounds computed by one partition.
+    bounds: Mutex<Vec<PartitionBounds>>,
     /// Number of partitions that have reported completion.
     completed_partitions: AtomicUsize,
     /// Total number of partitions.
     /// Need to know this so that we can update the dynamic filter once we are done
     /// building *all* of the hash tables.
     total_partitions: usize,
+    /// Dynamic filter for pushdown to probe side
+    dynamic_filter: Arc<DynamicFilterPhysicalExpr>,
+    /// Right side join expressions needed for creating filter bounds
+    on_right: Vec<PhysicalExprRef>,
 }
 
 impl SharedBoundsAccumulator {
@@ -160,6 +204,8 @@ impl SharedBoundsAccumulator {
         partition_mode: PartitionMode,
         left_child: &dyn ExecutionPlan,
         right_child: &dyn ExecutionPlan,
+        dynamic_filter: Arc<DynamicFilterPhysicalExpr>,
+        on_right: Vec<PhysicalExprRef>,
     ) -> Self {
         // Troubleshooting: If partition counts are incorrect, verify this logic matches
         // the actual execution pattern in collect_build_side()
@@ -179,44 +225,48 @@ impl SharedBoundsAccumulator {
             bounds: Mutex::new(Vec::with_capacity(expected_calls)),
             completed_partitions: AtomicUsize::new(0),
             total_partitions: expected_calls,
+            dynamic_filter,
+            on_right,
         }
     }
 
     /// Merge all bounds from completed partitions into global min/max.
     ///
+    /// This combines bounds from all partitions by computing the global minimum and maximum
+    /// for each join key column across all partitions.
+    ///
     /// Troubleshooting: If this returns None when you expect bounds, check:
     /// 1. All partitions called collect_build_side with bounds data
     /// 2. collect_left_input was called with should_compute_bounds=true
     /// 3. The build side had at least one non-empty batch
-    fn merge_bounds(&self) -> Option<Vec<(ScalarValue, ScalarValue)>> {
+    fn merge_bounds(&self) -> Option<Vec<ColumnBounds>> {
         let bounds = self.bounds.lock();
-        let all_bounds: Vec<_> = bounds.iter().collect();
 
-        if all_bounds.is_empty() {
+        if bounds.is_empty() {
             return None;
         }
 
-        let num_columns = all_bounds[0].len();
+        let num_columns = bounds[0].len();
         let mut merged = Vec::with_capacity(num_columns);
 
         for col_idx in 0..num_columns {
             let mut global_min = None;
             let mut global_max = None;
 
-            for partition_bounds in &all_bounds {
-                if let Some((min_val, max_val)) = partition_bounds.get(col_idx) {
+            for partition_bounds in bounds.iter() {
+                if let Some(column_bounds) = partition_bounds.get(col_idx) {
                     global_min = match global_min {
-                        None => Some(min_val.clone()),
-                        Some(current_min) => Some(if min_val < &current_min {
-                            min_val.clone()
+                        None => Some(column_bounds.min.clone()),
+                        Some(current_min) => Some(if column_bounds.min < current_min {
+                            column_bounds.min.clone()
                         } else {
                             current_min
                         }),
                     };
                     global_max = match global_max {
-                        None => Some(max_val.clone()),
-                        Some(current_max) => Some(if max_val > &current_max {
-                            max_val.clone()
+                        None => Some(column_bounds.max.clone()),
+                        Some(current_max) => Some(if column_bounds.max > current_max {
+                            column_bounds.max.clone()
                         } else {
                             current_max
                         }),
@@ -225,7 +275,7 @@ impl SharedBoundsAccumulator {
             }
 
             if let (Some(min), Some(max)) = (global_min, global_max) {
-                merged.push((min, max));
+                merged.push(ColumnBounds::new(min, max));
             }
         }
 
@@ -234,6 +284,81 @@ impl SharedBoundsAccumulator {
         } else {
             Some(merged)
         }
+    }
+
+    /// Create a filter expression from merged bounds
+    fn create_filter_from_bounds(
+        &self,
+        bounds: Vec<ColumnBounds>,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        // Create range predicates for each join key
+        let mut predicates = Vec::with_capacity(bounds.len());
+        for (column_bounds, right_expr) in bounds.iter().zip(self.on_right.iter()) {
+            // Create predicate: col >= min AND col <= max
+            let min_expr = Arc::new(BinaryExpr::new(
+                Arc::clone(right_expr),
+                Operator::GtEq,
+                lit(column_bounds.min.clone()),
+            )) as Arc<dyn PhysicalExpr>;
+            let max_expr = Arc::new(BinaryExpr::new(
+                Arc::clone(right_expr),
+                Operator::LtEq,
+                lit(column_bounds.max.clone()),
+            )) as Arc<dyn PhysicalExpr>;
+            let range_expr = Arc::new(BinaryExpr::new(min_expr, Operator::And, max_expr))
+                as Arc<dyn PhysicalExpr>;
+            predicates.push(range_expr);
+        }
+
+        // Combine all predicates with AND
+        let combined_predicate = predicates
+            .into_iter()
+            .reduce(|acc, pred| {
+                Arc::new(BinaryExpr::new(acc, Operator::And, pred))
+                    as Arc<dyn PhysicalExpr>
+            })
+            .unwrap_or_else(|| lit(true));
+
+        Ok(combined_predicate)
+    }
+
+    /// Report bounds from a completed partition and update dynamic filter if all partitions are done
+    ///
+    /// This method coordinates the dynamic filter updates across all partitions. It stores the
+    /// bounds from the current partition, increments the completion counter, and when all
+    /// partitions have reported, merges their bounds and updates the dynamic filter.
+    ///
+    /// # Arguments
+    /// * `partition_bounds` - The bounds computed by this partition (if any)
+    ///
+    /// # Returns
+    /// * `Result<()>` - Ok if successful, Err if filter update failed
+    fn report_partition_bounds(
+        &self,
+        partition_bounds: Option<Vec<ColumnBounds>>,
+    ) -> Result<()> {
+        // Store bounds in the accumulator - this runs once per partition
+        if let Some(bounds) = partition_bounds {
+            // Only push actual bounds if they exist
+            self.bounds.lock().push(PartitionBounds::new(bounds));
+        }
+
+        // Atomically increment the completion counter
+        // Even empty partitions must report to ensure proper termination
+        let completed = self.completed_partitions.fetch_add(1, Ordering::SeqCst) + 1;
+        let total_partitions = self.total_partitions;
+
+        // Critical synchronization point: Only update the filter when ALL partitions are complete
+        // Troubleshooting: If you see "completed > total_partitions", check partition
+        // count calculation in new_from_partition_mode() - it may not match actual execution calls
+        if completed == total_partitions {
+            if let Some(merged_bounds) = self.merge_bounds() {
+                let filter_expr = self.create_filter_from_bounds(merged_bounds)?;
+                self.dynamic_filter.update(filter_expr)?;
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -262,7 +387,7 @@ struct JoinLeftData {
     /// The MemoryReservation ensures proper tracking of memory resources throughout the join operation's lifecycle.
     _reservation: MemoryReservation,
     /// Bounds computed from the build side for dynamic filter pushdown
-    bounds: Option<Vec<(ScalarValue, ScalarValue)>>,
+    bounds: Option<Vec<ColumnBounds>>,
 }
 
 impl JoinLeftData {
@@ -274,7 +399,7 @@ impl JoinLeftData {
         visited_indices_bitmap: SharedBitmapBuilder,
         probe_threads_counter: AtomicUsize,
         reservation: MemoryReservation,
-        bounds: Option<Vec<(ScalarValue, ScalarValue)>>,
+        bounds: Option<Vec<ColumnBounds>>,
     ) -> Self {
         Self {
             hash_map,
@@ -514,10 +639,12 @@ pub struct HashJoinExec {
     /// Cache holding plan properties like equivalences, output partitioning etc.
     cache: PlanProperties,
     /// Dynamic filter for pushing down to the probe side
-    dynamic_filter: Arc<DynamicFilterPhysicalExpr>,
+    /// Set when dynamic filter pushdown is detected in handle_child_pushdown_result
+    dynamic_filter: Option<Arc<DynamicFilterPhysicalExpr>>,
     /// Shared bounds accumulator for coordinating dynamic filter updates across partitions
+    /// Only created when dynamic filter pushdown is enabled.
     /// Lazily initialized at execution time to use actual runtime partition counts
-    bounds_accumulator: Arc<OnceLock<Arc<SharedBoundsAccumulator>>>,
+    bounds_accumulator: Option<OnceLock<Arc<SharedBoundsAccumulator>>>,
 }
 
 impl fmt::Debug for HashJoinExec {
@@ -586,9 +713,8 @@ impl HashJoinExec {
             projection.as_ref(),
         )?;
 
-        let dynamic_filter = Self::create_dynamic_filter(&on);
-
-        let bounds_accumulator = Arc::new(OnceLock::new());
+        // Initialize both dynamic filter and bounds accumulator to None
+        // They will be set later if dynamic filtering is enabled
 
         Ok(HashJoinExec {
             left,
@@ -605,8 +731,8 @@ impl HashJoinExec {
             column_indices,
             null_equality,
             cache,
-            dynamic_filter,
-            bounds_accumulator,
+            dynamic_filter: None,
+            bounds_accumulator: None,
         })
     }
 
@@ -863,12 +989,7 @@ impl DisplayAs for HashJoinExec {
                     .map(|(c1, c2)| format!("({c1}, {c2})"))
                     .collect::<Vec<String>>()
                     .join(", ");
-                let dynamic_filter_display = match self.dynamic_filter.current() {
-                    Ok(current) if current != lit(true) => {
-                        format!(", filter=[{current}]")
-                    }
-                    _ => "".to_string(),
-                };
+                let dynamic_filter_display = "".to_string();
                 write!(
                     f,
                     "HashJoinExec: mode={:?}, join_type={:?}, on=[{}]{}{}{}",
@@ -976,21 +1097,28 @@ impl ExecutionPlan for HashJoinExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let new_join = HashJoinExec::try_new(
-            Arc::clone(&children[0]),
-            Arc::clone(&children[1]),
-            self.on.clone(),
-            self.filter.clone(),
-            &self.join_type,
-            self.projection.clone(),
-            self.mode,
-            self.null_equality,
-        )?;
-        Ok(Arc::new(new_join))
+        Ok(Arc::new(HashJoinExec {
+            left: Arc::clone(&children[0]),
+            right: Arc::clone(&children[1]),
+            on: self.on.clone(),
+            filter: self.filter.clone(),
+            join_type: self.join_type,
+            join_schema: Arc::clone(&self.join_schema),
+            left_fut: Arc::clone(&self.left_fut),
+            random_state: self.random_state.clone(),
+            mode: self.mode,
+            metrics: ExecutionPlanMetricsSet::new(),
+            projection: self.projection.clone(),
+            column_indices: self.column_indices.clone(),
+            null_equality: self.null_equality,
+            cache: self.cache.clone(),
+            // Keep the dynamic filter, bounds accumulator will be reset
+            dynamic_filter: self.dynamic_filter.clone(),
+            bounds_accumulator: None,
+        }))
     }
 
     fn reset_state(self: Arc<Self>) -> Result<Arc<dyn ExecutionPlan>> {
-        // Reset the left_fut to allow re-execution
         Ok(Arc::new(HashJoinExec {
             left: Arc::clone(&self.left),
             right: Arc::clone(&self.right),
@@ -998,6 +1126,7 @@ impl ExecutionPlan for HashJoinExec {
             filter: self.filter.clone(),
             join_type: self.join_type,
             join_schema: Arc::clone(&self.join_schema),
+            // Reset the left_fut to allow re-execution
             left_fut: Arc::new(OnceAsync::default()),
             random_state: self.random_state.clone(),
             mode: self.mode,
@@ -1006,8 +1135,9 @@ impl ExecutionPlan for HashJoinExec {
             column_indices: self.column_indices.clone(),
             null_equality: self.null_equality,
             cache: self.cache.clone(),
-            dynamic_filter: Self::create_dynamic_filter(&self.on),
-            bounds_accumulator: Arc::new(OnceLock::new()),
+            // Reset dynamic filter and bounds accumulator to initial state
+            dynamic_filter: None,
+            bounds_accumulator: None,
         }))
     }
 
@@ -1021,7 +1151,7 @@ impl ExecutionPlan for HashJoinExec {
             .iter()
             .map(|on| Arc::clone(&on.0))
             .collect::<Vec<_>>();
-        let on_right = self
+        let _on_right = self
             .on
             .iter()
             .map(|on| Arc::clone(&on.1))
@@ -1097,14 +1227,33 @@ impl ExecutionPlan for HashJoinExec {
 
         let batch_size = context.session_config().batch_size();
 
-        // Initialize bounds_accumulator lazily with runtime partition counts
-        let bounds_accumulator = Arc::clone(self.bounds_accumulator.get_or_init(|| {
-            Arc::new(SharedBoundsAccumulator::new_from_partition_mode(
-                self.mode,
-                self.left.as_ref(),
-                self.right.as_ref(),
-            ))
-        }));
+        // Initialize bounds_accumulator lazily with runtime partition counts (only if enabled)
+        let bounds_accumulator = if enable_dynamic_filter_pushdown
+            && self.dynamic_filter.is_some()
+        {
+            if let Some(ref bounds_accumulator_oncelock) = self.bounds_accumulator {
+                let dynamic_filter = Arc::clone(self.dynamic_filter.as_ref().unwrap());
+                let on_right = self
+                    .on
+                    .iter()
+                    .map(|(_, right_expr)| Arc::clone(right_expr))
+                    .collect::<Vec<_>>();
+
+                Some(Arc::clone(bounds_accumulator_oncelock.get_or_init(|| {
+                    Arc::new(SharedBoundsAccumulator::new_from_partition_mode(
+                        self.mode,
+                        self.left.as_ref(),
+                        self.right.as_ref(),
+                        dynamic_filter,
+                        on_right,
+                    ))
+                })))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
 
         // we have the batches and the hash map with their keys. We can how create a stream
         // over the right that uses this information to issue new batches.
@@ -1118,6 +1267,12 @@ impl ExecutionPlan for HashJoinExec {
                 .collect(),
             None => self.column_indices.clone(),
         };
+
+        let on_right = self
+            .on
+            .iter()
+            .map(|(_, right_expr)| Arc::clone(right_expr))
+            .collect::<Vec<_>>();
 
         Ok(Box::pin(HashJoinStream {
             schema: self.schema(),
@@ -1135,8 +1290,6 @@ impl ExecutionPlan for HashJoinExec {
             hashes_buffer: vec![],
             right_side_ordered: self.right.output_ordering().is_some(),
             bounds_accumulator,
-            dynamic_filter: enable_dynamic_filter_pushdown
-                .then_some(Arc::clone(&self.dynamic_filter)),
         }))
     }
 
@@ -1294,8 +1447,8 @@ impl ExecutionPlan for HashJoinExec {
                     column_indices: self.column_indices.clone(),
                     null_equality: self.null_equality,
                     cache: self.cache.clone(),
-                    dynamic_filter,
-                    bounds_accumulator: Arc::new(OnceLock::new()),
+                    dynamic_filter: Some(dynamic_filter),
+                    bounds_accumulator: Some(OnceLock::new()),
                 });
                 result = result.with_updated_node(new_node as Arc<dyn ExecutionPlan>);
             }
@@ -1305,13 +1458,13 @@ impl ExecutionPlan for HashJoinExec {
 }
 
 /// Compute min/max bounds for each column in the given arrays
-fn compute_bounds(arrays: &[ArrayRef]) -> Result<Vec<(ScalarValue, ScalarValue)>> {
+fn compute_bounds(arrays: &[ArrayRef]) -> Result<Vec<ColumnBounds>> {
     arrays
         .iter()
         .map(|array| {
             if array.is_empty() {
                 // Return NULL values for empty arrays
-                return Ok((
+                return Ok(ColumnBounds::new(
                     ScalarValue::try_from(array.data_type())?,
                     ScalarValue::try_from(array.data_type())?,
                 ));
@@ -1321,7 +1474,7 @@ fn compute_bounds(arrays: &[ArrayRef]) -> Result<Vec<(ScalarValue, ScalarValue)>
             let min_val = min_batch(array)?;
             let max_val = max_batch(array)?;
 
-            Ok((min_val, max_val))
+            Ok(ColumnBounds::new(min_val, max_val))
         })
         .collect()
 }
@@ -1665,10 +1818,8 @@ struct HashJoinStream {
     hashes_buffer: Vec<u64>,
     /// Specifies whether the right side has an ordering to potentially preserve
     right_side_ordered: bool,
-    /// Shared bounds accumulator for coordinating dynamic filter updates
-    bounds_accumulator: Arc<SharedBoundsAccumulator>,
-    /// Dynamic filter for pushdown to probe side
-    dynamic_filter: Option<Arc<DynamicFilterPhysicalExpr>>,
+    /// Shared bounds accumulator for coordinating dynamic filter updates (optional)
+    bounds_accumulator: Option<Arc<SharedBoundsAccumulator>>,
 }
 
 impl RecordBatchStream for HashJoinStream {
@@ -1860,87 +2011,16 @@ impl HashJoinStream {
 
         // Handle dynamic filter bounds accumulation
         //
-        // This coordination ensures the dynamic filter contains complete bounds information
-        // from all relevant partitions before being applied to probe-side scans.
-        //
-        // Process:
-        // 1. Store this partition's bounds in the shared accumulator
-        // 2. Atomically increment the completion counter
-        // 3. If we're the last partition to complete, merge all bounds and update the filter
-        //
-        // Note: In CollectLeft mode, multiple partitions may access the SAME build data
-        // (shared via OnceFut), but each partition must report separately to ensure proper
-        // coordination across all output partitions.
-        //
-        // The consequences of not doing this synchronization properly would be that a filter
-        // with incomplete bounds would be pushed down resulting in incorrect results (missing rows).
-        if let Some(dynamic_filter) = &self.dynamic_filter {
-            // Store bounds in the accumulator - this runs once per partition
-            if let Some(bounds) = &left_data.bounds {
-                // Only push actual bounds if they exist
-                self.bounds_accumulator.bounds.lock().push(bounds.clone());
-            }
-
-            // Atomically increment the completion counter
-            // Even empty partitions must report to ensure proper termination
-            let completed = self
-                .bounds_accumulator
-                .completed_partitions
-                .fetch_add(1, Ordering::SeqCst)
-                + 1;
-            let total_partitions = self.bounds_accumulator.total_partitions;
-
-            // Critical synchronization point: Only the last partition updates the filter
-            // Troubleshooting: If you see "completed > total_partitions", check partition
-            // count calculation in try_new() - it may not match actual execution calls
-            if completed == total_partitions {
-                if let Some(merged_bounds) = self.bounds_accumulator.merge_bounds() {
-                    let filter_expr = self.create_filter_from_bounds(merged_bounds)?;
-                    dynamic_filter.update(filter_expr)?;
-                }
-            }
+        // Dynamic filter coordination between partitions:
+        // Report bounds to the accumulator which will handle synchronization and filter updates
+        if let Some(ref bounds_accumulator) = self.bounds_accumulator {
+            bounds_accumulator.report_partition_bounds(left_data.bounds.clone())?;
         }
 
         self.state = HashJoinStreamState::FetchProbeBatch;
         self.build_side = BuildSide::Ready(BuildSideReadyState { left_data });
 
         Poll::Ready(Ok(StatefulStreamResult::Continue))
-    }
-
-    /// Create a filter expression from merged bounds
-    fn create_filter_from_bounds(
-        &self,
-        bounds: Vec<(ScalarValue, ScalarValue)>,
-    ) -> Result<Arc<dyn PhysicalExpr>> {
-        // Create range predicates for each join key
-        let mut predicates = Vec::with_capacity(bounds.len());
-        for ((min_val, max_val), right_expr) in bounds.iter().zip(self.on_right.iter()) {
-            // Create predicate: col >= min AND col <= max
-            let min_expr = Arc::new(BinaryExpr::new(
-                Arc::clone(right_expr),
-                Operator::GtEq,
-                lit(min_val.clone()),
-            )) as Arc<dyn PhysicalExpr>;
-            let max_expr = Arc::new(BinaryExpr::new(
-                Arc::clone(right_expr),
-                Operator::LtEq,
-                lit(max_val.clone()),
-            )) as Arc<dyn PhysicalExpr>;
-            let range_expr = Arc::new(BinaryExpr::new(min_expr, Operator::And, max_expr))
-                as Arc<dyn PhysicalExpr>;
-            predicates.push(range_expr);
-        }
-
-        // Combine all predicates with AND
-        let combined_predicate = predicates
-            .into_iter()
-            .reduce(|acc, pred| {
-                Arc::new(BinaryExpr::new(acc, Operator::And, pred))
-                    as Arc<dyn PhysicalExpr>
-            })
-            .unwrap_or_else(|| lit(true));
-
-        Ok(combined_predicate)
     }
 
     /// Fetches next batch from probe-side
