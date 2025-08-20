@@ -26,7 +26,7 @@ use datafusion_expr::{
     ScalarUDFImpl, Signature, Volatility,
 };
 
-#[derive(Debug)]
+#[derive(Debug, Eq, Hash, PartialEq)]
 pub struct SparkIf {
     signature: Signature,
 }
