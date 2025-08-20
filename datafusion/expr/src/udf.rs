@@ -469,18 +469,28 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync {
         ))
     }
 
-    /// Returns the function's [`Signature`] for information about what input
-    /// types are accepted and the function's Volatility.
+    /// Returns a [`Signature`] describing the argument types for which this
+    /// function has an implementation, and the function's [`Volatility`].
+    ///
+    /// See [`Signature`] for more details on argument type handling
+    /// and [`Self::return_type`] for computing the return type.
+    ///
+    /// [`Volatility`]: datafusion_expr_common::signature::Volatility
     fn signature(&self) -> &Signature;
 
-    /// What [`DataType`] will be returned by this function, given the types of
-    /// the arguments.
+    /// [`DataType`] returned by this function, given the types of the
+    /// arguments.
+    ///
+    /// # Arguments
+    ///
+    /// `arg_types` Data types of the arguments. These types are guaranteed to
+    /// match one of [`Self::signature`]s.
     ///
     /// # Notes
     ///
     /// If you provide an implementation for [`Self::return_field_from_args`],
     /// DataFusion will not call `return_type` (this function). In such cases
-    /// is recommended to return [`DataFusionError::Internal`].
+    /// is recommended to return [`DataFusionError::Internal`] from this function.
     ///
     /// [`DataFusionError::Internal`]: datafusion_common::DataFusionError::Internal
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType>;
