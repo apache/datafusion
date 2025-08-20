@@ -162,7 +162,7 @@ pub struct PushDownFilter {}
 pub(crate) fn lr_is_preserved(join_type: JoinType) -> (bool, bool) {
     match join_type {
         JoinType::Inner => (true, true),
-        JoinType::Left => (true, false),
+        JoinType::Left | JoinType::LeftSingle => (true, false),
         JoinType::Right => (false, true),
         JoinType::Full => (false, false),
         // No columns from the right side of the join can be referenced in output
@@ -186,7 +186,7 @@ pub(crate) fn lr_is_preserved(join_type: JoinType) -> (bool, bool) {
 pub(crate) fn on_lr_is_preserved(join_type: JoinType) -> (bool, bool) {
     match join_type {
         JoinType::Inner => (true, true),
-        JoinType::Left => (false, true),
+        JoinType::Left | JoinType::LeftSingle => (false, true),
         JoinType::Right => (true, false),
         JoinType::Full => (false, false),
         JoinType::LeftSemi | JoinType::RightSemi => (true, true),
@@ -687,7 +687,7 @@ fn infer_join_predicates_from_on_filters(
             on_filters,
             inferred_predicates,
         ),
-        JoinType::Left | JoinType::LeftSemi | JoinType::LeftMark => {
+        JoinType::Left | JoinType::LeftSemi | JoinType::LeftMark | JoinType::LeftSingle => {
             infer_join_predicates_impl::<true, false>(
                 join_col_keys,
                 on_filters,
@@ -1127,7 +1127,13 @@ impl OptimizerRule for PushDownFilter {
                 let (volatile_filters, non_volatile_filters): (Vec<&Expr>, Vec<&Expr>) =
                     filter_predicates
                         .into_iter()
-                        .partition(|pred| pred.is_volatile());
+                        // TODO: subquery decorrelation sometimes cannot decorrelated all the expr
+                        // (i.e in the case of recursive subquery)
+                        // this function may accidentally pushdown the subquery expr as well
+                        // until then, we have to exclude these exprs here
+                        .partition(|pred| {
+                            pred.is_volatile() || has_scalar_subquery(pred)
+                        });
 
                 // Check which non-volatile filters are supported by source
                 let supported_filters = scan
@@ -1418,6 +1424,14 @@ fn contain(e: &Expr, check_map: &HashMap<String, Expr>) -> bool {
     })
     .unwrap();
     is_contain
+}
+
+fn has_scalar_subquery(expr: &Expr) -> bool {
+    expr.exists(|e| match e {
+        Expr::ScalarSubquery(_) => Ok(true),
+        _ => Ok(false),
+    })
+    .unwrap()
 }
 
 #[cfg(test)]
@@ -2267,7 +2281,7 @@ mod tests {
             plan,
             @r"
         Projection: test.a, test1.d
-          Cross Join: 
+          Cross Join(ComparisonJoin): 
             Projection: test.a, test.b, test.c
               TableScan: test, full_filters=[test.a = Int32(1)]
             Projection: test1.d, test1.e, test1.f
@@ -2297,7 +2311,7 @@ mod tests {
             plan,
             @r"
         Projection: test.a, test1.a
-          Cross Join: 
+          Cross Join(ComparisonJoin): 
             Projection: test.a, test.b, test.c
               TableScan: test, full_filters=[test.a = Int32(1)]
             Projection: test1.a, test1.b, test1.c
@@ -2425,7 +2439,7 @@ mod tests {
         assert_snapshot!(plan,
         @r"
         Filter: test.a <= Int64(1)
-          Inner Join: test.a = test2.a
+          Inner Join(ComparisonJoin): test.a = test2.a
             TableScan: test
             Projection: test2.a
               TableScan: test2
@@ -2508,7 +2522,7 @@ mod tests {
         assert_snapshot!(plan,
         @r"
         Filter: test.c <= test2.b
-          Inner Join: test.a = test2.a
+          Inner Join(ComparisonJoin): test.a = test2.a
             Projection: test.a, test.c
               TableScan: test
             Projection: test2.a, test2.b
@@ -2554,7 +2568,7 @@ mod tests {
         assert_snapshot!(plan,
         @r"
         Filter: test.b <= Int64(1)
-          Inner Join: test.a = test2.a
+          Inner Join(ComparisonJoin): test.a = test2.a
             Projection: test.a, test.b
               TableScan: test
             Projection: test2.a, test2.c
@@ -2765,7 +2779,7 @@ mod tests {
         // not part of the test, just good to know:
         assert_snapshot!(plan,
         @r"
-        Inner Join: test.a = test2.a Filter: test.c > UInt32(1) AND test.b < test2.b AND test2.c > UInt32(4)
+        Inner Join(ComparisonJoin): test.a = test2.a Filter: test.c > UInt32(1) AND test.b < test2.b AND test2.c > UInt32(4)
           Projection: test.a, test.b, test.c
             TableScan: test
           Projection: test2.a, test2.b, test2.c
@@ -2810,7 +2824,7 @@ mod tests {
         // not part of the test, just good to know:
         assert_snapshot!(plan,
         @r"
-        Inner Join: test.a = test2.a Filter: test.b > UInt32(1) AND test2.c > UInt32(4)
+        Inner Join(ComparisonJoin): test.a = test2.a Filter: test.b > UInt32(1) AND test2.c > UInt32(4)
           Projection: test.a, test.b, test.c
             TableScan: test
           Projection: test2.a, test2.b, test2.c
@@ -2853,7 +2867,7 @@ mod tests {
         // not part of the test, just good to know:
         assert_snapshot!(plan,
         @r"
-        Inner Join: test.a = test2.b Filter: test.a > UInt32(1)
+        Inner Join(ComparisonJoin): test.a = test2.b Filter: test.a > UInt32(1)
           Projection: test.a
             TableScan: test
           Projection: test2.b
@@ -2899,7 +2913,7 @@ mod tests {
         // not part of the test, just good to know:
         assert_snapshot!(plan,
         @r"
-        Left Join: test.a = test2.a Filter: test.a > UInt32(1) AND test.b < test2.b AND test2.c > UInt32(4)
+        Left Join(ComparisonJoin): test.a = test2.a Filter: test.a > UInt32(1) AND test.b < test2.b AND test2.c > UInt32(4)
           Projection: test.a, test.b, test.c
             TableScan: test
           Projection: test2.a, test2.b, test2.c
@@ -2945,7 +2959,7 @@ mod tests {
         // not part of the test, just good to know:
         assert_snapshot!(plan,
         @r"
-        Right Join: test.a = test2.a Filter: test.a > UInt32(1) AND test.b < test2.b AND test2.c > UInt32(4)
+        Right Join(ComparisonJoin): test.a = test2.a Filter: test.a > UInt32(1) AND test.b < test2.b AND test2.c > UInt32(4)
           Projection: test.a, test.b, test.c
             TableScan: test
           Projection: test2.a, test2.b, test2.c
@@ -2991,7 +3005,7 @@ mod tests {
         // not part of the test, just good to know:
         assert_snapshot!(plan,
         @r"
-        Full Join: test.a = test2.a Filter: test.a > UInt32(1) AND test.b < test2.b AND test2.c > UInt32(4)
+        Full Join(ComparisonJoin): test.a = test2.a Filter: test.a > UInt32(1) AND test.b < test2.b AND test2.c > UInt32(4)
           Projection: test.a, test.b, test.c
             TableScan: test
           Projection: test2.a, test2.b, test2.c
@@ -3278,7 +3292,7 @@ mod tests {
 
         assert_snapshot!(plan,
         @r"
-        Inner Join: c = d Filter: c > UInt32(1)
+        Inner Join(ComparisonJoin): c = d Filter: c > UInt32(1)
           Projection: test.a AS c
             TableScan: test
           Projection: test2.b AS d
@@ -3461,7 +3475,7 @@ mod tests {
             .build()?;
 
         assert_optimized_plan_eq_with_rewrite_predicate!(plan.clone(), @r"
-        Inner Join:  Filter: test.a = d AND test.b > UInt32(1) OR test.b = e AND test.c < UInt32(10)
+        Inner Join(ComparisonJoin):  Filter: test.a = d AND test.b > UInt32(1) OR test.b = e AND test.c < UInt32(10)
           Projection: test.a, test.b, test.c
             TableScan: test, full_filters=[test.b > UInt32(1) OR test.c < UInt32(10)]
           Projection: test1.a AS d, test1.a AS e
@@ -3510,7 +3524,7 @@ mod tests {
         assert_snapshot!(plan,
         @r"
         Filter: test2.a <= Int64(1)
-          LeftSemi Join: test1.a = test2.a
+          LeftSemi Join(ComparisonJoin): test1.a = test2.a
             TableScan: test1
             Projection: test2.a, test2.b
               TableScan: test2
@@ -3555,7 +3569,7 @@ mod tests {
         // not part of the test, just good to know:
         assert_snapshot!(plan,
         @r"
-        LeftSemi Join: test1.a = test2.a Filter: test1.b > UInt32(1) AND test2.b > UInt32(2)
+        LeftSemi Join(ComparisonJoin): test1.a = test2.a Filter: test1.b > UInt32(1) AND test2.b > UInt32(2)
           TableScan: test1
           Projection: test2.a, test2.b
             TableScan: test2
@@ -3597,7 +3611,7 @@ mod tests {
         assert_snapshot!(plan,
         @r"
         Filter: test1.a <= Int64(1)
-          RightSemi Join: test1.a = test2.a
+          RightSemi Join(ComparisonJoin): test1.a = test2.a
             TableScan: test1
             Projection: test2.a, test2.b
               TableScan: test2
@@ -3642,7 +3656,7 @@ mod tests {
         // not part of the test, just good to know:
         assert_snapshot!(plan,
         @r"
-        RightSemi Join: test1.a = test2.a Filter: test1.b > UInt32(1) AND test2.b > UInt32(2)
+        RightSemi Join(ComparisonJoin): test1.a = test2.a Filter: test1.b > UInt32(1) AND test2.b > UInt32(2)
           TableScan: test1
           Projection: test2.a, test2.b
             TableScan: test2
@@ -3687,7 +3701,7 @@ mod tests {
         assert_snapshot!(plan,
         @r"
         Filter: test2.a > UInt32(2)
-          LeftAnti Join: test1.a = test2.a
+          LeftAnti Join(ComparisonJoin): test1.a = test2.a
             Projection: test1.a, test1.b
               TableScan: test1
             Projection: test2.a, test2.b
@@ -3737,7 +3751,7 @@ mod tests {
         // not part of the test, just good to know:
         assert_snapshot!(plan,
         @r"
-        LeftAnti Join: test1.a = test2.a Filter: test1.b > UInt32(1) AND test2.b > UInt32(2)
+        LeftAnti Join(ComparisonJoin): test1.a = test2.a Filter: test1.b > UInt32(1) AND test2.b > UInt32(2)
           Projection: test1.a, test1.b
             TableScan: test1
           Projection: test2.a, test2.b
@@ -3784,7 +3798,7 @@ mod tests {
         assert_snapshot!(plan,
         @r"
         Filter: test1.a > UInt32(2)
-          RightAnti Join: test1.a = test2.a
+          RightAnti Join(ComparisonJoin): test1.a = test2.a
             Projection: test1.a, test1.b
               TableScan: test1
             Projection: test2.a, test2.b
@@ -3834,7 +3848,7 @@ mod tests {
         // not part of the test, just good to know:
         assert_snapshot!(plan,
         @r"
-        RightAnti Join: test1.a = test2.a Filter: test1.b > UInt32(1) AND test2.b > UInt32(2)
+        RightAnti Join(ComparisonJoin): test1.a = test2.a Filter: test1.b > UInt32(1) AND test2.b > UInt32(2)
           Projection: test1.a, test1.b
             TableScan: test1
           Projection: test2.a, test2.b
@@ -3953,7 +3967,7 @@ mod tests {
           Filter: t.r > Float64(0.8)
             SubqueryAlias: t
               Projection: test1.a AS a, TestScalarUDF() AS r
-                Inner Join: test1.a = test2.a
+                Inner Join(ComparisonJoin): test1.a = test2.a
                   TableScan: test1
                   TableScan: test2
         ",

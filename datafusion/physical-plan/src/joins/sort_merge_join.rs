@@ -242,6 +242,7 @@ impl SortMergeJoinExec {
             | JoinType::LeftAnti
             | JoinType::LeftSemi
             | JoinType::LeftMark => JoinSide::Left,
+            JoinType::LeftSingle => unimplemented!(),
         }
     }
 
@@ -259,6 +260,7 @@ impl SortMergeJoinExec {
             | JoinType::RightMark => {
                 vec![false, true]
             }
+            JoinType::LeftSingle => unimplemented!(),
             _ => vec![false, false],
         }
     }

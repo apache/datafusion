@@ -525,7 +525,8 @@ fn expr_source_side(
         | JoinType::Right
         | JoinType::Full
         | JoinType::LeftMark
-        | JoinType::RightMark => {
+        | JoinType::RightMark
+        | JoinType::LeftSingle => {
             let eq_group = eqp.eq_group();
             let mut right_ordering = ordering.clone();
             let (mut valid_left, mut valid_right) = (true, true);
