@@ -25,6 +25,7 @@ use std::sync::Arc;
 use crate::url::ListingTableUrl;
 use crate::write::FileSinkConfig;
 use datafusion_common::error::Result;
+use datafusion_common::file_options::file_type::SINGLE_FILE_EXTENSION;
 use datafusion_physical_plan::SendableRecordBatchStream;
 
 use arrow::array::{
@@ -101,19 +102,21 @@ pub(crate) fn start_demuxer_task(
     let file_extension = config.file_extension.clone();
     let base_output_path = config.table_paths[0].clone();
     let task = if config.table_partition_cols.is_empty() {
+        let dot_free = SINGLE_FILE_EXTENSION.replace(".", "");
         let single_file_output = (!base_output_path.is_collection()
             && base_output_path.file_extension().is_some())
-            || base_output_path.file_extension() == Some("single");
+            || base_output_path.file_extension() == Some(&dot_free);
 
         let file_extension = if single_file_output {
-            file_extension.replace(".single", "")
+            file_extension.replace(SINGLE_FILE_EXTENSION, "")
         } else {
             file_extension
         };
 
-        let base_output_path =
-            ListingTableUrl::parse(base_output_path.as_str().replace(".single", ""))
-                .unwrap_or(base_output_path);
+        let base_output_path = ListingTableUrl::parse(
+            base_output_path.as_str().replace(SINGLE_FILE_EXTENSION, ""),
+        )
+        .unwrap_or(base_output_path);
         SpawnedTask::spawn(async move {
             row_count_demuxer(
                 tx,
