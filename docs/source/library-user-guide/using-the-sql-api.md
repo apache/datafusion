@@ -121,41 +121,41 @@ DataFusion can also read Avro files using the `register_avro` method.
 ```rust
 # #[cfg(feature = "avro")]
 {
-    use datafusion::arrow::util::pretty;
-    use datafusion::error::Result;
-    use datafusion::prelude::*;
+use datafusion::arrow::util::pretty;
+use datafusion::error::Result;
+use datafusion::prelude::*;
 
-    #[tokio::main]
-    async fn main() -> Result<()> {
-        let ctx = SessionContext::new();
-        // find the path to the avro test files
-        let testdata = datafusion::test_util::arrow_test_data();
-        // register avro file with the execution context
-        let avro_file = &format!("{testdata}/avro/alltypes_plain.avro");
-        ctx.register_avro("alltypes_plain", avro_file, AvroReadOptions::default()).await?;
+#[tokio::main]
+async fn main() -> Result<()> {
+    let ctx = SessionContext::new();
+    // find the path to the avro test files
+    let testdata = datafusion::test_util::arrow_test_data();
+    // register avro file with the execution context
+    let avro_file = &format!("{testdata}/avro/alltypes_plain.avro");
+    ctx.register_avro("alltypes_plain", avro_file, AvroReadOptions::default()).await?;
 
-        // execute the query
-        let df = ctx.sql(
-            "SELECT int_col, double_col, CAST(date_string_col as VARCHAR) \
-            FROM alltypes_plain \
-            WHERE id > 1 AND tinyint_col < double_col"
-        ).await?;
+    // execute the query
+    let df = ctx.sql(
+        "SELECT int_col, double_col, CAST(date_string_col as VARCHAR) \
+         FROM alltypes_plain \
+         WHERE id > 1 AND tinyint_col < double_col"
+      ).await?;
 
-        // execute the plan, and compare to the expected results
-        let results = df.collect().await?;
-        datafusion::assert_batches_eq!(vec![
-            "+---------+------------+--------------------------------+",
-            "| int_col | double_col | alltypes_plain.date_string_col |",
-            "+---------+------------+--------------------------------+",
-            "| 1       | 10.1       | 03/01/09                       |",
-            "| 1       | 10.1       | 04/01/09                       |",
-            "| 1       | 10.1       | 02/01/09                       |",
-            "+---------+------------+--------------------------------+",
-            ],
-            &results
-        );
-        Ok(())
-    }
+    // execute the plan, and compare to the expected results
+    let results = df.collect().await?;
+    datafusion::assert_batches_eq!(vec![
+        "+---------+------------+--------------------------------+",
+        "| int_col | double_col | alltypes_plain.date_string_col |",
+        "+---------+------------+--------------------------------+",
+        "| 1       | 10.1       | 03/01/09                       |",
+        "| 1       | 10.1       | 04/01/09                       |",
+        "| 1       | 10.1       | 02/01/09                       |",
+        "+---------+------------+--------------------------------+",
+        ],
+        &results
+    );
+    Ok(())
+}
 }
 ```
 
