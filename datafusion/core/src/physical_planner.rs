@@ -1784,7 +1784,7 @@ pub fn create_aggregate_expr_and_maybe_filter(
 ) -> Result<AggregateExprWithOptionalArgs> {
     // Unpack (potentially nested) aliased logical expressions, e.g. "sum(col) as total"
     // Some functions like `count_all()` create internal aliases,
-    // We need to unwrap all alias layers to get to the underlying aggregate function
+    // Unwrap all alias layers to get to the underlying aggregate function
     let (name, human_display, e) = match e {
         Expr::Alias(Alias { expr, name, .. }) => {
             // Recursively unwrap nested aliases to reach the inner expression
