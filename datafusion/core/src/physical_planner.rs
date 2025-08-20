@@ -1783,7 +1783,7 @@ pub fn create_aggregate_expr_and_maybe_filter(
     execution_props: &ExecutionProps,
 ) -> Result<AggregateExprWithOptionalArgs> {
     // Unpack (potentially nested) aliased logical expressions, e.g. "sum(col) as total"
-    // Some functions like count(*) create internal aliases, so user aliases can create nested structures
+    // Some functions like `count_all()` create internal aliases,
     // We need to unwrap all alias layers to get to the underlying aggregate function
     let (name, human_display, e) = match e {
         Expr::Alias(Alias { expr, name, .. }) => {
@@ -2423,6 +2423,7 @@ mod tests {
     use datafusion_expr::{
         col, lit, LogicalPlanBuilder, Operator, UserDefinedLogicalNodeCore,
     };
+    use datafusion_functions_aggregate::count::count_all;
     use datafusion_functions_aggregate::expr_fn::sum;
     use datafusion_physical_expr::expressions::{BinaryExpr, IsNotNullExpr};
     use datafusion_physical_expr::EquivalenceProperties;
@@ -2879,6 +2880,25 @@ mod tests {
         assert_eq!(
             "total_salary",
             physical_plan.schema().field(1).name().as_str()
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_dataframe_aggregate_count_all_with_alias() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("c1", DataType::Utf8, false),
+            Field::new("c2", DataType::UInt32, false),
+        ]));
+
+        let logical_plan = scan_empty(None, schema.as_ref(), None)?
+            .aggregate(Vec::<Expr>::new(), vec![count_all().alias("total_rows")])?
+            .build()?;
+
+        let physical_plan = plan(&logical_plan).await?;
+        assert_eq!(
+            "total_rows",
+            physical_plan.schema().field(0).name().as_str()
         );
         Ok(())
     }
