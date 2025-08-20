@@ -158,14 +158,11 @@ impl PartitionBounds {
 ///
 /// ## Thread Safety
 ///
-/// All fields use atomic operations or mutexes to ensure correct coordination between concurrent
+/// All fields use a single mutex to ensure correct coordination between concurrent
 /// partition executions.
 struct SharedBoundsAccumulator {
-    /// Bounds from completed partitions.
-    /// Each element represents the column bounds computed by one partition.
-    bounds: Mutex<Vec<PartitionBounds>>,
-    /// Number of partitions that have reported completion.
-    completed_partitions: AtomicUsize,
+    /// Shared state protected by a single mutex to avoid ordering concerns
+    inner: Mutex<SharedBoundsState>,
     /// Total number of partitions.
     /// Need to know this so that we can update the dynamic filter once we are done
     /// building *all* of the hash tables.
@@ -174,6 +171,15 @@ struct SharedBoundsAccumulator {
     dynamic_filter: Arc<DynamicFilterPhysicalExpr>,
     /// Right side join expressions needed for creating filter bounds
     on_right: Vec<PhysicalExprRef>,
+}
+
+/// State protected by SharedBoundsAccumulator's mutex
+struct SharedBoundsState {
+    /// Bounds from completed partitions.
+    /// Each element represents the column bounds computed by one partition.
+    bounds: Vec<PartitionBounds>,
+    /// Number of partitions that have reported completion.
+    completed_partitions: usize,
 }
 
 impl SharedBoundsAccumulator {
@@ -222,8 +228,10 @@ impl SharedBoundsAccumulator {
             PartitionMode::Auto => unreachable!("PartitionMode::Auto should not be present at execution time. This is a bug in DataFusion, please report it!"),
         };
         Self {
-            bounds: Mutex::new(Vec::with_capacity(expected_calls)),
-            completed_partitions: AtomicUsize::new(0),
+            inner: Mutex::new(SharedBoundsState {
+                bounds: Vec::with_capacity(expected_calls),
+                completed_partitions: 0,
+            }),
             total_partitions: expected_calls,
             dynamic_filter,
             on_right,
@@ -239,9 +247,7 @@ impl SharedBoundsAccumulator {
     /// 1. All partitions called collect_build_side with bounds data
     /// 2. collect_left_input was called with should_compute_bounds=true
     /// 3. The build side had at least one non-empty batch
-    fn merge_bounds(&self) -> Option<Vec<ColumnBounds>> {
-        let bounds = self.bounds.lock();
-
+    fn merge_bounds(&self, bounds: &[PartitionBounds]) -> Option<Vec<ColumnBounds>> {
         if bounds.is_empty() {
             return None;
         }
@@ -337,22 +343,25 @@ impl SharedBoundsAccumulator {
         &self,
         partition_bounds: Option<Vec<ColumnBounds>>,
     ) -> Result<()> {
+        let mut inner = self.inner.lock();
+
         // Store bounds in the accumulator - this runs once per partition
         if let Some(bounds) = partition_bounds {
             // Only push actual bounds if they exist
-            self.bounds.lock().push(PartitionBounds::new(bounds));
+            inner.bounds.push(PartitionBounds::new(bounds));
         }
 
-        // Atomically increment the completion counter
+        // Increment the completion counter
         // Even empty partitions must report to ensure proper termination
-        let completed = self.completed_partitions.fetch_add(1, Ordering::SeqCst) + 1;
+        inner.completed_partitions += 1;
+        let completed = inner.completed_partitions;
         let total_partitions = self.total_partitions;
 
         // Critical synchronization point: Only update the filter when ALL partitions are complete
         // Troubleshooting: If you see "completed > total_partitions", check partition
         // count calculation in new_from_partition_mode() - it may not match actual execution calls
         if completed == total_partitions {
-            if let Some(merged_bounds) = self.merge_bounds() {
+            if let Some(merged_bounds) = self.merge_bounds(&inner.bounds) {
                 let filter_expr = self.create_filter_from_bounds(merged_bounds)?;
                 self.dynamic_filter.update(filter_expr)?;
             }
