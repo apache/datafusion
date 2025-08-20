@@ -7418,6 +7418,15 @@ from distinct_avg;
 ----
 3 Float64 3 Float64 4
 
+query RR
+select
+    avg(distinct a),
+    avg(distinct b)
+from distinct_avg
+where a is null;
+----
+NULL NULL
+
 statement ok
 drop table distinct_avg;
 
