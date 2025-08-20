@@ -285,8 +285,10 @@ fn verify_file_encrypted(
         .options
         .insert("test_key".to_string(), "test value".to_string());
 
-    // the paths in encryption_factory are stored with "/", so we need to replace them on Windows
     let file_path_str = if cfg!(target_os = "windows") {
+        // Windows backslashes are eventually converted to slashes when writing the Parquet files,
+        // through `ListingTableUrl::parse`, making `encryption_factory.encryption_keys` store them
+        // it that format. So we also replace backslashes here to ensure they match.
         file_path.to_str().unwrap().replace("\\", "/")
     } else {
         file_path.to_str().unwrap().to_owned()
