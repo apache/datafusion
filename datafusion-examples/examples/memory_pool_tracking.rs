@@ -19,6 +19,11 @@
 //!
 //! The TrackConsumersPool provides enhanced error messages that show the top memory consumers
 //! when memory allocation fails, making it easier to debug memory issues in DataFusion queries.
+//!
+//! # Examples
+//!
+//! * [`automatic_usage_example`]: Shows how to use RuntimeEnvBuilder to automatically enable memory tracking
+//! * [`manual_tracking_example`]: Shows how to manually create and configure a TrackConsumersPool
 
 use datafusion::execution::memory_pool::{
     GreedyMemoryPool, MemoryConsumer, MemoryPool, TrackConsumersPool,
