@@ -563,6 +563,293 @@ pub(crate) async fn get_object_store(
     Ok(store)
 }
 
+pub mod instrumented {
+    use core::fmt;
+    use std::{sync::Arc, time::Duration};
+
+    use async_trait::async_trait;
+    use chrono::Utc;
+    use datafusion::{
+        common::instant::Instant, execution::object_store::ObjectStoreRegistry,
+    };
+    use futures::stream::BoxStream;
+    use object_store::{
+        path::Path, GetOptions, GetRange, GetResult, ListResult, MultipartUpload,
+        ObjectMeta, ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult,
+        Result,
+    };
+    use parking_lot::{Mutex, RwLock};
+    use url::Url;
+
+    #[derive(Debug)]
+    enum Operation {
+        Copy,
+        Delete,
+        Get,
+        List,
+        Put,
+    }
+
+    #[derive(Debug)]
+    struct RequestDetails {
+        op: Operation,
+        path: Path,
+        timestamp: chrono::DateTime<Utc>,
+        duration: Duration,
+        size: Option<usize>,
+        range: Option<GetRange>,
+    }
+
+    impl fmt::Display for RequestDetails {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(
+                f,
+                "{} operation={:?} duration={:.6}s path={}",
+                self.timestamp.to_rfc3339(),
+                self.op,
+                self.duration.as_secs_f32(),
+                self.path,
+            )
+        }
+    }
+
+    pub struct InstrumentedObjectStore {
+        inner: Arc<dyn ObjectStore>,
+        requests: Mutex<Vec<RequestDetails>>,
+    }
+
+    impl InstrumentedObjectStore {
+        pub fn new(object_store: Arc<dyn ObjectStore>) -> Self {
+            Self {
+                inner: object_store,
+                requests: Mutex::new(Vec::new()),
+            }
+        }
+
+        pub fn print_details(&self) {
+            let mut total_duration = Duration::default();
+            for rd in self.requests.lock().drain(..) {
+                println!("{rd}");
+                total_duration += rd.duration;
+            }
+
+            println!("Total duration: {:.6}", total_duration.as_secs_f32());
+        }
+    }
+
+    impl fmt::Display for InstrumentedObjectStore {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "InstrumentedObjectStore: {}", self.inner)
+        }
+    }
+
+    impl fmt::Debug for InstrumentedObjectStore {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "InstrumentedObjectStore: {:?}", self.inner)
+        }
+    }
+
+    #[async_trait]
+    impl ObjectStore for InstrumentedObjectStore {
+        async fn put_opts(
+            &self,
+            location: &Path,
+            payload: PutPayload,
+            opts: PutOptions,
+        ) -> Result<PutResult> {
+            let timestamp = Utc::now();
+            let start = Instant::now();
+            let size = payload.content_length();
+            let ret = self.inner.put_opts(location, payload, opts).await?;
+            let elapsed = start.elapsed();
+
+            self.requests.lock().push(RequestDetails {
+                op: Operation::Put,
+                path: location.clone(),
+                timestamp,
+                duration: elapsed,
+                size: Some(size),
+                range: None,
+            });
+
+            Ok(ret)
+        }
+
+        async fn put_multipart_opts(
+            &self,
+            location: &Path,
+            opts: PutMultipartOptions,
+        ) -> Result<Box<dyn MultipartUpload>> {
+            let timestamp = Utc::now();
+            let start = Instant::now();
+            let ret = self.inner.put_multipart_opts(location, opts).await?;
+            let elapsed = start.elapsed();
+
+            self.requests.lock().push(RequestDetails {
+                op: Operation::Put,
+                path: location.clone(),
+                timestamp,
+                duration: elapsed,
+                size: None,
+                range: None,
+            });
+
+            Ok(ret)
+        }
+
+        async fn get_opts(
+            &self,
+            location: &Path,
+            options: GetOptions,
+        ) -> Result<GetResult> {
+            let timestamp = Utc::now();
+            let range = options.range.clone();
+            let start = Instant::now();
+            let ret = self.inner.get_opts(location, options).await?;
+            let elapsed = start.elapsed();
+
+            self.requests.lock().push(RequestDetails {
+                op: Operation::Get,
+                path: location.clone(),
+                timestamp,
+                duration: elapsed,
+                size: Some((ret.range.end - ret.range.start) as usize),
+                range,
+            });
+
+            Ok(ret)
+        }
+
+        async fn delete(&self, location: &Path) -> Result<()> {
+            let timestamp = Utc::now();
+            let start = Instant::now();
+            self.inner.delete(location).await?;
+            let elapsed = start.elapsed();
+
+            self.requests.lock().push(RequestDetails {
+                op: Operation::Delete,
+                path: location.clone(),
+                timestamp,
+                duration: elapsed,
+                size: None,
+                range: None,
+            });
+
+            Ok(())
+        }
+
+        fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
+            let timestamp = Utc::now();
+            let start = Instant::now();
+            let ret = self.inner.list(prefix);
+            let elapsed = start.elapsed();
+
+            self.requests.lock().push(RequestDetails {
+                op: Operation::List,
+                path: prefix.cloned().unwrap_or_else(|| Path::from("")),
+                timestamp,
+                duration: elapsed,
+                size: None,
+                range: None,
+            });
+
+            ret
+        }
+
+        async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {
+            let timestamp = Utc::now();
+            let start = Instant::now();
+            let ret = self.inner.list_with_delimiter(prefix).await?;
+            let elapsed = start.elapsed();
+
+            self.requests.lock().push(RequestDetails {
+                op: Operation::List,
+                path: prefix.cloned().unwrap_or_else(|| Path::from("")),
+                timestamp,
+                duration: elapsed,
+                size: None,
+                range: None,
+            });
+
+            Ok(ret)
+        }
+
+        async fn copy(&self, from: &Path, to: &Path) -> Result<()> {
+            let timestamp = Utc::now();
+            let start = Instant::now();
+            self.inner.copy(from, to).await?;
+            let elapsed = start.elapsed();
+
+            self.requests.lock().push(RequestDetails {
+                op: Operation::Copy,
+                path: from.clone(),
+                timestamp,
+                duration: elapsed,
+                size: None,
+                range: None,
+            });
+
+            Ok(())
+        }
+
+        async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
+            let timestamp = Utc::now();
+            let start = Instant::now();
+            self.inner.copy_if_not_exists(from, to).await?;
+            let elapsed = start.elapsed();
+
+            self.requests.lock().push(RequestDetails {
+                op: Operation::Copy,
+                path: from.clone(),
+                timestamp,
+                duration: elapsed,
+                size: None,
+                range: None,
+            });
+
+            Ok(())
+        }
+    }
+
+    #[derive(Debug)]
+    pub struct InstrumentedObjectStoreRegistry {
+        inner: Arc<dyn ObjectStoreRegistry>,
+        stores: RwLock<Vec<Arc<InstrumentedObjectStore>>>,
+    }
+
+    impl InstrumentedObjectStoreRegistry {
+        pub fn new(registry: Arc<dyn ObjectStoreRegistry>) -> Self {
+            Self {
+                inner: registry,
+                stores: RwLock::new(Vec::new()),
+            }
+        }
+
+        pub fn stores(&self) -> Vec<Arc<InstrumentedObjectStore>> {
+            self.stores.read().clone()
+        }
+    }
+
+    impl ObjectStoreRegistry for InstrumentedObjectStoreRegistry {
+        fn register_store(
+            &self,
+            url: &Url,
+            store: Arc<dyn ObjectStore>,
+        ) -> Option<Arc<dyn ObjectStore>> {
+            let instrumented = Arc::new(InstrumentedObjectStore::new(store));
+            self.stores.write().push(Arc::clone(&instrumented));
+            self.inner.register_store(url, instrumented)
+        }
+
+        fn get_store(
+            &self,
+            url: &Url,
+        ) -> datafusion::common::Result<Arc<dyn ObjectStore>> {
+            self.inner.get_store(url)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::cli_context::CliSessionContext;

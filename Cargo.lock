@@ -1966,6 +1966,7 @@ dependencies = [
  "async-trait",
  "aws-config",
  "aws-credential-types",
+ "chrono",
  "clap 4.5.45",
  "ctor",
  "datafusion",
