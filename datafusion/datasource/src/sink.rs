@@ -46,7 +46,7 @@ use futures::StreamExt;
 /// output.
 #[async_trait]
 pub trait DataSink: DisplayAs + Debug + Send + Sync {
-    /// Returns the data sink as [`Any`](std::any::Any) so that it can be
+    /// Returns the data sink as [`Any`] so that it can be
     /// downcast to a specific implementation.
     fn as_any(&self) -> &dyn Any;
 

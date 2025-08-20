@@ -19,7 +19,7 @@ use crate::joins::utils::ColumnIndex;
 use arrow::datatypes::SchemaRef;
 use datafusion_common::JoinSide;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
-use std::sync::Arc;
+use std::{fmt::Display, sync::Arc};
 
 /// Filter applied before join output. Fields are crate-public to allow
 /// downstream implementations to experiment with custom joins.
@@ -31,6 +31,14 @@ pub struct JoinFilter {
     pub(crate) column_indices: Vec<ColumnIndex>,
     /// Physical schema of intermediate batch
     pub(crate) schema: SchemaRef,
+}
+
+/// For display in `EXPLAIN` plans, only expression with column names is needed,
+/// it output expresion like `(col1 + col2) = 0`
+impl Display for JoinFilter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.expression.fmt_sql(f)
+    }
 }
 
 impl JoinFilter {

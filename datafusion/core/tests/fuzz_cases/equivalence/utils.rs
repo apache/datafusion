@@ -512,7 +512,7 @@ fn get_sort_columns(
         .collect::<Result<Vec<_>>>()
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct TestScalarUDF {
     pub(crate) signature: Signature,
 }

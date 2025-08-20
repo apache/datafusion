@@ -2425,7 +2425,7 @@ impl TableProvider for DataFrameTableProvider {
         self
     }
 
-    fn get_logical_plan(&self) -> Option<Cow<LogicalPlan>> {
+    fn get_logical_plan(&self) -> Option<Cow<'_, LogicalPlan>> {
         Some(Cow::Borrowed(&self.plan))
     }
 
