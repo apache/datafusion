@@ -80,6 +80,10 @@ jobs:
     container:
       image: amd64/rust
     steps:
+      - name: Install system build dependencies
+        run: |
+          apt-get update
+          apt-get install -y cmake build-essential pkg-config
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
@@ -142,6 +146,10 @@ jobs:
     container:
       image: amd64/rust
     steps:
+      - name: Install system build dependencies
+        run: |
+          apt-get update
+          apt-get install -y cmake build-essential pkg-config
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
@@ -350,6 +358,10 @@ jobs:
     container:
       image: amd64/rust
     steps:
+      - name: Install system build dependencies
+        run: |
+          apt-get update
+          apt-get install -y cmake build-essential pkg-config
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           submodules: true
@@ -380,6 +392,10 @@ jobs:
     container:
       image: amd64/rust
     steps:
+      - name: Install system build dependencies
+        run: |
+          apt-get update
+          apt-get install -y cmake build-essential pkg-config
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           submodules: true
@@ -401,6 +417,10 @@ jobs:
     container:
       image: amd64/rust
     steps:
+      - name: Install system build dependencies
+        run: |
+          apt-get update
+          apt-get install -y cmake build-essential pkg-config
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
@@ -438,6 +458,10 @@ jobs:
     container:
       image: amd64/rust
     steps:
+      - name: Install system build dependencies
+        run: |
+          apt-get update
+          apt-get install -y cmake build-essential pkg-config
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           submodules: true
@@ -485,6 +509,10 @@ jobs:
           --health-timeout 5s
           --health-retries 5
     steps:
+      - name: Install system build dependencies
+        run: |
+          apt-get update
+          apt-get install -y cmake build-essential pkg-config
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           submodules: true
@@ -509,6 +537,10 @@ jobs:
     container:
       image: amd64/rust
     steps:
+      - name: Install system build dependencies
+        run: |
+          apt-get update
+          apt-get install -y cmake build-essential pkg-config
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           submodules: true
@@ -588,7 +620,7 @@ jobs:
         run: |
           echo "LIBRARY_PATH=$LD_LIBRARY_PATH" >> $GITHUB_ENV
           apt-get update
-          apt-get install python3-pip -y
+          apt-get install -y cmake build-essential pkg-config python3-pip
           python3 -m pip install pyarrow
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
@@ -603,6 +635,10 @@ jobs:
     container:
       image: amd64/rust
     steps:
+      - name: Install system build dependencies
+        run: |
+          apt-get update
+          apt-get install -y cmake build-essential pkg-config
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
@@ -679,6 +715,10 @@ jobs:
     container:
       image: amd64/rust
     steps:
+      - name: Install system build dependencies
+        run: |
+          apt-get update
+          apt-get install -y cmake build-essential pkg-config
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           submodules: true
@@ -704,6 +744,10 @@ jobs:
     container:
       image: amd64/rust
     steps:
+      - name: Install system build dependencies
+        run: |
+          apt-get update
+          apt-get install -y cmake build-essential pkg-config
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           submodules: true
@@ -725,6 +769,10 @@ jobs:
     container:
       image: amd64/rust
     steps:
+      - name: Install system build dependencies
+        run: |
+          apt-get update
+          apt-get install -y cmake build-essential pkg-config
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           submodules: true
@@ -758,6 +806,10 @@ jobs:
     container:
       image: amd64/rust
     steps:
+      - name: Install system build dependencies
+        run: |
+          apt-get update
+          apt-get install -y cmake build-essential pkg-config
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
