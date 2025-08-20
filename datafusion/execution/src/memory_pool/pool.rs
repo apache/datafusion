@@ -344,180 +344,23 @@ impl TrackedConsumer {
 /// # }
 /// ```
 ///
-/// # How to use in ExecutionPlan implementations
+/// # Usage Examples
 ///
-/// When implementing custom ExecutionPlans that need to use significant memory, you should
-/// use the memory pool to track and limit memory usage:
+/// For comprehensive examples of using `TrackConsumersPool`, see:
 ///
-/// ```rust
-/// use std::sync::Arc;
-/// use datafusion_execution::memory_pool::{MemoryPool, MemoryConsumer, MemoryReservation};
-/// use datafusion_common::Result;
+/// - **[memory_pool_tracking.rs]** - Shows basic usage patterns including:
+///   - Automatic setup with `RuntimeEnvBuilder::with_memory_limit()`
+///   - Manual memory consumer tracking
+///   - Error messages with top consumer details
 ///
-/// /// Example of an external batch bufferer that uses memory reservation.
-/// ///
-/// /// It's a simple example which spills all existing data to disk
-/// /// whenever the memory limit is reached.
-/// struct MyExternalBatchBufferer {
-///     buffer: Vec<u8>,
-///     reservation: MemoryReservation,
-/// }
+/// - **[memory_pool_execution_plan.rs]** - Demonstrates how to implement
+///   memory-aware ExecutionPlans with:
+///   - Memory reservation patterns
+///   - Spilling to disk when memory limits are reached
+///   - Proper cleanup and memory release
 ///
-/// impl MyExternalBatchBufferer {
-///     fn new(reservation: MemoryReservation) -> Self {
-///         Self {
-///             buffer: Vec::new(),
-///             reservation,
-///         }
-///     }
-///
-///     fn add_batch(&mut self, batch_data: Vec<u8>) -> Result<()> {
-///         let additional_memory = batch_data.len();
-///
-///         // Try to reserve memory before allocating
-///         if let Err(_) = self.reservation.try_grow(additional_memory) {
-///             // Memory limit reached - handle by spilling or other strategy
-///             self.spill_to_disk()?;
-///
-///             // Now safe to allocate and add the data
-///             self.reservation.try_grow(additional_memory)?;
-///         }
-///
-///         self.buffer.extend_from_slice(&batch_data);
-///         Ok(())
-///     }
-///
-///     fn spill_to_disk(&mut self) -> Result<()> {
-///         // Write buffer to disk
-///         // ... spilling logic ...
-///
-///         // Free the memory after spilling
-///         let freed_bytes = self.buffer.len();
-///         self.buffer.clear();
-///         self.reservation.shrink(freed_bytes);
-///
-///         Ok(())
-///     }
-///
-///     fn finish(&mut self) -> Vec<u8> {
-///         let result = std::mem::take(&mut self.buffer);
-///         // Free the memory when done
-///         self.reservation.free();
-///         result
-///     }
-/// }
-///
-/// # #[cfg(feature = "example")]
-/// # {
-/// use futures::StreamExt;
-/// use datafusion_execution::{SendableRecordBatchStream, TaskContext};
-/// use datafusion_physical_plan::{ExecutionPlan, DisplayAs, DisplayFormatType};
-/// use datafusion_common::{internal_err, DataFusionError};
-/// use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
-/// use arrow_schema::{Schema, SchemaRef};
-/// use futures::stream::{self, StreamExt};
-/// use std::any::Any;
-/// use std::fmt;
-///
-/// /// Example of an ExecutionPlan that uses the MyExternalBatchBufferer.
-/// #[derive(Debug)]
-/// struct MyBufferingExecutionPlan {
-///     schema: SchemaRef,
-///     input: Arc<dyn ExecutionPlan>,
-/// }
-///
-/// impl MyBufferingExecutionPlan {
-///     fn new(schema: SchemaRef, input: Arc<dyn ExecutionPlan>) -> Self {
-///         Self { schema, input }
-///     }
-/// }
-///
-/// impl DisplayAs for MyBufferingExecutionPlan {
-///     fn fmt_as(&self, _t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
-///         write!(f, "MyBufferingExecutionPlan")
-///     }
-/// }
-///
-/// impl ExecutionPlan for MyBufferingExecutionPlan {
-///     fn name(&self) -> &'static str {
-///         "MyBufferingExecutionPlan"
-///     }
-///
-///     fn as_any(&self) -> &dyn Any {
-///         self
-///     }
-///
-///     fn schema(&self) -> SchemaRef {
-///         self.schema.clone()
-///     }
-///
-///     fn properties(&self) -> &datafusion_physical_expr::PlanProperties {
-///         todo!()
-///     }
-///
-///     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
-///         vec![&self.input]
-///     }
-///
-///     fn with_new_children(
-///         self: Arc<Self>,
-///         children: Vec<Arc<dyn ExecutionPlan>>,
-///     ) -> Result<Arc<dyn ExecutionPlan>> {
-///         todo!()
-///     }
-///
-///     fn execute(
-///         &self,
-///         partition: usize,
-///         context: Arc<TaskContext>,
-///     ) -> Result<SendableRecordBatchStream> {
-///         // Register memory consumer with the context's memory pool
-///         let reservation = MemoryConsumer::new("MyExternalBatchBufferer")
-///             .with_can_spill(true)
-///             .register(context.memory_pool());
-///
-///         let mut operator = MyExternalBatchBufferer::new(reservation);
-///
-///         // Process incoming stream of batches
-///         let stream = self.input.execute(partition, context)?;
-///
-///         // Process the stream and collect all batches
-///         let processed_stream = stream
-///             .map(|batch_result| {
-///                 batch_result.map(|batch| {
-///                     // Convert RecordBatch to bytes for this example
-///                     vec![1u8; batch.get_array_memory_size()]
-///                 })
-///             })
-///             .try_for_each(move |batch_data| async move {
-///                 operator.add_batch(batch_data)?;
-///                 Ok(())
-///             })
-///             .map(move |result| {
-///                 match result {
-///                     Ok(_) => {
-///                         // Finish processing and get results
-///                         let _final_result = operator.finish();
-///                         // In a real implementation, you would convert final_result back to RecordBatches
-///                     }
-///                     Err(_) => {
-///                         // Handle error case
-///                     }
-///                 }
-///             });
-///
-///         // Since this is a simplified example, return an empty stream
-///         // In a real implementation, you would create a stream from the processed results
-///         let result_stream = stream::empty();
-///         Ok(Box::pin(result_stream))
-///     }
-/// }
-/// # }
-/// ```
-///
-/// # Runtime Monitoring
-///
-/// TODO(kosiew/wiedld):  Docs to be added after <https://github.com/apache/datafusion/pull/17021/>.
+/// [memory_pool_tracking.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/memory_pool_tracking.rs
+/// [memory_pool_execution_plan.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/memory_pool_execution_plan.rs
 #[derive(Debug)]
 pub struct TrackConsumersPool<I> {
     /// The wrapped memory pool that actually handles reservation logic
