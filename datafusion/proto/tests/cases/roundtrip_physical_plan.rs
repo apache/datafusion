@@ -49,7 +49,7 @@ use datafusion::datasource::listing::{ListingTableUrl, PartitionedFile};
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::{
     wrap_partition_type_in_dict, wrap_partition_value_in_dict, FileGroup,
-    FileScanConfigBuilder, FileSinkConfig, FileSource, ParquetSource,
+    FileScanConfigBuilder, FileSinkConfig, ParquetSource,
 };
 use datafusion::datasource::sink::DataSinkExec;
 use datafusion::datasource::source::DataSourceExec;
@@ -882,7 +882,7 @@ fn roundtrip_parquet_exec_with_pruning_predicate() -> Result<()> {
         "/path/to/file.parquet".to_string(),
         1024,
     )])])
-    .with_statistics(Statistics {
+    .with_file_source_projected_statistics(Statistics {
         num_rows: Precision::Inexact(100),
         total_byte_size: Precision::Inexact(1024),
         column_statistics: Statistics::unknown_column(&Arc::new(Schema::new(vec![
@@ -942,7 +942,7 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
         "/path/to/file.parquet".to_string(),
         1024,
     )])])
-    .with_statistics(Statistics {
+    .with_file_source_projected_statistics(Statistics {
         num_rows: Precision::Inexact(100),
         total_byte_size: Precision::Inexact(1024),
         column_statistics: Statistics::unknown_column(&Arc::new(Schema::new(vec![
@@ -1788,17 +1788,17 @@ async fn roundtrip_projection_source() -> Result<()> {
 
     let statistics = Statistics::new_unknown(&schema);
 
-    let file_source = ParquetSource::default().with_statistics(statistics.clone());
+    let file_source = ParquetSource::default();
     let scan_config = FileScanConfigBuilder::new(
         ObjectStoreUrl::local_filesystem(),
         schema.clone(),
-        file_source,
+        Arc::new(file_source),
     )
     .with_file_groups(vec![FileGroup::new(vec![PartitionedFile::new(
         "/path/to/file.parquet".to_string(),
         1024,
     )])])
-    .with_statistics(statistics)
+    .with_file_source_projected_statistics(statistics)
     .with_projection(Some(vec![0, 1, 2]))
     .build();
 

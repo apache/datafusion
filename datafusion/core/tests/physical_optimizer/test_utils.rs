@@ -131,11 +131,11 @@ pub(crate) fn parquet_exec_with_stats(file_size: u64) -> Arc<DataSourceExec> {
         Arc::new(ParquetSource::new(Default::default())),
     )
     .with_file(PartitionedFile::new("x".to_string(), file_size))
-    .with_statistics(statistics)
+    .with_file_source_projected_statistics(statistics)
     .build();
 
     assert_eq!(
-        config.file_source.statistics().unwrap().num_rows,
+        config.file_source.file_source_statistics(&config).num_rows,
         Precision::Inexact(10000)
     );
     DataSourceExec::from_data_source(config)

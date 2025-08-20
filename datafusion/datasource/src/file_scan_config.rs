@@ -192,6 +192,8 @@ pub struct FileScanConfig {
     /// Expression adapter used to adapt filters and projections that are pushed down into the scan
     /// from the logical schema to the physical schema of the file.
     pub expr_adapter_factory: Option<Arc<dyn PhysicalExprAdapterFactory>>,
+
+    pub file_source_projected_statistics: Statistics,
 }
 
 /// A builder for [`FileScanConfig`]'s.
@@ -264,7 +266,7 @@ pub struct FileScanConfigBuilder {
     table_partition_cols: Vec<FieldRef>,
     constraints: Option<Constraints>,
     file_groups: Vec<FileGroup>,
-    statistics: Option<Statistics>,
+    file_source_projected_statistics: Option<Statistics>,
     output_ordering: Vec<LexOrdering>,
     file_compression_type: Option<FileCompressionType>,
     new_lines_in_values: Option<bool>,
@@ -289,7 +291,7 @@ impl FileScanConfigBuilder {
             file_schema,
             file_source,
             file_groups: vec![],
-            statistics: None,
+            file_source_projected_statistics: None,
             output_ordering: vec![],
             file_compression_type: None,
             new_lines_in_values: None,
@@ -342,8 +344,11 @@ impl FileScanConfigBuilder {
 
     /// Set the estimated overall statistics of the files, taking `filters` into account.
     /// Defaults to [`Statistics::new_unknown`].
-    pub fn with_statistics(mut self, statistics: Statistics) -> Self {
-        self.statistics = Some(statistics);
+    pub fn with_file_source_projected_statistics(
+        mut self,
+        statistics: Statistics,
+    ) -> Self {
+        self.file_source_projected_statistics = Some(statistics);
         self
     }
 
@@ -435,7 +440,7 @@ impl FileScanConfigBuilder {
             table_partition_cols,
             constraints,
             file_groups,
-            statistics,
+            file_source_projected_statistics,
             output_ordering,
             file_compression_type,
             new_lines_in_values,
@@ -444,12 +449,11 @@ impl FileScanConfigBuilder {
         } = self;
 
         let constraints = constraints.unwrap_or_default();
-        let statistics =
-            statistics.unwrap_or_else(|| Statistics::new_unknown(&file_schema));
+        let file_source_projected_statistics = file_source_projected_statistics
+            .unwrap_or_else(|| Statistics::new_unknown(&file_schema));
 
-        let file_source = file_source
-            .with_statistics(statistics.clone())
-            .with_schema(Arc::clone(&file_schema));
+        let file_source = file_source;
+
         let file_compression_type =
             file_compression_type.unwrap_or(FileCompressionType::UNCOMPRESSED);
         let new_lines_in_values = new_lines_in_values.unwrap_or(false);
@@ -468,6 +472,7 @@ impl FileScanConfigBuilder {
             new_lines_in_values,
             batch_size,
             expr_adapter_factory: expr_adapter,
+            file_source_projected_statistics,
         }
     }
 }
@@ -479,7 +484,9 @@ impl From<FileScanConfig> for FileScanConfigBuilder {
             file_schema: config.file_schema,
             file_source: Arc::<dyn FileSource>::clone(&config.file_source),
             file_groups: config.file_groups,
-            statistics: config.file_source.statistics().ok(),
+            file_source_projected_statistics: Some(
+                config.file_source_projected_statistics,
+            ),
             output_ordering: config.output_ordering,
             file_compression_type: Some(config.file_compression_type),
             new_lines_in_values: Some(config.new_lines_in_values),
@@ -500,18 +507,21 @@ impl DataSource for FileScanConfig {
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         let object_store = context.runtime_env().object_store(&self.object_store_url)?;
+
         let batch_size = self
             .batch_size
             .unwrap_or_else(|| context.session_config().batch_size());
 
-        let source = self
-            .file_source
-            .with_batch_size(batch_size)
-            .with_projection(self);
+        let config = FileScanConfigBuilder::from(self.clone())
+            .with_batch_size(Some(batch_size))
+            .build();
 
-        let opener = source.create_file_opener(object_store, self, partition);
+        let opener =
+            self.file_source
+                .create_file_opener(object_store, &config, partition);
 
-        let stream = FileStream::new(self, partition, opener, source.metrics())?;
+        let stream =
+            FileStream::new(&config, partition, opener, self.file_source.metrics())?;
         Ok(Box::pin(cooperative(stream)))
     }
 
@@ -546,7 +556,7 @@ impl DataSource for FileScanConfig {
             }
             DisplayFormatType::TreeRender => {
                 writeln!(f, "format={}", self.file_source.file_type())?;
-                self.file_source.fmt_extra(t, f)?;
+                self.file_source.fmt_extra(t, f, self)?;
                 let num_files = self.file_groups.iter().map(|fg| fg.len()).sum::<usize>();
                 writeln!(f, "files={num_files}")?;
                 Ok(())
@@ -585,7 +595,7 @@ impl DataSource for FileScanConfig {
         SchedulingType::Cooperative
     }
 
-    fn statistics(&self) -> Result<Statistics> {
+    fn data_source_statistics(&self) -> Result<Statistics> {
         Ok(self.projected_stats())
     }
 
@@ -646,7 +656,9 @@ impl DataSource for FileScanConfig {
         filters: Vec<Arc<dyn PhysicalExpr>>,
         config: &ConfigOptions,
     ) -> Result<FilterPushdownPropagation<Arc<dyn DataSource>>> {
-        let result = self.file_source.try_pushdown_filters(filters, config)?;
+        let result = self
+            .file_source
+            .try_pushdown_filters(filters, config, self)?;
         match result.updated_node {
             Some(new_file_source) => {
                 let file_scan_config = FileScanConfigBuilder::from(self.clone())
@@ -679,7 +691,7 @@ impl FileScanConfig {
     }
 
     pub fn projected_stats(&self) -> Statistics {
-        let statistics = self.file_source.statistics().unwrap();
+        let statistics = self.file_source.file_source_statistics(self);
 
         let table_cols_stats = self
             .projection_indices()
@@ -746,7 +758,7 @@ impl FileScanConfig {
             return (
                 Arc::clone(&self.file_schema),
                 self.constraints.clone(),
-                self.file_source.statistics().unwrap().clone(),
+                self.file_source.file_source_statistics(self).clone(),
                 self.output_ordering.clone(),
             );
         }
@@ -961,7 +973,7 @@ impl FileScanConfig {
     /// Write the data_type based on file_source
     fn fmt_file_source(&self, t: DisplayFormatType, f: &mut Formatter) -> FmtResult {
         write!(f, ", file_type={}", self.file_source.file_type())?;
-        self.file_source.fmt_extra(t, f)
+        self.file_source.fmt_extra(t, f, self)
     }
 
     /// Returns the file_source
@@ -978,7 +990,7 @@ impl Debug for FileScanConfig {
         write!(
             f,
             "statistics={:?}, ",
-            self.file_source.statistics().unwrap()
+            self.file_source.file_source_statistics(self)
         )?;
 
         DisplayAs::fmt_as(self, DisplayFormatType::Verbose, f)?;
@@ -1569,8 +1581,8 @@ mod tests {
             to_partition_cols(partition_cols.clone()),
         );
 
-        let source_statistics = conf.file_source.statistics().unwrap();
-        let conf_stats = conf.statistics().unwrap();
+        let source_statistics = conf.file_source.file_source_statistics(&conf);
+        let conf_stats = conf.data_source_statistics().unwrap();
 
         // projection should be reflected in the file source statistics
         assert_eq!(conf_stats.num_rows, Precision::Inexact(3));
@@ -2080,7 +2092,7 @@ mod tests {
             Arc::new(MockSource::default()),
         )
         .with_projection(projection)
-        .with_statistics(statistics)
+        .with_file_source_projected_statistics(statistics)
         .with_table_partition_cols(table_partition_cols)
         .build()
     }
@@ -2138,7 +2150,7 @@ mod tests {
                 wrap_partition_type_in_dict(DataType::Utf8),
                 false,
             )])
-            .with_statistics(Statistics::new_unknown(&file_schema))
+            .with_file_source_projected_statistics(Statistics::new_unknown(&file_schema))
             .with_file_groups(vec![FileGroup::new(vec![PartitionedFile::new(
                 "test.parquet".to_string(),
                 1024,
@@ -2203,23 +2215,29 @@ mod tests {
 
         // Verify statistics are set to unknown
         assert_eq!(
-            config.file_source.statistics().unwrap().num_rows,
-            Precision::Absent
-        );
-        assert_eq!(
-            config.file_source.statistics().unwrap().total_byte_size,
+            config.file_source.file_source_statistics(&config).num_rows,
             Precision::Absent
         );
         assert_eq!(
             config
                 .file_source
-                .statistics()
-                .unwrap()
+                .file_source_statistics(&config)
+                .total_byte_size,
+            Precision::Absent
+        );
+        assert_eq!(
+            config
+                .file_source
+                .file_source_statistics(&config)
                 .column_statistics
                 .len(),
             file_schema.fields().len()
         );
-        for stat in config.file_source.statistics().unwrap().column_statistics {
+        for stat in config
+            .file_source
+            .file_source_statistics(&config)
+            .column_statistics
+        {
             assert_eq!(stat.distinct_count, Precision::Absent);
             assert_eq!(stat.min_value, Precision::Absent);
             assert_eq!(stat.max_value, Precision::Absent);

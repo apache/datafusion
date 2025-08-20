@@ -19,7 +19,7 @@ use arrow::datatypes::SchemaRef;
 use arrow::error::ArrowError;
 use arrow::{array::RecordBatch, compute::concat_batches};
 use datafusion::{datasource::object_store::ObjectStoreUrl, physical_plan::PhysicalExpr};
-use datafusion_common::{config::ConfigOptions, internal_err, Result, Statistics};
+use datafusion_common::{config::ConfigOptions, internal_err, Result};
 use datafusion_datasource::{
     file::FileSource, file_meta::FileMeta, file_scan_config::FileScanConfig,
     file_scan_config::FileScanConfigBuilder, file_stream::FileOpenFuture,
@@ -107,12 +107,8 @@ impl FileOpener for TestOpener {
 pub struct TestSource {
     support: bool,
     predicate: Option<Arc<dyn PhysicalExpr>>,
-    statistics: Option<Statistics>,
-    batch_size: Option<usize>,
     batches: Vec<RecordBatch>,
-    schema: Option<SchemaRef>,
     metrics: ExecutionPlanMetricsSet,
-    projection: Option<Vec<usize>>,
     schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
 }
 
@@ -131,14 +127,14 @@ impl FileSource for TestSource {
     fn create_file_opener(
         &self,
         _object_store: Arc<dyn ObjectStore>,
-        _base_config: &FileScanConfig,
+        base_config: &FileScanConfig,
         _partition: usize,
     ) -> Arc<dyn FileOpener> {
         Arc::new(TestOpener {
             batches: self.batches.clone(),
-            batch_size: self.batch_size,
-            schema: self.schema.clone(),
-            projection: self.projection.clone(),
+            batch_size: base_config.batch_size,
+            schema: Some(Arc::clone(&base_config.file_schema)),
+            projection: base_config.projection.clone(),
         })
     }
 
@@ -146,51 +142,20 @@ impl FileSource for TestSource {
         todo!("should not be called")
     }
 
-    fn with_batch_size(&self, batch_size: usize) -> Arc<dyn FileSource> {
-        Arc::new(TestSource {
-            batch_size: Some(batch_size),
-            ..self.clone()
-        })
-    }
-
-    fn with_schema(&self, schema: SchemaRef) -> Arc<dyn FileSource> {
-        Arc::new(TestSource {
-            schema: Some(schema),
-            ..self.clone()
-        })
-    }
-
-    fn with_projection(&self, config: &FileScanConfig) -> Arc<dyn FileSource> {
-        Arc::new(TestSource {
-            projection: config.projection.clone(),
-            ..self.clone()
-        })
-    }
-
-    fn with_statistics(&self, statistics: Statistics) -> Arc<dyn FileSource> {
-        Arc::new(TestSource {
-            statistics: Some(statistics),
-            ..self.clone()
-        })
-    }
-
     fn metrics(&self) -> &ExecutionPlanMetricsSet {
         &self.metrics
-    }
-
-    fn statistics(&self) -> Result<Statistics> {
-        Ok(self
-            .statistics
-            .as_ref()
-            .expect("statistics not set")
-            .clone())
     }
 
     fn file_type(&self) -> &str {
         "test"
     }
 
-    fn fmt_extra(&self, t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
+    fn fmt_extra(
+        &self,
+        t: DisplayFormatType,
+        f: &mut Formatter,
+        _config: &FileScanConfig,
+    ) -> std::fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 let support = format!(", pushdown_supported={}", self.support);
@@ -217,6 +182,7 @@ impl FileSource for TestSource {
         &self,
         mut filters: Vec<Arc<dyn PhysicalExpr>>,
         config: &ConfigOptions,
+        _fs_config: &FileScanConfig,
     ) -> Result<FilterPushdownPropagation<Arc<dyn FileSource>>> {
         if self.support && config.execution.parquet.pushdown_filters {
             if let Some(internal) = self.predicate.as_ref() {

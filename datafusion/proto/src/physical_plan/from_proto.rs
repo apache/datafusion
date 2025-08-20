@@ -546,7 +546,7 @@ pub fn parse_protobuf_file_scan_config(
     let config = FileScanConfigBuilder::new(object_store_url, file_schema, file_source)
         .with_file_groups(file_groups)
         .with_constraints(constraints)
-        .with_statistics(statistics)
+        .with_file_source_projected_statistics(statistics)
         .with_projection(Some(projection))
         .with_limit(proto.limit.as_ref().map(|sl| sl.limit as usize))
         .with_table_partition_cols(table_partition_cols)

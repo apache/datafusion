@@ -61,15 +61,12 @@ async fn csv_opener() -> Result<()> {
         Arc::new(CsvSource::default()),
     )
     .with_projection(Some(vec![12, 0]))
+    .with_batch_size(Some(8192))
     .with_limit(Some(5))
     .with_file(PartitionedFile::new(path.display().to_string(), 10))
     .build();
 
-    let config = CsvSource::new(true, b',', b'"')
-        .with_comment(Some(b'#'))
-        .with_schema(schema)
-        .with_batch_size(8192)
-        .with_projection(&scan_config);
+    let config = CsvSource::new(true, b',', b'"').with_comment(Some(b'#'));
 
     let opener = config.create_file_opener(object_store, &scan_config, 0);
 

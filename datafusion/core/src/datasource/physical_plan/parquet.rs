@@ -185,7 +185,9 @@ mod tests {
                 source = source.with_bloom_filter_on_read(false);
             }
 
-            source.with_schema(Arc::clone(&table_schema))
+            // source.with_schema(Arc::clone(&table_schema))
+
+            Arc::new(source) as Arc<dyn FileSource>
         }
 
         fn build_parquet_exec(

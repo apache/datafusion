@@ -194,7 +194,7 @@ impl DataSource for MemorySourceConfig {
         SchedulingType::Cooperative
     }
 
-    fn statistics(&self) -> Result<Statistics> {
+    fn data_source_statistics(&self) -> Result<Statistics> {
         Ok(common::compute_record_batch_statistics(
             &self.partitions,
             &self.schema,

@@ -22,8 +22,8 @@ use crate::{
 
 use std::sync::Arc;
 
-use arrow::datatypes::{Schema, SchemaRef};
-use datafusion_common::{Result, Statistics};
+use arrow::datatypes::Schema;
+use datafusion_common::Result;
 use datafusion_physical_expr::{expressions::Column, PhysicalExpr};
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use object_store::ObjectStore;
@@ -32,7 +32,6 @@ use object_store::ObjectStore;
 #[derive(Clone, Default)]
 pub(crate) struct MockSource {
     metrics: ExecutionPlanMetricsSet,
-    projected_statistics: Option<Statistics>,
     schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
 }
 
@@ -50,34 +49,8 @@ impl FileSource for MockSource {
         self
     }
 
-    fn with_batch_size(&self, _batch_size: usize) -> Arc<dyn FileSource> {
-        Arc::new(Self { ..self.clone() })
-    }
-
-    fn with_schema(&self, _schema: SchemaRef) -> Arc<dyn FileSource> {
-        Arc::new(Self { ..self.clone() })
-    }
-
-    fn with_projection(&self, _config: &FileScanConfig) -> Arc<dyn FileSource> {
-        Arc::new(Self { ..self.clone() })
-    }
-
-    fn with_statistics(&self, statistics: Statistics) -> Arc<dyn FileSource> {
-        let mut source = self.clone();
-        source.projected_statistics = Some(statistics);
-        Arc::new(source)
-    }
-
     fn metrics(&self) -> &ExecutionPlanMetricsSet {
         &self.metrics
-    }
-
-    fn statistics(&self) -> Result<Statistics> {
-        Ok(self
-            .projected_statistics
-            .as_ref()
-            .expect("projected_statistics must be set")
-            .clone())
     }
 
     fn file_type(&self) -> &str {

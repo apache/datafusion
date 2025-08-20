@@ -35,7 +35,7 @@ use datafusion_datasource::schema_adapter::{
     DefaultSchemaAdapterFactory, SchemaAdapterFactory,
 };
 
-use arrow::datatypes::{SchemaRef, TimeUnit};
+use arrow::datatypes::TimeUnit;
 use datafusion_common::config::TableParquetOptions;
 use datafusion_common::{DataFusionError, Statistics};
 use datafusion_datasource::file::FileSource;
@@ -271,21 +271,14 @@ pub struct ParquetSource {
     pub(crate) table_parquet_options: TableParquetOptions,
     /// Optional metrics
     pub(crate) metrics: ExecutionPlanMetricsSet,
-    /// The schema of the file.
-    /// In particular, this is the schema of the table without partition columns,
-    /// *not* the physical schema of the file.
-    pub(crate) file_schema: Option<SchemaRef>,
     /// Optional predicate for row filtering during parquet scan
     pub(crate) predicate: Option<Arc<dyn PhysicalExpr>>,
     /// Optional user defined parquet file reader factory
     pub(crate) parquet_file_reader_factory: Option<Arc<dyn ParquetFileReaderFactory>>,
     /// Optional user defined schema adapter
     pub(crate) schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
-    /// Batch size configuration
-    pub(crate) batch_size: Option<usize>,
     /// Optional hint for the size of the parquet metadata
     pub(crate) metadata_size_hint: Option<usize>,
-    pub(crate) projected_statistics: Option<Statistics>,
     #[cfg(feature = "parquet_encryption")]
     pub(crate) encryption_factory: Option<Arc<dyn EncryptionFactory>>,
 }
@@ -559,7 +552,7 @@ impl FileSource for ParquetSource {
         Arc::new(ParquetOpener {
             partition_index: partition,
             projection: Arc::from(projection),
-            batch_size: self
+            batch_size: base_config
                 .batch_size
                 .expect("Batch size must set before creating ParquetOpener"),
             limit: base_config.limit,
@@ -587,55 +580,35 @@ impl FileSource for ParquetSource {
         self
     }
 
-    fn with_batch_size(&self, batch_size: usize) -> Arc<dyn FileSource> {
-        let mut conf = self.clone();
-        conf.batch_size = Some(batch_size);
-        Arc::new(conf)
-    }
-
-    fn with_schema(&self, schema: SchemaRef) -> Arc<dyn FileSource> {
-        Arc::new(Self {
-            file_schema: Some(schema),
-            ..self.clone()
-        })
-    }
-
-    fn with_statistics(&self, statistics: Statistics) -> Arc<dyn FileSource> {
-        let mut conf = self.clone();
-        conf.projected_statistics = Some(statistics);
-        Arc::new(conf)
-    }
-
-    fn with_projection(&self, _config: &FileScanConfig) -> Arc<dyn FileSource> {
-        Arc::new(Self { ..self.clone() })
-    }
-
     fn metrics(&self) -> &ExecutionPlanMetricsSet {
         &self.metrics
     }
 
-    fn statistics(&self) -> datafusion_common::Result<Statistics> {
-        let statistics = &self.projected_statistics;
-        let statistics = statistics
-            .clone()
-            .expect("projected_statistics must be set");
+    fn file_source_statistics(&self, config: &FileScanConfig) -> Statistics {
+        let statistics = config.file_source_projected_statistics.clone();
+
         // When filters are pushed down, we have no way of knowing the exact statistics.
         // Note that pruning predicate is also a kind of filter pushdown.
         // (bloom filters use `pruning_predicate` too).
         // Because filter pushdown may happen dynamically as long as there is a predicate
         // if we have *any* predicate applied, we can't guarantee the statistics are exact.
         if self.predicate().is_some() {
-            Ok(statistics.to_inexact())
-        } else {
-            Ok(statistics)
+            return statistics.to_inexact();
         }
+
+        statistics
     }
 
     fn file_type(&self) -> &str {
         "parquet"
     }
 
-    fn fmt_extra(&self, t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
+    fn fmt_extra(
+        &self,
+        t: DisplayFormatType,
+        f: &mut Formatter,
+        config: &FileScanConfig,
+    ) -> std::fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 let predicate_string = self
@@ -653,8 +626,8 @@ impl FileSource for ParquetSource {
                 // the actual predicates are built in reference to the physical schema of
                 // each file, which we do not have at this point and hence cannot use.
                 // Instead we use the logical schema of the file (the table schema without partition columns).
-                if let (Some(file_schema), Some(predicate)) =
-                    (&self.file_schema, &self.predicate)
+                if let (file_schema, Some(predicate)) =
+                    (&config.file_schema, &self.predicate)
                 {
                     let predicate_creation_errors = Count::new();
                     if let (Some(pruning_predicate), _) = build_pruning_predicates(
@@ -691,12 +664,10 @@ impl FileSource for ParquetSource {
         &self,
         filters: Vec<Arc<dyn PhysicalExpr>>,
         config: &ConfigOptions,
+        fs_config: &FileScanConfig,
     ) -> datafusion_common::Result<FilterPushdownPropagation<Arc<dyn FileSource>>> {
-        let Some(file_schema) = self.file_schema.clone() else {
-            return Ok(FilterPushdownPropagation::with_parent_pushdown_result(
-                vec![PushedDown::No; filters.len()],
-            ));
-        };
+        let file_schema = fs_config.file_schema.clone();
+
         // Determine if based on configs we should push filters down.
         // If either the table / scan itself or the config has pushdown enabled,
         // we will push down the filters.

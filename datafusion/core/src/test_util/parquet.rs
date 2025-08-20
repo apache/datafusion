@@ -37,7 +37,6 @@ use crate::physical_plan::metrics::MetricsSet;
 use crate::physical_plan::ExecutionPlan;
 use crate::prelude::{Expr, SessionConfig, SessionContext};
 
-use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_datasource::source::DataSourceExec;
 use object_store::path::Path;
@@ -185,8 +184,8 @@ impl TestParquetFile {
             let source = Arc::new(
                 ParquetSource::new(parquet_options)
                     .with_predicate(Arc::clone(&physical_filter_expr)),
-            )
-            .with_schema(Arc::clone(&self.schema));
+            );
+
             let config = scan_config_builder.with_source(source).build();
             let parquet_exec = DataSourceExec::from_data_source(config);
 

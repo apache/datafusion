@@ -38,7 +38,6 @@ use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
 use arrow::json::ReaderBuilder;
 use arrow::{datatypes::SchemaRef, json};
-use datafusion_common::Statistics;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_execution::TaskContext;
@@ -77,9 +76,7 @@ impl JsonOpener {
 /// JsonSource holds the extra configuration that is necessary for [`JsonOpener`]
 #[derive(Clone, Default)]
 pub struct JsonSource {
-    batch_size: Option<usize>,
     metrics: ExecutionPlanMetricsSet,
-    projected_statistics: Option<Statistics>,
     schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
 }
 
@@ -104,7 +101,7 @@ impl FileSource for JsonSource {
         _partition: usize,
     ) -> Arc<dyn FileOpener> {
         Arc::new(JsonOpener {
-            batch_size: self
+            batch_size: base_config
                 .batch_size
                 .expect("Batch size must set before creating opener"),
             projected_schema: base_config.projected_file_schema(),
@@ -117,34 +114,8 @@ impl FileSource for JsonSource {
         self
     }
 
-    fn with_batch_size(&self, batch_size: usize) -> Arc<dyn FileSource> {
-        let mut conf = self.clone();
-        conf.batch_size = Some(batch_size);
-        Arc::new(conf)
-    }
-
-    fn with_schema(&self, _schema: SchemaRef) -> Arc<dyn FileSource> {
-        Arc::new(Self { ..self.clone() })
-    }
-    fn with_statistics(&self, statistics: Statistics) -> Arc<dyn FileSource> {
-        let mut conf = self.clone();
-        conf.projected_statistics = Some(statistics);
-        Arc::new(conf)
-    }
-
-    fn with_projection(&self, _config: &FileScanConfig) -> Arc<dyn FileSource> {
-        Arc::new(Self { ..self.clone() })
-    }
-
     fn metrics(&self) -> &ExecutionPlanMetricsSet {
         &self.metrics
-    }
-
-    fn statistics(&self) -> Result<Statistics> {
-        let statistics = &self.projected_statistics;
-        Ok(statistics
-            .clone()
-            .expect("projected_statistics must be set to call"))
     }
 
     fn file_type(&self) -> &str {
