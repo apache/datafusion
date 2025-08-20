@@ -45,17 +45,23 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: amd64/rust
+    env:
+      CARGO_PROFILE_CI_BUILD_OVERRIDE_DEBUG: true
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
       - name: Rust Dependency Cache
-        uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0  # v2.8.0
+        uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0 # v2.8.0
         with:
           shared-key: "amd-ci-check" # this job uses it's own cache becase check has a separate cache and we need it to be fast as it blocks other jobs
           save-if: ${{ github.ref_name == 'main' }}
+      - name: Install system build dependencies
+        run: |
+          apt-get update
+          apt-get install -y cmake build-essential pkg-config
       - name: Prepare cargo build
         run: |
           # Adding `--locked` here to assert that the `Cargo.lock` file is up to
@@ -74,7 +80,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
@@ -99,13 +105,17 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+      - name: Install system build dependencies
+        run: |
+          apt-get update
+          apt-get install -y cmake build-essential pkg-config
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
       - name: Rust Dependency Cache
-        uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0  # v2.8.0
+        uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0 # v2.8.0
         with:
           save-if: false # set in linux-test
           shared-key: "amd-ci"
@@ -118,10 +128,6 @@ jobs:
         run: cargo check --profile ci --no-default-features -p datafusion-substrait
       - name: Check datafusion-substrait (physical)
         run: cargo check --profile ci --no-default-features -p datafusion-substrait --features=physical
-      - name: Install cmake
-        run: |
-          # note the builder setup runs apt-get update / installs protobuf compiler
-          apt-get install -y cmake
       - name: Check datafusion-substrait (protoc)
         run: cargo check --profile ci --no-default-features -p datafusion-substrait --features=protoc
 
@@ -136,7 +142,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
@@ -155,7 +161,6 @@ jobs:
       - name: Check datafusion-proto (avro)
         run: cargo check --profile ci --no-default-features -p datafusion-proto --features=avro
 
-
   # Check datafusion crate features
   #
   # Ensure via `cargo check` that the crate can be built with a
@@ -167,13 +172,17 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+      - name: Install system build dependencies
+        run: |
+          apt-get update
+          apt-get install -y cmake build-essential pkg-config
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
       - name: Rust Dependency Cache
-        uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0  # v2.8.0
+        uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0 # v2.8.0
         with:
           save-if: false # set in linux-test
           shared-key: "amd-ci"
@@ -232,7 +241,11 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+      - name: Install system build dependencies
+        run: |
+          apt-get update
+          apt-get install -y cmake build-essential pkg-config
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
@@ -267,7 +280,11 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+      - name: Install system build dependencies
+        run: |
+          apt-get update
+          apt-get install -y cmake build-essential pkg-config
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           submodules: true
           fetch-depth: 1
@@ -276,10 +293,10 @@ jobs:
         with:
           rust-version: stable
       - name: Rust Dependency Cache
-        uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0  # v2.8.0
+        uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0 # v2.8.0
         with:
-         save-if: ${{ github.ref_name == 'main' }}
-         shared-key: "amd-ci"
+          save-if: ${{ github.ref_name == 'main' }}
+          shared-key: "amd-ci"
       - name: Run tests (excluding doctests and datafusion-cli)
         env:
           RUST_BACKTRACE: 1
@@ -308,7 +325,7 @@ jobs:
     # container:
     #  image: amd64/rust
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           submodules: true
           fetch-depth: 1
@@ -326,7 +343,6 @@ jobs:
       - name: Verify Working Directory Clean
         run: git diff --exit-code
 
-
   linux-test-example:
     name: cargo examples (amd64)
     needs: linux-build-lib
@@ -334,7 +350,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           submodules: true
           fetch-depth: 1
@@ -343,7 +359,7 @@ jobs:
         with:
           rust-version: stable
       - name: Rust Dependency Cache
-        uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0  # v2.8.0
+        uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0 # v2.8.0
         with:
           save-if: ${{ github.ref_name == 'main' }}
           shared-key: "amd-ci-linux-test-example"
@@ -364,7 +380,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           submodules: true
           fetch-depth: 1
@@ -385,7 +401,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
@@ -397,7 +413,7 @@ jobs:
     name: build and run with wasm-pack
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
       - name: Setup for wasm32
         run: |
           rustup target add wasm32-unknown-unknown
@@ -422,7 +438,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           submodules: true
           fetch-depth: 1
@@ -469,7 +485,7 @@ jobs:
           --health-timeout 5s
           --health-retries 5
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           submodules: true
           fetch-depth: 1
@@ -493,7 +509,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           submodules: true
           fetch-depth: 1
@@ -547,7 +563,7 @@ jobs:
     name: cargo test (macos-aarch64)
     runs-on: macos-14
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           submodules: true
           fetch-depth: 1
@@ -564,7 +580,7 @@ jobs:
     container:
       image: amd64/rust:bullseye # Use the bullseye tag image which comes with python3.9
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           submodules: true
           fetch-depth: 1
@@ -587,7 +603,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
@@ -604,7 +620,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
@@ -663,7 +679,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           submodules: true
           fetch-depth: 1
@@ -674,7 +690,7 @@ jobs:
       - name: Install Clippy
         run: rustup component add clippy
       - name: Rust Dependency Cache
-        uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0  # v2.8.0
+        uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0 # v2.8.0
         with:
           save-if: ${{ github.ref_name == 'main' }}
           shared-key: "amd-ci-clippy"
@@ -688,7 +704,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           submodules: true
           fetch-depth: 1
@@ -709,7 +725,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           submodules: true
           fetch-depth: 1
@@ -717,7 +733,7 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "20"
       - name: Check if configs.md has been modified
@@ -742,7 +758,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
       - name: Install cargo-msrv
