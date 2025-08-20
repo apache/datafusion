@@ -689,6 +689,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
             SQLDataType::Uuid => Ok(DataType::FixedSizeBinary(16)),
             SQLDataType::JSON | SQLDataType::JSONB => Ok(json_type()),
+            SQLDataType::Bit(_) | SQLDataType::VarBit(_) | SQLDataType::BitVarying(_) => {
+                Ok(DataType::Utf8)
+            }
             SQLDataType::Nvarchar(_)
             | SQLDataType::Binary(_)
             | SQLDataType::Varbinary(_)
@@ -743,15 +746,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             | SQLDataType::TinyText
             | SQLDataType::MediumText
             | SQLDataType::LongText
-            | SQLDataType::Bit(_)
-            | SQLDataType::BitVarying(_)
             | SQLDataType::Signed
             | SQLDataType::SignedInteger
             | SQLDataType::Unsigned
             | SQLDataType::UnsignedInteger
             | SQLDataType::AnyType
             | SQLDataType::Table(_)
-            | SQLDataType::VarBit(_)
             | SQLDataType::GeometricType(_) => {
                 not_impl_err!("Unsupported SQL type {sql_type:?}")
             }
