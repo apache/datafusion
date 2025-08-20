@@ -71,7 +71,7 @@ use crate::{
 };
 
 /// Batch emits this number of rows when processing
-pub const DEFAULT_INCREMENTAL_BATCH_VALUE: usize = 1;
+pub const DEFAULT_INCREMENTAL_BATCH_VALUE: usize = 8192;
 
 /// `PiecewiseMergeJoinExec` is a join execution plan that only evaluates single range filter.
 ///
@@ -187,36 +187,35 @@ pub const DEFAULT_INCREMENTAL_BATCH_VALUE: usize = 1;
 ///             min value: 200
 /// ```
 ///
-/// For both types of joins, the buffered side must be sorted ascending for `Operator::Lt`(<) or
-/// `Operator::LtEq`(<=) and descending for `Operator::Gt`(>) or `Operator::GtEq`(>=).
+/// For both types of joins, the buffered side must be sorted ascending for `Operator::Lt` (<) or
+/// `Operator::LtEq` (<=) and descending for `Operator::Gt` (>) or `Operator::GtEq` (>=).
 ///
 /// ## Assumptions / Notation
-/// - [R], [S]: number of pages (blocks) of R and S
-/// - |R|, |S|: number of tuples in R and S
-/// - B: number of buffer pages
+/// - \[R\], \[S\]: number of pages (blocks) of `R` and `S`
+/// - |R|, |S|: number of tuples in `R` and `S`
+/// - `B`: number of buffer pages
 ///
 /// # Performance (cost)
 /// Piecewise Merge Join is used over Nested Loop Join due to its superior performance. Here is a breakdown
 /// of the calculations:
 ///
 /// ## Piecewise Merge Join (PWMJ)
-/// Intuition: Keep the buffered side (R) sorted and in memory (or scan it in sorted order),
-/// sort the streamed side (S), then merge in order while advancing a pivot on R.
+/// Intuition: Keep the buffered side (`R`) sorted and in memory (or scan it in sorted order),
+/// sort the streamed side (`S`), then merge in order while advancing a pivot on `R`.
 ///
 /// Average I/O cost:
-///   cost(PWMJ) = cost_to_sort(R) + cost_to_sort(S) + ([R] + [S])
-///              = sort(R) + sort(S) + [R] + [S]
+///   `cost(PWMJ) = sort(R) + sort(S) + (\[R\] + \[S\])`
 ///
-///   - If R (buffered) already sorted on the join key:     cost(PWMJ) = sort(S) + [R] + [S]
-///   - If S already sorted and R not:                      cost(PWMJ) = sort(R) + [R] + [S]
-///   - If both already sorted:                             cost(PWMJ) = [R] + [S]
+///   - If `R` (buffered) already sorted on the join key:     `cost(PWMJ) = sort(S) + \[R\] + \[S\]`
+///   - If `S` already sorted and `R` not:                    `cost(PWMJ) = sort(R) + \[R\] + \[S\]`
+///   - If both already sorted:                               `cost(PWMJ) = \[R\] + \[S\]`
 ///
 /// ## Nested Loop Join
-///   cost(NLJ) ≈ [R] + |R|·[S]
+///   `cost(NLJ) ≈ \[R\] + |R|·\[S\]`
 ///
 /// Takeaway:
-///   - When at least one side needs sorting, PWMJ ≈ sort(R) + sort(S) + [R] + [S] on average,
-///     typically beating NLJ’s |R|·[S] (or its buffered variant) for nontrivial |R|, [S].
+///   - When at least one side needs sorting, PWMJ ≈ `sort(R) + sort(S) + \[R\] + \[S\]` on average,
+///     typically beating NLJ’s `|R|·\[S\]` (or its buffered variant) for nontrivial `|R|`, `\[S\]`.
 ///
 /// # Further Reference Material
 /// DuckDB blog on Range Joins: [Range Joins in DuckDB](https://duckdb.org/2022/05/27/iejoin.html)
@@ -387,7 +386,7 @@ impl PiecewiseMergeJoinExec {
             schema,
             &Self::maintains_input_order(join_type),
             Some(Self::probe_side(&join_type)),
-            &[join_on.clone()],
+            std::slice::from_ref(join_on),
         )?;
 
         let output_partitioning =
@@ -1136,8 +1135,8 @@ impl PiecewiseMergeJoinStream {
                 let buffered_value =
                     ScalarValue::try_from_array(&buffered_values, buffered_idx)?;
                 let ord = compare_rows(
-                    &[threshold.clone()],
-                    &[buffered_value.clone()],
+                    std::slice::from_ref(&threshold),
+                    std::slice::from_ref(&buffered_value),
                     &[self.sort_option],
                 )?;
 
