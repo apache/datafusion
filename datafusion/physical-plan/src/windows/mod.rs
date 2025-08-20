@@ -102,34 +102,28 @@ pub fn create_window_expr(
 ) -> Result<Arc<dyn WindowExpr>> {
     Ok(match fun {
         WindowFunctionDefinition::AggregateUDF(fun) => {
-            if distinct {
-                let aggregate = AggregateExprBuilder::new(Arc::clone(fun), args.to_vec())
+            let aggregate = if distinct {
+                AggregateExprBuilder::new(Arc::clone(fun), args.to_vec())
                     .schema(Arc::new(input_schema.clone()))
                     .alias(name)
                     .with_ignore_nulls(ignore_nulls)
                     .distinct()
                     .build()
-                    .map(Arc::new)?;
-                window_expr_from_aggregate_expr(
-                    partition_by,
-                    order_by,
-                    window_frame,
-                    aggregate,
-                )
+                    .map(Arc::new)?
             } else {
-                let aggregate = AggregateExprBuilder::new(Arc::clone(fun), args.to_vec())
+                AggregateExprBuilder::new(Arc::clone(fun), args.to_vec())
                     .schema(Arc::new(input_schema.clone()))
                     .alias(name)
                     .with_ignore_nulls(ignore_nulls)
                     .build()
-                    .map(Arc::new)?;
-                window_expr_from_aggregate_expr(
-                    partition_by,
-                    order_by,
-                    window_frame,
-                    aggregate,
-                )
-            }
+                    .map(Arc::new)?
+            };
+            window_expr_from_aggregate_expr(
+                partition_by,
+                order_by,
+                window_frame,
+                aggregate,
+            )
         }
         WindowFunctionDefinition::WindowUDF(fun) => Arc::new(StandardWindowExpr::new(
             create_udwf_window_expr(fun, args, input_schema, name, ignore_nulls)?,
