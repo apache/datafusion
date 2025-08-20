@@ -29,7 +29,6 @@ use datafusion_common::cast::{
 };
 use datafusion_common::exec_err;
 use datafusion_common::plan_err;
-use datafusion_common::types::{logical_binary, logical_string, NativeType};
 use datafusion_common::ScalarValue;
 use datafusion_common::{
     cast::as_generic_string_array, internal_err, DataFusionError, Result,
@@ -38,7 +37,7 @@ use datafusion_expr::function::Hint;
 use datafusion_expr::ColumnarValue;
 use datafusion_expr::TypeSignature;
 use datafusion_expr::{Documentation, ScalarUDFImpl, Signature, Volatility};
-use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
+use datafusion_expr_common::signature::TypeSignatureClass;
 use datafusion_macros::user_doc;
 use regex::Regex;
 use std::any::Any;
@@ -98,30 +97,18 @@ impl Default for RegexpReplaceFunc {
 
 impl RegexpReplaceFunc {
     pub fn new() -> Self {
+        use DataType::*;
         use TypeSignature::*;
         use TypeSignatureClass::*;
         Self {
             signature: Signature::one_of(
                 vec![
-                    Coercible(vec![
-                        Coercion::new_implicit(
-                            Native(logical_string()),
-                            vec![Native(logical_string()), Native(logical_binary())],
-                            NativeType::String,
-                        ),
-                        Coercion::new_exact(Native(logical_string())),
-                        Coercion::new_exact(Native(logical_string())),
-                    ]),
-                    Coercible(vec![
-                        Coercion::new_implicit(
-                            Native(logical_string()),
-                            vec![Native(logical_string()), Native(logical_binary())],
-                            NativeType::String,
-                        ),
-                        Coercion::new_exact(Native(logical_string())),
-                        Coercion::new_exact(Native(logical_string())),
-                        Coercion::new_exact(Native(logical_string())),
-                    ]),
+                    Exact(vec![Utf8View, Utf8View, Utf8View]),
+                    Exact(vec![LargeUtf8, LargeUtf8, LargeUtf8]),
+                    Exact(vec![Utf8, Utf8, Utf8]),
+                    Exact(vec![Utf8View, Utf8View, Utf8View, Utf8View]),
+                    Exact(vec![LargeUtf8, LargeUtf8, LargeUtf8, LargeUtf8]),
+                    Exact(vec![Utf8, Utf8, Utf8, Utf8]),
                 ],
                 Volatility::Immutable,
             ),
@@ -412,14 +399,14 @@ where
 }
 
 fn _regexp_replace_early_abort<T: ArrayAccessor>(
-    _input_array: T,
+    input_array: T,
     sz: usize,
 ) -> Result<ArrayRef> {
     // Mimicking the existing behavior of regexp_replace, if any of the scalar arguments
     // are actually null, then the result will be an array of the same size as the first argument with all nulls.
     //
     // Also acts like an early abort mechanism when the input array is empty.
-    Ok(new_null_array(&DataType::Utf8, sz))
+    Ok(new_null_array(input_array.data_type(), sz))
 }
 
 /// Get the first argument from the given string array.
