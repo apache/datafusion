@@ -188,6 +188,36 @@ See [#17028] for more details and an example implementation for `SortExec`.
 
 [#17028]: https://github.com/apache/datafusion/pull/17028
 
+### Nested Loop Join input sort order cannot be preserved
+
+The Nested Loop Join operator has been rewritten from scratch to improve performance and memory efficiency. From the micro-benchmarks: this change introduces up to 5X speed-up and uses only 1% memory in extreme cases compared to the previous implementation.
+
+However, the new implementation cannot preserve input sort order like the old version could. This is a fundamental design trade-off that prioritizes performance and memory efficiency over sort order preservation.
+
+See [#16996] for details.
+
+[#16996]: https://github.com/apache/datafusion/pull/16996
+
+### Add `as_any()` method to `LazyBatchGenerator`
+
+To help with protobuf serialization, the `as_any()` method has been added to the `LazyBatchGenerator` trait. This means you will need to add `as_any()` to your implementation of `LazyBatchGenerator`:
+
+```rust
+# /* comment to avoid running
+
+impl LazyBatchGenerator for MyBatchGenerator {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    ...
+}
+
+# */
+```
+
+See [#17200](https://github.com/apache/datafusion/pull/17200) for details.
+
 ## DataFusion `49.0.0`
 
 ### `MSRV` updated to 1.85.1

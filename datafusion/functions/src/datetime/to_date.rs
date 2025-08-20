@@ -53,7 +53,7 @@ Note: `to_date` returns Date32, which represents its values as the number of day
 +---------------------------------------------------------------------+
 ```
 
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/to_date.rs)
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/date_time_functions.rs)
 "#,
     standard_argument(name = "expression", prefix = "String"),
     argument(
