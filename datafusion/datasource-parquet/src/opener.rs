@@ -308,7 +308,7 @@ impl FileOpener for ParquetOpener {
             let (schema_mapping, adapted_projections) =
                 schema_adapter.map_schema(&physical_file_schema)?;
 
-            let mask = ProjectionMask::leaves(
+            let mask = ProjectionMask::roots(
                 builder.parquet_schema(),
                 adapted_projections.iter().cloned(),
             );
