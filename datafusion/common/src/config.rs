@@ -277,6 +277,16 @@ config_namespace! {
 
         /// Specifies the recursion depth limit when parsing complex SQL Queries
         pub recursion_limit: usize, default = 50
+
+        /// Specifies the default null ordering for query results. There are 4 options:
+        /// - `nulls_max`: Nulls appear last in ascending order.
+        /// - `nulls_min`: Nulls appear first in ascending order.
+        /// - `nulls_first`: Nulls always be first in any order.
+        /// - `nulls_last`: Nulls always be last in any order.
+        ///
+        /// By default, `nulls_max` is used to follow Postgres's behavior.
+        /// postgres rule: <https://www.postgresql.org/docs/current/queries-order.html>
+        pub default_null_ordering: String, default = "nulls_max".to_string()
     }
 }
 
@@ -591,13 +601,6 @@ config_namespace! {
         /// default parquet writer setting
         pub statistics_enabled: Option<String>, transform = str::to_lowercase, default = Some("page".into())
 
-        /// (writing) Sets max statistics size for any column. If NULL, uses
-        /// default parquet writer setting
-        /// max_statistics_size is deprecated, currently it is not being used
-        // TODO: remove once deprecated
-        #[deprecated(since = "45.0.0", note = "Setting does not do anything")]
-        pub max_statistics_size: Option<usize>, default = Some(4096)
-
         /// (writing) Target maximum number of rows in each row group (defaults to 1M
         /// rows). Writing larger row groups requires more memory to write, but
         /// can get better compression and be faster to read.
@@ -609,9 +612,9 @@ config_namespace! {
         /// (writing) Sets column index truncate length
         pub column_index_truncate_length: Option<usize>, default = Some(64)
 
-        /// (writing) Sets statictics truncate length. If NULL, uses
+        /// (writing) Sets statistics truncate length. If NULL, uses
         /// default parquet writer setting
-        pub statistics_truncate_length: Option<usize>, default = None
+        pub statistics_truncate_length: Option<usize>, default = Some(64)
 
         /// (writing) Sets best effort maximum number of rows in data page
         pub data_page_row_count_limit: usize, default = 20_000
@@ -914,7 +917,7 @@ impl<'a> TryInto<arrow::util::display::FormatOptions<'a>> for &'a FormatOptions 
 }
 
 /// A key value pair, with a corresponding description
-#[derive(Debug)]
+#[derive(Debug, Hash, PartialEq, Eq)]
 pub struct ConfigEntry {
     /// A unique string to identify this config value
     pub key: String,
@@ -999,11 +1002,23 @@ impl ConfigOptions {
         e.0.set(key, value)
     }
 
-    /// Create new ConfigOptions struct, taking values from
-    /// environment variables where possible.
+    /// Create new [`ConfigOptions`], taking values from environment variables
+    /// where possible.
     ///
-    /// For example, setting `DATAFUSION_EXECUTION_BATCH_SIZE` will
-    /// control `datafusion.execution.batch_size`.
+    /// For example, to configure `datafusion.execution.batch_size`
+    /// ([`ExecutionOptions::batch_size`]) you would set the
+    /// `DATAFUSION_EXECUTION_BATCH_SIZE` environment variable.
+    ///
+    /// The name of the environment variable is the option's key, transformed to
+    /// uppercase and with periods replaced with underscores.
+    ///
+    /// Values are parsed according to the [same rules used in casts from
+    /// Utf8](https://docs.rs/arrow/latest/arrow/compute/kernels/cast/fn.cast.html).
+    ///
+    /// If the value in the environment variable cannot be cast to the type of
+    /// the configuration option, the default value will be used instead and a
+    /// warning emitted. Environment variables are read when this method is
+    /// called, and are not re-read later.
     pub fn from_env() -> Result<Self> {
         struct Visitor(Vec<String>);
 
@@ -2048,13 +2063,6 @@ config_namespace_with_hashmap! {
         /// Sets bloom filter number of distinct values. If NULL, uses
         /// default parquet options
         pub bloom_filter_ndv: Option<u64>, default = None
-
-        /// Sets max statistics size for the column path. If NULL, uses
-        /// default parquet options
-        /// max_statistics_size is deprecated, currently it is not being used
-        // TODO: remove once deprecated
-        #[deprecated(since = "45.0.0", note = "Setting does not do anything")]
-        pub max_statistics_size: Option<usize>, default = None
     }
 }
 

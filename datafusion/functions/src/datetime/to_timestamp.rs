@@ -656,6 +656,7 @@ mod tests {
     use arrow::array::{ArrayRef, Int64Array, StringBuilder};
     use arrow::datatypes::{Field, TimeUnit};
     use chrono::Utc;
+    use datafusion_common::config::ConfigOptions;
     use datafusion_common::{assert_contains, DataFusionError, ScalarValue};
     use datafusion_expr::ScalarFunctionImplementation;
 
@@ -1034,6 +1035,7 @@ mod tests {
                     arg_fields: vec![arg_field],
                     number_rows: 4,
                     return_field: Field::new("f", rt, true).into(),
+                    config_options: Arc::new(ConfigOptions::default()),
                 };
                 let res = udf
                     .invoke_with_args(args)
@@ -1083,6 +1085,7 @@ mod tests {
                     arg_fields: vec![arg_field],
                     number_rows: 5,
                     return_field: Field::new("f", rt, true).into(),
+                    config_options: Arc::new(ConfigOptions::default()),
                 };
                 let res = udf
                     .invoke_with_args(args)

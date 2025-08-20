@@ -18,6 +18,7 @@
 pub mod expm1;
 pub mod factorial;
 pub mod hex;
+pub mod rint;
 
 use datafusion_expr::ScalarUDF;
 use datafusion_functions::make_udf_function;
@@ -26,6 +27,7 @@ use std::sync::Arc;
 make_udf_function!(expm1::SparkExpm1, expm1);
 make_udf_function!(factorial::SparkFactorial, factorial);
 make_udf_function!(hex::SparkHex, hex);
+make_udf_function!(rint::SparkRint, rint);
 
 pub mod expr_fn {
     use datafusion_functions::export_functions;
@@ -37,8 +39,9 @@ pub mod expr_fn {
         arg1
     ));
     export_functions!((hex, "Computes hex value of the given column.", arg1));
+    export_functions!((rint, "Returns the double value that is closest in value to the argument and is equal to a mathematical integer.", arg1));
 }
 
 pub fn functions() -> Vec<Arc<ScalarUDF>> {
-    vec![expm1(), factorial(), hex()]
+    vec![expm1(), factorial(), hex(), rint()]
 }

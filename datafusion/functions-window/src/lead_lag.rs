@@ -25,8 +25,8 @@ use datafusion_common::arrow::datatypes::Field;
 use datafusion_common::{arrow_datafusion_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::window_doc_sections::DOC_SECTION_ANALYTICAL;
 use datafusion_expr::{
-    Documentation, Literal, PartitionEvaluator, ReversedUDWF, Signature, TypeSignature,
-    Volatility, WindowUDFImpl,
+    udf_equals_hash, Documentation, Literal, PartitionEvaluator, ReversedUDWF, Signature,
+    TypeSignature, Volatility, WindowUDFImpl,
 };
 use datafusion_functions_window_common::expr::ExpressionArgs;
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
@@ -35,7 +35,7 @@ use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use std::any::Any;
 use std::cmp::min;
 use std::collections::VecDeque;
-use std::hash::{DefaultHasher, Hash, Hasher};
+use std::hash::Hash;
 use std::ops::{Neg, Range};
 use std::sync::{Arc, LazyLock};
 
@@ -120,7 +120,7 @@ impl WindowShiftKind {
 }
 
 /// window shift expression
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct WindowShift {
     signature: Signature,
     kind: WindowShiftKind,
@@ -159,15 +159,14 @@ static LAG_DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
         the value of expression should be retrieved. Defaults to 1.")
         .with_argument("default", "The default value if the offset is \
         not within the partition. Must be of the same type as expression.")
-        .with_sql_example(r#"```sql
-    --Example usage of the lag window function:
-    SELECT employee_id,
-           salary,
-           lag(salary, 1, 0) OVER (ORDER BY employee_id) AS prev_salary
-    FROM employees;
-```
-
+        .with_sql_example(r#"
 ```sql
+-- Example usage of the lag window function:
+SELECT employee_id,
+    salary,
+    lag(salary, 1, 0) OVER (ORDER BY employee_id) AS prev_salary
+FROM employees;
+
 +-------------+--------+-------------+
 | employee_id | salary | prev_salary |
 +-------------+--------+-------------+
@@ -176,7 +175,8 @@ static LAG_DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
 | 3           | 70000  | 50000       |
 | 4           | 60000  | 70000       |
 +-------------+--------+-------------+
-```"#)
+```
+"#)
         .build()
 });
 
@@ -195,17 +195,16 @@ static LEAD_DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
         forward the value of expression should be retrieved. Defaults to 1.")
         .with_argument("default", "The default value if the offset is \
         not within the partition. Must be of the same type as expression.")
-        .with_sql_example(r#"```sql
--- Example usage of lead() :
+        .with_sql_example(r#"
+```sql
+-- Example usage of lead window function:
 SELECT
     employee_id,
     department,
     salary,
     lead(salary, 1, 0) OVER (PARTITION BY department ORDER BY salary) AS next_salary
 FROM employees;
-```
 
-```sql
 +-------------+-------------+--------+--------------+
 | employee_id | department  | salary | next_salary  |
 +-------------+-------------+--------+--------------+
@@ -215,7 +214,8 @@ FROM employees;
 | 4           | Engineering | 40000  | 60000        |
 | 5           | Engineering | 60000  | 0            |
 +-------------+-------------+--------+--------------+
-```"#)
+```
+"#)
         .build()
 });
 
@@ -300,22 +300,7 @@ impl WindowUDFImpl for WindowShift {
         }
     }
 
-    fn equals(&self, other: &dyn WindowUDFImpl) -> bool {
-        let Some(other) = other.as_any().downcast_ref::<Self>() else {
-            return false;
-        };
-        let Self { signature, kind } = self;
-        signature == &other.signature && kind == &other.kind
-    }
-
-    fn hash_value(&self) -> u64 {
-        let Self { signature, kind } = self;
-        let mut hasher = DefaultHasher::new();
-        std::any::type_name::<Self>().hash(&mut hasher);
-        signature.hash(&mut hasher);
-        kind.hash(&mut hasher);
-        hasher.finish()
-    }
+    udf_equals_hash!(WindowUDFImpl);
 }
 
 /// When `lead`/`lag` is evaluated on a `NULL` expression we attempt to

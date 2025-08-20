@@ -1358,6 +1358,9 @@ impl DefaultPhysicalPlanner {
                     physical_name(expr),
                 ))?])),
             }
+        } else if group_expr.is_empty() {
+            // No GROUP BY clause - create empty PhysicalGroupBy
+            Ok(PhysicalGroupBy::new(vec![], vec![], vec![]))
         } else {
             Ok(PhysicalGroupBy::new_single(
                 group_expr
@@ -1646,6 +1649,7 @@ pub fn create_window_expr_with_name(
                         order_by,
                         window_frame,
                         null_treatment,
+                        distinct,
                     },
             } = window_fun.as_ref();
             let physical_args =
@@ -1674,6 +1678,7 @@ pub fn create_window_expr_with_name(
                 window_frame,
                 physical_schema,
                 ignore_nulls,
+                *distinct,
             )
         }
         other => plan_err!("Invalid window expression '{other:?}'"),
