@@ -51,6 +51,7 @@ use datafusion_expr::builder::{
     project, subquery_alias, table_scan_with_filter_and_fetch, table_scan_with_filters,
 };
 use datafusion_functions::core::planner::CoreFunctionPlanner;
+use datafusion_functions::planner::UserDefinedFunctionPlanner;
 use datafusion_functions_nested::extract::array_element_udf;
 use datafusion_functions_nested::planner::{FieldAccessPlanner, NestedFunctionPlanner};
 use datafusion_sql::unparser::ast::{
@@ -94,7 +95,7 @@ fn roundtrip_expr(table: TableReference, sql: &str) -> Result<String> {
     let state = MockSessionState::default().with_aggregate_function(sum_udaf());
     let context = MockContextProvider { state };
     let schema = context.get_table_source(table)?.schema();
-    let df_schema = DFSchema::try_from(schema.as_ref().clone())?;
+    let df_schema = DFSchema::try_from(schema)?;
     let sql_to_rel = SqlToRel::new(&context);
     let expr =
         sql_to_rel.sql_to_expr(sql_expr, &df_schema, &mut PlannerContext::new())?;
@@ -1340,6 +1341,7 @@ where
             .with_scalar_function(Arc::new(unicode::substr().as_ref().clone()))
             .with_scalar_function(make_array_udf())
             .with_expr_planner(Arc::new(CoreFunctionPlanner::default()))
+            .with_expr_planner(Arc::new(UserDefinedFunctionPlanner))
             .with_expr_planner(Arc::new(NestedFunctionPlanner))
             .with_expr_planner(Arc::new(FieldAccessPlanner)),
     };

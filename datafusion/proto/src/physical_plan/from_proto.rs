@@ -176,8 +176,8 @@ pub fn parse_physical_window_expr(
         &order_by,
         Arc::new(window_frame),
         &extended_schema,
-        false,
-        false,
+        proto.ignore_nulls,
+        proto.distinct,
     )
 }
 

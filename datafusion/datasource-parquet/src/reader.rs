@@ -22,6 +22,7 @@ use crate::metadata::DFParquetMetadata;
 use crate::ParquetFileMetrics;
 use bytes::Bytes;
 use datafusion_datasource::file_meta::FileMeta;
+use datafusion_execution::cache::cache_manager::FileMetadata;
 use datafusion_execution::cache::cache_manager::FileMetadataCache;
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use futures::future::BoxFuture;
@@ -30,6 +31,8 @@ use object_store::ObjectStore;
 use parquet::arrow::arrow_reader::ArrowReaderOptions;
 use parquet::arrow::async_reader::{AsyncFileReader, ParquetObjectReader};
 use parquet::file::metadata::ParquetMetaData;
+use std::any::Any;
+use std::collections::HashMap;
 use std::fmt::Debug;
 use std::ops::Range;
 use std::sync::Arc;
@@ -245,7 +248,7 @@ impl AsyncFileReader for CachedParquetFileReader {
 
     fn get_metadata<'a>(
         &'a mut self,
-        options: Option<&'a ArrowReaderOptions>,
+        #[allow(unused_variables)] options: Option<&'a ArrowReaderOptions>,
     ) -> BoxFuture<'a, parquet::errors::Result<Arc<ParquetMetaData>>> {
         let file_meta = self.file_meta.clone();
         let metadata_cache = Arc::clone(&self.metadata_cache);
@@ -272,5 +275,34 @@ impl AsyncFileReader for CachedParquetFileReader {
                 })
         }
         .boxed()
+    }
+}
+
+/// Wrapper to implement [`FileMetadata`] for [`ParquetMetaData`].
+pub struct CachedParquetMetaData(Arc<ParquetMetaData>);
+
+impl CachedParquetMetaData {
+    pub fn new(metadata: Arc<ParquetMetaData>) -> Self {
+        Self(metadata)
+    }
+
+    pub fn parquet_metadata(&self) -> &Arc<ParquetMetaData> {
+        &self.0
+    }
+}
+
+impl FileMetadata for CachedParquetMetaData {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn memory_size(&self) -> usize {
+        self.0.memory_size()
+    }
+
+    fn extra_info(&self) -> HashMap<String, String> {
+        let page_index =
+            self.0.column_index().is_some() && self.0.offset_index().is_some();
+        HashMap::from([("page_index".to_owned(), page_index.to_string())])
     }
 }

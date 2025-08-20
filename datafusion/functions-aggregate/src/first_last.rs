@@ -45,8 +45,8 @@ use datafusion_common::{
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::{format_state_name, AggregateOrderSensitivity};
 use datafusion_expr::{
-    udf_equals_hash, Accumulator, AggregateUDFImpl, Documentation, EmitTo, Expr,
-    ExprFunctionExt, GroupsAccumulator, ReversedUDAF, Signature, SortExpr, Volatility,
+    Accumulator, AggregateUDFImpl, Documentation, EmitTo, Expr, ExprFunctionExt,
+    GroupsAccumulator, ReversedUDAF, Signature, SortExpr, Volatility,
 };
 use datafusion_functions_aggregate_common::utils::get_sort_options;
 use datafusion_macros::user_doc;
@@ -294,8 +294,6 @@ impl AggregateUDFImpl for FirstValue {
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }
-
-    udf_equals_hash!(AggregateUDFImpl);
 }
 
 // TODO: rename to PrimitiveGroupsAccumulator
@@ -1217,8 +1215,6 @@ impl AggregateUDFImpl for LastValue {
             }
         }
     }
-
-    udf_equals_hash!(AggregateUDFImpl);
 }
 
 /// This accumulator is used when there is no ordering specified for the

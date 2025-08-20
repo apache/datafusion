@@ -134,9 +134,8 @@ impl ExecutionPlan for AnalyzeExec {
         vec![&self.input]
     }
 
-    /// AnalyzeExec is handled specially so this value is ignored
     fn required_input_distribution(&self) -> Vec<Distribution> {
-        vec![]
+        vec![Distribution::UnspecifiedDistribution]
     }
 
     fn with_new_children(
