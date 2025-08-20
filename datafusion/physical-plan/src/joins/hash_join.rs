@@ -238,89 +238,68 @@ impl SharedBoundsAccumulator {
         }
     }
 
-    /// Merge all bounds from completed partitions into global min/max.
+    /// Create a filter expression from individual partition bounds using OR logic.
     ///
-    /// This combines bounds from all partitions by computing the global minimum and maximum
-    /// for each join key column across all partitions.
+    /// This creates a filter where each partition's bounds form a conjunction (AND)
+    /// of column range predicates, and all partitions are combined with OR.
     ///
-    /// Troubleshooting: If this returns None when you expect bounds, check:
-    /// 1. All partitions called collect_build_side with bounds data
-    /// 2. collect_left_input was called with should_compute_bounds=true
-    /// 3. The build side had at least one non-empty batch
-    fn merge_bounds(&self, bounds: &[PartitionBounds]) -> Option<Vec<ColumnBounds>> {
+    /// For example, with 2 partitions and 2 columns:
+    /// ((col0 >= p0_min0 AND col0 <= p0_max0 AND col1 >= p0_min1 AND col1 <= p0_max1)
+    ///  OR
+    ///  (col0 >= p1_min0 AND col0 <= p1_max0 AND col1 >= p1_min1 AND col1 <= p1_max1))
+    fn create_filter_from_partition_bounds(
+        &self,
+        bounds: &[PartitionBounds],
+    ) -> Result<Arc<dyn PhysicalExpr>> {
         if bounds.is_empty() {
-            return None;
+            return Ok(lit(true));
         }
 
-        let num_columns = bounds[0].len();
-        let mut merged = Vec::with_capacity(num_columns);
+        // Create a predicate for each partition
+        let mut partition_predicates = Vec::with_capacity(bounds.len());
 
-        for col_idx in 0..num_columns {
-            let mut global_min = None;
-            let mut global_max = None;
+        for partition_bounds in bounds.iter() {
+            // Create range predicates for each join key in this partition
+            let mut column_predicates = Vec::with_capacity(partition_bounds.len());
 
-            for partition_bounds in bounds.iter() {
+            for (col_idx, right_expr) in self.on_right.iter().enumerate() {
                 if let Some(column_bounds) = partition_bounds.get_column_bounds(col_idx) {
-                    global_min = match global_min {
-                        None => Some(column_bounds.min.clone()),
-                        Some(current_min) => Some(if column_bounds.min < current_min {
-                            column_bounds.min.clone()
-                        } else {
-                            current_min
-                        }),
-                    };
-                    global_max = match global_max {
-                        None => Some(column_bounds.max.clone()),
-                        Some(current_max) => Some(if column_bounds.max > current_max {
-                            column_bounds.max.clone()
-                        } else {
-                            current_max
-                        }),
-                    };
+                    // Create predicate: col >= min AND col <= max
+                    let min_expr = Arc::new(BinaryExpr::new(
+                        Arc::clone(right_expr),
+                        Operator::GtEq,
+                        lit(column_bounds.min.clone()),
+                    )) as Arc<dyn PhysicalExpr>;
+                    let max_expr = Arc::new(BinaryExpr::new(
+                        Arc::clone(right_expr),
+                        Operator::LtEq,
+                        lit(column_bounds.max.clone()),
+                    )) as Arc<dyn PhysicalExpr>;
+                    let range_expr =
+                        Arc::new(BinaryExpr::new(min_expr, Operator::And, max_expr))
+                            as Arc<dyn PhysicalExpr>;
+                    column_predicates.push(range_expr);
                 }
             }
 
-            if let (Some(min), Some(max)) = (global_min, global_max) {
-                merged.push(ColumnBounds::new(min, max));
+            // Combine all column predicates for this partition with AND
+            if !column_predicates.is_empty() {
+                let partition_predicate = column_predicates
+                    .into_iter()
+                    .reduce(|acc, pred| {
+                        Arc::new(BinaryExpr::new(acc, Operator::And, pred))
+                            as Arc<dyn PhysicalExpr>
+                    })
+                    .unwrap();
+                partition_predicates.push(partition_predicate);
             }
         }
 
-        if merged.is_empty() {
-            None
-        } else {
-            Some(merged)
-        }
-    }
-
-    /// Create a filter expression from merged bounds
-    fn create_filter_from_bounds(
-        &self,
-        bounds: Vec<ColumnBounds>,
-    ) -> Result<Arc<dyn PhysicalExpr>> {
-        // Create range predicates for each join key
-        let mut predicates = Vec::with_capacity(bounds.len());
-        for (column_bounds, right_expr) in bounds.iter().zip(self.on_right.iter()) {
-            // Create predicate: col >= min AND col <= max
-            let min_expr = Arc::new(BinaryExpr::new(
-                Arc::clone(right_expr),
-                Operator::GtEq,
-                lit(column_bounds.min.clone()),
-            )) as Arc<dyn PhysicalExpr>;
-            let max_expr = Arc::new(BinaryExpr::new(
-                Arc::clone(right_expr),
-                Operator::LtEq,
-                lit(column_bounds.max.clone()),
-            )) as Arc<dyn PhysicalExpr>;
-            let range_expr = Arc::new(BinaryExpr::new(min_expr, Operator::And, max_expr))
-                as Arc<dyn PhysicalExpr>;
-            predicates.push(range_expr);
-        }
-
-        // Combine all predicates with AND
-        let combined_predicate = predicates
+        // Combine all partition predicates with OR
+        let combined_predicate = partition_predicates
             .into_iter()
             .reduce(|acc, pred| {
-                Arc::new(BinaryExpr::new(acc, Operator::And, pred))
+                Arc::new(BinaryExpr::new(acc, Operator::Or, pred))
                     as Arc<dyn PhysicalExpr>
             })
             .unwrap_or_else(|| lit(true));
@@ -332,7 +311,7 @@ impl SharedBoundsAccumulator {
     ///
     /// This method coordinates the dynamic filter updates across all partitions. It stores the
     /// bounds from the current partition, increments the completion counter, and when all
-    /// partitions have reported, merges their bounds and updates the dynamic filter.
+    /// partitions have reported, creates an OR'd filter from individual partition bounds.
     ///
     /// # Arguments
     /// * `partition_bounds` - The bounds computed by this partition (if any)
@@ -361,8 +340,9 @@ impl SharedBoundsAccumulator {
         // Troubleshooting: If you see "completed > total_partitions", check partition
         // count calculation in new_from_partition_mode() - it may not match actual execution calls
         if completed == total_partitions {
-            if let Some(merged_bounds) = self.merge_bounds(&inner.bounds) {
-                let filter_expr = self.create_filter_from_bounds(merged_bounds)?;
+            if !inner.bounds.is_empty() {
+                let filter_expr =
+                    self.create_filter_from_partition_bounds(&inner.bounds)?;
                 self.dynamic_filter.update(filter_expr)?;
             }
         }
@@ -1160,11 +1140,6 @@ impl ExecutionPlan for HashJoinExec {
             .iter()
             .map(|on| Arc::clone(&on.0))
             .collect::<Vec<_>>();
-        let _on_right = self
-            .on
-            .iter()
-            .map(|on| Arc::clone(&on.1))
-            .collect::<Vec<_>>();
         let left_partitions = self.left.output_partitioning().partition_count();
         let right_partitions = self.right.output_partitioning().partition_count();
 
@@ -1183,11 +1158,7 @@ impl ExecutionPlan for HashJoinExec {
             );
         }
 
-        let enable_dynamic_filter_pushdown = context
-            .session_config()
-            .options()
-            .optimizer
-            .enable_dynamic_filter_pushdown;
+        let enable_dynamic_filter_pushdown = self.dynamic_filter.is_some();
 
         let join_metrics = BuildProbeJoinMetrics::new(partition, &self.metrics);
         let left_fut = match self.mode {
