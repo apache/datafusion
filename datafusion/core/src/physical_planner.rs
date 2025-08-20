@@ -1792,7 +1792,11 @@ pub fn create_aggregate_expr_and_maybe_filter(
             while let Expr::Alias(Alias { expr, .. }) = current_expr {
                 current_expr = expr.as_ref();
             }
-            (Some(name.clone()), String::default(), current_expr)
+            (
+                Some(name.clone()),
+                e.human_display().to_string(),
+                current_expr,
+            )
         }
         Expr::AggregateFunction(_) => (
             Some(e.schema_name().to_string()),
