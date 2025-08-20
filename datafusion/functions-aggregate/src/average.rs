@@ -203,7 +203,7 @@ impl AggregateUDFImpl for Avg {
         matches!(
             args.return_field.data_type(),
             DataType::Float64 | DataType::Decimal128(_, _) | DataType::Duration(_)
-        )
+        ) && !args.is_distinct
     }
 
     fn create_groups_accumulator(

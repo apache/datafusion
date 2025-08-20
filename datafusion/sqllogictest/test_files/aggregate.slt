@@ -7418,6 +7418,20 @@ from distinct_avg;
 ----
 3 Float64 3 Float64 4
 
+query RR rowsort
+select
+    avg(distinct a),
+    avg(distinct b)
+from distinct_avg
+group by b;
+----
+1 1
+2 2
+3 3
+4 4
+5 5
+NULL NULL
+
 query RR
 select
     avg(distinct a),
