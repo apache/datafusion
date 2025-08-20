@@ -303,8 +303,8 @@ impl TrackedConsumer {
 /// # Automatic Usage with RuntimeEnvBuilder
 ///
 /// The easiest way to use `TrackConsumersPool` is through [`RuntimeEnvBuilder::with_memory_limit()`](crate::runtime_env::RuntimeEnvBuilder::with_memory_limit),
-/// which automatically creates a `TrackConsumersPool` wrapping a [`GreedyMemoryPool`] with tracking
-/// for the top 5 memory consumers:
+/// which automatically creates a `TrackConsumersPool` wrapping the default memory pool type
+/// (see source implementation for details) with tracking for the top 5 memory consumers:
 ///
 /// ```no_run
 /// # use datafusion_execution::runtime_env::RuntimeEnvBuilder;
