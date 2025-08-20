@@ -179,7 +179,7 @@ NULL three
 2 two
 1 one
 
-statement error DataFusion error: Error during planning: Unsupported Value NULL
+statement error DataFusion error: Error during planning: Unsupported value Null
 set datafusion.sql_parser.default_null_ordering = null;
 
 # reset to default null ordering
