@@ -85,6 +85,7 @@ macro_rules! make_udf_expr_and_func {
 macro_rules! create_func {
     ($UDF:ty, $SCALAR_UDF_FN:ident) => {
         paste::paste! {
+            #[allow(rustdoc::redundant_explicit_links)]
             #[doc = concat!("ScalarFunction that returns a [`ScalarUDF`](datafusion_expr::ScalarUDF) for ")]
             #[doc = stringify!($UDF)]
             pub fn $SCALAR_UDF_FN() -> std::sync::Arc<datafusion_expr::ScalarUDF> {
