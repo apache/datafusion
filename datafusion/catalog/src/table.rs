@@ -49,7 +49,7 @@ use datafusion_physical_plan::ExecutionPlan;
 /// [`CatalogProvider`]: super::CatalogProvider
 #[async_trait]
 pub trait TableProvider: Debug + Sync + Send {
-    /// Returns the table provider as [`Any`](std::any::Any) so that it can be
+    /// Returns the table provider as [`Any`] so that it can be
     /// downcast to a specific implementation.
     fn as_any(&self) -> &dyn Any;
 
@@ -75,7 +75,7 @@ pub trait TableProvider: Debug + Sync + Send {
     }
 
     /// Get the [`LogicalPlan`] of this table, if available.
-    fn get_logical_plan(&self) -> Option<Cow<LogicalPlan>> {
+    fn get_logical_plan(&'_ self) -> Option<Cow<'_, LogicalPlan>> {
         None
     }
 

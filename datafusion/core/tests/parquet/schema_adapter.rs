@@ -34,10 +34,11 @@ use datafusion_datasource::schema_adapter::{
 use datafusion_datasource::ListingTableUrl;
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_physical_expr::expressions::{self, Column};
-use datafusion_physical_expr::schema_rewriter::{
-    DefaultPhysicalExprAdapterFactory, PhysicalExprAdapter, PhysicalExprAdapterFactory,
+use datafusion_physical_expr::PhysicalExpr;
+use datafusion_physical_expr_adapter::{
+    DefaultPhysicalExprAdapter, DefaultPhysicalExprAdapterFactory, PhysicalExprAdapter,
+    PhysicalExprAdapterFactory,
 };
-use datafusion_physical_expr::{DefaultPhysicalExprAdapter, PhysicalExpr};
 use itertools::Itertools;
 use object_store::{memory::InMemory, path::Path, ObjectStore};
 use parquet::arrow::ArrowWriter;

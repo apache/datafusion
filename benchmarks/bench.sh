@@ -124,6 +124,7 @@ imdb:                   Join Order Benchmark (JOB) using the IMDB dataset conver
 
 # Micro-Benchmarks (specific operators and features)
 cancellation:           How long cancelling a query takes
+nlj:                    Benchmark for simple nested loop joins, testing various join scenarios
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Supported Configuration (Environment Variables)
@@ -196,6 +197,7 @@ main() {
                     data_clickbench_1
                     data_clickbench_partitioned
                     data_imdb
+                    # nlj uses range() function, no data generation needed
                     ;;
                 tpch)
                     data_tpch "1"
@@ -298,6 +300,10 @@ main() {
                     # same data as for tpch
                     data_tpch "1"
                     ;;
+                nlj)
+                    # nlj uses range() function, no data generation needed
+                    echo "NLJ benchmark does not require data generation"
+                    ;;
                 *)
                     echo "Error: unknown benchmark '$BENCHMARK' for data generation"
                     usage
@@ -354,6 +360,7 @@ main() {
                     run_h2o_join "BIG" "PARQUET" "join"
                     run_imdb
                     run_external_aggr
+                    run_nlj
                     ;;
                 tpch)
                     run_tpch "1" "parquet"
@@ -457,6 +464,9 @@ main() {
                     ;;
                 topk_tpch)
                     run_topk_tpch
+                    ;;
+                nlj)
+                    run_nlj
                     ;;
                 *)
                     echo "Error: unknown benchmark '$BENCHMARK' for run"
@@ -1083,6 +1093,14 @@ run_topk_tpch() {
     echo "Running topk tpch benchmark..."
 
     $CARGO_COMMAND --bin dfbench -- sort-tpch --iterations 5 --path "${TPCH_DIR}" -o "${RESULTS_FILE}" --limit 100 ${QUERY_ARG}
+}
+
+# Runs the nlj benchmark
+run_nlj() {
+    RESULTS_FILE="${RESULTS_DIR}/nlj.json"
+    echo "RESULTS_FILE: ${RESULTS_FILE}"
+    echo "Running nlj benchmark..."
+    debug_run $CARGO_COMMAND --bin dfbench -- nlj --iterations 5 -o "${RESULTS_FILE}" ${QUERY_ARG}
 }
 
 

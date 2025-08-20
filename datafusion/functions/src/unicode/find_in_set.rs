@@ -53,7 +53,7 @@ use datafusion_macros::user_doc;
         description = "A string list is a string composed of substrings separated by , characters."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct FindInSetFunc {
     signature: Signature,
 }
