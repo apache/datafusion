@@ -22,8 +22,8 @@ use arrow::{
 };
 use datafusion_common::{plan_err, utils::take_function_args, Result};
 use datafusion_expr::{
-    binary::comparison_coercion_numeric, ColumnarValue, ScalarFunctionArgs,
-    ScalarUDFImpl, Signature, Volatility,
+    binary::try_type_union_resolution, ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl,
+    Signature, Volatility,
 };
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -73,24 +73,10 @@ impl ScalarUDFImpl for SparkIf {
             );
         }
 
-        let Some(target_type) = comparison_coercion_numeric(&arg_types[1], &arg_types[2])
-        else {
-            return plan_err!(
-                "For function 'if' {} and {} is not comparable",
-                arg_types[1],
-                arg_types[2]
-            );
-        };
-        // Convert null to String type.
-        if target_type.is_null() {
-            Ok(vec![
-                DataType::Boolean,
-                DataType::Utf8View,
-                DataType::Utf8View,
-            ])
-        } else {
-            Ok(vec![DataType::Boolean, target_type.clone(), target_type])
-        }
+        let target_types = try_type_union_resolution(&arg_types[1..])?;
+        let mut result = vec![DataType::Boolean];
+        result.extend(target_types);
+        Ok(result)
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {

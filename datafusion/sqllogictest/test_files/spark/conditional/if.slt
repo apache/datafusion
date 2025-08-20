@@ -118,7 +118,7 @@ SELECT if(false, 'yes', NULL);
 NULL
 
 # Test with all NULL
-query T
+query ?
 SELECT if(true, NULL, NULL);
 ----
 NULL
