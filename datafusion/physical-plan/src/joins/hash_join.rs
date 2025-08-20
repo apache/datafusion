@@ -1100,7 +1100,15 @@ impl ExecutionPlan for HashJoinExec {
             projection: self.projection.clone(),
             column_indices: self.column_indices.clone(),
             null_equality: self.null_equality,
-            cache: self.cache.clone(),
+            cache: Self::compute_properties(
+                &children[0],
+                &children[1],
+                Arc::clone(&self.join_schema),
+                self.join_type,
+                &self.on,
+                self.mode,
+                self.projection.as_ref(),
+            )?,
             // Keep the dynamic filter, bounds accumulator will be reset
             dynamic_filter: self.dynamic_filter.clone(),
             bounds_accumulator: None,
