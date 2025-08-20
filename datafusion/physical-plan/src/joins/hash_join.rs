@@ -132,7 +132,7 @@ impl PartitionBounds {
         self.column_bounds.len()
     }
 
-    fn get(&self, index: usize) -> Option<&ColumnBounds> {
+    fn get_column_bounds(&self, index: usize) -> Option<&ColumnBounds> {
         self.column_bounds.get(index)
     }
 }
@@ -254,7 +254,7 @@ impl SharedBoundsAccumulator {
             let mut global_max = None;
 
             for partition_bounds in bounds.iter() {
-                if let Some(column_bounds) = partition_bounds.get(col_idx) {
+                if let Some(column_bounds) = partition_bounds.get_column_bounds(col_idx) {
                     global_min = match global_min {
                         None => Some(column_bounds.min.clone()),
                         Some(current_min) => Some(if column_bounds.min < current_min {
