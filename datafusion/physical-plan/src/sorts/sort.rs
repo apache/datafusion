@@ -465,25 +465,6 @@ impl ExternalSorter {
                 Some((self.spill_manager.create_in_progress_file("Sorting")?, 0));
         }
 
-        // Slice only the last batch if it's too large.
-        // This prevents an oversized batch from inflating `max_record_batch_size`,
-        // ensuring more consistent memory usage when reading back spilled batches.
-        if let Some(last_batch) = globally_sorted_batches.pop() {
-            let total_rows = last_batch.num_rows();
-            let mut offset = 0;
-
-            if total_rows <= self.batch_size {
-                globally_sorted_batches.push(last_batch);
-            } else {
-                while offset < total_rows {
-                    let length = std::cmp::min(total_rows - offset, self.batch_size);
-                    let sliced_batch = last_batch.slice(offset, length);
-                    globally_sorted_batches.push(sliced_batch);
-                    offset += length;
-                }
-            }
-        }
-
         Self::organize_stringview_arrays(globally_sorted_batches)?;
 
         debug!("Spilling sort data of ExternalSorter to disk whilst inserting");
