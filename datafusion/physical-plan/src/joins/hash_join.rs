@@ -978,11 +978,7 @@ impl DisplayAs for HashJoinExec {
                 write!(
                     f,
                     "HashJoinExec: mode={:?}, join_type={:?}, on=[{}]{}{}",
-                    self.mode,
-                    self.join_type,
-                    on,
-                    display_filter,
-                    display_projections,
+                    self.mode, self.join_type, on, display_filter, display_projections,
                 )
             }
             DisplayFormatType::TreeRender => {
