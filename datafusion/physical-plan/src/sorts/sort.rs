@@ -900,13 +900,14 @@ impl ExternalSorter {
 /// This is used to pre-reserve memory for the sort/merge. The sort/merge process involves
 /// creating sorted copies of sorted columns in record batches for speeding up comparison
 /// in sorting and merging. The sorted copies are in either row format or array format.
-/// Please refer to cursor.rs and stream.rs for more details. No matter what format the
-/// sorted copies are, they will use more memory than the original record batch.
+/// Please refer to cursor.rs and stream.rs for more details.
 pub(crate) fn get_reserved_byte_for_record_batch_size(
     record_batch_size: usize,
     ratio: Option<f64>,
 ) -> usize {
-    // 2x may not be enough for some cases, but it's a good start.
+    // The amount of memory to reserve is estimated as:
+    // - `record_batch_size * ratio` if `ratio` is provided (recorded when the first batch is inserted),
+    // - otherwise, a default multiplier of 2.0 is used.
     // If 2x is not enough, user can set a larger value for `sort_spill_reservation_bytes`
     // to compensate for the extra memory needed.
     let ratio = ratio.unwrap_or(2.0);
