@@ -35,12 +35,6 @@ use datafusion::{
 };
 use std::{fs::File, io::BufReader, str::FromStr, sync::Arc};
 
-#[derive(Debug, Clone, Copy)]
-pub enum MemoryProfilingCommand {
-    Enable,
-    Disable,
-}
-
 /// Command
 #[derive(Debug)]
 pub enum Command {
@@ -53,7 +47,7 @@ pub enum Command {
     SearchFunctions(String),
     QuietMode(Option<bool>),
     OutputFormat(Option<String>),
-    MemoryProfiling(Option<MemoryProfilingCommand>),
+    MemoryProfiling(Option<bool>),
 }
 
 pub enum OutputFormat {
@@ -118,25 +112,13 @@ impl Command {
                 }
                 Ok(())
             }
-            Self::MemoryProfiling(subcmd) => {
-                match subcmd {
-                    Some(MemoryProfilingCommand::Enable) => {
-                        ctx.set_memory_profiling(true);
-                        println!("Memory profiling enabled");
-                    }
-                    Some(MemoryProfilingCommand::Disable) => {
-                        ctx.set_memory_profiling(false);
-                        println!("Memory profiling disabled");
-                    }
-                    None => {
-                        let enable = !ctx.memory_profiling();
-                        ctx.set_memory_profiling(enable);
-                        println!(
-                            "Memory profiling {}",
-                            if enable { "enabled" } else { "disabled" }
-                        );
-                    }
-                }
+            Self::MemoryProfiling(enable) => {
+                let enable = enable.unwrap_or_else(|| !ctx.memory_profiling());
+                ctx.set_memory_profiling(enable);
+                println!(
+                    "Memory profiling {}",
+                    if enable { "enabled" } else { "disabled" }
+                );
                 Ok(())
             }
             Self::Quit => exec_err!("Unexpected quit, this should be handled outside"),
@@ -172,8 +154,8 @@ impl Command {
                 ("\\pset [NAME [VALUE]]", "set table output option\n(format)")
             }
             Self::MemoryProfiling(_) => (
-                "\\memory_profiling",
-                "toggle memory profiling (requires --top-memory-consumers N at startup for metrics)",
+                "\\memory_profiling [on|off]",
+                "toggle or set memory profiling (requires --top-memory-consumers N at startup for metrics)",
             ),
         }
     }
@@ -241,7 +223,9 @@ impl FromStr for Command {
             }
             ("pset", None) => Self::OutputFormat(None),
             ("memory_profiling", None) => Self::MemoryProfiling(None),
-            ("memory_profiling", Some(_)) => return Err(()), // memory_profiling doesn't accept arguments
+            ("memory_profiling", Some("on")) => Self::MemoryProfiling(Some(true)),
+            ("memory_profiling", Some("off")) => Self::MemoryProfiling(Some(false)),
+            ("memory_profiling", Some(_)) => return Err(()),
             _ => return Err(()),
         })
     }

@@ -5,7 +5,7 @@ info:
   program: datafusion-cli
   args:
     - "-q"
-  stdin: "\\memory_profiling\nselect 1;\n\\memory_profiling\nselect 1;\n"
+  stdin: "\\memory_profiling on\nselect 1;\n\\memory_profiling off\nselect 1;\n"
 ---
 success: true
 exit_code: 0

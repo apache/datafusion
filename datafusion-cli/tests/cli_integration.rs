@@ -281,9 +281,9 @@ fn cli_memory_disable_stops_report() {
     let _bound = settings.bind_to_scope();
 
     let input = "\
-\\memory_profiling
+\\memory_profiling on
 select 1;
-\\memory_profiling
+\\memory_profiling off
 select 1;
 ";
 
