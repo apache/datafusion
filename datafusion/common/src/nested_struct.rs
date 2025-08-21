@@ -53,28 +53,28 @@ fn cast_struct_column(
     source_col: &ArrayRef,
     target_fields: &[Arc<Field>],
 ) -> Result<ArrayRef> {
-    if let Some(struct_array) = source_col.as_any().downcast_ref::<StructArray>() {
-        let mut children: Vec<(Arc<Field>, Arc<dyn Array>)> = Vec::new();
+    if let Some(source_struct) = source_col.as_any().downcast_ref::<StructArray>() {
+        let mut fields: Vec<Arc<Field>> = Vec::with_capacity(target_fields.len());
+        let mut arrays: Vec<ArrayRef> = Vec::with_capacity(target_fields.len());
         let num_rows = source_col.len();
 
         for target_child_field in target_fields {
             let field_arc = Arc::clone(target_child_field);
-            match struct_array.column_by_name(target_child_field.name()) {
+            fields.push(Arc::clone(&field_arc));
+            match source_struct.column_by_name(target_child_field.name()) {
                 Some(source_child_col) => {
                     let adapted_child =
                         cast_column(source_child_col, target_child_field)?;
-                    children.push((field_arc, adapted_child));
+                    arrays.push(adapted_child);
                 }
                 None => {
-                    children.push((
-                        field_arc,
-                        new_null_array(target_child_field.data_type(), num_rows),
-                    ));
+                    arrays.push(new_null_array(target_child_field.data_type(), num_rows));
                 }
             }
         }
 
-        let struct_array = StructArray::from(children);
+        let struct_array =
+            StructArray::new(fields.into(), arrays, source_struct.nulls().cloned());
         Ok(Arc::new(struct_array))
     } else {
         // Return error if source is not a struct type
@@ -201,6 +201,7 @@ mod tests {
     use super::*;
     use arrow::{
         array::{Int32Array, Int64Array, StringArray},
+        buffer::NullBuffer,
         datatypes::{DataType, Field},
     };
     /// Macro to extract and downcast a column from a StructArray
@@ -325,5 +326,30 @@ mod tests {
         let result = validate_struct_compatibility(&source_fields, &target_fields);
         assert!(result.is_ok());
         assert!(result.unwrap());
+    }
+
+    #[test]
+    fn test_cast_struct_parent_nulls_retained() {
+        let a_array = Arc::new(Int32Array::from(vec![Some(1), Some(2)])) as ArrayRef;
+        let fields = vec![Arc::new(Field::new("a", DataType::Int32, true))];
+        let nulls = Some(NullBuffer::from(vec![true, false]));
+        let source_struct = StructArray::new(fields.clone().into(), vec![a_array], nulls);
+        let source_col = Arc::new(source_struct) as ArrayRef;
+
+        let target_field = Field::new(
+            "s",
+            Struct(vec![Arc::new(Field::new("a", DataType::Int64, true))].into()),
+            true,
+        );
+
+        let result = cast_column(&source_col, &target_field).unwrap();
+        let struct_array = result.as_any().downcast_ref::<StructArray>().unwrap();
+        assert_eq!(struct_array.null_count(), 1);
+        assert!(struct_array.is_valid(0));
+        assert!(struct_array.is_null(1));
+
+        let a_result = get_column_as!(&struct_array, "a", Int64Array);
+        assert_eq!(a_result.value(0), 1);
+        assert_eq!(a_result.value(1), 2);
     }
 }
