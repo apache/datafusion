@@ -85,7 +85,7 @@ pub enum Volatility {
 /// Functions typically provide implementations for a small number of different
 /// argument [`DataType`]s, rather than all possible combinations. If a user
 /// calls a function with arguments that do not match any of the declared types,
-/// DataFusion will attempt to automatically coerces (add casts to) function
+/// DataFusion will attempt to automatically coerce (add casts to) function
 /// arguments so they match the [`TypeSignature`]. See the [`type_coercion`] module
 /// for more details
 ///
