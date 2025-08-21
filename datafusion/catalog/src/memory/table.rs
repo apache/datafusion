@@ -138,6 +138,7 @@ impl MemTable {
     ) -> Result<Self> {
         let schema = t.schema();
         let constraints = t.constraints();
+        #[expect(deprecated)]
         let exec = t.scan(state, None, &[], None).await?;
         let partition_count = exec.output_partitioning().partition_count();
 

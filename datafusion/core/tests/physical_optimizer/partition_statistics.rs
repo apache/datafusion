@@ -104,6 +104,7 @@ mod test {
             .downcast_ref::<ListingTable>()
             .unwrap()
             .clone();
+        #[expect(deprecated)]
         listing_table
             .scan(&ctx.state(), None, &[], None)
             .await

@@ -185,11 +185,22 @@ pub trait TableProvider: Debug + Sync + Send {
             limit,
         } = args;
         let filters = filters.unwrap_or_default();
-        #[allow(deprecated)]
+        let unsupported_filters = self
+            .supports_filters_pushdown(&filters.iter().collect_vec())?
+            .into_iter()
+            .zip(&filters)
+            .filter_map(|(support, expr)| match support {
+                TableProviderFilterPushDown::Inexact | TableProviderFilterPushDown::Unsupported => {
+                    Some(expr.clone())
+                }
+                TableProviderFilterPushDown::Exact => None,
+            })
+            .collect_vec();
+        #[expect(deprecated)]
         let plan = self
             .scan(state, projection.as_ref(), &filters, limit)
             .await?;
-        Ok(ScanResult::new(plan, vec![]))
+        Ok(ScanResult::new(plan, unsupported_filters))
     }
 
     /// Specify if DataFusion should provide filter expressions to the
@@ -272,7 +283,6 @@ pub trait TableProvider: Debug + Sync + Send {
     ///     }
     /// }
     /// ```
-    #[deprecated(since = "50.0.0", note = "Use `scan_with_args` instead")]
     fn supports_filters_pushdown(
         &self,
         filters: &[&Expr],

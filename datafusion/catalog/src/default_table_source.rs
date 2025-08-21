@@ -73,7 +73,6 @@ impl TableSource for DefaultTableSource {
         &self,
         filter: &[&Expr],
     ) -> datafusion_common::Result<Vec<TableProviderFilterPushDown>> {
-        #[allow(deprecated)]
         self.table_provider.supports_filters_pushdown(filter)
     }
 

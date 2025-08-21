@@ -260,6 +260,7 @@ unsafe extern "C" fn scan_fn_wrapper(
 
         let projections: Vec<_> = projections.into_iter().collect();
 
+        #[expect(deprecated)]
         let plan = rresult_return!(
             internal_provider
                 .scan(&ctx.state(), Some(&projections), &filters, limit.into())

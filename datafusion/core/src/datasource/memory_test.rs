@@ -59,6 +59,7 @@ mod tests {
         let provider = MemTable::try_new(schema, vec![vec![batch]])?;
 
         // scan with projection
+        #[expect(deprecated)]
         let exec = provider
             .scan(&session_ctx.state(), Some(&vec![2, 1]), &[], None)
             .await?;
@@ -94,6 +95,7 @@ mod tests {
 
         let provider = MemTable::try_new(schema, vec![vec![batch]])?;
 
+        #[expect(deprecated)]
         let exec = provider.scan(&session_ctx.state(), None, &[], None).await?;
         let mut it = exec.execute(0, task_ctx)?;
         let batch1 = it.next().await.unwrap()?;
@@ -126,6 +128,7 @@ mod tests {
 
         let projection: Vec<usize> = vec![0, 4];
 
+        #[expect(deprecated)]
         match provider
             .scan(&session_ctx.state(), Some(&projection), &[], None)
             .await
@@ -254,6 +257,7 @@ mod tests {
         let provider =
             MemTable::try_new(Arc::new(merged_schema), vec![vec![batch1, batch2]])?;
 
+        #[expect(deprecated)]
         let exec = provider.scan(&session_ctx.state(), None, &[], None).await?;
         let mut it = exec.execute(0, task_ctx)?;
         let batch1 = it.next().await.unwrap()?;

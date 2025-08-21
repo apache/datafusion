@@ -86,7 +86,7 @@ use datafusion_expr::{
 use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
 use datafusion_physical_expr::expressions::{Column, Literal};
 use datafusion_physical_expr::{
-    conjunction, create_physical_sort_exprs, LexOrdering, PhysicalSortExpr,
+    create_physical_sort_exprs, LexOrdering, PhysicalSortExpr,
 };
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::empty::EmptyExec;
