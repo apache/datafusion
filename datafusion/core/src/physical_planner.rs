@@ -1788,14 +1788,14 @@ pub fn create_aggregate_expr_and_maybe_filter(
     let (name, human_display, e) = match e {
         Expr::Alias(Alias { name, .. }) => {
             let unaliased = e.clone().unalias_nested().data;
-            (Some(name.clone()), e.human_display().to_string(), unaliased)
+            (Some(name.clone()), e.human_display().to_string(), unaliased.clone())
         }
         Expr::AggregateFunction(_) => (
             Some(e.schema_name().to_string()),
             e.human_display().to_string(),
-            e,
+            e.clone(),
         ),
-        _ => (None, String::default(), e),
+        _ => (None, String::default(), e.clone()),
     };
 
     create_aggregate_expr_with_name_and_maybe_filter(
