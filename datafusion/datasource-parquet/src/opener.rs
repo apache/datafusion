@@ -54,7 +54,7 @@ use log::debug;
 use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
 use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::{ParquetRecordBatchStreamBuilder, ProjectionMask};
-use parquet::file::metadata::ParquetMetaDataReader;
+use parquet::file::metadata::{PageIndexPolicy, ParquetMetaDataReader};
 
 /// Implements [`FileOpener`] for a parquet file
 pub(super) struct ParquetOpener {
@@ -652,8 +652,8 @@ async fn load_page_index<T: AsyncFileReader>(
     if missing_column_index || missing_offset_index {
         let m = Arc::try_unwrap(Arc::clone(parquet_metadata))
             .unwrap_or_else(|e| e.as_ref().clone());
-        let mut reader =
-            ParquetMetaDataReader::new_with_metadata(m).with_page_indexes(true);
+        let mut reader = ParquetMetaDataReader::new_with_metadata(m)
+            .with_page_index_policy(PageIndexPolicy::Optional);
         reader.load_page_index(input).await?;
         let new_parquet_metadata = reader.finish()?;
         let new_arrow_reader =
