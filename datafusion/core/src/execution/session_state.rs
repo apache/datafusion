@@ -16,76 +16,69 @@
 // under the License.
 
 //! [`SessionState`]: information required to run queries in a session
-use crate::{
-    catalog::{CatalogProviderList, SchemaProvider, TableProviderFactory},
-    datasource::{
-        cte_worktable::CteWorkTable, file_format::format_as_file_type,
-        file_format::FileFormatFactory, provider_as_source,
-    },
-    execution::{
-        context::EmptySerializerRegistry, context::FunctionFactory,
-        context::QueryPlanner, SessionStateDefaults,
-    },
-    physical_planner::{DefaultPhysicalPlanner, PhysicalPlanner},
-};
+
+use std::any::Any;
+use std::collections::hash_map::Entry;
+use std::collections::{HashMap, HashSet};
+use std::fmt::Debug;
+use std::sync::Arc;
+
+use crate::catalog::{CatalogProviderList, SchemaProvider, TableProviderFactory};
+use crate::datasource::cte_worktable::CteWorkTable;
+use crate::datasource::file_format::{format_as_file_type, FileFormatFactory};
+use crate::datasource::provider_as_source;
+use crate::execution::context::{EmptySerializerRegistry, FunctionFactory, QueryPlanner};
+use crate::execution::SessionStateDefaults;
+use crate::physical_planner::{DefaultPhysicalPlanner, PhysicalPlanner};
 use datafusion_catalog::information_schema::{
     InformationSchemaProvider, INFORMATION_SCHEMA,
 };
-use std::{
-    any::Any,
-    collections::{hash_map::Entry, HashMap, HashSet},
-    fmt::Debug,
-    sync::Arc,
-};
 
 use arrow::datatypes::{DataType, SchemaRef};
-use async_trait::async_trait;
-use chrono::{DateTime, Utc};
-use datafusion_catalog::{MemoryCatalogProviderList, TableFunction, TableFunctionImpl};
+use datafusion_catalog::MemoryCatalogProviderList;
+use datafusion_catalog::{TableFunction, TableFunctionImpl};
+use datafusion_common::alias::AliasGenerator;
+use datafusion_common::config::{ConfigExtension, ConfigOptions, TableOptions};
+use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
+use datafusion_common::file_options::file_type::FileType;
+use datafusion_common::tree_node::TreeNode;
 use datafusion_common::{
-    alias::AliasGenerator,
-    config::{ConfigExtension, ConfigOptions, TableOptions},
-    config_err,
-    display::{PlanType, StringifiedPlan, ToStringifiedPlan},
-    exec_err,
-    file_options::file_type::FileType,
-    not_impl_err, plan_datafusion_err,
-    tree_node::TreeNode,
-    DFSchema, DataFusionError, ResolvedTableReference, TableReference,
+    config_err, exec_err, not_impl_err, plan_datafusion_err, DFSchema, DataFusionError,
+    ResolvedTableReference, TableReference,
 };
-use datafusion_execution::{config::SessionConfig, runtime_env::RuntimeEnv, TaskContext};
+use datafusion_execution::config::SessionConfig;
+use datafusion_execution::runtime_env::RuntimeEnv;
+use datafusion_execution::TaskContext;
+use datafusion_expr::execution_props::ExecutionProps;
+use datafusion_expr::expr_rewriter::FunctionRewrite;
+use datafusion_expr::planner::{ExprPlanner, TypePlanner};
+use datafusion_expr::registry::{FunctionRegistry, SerializerRegistry};
+use datafusion_expr::simplify::SimplifyInfo;
+use datafusion_expr::var_provider::{is_system_variables, VarType};
 use datafusion_expr::{
-    execution_props::ExecutionProps,
-    expr_rewriter::FunctionRewrite,
-    planner::{ExprPlanner, TypePlanner},
-    registry::{FunctionRegistry, SerializerRegistry},
-    simplify::SimplifyInfo,
-    var_provider::{is_system_variables, VarType},
     AggregateUDF, Explain, Expr, ExprSchemable, LogicalPlan, ScalarUDF, TableSource,
     WindowUDF,
 };
+use datafusion_optimizer::simplify_expressions::ExprSimplifier;
 use datafusion_optimizer::{
-    simplify_expressions::ExprSimplifier, Analyzer, AnalyzerRule, Optimizer,
-    OptimizerConfig, OptimizerRule,
+    Analyzer, AnalyzerRule, Optimizer, OptimizerConfig, OptimizerRule,
 };
 use datafusion_physical_expr::create_physical_expr;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
-use datafusion_physical_optimizer::{
-    optimizer::PhysicalOptimizer, PhysicalOptimizerRule,
-};
+use datafusion_physical_optimizer::optimizer::PhysicalOptimizer;
+use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_session::Session;
-use datafusion_sql::{
-    parser::{DFParserBuilder, Statement},
-    planner::{ContextProvider, ParserOptions, PlannerContext, SqlToRel},
-};
+use datafusion_sql::parser::{DFParserBuilder, Statement};
+use datafusion_sql::planner::{ContextProvider, ParserOptions, PlannerContext, SqlToRel};
+
+use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use itertools::Itertools;
 use log::{debug, info};
 use object_store::ObjectStore;
-use sqlparser::{
-    ast::{Expr as SQLExpr, ExprWithAlias as SQLExprWithAlias},
-    dialect::dialect_from_str,
-};
+use sqlparser::ast::{Expr as SQLExpr, ExprWithAlias as SQLExprWithAlias};
+use sqlparser::dialect::dialect_from_str;
 use url::Url;
 use uuid::Uuid;
 
