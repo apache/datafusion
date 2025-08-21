@@ -183,7 +183,7 @@ pub trait TableProvider: Debug + Sync + Send {
             filters,
             projection,
             limit,
-        } = options;
+        } = args;
         let filters = filters.unwrap_or_default();
         #[allow(deprecated)]
         let plan = self
