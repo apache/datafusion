@@ -160,7 +160,14 @@ mod tests {
                 .as_ref()
                 .map(|p| logical2physical(p, &table_schema));
 
-            let mut source = ParquetSource::default();
+            let base_config = FileScanConfigBuilder::new(
+                ObjectStoreUrl::local_filesystem(),
+                table_schema,
+            )
+            .build();
+
+            let mut source =
+                ParquetSource::new(TableParquetOptions::default(), base_config);
             if let Some(predicate) = predicate {
                 source = source.with_predicate(predicate);
             }
@@ -199,12 +206,14 @@ mod tests {
             let base_config = FileScanConfigBuilder::new(
                 ObjectStoreUrl::local_filesystem(),
                 file_schema,
-                source,
             )
             .with_file_group(file_group)
             .with_projection(self.projection.clone())
             .build();
-            DataSourceExec::from_data_source(base_config)
+
+            Arc::new(DataSourceExec::new(
+                source.with_config(base_config).as_data_source(),
+            ))
         }
 
         /// run the test, returning the `RoundTripResult`
@@ -1549,12 +1558,14 @@ mod tests {
             let config = FileScanConfigBuilder::new(
                 ObjectStoreUrl::local_filesystem(),
                 file_schema,
-                Arc::new(ParquetSource::default()),
             )
             .with_file_groups(file_groups)
             .build();
 
-            let parquet_exec = DataSourceExec::from_data_source(config);
+            let source =
+                ParquetSource::new(TableParquetOptions::default(), config.clone());
+
+            let parquet_exec = DataSourceExec::from_data_source(source);
             assert_eq!(
                 parquet_exec
                     .properties()
@@ -1651,8 +1662,7 @@ mod tests {
             ),
         ]);
 
-        let source = Arc::new(ParquetSource::default());
-        let config = FileScanConfigBuilder::new(object_store_url, schema.clone(), source)
+        let config = FileScanConfigBuilder::new(object_store_url, schema.clone())
             .with_file(partitioned_file)
             // file has 10 cols so index 12 should be month and 13 should be day
             .with_projection(Some(vec![0, 1, 2, 12, 13]))
@@ -1670,7 +1680,9 @@ mod tests {
             ])
             .build();
 
-        let parquet_exec = DataSourceExec::from_data_source(config);
+        let source = ParquetSource::new(TableParquetOptions::default(), config.clone());
+
+        let parquet_exec = DataSourceExec::from_data_source(source);
         let partition_count = parquet_exec
             .data_source()
             .output_partitioning()
@@ -1727,15 +1739,14 @@ mod tests {
         };
 
         let file_schema = Arc::new(Schema::empty());
-        let config = FileScanConfigBuilder::new(
-            ObjectStoreUrl::local_filesystem(),
-            file_schema,
-            Arc::new(ParquetSource::default()),
-        )
-        .with_file(partitioned_file)
-        .build();
+        let config =
+            FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_schema)
+                .with_file(partitioned_file)
+                .build();
 
-        let parquet_exec = DataSourceExec::from_data_source(config);
+        let source = ParquetSource::new(TableParquetOptions::default(), config.clone());
+
+        let parquet_exec = DataSourceExec::from_data_source(source);
 
         let mut results = parquet_exec.execute(0, state.task_ctx())?;
         let batch = results.next().await.unwrap();
@@ -2251,12 +2262,7 @@ mod tests {
 
         let size_hint_calls = reader_factory.metadata_size_hint_calls.clone();
 
-        let source = Arc::new(
-            ParquetSource::default()
-                .with_parquet_file_reader_factory(reader_factory)
-                .with_metadata_size_hint(456),
-        );
-        let config = FileScanConfigBuilder::new(store_url, schema, source)
+        let config = FileScanConfigBuilder::new(store_url, schema)
             .with_file(
                 PartitionedFile {
                     object_meta: ObjectMeta {
@@ -2290,7 +2296,11 @@ mod tests {
             })
             .build();
 
-        let exec = DataSourceExec::from_data_source(config);
+        let source = ParquetSource::new(TableParquetOptions::default(), config.clone())
+            .with_parquet_file_reader_factory(reader_factory)
+            .with_metadata_size_hint(456);
+
+        let exec = DataSourceExec::from_data_source(source);
 
         let res = collect(exec, ctx.task_ctx()).await.unwrap();
         assert_eq!(res.len(), 2);

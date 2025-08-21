@@ -30,16 +30,29 @@ use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::PartitionedFile;
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 
+use datafusion_datasource::source::DataSource;
 use futures::StreamExt;
 use itertools::Itertools;
 use object_store::{GetOptions, GetRange, GetResultPayload, ObjectStore};
 
 /// Arrow configuration struct that is given to DataSourceExec
 /// Does not hold anything special, since [`FileScanConfig`] is sufficient for arrow
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct ArrowSource {
     metrics: ExecutionPlanMetricsSet,
     schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
+    config: FileScanConfig,
+}
+
+impl ArrowSource {
+    /// Returns a [`ArrowSource`]
+    pub fn new(config: FileScanConfig) -> Self {
+        Self {
+            metrics: Default::default(),
+            schema_adapter_factory: None,
+            config,
+        }
+    }
 }
 
 impl From<ArrowSource> for Arc<dyn FileSource> {
@@ -49,15 +62,29 @@ impl From<ArrowSource> for Arc<dyn FileSource> {
 }
 
 impl FileSource for ArrowSource {
+    fn config(&self) -> &FileScanConfig {
+        &self.config
+    }
+
+    fn with_config(&self, config: FileScanConfig) -> Arc<dyn FileSource> {
+        let mut this = self.clone();
+        this.config = config;
+
+        Arc::new(this)
+    }
+
+    fn as_data_source(&self) -> Arc<dyn DataSource> {
+        Arc::new(self.clone())
+    }
+
     fn create_file_opener(
         &self,
         object_store: Arc<dyn ObjectStore>,
-        base_config: &FileScanConfig,
         _partition: usize,
     ) -> Arc<dyn FileOpener> {
         Arc::new(ArrowOpener {
             object_store,
-            projection: base_config.file_column_projection_indices(),
+            projection: self.config().file_column_projection_indices(),
         })
     }
 
@@ -65,7 +92,7 @@ impl FileSource for ArrowSource {
         self
     }
 
-    fn metrics(&self) -> &ExecutionPlanMetricsSet {
+    fn metrics_inner(&self) -> &ExecutionPlanMetricsSet {
         &self.metrics
     }
 
@@ -85,6 +112,15 @@ impl FileSource for ArrowSource {
 
     fn schema_adapter_factory(&self) -> Option<Arc<dyn SchemaAdapterFactory>> {
         self.schema_adapter_factory.clone()
+    }
+}
+
+impl std::fmt::Debug for ArrowSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} {{ ", self.file_type())?;
+        write!(f, "statistics={:?}, ", self.file_source_statistics())?;
+        write!(f, "config={:?}, ", self.config())?;
+        write!(f, " }}")
     }
 }
 

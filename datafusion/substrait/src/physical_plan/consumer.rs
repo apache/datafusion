@@ -35,6 +35,7 @@ use crate::variation_const::{
 };
 use async_recursion::async_recursion;
 use chrono::DateTime;
+use datafusion::config::TableParquetOptions;
 use datafusion::datasource::memory::DataSourceExec;
 use object_store::ObjectMeta;
 use substrait::proto::r#type::{Kind, Nullability};
@@ -53,7 +54,6 @@ pub async fn from_substrait_rel(
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let mut base_config_builder;
 
-    let source = Arc::new(ParquetSource::default());
     match &rel.rel_type {
         Some(RelType::Read(read)) => {
             if read.filter.is_some() || read.best_effort_filter.is_some() {
@@ -83,7 +83,6 @@ pub async fn from_substrait_rel(
                     base_config_builder = FileScanConfigBuilder::new(
                         ObjectStoreUrl::local_filesystem(),
                         Arc::new(Schema::new(fields)),
-                        source,
                     );
                 }
                 Err(e) => return Err(e),
@@ -156,10 +155,13 @@ pub async fn from_substrait_rel(
                         }
                     }
 
-                    Ok(
-                        DataSourceExec::from_data_source(base_config_builder.build())
-                            as Arc<dyn ExecutionPlan>,
-                    )
+                    let conf = base_config_builder.build();
+
+                    let source =
+                        ParquetSource::new(TableParquetOptions::default(), conf.clone());
+
+                    Ok(DataSourceExec::from_data_source(source)
+                        as Arc<dyn ExecutionPlan>)
                 }
                 _ => not_impl_err!(
                     "Only LocalFile reads are supported when parsing physical"

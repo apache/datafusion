@@ -17,8 +17,7 @@
 
 //! ParquetSource implementation for reading parquet files
 use std::any::Any;
-use std::fmt::Debug;
-use std::fmt::Formatter;
+use std::fmt::{self, Debug, Formatter};
 use std::sync::Arc;
 
 use crate::opener::build_pruning_predicates;
@@ -53,6 +52,7 @@ use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion_physical_plan::DisplayFormatType;
 
 use datafusion_common::encryption::map_config_decryption_to_decryption;
+use datafusion_datasource::source::DataSource;
 #[cfg(feature = "parquet_encryption")]
 use datafusion_execution::parquet_encryption::EncryptionFactory;
 use itertools::Itertools;
@@ -98,18 +98,20 @@ use object_store::ObjectStore;
 /// # use datafusion_physical_expr::expressions::lit;
 /// # use datafusion_datasource::source::DataSourceExec;
 /// # use datafusion_common::config::TableParquetOptions;
+/// use datafusion_datasource::file::FileSource;
 ///
 /// # let file_schema = Arc::new(Schema::empty());
 /// # let object_store_url = ObjectStoreUrl::local_filesystem();
 /// # let predicate = lit(true);
-/// let source = Arc::new(
-///     ParquetSource::default()
-///     .with_predicate(predicate)
-/// );
 /// // Create a DataSourceExec for reading `file1.parquet` with a file size of 100MB
-/// let config = FileScanConfigBuilder::new(object_store_url, file_schema, source)
+/// let config = FileScanConfigBuilder::new(object_store_url, file_schema)
 ///    .with_file(PartitionedFile::new("file1.parquet", 100*1024*1024)).build();
-/// let exec = DataSourceExec::from_data_source(config);
+///
+/// let source = ParquetSource::new(TableParquetOptions::default(), config)
+///     .with_predicate(predicate)
+///     .as_data_source();
+///
+/// let exec = Arc::new(DataSourceExec::new(source));
 /// ```
 ///
 /// # Features
@@ -173,15 +175,18 @@ use object_store::ObjectStore;
 /// ```no_run
 /// # use std::sync::Arc;
 /// # use arrow::datatypes::Schema;
+/// # use datafusion_datasource::file::FileSource;
 /// # use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 /// # use datafusion_datasource::PartitionedFile;
 /// # use datafusion_datasource::source::DataSourceExec;
+/// # use datafusion_datasource_parquet::source::ParquetSource;
 ///
-/// # fn parquet_exec() -> DataSourceExec { unimplemented!() }
+/// fn parquet_exec() -> DataSourceExec { unimplemented!() }
 /// // Split a single DataSourceExec into multiple DataSourceExecs, one for each file
 /// let exec = parquet_exec();
 /// let data_source = exec.data_source();
-/// let base_config = data_source.as_any().downcast_ref::<FileScanConfig>().unwrap();
+/// let parquet_source = data_source.as_any().downcast_ref::<ParquetSource>().unwrap();
+/// let base_config = parquet_source.config();
 /// let existing_file_groups = &base_config.file_groups;
 /// let new_execs = existing_file_groups
 ///   .iter()
@@ -191,7 +196,9 @@ use object_store::ObjectStore;
 ///        .with_file_groups(vec![file_group.clone()])
 ///       .build();
 ///
-///     (DataSourceExec::from_data_source(new_config))
+///     let source = parquet_source.with_config(new_config).as_data_source();
+///
+///     Arc::new(DataSourceExec::new(source))
 ///   })
 ///   .collect::<Vec<_>>();
 /// ```
@@ -212,6 +219,7 @@ use object_store::ObjectStore;
 /// ```
 /// # use std::sync::Arc;
 /// # use arrow::datatypes::{Schema, SchemaRef};
+/// # use datafusion_common::config::TableParquetOptions;
 /// # use datafusion_datasource::PartitionedFile;
 /// # use datafusion_datasource_parquet::ParquetAccessPlan;
 /// # use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
@@ -230,11 +238,14 @@ use object_store::ObjectStore;
 /// let partitioned_file = PartitionedFile::new("my_file.parquet", 1234)
 ///   .with_extensions(Arc::new(access_plan));
 /// // create a FileScanConfig to scan this file
-/// let config = FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), schema(), Arc::new(ParquetSource::default()))
+/// let config = FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), schema())
 ///     .with_file(partitioned_file).build();
+///
+/// let source = ParquetSource::new(TableParquetOptions::default(), config);
+///
 /// // this parquet DataSourceExec will not even try to read row groups 2 and 4. Additional
 /// // pruning based on predicates may also happen
-/// let exec = DataSourceExec::from_data_source(config);
+/// let exec = DataSourceExec::from_data_source(source);
 /// ```
 ///
 /// For a complete example, see the [`advanced_parquet_index` example]).
@@ -265,7 +276,7 @@ use object_store::ObjectStore;
 /// [`RecordBatch`]: arrow::record_batch::RecordBatch
 /// [`SchemaAdapter`]: datafusion_datasource::schema_adapter::SchemaAdapter
 /// [`ParquetMetadata`]: parquet::file::metadata::ParquetMetaData
-#[derive(Clone, Default, Debug)]
+#[derive(Clone)]
 pub struct ParquetSource {
     /// Options for reading Parquet files
     pub(crate) table_parquet_options: TableParquetOptions,
@@ -281,16 +292,28 @@ pub struct ParquetSource {
     pub(crate) metadata_size_hint: Option<usize>,
     #[cfg(feature = "parquet_encryption")]
     pub(crate) encryption_factory: Option<Arc<dyn EncryptionFactory>>,
+
+    pub(crate) config: FileScanConfig,
 }
 
 impl ParquetSource {
     /// Create a new ParquetSource to read the data specified in the file scan
     /// configuration with the provided `TableParquetOptions`.
     /// if default values are going to be used, use `ParguetConfig::default()` instead
-    pub fn new(table_parquet_options: TableParquetOptions) -> Self {
+    pub fn new(
+        table_parquet_options: TableParquetOptions,
+        config: FileScanConfig,
+    ) -> Self {
         Self {
             table_parquet_options,
-            ..Self::default()
+            metrics: Default::default(),
+            predicate: None,
+            parquet_file_reader_factory: None,
+            schema_adapter_factory: None,
+            metadata_size_hint: None,
+            #[cfg(feature = "parquet_encryption")]
+            encryption_factory: None,
+            config,
         }
     }
 
@@ -425,16 +448,13 @@ impl ParquetSource {
     /// * `conf` - FileScanConfig that may contain a schema adapter factory
     /// # Returns
     /// The converted FileSource with schema adapter factory applied if provided
-    pub fn apply_schema_adapter(
-        self,
-        conf: &FileScanConfig,
-    ) -> datafusion_common::Result<Arc<dyn FileSource>> {
-        let file_source: Arc<dyn FileSource> = self.into();
+    pub fn apply_schema_adapter(self) -> datafusion_common::Result<Arc<dyn FileSource>> {
+        let file_source: Arc<dyn FileSource> = self.clone().into();
 
         // If the FileScanConfig.file_source() has a schema adapter factory, apply it
-        if let Some(factory) = conf.file_source().schema_adapter_factory() {
+        if let Some(factory) = &self.schema_adapter_factory() {
             file_source.with_schema_adapter_factory(
-                Arc::<dyn SchemaAdapterFactory>::clone(&factory),
+                Arc::<dyn SchemaAdapterFactory>::clone(factory),
             )
         } else {
             Ok(file_source)
@@ -481,12 +501,28 @@ impl From<ParquetSource> for Arc<dyn FileSource> {
 }
 
 impl FileSource for ParquetSource {
+    fn config(&self) -> &FileScanConfig {
+        &self.config
+    }
+
+    fn with_config(&self, config: FileScanConfig) -> Arc<dyn FileSource> {
+        let mut this = self.clone();
+        this.config = config;
+
+        Arc::new(this)
+    }
+
+    fn as_data_source(&self) -> Arc<dyn DataSource> {
+        Arc::new(self.clone())
+    }
+
     fn create_file_opener(
         &self,
         object_store: Arc<dyn ObjectStore>,
-        base_config: &FileScanConfig,
         partition: usize,
     ) -> Arc<dyn FileOpener> {
+        let base_config = self.config();
+
         let projection = base_config
             .file_column_projection_indices()
             .unwrap_or_else(|| (0..base_config.file_schema.fields().len()).collect());
@@ -560,7 +596,7 @@ impl FileSource for ParquetSource {
             logical_file_schema: Arc::clone(&base_config.file_schema),
             partition_fields: base_config.table_partition_cols.clone(),
             metadata_size_hint: self.metadata_size_hint,
-            metrics: self.metrics().clone(),
+            metrics: self.metrics_inner().clone(),
             parquet_file_reader_factory,
             pushdown_filters: self.pushdown_filters(),
             reorder_filters: self.reorder_filters(),
@@ -580,12 +616,12 @@ impl FileSource for ParquetSource {
         self
     }
 
-    fn metrics(&self) -> &ExecutionPlanMetricsSet {
+    fn metrics_inner(&self) -> &ExecutionPlanMetricsSet {
         &self.metrics
     }
 
-    fn file_source_statistics(&self, config: &FileScanConfig) -> Statistics {
-        let statistics = config.file_source_projected_statistics.clone();
+    fn file_source_statistics(&self) -> Statistics {
+        let statistics = self.config.file_source_projected_statistics.clone();
 
         // When filters are pushed down, we have no way of knowing the exact statistics.
         // Note that pruning predicate is also a kind of filter pushdown.
@@ -603,12 +639,7 @@ impl FileSource for ParquetSource {
         "parquet"
     }
 
-    fn fmt_extra(
-        &self,
-        t: DisplayFormatType,
-        f: &mut Formatter,
-        config: &FileScanConfig,
-    ) -> std::fmt::Result {
+    fn fmt_extra(&self, t: DisplayFormatType, f: &mut Formatter) -> fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 let predicate_string = self
@@ -627,7 +658,7 @@ impl FileSource for ParquetSource {
                 // each file, which we do not have at this point and hence cannot use.
                 // Instead we use the logical schema of the file (the table schema without partition columns).
                 if let (file_schema, Some(predicate)) =
-                    (&config.file_schema, &self.predicate)
+                    (&self.config.file_schema, &self.predicate)
                 {
                     let predicate_creation_errors = Count::new();
                     if let (Some(pruning_predicate), _) = build_pruning_predicates(
@@ -664,9 +695,8 @@ impl FileSource for ParquetSource {
         &self,
         filters: Vec<Arc<dyn PhysicalExpr>>,
         config: &ConfigOptions,
-        fs_config: &FileScanConfig,
     ) -> datafusion_common::Result<FilterPushdownPropagation<Arc<dyn FileSource>>> {
-        let file_schema = fs_config.file_schema.clone();
+        let file_schema = Arc::clone(&self.config.file_schema);
 
         // Determine if based on configs we should push filters down.
         // If either the table / scan itself or the config has pushdown enabled,
@@ -742,5 +772,14 @@ impl FileSource for ParquetSource {
 
     fn schema_adapter_factory(&self) -> Option<Arc<dyn SchemaAdapterFactory>> {
         self.schema_adapter_factory.clone()
+    }
+}
+
+impl Debug for ParquetSource {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{} {{ ", self.file_type())?;
+        write!(f, "statistics={:?}, ", self.file_source_statistics())?;
+        write!(f, "config={:?} ", self.config())?;
+        write!(f, " }}")
     }
 }

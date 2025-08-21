@@ -496,6 +496,7 @@ impl TryFrom<&[PartitionedFile]> for protobuf::FileGroup {
 
 pub fn serialize_file_scan_config(
     conf: &FileScanConfig,
+    file_source_statistics: datafusion_common::Statistics,
     codec: &dyn PhysicalExtensionCodec,
 ) -> Result<protobuf::FileScanExecConf> {
     let file_groups = conf
@@ -523,7 +524,7 @@ pub fn serialize_file_scan_config(
 
     Ok(protobuf::FileScanExecConf {
         file_groups,
-        statistics: Some((&conf.file_source.file_source_statistics(conf)).into()),
+        statistics: Some((&file_source_statistics).into()),
         limit: conf.limit.map(|l| protobuf::ScanLimit { limit: l as u32 }),
         projection: conf
             .projection

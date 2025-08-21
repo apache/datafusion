@@ -43,6 +43,7 @@ use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_execution::TaskContext;
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 
+use datafusion_datasource::source::DataSource;
 use futures::{StreamExt, TryStreamExt};
 use object_store::buffered::BufWriter;
 use object_store::{GetOptions, GetResultPayload, ObjectStore};
@@ -74,16 +75,22 @@ impl JsonOpener {
 }
 
 /// JsonSource holds the extra configuration that is necessary for [`JsonOpener`]
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct JsonSource {
     metrics: ExecutionPlanMetricsSet,
     schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
+
+    config: FileScanConfig,
 }
 
 impl JsonSource {
     /// Initialize a JsonSource with default values
-    pub fn new() -> Self {
-        Self::default()
+    pub fn new(config: FileScanConfig) -> Self {
+        Self {
+            metrics: Default::default(),
+            schema_adapter_factory: None,
+            config,
+        }
     }
 }
 
@@ -94,18 +101,33 @@ impl From<JsonSource> for Arc<dyn FileSource> {
 }
 
 impl FileSource for JsonSource {
+    fn config(&self) -> &FileScanConfig {
+        &self.config
+    }
+
+    fn with_config(&self, config: FileScanConfig) -> Arc<dyn FileSource> {
+        let mut this = self.clone();
+        this.config = config;
+
+        Arc::new(this)
+    }
+
+    fn as_data_source(&self) -> Arc<dyn DataSource> {
+        Arc::new(self.clone())
+    }
+
     fn create_file_opener(
         &self,
         object_store: Arc<dyn ObjectStore>,
-        base_config: &FileScanConfig,
         _partition: usize,
     ) -> Arc<dyn FileOpener> {
         Arc::new(JsonOpener {
-            batch_size: base_config
+            batch_size: self
+                .config
                 .batch_size
                 .expect("Batch size must set before creating opener"),
-            projected_schema: base_config.projected_file_schema(),
-            file_compression_type: base_config.file_compression_type,
+            projected_schema: self.config.projected_file_schema(),
+            file_compression_type: self.config.file_compression_type,
             object_store,
         })
     }
@@ -114,7 +136,7 @@ impl FileSource for JsonSource {
         self
     }
 
-    fn metrics(&self) -> &ExecutionPlanMetricsSet {
+    fn metrics_inner(&self) -> &ExecutionPlanMetricsSet {
         &self.metrics
     }
 
@@ -134,6 +156,15 @@ impl FileSource for JsonSource {
 
     fn schema_adapter_factory(&self) -> Option<Arc<dyn SchemaAdapterFactory>> {
         self.schema_adapter_factory.clone()
+    }
+}
+
+impl std::fmt::Debug for JsonSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} {{ ", self.file_type())?;
+        write!(f, "statistics={:?}, ", self.file_source_statistics())?;
+        write!(f, "config={:?}, ", self.config())?;
+        write!(f, " }}")
     }
 }
 

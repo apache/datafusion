@@ -20,6 +20,7 @@ use arrow::error::ArrowError;
 use arrow::{array::RecordBatch, compute::concat_batches};
 use datafusion::{datasource::object_store::ObjectStoreUrl, physical_plan::PhysicalExpr};
 use datafusion_common::{config::ConfigOptions, internal_err, Result};
+use datafusion_datasource::source::DataSource;
 use datafusion_datasource::{
     file::FileSource, file_meta::FileMeta, file_scan_config::FileScanConfig,
     file_scan_config::FileScanConfigBuilder, file_stream::FileOpenFuture,
@@ -49,6 +50,7 @@ use std::{
     sync::Arc,
     task::{Context, Poll},
 };
+
 pub struct TestOpener {
     batches: Vec<RecordBatch>,
     batch_size: Option<usize>,
@@ -103,38 +105,56 @@ impl FileOpener for TestOpener {
 }
 
 /// A placeholder data source that accepts filter pushdown
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct TestSource {
     support: bool,
     predicate: Option<Arc<dyn PhysicalExpr>>,
     batches: Vec<RecordBatch>,
     metrics: ExecutionPlanMetricsSet,
     schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
+
+    config: FileScanConfig,
 }
 
 impl TestSource {
-    fn new(support: bool, batches: Vec<RecordBatch>) -> Self {
+    fn new(support: bool, batches: Vec<RecordBatch>, config: FileScanConfig) -> Self {
         Self {
             support,
             metrics: ExecutionPlanMetricsSet::new(),
             batches,
-            ..Default::default()
+            schema_adapter_factory: None,
+            predicate: None,
+            config,
         }
     }
 }
 
 impl FileSource for TestSource {
+    fn config(&self) -> &FileScanConfig {
+        &self.config
+    }
+
+    fn with_config(&self, config: FileScanConfig) -> Arc<dyn FileSource> {
+        let mut this = self.clone();
+        this.config = config;
+
+        Arc::new(this)
+    }
+
+    fn as_data_source(&self) -> Arc<dyn DataSource> {
+        Arc::new(self.clone())
+    }
+
     fn create_file_opener(
         &self,
         _object_store: Arc<dyn ObjectStore>,
-        base_config: &FileScanConfig,
         _partition: usize,
     ) -> Arc<dyn FileOpener> {
         Arc::new(TestOpener {
             batches: self.batches.clone(),
-            batch_size: base_config.batch_size,
-            schema: Some(Arc::clone(&base_config.file_schema)),
-            projection: base_config.projection.clone(),
+            batch_size: self.config().batch_size,
+            schema: Some(Arc::clone(&self.config().file_schema)),
+            projection: self.config().projection.clone(),
         })
     }
 
@@ -142,7 +162,7 @@ impl FileSource for TestSource {
         todo!("should not be called")
     }
 
-    fn metrics(&self) -> &ExecutionPlanMetricsSet {
+    fn metrics_inner(&self) -> &ExecutionPlanMetricsSet {
         &self.metrics
     }
 
@@ -150,12 +170,7 @@ impl FileSource for TestSource {
         "test"
     }
 
-    fn fmt_extra(
-        &self,
-        t: DisplayFormatType,
-        f: &mut Formatter,
-        _config: &FileScanConfig,
-    ) -> std::fmt::Result {
+    fn fmt_extra(&self, t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 let support = format!(", pushdown_supported={}", self.support);
@@ -182,7 +197,6 @@ impl FileSource for TestSource {
         &self,
         mut filters: Vec<Arc<dyn PhysicalExpr>>,
         config: &ConfigOptions,
-        _fs_config: &FileScanConfig,
     ) -> Result<FilterPushdownPropagation<Arc<dyn FileSource>>> {
         if self.support && config.execution.parquet.pushdown_filters {
             if let Some(internal) = self.predicate.as_ref() {
@@ -220,6 +234,15 @@ impl FileSource for TestSource {
     }
 }
 
+impl std::fmt::Debug for TestSource {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} {{ ", self.file_type())?;
+        write!(f, "statistics={:?}, ", self.file_source_statistics())?;
+        write!(f, "config={:?}, ", self.config())?;
+        write!(f, " }}")
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct TestScanBuilder {
     support: bool,
@@ -247,15 +270,18 @@ impl TestScanBuilder {
     }
 
     pub fn build(self) -> Arc<dyn ExecutionPlan> {
-        let source = Arc::new(TestSource::new(self.support, self.batches));
         let base_config = FileScanConfigBuilder::new(
             ObjectStoreUrl::parse("test://").unwrap(),
             Arc::clone(&self.schema),
-            source,
         )
         .with_file(PartitionedFile::new("test.parquet", 123))
         .build();
-        DataSourceExec::from_data_source(base_config)
+
+        DataSourceExec::from_data_source(TestSource::new(
+            self.support,
+            self.batches,
+            base_config.clone(),
+        ))
     }
 }
 

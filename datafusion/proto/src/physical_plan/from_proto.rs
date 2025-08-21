@@ -34,7 +34,7 @@ use datafusion::datasource::file_format::parquet::ParquetSink;
 use datafusion::datasource::listing::{FileRange, ListingTableUrl, PartitionedFile};
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::{
-    FileGroup, FileScanConfig, FileScanConfigBuilder, FileSinkConfig, FileSource,
+    FileGroup, FileScanConfig, FileScanConfigBuilder, FileSinkConfig,
 };
 use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::WindowFunctionDefinition;
@@ -490,7 +490,6 @@ pub fn parse_protobuf_file_scan_config(
     proto: &protobuf::FileScanExecConf,
     ctx: &SessionContext,
     codec: &dyn PhysicalExtensionCodec,
-    file_source: Arc<dyn FileSource>,
 ) -> Result<FileScanConfig> {
     let schema: Arc<Schema> = parse_protobuf_file_scan_schema(proto)?;
     let projection = proto
@@ -543,7 +542,7 @@ pub fn parse_protobuf_file_scan_config(
         output_ordering.extend(LexOrdering::new(sort_exprs));
     }
 
-    let config = FileScanConfigBuilder::new(object_store_url, file_schema, file_source)
+    let config = FileScanConfigBuilder::new(object_store_url, file_schema)
         .with_file_groups(file_groups)
         .with_constraints(constraints)
         .with_file_source_projected_statistics(statistics)
