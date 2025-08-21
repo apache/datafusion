@@ -87,6 +87,11 @@ pub enum Volatility {
 
 /// The types of arguments for which a function has implementations.
 ///
+/// [`TypeSignature`] **DOES NOT** define the types that a user query could call the
+/// function with. DataFusion will automatically coerce (cast) argument types to
+/// one of the supported function signatures, if possible.
+///
+/// # Overview
 /// Functions typically provide implementations for a small number of different
 /// argument [`DataType`]s, rather than all possible combinations. If a user
 /// calls a function with arguments that do not match any of the declared types,
@@ -94,6 +99,7 @@ pub enum Volatility {
 /// arguments so they match the [`TypeSignature`]. See the [`type_coercion`] module
 /// for more details
 ///
+/// # Example: Numeric Functions
 /// For example, a function like `cos` may only provide an implementation for
 /// [`DataType::Float64`]. When users call `cos` with a different argument type,
 /// such as `cos(int_column)`, and type coercion automatically adds a cast such
@@ -778,22 +784,12 @@ impl Hash for ImplicitCoercion {
     }
 }
 
-/// Defines supported argument types and volatility for a function.
+/// Provides  information necessary for calling a function.
 ///
-/// A [`Signature`] provides DataFusion information necessary for calling a
-/// function.
+/// - [`TypeSignature`] defines the argument types that a function has implementations
+///   for.
 ///
-/// The [`TypeSignature`] defines the types that a function has implementations
-/// for. It **DOES NOT** define the types that a user query could call the
-/// function with. DataFusion will automatically coerce (cast) argument types to
-/// one of the supported function signatures, if possible.
-///
-/// For example, if the `Signature` of a function is `Exact(vec![DataType::Float64])`,
-/// the function only has an implementation for `Float64` arguments. However, a user
-/// can call the function with `Float32` or `Int64` arguments, and DataFusion will
-/// automatically coerce (cast) the arguments to `Float64` before calling the function.
-///
-/// The [`Volatility`] defines how the output of the function changes with the input.
+/// - [`Volatility`] defines how the output of the function changes with the input.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub struct Signature {
     /// The data types that the function accepts. See [TypeSignature] for more information.
