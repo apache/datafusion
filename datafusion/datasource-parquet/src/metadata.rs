@@ -327,7 +327,7 @@ impl<'a> DFParquetMetadata<'a> {
 /// Min/max aggregation can take Dictionary encode input but always produces unpacked
 /// (aka non Dictionary) output. We need to adjust the output data type to reflect this.
 /// The reason min/max aggregate produces unpacked output because there is only one
-/// min/max value per group; there is no needs to keep them Dictionary encode
+/// min/max value per group; there is no needs to keep them Dictionary encoded
 fn min_max_aggregate_data_type(input_type: &DataType) -> &DataType {
     if let DataType::Dictionary(_, value_type) = input_type {
         value_type.as_ref()
