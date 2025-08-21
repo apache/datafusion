@@ -80,22 +80,16 @@ pub(crate) mod test_util {
         }]
         .into()];
 
-        let exec = format
-            .create_physical_plan(
-                state,
-                FileScanConfigBuilder::new(
-                    ObjectStoreUrl::local_filesystem(),
-                    file_schema,
-                    format.file_source(),
-                )
+        let config =
+            FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_schema)
                 .with_file_groups(file_groups)
                 .with_file_source_projected_statistics(statistics)
                 .with_projection(projection)
                 .with_limit(limit)
-                .build(),
-            )
-            .await?;
-        Ok(exec)
+                .build();
+
+        let source = format.file_source(config);
+        format.create_physical_plan(state, source).await
     }
 }
 

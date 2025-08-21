@@ -24,6 +24,7 @@ use datafusion::{
     datasource::{listing::PartitionedFile, physical_plan::ParquetSource},
     prelude::*,
 };
+use datafusion_common::config::TableParquetOptions;
 use datafusion_common::DFSchema;
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_datasource::source::DataSourceExec;
@@ -275,15 +276,9 @@ async fn execute_with_predicate(
     schema: Arc<Schema>,
     ctx: &SessionContext,
 ) -> Vec<String> {
-    let parquet_source = if prune_stats {
-        ParquetSource::default().with_predicate(predicate.clone())
-    } else {
-        ParquetSource::default()
-    };
     let config = FileScanConfigBuilder::new(
         ObjectStoreUrl::parse("memory://").unwrap(),
         schema.clone(),
-        Arc::new(parquet_source),
     )
     .with_file_group(
         files
@@ -294,7 +289,15 @@ async fn execute_with_predicate(
             .collect(),
     )
     .build();
-    let exec = DataSourceExec::from_data_source(config);
+
+    let parquet_source = if prune_stats {
+        ParquetSource::new(TableParquetOptions::default(), config.clone())
+            .with_predicate(predicate.clone())
+    } else {
+        ParquetSource::new(TableParquetOptions::default(), config.clone())
+    };
+
+    let exec = DataSourceExec::from_data_source(parquet_source);
     let exec =
         Arc::new(FilterExec::try_new(predicate, exec).unwrap()) as Arc<dyn ExecutionPlan>;
 

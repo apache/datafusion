@@ -27,6 +27,7 @@ use datafusion::common::pruning::PruningStatistics;
 use datafusion::common::{
     internal_datafusion_err, DFSchema, DataFusionError, Result, ScalarValue,
 };
+use datafusion::config::TableParquetOptions;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::memory::DataSourceExec;
 use datafusion::datasource::physical_plan::{FileScanConfigBuilder, ParquetSource};
@@ -243,9 +244,9 @@ impl TableProvider for IndexTableProvider {
         let files = self.index.get_files(predicate.clone())?;
 
         let object_store_url = ObjectStoreUrl::parse("file://")?;
-        let source = Arc::new(ParquetSource::default().with_predicate(predicate));
+
         let mut file_scan_config_builder =
-            FileScanConfigBuilder::new(object_store_url, self.schema(), source)
+            FileScanConfigBuilder::new(object_store_url, self.schema())
                 .with_projection(projection.cloned())
                 .with_limit(limit);
 
@@ -258,8 +259,13 @@ impl TableProvider for IndexTableProvider {
                 PartitionedFile::new(canonical_path.display().to_string(), file_size),
             );
         }
+
         Ok(DataSourceExec::from_data_source(
-            file_scan_config_builder.build(),
+            ParquetSource::new(
+                TableParquetOptions::default(),
+                file_scan_config_builder.build(),
+            )
+            .with_predicate(predicate),
         ))
     }
 

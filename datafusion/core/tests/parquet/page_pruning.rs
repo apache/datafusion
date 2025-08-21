@@ -15,10 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::Arc;
-
 use crate::parquet::Unit::Page;
 use crate::parquet::{ContextWithParquet, Scenario};
+use std::sync::Arc;
 
 use arrow::array::RecordBatch;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
@@ -36,6 +35,7 @@ use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::{col, lit, Expr};
 use datafusion_physical_expr::create_physical_expr;
 
+use datafusion_common::config::TableParquetOptions;
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use futures::StreamExt;
 use object_store::path::Path;
@@ -80,17 +80,15 @@ async fn get_parquet_exec(
     let execution_props = ExecutionProps::new();
     let predicate = create_physical_expr(&filter, &df_schema, &execution_props).unwrap();
 
-    let source = Arc::new(
-        ParquetSource::default()
-            .with_predicate(predicate)
-            .with_enable_page_index(true)
-            .with_pushdown_filters(pushdown_filters),
-    );
-    let base_config = FileScanConfigBuilder::new(object_store_url, schema, source)
+    let base_config = FileScanConfigBuilder::new(object_store_url, schema)
         .with_file(partitioned_file)
         .build();
+    let source = ParquetSource::new(TableParquetOptions::default(), base_config.clone())
+        .with_predicate(predicate)
+        .with_enable_page_index(true)
+        .with_pushdown_filters(pushdown_filters);
 
-    DataSourceExec::new(Arc::new(base_config))
+    DataSourceExec::new(Arc::new(source))
 }
 
 async fn get_filter_results(

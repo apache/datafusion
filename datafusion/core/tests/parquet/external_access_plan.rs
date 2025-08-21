@@ -36,6 +36,7 @@ use datafusion_expr::{col, lit, Expr};
 use datafusion_physical_plan::metrics::MetricsSet;
 use datafusion_physical_plan::ExecutionPlan;
 
+use datafusion_common::config::TableParquetOptions;
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_datasource::source::DataSourceExec;
 use parquet::arrow::arrow_reader::{RowSelection, RowSelector};
@@ -342,19 +343,27 @@ impl TestFull {
 
         // Create a DataSourceExec to read the file
         let object_store_url = ObjectStoreUrl::local_filesystem();
+
+        let config = FileScanConfigBuilder::new(object_store_url, schema.clone())
+            .with_file(partitioned_file)
+            .build();
+
         // add the predicate, if requested
         let source = if let Some(predicate) = predicate {
             let df_schema = DFSchema::try_from(schema.clone())?;
             let predicate = ctx.create_physical_expr(predicate, &df_schema)?;
-            Arc::new(ParquetSource::default().with_predicate(predicate))
+            Arc::new(
+                ParquetSource::new(TableParquetOptions::default(), config.clone())
+                    .with_predicate(predicate),
+            )
         } else {
-            Arc::new(ParquetSource::default())
+            Arc::new(ParquetSource::new(
+                TableParquetOptions::default(),
+                config.clone(),
+            ))
         };
-        let config = FileScanConfigBuilder::new(object_store_url, schema.clone(), source)
-            .with_file(partitioned_file)
-            .build();
 
-        let plan: Arc<dyn ExecutionPlan> = DataSourceExec::from_data_source(config);
+        let plan: Arc<dyn ExecutionPlan> = Arc::new(DataSourceExec::new(source));
 
         // run the DataSourceExec and collect the results
         let results =

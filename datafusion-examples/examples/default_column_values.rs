@@ -29,6 +29,7 @@ use datafusion::catalog::{Session, TableProvider};
 use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion::common::DFSchema;
 use datafusion::common::{Result, ScalarValue};
+use datafusion::config::TableParquetOptions;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::physical_plan::{FileScanConfigBuilder, ParquetSource};
 use datafusion::execution::context::SessionContext;
@@ -235,10 +236,6 @@ impl TableProvider for DefaultValueTableProvider {
             &df_schema,
         )?;
 
-        let parquet_source = ParquetSource::default()
-            .with_predicate(filter)
-            .with_pushdown_filters(true);
-
         let object_store_url = ObjectStoreUrl::parse("memory://")?;
         let store = state.runtime_env().object_store(object_store_url)?;
 
@@ -255,19 +252,21 @@ impl TableProvider for DefaultValueTableProvider {
             .map(|file| PartitionedFile::new(file.location.clone(), file.size))
             .collect();
 
-        let file_scan_config = FileScanConfigBuilder::new(
+        let config = FileScanConfigBuilder::new(
             ObjectStoreUrl::parse("memory://")?,
             self.schema.clone(),
-            Arc::new(parquet_source),
         )
         .with_projection(projection.cloned())
         .with_limit(limit)
         .with_file_group(file_group)
-        .with_expr_adapter(Some(Arc::new(DefaultValuePhysicalExprAdapterFactory) as _));
+        .with_expr_adapter(Some(Arc::new(DefaultValuePhysicalExprAdapterFactory) as _))
+        .build();
 
-        Ok(Arc::new(DataSourceExec::new(Arc::new(
-            file_scan_config.build(),
-        ))))
+        Ok(DataSourceExec::from_data_source(
+            ParquetSource::new(TableParquetOptions::default(), config.clone())
+                .with_predicate(filter)
+                .with_pushdown_filters(true),
+        ))
     }
 }
 

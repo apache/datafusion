@@ -27,6 +27,7 @@ use datafusion::datasource::physical_plan::{
 };
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionContext;
+use datafusion_common::config::TableParquetOptions;
 use datafusion_common::ColumnStatistics;
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_datasource::schema_adapter::{
@@ -182,22 +183,22 @@ async fn test_parquet_integration_with_schema_adapter() -> Result<()> {
     let ctx = SessionContext::new();
     ctx.register_object_store(store_url.as_ref(), Arc::clone(&store));
 
-    // Create a ParquetSource with the adapter factory
-    let file_source = ParquetSource::default()
-        .with_schema_adapter_factory(Arc::new(UppercaseAdapterFactory {}))?;
-
     // Create a table schema with uppercase column names
     let table_schema = Arc::new(Schema::new(vec![
         Field::new("ID", DataType::Int32, false),
         Field::new("NAME", DataType::Utf8, true),
     ]));
 
-    let config = FileScanConfigBuilder::new(store_url, table_schema.clone(), file_source)
+    let config = FileScanConfigBuilder::new(store_url, table_schema.clone())
         .with_file(PartitionedFile::new(path, file_size))
         .build();
 
+    // Create a ParquetSource with the adapter factory
+    let file_source = ParquetSource::new(TableParquetOptions::default(), config.clone())
+        .with_schema_adapter_factory(Arc::new(UppercaseAdapterFactory {}))?;
+
     // Create a data source executor
-    let exec = DataSourceExec::from_data_source(config);
+    let exec = Arc::new(DataSourceExec::new(file_source.as_data_source()));
 
     // Collect results
     let task_ctx = ctx.task_ctx();
@@ -244,16 +245,16 @@ async fn test_parquet_integration_with_schema_adapter_and_expression_rewriter(
     let ctx = SessionContext::new();
     ctx.register_object_store(store_url.as_ref(), Arc::clone(&store));
 
-    // Create a ParquetSource with the adapter factory
-    let file_source = ParquetSource::default()
-        .with_schema_adapter_factory(Arc::new(UppercaseAdapterFactory {}))?;
-
-    let config = FileScanConfigBuilder::new(store_url, batch.schema(), file_source)
+    let config = FileScanConfigBuilder::new(store_url, batch.schema())
         .with_file(PartitionedFile::new(path, file_size))
         .build();
 
+    // Create a ParquetSource with the adapter factory
+    let file_source = ParquetSource::new(TableParquetOptions::default(), config.clone())
+        .with_schema_adapter_factory(Arc::new(UppercaseAdapterFactory {}))?;
+
     // Create a data source executor
-    let exec = DataSourceExec::from_data_source(config);
+    let exec = Arc::new(DataSourceExec::new(file_source.as_data_source()));
 
     // Collect results
     let task_ctx = ctx.task_ctx();
@@ -279,12 +280,18 @@ async fn test_multi_source_schema_adapter_reuse() -> Result<()> {
     // 2. The factory can be shared and cloned efficiently using Arc
     // 3. Various data source implementations correctly implement the schema adapter factory pattern
 
+    let config = FileScanConfigBuilder::new(
+        ObjectStoreUrl::local_filesystem(),
+        Arc::new(Schema::empty()),
+    )
+    .build();
+
     // Create a test factory
     let factory = Arc::new(UppercaseAdapterFactory {});
 
     // Test ArrowSource
     {
-        let source = ArrowSource::default();
+        let source = ArrowSource::new(config.clone());
         let source_with_adapter = source
             .clone()
             .with_schema_adapter_factory(factory.clone())
@@ -304,7 +311,7 @@ async fn test_multi_source_schema_adapter_reuse() -> Result<()> {
     // Test ParquetSource
     #[cfg(feature = "parquet")]
     {
-        let source = ParquetSource::default();
+        let source = ParquetSource::new(TableParquetOptions::default(), config.clone());
         let source_with_adapter = source
             .clone()
             .with_schema_adapter_factory(factory.clone())
@@ -323,7 +330,7 @@ async fn test_multi_source_schema_adapter_reuse() -> Result<()> {
 
     // Test CsvSource
     {
-        let source = CsvSource::default();
+        let source = CsvSource::new(false, 0, 0, config.clone());
         let source_with_adapter = source
             .clone()
             .with_schema_adapter_factory(factory.clone())
@@ -342,7 +349,7 @@ async fn test_multi_source_schema_adapter_reuse() -> Result<()> {
 
     // Test JsonSource
     {
-        let source = JsonSource::default();
+        let source = JsonSource::new(config.clone());
         let source_with_adapter = source
             .clone()
             .with_schema_adapter_factory(factory.clone())

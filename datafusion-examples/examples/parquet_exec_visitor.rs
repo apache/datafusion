@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::ListingOptions;
-use datafusion::datasource::physical_plan::{FileGroup, ParquetSource};
+use datafusion::datasource::physical_plan::{FileGroup, FileSource, ParquetSource};
 use datafusion::datasource::source::DataSourceExec;
 use datafusion::error::DataFusionError;
 use datafusion::execution::context::SessionContext;
@@ -98,9 +98,11 @@ impl ExecutionPlanVisitor for ParquetExecVisitor {
     fn pre_visit(&mut self, plan: &dyn ExecutionPlan) -> Result<bool, Self::Error> {
         // If needed match on a specific `ExecutionPlan` node type
         if let Some(data_source_exec) = plan.as_any().downcast_ref::<DataSourceExec>() {
-            if let Some((file_config, _)) =
+            if let Some(parquet_source) =
                 data_source_exec.downcast_to_file_source::<ParquetSource>()
             {
+                let file_config = parquet_source.config();
+
                 self.file_groups = Some(file_config.file_groups.clone());
 
                 let metrics = match data_source_exec.metrics() {

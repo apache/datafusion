@@ -1113,8 +1113,11 @@ impl ListingTable {
     }
 
     /// Creates a file source and applies schema adapter factory if available
-    fn create_file_source_with_schema_adapter(&self) -> Result<Arc<dyn FileSource>> {
-        let mut source = self.options.format.file_source();
+    fn create_file_source_with_schema_adapter(
+        &self,
+        config: FileScanConfig,
+    ) -> Result<Arc<dyn FileSource>> {
+        let mut source = self.options.format.file_source(config);
         // Apply schema adapter to source if available
         //
         // The source will use this SchemaAdapter to adapt data batches as they flow up the plan.
@@ -1233,18 +1236,8 @@ impl TableProvider for ListingTable {
             return Ok(Arc::new(EmptyExec::new(Arc::new(Schema::empty()))));
         };
 
-        let file_source = self.create_file_source_with_schema_adapter()?;
-
-        // create the execution plan
-        self.options
-            .format
-            .create_physical_plan(
-                state,
-                FileScanConfigBuilder::new(
-                    object_store_url,
-                    Arc::clone(&self.file_schema),
-                    file_source,
-                )
+        let conf =
+            FileScanConfigBuilder::new(object_store_url, Arc::clone(&self.file_schema))
                 .with_file_groups(partitioned_file_lists)
                 .with_constraints(self.constraints.clone())
                 .with_file_source_projected_statistics(statistics)
@@ -1253,7 +1246,14 @@ impl TableProvider for ListingTable {
                 .with_output_ordering(output_ordering)
                 .with_table_partition_cols(table_partition_cols)
                 .with_expr_adapter(self.expr_adapter_factory.clone())
-                .build(),
+                .build();
+
+        // create the execution plan
+        self.options
+            .format
+            .create_physical_plan(
+                state,
+                self.create_file_source_with_schema_adapter(conf)?,
             )
             .await
     }

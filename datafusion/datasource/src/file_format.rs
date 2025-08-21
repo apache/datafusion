@@ -35,6 +35,7 @@ use datafusion_physical_expr::LexRequirement;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_session::Session;
 
+use crate::source::DataSourceExec;
 use async_trait::async_trait;
 use object_store::{ObjectMeta, ObjectStore};
 
@@ -94,9 +95,11 @@ pub trait FileFormat: Send + Sync + fmt::Debug {
     /// according to this file format.
     async fn create_physical_plan(
         &self,
-        state: &dyn Session,
-        conf: FileScanConfig,
-    ) -> Result<Arc<dyn ExecutionPlan>>;
+        _state: &dyn Session,
+        file_source: Arc<dyn FileSource>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(Arc::new(DataSourceExec::new(file_source.as_data_source())))
+    }
 
     /// Take a list of files and the configuration to convert it to the
     /// appropriate writer executor according to this file format.
@@ -111,7 +114,7 @@ pub trait FileFormat: Send + Sync + fmt::Debug {
     }
 
     /// Return the related FileSource such as `CsvSource`, `JsonSource`, etc.
-    fn file_source(&self) -> Arc<dyn FileSource>;
+    fn file_source(&self, config: FileScanConfig) -> Arc<dyn FileSource>;
 }
 
 /// Factory for creating [`FileFormat`] instances based on session and command level options

@@ -29,45 +29,45 @@ use crate::physical_optimizer::test_utils::{
     union_exec, RequirementsTestExec,
 };
 
+use arrow::array::{Int32Array, RecordBatch};
 use arrow::compute::SortOptions;
+use arrow::datatypes::Field;
 use arrow::datatypes::{DataType, SchemaRef};
+use arrow_schema::Schema;
+use datafusion::datasource::listing::PartitionedFile;
+use datafusion::datasource::physical_plan::CsvSource;
+use datafusion::prelude::*;
+use datafusion_catalog::streaming::StreamingTable;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::{TreeNode, TransformedResult};
+use datafusion_common::tree_node::{TransformedResult, TreeNode};
 use datafusion_common::{Result, ScalarValue, TableReference};
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_datasource::source::DataSourceExec;
-use datafusion_expr_common::operator::Operator;
-use datafusion_expr::{JoinType, SortExpr, WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition};
 use datafusion_execution::object_store::ObjectStoreUrl;
+use datafusion_execution::TaskContext;
+use datafusion_expr::{JoinType, SortExpr, WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition};
+use datafusion_expr_common::operator::Operator;
 use datafusion_functions_aggregate::average::avg_udaf;
 use datafusion_functions_aggregate::count::count_udaf;
 use datafusion_functions_aggregate::min_max::{max_udaf, min_udaf};
+use datafusion_physical_expr::expressions::{col, BinaryExpr, Column, NotExpr};
+use datafusion_physical_expr::{Distribution, Partitioning};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::{
-    LexOrdering, PhysicalSortExpr, PhysicalSortRequirement, OrderingRequirements
+    LexOrdering, OrderingRequirements, PhysicalSortExpr, PhysicalSortRequirement
 };
-use datafusion_physical_expr::{Distribution, Partitioning};
-use datafusion_physical_expr::expressions::{col, BinaryExpr, Column, NotExpr};
-use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
-use datafusion_physical_plan::repartition::RepartitionExec;
-use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
-use datafusion_physical_plan::sorts::sort::SortExec;
-use datafusion_physical_plan::windows::{create_window_expr, BoundedWindowAggExec, WindowAggExec};
-use datafusion_physical_plan::{displayable, get_plan_string, ExecutionPlan, InputOrderMode};
-use datafusion::datasource::physical_plan::CsvSource;
-use datafusion::datasource::listing::PartitionedFile;
-use datafusion_physical_optimizer::enforce_sorting::{EnforceSorting, PlanWithCorrespondingCoalescePartitions, PlanWithCorrespondingSort, parallelize_sorts, ensure_sorting};
-use datafusion_physical_optimizer::enforce_sorting::replace_with_order_preserving_variants::{replace_with_order_preserving_variants, OrderPreservationContext};
-use datafusion_physical_optimizer::enforce_sorting::sort_pushdown::{SortPushDown, assign_initial_requirements, pushdown_sorts};
 use datafusion_physical_optimizer::enforce_distribution::EnforceDistribution;
+use datafusion_physical_optimizer::enforce_sorting::replace_with_order_preserving_variants::{replace_with_order_preserving_variants, OrderPreservationContext};
+use datafusion_physical_optimizer::enforce_sorting::sort_pushdown::{assign_initial_requirements, pushdown_sorts, SortPushDown};
+use datafusion_physical_optimizer::enforce_sorting::{ensure_sorting, parallelize_sorts, EnforceSorting, PlanWithCorrespondingCoalescePartitions, PlanWithCorrespondingSort};
 use datafusion_physical_optimizer::output_requirements::OutputRequirementExec;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
-use datafusion::prelude::*;
-use arrow::array::{Int32Array, RecordBatch};
-use arrow::datatypes::{Field};
-use arrow_schema::Schema;
-use datafusion_execution::TaskContext;
-use datafusion_catalog::streaming::StreamingTable;
+use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
+use datafusion_physical_plan::repartition::RepartitionExec;
+use datafusion_physical_plan::sorts::sort::SortExec;
+use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
+use datafusion_physical_plan::windows::{create_window_expr, BoundedWindowAggExec, WindowAggExec};
+use datafusion_physical_plan::{displayable, get_plan_string, ExecutionPlan, InputOrderMode};
 
 use futures::StreamExt;
 use rstest::rstest;
@@ -80,7 +80,6 @@ fn csv_exec_sorted(
     let mut builder = FileScanConfigBuilder::new(
         ObjectStoreUrl::parse("test:///").unwrap(),
         schema.clone(),
-        Arc::new(CsvSource::new(false, 0, 0)),
     )
     .with_file(PartitionedFile::new("x".to_string(), 100));
     if let Some(ordering) = LexOrdering::new(sort_exprs) {
@@ -88,7 +87,7 @@ fn csv_exec_sorted(
     }
 
     let config = builder.build();
-    DataSourceExec::from_data_source(config)
+    DataSourceExec::from_data_source(CsvSource::new(false, 0, 0, config.clone()))
 }
 
 /// Runs the sort enforcement optimizer and asserts the plan

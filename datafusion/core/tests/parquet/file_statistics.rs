@@ -37,8 +37,9 @@ use datafusion_execution::config::SessionConfig;
 use datafusion_execution::runtime_env::RuntimeEnvBuilder;
 use datafusion_expr::{col, lit, Expr};
 
-use datafusion::datasource::physical_plan::FileScanConfig;
 use datafusion_common::config::ConfigOptions;
+use datafusion_datasource::file::FileSource;
+use datafusion_datasource_parquet::source::ParquetSource;
 use datafusion_physical_optimizer::filter_pushdown::FilterPushdown;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::filter::FilterExec;
@@ -200,11 +201,11 @@ async fn list_files_with_session_level_cache() {
     let data_source = data_source_exec.data_source();
     let parquet1 = data_source
         .as_any()
-        .downcast_ref::<FileScanConfig>()
+        .downcast_ref::<ParquetSource>()
         .unwrap();
 
     assert_eq!(get_list_file_cache_size(&state1), 1);
-    let fg = &parquet1.file_groups;
+    let fg = &parquet1.config().file_groups;
     assert_eq!(fg.len(), 1);
     assert_eq!(fg.first().unwrap().len(), 1);
 
@@ -216,11 +217,11 @@ async fn list_files_with_session_level_cache() {
     let data_source = data_source_exec.data_source();
     let parquet2 = data_source
         .as_any()
-        .downcast_ref::<FileScanConfig>()
+        .downcast_ref::<ParquetSource>()
         .unwrap();
 
     assert_eq!(get_list_file_cache_size(&state2), 1);
-    let fg2 = &parquet2.file_groups;
+    let fg2 = &parquet2.config().file_groups;
     assert_eq!(fg2.len(), 1);
     assert_eq!(fg2.first().unwrap().len(), 1);
 
@@ -232,11 +233,11 @@ async fn list_files_with_session_level_cache() {
     let data_source = data_source_exec.data_source();
     let parquet3 = data_source
         .as_any()
-        .downcast_ref::<FileScanConfig>()
+        .downcast_ref::<ParquetSource>()
         .unwrap();
 
     assert_eq!(get_list_file_cache_size(&state1), 1);
-    let fg = &parquet3.file_groups;
+    let fg = &parquet3.config().file_groups;
     assert_eq!(fg.len(), 1);
     assert_eq!(fg.first().unwrap().len(), 1);
     // List same file no increase

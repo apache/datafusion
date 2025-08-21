@@ -536,7 +536,6 @@ mod tests {
 
     use crate::file_meta::FileMeta;
     use crate::file_stream::{FileOpenFuture, FileOpener, FileStream, OnError};
-    use crate::test_util::MockSource;
     use arrow::array::RecordBatch;
     use arrow::datatypes::Schema;
 
@@ -664,11 +663,11 @@ mod tests {
             let config = FileScanConfigBuilder::new(
                 ObjectStoreUrl::parse("test:///").unwrap(),
                 file_schema,
-                Arc::new(MockSource::default()),
             )
             .with_file_group(file_group)
             .with_limit(self.limit)
             .build();
+
             let metrics_set = ExecutionPlanMetricsSet::new();
             let file_stream =
                 FileStream::new(&config, 0, Arc::new(self.opener), &metrics_set)

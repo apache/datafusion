@@ -27,7 +27,7 @@ use std::fmt::{Debug, Formatter, Result as FmtResult};
 /// {NUM_GROUPS groups: [[file1, file2,...], [fileN, fileM, ...], ...]}
 /// ```
 #[derive(Debug)]
-pub(crate) struct FileGroupsDisplay<'a>(pub(crate) &'a [FileGroup]);
+pub struct FileGroupsDisplay<'a>(pub(crate) &'a [FileGroup]);
 
 impl DisplayAs for FileGroupsDisplay<'_> {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> FmtResult {

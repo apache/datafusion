@@ -251,16 +251,16 @@ impl FileFormat for JsonFormat {
     async fn create_physical_plan(
         &self,
         _state: &dyn Session,
-        conf: FileScanConfig,
+        source: Arc<dyn FileSource>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let source = Arc::new(JsonSource::new());
-        let conf = FileScanConfigBuilder::from(conf)
+        let conf = FileScanConfigBuilder::from(source.config().to_owned())
             .with_file_compression_type(FileCompressionType::from(
                 self.options.compression,
             ))
-            .with_source(source)
             .build();
-        Ok(DataSourceExec::from_data_source(conf))
+
+        let source = JsonSource::new(conf.clone());
+        Ok(DataSourceExec::from_data_source(source))
     }
 
     async fn create_writer_physical_plan(
@@ -281,8 +281,8 @@ impl FileFormat for JsonFormat {
         Ok(Arc::new(DataSinkExec::new(input, sink, order_requirements)) as _)
     }
 
-    fn file_source(&self) -> Arc<dyn FileSource> {
-        Arc::new(JsonSource::default())
+    fn file_source(&self, config: FileScanConfig) -> Arc<dyn FileSource> {
+        Arc::new(JsonSource::new(config))
     }
 }
 

@@ -35,9 +35,7 @@ use datafusion_common::{Result, Statistics};
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_format::{FileFormat, FileFormatFactory};
-use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
-use datafusion_datasource::source::DataSourceExec;
-use datafusion_physical_plan::ExecutionPlan;
+use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_session::Session;
 
 use async_trait::async_trait;
@@ -149,18 +147,7 @@ impl FileFormat for AvroFormat {
         Ok(Statistics::new_unknown(&table_schema))
     }
 
-    async fn create_physical_plan(
-        &self,
-        _state: &dyn Session,
-        conf: FileScanConfig,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        let config = FileScanConfigBuilder::from(conf)
-            .with_source(self.file_source())
-            .build();
-        Ok(DataSourceExec::from_data_source(config))
-    }
-
-    fn file_source(&self) -> Arc<dyn FileSource> {
-        Arc::new(AvroSource::new())
+    fn file_source(&self, config: FileScanConfig) -> Arc<dyn FileSource> {
+        Arc::new(AvroSource::new(config))
     }
 }
