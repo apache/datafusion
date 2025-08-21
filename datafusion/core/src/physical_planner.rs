@@ -765,7 +765,7 @@ impl DefaultPhysicalPlanner {
                     .iter()
                     .any(|(_, name)| name == Aggregate::INTERNAL_GROUPING_ID);
 
-                let can_repartition = !groups.is_empty() 
+                let can_repartition = !groups.is_empty()
                     && session_state.config().target_partitions() > 1
                     && session_state.config().repartition_aggregations();
 
