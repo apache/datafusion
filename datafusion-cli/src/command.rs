@@ -240,13 +240,8 @@ impl FromStr for Command {
                 Self::OutputFormat(Some(subcommand.to_string()))
             }
             ("pset", None) => Self::OutputFormat(None),
-            ("memory_profiling", sub) => {
-                let sub = match sub {
-                    Some(s) => Some(s.parse::<MemoryProfilingCommand>().map_err(|_| ())?),
-                    None => None,
-                };
-                Self::MemoryProfiling(sub)
-            }
+            ("memory_profiling", None) => Self::MemoryProfiling(None),
+            ("memory_profiling", Some(_)) => return Err(()), // memory_profiling doesn't accept arguments
             _ => return Err(()),
         })
     }
