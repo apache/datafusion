@@ -26,8 +26,7 @@ use arrow::{
     datatypes::{DataType, Field, Schema, SchemaRef},
 };
 use datafusion_common::{
-    nested_struct::{cast_column, validate_struct_compatibility},
-    plan_err, ColumnStatistics,
+    cast_column, nested_struct::validate_struct_compatibility, plan_err, ColumnStatistics,
 };
 use std::{fmt::Debug, sync::Arc};
 /// Function used by [`SchemaMapping`] to adapt a column from the file schema to
