@@ -152,7 +152,7 @@ impl DatasetGenerator {
                 .map(|key| col(key, schema).map(PhysicalSortExpr::new_default))
                 .collect::<Result<Vec<_>>>()?;
             let batch = if let Some(ordering) = LexOrdering::new(sort_exprs) {
-                sort_batch(&base_batch, &ordering, None)?
+                sort_batch(&base_batch, &ordering, None, None)?
             } else {
                 base_batch.clone()
             };
