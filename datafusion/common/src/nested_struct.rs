@@ -209,12 +209,9 @@ pub fn validate_struct_compatibility(
 mod tests {
     use super::*;
     use arrow::{
-        array::{
-            Int32Array, Int32Builder, Int64Array, ListArray, MapArray, MapBuilder,
-            StringArray, StringBuilder,
-        },
+        array::{Int32Array, Int64Array, StringArray, StringBuilder},
         buffer::NullBuffer,
-        datatypes::{DataType, Field, Int32Type},
+        datatypes::{DataType, Field},
     };
     /// Macro to extract and downcast a column from a StructArray
     macro_rules! get_column_as {
