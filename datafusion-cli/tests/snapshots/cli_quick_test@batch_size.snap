@@ -17,11 +17,5 @@ exit_code: 0
 +---------------------------------+-------+
 | datafusion.execution.batch_size | 1     |
 +---------------------------------+-------+
-Peak memory usage: 17.5 KB
-Cumulative allocations: 17.5 KB
-Memory usage by operator:
-Other: 48.0 B
-Repartition: 17.5 KB
-
 
 ----- stderr -----

@@ -30,7 +30,7 @@ use datafusion::{
 };
 use datafusion_cli::{
     catalog::DynamicObjectStoreCatalog,
-    cli_context::{CliSessionContext, ReplSessionContext},
+    cli_context::ReplSessionContext,
     exec,
     functions::{MetadataCacheFunc, ParquetMetadataFunc},
     pool_type::PoolType,
@@ -217,9 +217,6 @@ async fn main_inner() -> Result<()> {
     // wrap the SessionContext in a REPL context (adds profiling, top consumers, etc.)
     let ctx =
         ReplSessionContext::new(session_ctx, pool.clone(), args.top_memory_consumers);
-    if args.top_memory_consumers > 0 {
-        ctx.set_memory_profiling(true);
-    }
 
     let mut print_options = PrintOptions {
         format: args.format,

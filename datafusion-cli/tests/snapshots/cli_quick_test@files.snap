@@ -15,10 +15,5 @@ exit_code: 0
 +----------+
 | 1        |
 +----------+
-Peak memory usage: 8.0 B
-Cumulative allocations: 8.0 B
-Memory usage by operator:
-Other: 8.0 B
-
 
 ----- stderr -----

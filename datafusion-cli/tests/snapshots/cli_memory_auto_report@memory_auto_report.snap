@@ -1,5 +1,6 @@
 ---
 source: datafusion-cli/tests/cli_integration.rs
+assertion_line: 267
 info:
   program: datafusion-cli
   args:
@@ -9,12 +10,17 @@ info:
 success: true
 exit_code: 0
 ----- stdout -----
-Memory profiling disabled
+Memory profiling enabled
 +----------+
 | Int64(1) |
 +----------+
 | 1        |
 +----------+
+Peak memory usage: XB
+Cumulative allocations: XB
+Memory usage by operator:
+Other: XB
+
 +----+
 | v1 |
 +----+
@@ -62,6 +68,13 @@ Memory profiling disabled
 | .  |
 | .  |
 +----+
+Peak memory usage: XB
+Cumulative allocations: XB
+Memory usage by operator:
+Other: XB
+Sorting: XB
+
 \q
 
 ----- stderr -----
+
