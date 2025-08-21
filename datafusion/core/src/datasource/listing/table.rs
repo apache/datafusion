@@ -802,6 +802,9 @@ impl ListingOptions {
                     .rev()
                     .skip(1) // get parents only; skip the file itself
                     .rev()
+                    // Partitions are expected to follow the format "column_name=value", so we
+                    // should ignore any path part that cannot be parsed into the expected format
+                    .filter(|s| s.contains('='))
                     .map(|s| s.split('=').take(1).collect())
                     .collect_vec()
             })
