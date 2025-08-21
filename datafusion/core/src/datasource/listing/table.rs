@@ -1170,13 +1170,13 @@ impl TableProvider for ListingTable {
             .with_projection(projection.cloned())
             .with_filters(Some(filters.to_vec()))
             .with_limit(limit);
-        Ok(self.scan_with_options(state, options).await?.plan())
+        Ok(self.scan_with_args(state, options).await?.plan())
     }
 
-    async fn scan_with_options(
+    async fn scan_with_args(
         &self,
         state: &dyn Session,
-        options: ScanArgs,
+        args: ScanArgs,
     ) -> Result<ScanResult> {
         let projection = options.projection();
         let filters = options.filters().map(|f| f.to_vec()).unwrap_or_default();

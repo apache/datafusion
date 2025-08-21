@@ -164,7 +164,7 @@ pub trait TableProvider: Debug + Sync + Send {
     /// because inexact filters do not guarantee that every filtered row is
     /// removed, so applying the limit could lead to too few rows being available
     /// to return as a final result.
-    #[deprecated(since = "50.0.0", note = "Use `scan_with_options` instead")]
+    #[deprecated(since = "50.0.0", note = "Use `scan_with_args` instead")]
     async fn scan(
         &self,
         state: &dyn Session,
@@ -173,10 +173,10 @@ pub trait TableProvider: Debug + Sync + Send {
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>>;
 
-    async fn scan_with_options(
+    async fn scan_with_args(
         &self,
         state: &dyn Session,
-        options: ScanArgs,
+        args: ScanArgs,
     ) -> Result<ScanResult> {
         let ScanArgs {
             preferred_ordering: _,
@@ -272,7 +272,7 @@ pub trait TableProvider: Debug + Sync + Send {
     ///     }
     /// }
     /// ```
-    #[deprecated(since = "50.0.0", note = "Use `scan_with_options` instead")]
+    #[deprecated(since = "50.0.0", note = "Use `scan_with_args` instead")]
     fn supports_filters_pushdown(
         &self,
         filters: &[&Expr],
@@ -371,7 +371,7 @@ impl ScanArgs {
 pub struct ScanResult {
     /// The ExecutionPlan to run.
     plan: Arc<dyn ExecutionPlan>,
-    // Remaining filters that were not completely evaluated during `scan_with_options()`.
+    // Remaining filters that were not completely evaluated during `scan_with_args()`.
     filters: Vec<Expr>,
 }
 

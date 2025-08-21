@@ -466,7 +466,7 @@ impl DefaultPhysicalPlanner {
                     .with_filters(Some(filters).clone())
                     .with_preferred_ordering(preferred_ordering.clone())
                     .with_limit(*fetch);
-                let res = source.scan_with_options(session_state, opts).await?;
+                let res = source.scan_with_args(session_state, opts).await?;
                 // TODO: move FilterExec wrapping logic from filter pushdown rule to here?
                 res.plan()
             }
