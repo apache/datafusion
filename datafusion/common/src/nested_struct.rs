@@ -167,6 +167,15 @@ pub fn validate_struct_compatibility(
             .iter()
             .find(|f| f.name() == target_field.name())
         {
+            // Ensure nullability is compatible. It is invalid to cast a nullable
+            // source field to a non-nullable target field as this may discard
+            // null values.
+            if source_field.is_nullable() && !target_field.is_nullable() {
+                return _plan_err!(
+                    "Cannot cast nullable struct field '{}' to non-nullable field",
+                    target_field.name()
+                );
+            }
             // Check if the matching field types are compatible
             match (source_field.data_type(), target_field.data_type()) {
                 // Recursively validate nested structs
@@ -351,5 +360,56 @@ mod tests {
         let a_result = get_column_as!(&struct_array, "a", Int64Array);
         assert_eq!(a_result.value(0), 1);
         assert_eq!(a_result.value(1), 2);
+    }
+
+    #[test]
+    fn test_validate_struct_compatibility_nullable_to_non_nullable() {
+        // Source struct: {field1: Int32 nullable}
+        let source_fields = vec![Arc::new(Field::new("field1", DataType::Int32, true))];
+
+        // Target struct: {field1: Int32 non-nullable}
+        let target_fields = vec![Arc::new(Field::new("field1", DataType::Int32, false))];
+
+        let result = validate_struct_compatibility(&source_fields, &target_fields);
+        assert!(result.is_err());
+        let error_msg = result.unwrap_err().to_string();
+        assert!(error_msg.contains("field1"));
+        assert!(error_msg.contains("non-nullable"));
+    }
+
+    #[test]
+    fn test_validate_struct_compatibility_non_nullable_to_nullable() {
+        // Source struct: {field1: Int32 non-nullable}
+        let source_fields = vec![Arc::new(Field::new("field1", DataType::Int32, false))];
+
+        // Target struct: {field1: Int32 nullable}
+        let target_fields = vec![Arc::new(Field::new("field1", DataType::Int32, true))];
+
+        let result = validate_struct_compatibility(&source_fields, &target_fields);
+        assert!(result.is_ok());
+        assert!(result.unwrap());
+    }
+
+    #[test]
+    fn test_validate_struct_compatibility_nested_nullable_to_non_nullable() {
+        // Source struct: {field1: {nested: Int32 nullable}}
+        let source_fields = vec![Arc::new(Field::new(
+            "field1",
+            Struct(vec![Arc::new(Field::new("nested", DataType::Int32, true))].into()),
+            false,
+        ))];
+
+        // Target struct: {field1: {nested: Int32 non-nullable}}
+        let target_fields = vec![Arc::new(Field::new(
+            "field1",
+            Struct(vec![Arc::new(Field::new("nested", DataType::Int32, false))].into()),
+            false,
+        ))];
+
+        let result = validate_struct_compatibility(&source_fields, &target_fields);
+        assert!(result.is_err());
+        let error_msg = result.unwrap_err().to_string();
+        assert!(error_msg.contains("nested"));
+        assert!(error_msg.contains("non-nullable"));
     }
 }
