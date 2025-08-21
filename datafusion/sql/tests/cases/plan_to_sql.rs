@@ -51,6 +51,7 @@ use datafusion_expr::builder::{
     project, subquery_alias, table_scan_with_filter_and_fetch, table_scan_with_filters,
 };
 use datafusion_functions::core::planner::CoreFunctionPlanner;
+use datafusion_functions::unicode::planner::UnicodeFunctionPlanner;
 use datafusion_functions_nested::extract::array_element_udf;
 use datafusion_functions_nested::planner::{FieldAccessPlanner, NestedFunctionPlanner};
 use datafusion_sql::unparser::ast::{
@@ -1340,6 +1341,7 @@ where
             .with_scalar_function(Arc::new(unicode::substr().as_ref().clone()))
             .with_scalar_function(make_array_udf())
             .with_expr_planner(Arc::new(CoreFunctionPlanner::default()))
+            .with_expr_planner(Arc::new(UnicodeFunctionPlanner))
             .with_expr_planner(Arc::new(NestedFunctionPlanner))
             .with_expr_planner(Arc::new(FieldAccessPlanner)),
     };

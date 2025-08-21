@@ -888,6 +888,8 @@ message PhysicalWindowExprNode {
   WindowFrame window_frame = 7;
   string name = 8;
   optional bytes fun_definition = 9;
+  bool ignore_nulls = 11;
+  bool distinct = 12;
 }
 
 message PhysicalIsNull {
