@@ -252,18 +252,6 @@ impl FromStr for Command {
     }
 }
 
-impl FromStr for MemoryProfilingCommand {
-    type Err = ();
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "enable" | "on" => Ok(Self::Enable),
-            "disable" | "off" => Ok(Self::Disable),
-            _ => Err(()),
-        }
-    }
-}
-
 impl FromStr for OutputFormat {
     type Err = ();
 
