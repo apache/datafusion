@@ -16,7 +16,6 @@
 // under the License.
 
 use std::{
-    num::NonZeroUsize,
     sync::atomic::{AtomicBool, Ordering},
     sync::Arc,
 };
@@ -24,13 +23,7 @@ use std::{
 use datafusion::{
     dataframe::DataFrame,
     error::DataFusionError,
-    execution::{
-        context::SessionState,
-        memory_pool::{MemoryPool, TrackConsumersPool, TrackedPool},
-        runtime_env::RuntimeEnvBuilder,
-        session_state::SessionStateBuilder,
-        TaskContext,
-    },
+    execution::{context::SessionState, memory_pool::TrackedPool, TaskContext},
     logical_expr::LogicalPlan,
     prelude::SessionContext,
 };
@@ -130,35 +123,8 @@ pub struct ReplSessionContext {
 impl ReplSessionContext {
     pub fn new(
         ctx: SessionContext,
-        base_memory_pool: Arc<dyn MemoryPool>,
-        top_memory_consumers: usize,
+        tracked_memory_pool: Option<Arc<dyn TrackedPool>>,
     ) -> Self {
-        let tracked_memory_pool = if top_memory_consumers > 0 {
-            let tracked = Arc::new(TrackConsumersPool::new(
-                base_memory_pool.clone(),
-                NonZeroUsize::new(top_memory_consumers).unwrap(),
-            ));
-            // tracking is disabled by default and enabled only when
-            // `set_memory_profiling(true)` is called
-            tracked.disable_tracking();
-            let runtime = ctx.runtime_env();
-            let builder = RuntimeEnvBuilder::from_runtime_env(runtime.as_ref());
-            let runtime = Arc::new(
-                builder
-                    .with_memory_pool(tracked.clone() as Arc<dyn MemoryPool>)
-                    .build()
-                    .unwrap(),
-            );
-            let state_ref = ctx.state_ref();
-            let mut state = state_ref.write();
-            *state = SessionStateBuilder::from(state.clone())
-                .with_runtime_env(runtime)
-                .build();
-            Some(tracked as Arc<dyn TrackedPool>)
-        } else {
-            None
-        };
-
         Self {
             ctx,
             memory_profiling: AtomicBool::new(false),

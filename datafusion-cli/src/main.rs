@@ -21,9 +21,12 @@ use datafusion::{
     config::ConfigOptions,
     error::{DataFusionError, Result},
     execution::{
-        context::SessionConfig, disk_manager::DiskManagerBuilder,
-        disk_manager::DiskManagerMode, memory_pool::FairSpillPool,
-        memory_pool::GreedyMemoryPool, memory_pool::MemoryPool,
+        context::SessionConfig,
+        disk_manager::{DiskManagerBuilder, DiskManagerMode},
+        memory_pool::{
+            FairSpillPool, GreedyMemoryPool, MemoryPool, TrackConsumersPool, TrackedPool,
+            UnboundedMemoryPool,
+        },
         runtime_env::RuntimeEnvBuilder,
     },
     prelude::SessionContext,
@@ -42,6 +45,7 @@ use mimalloc::MiMalloc;
 use std::{
     collections::HashMap,
     env,
+    num::NonZeroUsize,
     path::Path,
     process::ExitCode,
     sync::{Arc, LazyLock},
@@ -176,14 +180,30 @@ async fn main_inner() -> Result<()> {
     let session_config = get_session_config(&args)?;
 
     let mut rt_builder = RuntimeEnvBuilder::new();
-    if let Some(memory_limit) = args.memory_limit {
-        // set memory pool type
-        let pool: Arc<dyn MemoryPool> = match args.mem_pool_type {
-            PoolType::Fair => Arc::new(FairSpillPool::new(memory_limit)),
-            PoolType::Greedy => Arc::new(GreedyMemoryPool::new(memory_limit)),
+
+    // set memory pool type
+    let base_memory_pool: Arc<dyn MemoryPool> =
+        if let Some(memory_limit) = args.memory_limit {
+            match args.mem_pool_type {
+                PoolType::Fair => Arc::new(FairSpillPool::new(memory_limit)),
+                PoolType::Greedy => Arc::new(GreedyMemoryPool::new(memory_limit)),
+            }
+        } else {
+            Arc::new(UnboundedMemoryPool::default())
         };
-        rt_builder = rt_builder.with_memory_pool(pool);
-    }
+
+    let tracked_pool: Option<Arc<dyn TrackedPool>> = if args.top_memory_consumers > 0 {
+        let tracked = Arc::new(TrackConsumersPool::new(
+            base_memory_pool.clone(),
+            NonZeroUsize::new(args.top_memory_consumers).unwrap(),
+        ));
+        tracked.disable_tracking();
+        rt_builder = rt_builder.with_memory_pool(tracked.clone());
+        Some(tracked as Arc<dyn TrackedPool>)
+    } else {
+        rt_builder = rt_builder.with_memory_pool(base_memory_pool);
+        None
+    };
 
     // set disk limit
     if let Some(disk_limit) = args.disk_limit {
@@ -194,7 +214,6 @@ async fn main_inner() -> Result<()> {
     }
 
     let runtime_env = rt_builder.build_arc()?;
-    let pool = runtime_env.memory_pool.clone();
 
     // enable dynamic file query
     let session_ctx = SessionContext::new_with_config_rt(session_config, runtime_env)
@@ -215,8 +234,7 @@ async fn main_inner() -> Result<()> {
         )),
     );
     // wrap the SessionContext in a REPL context (adds profiling, top consumers, etc.)
-    let ctx =
-        ReplSessionContext::new(session_ctx, pool.clone(), args.top_memory_consumers);
+    let ctx = ReplSessionContext::new(session_ctx, tracked_pool);
 
     let mut print_options = PrintOptions {
         format: args.format,
