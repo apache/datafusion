@@ -104,7 +104,7 @@ impl<'a> DFParquetMetadata<'a> {
         self
     }
 
-    /// Fetch parquet metadata
+    /// Fetch parquet metadata from the remote object store
     pub async fn fetch_metadata(&self) -> Result<Arc<ParquetMetaData>> {
         let Self {
             store,
@@ -200,6 +200,8 @@ impl<'a> DFParquetMetadata<'a> {
         Ok((loc_path, schema))
     }
 
+    /// Fetch the metadata from the Parquet file via [`Self::fetch_metadata`] and convert
+    /// the statistics in the metadata using [`Self::statistics_from_parquet_metadata`]
     pub async fn fetch_statistics(&self, table_schema: &SchemaRef) -> Result<Statistics> {
         let metadata = self.fetch_metadata().await?;
         Self::statistics_from_parquet_metadata(&metadata, table_schema)
