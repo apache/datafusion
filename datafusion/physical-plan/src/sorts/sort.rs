@@ -41,10 +41,10 @@ use crate::sorts::streaming_merge::{SortedSpillFile, StreamingMergeBuilder};
 use crate::spill::get_record_batch_memory_size;
 use crate::spill::in_progress_spill_file::InProgressSpillFile;
 use crate::spill::spill_manager::{GetSlicedSize, SpillManager};
+use crate::stream::BatchSplitStream;
 use crate::stream::RecordBatchStreamAdapter;
-use crate::stream::{BatchSplitStream, RecordBatchStreamAdapter};
 use crate::topk::TopK;
-use crate::topk::{TopK, TopKDynamicFilters};
+use crate::topk::TopKDynamicFilters;
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, EmptyRecordBatchStream, ExecutionPlan,
     ExecutionPlanProperties, Partitioning, PlanProperties, SendableRecordBatchStream,
