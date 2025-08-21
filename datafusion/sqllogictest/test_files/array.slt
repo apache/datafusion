@@ -8065,6 +8065,18 @@ FixedSizeList(Field { name: "item", data_type: Int32, nullable: true, dict_id: 0
 statement error
 create table varying_fixed_size_col_table (a int[3]) as values ([1,2,3]), ([4,5]);
 
+statement ok
+COPY (select [[true, false], [false, true]] a, [false, true] b union select [[null, null]], null) to 'test_files/scratch/array/array_has/single_file.parquet' stored as parquet;
+
+statement ok
+CREATE EXTERNAL TABLE array_has STORED AS PARQUET location 'test_files/scratch/array/array_has/single_file.parquet';
+
+query B
+select array_contains(a, b) from array_has order by 1 nulls last;
+----
+true
+NULL
+
 ### Delete tables
 
 statement ok
@@ -8243,3 +8255,6 @@ drop table values_all_empty;
 
 statement ok
 drop table fixed_size_col_table;
+
+statement ok
+drop table array_has;
