@@ -15,40 +15,29 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! SQL planning extensions like [`UserDefinedFunctionPlanner`]
+//! SQL planning extensions like [`UnicodeFunctionPlanner`]
 
-use datafusion_common::Result;
-use datafusion_expr::{
-    expr::ScalarFunction,
-    planner::{ExprPlanner, PlannerResult},
-    Expr,
-};
+use datafusion_expr::expr::ScalarFunction;
+use datafusion_expr::planner::{ExprPlanner, PlannerResult};
+use datafusion_expr::Expr;
 
-#[deprecated(
-    since = "0.50.0",
-    note = "Use UnicodeFunctionPlanner and DateTimeFunctionPlanner instead"
-)]
 #[derive(Default, Debug)]
-pub struct UserDefinedFunctionPlanner;
+pub struct UnicodeFunctionPlanner;
 
-#[expect(deprecated)]
-impl ExprPlanner for UserDefinedFunctionPlanner {
-    #[cfg(feature = "datetime_expressions")]
-    fn plan_extract(&self, args: Vec<Expr>) -> Result<PlannerResult<Vec<Expr>>> {
-        Ok(PlannerResult::Planned(Expr::ScalarFunction(
-            ScalarFunction::new_udf(crate::datetime::date_part(), args),
-        )))
-    }
-
-    #[cfg(feature = "unicode_expressions")]
-    fn plan_position(&self, args: Vec<Expr>) -> Result<PlannerResult<Vec<Expr>>> {
+impl ExprPlanner for UnicodeFunctionPlanner {
+    fn plan_position(
+        &self,
+        args: Vec<Expr>,
+    ) -> datafusion_common::Result<PlannerResult<Vec<Expr>>> {
         Ok(PlannerResult::Planned(Expr::ScalarFunction(
             ScalarFunction::new_udf(crate::unicode::strpos(), args),
         )))
     }
 
-    #[cfg(feature = "unicode_expressions")]
-    fn plan_substring(&self, args: Vec<Expr>) -> Result<PlannerResult<Vec<Expr>>> {
+    fn plan_substring(
+        &self,
+        args: Vec<Expr>,
+    ) -> datafusion_common::Result<PlannerResult<Vec<Expr>>> {
         Ok(PlannerResult::Planned(Expr::ScalarFunction(
             ScalarFunction::new_udf(crate::unicode::substr(), args),
         )))
