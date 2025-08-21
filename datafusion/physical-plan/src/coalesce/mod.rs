@@ -228,6 +228,12 @@ fn gc_string_view_batch(batch: &RecordBatch) -> RecordBatch {
             let Some(s) = c.as_string_view_opt() else {
                 return Arc::clone(c);
             };
+
+            // Fast path: if the data buffers are empty, we can return the original array
+            if s.data_buffers().is_empty() {
+                return Arc::clone(c);
+            }
+
             let ideal_buffer_size: usize = s
                 .views()
                 .iter()
@@ -240,7 +246,11 @@ fn gc_string_view_batch(batch: &RecordBatch) -> RecordBatch {
                     }
                 })
                 .sum();
-            let actual_buffer_size = s.get_buffer_memory_size();
+
+            // We don't use get_buffer_memory_size here, because gc is for the contents of the
+            // data buffers, not views and nulls.
+            let actual_buffer_size =
+                s.data_buffers().iter().map(|b| b.capacity()).sum::<usize>();
 
             // Re-creating the array copies data and can be time consuming.
             // We only do it if the array is sparse
@@ -593,7 +603,7 @@ mod tests {
         }
     }
     fn batch_to_pretty_strings(batch: &RecordBatch) -> String {
-        arrow::util::pretty::pretty_format_batches(&[batch.clone()])
+        arrow::util::pretty::pretty_format_batches(std::slice::from_ref(batch))
             .unwrap()
             .to_string()
     }

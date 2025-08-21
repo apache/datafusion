@@ -21,14 +21,17 @@ use crate::async_udf::AsyncScalarUDF;
 use crate::expr::schema_name_from_exprs_comma_separated_without_space;
 use crate::simplify::{ExprSimplifyResult, SimplifyInfo};
 use crate::sort_properties::{ExprProperties, SortProperties};
+use crate::udf_eq::UdfEq;
 use crate::{ColumnarValue, Documentation, Expr, Signature};
 use arrow::datatypes::{DataType, Field, FieldRef};
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::{not_impl_err, ExprSchema, Result, ScalarValue};
+use datafusion_expr_common::dyn_eq::{DynEq, DynHash};
 use datafusion_expr_common::interval_arithmetic::Interval;
 use std::any::Any;
 use std::cmp::Ordering;
 use std::fmt::Debug;
-use std::hash::{DefaultHasher, Hash, Hasher};
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 /// Logical representation of a Scalar User Defined Function.
@@ -60,10 +63,11 @@ pub struct ScalarUDF {
 
 impl PartialEq for ScalarUDF {
     fn eq(&self, other: &Self) -> bool {
-        self.inner.equals(other.inner.as_ref())
+        self.inner.dyn_eq(other.inner.as_any())
     }
 }
 
+// TODO (https://github.com/apache/datafusion/issues/17064) PartialOrd is not consistent with PartialEq for `ScalarUDF` and it should be
 // Manual implementation based on `ScalarUDFImpl::equals`
 impl PartialOrd for ScalarUDF {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
@@ -78,7 +82,7 @@ impl Eq for ScalarUDF {}
 
 impl Hash for ScalarUDF {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.inner.hash_value().hash(state)
+        self.inner.dyn_hash(state)
     }
 }
 
@@ -141,7 +145,12 @@ impl ScalarUDF {
     /// Returns this function's display_name.
     ///
     /// See [`ScalarUDFImpl::display_name`] for more details
+    #[deprecated(
+        since = "50.0.0",
+        note = "This method is unused and will be removed in a future release"
+    )]
     pub fn display_name(&self, args: &[Expr]) -> Result<String> {
+        #[expect(deprecated)]
         self.inner.display_name(args)
     }
 
@@ -197,8 +206,9 @@ impl ScalarUDF {
         self.inner.simplify(args, info)
     }
 
-    #[allow(deprecated)]
+    #[deprecated(since = "50.0.0", note = "Use `return_field_from_args` instead.")]
     pub fn is_nullable(&self, args: &[Expr], schema: &dyn ExprSchema) -> bool {
+        #[allow(deprecated)]
         self.inner.is_nullable(args, schema)
     }
 
@@ -311,6 +321,8 @@ pub struct ScalarFunctionArgs {
     /// or `return_field_from_args`) when creating the physical expression
     /// from the logical expression
     pub return_field: FieldRef,
+    /// The config options at execution time
+    pub config_options: Arc<ConfigOptions>,
 }
 
 impl ScalarFunctionArgs {
@@ -361,7 +373,7 @@ pub struct ReturnFieldArgs<'a> {
 /// # use datafusion_expr::{ScalarUDFImpl, ScalarUDF};
 /// # use datafusion_expr::scalar_doc_sections::DOC_SECTION_MATH;
 /// /// This struct for a simple UDF that adds one to an int32
-/// #[derive(Debug)]
+/// #[derive(Debug, PartialEq, Eq, Hash)]
 /// struct AddOne {
 ///   signature: Signature,
 /// }
@@ -410,10 +422,7 @@ pub struct ReturnFieldArgs<'a> {
 /// // Call the function `add_one(col)`
 /// let expr = add_one.call(vec![col("a")]);
 /// ```
-pub trait ScalarUDFImpl: Debug + Send + Sync {
-    // Note: When adding any methods (with default implementations), remember to add them also
-    // into the AliasedScalarUDFImpl below!
-
+pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync {
     /// Returns this object as an [`Any`] trait object
     fn as_any(&self) -> &dyn Any;
 
@@ -439,6 +448,10 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     /// function.
     ///
     /// Defaults to `name(args[0], args[1], ...)`
+    #[deprecated(
+        since = "50.0.0",
+        note = "This method is unused and will be removed in a future release"
+    )]
     fn display_name(&self, args: &[Expr]) -> Result<String> {
         let names: Vec<String> = args.iter().map(ToString::to_string).collect();
         // TODO: join with ", " to standardize the formatting of Vec<Expr>, <https://github.com/apache/datafusion/issues/10364>
@@ -694,42 +707,6 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
         not_impl_err!("Function {} does not implement coerce_types", self.name())
     }
 
-    /// Return true if this scalar UDF is equal to the other.
-    ///
-    /// Allows customizing the equality of scalar UDFs.
-    /// *Must* be implemented explicitly if the UDF type has internal state.
-    /// Must be consistent with [`Self::hash_value`] and follow the same rules as [`Eq`]:
-    ///
-    /// - reflexive: `a.equals(a)`;
-    /// - symmetric: `a.equals(b)` implies `b.equals(a)`;
-    /// - transitive: `a.equals(b)` and `b.equals(c)` implies `a.equals(c)`.
-    ///
-    /// By default, compares type, [`Self::name`], [`Self::aliases`] and [`Self::signature`].
-    fn equals(&self, other: &dyn ScalarUDFImpl) -> bool {
-        self.as_any().type_id() == other.as_any().type_id()
-            && self.name() == other.name()
-            && self.aliases() == other.aliases()
-            && self.signature() == other.signature()
-    }
-
-    /// Returns a hash value for this scalar UDF.
-    ///
-    /// Allows customizing the hash code of scalar UDFs.
-    /// *Must* be implemented explicitly whenever [`Self::equals`] is implemented.
-    ///
-    /// Similarly to [`Hash`] and [`Eq`], if [`Self::equals`] returns true for two UDFs,
-    /// their `hash_value`s must be the same.
-    ///
-    /// By default, it is consistent with default implementation of [`Self::equals`].
-    fn hash_value(&self) -> u64 {
-        let hasher = &mut DefaultHasher::new();
-        self.as_any().type_id().hash(hasher);
-        self.name().hash(hasher);
-        self.aliases().hash(hasher);
-        self.signature().hash(hasher);
-        hasher.finish()
-    }
-
     /// Returns the documentation for this Scalar UDF.
     ///
     /// Documentation can be accessed programmatically as well as generating
@@ -741,9 +718,9 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
 
 /// ScalarUDF that adds an alias to the underlying function. It is better to
 /// implement [`ScalarUDFImpl`], which supports aliases, directly if possible.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 struct AliasedScalarUDFImpl {
-    inner: Arc<dyn ScalarUDFImpl>,
+    inner: UdfEq<Arc<dyn ScalarUDFImpl>>,
     aliases: Vec<String>,
 }
 
@@ -754,10 +731,14 @@ impl AliasedScalarUDFImpl {
     ) -> Self {
         let mut aliases = inner.aliases().to_vec();
         aliases.extend(new_aliases.into_iter().map(|s| s.to_string()));
-        Self { inner, aliases }
+        Self {
+            inner: inner.into(),
+            aliases,
+        }
     }
 }
 
+#[warn(clippy::missing_trait_methods)] // Delegates, so it should implement every single trait method
 impl ScalarUDFImpl for AliasedScalarUDFImpl {
     fn as_any(&self) -> &dyn Any {
         self
@@ -768,6 +749,7 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
     }
 
     fn display_name(&self, args: &[Expr]) -> Result<String> {
+        #[expect(deprecated)]
         self.inner.display_name(args)
     }
 
@@ -785,6 +767,11 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         self.inner.return_field_from_args(args)
+    }
+
+    fn is_nullable(&self, args: &[Expr], schema: &dyn ExprSchema) -> bool {
+        #[allow(deprecated)]
+        self.inner.is_nullable(args, schema)
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -829,22 +816,6 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         self.inner.coerce_types(arg_types)
-    }
-
-    fn equals(&self, other: &dyn ScalarUDFImpl) -> bool {
-        if let Some(other) = other.as_any().downcast_ref::<AliasedScalarUDFImpl>() {
-            self.inner.equals(other.inner.as_ref()) && self.aliases == other.aliases
-        } else {
-            false
-        }
-    }
-
-    fn hash_value(&self) -> u64 {
-        let hasher = &mut DefaultHasher::new();
-        std::any::type_name::<Self>().hash(hasher);
-        self.inner.hash_value().hash(hasher);
-        self.aliases.hash(hasher);
-        hasher.finish()
     }
 
     fn documentation(&self) -> Option<&Documentation> {
@@ -966,4 +937,55 @@ The following regular expression functions are supported:"#,
         label: "Union Functions",
         description: Some("Functions to work with the union data type, also know as tagged unions, variant types, enums or sum types. Note: Not related to the SQL UNION operator"),
     };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::hash::DefaultHasher;
+
+    #[derive(Debug, PartialEq, Eq, Hash)]
+    struct TestScalarUDFImpl {
+        field: &'static str,
+    }
+    impl ScalarUDFImpl for TestScalarUDFImpl {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn name(&self) -> &str {
+            "TestScalarUDFImpl"
+        }
+
+        fn signature(&self) -> &Signature {
+            unimplemented!()
+        }
+
+        fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+            unimplemented!()
+        }
+
+        fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+            unimplemented!()
+        }
+    }
+
+    #[test]
+    fn test_partial_eq() {
+        let a1 = ScalarUDF::from(TestScalarUDFImpl { field: "a" });
+        let a2 = ScalarUDF::from(TestScalarUDFImpl { field: "a" });
+        let b = ScalarUDF::from(TestScalarUDFImpl { field: "b" });
+        let eq = a1 == a2;
+        assert!(eq);
+        assert_eq!(a1, a2);
+        assert_eq!(hash(&a1), hash(&a2));
+        assert_ne!(a1, b);
+        assert_ne!(a2, b);
+    }
+
+    fn hash<T: Hash>(value: &T) -> u64 {
+        let hasher = &mut DefaultHasher::new();
+        value.hash(hasher);
+        hasher.finish()
+    }
 }

@@ -47,6 +47,7 @@ compression = [
     "bzip2",
     "flate2",
     "zstd",
+    "arrow-ipc/zstd",
     "datafusion-datasource/compression",
 ]
 crypto_expressions = ["datafusion-functions/crypto_expressions"]
@@ -128,6 +129,7 @@ datafusion-functions-table = { workspace = true }
 datafusion-functions-window = { workspace = true }
 datafusion-optimizer = { workspace = true }
 datafusion-physical-expr = { workspace = true }
+datafusion-physical-expr-adapter = { workspace = true }
 datafusion-physical-expr-common = { workspace = true }
 datafusion-physical-optimizer = { workspace = true }
 datafusion-physical-plan = { workspace = true }
@@ -171,7 +173,7 @@ rand_distr = "0.5"
 regex = { workspace = true }
 rstest = { workspace = true }
 serde_json = { workspace = true }
-sysinfo = "0.36.1"
+sysinfo = "0.37.0"
 test-utils = { path = "../../test-utils" }
 tokio = { workspace = true, features = ["rt-multi-thread", "parking_lot", "fs"] }
 
