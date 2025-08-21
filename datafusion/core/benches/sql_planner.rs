@@ -39,7 +39,6 @@ use datafusion_functions::expr_fn::{
 use std::ops::Rem;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
 use test_utils::tpcds::tpcds_schemas;
 use test_utils::tpch::tpch_schemas;
 use test_utils::TableDef;
