@@ -27,8 +27,8 @@ use datafusion_expr::{
     CreateMemoryTable, DdlStatement, Distinct, Expr, LogicalPlan, LogicalPlanBuilder,
 };
 use sqlparser::ast::{
-    Expr as SQLExpr, Ident, LimitClause, OrderBy, OrderByExpr, OrderByKind, PipeOperator,
-    Query, SelectInto, SetExpr,
+    Expr as SQLExpr, Ident, LimitClause, Offset, OffsetRows, OrderBy, OrderByExpr,
+    OrderByKind, PipeOperator, Query, SelectInto, SetExpr,
 };
 use sqlparser::tokenizer::Span;
 
@@ -120,6 +120,18 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 )?;
                 self.order_by(plan, sort_exprs)
             }
+            PipeOperator::Limit { expr, offset } => self.limit(
+                plan,
+                Some(LimitClause::LimitOffset {
+                    limit: Some(expr),
+                    offset: offset.map(|offset| Offset {
+                        value: offset,
+                        rows: OffsetRows::None,
+                    }),
+                    limit_by: vec![],
+                }),
+                planner_context,
+            ),
             x => not_impl_err!("{x} pipe operator is not supported yet"),
         }
     }
