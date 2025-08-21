@@ -40,3 +40,13 @@ FROM test
 ----
 2 2.2 b NULL
 3 3.3 c NULL
+
+# ORDER BY pipe
+query IRTT
+SELECT *
+FROM test
+|> ORDER BY a DESC
+----
+3 3.3 c NULL
+2 2.2 b NULL
+1 1.1 a NULL

@@ -110,6 +110,16 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             PipeOperator::Where { expr } => {
                 self.plan_selection(Some(expr), plan, planner_context)
             }
+            PipeOperator::OrderBy { exprs } => {
+                let sort_exprs = self.order_by_to_sort_expr(
+                    exprs,
+                    plan.schema(),
+                    planner_context,
+                    true,
+                    None,
+                )?;
+                self.order_by(plan, sort_exprs)
+            }
             x => not_impl_err!("{x} pipe operator is not supported yet"),
         }
     }
