@@ -55,14 +55,18 @@ pub enum Volatility {
     /// Always returns the same output when given the same input.
     ///
     /// DataFusion will inline immutable functions during planning.
+    ///
+    /// For example, the `abs` function is immutable, so `abs(-1)` will be
+    /// evaluated and replaced  with `1` during planning rather than invoking
+    /// the function at runtime.
     Immutable,
     /// May return different values given the same input across different
     /// queries but must return the same value for a given input within a query.
     ///
-    /// An example of a stable function is the `now()` function. For example,
-    /// the query `select col1, now() from t1`, will return different results
-    /// each time it is run, but within the same query, the output of the
-    /// `now()` function has the same value for each output row.
+    /// For example, the `now()` function is stable, because the query `select
+    /// col1, now() from t1`, will return different results each time it is run,
+    /// but within the same query, the output of the `now()` function has the
+    /// same value for each output row.
     ///
     /// DataFusion will inline `Stable` functions during planning, when
     /// possible.
