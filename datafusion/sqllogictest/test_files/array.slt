@@ -8079,7 +8079,7 @@ statement ok
 CREATE EXTERNAL TABLE array_has STORED AS PARQUET location 'test_files/scratch/array/array_has/single_file.parquet';
 
 query B
-select array_contains(a, b) from array_has;
+select array_contains(a, b) from array_has order by 1 nulls last;
 ----
 true
 NULL
