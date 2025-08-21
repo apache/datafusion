@@ -46,7 +46,7 @@ pub enum Command {
     SearchFunctions(String),
     QuietMode(Option<bool>),
     OutputFormat(Option<String>),
-    MemoryProfiling(Option<bool>),
+    MemoryProfiling,
 }
 
 pub enum OutputFormat {
@@ -111,8 +111,8 @@ impl Command {
                 }
                 Ok(())
             }
-            Self::MemoryProfiling(enable) => {
-                let enable = enable.unwrap_or_else(|| !ctx.memory_profiling());
+            Self::MemoryProfiling => {
+                let enable = !ctx.memory_profiling();
                 ctx.set_memory_profiling(enable);
                 println!(
                     "Memory profiling {}",
@@ -152,9 +152,9 @@ impl Command {
             Self::OutputFormat(_) => {
                 ("\\pset [NAME [VALUE]]", "set table output option\n(format)")
             }
-            Self::MemoryProfiling(_) => (
-                "\\memory_profiling [on|off]",
-                "toggle or set memory profiling (requires --top-memory-consumers N at startup for metrics)",
+            Self::MemoryProfiling => (
+                "\\memory_profiling",
+                "toggle memory profiling (requires --top-memory-consumers N at startup for metrics)",
             ),
         }
     }
@@ -170,7 +170,7 @@ const ALL_COMMANDS: [Command; 10] = [
     Command::SearchFunctions(String::new()),
     Command::QuietMode(None),
     Command::OutputFormat(None),
-    Command::MemoryProfiling(None),
+    Command::MemoryProfiling,
 ];
 
 fn all_commands_info() -> RecordBatch {
@@ -221,9 +221,7 @@ impl FromStr for Command {
                 Self::OutputFormat(Some(subcommand.to_string()))
             }
             ("pset", None) => Self::OutputFormat(None),
-            ("memory_profiling", None) => Self::MemoryProfiling(None),
-            ("memory_profiling", Some("on")) => Self::MemoryProfiling(Some(true)),
-            ("memory_profiling", Some("off")) => Self::MemoryProfiling(Some(false)),
+            ("memory_profiling", None) => Self::MemoryProfiling,
             ("memory_profiling", Some(_)) => return Err(()),
             _ => return Err(()),
         })
