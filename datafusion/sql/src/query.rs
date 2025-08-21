@@ -132,7 +132,13 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 }),
                 planner_context,
             ),
-            x => not_impl_err!("{x} pipe operator is not supported yet"),
+            PipeOperator::Select { exprs } => {
+                let empty_from = matches!(plan, LogicalPlan::EmptyRelation(_));
+                let select_exprs =
+                    self.prepare_select_exprs(&plan, exprs, empty_from, planner_context)?;
+                self.project(plan, select_exprs)
+            }
+            x => not_impl_err!("`{x}` pipe operator is not supported yet"),
         }
     }
 

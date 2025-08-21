@@ -59,3 +59,13 @@ FROM test
 |> LIMIT 1
 ----
 3 3.3 c NULL
+
+# SELECT pipe
+query I
+SELECT *
+FROM test
+|> SELECT a
+----
+1
+2
+3
