@@ -574,7 +574,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         Ok((intermediate_plan, intermediate_select_exprs))
     }
 
-    fn plan_selection(
+    pub(crate) fn plan_selection(
         &self,
         selection: Option<SQLExpr>,
         plan: LogicalPlan,

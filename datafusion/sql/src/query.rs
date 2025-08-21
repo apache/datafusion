@@ -27,8 +27,8 @@ use datafusion_expr::{
     CreateMemoryTable, DdlStatement, Distinct, Expr, LogicalPlan, LogicalPlanBuilder,
 };
 use sqlparser::ast::{
-    Expr as SQLExpr, Ident, LimitClause, OrderBy, OrderByExpr, OrderByKind, Query,
-    SelectInto, SetExpr,
+    Expr as SQLExpr, Ident, LimitClause, OrderBy, OrderByExpr, OrderByKind, PipeOperator,
+    Query, SelectInto, SetExpr,
 };
 use sqlparser::tokenizer::Span;
 
@@ -48,8 +48,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             self.plan_with_clause(with, planner_context)?;
         }
 
+        let pipe_operators = query.pipe_operators.clone();
+
         let set_expr = *query.body;
-        match set_expr {
+        let plan = match set_expr {
             SetExpr::Select(mut select) => {
                 let select_into = select.into.take();
                 let plan =
@@ -78,6 +80,37 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 let plan = self.order_by(plan, order_by_rex)?;
                 self.limit(plan, query.limit_clause, planner_context)
             }
+        }?;
+
+        self.pipe_operators(plan, pipe_operators, planner_context)
+    }
+
+    /// Apply pipe operators to a plan
+    fn pipe_operators(
+        &self,
+        plan: LogicalPlan,
+        pipe_operators: Vec<PipeOperator>,
+        planner_context: &mut PlannerContext,
+    ) -> Result<LogicalPlan> {
+        let mut plan = plan;
+        for pipe_operator in pipe_operators {
+            plan = self.pipe_operator(plan, pipe_operator, planner_context)?;
+        }
+        Ok(plan)
+    }
+
+    /// Apply a pipe operator to a plan
+    fn pipe_operator(
+        &self,
+        plan: LogicalPlan,
+        pipe_operator: PipeOperator,
+        planner_context: &mut PlannerContext,
+    ) -> Result<LogicalPlan> {
+        match pipe_operator {
+            PipeOperator::Where { expr } => {
+                self.plan_selection(Some(expr), plan, planner_context)
+            }
+            x => not_impl_err!("{x} pipe operator is not supported yet"),
         }
     }
 
