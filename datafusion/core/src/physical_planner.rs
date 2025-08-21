@@ -1786,17 +1786,9 @@ pub fn create_aggregate_expr_and_maybe_filter(
     // Some functions like `count_all()` create internal aliases,
     // Unwrap all alias layers to get to the underlying aggregate function
     let (name, human_display, e) = match e {
-        Expr::Alias(Alias { expr, name, .. }) => {
-            // Recursively unwrap nested aliases to reach the inner expression
-            let mut current_expr = expr.as_ref();
-            while let Expr::Alias(Alias { expr, .. }) = current_expr {
-                current_expr = expr.as_ref();
-            }
-            (
-                Some(name.clone()),
-                e.human_display().to_string(),
-                current_expr,
-            )
+        Expr::Alias(Alias { name, .. }) => {
+            let unaliased = e.clone().unalias_nested().data;
+            (Some(name.clone()), e.human_display().to_string(), unaliased)
         }
         Expr::AggregateFunction(_) => (
             Some(e.schema_name().to_string()),
@@ -1807,7 +1799,7 @@ pub fn create_aggregate_expr_and_maybe_filter(
     };
 
     create_aggregate_expr_with_name_and_maybe_filter(
-        e,
+        &e,
         name,
         human_display,
         logical_input_schema,
