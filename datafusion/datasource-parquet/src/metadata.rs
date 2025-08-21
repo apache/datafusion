@@ -104,7 +104,7 @@ impl<'a> DFParquetMetadata<'a> {
         self
     }
 
-    /// fetch parquet metadata
+    /// Fetch parquet metadata
     pub async fn fetch_metadata(&self) -> Result<Arc<ParquetMetaData>> {
         let Self {
             store,
