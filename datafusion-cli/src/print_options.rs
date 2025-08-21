@@ -15,12 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{
-    fmt::{Display, Formatter},
-    io::Write,
-    pin::Pin,
-    str::FromStr,
-};
+use std::fmt::{Display, Formatter};
+use std::io::Write;
+use std::pin::Pin;
+use std::str::FromStr;
 
 use crate::print_format::PrintFormat;
 
