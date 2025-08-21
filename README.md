@@ -135,6 +135,20 @@ Optional features:
 [apache parquet]: https://parquet.apache.org/
 [parquet modular encryption]: https://parquet.apache.org/docs/file-format/data-pages/encryption/
 
+## Schema adaptation and nested casting
+
+Data sources can evolve independently from the table schema a query expects.
+DataFusion's [`SchemaAdapter`](docs/source/library-user-guide/schema_adapter.md)
+bridges this gap by invoking `cast_column` to coerce arrays into the desired
+[`Field`] types. The function walks nested `Struct` values, fills in missing
+fields with `NULL`, and ensures each level matches the target schema.
+
+See [Schema Adapter and Column Casting](docs/source/library-user-guide/schema_adapter.md)
+for examples and notes on performance trade-offs when deeply nested structs are
+cast.
+
+[`Field`]: https://docs.rs/arrow/latest/arrow/datatypes/struct.Field.html
+
 ## DataFusion API Evolution and Deprecation Guidelines
 
 Public methods in Apache DataFusion evolve over time: while we try to maintain a

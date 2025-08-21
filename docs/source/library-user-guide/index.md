@@ -38,6 +38,10 @@ DataFusion is designed to be extensible at all points, including
 - [x] User Defined `LogicalPlan` nodes
 - [x] User Defined `ExecutionPlan` nodes
 
+For adapting columns between evolving schemas, see
+[Schema Adapter and Column Casting](schema_adapter.md), which explains how
+`cast_column` reconciles nested structs and the trade-offs of deep casting.
+
 [user guide]: ../user-guide/example-usage.md
 [contributor guide]: ../contributor-guide/index.md
 [docs]: https://docs.rs/datafusion/latest/datafusion/#architecture
