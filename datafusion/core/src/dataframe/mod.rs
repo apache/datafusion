@@ -1373,8 +1373,7 @@ impl DataFrame {
     pub async fn collect(self) -> Result<Vec<RecordBatch>> {
         let task_ctx = Arc::new(self.task_ctx());
         let plan = self.create_physical_plan().await?;
-        let batches = collect(plan, task_ctx).await?;
-        Ok(batches)
+        collect(plan, task_ctx).await
     }
 
     /// Execute the `DataFrame` and print the results to the console.
