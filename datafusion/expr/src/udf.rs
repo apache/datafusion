@@ -500,14 +500,18 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync {
     ///
     /// # Arguments
     ///
-    /// `arg_types` Data types of the arguments. These types are guaranteed to
-    /// match one of [`Self::signature`]s.
+    /// `arg_types` Data types of the arguments. The implementation of
+    /// `return_type` can assume that some other part of the code has coerced
+    /// the actual argument types to match [`Self::signature`].
     ///
     /// # Notes
     ///
     /// If you provide an implementation for [`Self::return_field_from_args`],
-    /// DataFusion will not call `return_type` (this function). In such cases
-    /// is recommended to return [`DataFusionError::Internal`] from this function.
+    /// DataFusion will not call `return_type` (this function). While it is
+    /// valid to to put [`unimplemented!()`] or [`unreachable!()`], it is
+    /// recommended to return [`DataFusionError::Internal`] instead, which
+    /// reduces the severity of symptoms if bugs occur (an error rather than a
+    /// panic).
     ///
     /// [`DataFusionError::Internal`]: datafusion_common::DataFusionError::Internal
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType>;
