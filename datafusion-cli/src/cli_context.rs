@@ -15,11 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{
-    sync::atomic::{AtomicBool, Ordering},
-    sync::Arc,
-};
-
 use datafusion::{
     dataframe::DataFrame,
     error::DataFusionError,
@@ -28,6 +23,7 @@ use datafusion::{
     prelude::SessionContext,
 };
 use object_store::ObjectStore;
+use std::sync::Arc;
 
 use crate::object_storage::{AwsOptions, GcpOptions};
 
@@ -116,7 +112,6 @@ impl CliSessionContext for SessionContext {
 /// Session context used by the CLI with memory profiling support.
 pub struct ReplSessionContext {
     ctx: SessionContext,
-    memory_profiling: AtomicBool,
     tracked_memory_pool: Option<Arc<dyn TrackedPool>>,
 }
 
@@ -127,7 +122,6 @@ impl ReplSessionContext {
     ) -> Self {
         Self {
             ctx,
-            memory_profiling: AtomicBool::new(false),
             tracked_memory_pool,
         }
     }
@@ -174,24 +168,19 @@ impl CliSessionContext for ReplSessionContext {
     }
 
     fn memory_profiling(&self) -> bool {
-        self.memory_profiling.load(Ordering::Relaxed)
+        self.tracked_memory_pool
+            .as_ref()
+            .map(|pool| pool.tracking_enabled())
+            .unwrap_or(false)
     }
 
     fn set_memory_profiling(&self, enable: bool) {
-        let Some(pool) = &self.tracked_memory_pool else {
-            return;
-        };
-
-        if enable {
-            if self.memory_profiling.swap(true, Ordering::Relaxed) {
-                return;
+        if let Some(pool) = &self.tracked_memory_pool {
+            if enable {
+                pool.enable_tracking();
+            } else {
+                pool.disable_tracking();
             }
-            pool.enable_tracking();
-        } else {
-            if !self.memory_profiling.swap(false, Ordering::Relaxed) {
-                return;
-            }
-            pool.disable_tracking();
         }
     }
 

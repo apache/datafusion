@@ -317,6 +317,9 @@ pub trait TrackedPool: Send + Sync {
     /// Disable tracking of consumers
     fn disable_tracking(&self);
 
+    /// Return true if tracking is enabled
+    fn tracking_enabled(&self) -> bool;
+
     /// Returns a snapshot of the metrics for all tracked consumers
     fn consumer_metrics(&self) -> Vec<ConsumerMemoryMetrics>;
 }
@@ -413,6 +416,11 @@ impl<I: MemoryPool> TrackConsumersPool<I> {
             .join(",\n")
             + "."
     }
+
+    /// Return true if tracking is currently enabled
+    pub fn tracking_enabled(&self) -> bool {
+        self.tracking_enabled.load(Ordering::Relaxed)
+    }
 }
 
 impl<I: MemoryPool> TrackedPool for TrackConsumersPool<I> {
@@ -422,6 +430,10 @@ impl<I: MemoryPool> TrackedPool for TrackConsumersPool<I> {
 
     fn disable_tracking(&self) {
         TrackConsumersPool::disable_tracking(self);
+    }
+
+    fn tracking_enabled(&self) -> bool {
+        TrackConsumersPool::tracking_enabled(self)
     }
 
     fn consumer_metrics(&self) -> Vec<ConsumerMemoryMetrics> {
