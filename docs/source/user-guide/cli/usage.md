@@ -124,34 +124,32 @@ Available commands inside DataFusion CLI are:
 
 - Memory profiling
 
-> **Tip:** Memory profiling requires the tracked pool. Start the CLI with `--top-memory-consumers N` (N≥1), or profiling will report no metrics. By default CLI starts with --top-memory-consumers 5.
+> **Tip:** Memory profiling requires the tracked pool. Start the CLI with `--top-memory-consumers N` (N≥1), or profiling will report no metrics. By default, the CLI starts with `--top-memory-consumers 3`.
 
-**Note:** The `\memory_profiling` command toggles memory profiling on and off; run it once to enable profiling and run it again to disable it.
+Memory profiling is disabled by default. Run the `\memory_profiling` command to enable it; a usage report will print automatically after each subsequent query. Run the command again to disable profiling.
 
 Example usage:
 
 ```text
-\memory_profiling
-```
+> \memory_profiling
+Memory profiling enabled
+> SELECT v % 100 AS group_key, COUNT(*) AS cnt, SUM(v) AS sum_v FROM generate_series(1,100000) AS t(v) GROUP BY group_key ORDER BY group_key;
 
-```bash
-> SELECT 1;
-```
-
-```text
-+---+
-| 1 |
-+---+
-| 1 |
-+---+
++-----------+------+----------+
+| group_key | cnt  | sum_v    |
++-----------+------+----------+
+| 0         | 1000 | 50050000 |
+| 1         | 1000 | 49951000 |
+| 2         | 1000 | 49952000 |
+...
 Peak memory usage: 10.0 MB
 Cumulative allocations: 101.6 MB
 Memory usage by operator:
-Other: 100.0 MB
-```
+Aggregation: 762.2 KB
+Repartition: 884.8 KB
+Sorting: 100.0 MB
 
-```bash
-> \memory_profiling
+\memory_profiling   # optional toggle to disable
 ```
 
 ## Supported SQL

@@ -30,31 +30,3 @@ DataFusion CLI (`datafusion-cli`) is a small command line utility that runs SQL 
 ## Where can I find more information?
 
 See the [`datafusion-cli` documentation](https://datafusion.apache.org/user-guide/cli/index.html) for further information.
-
-## Memory Profiling
-
-> **Tip:** Memory profiling requires the tracked pool. Start the CLI with `--top-memory-consumers N` (N≥1), or profiling will report no metrics. By default, CLI starts with --top-memory-consumers 5.
-
-Enable memory tracking; a usage report will print automatically after each subsequent query:
-
-```text
-> \memory_profiling
-Memory profiling enabled
-> SELECT v % 100 AS group_key, COUNT(*) AS cnt, SUM(v) AS sum_v FROM generate_series(1,100000) AS t(v) GROUP BY group_key ORDER BY group_key;
-
-+-----------+------+----------+
-| group_key | cnt  | sum_v    |
-+-----------+------+----------+
-| 0         | 1000 | 50050000 |
-| 1         | 1000 | 49951000 |
-| 2         | 1000 | 49952000 |
-...
-Peak memory usage: 10.0 MB
-Cumulative allocations: 101.6 MB
-Memory usage by operator:
-Aggregation: 762.2 KB
-Repartition: 884.8 KB
-Sorting: 100.0 MB
-
-\memory_profiling   # optional toggle to disable
-```
