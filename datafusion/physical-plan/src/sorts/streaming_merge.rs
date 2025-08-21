@@ -150,7 +150,8 @@ impl<'a> StreamingMergeBuilder<'a> {
         self
     }
 
-    pub fn with_cursor_batch_ratio(mut self, ratio: Option<f64>) -> Self {
+    /// This is not marked as `pub` because it is not recommended to use this method
+    pub(super) fn with_cursor_batch_ratio(mut self, ratio: Option<f64>) -> Self {
         self.cursor_batch_ratio = ratio;
         self
     }

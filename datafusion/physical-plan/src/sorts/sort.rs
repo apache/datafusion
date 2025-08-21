@@ -606,8 +606,7 @@ impl ExternalSorter {
 
         while let Some(batch) = sorted_stream.next().await {
             let batch = batch?;
-            let sorted_size =
-                get_reserved_byte_for_record_batch(&batch, self.cursor_batch_ratio);
+            let sorted_size = get_reserved_byte_for_record_batch(&batch, None);
             if self.reservation.try_grow(sorted_size).is_err() {
                 // Although the reservation is not enough, the batch is
                 // already in memory, so it's okay to combine it with previously
@@ -734,10 +733,7 @@ impl ExternalSorter {
             let batch = concat_batches(&self.schema, &self.in_mem_batches)?;
             self.in_mem_batches.clear();
             self.reservation
-                .try_resize(get_reserved_byte_for_record_batch(
-                    &batch,
-                    self.cursor_batch_ratio,
-                ))
+                .try_resize(get_reserved_byte_for_record_batch(&batch, None))
                 .map_err(Self::err_with_oom_context)?;
             let reservation = self.reservation.take();
             return self.sort_batch_stream(batch, metrics, reservation, true);
@@ -788,7 +784,7 @@ impl ExternalSorter {
         mut split: bool,
     ) -> Result<SendableRecordBatchStream> {
         assert_eq!(
-            get_reserved_byte_for_record_batch(&batch, self.cursor_batch_ratio),
+            get_reserved_byte_for_record_batch(&batch, None),
             reservation.size()
         );
 
@@ -845,7 +841,7 @@ impl ExternalSorter {
         &mut self,
         input: &RecordBatch,
     ) -> Result<()> {
-        let size = get_reserved_byte_for_record_batch(input, self.cursor_batch_ratio);
+        let size = get_reserved_byte_for_record_batch(input, None);
         match self.reservation.try_grow(size) {
             Ok(_) => Ok(()),
             Err(e) => {
