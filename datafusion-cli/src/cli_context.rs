@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::sync::Arc;
+
 use datafusion::{
     dataframe::DataFrame,
     error::DataFusionError,
@@ -23,7 +25,6 @@ use datafusion::{
     prelude::SessionContext,
 };
 use object_store::ObjectStore;
-use std::sync::Arc;
 
 use crate::object_storage::{AwsOptions, GcpOptions};
 

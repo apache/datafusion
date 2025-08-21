@@ -6,7 +6,7 @@ info:
   env:
     AWS_ACCESS_KEY_ID: TEST-DataFusionLogin
     AWS_ALLOW_HTTP: "true"
-    AWS_ENDPOINT: "http://localhost:32769"
+    AWS_ENDPOINT: "http://localhost:32768"
     AWS_SECRET_ACCESS_KEY: TEST-DataFusionPassword
   stdin: "CREATE EXTERNAL TABLE CARS\nSTORED AS CSV\nLOCATION 's3://data/cars.csv';\n\nSELECT * FROM CARS limit 1;"
 input_file: datafusion-cli/tests/sql/integration/load_s3_csv.sql
@@ -18,11 +18,6 @@ exit_code: 0
 0 row(s) fetched. 
 [ELAPSED]
 
-Peak memory usage: 0.0 B
-Cumulative allocations: 0.0 B
-Memory usage by operator:
-Other: 0.0 B
-
 +-----+-------+---------------------+
 | car | speed | time                |
 +-----+-------+---------------------+
@@ -30,11 +25,6 @@ Other: 0.0 B
 +-----+-------+---------------------+
 1 row(s) fetched. 
 [ELAPSED]
-
-Peak memory usage: 1664.0 B
-Cumulative allocations: 1664.0 B
-Memory usage by operator:
-Other: 1664.0 B
 
 \q
 
