@@ -190,9 +190,8 @@ pub trait TableProvider: Debug + Sync + Send {
             .into_iter()
             .zip(&filters)
             .filter_map(|(support, expr)| match support {
-                TableProviderFilterPushDown::Inexact | TableProviderFilterPushDown::Unsupported => {
-                    Some(expr.clone())
-                }
+                TableProviderFilterPushDown::Inexact
+                | TableProviderFilterPushDown::Unsupported => Some(expr.clone()),
                 TableProviderFilterPushDown::Exact => None,
             })
             .collect_vec();

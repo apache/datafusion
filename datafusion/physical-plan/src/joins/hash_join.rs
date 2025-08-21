@@ -290,6 +290,11 @@ impl SharedBoundsAccumulator {
 
             // Combine all column predicates for this partition with AND
             if !column_predicates.is_empty() {
+                #[cfg(debug_assertions)]
+                {
+                    // Sort predicates for consistent ordering in debug builds
+                    column_predicates.sort_by_cached_key(|expr| format!("{}", fmt_sql(expr.as_ref())));
+                }
                 let partition_predicate = column_predicates
                     .into_iter()
                     .reduce(|acc, pred| {
