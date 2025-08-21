@@ -15,11 +15,6 @@ exit_code: 0
 0 row(s) fetched. 
 [ELAPSED]
 
-Peak memory usage: 0.0 B
-Cumulative allocations: 0.0 B
-Memory usage by operator:
-Other: 0.0 B
-
 +----------+
 | count(*) |
 +----------+
@@ -27,11 +22,6 @@ Other: 0.0 B
 +----------+
 1 row(s) fetched. 
 [ELAPSED]
-
-Peak memory usage: 8.0 B
-Cumulative allocations: 8.0 B
-Memory usage by operator:
-Other: 8.0 B
 
 \q
 
