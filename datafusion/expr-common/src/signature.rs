@@ -43,11 +43,11 @@ pub const TIMEZONE_WILDCARD: &str = "+TZ";
 /// valid length. It exists to avoid the need to enumerate all possible fixed size list lengths.
 pub const FIXED_SIZE_LIST_WILDCARD: i32 = i32::MIN;
 
-/// When a function's output changes when the input does not
+/// How a function's output changes with respect to a fixed input
 ///
-/// The volatility of a function determine eligibility for certain
-/// optimizations. You should always defined your function to have the strictest
-/// volatility that applies to it to maximize performance and avoid unexpected
+/// The volatility of a function determines eligibility for certain
+/// optimizations. You should always define your function to have the strictest
+/// possible volatility to maximize performance and avoid unexpected
 /// results.
 ///
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
