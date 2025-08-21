@@ -29,7 +29,7 @@ use crate::{
 use arrow::datatypes::{DataType, Field, SchemaBuilder, SchemaRef};
 use arrow_schema::Schema;
 use async_trait::async_trait;
-use datafusion_catalog::{Session, TableProvider};
+use datafusion_catalog::{ScanArgs, ScanResult, Session, TableProvider};
 use datafusion_common::{
     config_datafusion_err, config_err, internal_err, plan_err, project_schema,
     stats::Precision, Constraints, DataFusionError, Result, SchemaExt,
@@ -1166,6 +1166,22 @@ impl TableProvider for ListingTable {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        let options = ScanArgs::default()
+            .with_projection(projection.cloned())
+            .with_filters(Some(filters.to_vec()))
+            .with_limit(limit);
+        Ok(self.scan_with_options(state, options).await?.plan())
+    }
+
+    async fn scan_with_options(
+        &self,
+        state: &dyn Session,
+        options: ScanArgs,
+    ) -> Result<ScanResult> {
+        let projection = options.projection();
+        let filters = options.filters().map(|f| f.to_vec()).unwrap_or_default();
+        let limit = options.limit();
+
         // extract types of partition columns
         let table_partition_cols = self
             .options
@@ -1195,21 +1211,36 @@ impl TableProvider for ListingTable {
 
         // if no files need to be read, return an `EmptyExec`
         if partitioned_file_lists.is_empty() {
-            let projected_schema = project_schema(&self.schema(), projection)?;
-            return Ok(Arc::new(EmptyExec::new(projected_schema)));
+            let projected_schema = project_schema(&self.schema(), projection.as_ref())?;
+            return Ok(ScanResult::new(
+                Arc::new(EmptyExec::new(projected_schema)),
+                filters.clone(),
+            ));
         }
 
-        let output_ordering = self.try_create_output_ordering()?;
+        let known_file_ordering = self.try_create_output_ordering()?;
+        let desired_file_ordering = match options.preferred_ordering() {
+            Some(ordering) if !ordering.is_empty() => {
+                // Prefer the ordering requested by the query to any inherint file ordering
+                create_ordering(&self.table_schema, &[ordering.to_vec()])?
+                    .first()
+                    .cloned()
+            }
+            Some(_) | None => {
+                // If the query did not request a specific ordering, fall back to any inherent file ordering
+                known_file_ordering.first().cloned()
+            }
+        };
         match state
             .config_options()
             .execution
             .split_file_groups_by_statistics
             .then(|| {
-                output_ordering.first().map(|output_ordering| {
+                desired_file_ordering.map(|ordering| {
                     FileScanConfig::split_groups_by_statistics_with_target_partitions(
                         &self.table_schema,
                         &partitioned_file_lists,
-                        output_ordering,
+                        &ordering,
                         self.options.target_partitions,
                     )
                 })
@@ -1230,13 +1261,17 @@ impl TableProvider for ListingTable {
         let Some(object_store_url) =
             self.table_paths.first().map(ListingTableUrl::object_store)
         else {
-            return Ok(Arc::new(EmptyExec::new(Arc::new(Schema::empty()))));
+            return Ok(ScanResult::new(
+                Arc::new(EmptyExec::new(Arc::new(Schema::empty()))),
+                filters.clone(),
+            ));
         };
 
         let file_source = self.create_file_source_with_schema_adapter()?;
 
         // create the execution plan
-        self.options
+        let plan = self
+            .options
             .format
             .create_physical_plan(
                 state,
@@ -1248,14 +1283,16 @@ impl TableProvider for ListingTable {
                 .with_file_groups(partitioned_file_lists)
                 .with_constraints(self.constraints.clone())
                 .with_statistics(statistics)
-                .with_projection(projection.cloned())
+                .with_projection(projection)
                 .with_limit(limit)
-                .with_output_ordering(output_ordering)
+                .with_output_ordering(known_file_ordering)
                 .with_table_partition_cols(table_partition_cols)
                 .with_expr_adapter(self.expr_adapter_factory.clone())
                 .build(),
             )
-            .await
+            .await?;
+
+        Ok(ScanResult::new(plan, filters.clone()))
     }
 
     fn supports_filters_pushdown(

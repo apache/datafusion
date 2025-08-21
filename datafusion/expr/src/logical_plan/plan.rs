@@ -2525,6 +2525,8 @@ pub struct TableScan {
     pub filters: Vec<Expr>,
     /// Optional number of rows to read
     pub fetch: Option<usize>,
+    /// Preferred read ordering of the table
+    pub preferred_ordering: Option<Vec<SortExpr>>,
 }
 
 impl Debug for TableScan {
@@ -2643,7 +2645,13 @@ impl TableScan {
             projected_schema,
             filters,
             fetch,
+            preferred_ordering: None,
         })
+    }
+
+    pub fn with_preferred_ordering(mut self, ordering: Option<Vec<SortExpr>>) -> Self {
+        self.preferred_ordering = ordering;
+        self
     }
 }
 
@@ -4814,6 +4822,7 @@ mod tests {
             projected_schema: Arc::clone(&schema),
             filters: vec![],
             fetch: None,
+            preferred_ordering: None,
         }));
         let col = schema.field_names()[0].clone();
 
@@ -4844,6 +4853,7 @@ mod tests {
             projected_schema: Arc::clone(&unique_schema),
             filters: vec![],
             fetch: None,
+            preferred_ordering: None,
         }));
         let col = schema.field_names()[0].clone();
 
