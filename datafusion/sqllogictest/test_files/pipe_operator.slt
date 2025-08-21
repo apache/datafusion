@@ -50,3 +50,12 @@ FROM test
 3 3.3 c NULL
 2 2.2 b NULL
 1 1.1 a NULL
+
+# ORDER BY pipe, limit
+query IRTT
+SELECT *
+FROM test
+|> ORDER BY a DESC
+|> LIMIT 1
+----
+3 3.3 c NULL
