@@ -68,8 +68,9 @@ pub enum Volatility {
     /// but within the same query, the output of the `now()` function has the
     /// same value for each output row.
     ///
-    /// DataFusion will inline `Stable` functions during planning, when
-    /// possible.
+    /// DataFusion will inline `Stable` functions when possible. For example,
+    /// `Stable` functions are inlined when planning a query for execution, but
+    /// not in View definitions or prepared statements.
     Stable,
     /// May change the return value from evaluation to evaluation.
     ///
