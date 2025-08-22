@@ -32,7 +32,9 @@ use async_trait::async_trait;
 use datafusion_catalog::{ScanArgs, ScanResult, Session, TableProvider};
 use datafusion_common::{
     config_datafusion_err, config_err, internal_err, plan_err, project_schema,
-    stats::Precision, Constraints, DataFusionError, Result, SchemaExt,
+    stats::Precision,
+    tree_node::{TreeNodeContainer, TreeNodeRecursion},
+    Constraints, DataFusionError, Result, SchemaExt,
 };
 use datafusion_datasource::{
     compute_all_files_statistics,
@@ -1221,10 +1223,31 @@ impl TableProvider for ListingTable {
         let known_file_ordering = self.try_create_output_ordering()?;
         let desired_file_ordering = match args.preferred_ordering() {
             Some(ordering) if !ordering.is_empty() => {
-                // Prefer the ordering requested by the query to any inherint file ordering
-                create_ordering(&self.table_schema, &[ordering.to_vec()])?
-                    .first()
-                    .cloned()
+                // Prefer the ordering requested by the query to any natural file ordering.
+                // We'll try to re-order the file reads to match the requested ordering as best we can using statistics.
+                // Whatever the result is, it's likely better than a natural file ordering that doesn't match the query's ordering.
+                // But we can only do this if the query's ordering is a simple ordering of columns (no expressions).
+                let can_use_preferred_ordering = ordering.iter().all(|sort_expr| {
+                    let mut contains_only_columns = true;
+                    sort_expr
+                        .apply_elements(|e| {
+                            if !matches!(e, Expr::Column(_)) {
+                                contains_only_columns = false;
+                                Ok(TreeNodeRecursion::Stop)
+                            } else {
+                                Ok(TreeNodeRecursion::Continue)
+                            }
+                        })
+                        .expect("infallible closure cannot fail");
+                    contains_only_columns
+                });
+                if can_use_preferred_ordering {
+                    create_ordering(&self.table_schema, &[ordering.to_vec()])?
+                        .first()
+                        .cloned()
+                } else {
+                    known_file_ordering.first().cloned()
+                }
             }
             Some(_) | None => {
                 // If the query did not request a specific ordering, fall back to any inherent file ordering
