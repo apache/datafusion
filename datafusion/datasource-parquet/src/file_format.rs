@@ -1313,6 +1313,7 @@ impl FileSink for ParquetSink {
                 .build()?;
                 let schema = get_writer_schema(&self.config);
                 let props = parquet_props.clone();
+                let skip_arrow_metadata = self.parquet_options.global.skip_arrow_metadata;
                 let parallel_options_clone = parallel_options.clone();
                 let pool = Arc::clone(context.memory_pool());
                 file_write_tasks.spawn(async move {
@@ -1321,6 +1322,7 @@ impl FileSink for ParquetSink {
                         rx,
                         schema,
                         &props,
+                        skip_arrow_metadata,
                         parallel_options_clone,
                         pool,
                     )
@@ -1647,7 +1649,8 @@ async fn output_single_parquet_file_parallelized(
     object_store_writer: Box<dyn AsyncWrite + Send + Unpin>,
     data: Receiver<RecordBatch>,
     output_schema: Arc<Schema>,
-    parquet_props: &WriterProperties,
+    writer_properties: &WriterProperties,
+    skip_arrow_metadata: bool,
     parallel_options: ParallelParquetWriterOptions,
     pool: Arc<dyn MemoryPool>,
 ) -> Result<FileMetaData> {
@@ -1657,20 +1660,22 @@ async fn output_single_parquet_file_parallelized(
         mpsc::channel::<SpawnedTask<RBStreamSerializeResult>>(max_rowgroups);
 
     let merged_buff = SharedBuffer::new(INITIAL_BUFFER_BYTES);
-    let writer = ArrowWriter::try_new(
+    let options = ArrowWriterOptions::new()
+        .with_properties(writer_properties.clone())
+        .with_skip_arrow_metadata(skip_arrow_metadata);
+    let writer = ArrowWriter::try_new_with_options(
         merged_buff.clone(),
         Arc::clone(&output_schema),
-        Some(parquet_props.clone()),
+        options,
     )?;
     let (writer, row_group_writer_factory) = writer.into_serialized_writer()?;
 
-    let arc_props = Arc::new(parquet_props.clone());
     let launch_serialization_task = spawn_parquet_parallel_serialization_task(
         row_group_writer_factory,
         data,
         serialize_tx,
         Arc::clone(&output_schema),
-        Arc::clone(&arc_props),
+        Arc::new(writer_properties.clone()),
         parallel_options,
         Arc::clone(&pool),
     );
