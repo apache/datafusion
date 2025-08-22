@@ -15,12 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::{Arc, LazyLock};
-
-use arrow::record_batch::RecordBatch;
 use arrow::{
     array::record_batch,
     datatypes::{DataType, Field, Schema, SchemaRef},
+    record_batch::RecordBatch,
     util::pretty::pretty_format_batches,
 };
 use arrow_schema::SortOptions;
@@ -34,15 +32,17 @@ use datafusion::{
     prelude::{ParquetReadOptions, SessionConfig, SessionContext},
     scalar::ScalarValue,
 };
-use datafusion_common::config::ConfigOptions;
+
+use datafusion_common::{config::ConfigOptions, JoinType::JoinType};
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_expr::ScalarUDF;
 use datafusion_functions::math::random::RandomFunc;
 use datafusion_functions_aggregate::count::count_udaf;
 use datafusion_physical_expr::{
-    aggregate::AggregateExprBuilder, Partitioning, ScalarFunctionExpr,
+    aggregate::AggregateExprBuilder,
+    expressions::col,
+    {LexOrdering, Partitioning, PhysicalSortExpr, ScalarFunctionExpr},
 };
-use datafusion_physical_expr::{expressions::col, LexOrdering, PhysicalSortExpr};
 use datafusion_physical_optimizer::{
     filter_pushdown::FilterPushdown, PhysicalOptimizerRule,
 };
@@ -50,27 +50,24 @@ use datafusion_physical_plan::{
     aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy},
     coalesce_batches::CoalesceBatchesExec,
     coalesce_partitions::CoalescePartitionsExec,
-    collect,
+    execution_plan::Boundedness,
     filter::FilterExec,
+    joins::{HashJoinExec, PartitionMode},
+    memory::{LazyBatchGenerator, LazyMemoryExec},
     repartition::RepartitionExec,
     sorts::sort::SortExec,
-    ExecutionPlan,
+    {collect, ExecutionPlan},
 };
-use datafusion_physical_plan::{
-    execution_plan::Boundedness,
-    memory::{LazyBatchGenerator, LazyMemoryExec},
-};
-
 use futures::StreamExt;
 use object_store::{memory::InMemory, ObjectStore};
 use parking_lot::RwLock;
 use std::{
     any::Any,
     fmt::{Display, Formatter},
+    sync::{Arc, LazyLock},
     time::Duration,
 };
 use util::{format_plan_for_test, OptimizationTest, TestNode, TestScanBuilder};
-
 mod util;
 
 #[test]
@@ -1531,9 +1528,6 @@ STORED AS PARQUET;
 /// filter predicates must be identical across runs.
 #[tokio::test]
 async fn test_hashjoin_dynamic_filter_pushdown_out_of_order() {
-    use datafusion_common::JoinType;
-    use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
-
     // Build and execute a plan with the given delays for the build side
     // partitions, returning the formatted plan string.
     async fn run_with_delays(delays: [u64; 2]) -> String {
