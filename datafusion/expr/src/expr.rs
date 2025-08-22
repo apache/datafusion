@@ -642,7 +642,7 @@ pub type SchemaFieldMetadata = std::collections::HashMap<String, String>;
 /// # Returns
 ///
 /// A new `SchemaFieldMetadata` containing only the intersected metadata
-pub fn intersect_for_union<'a>(
+pub fn intersect_metadata_for_union<'a>(
     metadatas: impl IntoIterator<Item = &'a SchemaFieldMetadata>,
 ) -> SchemaFieldMetadata {
     let mut metadatas = metadatas.into_iter();

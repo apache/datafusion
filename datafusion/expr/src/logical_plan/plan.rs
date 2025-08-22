@@ -32,7 +32,7 @@ use super::invariants::{
 use super::DdlStatement;
 use crate::builder::{change_redundant_column, unnest_with_options};
 use crate::expr::{
-    intersect_for_union, Placeholder, Sort as SortExpr, WindowFunction,
+    intersect_metadata_for_union, Placeholder, Sort as SortExpr, WindowFunction,
     WindowFunctionParams,
 };
 use crate::expr_rewriter::{
@@ -2802,7 +2802,7 @@ impl Union {
 
                     let mut field =
                         Field::new(name, data_type.clone(), final_is_nullable);
-                    field.set_metadata(intersect_maps(unmerged_metadata));
+                    field.set_metadata(intersect_metadata_for_union(unmerged_metadata));
 
                     (None, Arc::new(field))
                 },
@@ -2894,12 +2894,6 @@ impl Union {
 
         Ok(schema)
     }
-}
-
-fn intersect_maps<'a>(
-    inputs: impl IntoIterator<Item = &'a HashMap<String, String>>,
-) -> HashMap<String, String> {
-    intersect_for_union(inputs)
 }
 
 // Manual implementation needed because of `schema` field. Comparison excludes this field.
