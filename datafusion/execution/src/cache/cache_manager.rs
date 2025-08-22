@@ -25,19 +25,34 @@ use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
-/// The cache of listing files statistics.
-/// if set [`CacheManagerConfig::with_files_statistics_cache`]
-/// Will avoid infer same file statistics repeatedly during the session lifetime,
-/// this cache will store in [`crate::runtime_env::RuntimeEnv`].
+/// A cache for [`Statistics`].
+///
+/// If enabled via [`CacheManagerConfig::with_files_statistics_cache`] this
+/// cache avoids inferring the same file statistics repeatedly during the
+/// session lifetime.
+///
+/// See [`crate::runtime_env::RuntimeEnv`] for more details
 pub type FileStatisticsCache =
     Arc<dyn CacheAccessor<Path, Arc<Statistics>, Extra = ObjectMeta>>;
 
+/// Cache for storing the [`ObjectMeta`]s that result from listing a path
+///
+/// Listing a path means doing an object store "list" operation or `ls`
+/// command on the local filesystem. This operation can be expensive,
+/// especially when done over remote object stores.
+///
+/// See [`crate::runtime_env::RuntimeEnv`] for more details
 pub type ListFilesCache =
     Arc<dyn CacheAccessor<Path, Arc<Vec<ObjectMeta>>, Extra = ObjectMeta>>;
 
-/// Represents generic file-embedded metadata.
+/// Generic file-embedded metadata used with [`FileMetadataCache`].
+///
+/// For example, Parquet footers and page metadata can be represented
+/// using this trait.
+///
+/// See [`crate::runtime_env::RuntimeEnv`] for more details
 pub trait FileMetadata: Any + Send + Sync {
-    /// Returns the file metadata as [`Any`] so that it can be downcasted to a specific
+    /// Returns the file metadata as [`Any`] so that it can be downcast to a specific
     /// implementation.
     fn as_any(&self) -> &dyn Any;
 
@@ -48,7 +63,20 @@ pub trait FileMetadata: Any + Send + Sync {
     fn extra_info(&self) -> HashMap<String, String>;
 }
 
-/// Cache to store file-embedded metadata.
+/// Cache for file-embedded metadata.
+///
+/// This cache stores per-file metadata in the form of [`FileMetadata`],
+///
+/// For example, the built in [`ListingTable`] uses this cache to avoid parsing
+/// Parquet footers multiple times for the same file.
+///
+/// DataFusion provides a default implementation, [`DefaultFilesMetadataCache`],
+/// and users can also provide their own implementations to implement custom
+/// caching strategies.
+///
+/// See [`crate::runtime_env::RuntimeEnv`] for more details.
+///
+/// [`ListingTable`]: https://docs.rs/datafusion/latest/datafusion/datasource/listing/struct.ListingTable.html
 pub trait FileMetadataCache:
     CacheAccessor<ObjectMeta, Arc<dyn FileMetadata>, Extra = ObjectMeta>
 {
@@ -93,6 +121,13 @@ impl Debug for dyn FileMetadataCache {
     }
 }
 
+/// Manages various caches used in DataFusion.
+///
+/// Following DataFusion design principles, DataFusion provides default cache
+/// implementations, while also allowing users to provide their own custom cache
+/// implementations by implementing the relevant traits.
+///
+/// See [`CacheManagerConfig`] for configuration options.
 #[derive(Debug)]
 pub struct CacheManager {
     file_statistic_cache: Option<FileStatisticsCache>,
@@ -130,7 +165,7 @@ impl CacheManager {
         self.file_statistic_cache.clone()
     }
 
-    /// Get the cache of objectMeta under same path.
+    /// Get the cache for storing the result of listing [`ObjectMeta`]s under the same path.
     pub fn get_list_files_cache(&self) -> Option<ListFilesCache> {
         self.list_files_cache.clone()
     }
@@ -181,6 +216,9 @@ impl Default for CacheManagerConfig {
 }
 
 impl CacheManagerConfig {
+    /// Set the cache for files statistics.
+    ///
+    /// Default is `None` (disabled).
     pub fn with_files_statistics_cache(
         mut self,
         cache: Option<FileStatisticsCache>,
@@ -189,11 +227,17 @@ impl CacheManagerConfig {
         self
     }
 
+    /// Set the cache for listing files.
+    ///     
+    /// Default is `None` (disabled).
     pub fn with_list_files_cache(mut self, cache: Option<ListFilesCache>) -> Self {
         self.list_files_cache = cache;
         self
     }
 
+    /// Sets the cache for file-embedded metadata.
+    ///
+    /// Default is a [`DefaultFilesMetadataCache`].
     pub fn with_file_metadata_cache(
         mut self,
         cache: Option<Arc<dyn FileMetadataCache>>,
@@ -202,6 +246,7 @@ impl CacheManagerConfig {
         self
     }
 
+    /// Sets the limit of the file-embedded metadata cache, in bytes.
     pub fn with_metadata_cache_limit(mut self, limit: usize) -> Self {
         self.metadata_cache_limit = limit;
         self
