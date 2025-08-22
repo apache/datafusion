@@ -12624,6 +12624,192 @@ impl<'de> serde::Deserialize<'de> for MaybePhysicalSortExprs {
         deserializer.deserialize_struct("datafusion.MaybePhysicalSortExprs", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for MemoryScanExecNode {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.partitions.is_empty() {
+            len += 1;
+        }
+        if self.schema.is_some() {
+            len += 1;
+        }
+        if !self.projection.is_empty() {
+            len += 1;
+        }
+        if !self.sort_information.is_empty() {
+            len += 1;
+        }
+        if self.show_sizes {
+            len += 1;
+        }
+        if self.fetch.is_some() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion.MemoryScanExecNode", len)?;
+        if !self.partitions.is_empty() {
+            struct_ser.serialize_field("partitions", &self.partitions.iter().map(pbjson::private::base64::encode).collect::<Vec<_>>())?;
+        }
+        if let Some(v) = self.schema.as_ref() {
+            struct_ser.serialize_field("schema", v)?;
+        }
+        if !self.projection.is_empty() {
+            struct_ser.serialize_field("projection", &self.projection)?;
+        }
+        if !self.sort_information.is_empty() {
+            struct_ser.serialize_field("sortInformation", &self.sort_information)?;
+        }
+        if self.show_sizes {
+            struct_ser.serialize_field("showSizes", &self.show_sizes)?;
+        }
+        if let Some(v) = self.fetch.as_ref() {
+            struct_ser.serialize_field("fetch", v)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for MemoryScanExecNode {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "partitions",
+            "schema",
+            "projection",
+            "sort_information",
+            "sortInformation",
+            "show_sizes",
+            "showSizes",
+            "fetch",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Partitions,
+            Schema,
+            Projection,
+            SortInformation,
+            ShowSizes,
+            Fetch,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "partitions" => Ok(GeneratedField::Partitions),
+                            "schema" => Ok(GeneratedField::Schema),
+                            "projection" => Ok(GeneratedField::Projection),
+                            "sortInformation" | "sort_information" => Ok(GeneratedField::SortInformation),
+                            "showSizes" | "show_sizes" => Ok(GeneratedField::ShowSizes),
+                            "fetch" => Ok(GeneratedField::Fetch),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = MemoryScanExecNode;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion.MemoryScanExecNode")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<MemoryScanExecNode, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut partitions__ = None;
+                let mut schema__ = None;
+                let mut projection__ = None;
+                let mut sort_information__ = None;
+                let mut show_sizes__ = None;
+                let mut fetch__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Partitions => {
+                            if partitions__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("partitions"));
+                            }
+                            partitions__ = 
+                                Some(map_.next_value::<Vec<::pbjson::private::BytesDeserialize<_>>>()?
+                                    .into_iter().map(|x| x.0).collect())
+                            ;
+                        }
+                        GeneratedField::Schema => {
+                            if schema__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("schema"));
+                            }
+                            schema__ = map_.next_value()?;
+                        }
+                        GeneratedField::Projection => {
+                            if projection__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("projection"));
+                            }
+                            projection__ = 
+                                Some(map_.next_value::<Vec<::pbjson::private::NumberDeserialize<_>>>()?
+                                    .into_iter().map(|x| x.0).collect())
+                            ;
+                        }
+                        GeneratedField::SortInformation => {
+                            if sort_information__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("sortInformation"));
+                            }
+                            sort_information__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::ShowSizes => {
+                            if show_sizes__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("showSizes"));
+                            }
+                            show_sizes__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Fetch => {
+                            if fetch__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("fetch"));
+                            }
+                            fetch__ = 
+                                map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| x.0)
+                            ;
+                        }
+                    }
+                }
+                Ok(MemoryScanExecNode {
+                    partitions: partitions__.unwrap_or_default(),
+                    schema: schema__,
+                    projection: projection__.unwrap_or_default(),
+                    sort_information: sort_information__.unwrap_or_default(),
+                    show_sizes: show_sizes__.unwrap_or_default(),
+                    fetch: fetch__,
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion.MemoryScanExecNode", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for NamedStructField {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
