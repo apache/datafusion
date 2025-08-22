@@ -90,11 +90,10 @@ impl SessionStateDefaults {
             Arc::new(functions_nested::planner::NestedFunctionPlanner),
             #[cfg(feature = "nested_expressions")]
             Arc::new(functions_nested::planner::FieldAccessPlanner),
-            #[cfg(any(
-                feature = "datetime_expressions",
-                feature = "unicode_expressions"
-            ))]
-            Arc::new(functions::planner::UserDefinedFunctionPlanner),
+            #[cfg(feature = "datetime_expressions")]
+            Arc::new(functions::datetime::planner::DatetimeFunctionPlanner),
+            #[cfg(feature = "unicode_expressions")]
+            Arc::new(functions::unicode::planner::UnicodeFunctionPlanner),
             Arc::new(functions_aggregate::planner::AggregateFunctionPlanner),
             Arc::new(functions_window::planner::WindowFunctionPlanner),
         ];
