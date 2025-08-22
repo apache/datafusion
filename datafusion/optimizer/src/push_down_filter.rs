@@ -3012,9 +3012,7 @@ mod tests {
         let table_scan = LogicalPlan::TableScan(TableScan {
             table_name: "test".into(),
             filters,
-            projected_schema: Arc::new(DFSchema::try_from(
-                (*test_provider.schema()).clone(),
-            )?),
+            projected_schema: Arc::new(DFSchema::try_from(test_provider.schema())?),
             projection,
             source: Arc::new(test_provider),
             fetch: None,
@@ -3384,7 +3382,7 @@ mod tests {
               Projection: b.a
                 SubqueryAlias: b
                   Projection: Int64(0) AS a
-                    EmptyRelation
+                    EmptyRelation: rows=1
         ",
         );
         // Ensure that the predicate without any columns (0 = 1) is
@@ -3398,7 +3396,7 @@ mod tests {
               SubqueryAlias: b
                 Projection: Int64(0) AS a
                   Filter: Int64(0) = Int64(1)
-                    EmptyRelation
+                    EmptyRelation: rows=1
         "
         )
     }
@@ -3817,7 +3815,7 @@ mod tests {
         )
     }
 
-    #[derive(Debug)]
+    #[derive(Debug, PartialEq, Eq, Hash)]
     struct TestScalarUDF {
         signature: Signature,
     }

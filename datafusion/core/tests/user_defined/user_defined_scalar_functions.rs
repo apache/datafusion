@@ -43,9 +43,9 @@ use datafusion_common::{
 use datafusion_expr::expr::FieldMetadata;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::{
-    lit_with_metadata, udf_equals_hash, Accumulator, ColumnarValue, CreateFunction,
-    CreateFunctionBody, LogicalPlanBuilder, OperateFunctionArg, ReturnFieldArgs,
-    ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
+    lit_with_metadata, Accumulator, ColumnarValue, CreateFunction, CreateFunctionBody,
+    LogicalPlanBuilder, OperateFunctionArg, ReturnFieldArgs, ScalarFunctionArgs,
+    ScalarUDF, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_functions_nested::range::range_udf;
 use parking_lot::Mutex;
@@ -218,8 +218,6 @@ impl ScalarUDFImpl for Simple0ArgsScalarUDF {
     fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         Ok(ColumnarValue::Scalar(ScalarValue::Int32(Some(100))))
     }
-
-    udf_equals_hash!(ScalarUDFImpl);
 }
 
 #[tokio::test]
@@ -560,8 +558,6 @@ impl ScalarUDFImpl for AddIndexToStringVolatileScalarUDF {
         };
         Ok(ColumnarValue::Array(Arc::new(StringArray::from(answer))))
     }
-
-    udf_equals_hash!(ScalarUDFImpl);
 }
 
 #[tokio::test]
@@ -665,7 +661,7 @@ async fn volatile_scalar_udf_with_params() -> Result<()> {
     Ok(())
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 struct CastToI64UDF {
     signature: Signature,
 }
@@ -787,7 +783,7 @@ async fn deregister_udf() -> Result<()> {
     Ok(())
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 struct TakeUDF {
     signature: Signature,
 }
@@ -979,8 +975,6 @@ impl ScalarUDFImpl for ScalarFunctionWrapper {
 
         Ok(ExprSimplifyResult::Simplified(replacement))
     }
-
-    udf_equals_hash!(ScalarUDFImpl);
 }
 
 impl ScalarFunctionWrapper {
@@ -1282,8 +1276,6 @@ impl ScalarUDFImpl for MyRegexUdf {
             _ => exec_err!("regex_udf only accepts a Utf8 arguments"),
         }
     }
-
-    udf_equals_hash!(ScalarUDFImpl);
 }
 
 #[tokio::test]
@@ -1471,8 +1463,6 @@ impl ScalarUDFImpl for MetadataBasedUdf {
             }
         }
     }
-
-    udf_equals_hash!(ScalarUDFImpl);
 }
 
 #[tokio::test]
@@ -1611,7 +1601,7 @@ async fn test_metadata_based_udf_with_literal() -> Result<()> {
 /// sides. For the input, we will handle the data differently if there is
 /// the canonical extension type Bool8. For the output we will add a
 /// user defined extension type.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 struct ExtensionBasedUdf {
     name: String,
     signature: Signature,
@@ -1790,7 +1780,7 @@ async fn test_extension_based_udf() -> Result<()> {
 
 #[tokio::test]
 async fn test_config_options_work_for_scalar_func() -> Result<()> {
-    #[derive(Debug)]
+    #[derive(Debug, PartialEq, Eq, Hash)]
     struct TestScalarUDF {
         signature: Signature,
     }

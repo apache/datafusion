@@ -68,7 +68,7 @@ pub type PhysicalExprRef = Arc<dyn PhysicalExpr>;
 /// [`Expr`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/enum.Expr.html
 /// [`create_physical_expr`]: https://docs.rs/datafusion/latest/datafusion/physical_expr/fn.create_physical_expr.html
 /// [`Column`]: https://docs.rs/datafusion/latest/datafusion/physical_expr/expressions/struct.Column.html
-pub trait PhysicalExpr: Send + Sync + Display + Debug + DynEq + DynHash {
+pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
     /// Returns the physical expression as [`Any`] so that it can be
     /// downcast to a specific implementation.
     fn as_any(&self) -> &dyn Any;
@@ -110,15 +110,13 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + DynEq + DynHash {
             // When the scalar is true or false, skip the scatter process
             if let Some(v) = value {
                 if *v {
-                    return Ok(ColumnarValue::from(
-                        Arc::new(selection.clone()) as ArrayRef
-                    ));
+                    Ok(ColumnarValue::from(Arc::new(selection.clone()) as ArrayRef))
                 } else {
-                    return Ok(tmp_result);
+                    Ok(tmp_result)
                 }
             } else {
                 let array = BooleanArray::from(vec![None; batch.num_rows()]);
-                return scatter(selection, &array).map(ColumnarValue::Array);
+                scatter(selection, &array).map(ColumnarValue::Array)
             }
         } else {
             Ok(tmp_result)

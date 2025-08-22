@@ -39,7 +39,7 @@ arrow = { workspace = true }
 async-trait = { workspace = true }
 aws-config = "1.8.3"
 aws-credential-types = "1.2.5"
-clap = { version = "4.5.43", features = ["derive", "cargo"] }
+clap = { version = "4.5.44", features = ["derive", "cargo"] }
 datafusion = { workspace = true, features = [
     "avro",
     "crypto_expressions",
@@ -47,6 +47,7 @@ datafusion = { workspace = true, features = [
     "encoding_expressions",
     "nested_expressions",
     "parquet",
+    "parquet_encryption",
     "recursive_protection",
     "regex_expressions",
     "unicode_expressions",

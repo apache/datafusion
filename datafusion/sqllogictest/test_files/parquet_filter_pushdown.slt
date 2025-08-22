@@ -551,7 +551,7 @@ COPY (
         '2023-10-01 00:00:00'::timestamptz AS start_timestamp,
         'prod' as deployment_environment
 )
-TO 'data/1.parquet';
+TO 'test_files/scratch/parquet_filter_pushdown/data/1.parquet';
 
 statement ok
 COPY (
@@ -560,10 +560,10 @@ COPY (
         '2024-10-01 00:00:00'::timestamptz AS start_timestamp,
         'staging' as deployment_environment
 )
-TO 'data/2.parquet';
+TO 'test_files/scratch/parquet_filter_pushdown/data/2.parquet';
 
 statement ok
-CREATE EXTERNAL TABLE t1 STORED AS PARQUET LOCATION 'data/';
+CREATE EXTERNAL TABLE t1 STORED AS PARQUET LOCATION 'test_files/scratch/parquet_filter_pushdown/data/';
 
 statement ok
 SET datafusion.execution.parquet.pushdown_filters = true;
