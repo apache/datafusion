@@ -147,7 +147,7 @@ See [Schema Adapter and Column Casting](docs/source/library-user-guide/schema_ad
 for examples and notes on performance trade-offs when deeply nested structs are
 cast.
 
-[`Field`]: https://docs.rs/arrow/latest/arrow/datatypes/struct.Field.html
+[`field`]: https://docs.rs/arrow/latest/arrow/datatypes/struct.Field.html
 
 ## DataFusion API Evolution and Deprecation Guidelines
 

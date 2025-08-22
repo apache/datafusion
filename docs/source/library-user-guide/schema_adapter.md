@@ -103,4 +103,4 @@ type differs between source and target schemas. In this example, `id` is cast fr
   wide structs can increase memory use and CPU time, so avoid unnecessary
   casting in hot paths.
 
-[`Field`]: https://docs.rs/arrow/latest/arrow/datatypes/struct.Field.html
+[`field`]: https://docs.rs/arrow/latest/arrow/datatypes/struct.Field.html
