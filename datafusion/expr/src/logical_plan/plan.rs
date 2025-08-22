@@ -2809,8 +2809,9 @@ impl Union {
             )
             .collect::<Vec<(Option<TableReference>, _)>>();
 
-        let union_schema_metadata =
-            intersect_maps(inputs.iter().map(|input| input.schema().metadata()));
+        let union_schema_metadata = intersect_metadata_for_union(
+            inputs.iter().map(|input| input.schema().metadata()),
+        );
 
         // Functional Dependencies are not preserved after UNION operation
         let schema = DFSchema::new_with_metadata(union_fields, union_schema_metadata)?;
@@ -2879,14 +2880,16 @@ impl Union {
                 };
 
                 let mut field = Field::new(&name, data_type.clone(), nullable);
-                let field_metadata =
-                    intersect_maps(fields.iter().map(|field| field.metadata()));
+                let field_metadata = intersect_metadata_for_union(
+                    fields.iter().map(|field| field.metadata()),
+                );
                 field.set_metadata(field_metadata);
                 Ok((None, Arc::new(field)))
             })
             .collect::<Result<_>>()?;
-        let union_schema_metadata =
-            intersect_maps(inputs.iter().map(|input| input.schema().metadata()));
+        let union_schema_metadata = intersect_metadata_for_union(
+            inputs.iter().map(|input| input.schema().metadata()),
+        );
 
         // Functional Dependencies are not preserved after UNION operation
         let schema = DFSchema::new_with_metadata(union_fields, union_schema_metadata)?;
