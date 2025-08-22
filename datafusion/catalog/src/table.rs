@@ -164,7 +164,6 @@ pub trait TableProvider: Debug + Sync + Send {
     /// because inexact filters do not guarantee that every filtered row is
     /// removed, so applying the limit could lead to too few rows being available
     /// to return as a final result.
-    #[deprecated(since = "50.0.0", note = "Use `scan_with_args` instead")]
     async fn scan(
         &self,
         state: &dyn Session,
@@ -195,7 +194,6 @@ pub trait TableProvider: Debug + Sync + Send {
                 TableProviderFilterPushDown::Exact => None,
             })
             .collect_vec();
-        #[expect(deprecated)]
         let plan = self
             .scan(state, projection.as_ref(), &filters, limit)
             .await?;
@@ -381,6 +379,7 @@ pub struct ScanResult {
     /// The ExecutionPlan to run.
     plan: Arc<dyn ExecutionPlan>,
     // Remaining filters that were not completely evaluated during `scan_with_args()`.
+    // These were previously referred to as "unsupported filters" or "inexact filters".
     filters: Vec<Expr>,
 }
 

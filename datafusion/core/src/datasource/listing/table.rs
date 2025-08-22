@@ -1696,7 +1696,6 @@ mod tests {
 
         let table = load_table(&ctx, "alltypes_plain.parquet").await?;
         let projection = None;
-        #[expect(deprecated)]
         let exec = table
             .scan(&ctx.state(), projection, &[], None)
             .await
@@ -1834,7 +1833,6 @@ mod tests {
         // this will filter out the only file in the store
         let filter = Expr::not_eq(col("p1"), lit("v1"));
 
-        #[expect(deprecated)]
         let scan = table
             .scan(&ctx.state(), None, &[filter], None)
             .await
@@ -2735,7 +2733,6 @@ mod tests {
             .with_schema(schema_default);
         let table_default = ListingTable::try_new(config_default)?;
 
-        #[expect(deprecated)]
         let exec_default = table_default.scan(&state, None, &[], None).await?;
         assert_eq!(
             exec_default.partition_statistics(None)?.num_rows,
@@ -2757,7 +2754,6 @@ mod tests {
             .with_schema(schema_disabled);
         let table_disabled = ListingTable::try_new(config_disabled)?;
 
-        #[expect(deprecated)]
         let exec_disabled = table_disabled.scan(&state, None, &[], None).await?;
         assert_eq!(
             exec_disabled.partition_statistics(None)?.num_rows,
@@ -2777,7 +2773,6 @@ mod tests {
             .with_schema(schema_enabled);
         let table_enabled = ListingTable::try_new(config_enabled)?;
 
-        #[expect(deprecated)]
         let exec_enabled = table_enabled.scan(&state, None, &[], None).await?;
         assert_eq!(
             exec_enabled.partition_statistics(None)?.num_rows,
@@ -2884,7 +2879,6 @@ mod tests {
         assert!(table.schema_adapter_factory().is_none());
 
         // The scan should work correctly with the default schema adapter
-        #[expect(deprecated)]
         let scan_result = table.scan(&ctx.state(), None, &[], None).await;
         assert!(
             scan_result.is_ok(),
@@ -2921,7 +2915,6 @@ mod tests {
         )?;
 
         // The error should bubble up from the scan operation when schema mapping fails
-        #[expect(deprecated)]
         let scan_result = table.scan(&ctx.state(), None, &[], None).await;
 
         assert!(scan_result.is_err());
