@@ -2665,7 +2665,7 @@ impl Display for OutputFormat {
 mod tests {
     use crate::config::{
         ConfigEntry, ConfigExtension, ConfigField, ConfigFileType, ExtensionOptions,
-        Extensions, TableOptions,
+        Extensions, TableOptions, TableParquetOptions,
     };
     use std::any::Any;
     use std::collections::HashMap;
