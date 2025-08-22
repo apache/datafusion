@@ -615,21 +615,24 @@ bar         |
 ```
 
 ## Pipe operators
+
 Some SQL dialects (e.g. BigQuery) support the pipe operator `|>`.
 The SQL dialect can be set like this:
+
 ```sql
 set datafusion.sql_parser.dialect = 'BigQuery';
 ```
 
 DataFusion currently supports the following pipe operators:
+
 - [WHERE](#pipe_where)
 - [ORDER BY](#pipe_order_by)
 - [LIMIT](#pipe_limit)
 - [SELECT](#pipe_select)
 - [EXTEND](#pipe_extend)
 
-
 (pipe_where)=
+
 ### WHERE
 
 ```sql
@@ -644,6 +647,7 @@ DataFusion currently supports the following pipe operators:
 ```
 
 (pipe_order_by)=
+
 ### ORDER BY
 
 ```sql
@@ -659,6 +663,7 @@ DataFusion currently supports the following pipe operators:
 ```
 
 (pipe_limit)=
+
 ### LIMIT
 
 ```sql
@@ -673,6 +678,7 @@ DataFusion currently supports the following pipe operators:
 ```
 
 (pipe_select)=
+
 ### SELECT
 
 ```sql
@@ -688,6 +694,7 @@ DataFusion currently supports the following pipe operators:
 ```
 
 (pipe_extend)=
+
 ### EXTEND
 
 ```sql
