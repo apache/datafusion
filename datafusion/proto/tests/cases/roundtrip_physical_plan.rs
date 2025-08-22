@@ -2125,3 +2125,14 @@ async fn analyze_roundtrip_unoptimized() -> Result<()> {
     physical_planner.optimize_physical_plan(unoptimized, &session_state, |_, _| {})?;
     Ok(())
 }
+
+#[tokio::test]
+async fn roundtrip_memory_source() -> Result<()> {
+    let ctx = SessionContext::new();
+    let plan = ctx
+        .sql("select * from values ('Tom', 18)")
+        .await?
+        .create_physical_plan()
+        .await?;
+    roundtrip_test(plan)
+}
