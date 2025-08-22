@@ -1040,6 +1040,15 @@ message AvroScanExecNode {
   FileScanExecConf base_conf = 1;
 }
 
+message MemoryScanExecNode {
+  repeated bytes partitions = 1;
+  datafusion_common.Schema schema = 2;
+  Projection projection = 3;
+  repeated PhysicalSortExprNodeCollection sort_information = 4;
+  bool show_sizes = 5;
+  optional uint32 fetch = 6;
+}
+
 message CooperativeExecNode {
   PhysicalPlanNode input = 1;
 }

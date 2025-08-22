@@ -40,6 +40,7 @@ use crate::{convert_required, into_required};
 
 use datafusion::arrow::compute::SortOptions;
 use datafusion::arrow::datatypes::{IntervalMonthDayNanoType, Schema, SchemaRef};
+use datafusion::catalog::memory::MemorySourceConfig;
 use datafusion::datasource::file_format::csv::CsvSink;
 use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
 use datafusion::datasource::file_format::json::JsonSink;
@@ -2408,6 +2409,9 @@ impl protobuf::PhysicalPlanNode {
                     )),
                 }));
             }
+        }
+
+        if let Some(scan_conf) = data_source.as_any().downcast_ref::<MemorySourceConfig>() {
         }
 
         Ok(None)
