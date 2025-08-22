@@ -17,12 +17,9 @@
 
 //! Execution functions
 
-use crate::catalog::DynamicObjectStoreSchemaProvider;
 use crate::cli_context::CliSessionContext;
 use crate::helper::split_from_semicolon;
-use crate::object_storage::instrumented::{
-    InstrumentedObjectStore, InstrumentedObjectStoreRegistry,
-};
+use crate::object_storage::instrumented::InstrumentedObjectStoreRegistry;
 use crate::print_format::PrintFormat;
 use crate::{
     command::{Command, OutputFormat},
