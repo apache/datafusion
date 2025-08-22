@@ -33,7 +33,7 @@ use datafusion::{
     scalar::ScalarValue,
 };
 
-use datafusion_common::{config::ConfigOptions, JoinType::JoinType};
+use datafusion_common::{config::ConfigOptions, JoinType};
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_expr::ScalarUDF;
 use datafusion_functions::math::random::RandomFunc;
