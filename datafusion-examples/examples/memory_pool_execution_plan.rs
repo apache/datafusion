@@ -24,9 +24,9 @@
 //! - Handle memory pressure by spilling to disk
 //! - Release memory when done
 
-use arrow::array::{Int32Array, StringArray};
 use arrow::record_batch::RecordBatch;
-use arrow_schema::{DataType, Field, Schema, SchemaRef};
+use arrow_schema::SchemaRef;
+use datafusion::common::record_batch;
 use datafusion::datasource::{memory::MemTable, DefaultTableSource};
 use datafusion::error::{DataFusionError, Result};
 use datafusion::execution::memory_pool::{MemoryConsumer, MemoryReservation};
@@ -56,46 +56,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = SessionConfig::new().with_coalesce_batches(false);
     let ctx = SessionContext::new_with_config_rt(config, runtime.clone());
 
-    // Create some test data
-    let schema = Arc::new(Schema::new(vec![
-        Field::new("id", DataType::Int32, false),
-        Field::new("name", DataType::Utf8, false),
-    ]));
-
     // Create smaller batches to ensure we get multiple RecordBatches from the scan
     // Make each batch smaller than the memory limit to force multiple batches
-    let batch1 = RecordBatch::try_new(
-        schema.clone(),
-        vec![
-            Arc::new(Int32Array::from([1; 800].to_vec())), // Much smaller
-            Arc::new(StringArray::from(["Alice"; 800].to_vec())),
-        ],
+    let batch1 = record_batch!(
+        ("id", Int32, vec![1; 800]),
+        ("name", Utf8, vec!["Alice"; 800])
     )?;
-    let batch2 = RecordBatch::try_new(
-        schema.clone(),
-        vec![
-            Arc::new(Int32Array::from([2; 800].to_vec())),
-            Arc::new(StringArray::from(["Bob"; 800].to_vec())),
-        ],
+
+    let batch2 = record_batch!(
+        ("id", Int32, vec![2; 800]),
+        ("name", Utf8, vec!["Bob"; 800])
     )?;
-    let batch3 = RecordBatch::try_new(
-        schema.clone(),
-        vec![
-            Arc::new(Int32Array::from([3; 800].to_vec())),
-            Arc::new(StringArray::from(["Charlie"; 800].to_vec())),
-        ],
+
+    let batch3 = record_batch!(
+        ("id", Int32, vec![3; 800]),
+        ("name", Utf8, vec!["Charlie"; 800])
     )?;
-    let batch4 = RecordBatch::try_new(
-        schema.clone(),
-        vec![
-            Arc::new(Int32Array::from([4; 800].to_vec())),
-            Arc::new(StringArray::from(["David"; 800].to_vec())),
-        ],
+
+    let batch4 = record_batch!(
+        ("id", Int32, vec![4; 800]),
+        ("name", Utf8, vec!["David"; 800])
     )?;
+
+    let schema = batch1.schema();
 
     // Create a single MemTable with all batches in one partition to preserve order but ensure streaming
     let mem_table = Arc::new(MemTable::try_new(
-        schema.clone(),
+        Arc::clone(&schema),
         vec![vec![batch1, batch2, batch3, batch4]], // Single partition with multiple batches
     )?);
 
@@ -111,11 +98,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("---------------------------------------------------");
 
     // Wrap our input plan with our custom BufferingExecutionPlan
-    let buffering_plan =
-        Arc::new(BufferingExecutionPlan::new(schema.clone(), physical_plan));
+    let buffering_plan = Arc::new(BufferingExecutionPlan::new(schema, physical_plan));
 
     // Create a task context from our runtime
-    let task_ctx = Arc::new(TaskContext::default().with_runtime(runtime.clone()));
+    let task_ctx = Arc::new(TaskContext::default().with_runtime(runtime));
 
     // Execute the plan directly to demonstrate memory tracking
     println!("Executing BufferingExecutionPlan with memory tracking...");
@@ -279,7 +265,6 @@ impl ExecutionPlan for BufferingExecutionPlan {
 
         // Incoming stream of batches
         let mut input_stream = self.input.execute(partition, context)?;
-        let schema = Arc::clone(&self.schema);
 
         // Process the stream and collect all batches
         Ok(Box::pin(RecordBatchStreamAdapter::new(
@@ -302,18 +287,12 @@ impl ExecutionPlan for BufferingExecutionPlan {
 
                 // Since this is a simplified example, return an empty batch
                 // In a real implementation, you would create a batch stream from the processed results
-                RecordBatch::try_new(
-                    schema,
-                    vec![
-                        Arc::new(Int32Array::from(vec![5])),
-                        Arc::new(StringArray::from(vec!["Eve"])),
-                    ],
-                )
-                .map_err(|e| {
-                    DataFusionError::Execution(format!(
-                        "Failed to create final RecordBatch: {e}",
-                    ))
-                })
+                record_batch!(("id", Int32, vec![5]), ("name", Utf8, vec!["Eve"]))
+                    .map_err(|e| {
+                        DataFusionError::Execution(format!(
+                            "Failed to create final RecordBatch: {e}",
+                        ))
+                    })
             }),
         )))
     }
