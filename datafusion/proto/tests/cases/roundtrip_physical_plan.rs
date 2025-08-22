@@ -75,8 +75,8 @@ use datafusion::physical_plan::expressions::{
 };
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::joins::{
-    HashJoinExec, NestedLoopJoinExec, PartitionMode, StreamJoinPartitionMode,
-    SymmetricHashJoinExec,
+    HashJoinExec, NestedLoopJoinExec, PartitionMode, SortMergeJoinExec,
+    StreamJoinPartitionMode, SymmetricHashJoinExec,
 };
 use datafusion::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion::physical_plan::placeholder_row::PlaceholderRowExec;
@@ -2124,4 +2124,66 @@ async fn analyze_roundtrip_unoptimized() -> Result<()> {
         datafusion::physical_planner::DefaultPhysicalPlanner::default();
     physical_planner.optimize_physical_plan(unoptimized, &session_state, |_, _| {})?;
     Ok(())
+}
+
+#[test]
+fn roundtrip_sort_merge_join() -> Result<()> {
+    let field_a = Field::new("col", DataType::Int64, false);
+    let schema_left = Schema::new(vec![field_a.clone()]);
+    let schema_right = Schema::new(vec![field_a]);
+    let on = vec![(
+        Arc::new(Column::new("col", schema_left.index_of("col")?)) as _,
+        Arc::new(Column::new("col", schema_right.index_of("col")?)) as _,
+    )];
+
+    let schema_left = Arc::new(schema_left);
+    let schema_right = Arc::new(schema_right);
+    for join_type in [
+        JoinType::Inner,
+        JoinType::Left,
+        JoinType::Right,
+        JoinType::Full,
+        JoinType::LeftAnti,
+        JoinType::RightAnti,
+        JoinType::LeftSemi,
+        JoinType::RightSemi,
+    ] {
+        roundtrip_test(Arc::new(SortMergeJoinExec::try_new(
+            Arc::new(EmptyExec::new(schema_left.clone())),
+            Arc::new(EmptyExec::new(schema_right.clone())),
+            on.clone(),
+            None,
+            join_type,
+            vec![Default::default()],
+            NullEquality::NullEqualsNothing,
+        )?))?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_logical_plan_sort_merge_join() -> Result<()> {
+    let ctx = SessionContext::new();
+    ctx.register_csv(
+        "t0",
+        "tests/testdata/test.csv",
+        datafusion::prelude::CsvReadOptions::default().has_header(true),
+    )
+    .await?;
+    ctx.register_csv(
+        "t1",
+        "tests/testdata/test.csv",
+        datafusion::prelude::CsvReadOptions::default().has_header(true),
+    )
+    .await?;
+
+    ctx.sql("SET datafusion.optimizer.prefer_hash_join = false")
+        .await?
+        .show()
+        .await?;
+
+    let query = "SELECT t1.* FROM t0 join t1 on t0.a = t1.a";
+    let plan = ctx.sql(query).await?.create_physical_plan().await?;
+
+    roundtrip_test(plan)
 }
