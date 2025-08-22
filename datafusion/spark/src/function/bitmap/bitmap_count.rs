@@ -34,7 +34,7 @@ use datafusion_expr::{
 use datafusion_functions::utils::make_scalar_function;
 use datafusion_functions::{downcast_arg, downcast_named_arg};
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct BitmapCount {
     signature: Signature,
 }
