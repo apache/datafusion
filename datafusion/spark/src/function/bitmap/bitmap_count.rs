@@ -48,6 +48,7 @@ impl Default for BitmapCount {
 impl BitmapCount {
     pub fn new() -> Self {
         Self {
+            // TODO: add definitive TypeSignature after https://github.com/apache/datafusion/issues/17291 is done
             signature: Signature::any(1, Volatility::Immutable),
         }
     }
