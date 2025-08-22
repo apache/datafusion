@@ -67,7 +67,7 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
   - **U**: swap the meaning of x* and x*?"#
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct RegexpLikeFunc {
     signature: Signature,
 }

@@ -40,7 +40,7 @@ Zero and positive numbers return `1`."#,
     syntax_example = "signum(numeric_expression)",
     standard_argument(name = "numeric_expression", prefix = "Numeric")
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SignumFunc {
     signature: Signature,
 }

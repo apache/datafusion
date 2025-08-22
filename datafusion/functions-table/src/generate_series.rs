@@ -31,17 +31,28 @@ use datafusion_expr::{Expr, TableType};
 use datafusion_physical_plan::memory::{LazyBatchGenerator, LazyMemoryExec};
 use datafusion_physical_plan::ExecutionPlan;
 use parking_lot::RwLock;
+use std::any::Any;
 use std::fmt;
 use std::str::FromStr;
 use std::sync::Arc;
 
 /// Empty generator that produces no rows - used when series arguments contain null values
 #[derive(Debug, Clone)]
-struct Empty {
+pub struct Empty {
     name: &'static str,
 }
 
+impl Empty {
+    pub fn name(&self) -> &'static str {
+        self.name
+    }
+}
+
 impl LazyBatchGenerator for Empty {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
     fn generate_next_batch(&mut self) -> Result<Option<RecordBatch>> {
         Ok(None)
     }
@@ -54,7 +65,7 @@ impl fmt::Display for Empty {
 }
 
 /// Trait for values that can be generated in a series
-trait SeriesValue: fmt::Debug + Clone + Send + Sync + 'static {
+pub trait SeriesValue: fmt::Debug + Clone + Send + Sync + 'static {
     type StepType: fmt::Debug + Clone + Send + Sync;
     type ValueType: fmt::Debug + Clone + Send + Sync;
 
@@ -101,10 +112,20 @@ impl SeriesValue for i64 {
 }
 
 #[derive(Debug, Clone)]
-struct TimestampValue {
+pub struct TimestampValue {
     value: i64,
     parsed_tz: Option<Tz>,
     tz_str: Option<Arc<str>>,
+}
+
+impl TimestampValue {
+    pub fn value(&self) -> i64 {
+        self.value
+    }
+
+    pub fn tz_str(&self) -> Option<&Arc<str>> {
+        self.tz_str.as_ref()
+    }
 }
 
 impl SeriesValue for TimestampValue {
@@ -167,7 +188,7 @@ impl SeriesValue for TimestampValue {
 
 /// Indicates the arguments used for generating a series.
 #[derive(Debug, Clone)]
-enum GenSeriesArgs {
+pub enum GenSeriesArgs {
     /// ContainsNull signifies that at least one argument(start, end, step) was null, thus no series will be generated.
     ContainsNull { name: &'static str },
     /// Int64Args holds the start, end, and step values for generating integer series when all arguments are not null.
@@ -203,122 +224,20 @@ enum GenSeriesArgs {
 
 /// Table that generates a series of integers/timestamps from `start`(inclusive) to `end`, incrementing by step
 #[derive(Debug, Clone)]
-struct GenerateSeriesTable {
+pub struct GenerateSeriesTable {
     schema: SchemaRef,
     args: GenSeriesArgs,
 }
 
-#[derive(Debug, Clone)]
-struct GenericSeriesState<T: SeriesValue> {
-    schema: SchemaRef,
-    start: T,
-    end: T,
-    step: T::StepType,
-    batch_size: usize,
-    current: T,
-    include_end: bool,
-    name: &'static str,
-}
-
-impl<T: SeriesValue> LazyBatchGenerator for GenericSeriesState<T> {
-    fn generate_next_batch(&mut self) -> Result<Option<RecordBatch>> {
-        let mut buf = Vec::with_capacity(self.batch_size);
-
-        while buf.len() < self.batch_size
-            && !self
-                .current
-                .should_stop(self.end.clone(), &self.step, self.include_end)
-        {
-            buf.push(self.current.to_value_type());
-            self.current.advance(&self.step)?;
-        }
-
-        if buf.is_empty() {
-            return Ok(None);
-        }
-
-        let array = self.current.create_array(buf)?;
-        let batch = RecordBatch::try_new(Arc::clone(&self.schema), vec![array])?;
-        Ok(Some(batch))
-    }
-}
-
-impl<T: SeriesValue> fmt::Display for GenericSeriesState<T> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(
-            f,
-            "{}: start={}, end={}, batch_size={}",
-            self.name,
-            self.start.display_value(),
-            self.end.display_value(),
-            self.batch_size
-        )
-    }
-}
-
-fn reach_end_int64(val: i64, end: i64, step: i64, include_end: bool) -> bool {
-    if step > 0 {
-        if include_end {
-            val > end
-        } else {
-            val >= end
-        }
-    } else if include_end {
-        val < end
-    } else {
-        val <= end
-    }
-}
-
-fn validate_interval_step(
-    step: IntervalMonthDayNano,
-    start: i64,
-    end: i64,
-) -> Result<()> {
-    if step.months == 0 && step.days == 0 && step.nanoseconds == 0 {
-        return plan_err!("Step interval cannot be zero");
+impl GenerateSeriesTable {
+    pub fn new(schema: SchemaRef, args: GenSeriesArgs) -> Self {
+        Self { schema, args }
     }
 
-    let step_is_positive = step.months > 0 || step.days > 0 || step.nanoseconds > 0;
-    let step_is_negative = step.months < 0 || step.days < 0 || step.nanoseconds < 0;
-
-    if start > end && step_is_positive {
-        return plan_err!("Start is bigger than end, but increment is positive: Cannot generate infinite series");
-    }
-
-    if start < end && step_is_negative {
-        return plan_err!("Start is smaller than end, but increment is negative: Cannot generate infinite series");
-    }
-
-    Ok(())
-}
-
-#[async_trait]
-impl TableProvider for GenerateSeriesTable {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn schema(&self) -> SchemaRef {
-        Arc::clone(&self.schema)
-    }
-
-    fn table_type(&self) -> TableType {
-        TableType::Base
-    }
-
-    async fn scan(
+    pub fn as_generator(
         &self,
-        state: &dyn Session,
-        projection: Option<&Vec<usize>>,
-        _filters: &[Expr],
-        _limit: Option<usize>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        let batch_size = state.config_options().execution.batch_size;
-        let schema = match projection {
-            Some(projection) => Arc::new(self.schema.project(projection)?),
-            None => self.schema(),
-        };
+        batch_size: usize,
+    ) -> Result<Arc<RwLock<dyn LazyBatchGenerator>>> {
         let generator: Arc<RwLock<dyn LazyBatchGenerator>> = match &self.args {
             GenSeriesArgs::ContainsNull { name } => Arc::new(RwLock::new(Empty { name })),
             GenSeriesArgs::Int64Args {
@@ -407,6 +326,158 @@ impl TableProvider for GenerateSeriesTable {
                 name,
             })),
         };
+
+        Ok(generator)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct GenericSeriesState<T: SeriesValue> {
+    schema: SchemaRef,
+    start: T,
+    end: T,
+    step: T::StepType,
+    batch_size: usize,
+    current: T,
+    include_end: bool,
+    name: &'static str,
+}
+
+impl<T: SeriesValue> GenericSeriesState<T> {
+    pub fn name(&self) -> &'static str {
+        self.name
+    }
+
+    pub fn batch_size(&self) -> usize {
+        self.batch_size
+    }
+
+    pub fn include_end(&self) -> bool {
+        self.include_end
+    }
+
+    pub fn start(&self) -> &T {
+        &self.start
+    }
+
+    pub fn end(&self) -> &T {
+        &self.end
+    }
+
+    pub fn step(&self) -> &T::StepType {
+        &self.step
+    }
+
+    pub fn current(&self) -> &T {
+        &self.current
+    }
+}
+
+impl<T: SeriesValue> LazyBatchGenerator for GenericSeriesState<T> {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn generate_next_batch(&mut self) -> Result<Option<RecordBatch>> {
+        let mut buf = Vec::with_capacity(self.batch_size);
+
+        while buf.len() < self.batch_size
+            && !self
+                .current
+                .should_stop(self.end.clone(), &self.step, self.include_end)
+        {
+            buf.push(self.current.to_value_type());
+            self.current.advance(&self.step)?;
+        }
+
+        if buf.is_empty() {
+            return Ok(None);
+        }
+
+        let array = self.current.create_array(buf)?;
+        let batch = RecordBatch::try_new(Arc::clone(&self.schema), vec![array])?;
+        Ok(Some(batch))
+    }
+}
+
+impl<T: SeriesValue> fmt::Display for GenericSeriesState<T> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "{}: start={}, end={}, batch_size={}",
+            self.name,
+            self.start.display_value(),
+            self.end.display_value(),
+            self.batch_size
+        )
+    }
+}
+
+fn reach_end_int64(val: i64, end: i64, step: i64, include_end: bool) -> bool {
+    if step > 0 {
+        if include_end {
+            val > end
+        } else {
+            val >= end
+        }
+    } else if include_end {
+        val < end
+    } else {
+        val <= end
+    }
+}
+
+fn validate_interval_step(
+    step: IntervalMonthDayNano,
+    start: i64,
+    end: i64,
+) -> Result<()> {
+    if step.months == 0 && step.days == 0 && step.nanoseconds == 0 {
+        return plan_err!("Step interval cannot be zero");
+    }
+
+    let step_is_positive = step.months > 0 || step.days > 0 || step.nanoseconds > 0;
+    let step_is_negative = step.months < 0 || step.days < 0 || step.nanoseconds < 0;
+
+    if start > end && step_is_positive {
+        return plan_err!("Start is bigger than end, but increment is positive: Cannot generate infinite series");
+    }
+
+    if start < end && step_is_negative {
+        return plan_err!("Start is smaller than end, but increment is negative: Cannot generate infinite series");
+    }
+
+    Ok(())
+}
+
+#[async_trait]
+impl TableProvider for GenerateSeriesTable {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn schema(&self) -> SchemaRef {
+        Arc::clone(&self.schema)
+    }
+
+    fn table_type(&self) -> TableType {
+        TableType::Base
+    }
+
+    async fn scan(
+        &self,
+        state: &dyn Session,
+        projection: Option<&Vec<usize>>,
+        _filters: &[Expr],
+        _limit: Option<usize>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let batch_size = state.config_options().execution.batch_size;
+        let schema = match projection {
+            Some(projection) => Arc::new(self.schema.project(projection)?),
+            None => self.schema(),
+        };
+
+        let generator = self.as_generator(batch_size)?;
 
         Ok(Arc::new(LazyMemoryExec::try_new(schema, vec![generator])?))
     }

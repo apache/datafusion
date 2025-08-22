@@ -30,7 +30,7 @@ use std::sync::Arc;
 
 #[user_doc(
     doc_section(label = "String Functions"),
-    description = "Returns the Unicode character code of the first character in a string.",
+    description = "Returns the first Unicode scalar value of a string.",
     syntax_example = "ascii(str)",
     sql_example = r#"```sql
 > select ascii('abc');
@@ -49,7 +49,7 @@ use std::sync::Arc;
     standard_argument(name = "str", prefix = "String"),
     related_udf(name = "chr")
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct AsciiFunc {
     signature: Signature,
 }
