@@ -34,7 +34,8 @@ use crate::protobuf::physical_aggregate_expr_node::AggregateFunction;
 use crate::protobuf::physical_expr_node::ExprType;
 use crate::protobuf::physical_plan_node::PhysicalPlanType;
 use crate::protobuf::{
-    self, proto_error, window_agg_exec_node, ListUnnest as ProtoListUnnest,
+    self, proto_error, window_agg_exec_node, ListUnnest as ProtoListUnnest, SortExprNode,
+    SortMergeJoinExecNode,
 };
 use crate::{convert_required, into_required};
 
@@ -74,7 +75,8 @@ use datafusion::physical_plan::expressions::PhysicalSortExpr;
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::joins::utils::{ColumnIndex, JoinFilter};
 use datafusion::physical_plan::joins::{
-    CrossJoinExec, NestedLoopJoinExec, StreamJoinPartitionMode, SymmetricHashJoinExec,
+    CrossJoinExec, NestedLoopJoinExec, SortMergeJoinExec, StreamJoinPartitionMode,
+    SymmetricHashJoinExec,
 };
 use datafusion::physical_plan::joins::{HashJoinExec, PartitionMode};
 use datafusion::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
@@ -294,6 +296,9 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
             PhysicalPlanType::GenerateSeries(generate_series) => {
                 self.try_into_generate_series_physical_plan(generate_series)
             }
+            PhysicalPlanType::SortMergeJoin(sort_join) => {
+                self.try_into_sort_join(sort_join, ctx, runtime, extension_codec)
+            }
         }
     }
 
@@ -358,6 +363,13 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
 
         if let Some(exec) = plan.downcast_ref::<SymmetricHashJoinExec>() {
             return protobuf::PhysicalPlanNode::try_from_symmetric_hash_join_exec(
+                exec,
+                extension_codec,
+            );
+        }
+
+        if let Some(exec) = plan.downcast_ref::<SortMergeJoinExec>() {
+            return protobuf::PhysicalPlanNode::try_from_sort_merge_join_exec(
                 exec,
                 extension_codec,
             );
@@ -1752,6 +1764,117 @@ impl protobuf::PhysicalPlanNode {
             protobuf::GenerateSeriesName::GsRange => "range",
         }
     }
+    fn try_into_sort_join(
+        &self,
+        sort_join: &SortMergeJoinExecNode,
+        ctx: &SessionContext,
+        runtime: &RuntimeEnv,
+        extension_codec: &dyn PhysicalExtensionCodec,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let left = into_physical_plan(&sort_join.left, ctx, runtime, extension_codec)?;
+        let left_schema = left.schema();
+        let right = into_physical_plan(&sort_join.right, ctx, runtime, extension_codec)?;
+        let right_schema = right.schema();
+
+        let filter = sort_join
+            .filter
+            .as_ref()
+            .map(|f| {
+                let schema = f
+                    .schema
+                    .as_ref()
+                    .ok_or_else(|| proto_error("Missing JoinFilter schema"))?
+                    .try_into()?;
+
+                let expression = parse_physical_expr(
+                    f.expression.as_ref().ok_or_else(|| {
+                        proto_error("Unexpected empty filter expression")
+                    })?,
+                    ctx,
+                    &schema,
+                    extension_codec,
+                )?;
+                let column_indices = f
+                    .column_indices
+                    .iter()
+                    .map(|i| {
+                        let side =
+                            protobuf::JoinSide::try_from(i.side).map_err(|_| {
+                                proto_error(format!(
+                                    "Received a SortMergeJoinExecNode message with JoinSide in Filter {}",
+                                    i.side
+                                ))
+                            })?;
+
+                        Ok(ColumnIndex {
+                            index: i.index as usize,
+                            side: side.into(),
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+
+                Ok(JoinFilter::new(
+                    expression,
+                    column_indices,
+                    Arc::new(schema),
+                ))
+            })
+            .map_or(Ok(None), |v: Result<JoinFilter>| v.map(Some))?;
+
+        let join_type =
+            protobuf::JoinType::try_from(sort_join.join_type).map_err(|_| {
+                proto_error(format!(
+                    "Received a SortMergeJoinExecNode message with unknown JoinType {}",
+                    sort_join.join_type
+                ))
+            })?;
+
+        let null_equality = protobuf::NullEquality::try_from(sort_join.null_equality)
+            .map_err(|_| {
+                proto_error(format!(
+                    "Received a SortMergeJoinExecNode message with unknown NullEquality {}",
+                    sort_join.null_equality
+                ))
+            })?;
+
+        let sort_options = sort_join
+            .sort_options
+            .iter()
+            .map(|e| SortOptions {
+                descending: !e.asc,
+                nulls_first: e.nulls_first,
+            })
+            .collect();
+        let on = sort_join
+            .on
+            .iter()
+            .map(|col| {
+                let left = parse_physical_expr(
+                    &col.left.clone().unwrap(),
+                    ctx,
+                    left_schema.as_ref(),
+                    extension_codec,
+                )?;
+                let right = parse_physical_expr(
+                    &col.right.clone().unwrap(),
+                    ctx,
+                    right_schema.as_ref(),
+                    extension_codec,
+                )?;
+                Ok((left, right))
+            })
+            .collect::<Result<_>>()?;
+
+        Ok(Arc::new(SortMergeJoinExec::try_new(
+            left,
+            right,
+            on,
+            filter,
+            join_type.into(),
+            sort_options,
+            null_equality.into(),
+        )?))
+    }
 
     fn try_into_generate_series_physical_plan(
         &self,
@@ -2149,6 +2272,90 @@ impl protobuf::PhysicalPlanNode {
                     left_sort_exprs,
                     right_sort_exprs,
                     filter,
+                },
+            ))),
+        })
+    }
+
+    fn try_from_sort_merge_join_exec(
+        exec: &SortMergeJoinExec,
+        extension_codec: &dyn PhysicalExtensionCodec,
+    ) -> Result<Self> {
+        let left = protobuf::PhysicalPlanNode::try_from_physical_plan(
+            exec.left().to_owned(),
+            extension_codec,
+        )?;
+        let right = protobuf::PhysicalPlanNode::try_from_physical_plan(
+            exec.right().to_owned(),
+            extension_codec,
+        )?;
+        let on = exec
+            .on()
+            .iter()
+            .map(|tuple| {
+                let l = serialize_physical_expr(&tuple.0, extension_codec)?;
+                let r = serialize_physical_expr(&tuple.1, extension_codec)?;
+                Ok::<_, DataFusionError>(protobuf::JoinOn {
+                    left: Some(l),
+                    right: Some(r),
+                })
+            })
+            .collect::<Result<_>>()?;
+        let join_type: protobuf::JoinType = exec.join_type().to_owned().into();
+        let null_equality: protobuf::NullEquality = exec.null_equality().into();
+        let filter = exec
+            .filter()
+            .as_ref()
+            .map(|f| {
+                let expression =
+                    serialize_physical_expr(f.expression(), extension_codec)?;
+                let column_indices = f
+                    .column_indices()
+                    .iter()
+                    .map(|i| {
+                        let side: protobuf::JoinSide = i.side.to_owned().into();
+                        protobuf::ColumnIndex {
+                            index: i.index as u32,
+                            side: side.into(),
+                        }
+                    })
+                    .collect();
+                let schema = f.schema().as_ref().try_into()?;
+                Ok(protobuf::JoinFilter {
+                    expression: Some(expression),
+                    column_indices,
+                    schema: Some(schema),
+                })
+            })
+            .map_or(Ok(None), |v: Result<protobuf::JoinFilter>| v.map(Some))?;
+
+        let sort_options = exec
+            .sort_options()
+            .iter()
+            .map(
+                |SortOptions {
+                     descending,
+                     nulls_first,
+                 }| {
+                    SortExprNode {
+                        expr: None,
+                        asc: !*descending,
+                        nulls_first: *nulls_first,
+                    }
+                },
+            )
+            .collect();
+
+        Ok(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(PhysicalPlanType::SortMergeJoin(Box::new(
+                protobuf::SortMergeJoinExecNode {
+                    left: Some(Box::new(left)),
+                    right: Some(Box::new(right)),
+                    on,
+                    join_type: join_type.into(),
+                    null_equality: null_equality.into(),
+                    filter,
+                    sort_options,
                 },
             ))),
         })
