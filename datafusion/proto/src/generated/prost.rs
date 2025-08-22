@@ -1589,6 +1589,21 @@ pub struct AvroScanExecNode {
     pub base_conf: ::core::option::Option<FileScanExecConf>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct MemoryScanExecNode {
+    #[prost(bytes = "vec", repeated, tag = "1")]
+    pub partitions: ::prost::alloc::vec::Vec<::prost::alloc::vec::Vec<u8>>,
+    #[prost(message, optional, tag = "2")]
+    pub schema: ::core::option::Option<super::datafusion_common::Schema>,
+    #[prost(uint32, repeated, tag = "3")]
+    pub projection: ::prost::alloc::vec::Vec<u32>,
+    #[prost(message, repeated, tag = "4")]
+    pub sort_information: ::prost::alloc::vec::Vec<PhysicalSortExprNodeCollection>,
+    #[prost(bool, tag = "5")]
+    pub show_sizes: bool,
+    #[prost(uint32, optional, tag = "6")]
+    pub fetch: ::core::option::Option<u32>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CooperativeExecNode {
     #[prost(message, optional, boxed, tag = "1")]
     pub input: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
