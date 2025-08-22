@@ -350,12 +350,6 @@ impl TopK {
 
         let new_threshold_row = &max_row.row;
 
-        // Extract scalar values BEFORE acquiring lock to reduce critical section
-        let thresholds = match self.heap.get_threshold_values(&self.expr)? {
-            Some(t) => t,
-            None => return Ok(()),
-        };
-
         // Fast path: check if the current value in topk is better than what is
         // currently set in the filter with a read only lock
         let needs_update = self
@@ -373,6 +367,12 @@ impl TopK {
         if !needs_update {
             return Ok(());
         }
+
+        // Extract scalar values BEFORE acquiring lock to reduce critical section
+        let thresholds = match self.heap.get_threshold_values(&self.expr)? {
+            Some(t) => t,
+            None => return Ok(()),
+        };
 
         // Build the filter expression OUTSIDE any synchronization
         let predicate = Self::build_filter_expression(&self.expr, thresholds)?;
