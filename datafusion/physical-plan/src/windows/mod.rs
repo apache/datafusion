@@ -69,12 +69,7 @@ pub fn schema_add_window_field(
         .iter()
         .map(|e| Arc::clone(e).as_ref().return_field(schema))
         .collect::<Result<Vec<_>>>()?;
-    let nullability = args
-        .iter()
-        .map(|e| Arc::clone(e).as_ref().nullable(schema))
-        .collect::<Result<Vec<_>>>()?;
-    let window_expr_return_field =
-        window_fn.return_field(&fields, &nullability, fn_name)?;
+    let window_expr_return_field = window_fn.return_field(&fields, fn_name)?;
     let mut window_fields = schema
         .fields()
         .iter()
@@ -103,15 +98,26 @@ pub fn create_window_expr(
     window_frame: Arc<WindowFrame>,
     input_schema: &Schema,
     ignore_nulls: bool,
+    distinct: bool,
 ) -> Result<Arc<dyn WindowExpr>> {
     Ok(match fun {
         WindowFunctionDefinition::AggregateUDF(fun) => {
-            let aggregate = AggregateExprBuilder::new(Arc::clone(fun), args.to_vec())
-                .schema(Arc::new(input_schema.clone()))
-                .alias(name)
-                .with_ignore_nulls(ignore_nulls)
-                .build()
-                .map(Arc::new)?;
+            let aggregate = if distinct {
+                AggregateExprBuilder::new(Arc::clone(fun), args.to_vec())
+                    .schema(Arc::new(input_schema.clone()))
+                    .alias(name)
+                    .with_ignore_nulls(ignore_nulls)
+                    .distinct()
+                    .build()
+                    .map(Arc::new)?
+            } else {
+                AggregateExprBuilder::new(Arc::clone(fun), args.to_vec())
+                    .schema(Arc::new(input_schema.clone()))
+                    .alias(name)
+                    .with_ignore_nulls(ignore_nulls)
+                    .build()
+                    .map(Arc::new)?
+            };
             window_expr_from_aggregate_expr(
                 partition_by,
                 order_by,
@@ -804,6 +810,7 @@ mod tests {
                 &[],
                 Arc::new(WindowFrame::new(None)),
                 schema.as_ref(),
+                false,
                 false,
             )?],
             blocking_exec,

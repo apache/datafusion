@@ -352,6 +352,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     order_by,
                     window_frame,
                     null_treatment,
+                    distinct: function_args.distinct,
                 };
 
                 for planner in self.context_provider.get_expr_planners().iter() {
@@ -368,7 +369,18 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     order_by,
                     window_frame,
                     null_treatment,
+                    distinct,
                 } = window_expr;
+
+                if distinct {
+                    return Expr::from(expr::WindowFunction::new(func_def, args))
+                        .partition_by(partition_by)
+                        .order_by(order_by)
+                        .window_frame(window_frame)
+                        .null_treatment(null_treatment)
+                        .distinct()
+                        .build();
+                }
 
                 return Expr::from(expr::WindowFunction::new(func_def, args))
                     .partition_by(partition_by)
@@ -380,10 +392,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         } else {
             // User defined aggregate functions (UDAF) have precedence in case it has the same name as a scalar built-in function
             if let Some(fm) = self.context_provider.get_aggregate_meta(&name) {
-                if fm.is_ordered_set_aggregate() && within_group.is_empty() {
-                    return plan_err!("WITHIN GROUP clause is required when calling ordered set aggregate function({})", fm.name());
-                }
-
                 if null_treatment.is_some() && !fm.supports_null_handling_clause() {
                     return plan_err!(
                         "[IGNORE | RESPECT] NULLS are not permitted for {}",
@@ -403,7 +411,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         None,
                     )?;
 
-                    // add target column expression in within group clause to function arguments
+                    // Add the WITHIN GROUP ordering expressions to the front of the argument list
+                    // So function(arg) WITHIN GROUP (ORDER BY x) becomes function(x, arg)
                     if !within_group.is_empty() {
                         args = within_group
                             .iter()

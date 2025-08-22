@@ -56,7 +56,7 @@ use datafusion_macros::user_doc;
     ),
     related_udf(name = "rpad")
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct LPadFunc {
     signature: Signature,
 }
@@ -204,42 +204,13 @@ where
     V2: StringArrayType<'a>,
     T: OffsetSizeTrait,
 {
-    let array = if fill_array.is_none() {
-        let mut builder: GenericStringBuilder<T> = GenericStringBuilder::new();
-
-        for (string, length) in string_array.iter().zip(length_array.iter()) {
-            if let (Some(string), Some(length)) = (string, length) {
-                if length > i32::MAX as i64 {
-                    return exec_err!("lpad requested length {length} too large");
-                }
-
-                let length = if length < 0 { 0 } else { length as usize };
-                if length == 0 {
-                    builder.append_value("");
-                    continue;
-                }
-
-                let graphemes = string.graphemes(true).collect::<Vec<&str>>();
-                if length < graphemes.len() {
-                    builder.append_value(graphemes[..length].concat());
-                } else {
-                    builder.write_str(" ".repeat(length - graphemes.len()).as_str())?;
-                    builder.write_str(string)?;
-                    builder.append_value("");
-                }
-            } else {
-                builder.append_null();
-            }
-        }
-
-        builder.finish()
-    } else {
+    let array = if let Some(fill_array) = fill_array {
         let mut builder: GenericStringBuilder<T> = GenericStringBuilder::new();
 
         for ((string, length), fill) in string_array
             .iter()
             .zip(length_array.iter())
-            .zip(fill_array.unwrap().iter())
+            .zip(fill_array.iter())
         {
             if let (Some(string), Some(length), Some(fill)) = (string, length, fill) {
                 if length > i32::MAX as i64 {
@@ -264,6 +235,35 @@ where
                         let c = *fill_chars.get(l % fill_chars.len()).unwrap();
                         builder.write_char(c)?;
                     }
+                    builder.write_str(string)?;
+                    builder.append_value("");
+                }
+            } else {
+                builder.append_null();
+            }
+        }
+
+        builder.finish()
+    } else {
+        let mut builder: GenericStringBuilder<T> = GenericStringBuilder::new();
+
+        for (string, length) in string_array.iter().zip(length_array.iter()) {
+            if let (Some(string), Some(length)) = (string, length) {
+                if length > i32::MAX as i64 {
+                    return exec_err!("lpad requested length {length} too large");
+                }
+
+                let length = if length < 0 { 0 } else { length as usize };
+                if length == 0 {
+                    builder.append_value("");
+                    continue;
+                }
+
+                let graphemes = string.graphemes(true).collect::<Vec<&str>>();
+                if length < graphemes.len() {
+                    builder.append_value(graphemes[..length].concat());
+                } else {
+                    builder.write_str(" ".repeat(length - graphemes.len()).as_str())?;
                     builder.write_str(string)?;
                     builder.append_value("");
                 }
