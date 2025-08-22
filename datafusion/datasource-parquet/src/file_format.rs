@@ -25,7 +25,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::{fmt, vec};
 
-use arrow::array::{ArrayRef, BooleanArray, RecordBatch};
+use arrow::array::RecordBatch;
 use arrow::datatypes::{Fields, Schema, SchemaRef, TimeUnit};
 use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_sink_config::{FileSink, FileSinkConfig};
@@ -36,18 +36,15 @@ use datafusion_datasource::write::{
 use datafusion_datasource::file_format::{FileFormat, FileFormatFactory};
 use datafusion_datasource::write::demux::DemuxedStreamReceiver;
 
-use arrow::compute::kernels::cmp::eq;
-use arrow::compute::{and, sum};
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::config::{ConfigField, ConfigFileType, TableParquetOptions};
 #[cfg(feature = "parquet_encryption")]
 use datafusion_common::encryption::map_config_decryption_to_decryption;
 use datafusion_common::encryption::FileDecryptionProperties;
 use datafusion_common::parsers::CompressionTypeVariant;
-use datafusion_common::stats::Precision;
 use datafusion_common::{
-    internal_datafusion_err, internal_err, not_impl_err, ColumnStatistics,
-    DataFusionError, GetExt, HashSet, Result, ScalarValue, DEFAULT_PARQUET_EXTENSION,
+    internal_datafusion_err, internal_err, not_impl_err, DataFusionError, GetExt,
+    HashSet, Result, DEFAULT_PARQUET_EXTENSION,
 };
 use datafusion_common::{HashMap, Statistics};
 use datafusion_common_runtime::{JoinSet, SpawnedTask};
@@ -78,9 +75,7 @@ use parquet::arrow::arrow_writer::{
     ArrowRowGroupWriterFactory, ArrowWriterOptions,
 };
 use parquet::arrow::async_reader::MetadataFetch;
-use parquet::arrow::{
-    ArrowSchemaConverter, ArrowWriter, AsyncArrowWriter,
-};
+use parquet::arrow::{ArrowWriter, AsyncArrowWriter};
 use parquet::basic::Type;
 
 use crate::metadata::DFParquetMetadata;
