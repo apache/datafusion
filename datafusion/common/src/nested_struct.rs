@@ -342,6 +342,23 @@ mod tests {
     }
 
     #[test]
+    fn test_validate_struct_compatibility_additional_field_in_source() {
+        // Source struct: {field1: Int32, field2: String} (extra field2)
+        let source_fields = vec![
+            Arc::new(Field::new("field1", DataType::Int32, true)),
+            Arc::new(Field::new("field2", DataType::Utf8, true)),
+        ];
+
+        // Target struct: {field1: Int32}
+        let target_fields = vec![Arc::new(Field::new("field1", DataType::Int32, true))];
+
+        // Should be OK - extra fields in source are ignored
+        let result = validate_struct_compatibility(&source_fields, &target_fields);
+        assert!(result.is_ok());
+        assert!(result.unwrap());
+    }
+
+    #[test]
     fn test_cast_struct_parent_nulls_retained() {
         let a_array = Arc::new(Int32Array::from(vec![Some(1), Some(2)])) as ArrayRef;
         let fields = vec![Arc::new(Field::new("a", DataType::Int32, true))];
