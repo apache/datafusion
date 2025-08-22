@@ -2924,17 +2924,17 @@ array_filter(array, lambda)
 #### Arguments
 
 - **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
-- **lambda**: Lambda function with one argument that returns a boolean. The lambda is applied to each element of the array.
+- **lambda**: Lambda function with one argument that returns a boolean. The lambda is applied to each element of the array. Nulls will be counted as false.
 
 #### Example
 
 ```sql
 > select array_filter([1, 2, 3, 4, 5], x -> x > 3);
-+--------------------------------------------------+
-| array_filter(List([1,2,3,4,5]), x -> x > 3)      |
-+--------------------------------------------------+
-| [4, 5]                                           |
-+--------------------------------------------------+
++---------------------------------------------+
+| array_filter(List([1,2,3,4,5]), x -> x > 3) |
++---------------------------------------------+
+| [4, 5]                                      |
++---------------------------------------------+
 ```
 
 ### `array_has`
