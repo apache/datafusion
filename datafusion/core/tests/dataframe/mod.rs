@@ -20,12 +20,12 @@ mod dataframe_functions;
 mod describe;
 
 use arrow::array::{
-    record_batch, Array, ArrayRef, BooleanArray, DictionaryArray, FixedSizeListArray,
-    FixedSizeListBuilder, Float32Array, Float64Array, Int32Array, Int32Builder,
-    Int8Array, LargeListArray, ListArray, ListBuilder, RecordBatch, StringArray,
-    StringBuilder, StructBuilder, UInt32Array, UInt32Builder, UnionArray,
+    as_list_array, record_batch, Array, ArrayRef, BooleanArray, DictionaryArray,
+    FixedSizeListArray, FixedSizeListBuilder, Float32Array, Float64Array, Int32Array,
+    Int32Builder, Int8Array, LargeListArray, ListArray, ListBuilder, RecordBatch,
+    StringArray, StringBuilder, StructBuilder, UInt32Array, UInt32Builder, UnionArray,
 };
-use arrow::buffer::ScalarBuffer;
+use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow::datatypes::{
     DataType, Field, Float32Type, Int32Type, Schema, SchemaRef, UInt64Type, UnionFields,
     UnionMode,
@@ -79,6 +79,7 @@ use datafusion_expr::{
     LogicalPlanBuilder, ScalarFunctionImplementation, SortExpr, WindowFrame,
     WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition,
 };
+use datafusion_functions_nested::transform::array_transform_udf;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::Partitioning;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
@@ -6243,5 +6244,40 @@ async fn test_copy_to_preserves_order() -> Result<()> {
       DataSourceExec: partitions=1, partition_sizes=[1]
     "###
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_function_array_transform() -> Result<()> {
+    let values = Arc::new(Int32Array::from(vec![1, -2, 3, -4, 5, -6, 7, -8]));
+    let field = Arc::new(Field::new("a", DataType::Int32, false));
+    let offsets: OffsetBuffer<i32> = OffsetBuffer::from_lengths([3, 2, 3]);
+
+    let outer = Arc::new(ListArray::try_new(field, offsets, values, None)?);
+
+    let df = DataFrame::from_columns(vec![("a", outer)])?;
+
+    let udf = array_transform_udf(datafusion_functions::math::abs(), 0);
+
+    let df = df.select([col("a"), udf.call(vec![col("a")]).alias("abs(a[])")])?;
+
+    let results = df.collect().await?;
+    let result_column = as_list_array(results[0].column(1));
+    assert_eq!(result_column.len(), 3);
+
+    let expected_values = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8]));
+    let expected_field = Arc::new(Field::new("abs", DataType::Int32, true));
+    let expected_offsets: OffsetBuffer<i32> = OffsetBuffer::from_lengths([3, 2, 3]);
+    let expected_nulls = NullBuffer::new_valid(3);
+
+    let expected = Arc::new(ListArray::try_new(
+        expected_field,
+        expected_offsets,
+        expected_values,
+        Some(expected_nulls),
+    )?) as ArrayRef;
+
+    assert_eq!(results[0].column(1), &expected);
+
     Ok(())
 }
