@@ -92,7 +92,6 @@ use datafusion_physical_expr_common::datum::compare_op_for_nested;
 use ahash::RandomState;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use futures::{ready, Stream, StreamExt, TryStreamExt};
-use itertools::Itertools;
 use parking_lot::Mutex;
 
 /// Hard-coded seed to ensure hash values from the hash join differ from `RepartitionExec`, avoiding collisions.
