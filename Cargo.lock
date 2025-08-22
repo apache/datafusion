@@ -247,22 +247,22 @@ checksum = "7c02d123df017efcdfbd739ef81735b36c5ba83ec3c59c80a9d7ecc718f92e50"
 [[package]]
 name = "arrow"
 version = "56.0.0"
-source = "git+https://github.com/apache/arrow-rs.git#7a5f6d3d48655bea190560a7e393cafb2c5eb073"
+source = "git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3#ff9ada0369ae4dbfa918002b7300ca82319c4321"
 dependencies = [
- "arrow-arith",
- "arrow-array",
- "arrow-buffer",
- "arrow-cast",
+ "arrow-arith 56.0.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3)",
+ "arrow-array 56.0.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3)",
+ "arrow-buffer 56.0.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3)",
+ "arrow-cast 56.0.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3)",
  "arrow-csv",
- "arrow-data",
- "arrow-ipc",
+ "arrow-data 56.0.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3)",
+ "arrow-ipc 56.0.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3)",
  "arrow-json",
- "arrow-ord",
+ "arrow-ord 56.0.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3)",
  "arrow-pyarrow",
- "arrow-row",
- "arrow-schema",
- "arrow-select",
- "arrow-string",
+ "arrow-row 56.0.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3)",
+ "arrow-schema 56.0.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3)",
+ "arrow-select 56.0.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3)",
+ "arrow-string 56.0.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3)",
  "half",
  "rand 0.9.2",
 ]
@@ -270,12 +270,25 @@ dependencies = [
 [[package]]
 name = "arrow-arith"
 version = "56.0.0"
-source = "git+https://github.com/apache/arrow-rs.git#7a5f6d3d48655bea190560a7e393cafb2c5eb073"
+source = "git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3#ff9ada0369ae4dbfa918002b7300ca82319c4321"
 dependencies = [
- "arrow-array",
- "arrow-buffer",
- "arrow-data",
- "arrow-schema",
+ "arrow-array 56.0.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3)",
+ "arrow-buffer 56.0.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3)",
+ "arrow-data 56.0.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3)",
+ "arrow-schema 56.0.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3)",
+ "chrono",
+ "num",
+]
+
+[[package]]
+name = "arrow-arith"
+version = "56.0.0"
+source = "git+https://github.com/rok/arrow-rs.git#876585c1cd986dbaee0c26d52b55a4186a2f68c8"
+dependencies = [
+ "arrow-array 56.0.0 (git+https://github.com/rok/arrow-rs.git)",
+ "arrow-buffer 56.0.0 (git+https://github.com/rok/arrow-rs.git)",
+ "arrow-data 56.0.0 (git+https://github.com/rok/arrow-rs.git)",
+ "arrow-schema 56.0.0 (git+https://github.com/rok/arrow-rs.git)",
  "chrono",
  "num",
 ]
@@ -283,12 +296,12 @@ dependencies = [
 [[package]]
 name = "arrow-array"
 version = "56.0.0"
-source = "git+https://github.com/apache/arrow-rs.git#7a5f6d3d48655bea190560a7e393cafb2c5eb073"
+source = "git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3#ff9ada0369ae4dbfa918002b7300ca82319c4321"
 dependencies = [
  "ahash 0.8.12",
- "arrow-buffer",
- "arrow-data",
- "arrow-schema",
+ "arrow-buffer 56.0.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3)",
+ "arrow-data 56.0.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3)",
+ "arrow-schema 56.0.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3)",
  "chrono",
  "chrono-tz",
  "half",
@@ -297,9 +310,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "arrow-array"
+version = "56.0.0"
+source = "git+https://github.com/rok/arrow-rs.git#876585c1cd986dbaee0c26d52b55a4186a2f68c8"
+dependencies = [
+ "ahash 0.8.12",
+ "arrow-buffer 56.0.0 (git+https://github.com/rok/arrow-rs.git)",
+ "arrow-data 56.0.0 (git+https://github.com/rok/arrow-rs.git)",
+ "arrow-schema 56.0.0 (git+https://github.com/rok/arrow-rs.git)",
+ "chrono",
+ "half",
+ "hashbrown 0.15.5",
+ "num",
+]
+
+[[package]]
 name = "arrow-buffer"
 version = "56.0.0"
-source = "git+https://github.com/apache/arrow-rs.git#7a5f6d3d48655bea190560a7e393cafb2c5eb073"
+source = "git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3#ff9ada0369ae4dbfa918002b7300ca82319c4321"
+dependencies = [
+ "bytes",
+ "half",
+ "num",
+]
+
+[[package]]
+name = "arrow-buffer"
+version = "56.0.0"
+source = "git+https://github.com/rok/arrow-rs.git#876585c1cd986dbaee0c26d52b55a4186a2f68c8"
 dependencies = [
  "bytes",
  "half",
@@ -309,13 +347,13 @@ dependencies = [
 [[package]]
 name = "arrow-cast"
 version = "56.0.0"
-source = "git+https://github.com/apache/arrow-rs.git#7a5f6d3d48655bea190560a7e393cafb2c5eb073"
+source = "git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3#ff9ada0369ae4dbfa918002b7300ca82319c4321"
 dependencies = [
- "arrow-array",
- "arrow-buffer",
- "arrow-data",
- "arrow-schema",
- "arrow-select",
+ "arrow-array 56.0.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3)",
+ "arrow-buffer 56.0.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3)",
+ "arrow-data 56.0.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3)",
+ "arrow-schema 56.0.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3)",
+ "arrow-select 56.0.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3)",
  "atoi",
  "base64 0.22.1",
  "chrono",
@@ -327,13 +365,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "arrow-cast"
+version = "56.0.0"
+source = "git+https://github.com/rok/arrow-rs.git#876585c1cd986dbaee0c26d52b55a4186a2f68c8"
+dependencies = [
+ "arrow-array 56.0.0 (git+https://github.com/rok/arrow-rs.git)",
+ "arrow-buffer 56.0.0 (git+https://github.com/rok/arrow-rs.git)",
+ "arrow-data 56.0.0 (git+https://github.com/rok/arrow-rs.git)",
+ "arrow-schema 56.0.0 (git+https://github.com/rok/arrow-rs.git)",
+ "arrow-select 56.0.0 (git+https://github.com/rok/arrow-rs.git)",
+ "atoi",
+ "base64 0.22.1",
+ "chrono",
+ "half",
+ "lexical-core",
+ "num",
+ "ryu",
+]
+
+[[package]]
 name = "arrow-csv"
 version = "56.0.0"
-source = "git+https://github.com/apache/arrow-rs.git#7a5f6d3d48655bea190560a7e393cafb2c5eb073"
+source = "git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3#ff9ada0369ae4dbfa918002b7300ca82319c4321"
 dependencies = [
- "arrow-array",
- "arrow-cast",
- "arrow-schema",
+ "arrow-array 56.0.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3)",
+ "arrow-cast 56.0.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3)",
+ "arrow-schema 56.0.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3)",
  "chrono",
  "csv",
  "csv-core",
@@ -343,10 +400,21 @@ dependencies = [
 [[package]]
 name = "arrow-data"
 version = "56.0.0"
-source = "git+https://github.com/apache/arrow-rs.git#7a5f6d3d48655bea190560a7e393cafb2c5eb073"
+source = "git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3#ff9ada0369ae4dbfa918002b7300ca82319c4321"
 dependencies = [
- "arrow-buffer",
- "arrow-schema",
+ "arrow-buffer 56.0.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3)",
+ "arrow-schema 56.0.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3)",
+ "half",
+ "num",
+]
+
+[[package]]
+name = "arrow-data"
+version = "56.0.0"
+source = "git+https://github.com/rok/arrow-rs.git#876585c1cd986dbaee0c26d52b55a4186a2f68c8"
+dependencies = [
+ "arrow-buffer 56.0.0 (git+https://github.com/rok/arrow-rs.git)",
+ "arrow-schema 56.0.0 (git+https://github.com/rok/arrow-rs.git)",
  "half",
  "num",
 ]
@@ -354,19 +422,19 @@ dependencies = [
 [[package]]
 name = "arrow-flight"
 version = "56.0.0"
-source = "git+https://github.com/apache/arrow-rs.git#7a5f6d3d48655bea190560a7e393cafb2c5eb073"
+source = "git+https://github.com/rok/arrow-rs.git#876585c1cd986dbaee0c26d52b55a4186a2f68c8"
 dependencies = [
- "arrow-arith",
- "arrow-array",
- "arrow-buffer",
- "arrow-cast",
- "arrow-data",
- "arrow-ipc",
- "arrow-ord",
- "arrow-row",
- "arrow-schema",
- "arrow-select",
- "arrow-string",
+ "arrow-arith 56.0.0 (git+https://github.com/rok/arrow-rs.git)",
+ "arrow-array 56.0.0 (git+https://github.com/rok/arrow-rs.git)",
+ "arrow-buffer 56.0.0 (git+https://github.com/rok/arrow-rs.git)",
+ "arrow-cast 56.0.0 (git+https://github.com/rok/arrow-rs.git)",
+ "arrow-data 56.0.0 (git+https://github.com/rok/arrow-rs.git)",
+ "arrow-ipc 56.0.0 (git+https://github.com/rok/arrow-rs.git)",
+ "arrow-ord 56.0.0 (git+https://github.com/rok/arrow-rs.git)",
+ "arrow-row 56.0.0 (git+https://github.com/rok/arrow-rs.git)",
+ "arrow-schema 56.0.0 (git+https://github.com/rok/arrow-rs.git)",
+ "arrow-select 56.0.0 (git+https://github.com/rok/arrow-rs.git)",
+ "arrow-string 56.0.0 (git+https://github.com/rok/arrow-rs.git)",
  "base64 0.22.1",
  "bytes",
  "futures",
@@ -380,27 +448,40 @@ dependencies = [
 [[package]]
 name = "arrow-ipc"
 version = "56.0.0"
-source = "git+https://github.com/apache/arrow-rs.git#7a5f6d3d48655bea190560a7e393cafb2c5eb073"
+source = "git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3#ff9ada0369ae4dbfa918002b7300ca82319c4321"
 dependencies = [
- "arrow-array",
- "arrow-buffer",
- "arrow-data",
- "arrow-schema",
+ "arrow-array 56.0.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3)",
+ "arrow-buffer 56.0.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3)",
+ "arrow-data 56.0.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3)",
+ "arrow-schema 56.0.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3)",
+ "arrow-select 56.0.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3)",
  "flatbuffers",
  "lz4_flex",
  "zstd",
 ]
 
 [[package]]
+name = "arrow-ipc"
+version = "56.0.0"
+source = "git+https://github.com/rok/arrow-rs.git#876585c1cd986dbaee0c26d52b55a4186a2f68c8"
+dependencies = [
+ "arrow-array 56.0.0 (git+https://github.com/rok/arrow-rs.git)",
+ "arrow-buffer 56.0.0 (git+https://github.com/rok/arrow-rs.git)",
+ "arrow-data 56.0.0 (git+https://github.com/rok/arrow-rs.git)",
+ "arrow-schema 56.0.0 (git+https://github.com/rok/arrow-rs.git)",
+ "flatbuffers",
+]
+
+[[package]]
 name = "arrow-json"
 version = "56.0.0"
-source = "git+https://github.com/apache/arrow-rs.git#7a5f6d3d48655bea190560a7e393cafb2c5eb073"
+source = "git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3#ff9ada0369ae4dbfa918002b7300ca82319c4321"
 dependencies = [
- "arrow-array",
- "arrow-buffer",
- "arrow-cast",
- "arrow-data",
- "arrow-schema",
+ "arrow-array 56.0.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3)",
+ "arrow-buffer 56.0.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3)",
+ "arrow-cast 56.0.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3)",
+ "arrow-data 56.0.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3)",
+ "arrow-schema 56.0.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3)",
  "chrono",
  "half",
  "indexmap 2.11.0",
@@ -415,42 +496,66 @@ dependencies = [
 [[package]]
 name = "arrow-ord"
 version = "56.0.0"
-source = "git+https://github.com/apache/arrow-rs.git#7a5f6d3d48655bea190560a7e393cafb2c5eb073"
+source = "git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3#ff9ada0369ae4dbfa918002b7300ca82319c4321"
 dependencies = [
- "arrow-array",
- "arrow-buffer",
- "arrow-data",
- "arrow-schema",
- "arrow-select",
+ "arrow-array 56.0.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3)",
+ "arrow-buffer 56.0.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3)",
+ "arrow-data 56.0.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3)",
+ "arrow-schema 56.0.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3)",
+ "arrow-select 56.0.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3)",
+]
+
+[[package]]
+name = "arrow-ord"
+version = "56.0.0"
+source = "git+https://github.com/rok/arrow-rs.git#876585c1cd986dbaee0c26d52b55a4186a2f68c8"
+dependencies = [
+ "arrow-array 56.0.0 (git+https://github.com/rok/arrow-rs.git)",
+ "arrow-buffer 56.0.0 (git+https://github.com/rok/arrow-rs.git)",
+ "arrow-data 56.0.0 (git+https://github.com/rok/arrow-rs.git)",
+ "arrow-schema 56.0.0 (git+https://github.com/rok/arrow-rs.git)",
+ "arrow-select 56.0.0 (git+https://github.com/rok/arrow-rs.git)",
 ]
 
 [[package]]
 name = "arrow-pyarrow"
 version = "56.0.0"
-source = "git+https://github.com/apache/arrow-rs.git#7a5f6d3d48655bea190560a7e393cafb2c5eb073"
+source = "git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3#ff9ada0369ae4dbfa918002b7300ca82319c4321"
 dependencies = [
- "arrow-array",
- "arrow-data",
- "arrow-schema",
+ "arrow-array 56.0.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3)",
+ "arrow-data 56.0.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3)",
+ "arrow-schema 56.0.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3)",
  "pyo3",
 ]
 
 [[package]]
 name = "arrow-row"
 version = "56.0.0"
-source = "git+https://github.com/apache/arrow-rs.git#7a5f6d3d48655bea190560a7e393cafb2c5eb073"
+source = "git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3#ff9ada0369ae4dbfa918002b7300ca82319c4321"
 dependencies = [
- "arrow-array",
- "arrow-buffer",
- "arrow-data",
- "arrow-schema",
+ "arrow-array 56.0.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3)",
+ "arrow-buffer 56.0.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3)",
+ "arrow-data 56.0.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3)",
+ "arrow-schema 56.0.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3)",
+ "half",
+]
+
+[[package]]
+name = "arrow-row"
+version = "56.0.0"
+source = "git+https://github.com/rok/arrow-rs.git#876585c1cd986dbaee0c26d52b55a4186a2f68c8"
+dependencies = [
+ "arrow-array 56.0.0 (git+https://github.com/rok/arrow-rs.git)",
+ "arrow-buffer 56.0.0 (git+https://github.com/rok/arrow-rs.git)",
+ "arrow-data 56.0.0 (git+https://github.com/rok/arrow-rs.git)",
+ "arrow-schema 56.0.0 (git+https://github.com/rok/arrow-rs.git)",
  "half",
 ]
 
 [[package]]
 name = "arrow-schema"
 version = "56.0.0"
-source = "git+https://github.com/apache/arrow-rs.git#7a5f6d3d48655bea190560a7e393cafb2c5eb073"
+source = "git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3#ff9ada0369ae4dbfa918002b7300ca82319c4321"
 dependencies = [
  "bitflags 2.9.1",
  "serde",
@@ -458,28 +563,62 @@ dependencies = [
 ]
 
 [[package]]
+name = "arrow-schema"
+version = "56.0.0"
+source = "git+https://github.com/rok/arrow-rs.git#876585c1cd986dbaee0c26d52b55a4186a2f68c8"
+
+[[package]]
 name = "arrow-select"
 version = "56.0.0"
-source = "git+https://github.com/apache/arrow-rs.git#7a5f6d3d48655bea190560a7e393cafb2c5eb073"
+source = "git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3#ff9ada0369ae4dbfa918002b7300ca82319c4321"
 dependencies = [
  "ahash 0.8.12",
- "arrow-array",
- "arrow-buffer",
- "arrow-data",
- "arrow-schema",
+ "arrow-array 56.0.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3)",
+ "arrow-buffer 56.0.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3)",
+ "arrow-data 56.0.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3)",
+ "arrow-schema 56.0.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3)",
+ "num",
+]
+
+[[package]]
+name = "arrow-select"
+version = "56.0.0"
+source = "git+https://github.com/rok/arrow-rs.git#876585c1cd986dbaee0c26d52b55a4186a2f68c8"
+dependencies = [
+ "ahash 0.8.12",
+ "arrow-array 56.0.0 (git+https://github.com/rok/arrow-rs.git)",
+ "arrow-buffer 56.0.0 (git+https://github.com/rok/arrow-rs.git)",
+ "arrow-data 56.0.0 (git+https://github.com/rok/arrow-rs.git)",
+ "arrow-schema 56.0.0 (git+https://github.com/rok/arrow-rs.git)",
  "num",
 ]
 
 [[package]]
 name = "arrow-string"
 version = "56.0.0"
-source = "git+https://github.com/apache/arrow-rs.git#7a5f6d3d48655bea190560a7e393cafb2c5eb073"
+source = "git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3#ff9ada0369ae4dbfa918002b7300ca82319c4321"
 dependencies = [
- "arrow-array",
- "arrow-buffer",
- "arrow-data",
- "arrow-schema",
- "arrow-select",
+ "arrow-array 56.0.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3)",
+ "arrow-buffer 56.0.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3)",
+ "arrow-data 56.0.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3)",
+ "arrow-schema 56.0.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3)",
+ "arrow-select 56.0.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3)",
+ "memchr",
+ "num",
+ "regex",
+ "regex-syntax",
+]
+
+[[package]]
+name = "arrow-string"
+version = "56.0.0"
+source = "git+https://github.com/rok/arrow-rs.git#876585c1cd986dbaee0c26d52b55a4186a2f68c8"
+dependencies = [
+ "arrow-array 56.0.0 (git+https://github.com/rok/arrow-rs.git)",
+ "arrow-buffer 56.0.0 (git+https://github.com/rok/arrow-rs.git)",
+ "arrow-data 56.0.0 (git+https://github.com/rok/arrow-rs.git)",
+ "arrow-schema 56.0.0 (git+https://github.com/rok/arrow-rs.git)",
+ "arrow-select 56.0.0 (git+https://github.com/rok/arrow-rs.git)",
  "memchr",
  "num",
  "regex",
@@ -1802,8 +1941,8 @@ name = "datafusion"
 version = "49.0.2"
 dependencies = [
  "arrow",
- "arrow-ipc",
- "arrow-schema",
+ "arrow-ipc 56.0.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3)",
+ "arrow-schema 56.0.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3)",
  "async-trait",
  "bytes",
  "bzip2 0.6.0",
@@ -1980,7 +2119,7 @@ dependencies = [
  "ahash 0.8.12",
  "apache-avro",
  "arrow",
- "arrow-ipc",
+ "arrow-ipc 56.0.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3)",
  "base64 0.22.1",
  "chrono",
  "half",
@@ -2160,7 +2299,7 @@ version = "49.0.2"
 dependencies = [
  "arrow",
  "arrow-flight",
- "arrow-schema",
+ "arrow-schema 56.0.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3)",
  "async-trait",
  "base64 0.22.1",
  "bytes",
@@ -2248,7 +2387,7 @@ version = "49.0.2"
 dependencies = [
  "abi_stable",
  "arrow",
- "arrow-schema",
+ "arrow-schema 56.0.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3)",
  "async-ffi",
  "async-trait",
  "datafusion",
@@ -2268,7 +2407,7 @@ name = "datafusion-functions"
 version = "49.0.2"
 dependencies = [
  "arrow",
- "arrow-buffer",
+ "arrow-buffer 56.0.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3)",
  "base64 0.22.1",
  "blake2",
  "blake3",
@@ -2331,7 +2470,7 @@ name = "datafusion-functions-nested"
 version = "49.0.2"
 dependencies = [
  "arrow",
- "arrow-ord",
+ "arrow-ord 56.0.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3)",
  "criterion",
  "datafusion-common",
  "datafusion-doc",
@@ -2502,8 +2641,8 @@ version = "49.0.2"
 dependencies = [
  "ahash 0.8.12",
  "arrow",
- "arrow-ord",
- "arrow-schema",
+ "arrow-ord 56.0.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3)",
+ "arrow-schema 56.0.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3)",
  "async-trait",
  "chrono",
  "criterion",
@@ -2574,7 +2713,7 @@ name = "datafusion-pruning"
 version = "49.0.2"
 dependencies = [
  "arrow",
- "arrow-schema",
+ "arrow-schema 56.0.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3)",
  "datafusion-common",
  "datafusion-datasource",
  "datafusion-expr",
@@ -4508,16 +4647,16 @@ dependencies = [
 [[package]]
 name = "parquet"
 version = "56.0.0"
-source = "git+https://github.com/apache/arrow-rs.git#7a5f6d3d48655bea190560a7e393cafb2c5eb073"
+source = "git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3#ff9ada0369ae4dbfa918002b7300ca82319c4321"
 dependencies = [
  "ahash 0.8.12",
- "arrow-array",
- "arrow-buffer",
- "arrow-cast",
- "arrow-data",
- "arrow-ipc",
- "arrow-schema",
- "arrow-select",
+ "arrow-array 56.0.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3)",
+ "arrow-buffer 56.0.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3)",
+ "arrow-cast 56.0.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3)",
+ "arrow-data 56.0.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3)",
+ "arrow-ipc 56.0.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3)",
+ "arrow-schema 56.0.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3)",
+ "arrow-select 56.0.0 (git+https://github.com/rok/arrow-rs.git?branch=multi-threaded_encrypted_writing_3)",
  "base64 0.22.1",
  "brotli",
  "bytes",
