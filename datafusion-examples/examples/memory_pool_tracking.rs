@@ -23,15 +23,9 @@
 //! # Examples
 //!
 //! * [`automatic_usage_example`]: Shows how to use RuntimeEnvBuilder to automatically enable memory tracking
-//! * [`manual_tracking_example`]: Shows how to manually create and configure a TrackConsumersPool
 
-use datafusion::execution::memory_pool::{
-    GreedyMemoryPool, MemoryConsumer, MemoryPool, TrackConsumersPool,
-};
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::prelude::*;
-use std::num::NonZeroUsize;
-use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -39,13 +33,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Example 1: Automatic Usage with RuntimeEnvBuilder
     automatic_usage_example().await?;
-
-    println!("\n{}\n", "=".repeat(60));
-
-    // Example 2: Manual tracking with custom consumers
-    manual_tracking_example()?;
-
-    println!("\n{}\n", "=".repeat(60));
 
     Ok(())
 }
@@ -135,57 +122,6 @@ async fn automatic_usage_example() -> datafusion::error::Result<()> {
 
     println!("\nNote: The error message above shows which memory consumers");
     println!("were using the most memory when the limit was exceeded.");
-
-    Ok(())
-}
-
-/// Example 2: Manual tracking with custom consumers
-///
-/// This shows how to manually create and use memory consumers with tracking.
-fn manual_tracking_example() -> datafusion::error::Result<()> {
-    println!("Example 2: Manual Memory Consumer Tracking");
-    println!("------------------------------------------");
-
-    // Create a tracking pool that reports top 3 consumers in error messages
-    let tracked_pool: Arc<dyn MemoryPool> = Arc::new(TrackConsumersPool::new(
-        GreedyMemoryPool::new(1000), // 1KB limit for demonstration
-        NonZeroUsize::new(3).unwrap(),
-    ));
-
-    println!("Created TrackConsumersPool with 1KB limit, tracking top 3 consumers");
-
-    // Create several consumers with different memory usage
-    let mut big_consumer = MemoryConsumer::new("BigOperation").register(&tracked_pool);
-    big_consumer.grow(400);
-    println!("BigOperation: reserved 400 bytes");
-
-    let mut medium_consumer =
-        MemoryConsumer::new("MediumOperation").register(&tracked_pool);
-    medium_consumer.grow(200);
-    println!("MediumOperation: reserved 200 bytes");
-
-    let mut small_consumer =
-        MemoryConsumer::new("SmallOperation").register(&tracked_pool);
-    small_consumer.grow(100);
-    println!("SmallOperation: reserved 100 bytes");
-
-    println!(
-        "Total reserved: {} bytes out of 1000 byte limit",
-        tracked_pool.reserved()
-    );
-
-    // Try to allocate more memory than available - this will show detailed error
-    let mut failing_consumer =
-        MemoryConsumer::new("FailingOperation").register(&tracked_pool);
-
-    println!("\nAttempting to reserve 500 bytes (would exceed limit)...");
-    match failing_consumer.try_grow(500) {
-        Ok(_) => panic!("Unexpectedly succeeded!"),
-        Err(e) => {
-            println!("Expected failure with detailed error message:");
-            println!("{e}");
-        }
-    }
 
     Ok(())
 }
