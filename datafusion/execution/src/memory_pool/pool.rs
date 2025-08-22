@@ -300,64 +300,17 @@ impl TrackedConsumer {
 /// Tracking is per hashed [`MemoryConsumer`], not per [`MemoryReservation`].
 /// The same consumer can have multiple reservations.
 ///
-/// # Automatic Usage with RuntimeEnvBuilder
+/// # Automatic Usage via [`RuntimeEnvBuilder`]
 ///
-/// The easiest way to use `TrackConsumersPool` is through [`RuntimeEnvBuilder::with_memory_limit()`](crate::runtime_env::RuntimeEnvBuilder::with_memory_limit),
-/// which automatically creates a `TrackConsumersPool` wrapping the default memory pool type
-/// (see source implementation for details) with tracking for the top 5 memory consumers:
+/// The easiest way to use `TrackConsumersPool` is via
+/// [`RuntimeEnvBuilder::with_memory_limit()`].
 ///
-/// ```no_run
-/// # use datafusion_execution::runtime_env::RuntimeEnvBuilder;
-/// # use datafusion_execution::config::SessionConfig;
-/// # use std::sync::Arc;
-/// # async fn example() -> datafusion_common::Result<()> {
-/// // Create a runtime with 20MB memory limit and consumer tracking
-/// let runtime = RuntimeEnvBuilder::new()
-///     .with_memory_limit(20_000_000, 1.0)  // 20MB, 100% utilization
-///     .build_arc()?;
-///
-/// let config = SessionConfig::new();
-///
-/// // Note: In real usage, you would use datafusion::prelude::SessionContext
-/// // let ctx = SessionContext::new_with_config_rt(config, runtime);
-///
-/// // Register your table
-/// // ctx.register_table("t", table)?;
-///
-/// // Run a memory-intensive query
-/// let query = "
-///     COPY (select * from t)
-///     TO '/tmp/output.parquet'
-///     STORED AS PARQUET OPTIONS (compression 'uncompressed')";
-///
-/// // If memory is exhausted, you'll get detailed error messages like:
-/// // "Additional allocation failed with top memory consumers (across reservations) as:
-/// //   ParquetSink(ArrowColumnWriter)#123(can spill: false) consumed 15.2 MB,
-/// //   HashJoin#456(can spill: false) consumed 3.1 MB,
-/// //   Sort#789(can spill: true) consumed 1.8 MB,
-/// //   Aggregation#101(can spill: false) consumed 892.0 KB,
-/// //   Filter#202(can spill: false) consumed 156.0 KB.
-/// // Error: Failed to allocate additional 2.5 MB..."
-///
-/// // let result = ctx.sql(query).await?.collect().await;
-/// # Ok(())
-/// # }
-/// ```
+/// [`RuntimeEnvBuilder`]: crate::runtime_env::RuntimeEnvBuilder
+/// [`RuntimeEnvBuilder::with_memory_limit()`]: crate::runtime_env::RuntimeEnvBuilder::with_memory_limit
 ///
 /// # Usage Examples
 ///
-/// For comprehensive examples of using `TrackConsumersPool`, see:
-///
-/// - **[memory_pool_tracking.rs]** - Shows basic usage patterns including:
-///   - Automatic setup with `RuntimeEnvBuilder::with_memory_limit()`
-///   - Manual memory consumer tracking
-///   - Error messages with top consumer details
-///
-/// - **[memory_pool_execution_plan.rs]** - Demonstrates how to implement
-///   memory-aware ExecutionPlans with:
-///   - Memory reservation patterns
-///   - Spilling to disk when memory limits are reached
-///   - Proper cleanup and memory release
+/// For more examples of using `TrackConsumersPool`, see the [memory_pool_tracking.rs] example
 ///
 /// [memory_pool_tracking.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/memory_pool_tracking.rs
 /// [memory_pool_execution_plan.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/memory_pool_execution_plan.rs
