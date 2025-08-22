@@ -15,15 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::{
-    array::{ArrayRef, BooleanArray},
-    compute::kernels::zip::zip,
-    datatypes::DataType,
-};
-use datafusion_common::{plan_err, utils::take_function_args, Result};
+use arrow::datatypes::DataType;
+use datafusion_common::{internal_err, plan_err, Result};
 use datafusion_expr::{
-    binary::try_type_union_resolution, ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl,
-    Signature, Volatility,
+    binary::try_type_union_resolution, simplify::ExprSimplifyResult, when, ColumnarValue,
+    Expr, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -83,11 +79,23 @@ impl ScalarUDFImpl for SparkIf {
         Ok(arg_types[1].clone())
     }
 
-    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let args = ColumnarValue::values_to_arrays(&args.args)?;
-        let [expr1, expr2, expr3] = take_function_args::<3, ArrayRef>("if", args)?;
-        let expr1 = expr1.as_any().downcast_ref::<BooleanArray>().unwrap();
-        let result = zip(expr1, &expr2, &expr3)?;
-        Ok(ColumnarValue::Array(result))
+    fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        internal_err!("if should have been simplified to case")
+    }
+
+    fn simplify(
+        &self,
+        args: Vec<Expr>,
+        _info: &dyn datafusion_expr::simplify::SimplifyInfo,
+    ) -> Result<ExprSimplifyResult> {
+        let condition = args[0].clone();
+        let then_expr = args[1].clone();
+        let else_expr = args[2].clone();
+
+        // Convert IF(condition, then_expr, else_expr) to
+        // CASE WHEN condition THEN then_expr ELSE else_expr END
+        let case_expr = when(condition, then_expr).otherwise(else_expr)?;
+
+        Ok(ExprSimplifyResult::Simplified(case_expr))
     }
 }
