@@ -69,12 +69,15 @@ SELECT array_filter([1, 2, 3], x -> x + 'invalid')
 
 # array_filter with multiple array columns
 statement ok
-CREATE TABLE test_arrays (arr1 ARRAY<INTEGER>, arr2 ARRAY<INTEGER>) AS VALUES ([1, 2, 3], [4, 5, 6]);
+CREATE TABLE test_arrays (arr1 ARRAY<INTEGER>, arr2 ARRAY<INTEGER>) AS VALUES 
+([1, 2, 3], [4, 5, 6]), (NULL, NULL), ([1,NULL,3], [NULL, 10, 11]);
 
 query ??
 SELECT array_filter(arr1, x -> x > 1::int), array_filter(arr2, x -> x < 6::int) FROM test_arrays;
 ----
 [2, 3] [4, 5]
+NULL NULL
+[3] []
 
 # array_filter in WHERE clause
 query ?
@@ -87,6 +90,7 @@ query ?
 SELECT arr1 FROM test_arrays WHERE array_length(array_filter(arr1, x -> x > 10::int)) = 0;
 ----
 [1, 2, 3]
+[1, NULL, 3]
 
 statement ok
 DROP TABLE test_arrays;

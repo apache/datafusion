@@ -17,17 +17,20 @@
 
 //! [`ScalarUDFImpl`] definitions for array_filter function.
 
-use arrow::array::{Array, ArrayRef, GenericListArray, OffsetSizeTrait, RecordBatch};
-use arrow::buffer::OffsetBuffer;
+use arrow::array::{
+    Array, ArrayRef, Capacities, GenericListArray, MutableArrayData, OffsetBufferBuilder,
+    OffsetSizeTrait, RecordBatch,
+};
 use arrow::compute::filter;
 use arrow::datatypes::DataType::{LargeList, List};
-use arrow::datatypes::{DataType, Field, Schema};
+use arrow::datatypes::{DataType, Field, FieldRef, Schema};
 use datafusion_common::cast::{as_boolean_array, as_large_list_array, as_list_array};
 use datafusion_common::utils::take_function_args;
-use datafusion_common::{exec_err, plan_err, DFSchema, Result};
+use datafusion_common::{exec_err, not_impl_err, plan_err, DFSchema, Result};
 use datafusion_expr::expr::{schema_name_from_exprs_ref, ScalarFunction};
 use datafusion_expr::{
-    ColumnarValue, Documentation, ExprSchemable, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Documentation, ExprSchemable, ReturnFieldArgs, ScalarUDFImpl,
+    Signature, Volatility,
 };
 use datafusion_expr::{Expr, LambdaPlanner, PhysicalLambda, ScalarUDF};
 use datafusion_macros::user_doc;
@@ -49,6 +52,7 @@ make_udf_expr_and_func!(ArrayFilter,
 ///
 /// This function filters array elements using a lambda function, returning a new array
 /// containing only the elements for which the lambda function returns true.
+/// Nulls will be counted as false.
 ///
 /// The struct maintains both logical and physical representations of the lambda:
 /// - `lambda`: The logical lambda expression from the SQL query
@@ -60,11 +64,11 @@ make_udf_expr_and_func!(ArrayFilter,
     syntax_example = "array_filter(array, lambda)",
     sql_example = r#"```sql
 > select array_filter([1, 2, 3, 4, 5], x -> x > 3);
-+--------------------------------------------------+
-| array_filter(List([1,2,3,4,5]), x -> x > 3)      |
-+--------------------------------------------------+
-| [4, 5]                                           |
-+--------------------------------------------------+
++---------------------------------------------+
+| array_filter(List([1,2,3,4,5]), x -> x > 3) |
++---------------------------------------------+
+| [4, 5]                                      |
++---------------------------------------------+
 ```"#,
     argument(
         name = "array",
@@ -72,7 +76,7 @@ make_udf_expr_and_func!(ArrayFilter,
     ),
     argument(
         name = "lambda",
-        description = "Lambda function with one argument that returns a boolean. The lambda is applied to each element of the array."
+        description = "Lambda function with one argument that returns a boolean. The lambda is applied to each element of the array. Nulls will be counted as false."
     )
 )]
 pub struct ArrayFilter {
@@ -176,12 +180,18 @@ impl ScalarUDFImpl for ArrayFilter {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        let [arg_type] = take_function_args(self.name(), arg_types)?;
-        match arg_type {
-            List(_) | LargeList(_) => Ok(arg_type.clone()),
-            _ => plan_err!("{} does not support type {}", self.name(), arg_type),
-        }
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let [arg] = take_function_args(self.name(), args.arg_fields)?;
+        let arg_type = arg.data_type();
+        let return_type = match arg_type {
+            List(_) | LargeList(_) => arg_type.clone(),
+            _ => return plan_err!("{} does not support type {}", self.name(), arg_type),
+        };
+        Ok(Arc::new(Field::new(
+            self.name(),
+            return_type,
+            arg.is_nullable(),
+        )))
     }
 
     fn invoke_with_args(
@@ -278,13 +288,6 @@ impl ScalarUDFImpl for ArrayFilter {
         }
     }
 
-    fn coerce_types(&self, _arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        datafusion_common::not_impl_err!(
-            "Function {} does not implement coerce_types",
-            self.name()
-        )
-    }
-
     fn args_with_lambda<'a>(&'a self, args: &'a [Expr]) -> Result<Vec<&'a Expr>> {
         match (self.lambda.as_ref(), args) {
             (Some(lambda), [expr]) => Ok(vec![expr, lambda.as_ref()]),
@@ -294,9 +297,14 @@ impl ScalarUDFImpl for ArrayFilter {
             _ => plan_err!("{} requires 1 argument and 1 lambda", self.name()),
         }
     }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        not_impl_err!("{} does not implement return_type", self.name())
+    }
 }
 
 fn array_filter_inner(array: &ArrayRef, lambda: &dyn PhysicalLambda) -> Result<ArrayRef> {
+    let array = compact_array(array)?;
     match array.data_type() {
         List(field) => {
             let array = as_list_array(&array)?;
@@ -310,12 +318,28 @@ fn array_filter_inner(array: &ArrayRef, lambda: &dyn PhysicalLambda) -> Result<A
     }
 }
 
+fn compact_array(array: &ArrayRef) -> Result<ArrayRef> {
+    let original_data = array.to_data();
+    let capacity = Capacities::Array(array.len());
+    let mut mutable =
+        MutableArrayData::with_capacities(vec![&original_data], true, capacity);
+    for row_index in 0..array.len() {
+        if array.is_null(row_index) {
+            mutable.extend_nulls(1);
+        } else {
+            mutable.extend(0, row_index, row_index + 1);
+        }
+    }
+    let data = mutable.freeze();
+    Ok(arrow::array::make_array(data))
+}
+
 fn filter_generic_list_array<OffsetSize: OffsetSizeTrait>(
     list_array: &GenericListArray<OffsetSize>,
     lambda: &dyn PhysicalLambda,
     field: &Arc<Field>,
 ) -> Result<ArrayRef> {
-    let mut offsets = vec![OffsetSize::zero()];
+    let mut offsets = OffsetBufferBuilder::<OffsetSize>::new(list_array.len());
 
     let values = list_array.values();
     let value_offsets = list_array.value_offsets();
@@ -342,7 +366,7 @@ fn filter_generic_list_array<OffsetSize: OffsetSizeTrait>(
     for row_index in 0..list_array.len() {
         if list_array.is_null(row_index) {
             // Handle null arrays by keeping the offset unchanged
-            offsets.push(offsets[row_index]);
+            offsets.push_length(0);
             continue;
         }
         let start = value_offsets[row_index];
@@ -350,9 +374,9 @@ fn filter_generic_list_array<OffsetSize: OffsetSizeTrait>(
         let num_true = filter_array
             .slice(start.as_usize(), (end - start).as_usize())
             .true_count();
-        offsets.push(offsets[row_index] + OffsetSize::usize_as(num_true));
+        offsets.push_length(num_true);
     }
-    let offsets = OffsetBuffer::new(offsets.into());
+    let offsets = offsets.finish();
     let list_array = GenericListArray::<OffsetSize>::try_new(
         Arc::clone(field),
         offsets,
