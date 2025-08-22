@@ -75,7 +75,7 @@ use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore};
 use parquet::arrow::arrow_writer::{
     compute_leaves, ArrowColumnChunk, ArrowColumnWriter, ArrowLeafColumn,
-    ArrowWriterOptions,
+    ArrowRowGroupWriterFactory, ArrowWriterOptions,
 };
 use parquet::arrow::async_reader::MetadataFetch;
 use parquet::arrow::{
@@ -88,6 +88,7 @@ use datafusion_execution::cache::cache_manager::FileMetadataCache;
 use parquet::errors::ParquetError;
 use parquet::file::metadata::ParquetMetaData;
 use parquet::file::properties::{WriterProperties, WriterPropertiesBuilder};
+use parquet::file::writer::SerializedFileWriter;
 use parquet::format::FileMetaData;
 use parquet::schema::types::SchemaDescriptor;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
@@ -1498,18 +1499,20 @@ fn spawn_rg_join_and_finalize_task(
 /// across both columns and row_groups, with a theoretical max number of parallel tasks
 /// given by n_columns * num_row_groups.
 fn spawn_parquet_parallel_serialization_task(
-    mut arrow_writer: ArrowWriter<SharedBuffer>,
+    row_group_writer_factory: ArrowRowGroupWriterFactory,
     mut data: Receiver<RecordBatch>,
     serialize_tx: Sender<SpawnedTask<RBStreamSerializeResult>>,
     schema: Arc<Schema>,
     writer_props: Arc<WriterProperties>,
     parallel_options: ParallelParquetWriterOptions,
     pool: Arc<dyn MemoryPool>,
-) -> SpawnedTask<Result<ArrowWriter<SharedBuffer>, DataFusionError>> {
+) -> SpawnedTask<Result<(), DataFusionError>> {
     SpawnedTask::spawn(async move {
         let max_buffer_rb = parallel_options.max_buffered_record_batches_per_stream;
         let max_row_group_rows = writer_props.max_row_group_size();
-        let col_writers = arrow_writer.get_column_writers().unwrap();
+        let mut row_group_index = 0;
+        let col_writers =
+            row_group_writer_factory.create_column_writers(row_group_index)?;
         let (mut column_writer_handles, mut col_array_channels) =
             spawn_column_parallel_row_group_writer(col_writers, max_buffer_rb, &pool)?;
         let mut current_rg_rows = 0;
@@ -1551,13 +1554,15 @@ fn spawn_parquet_parallel_serialization_task(
                     // Do not surface error from closed channel (means something
                     // else hit an error, and the plan is shutting down).
                     if serialize_tx.send(finalize_rg_task).await.is_err() {
-                        return Ok(arrow_writer);
+                        return Ok(());
                     }
 
                     current_rg_rows = 0;
                     rb = rb.slice(rows_left, rb.num_rows() - rows_left);
 
-                    let col_writers = arrow_writer.get_column_writers().unwrap();
+                    row_group_index += 1;
+                    let col_writers = row_group_writer_factory
+                        .create_column_writers(row_group_index)?;
                     (column_writer_handles, col_array_channels) =
                         spawn_column_parallel_row_group_writer(
                             col_writers,
@@ -1580,18 +1585,18 @@ fn spawn_parquet_parallel_serialization_task(
             // Do not surface error from closed channel (means something
             // else hit an error, and the plan is shutting down).
             if serialize_tx.send(finalize_rg_task).await.is_err() {
-                return Ok(arrow_writer);
+                return Ok(());
             }
         }
 
-        Ok(arrow_writer)
+        Ok(())
     })
 }
 
 /// Consume RowGroups serialized by other parallel tasks and concatenate them in
 /// to the final parquet file, while flushing finalized bytes to an [ObjectStore]
 async fn concatenate_parallel_row_groups(
-    mut arrow_writer: ArrowWriter<SharedBuffer>,
+    mut parquet_writer: SerializedFileWriter<SharedBuffer>,
     merged_buff: SharedBuffer,
     mut serialize_rx: Receiver<SpawnedTask<RBStreamSerializeResult>>,
     mut object_store_writer: Box<dyn AsyncWrite + Send + Unpin>,
@@ -1605,9 +1610,9 @@ async fn concatenate_parallel_row_groups(
         let (serialized_columns, mut rg_reservation, _cnt) =
             result.map_err(|e| DataFusionError::ExecutionJoin(Box::new(e)))??;
 
-        let mut finalized_rg = Vec::with_capacity(serialized_columns.len());
-        for task in serialized_columns {
-            finalized_rg.push(task);
+        let mut rg_out = parquet_writer.next_row_group()?;
+        for chunk in serialized_columns {
+            chunk.append_to_row_group(&mut rg_out)?;
 
             rg_reservation.free();
             let mut buff_to_flush = merged_buff.buffer.try_lock().unwrap();
@@ -1621,10 +1626,10 @@ async fn concatenate_parallel_row_groups(
                 file_reservation.try_resize(buff_to_flush.len())?; // will set to zero
             }
         }
-        arrow_writer.append_row_group(finalized_rg)?;
+        rg_out.close()?;
     }
 
-    let file_metadata = arrow_writer.finish()?;
+    let file_metadata = parquet_writer.close()?;
     let final_buff = merged_buff.buffer.try_lock().unwrap();
 
     object_store_writer.write_all(final_buff.as_slice()).await?;
@@ -1657,10 +1662,11 @@ async fn output_single_parquet_file_parallelized(
         Arc::clone(&output_schema),
         Some(parquet_props.clone()),
     )?;
+    let (writer, row_group_writer_factory) = writer.into_serialized_writer()?;
 
     let arc_props = Arc::new(parquet_props.clone());
     let launch_serialization_task = spawn_parquet_parallel_serialization_task(
-        writer,
+        row_group_writer_factory,
         data,
         serialize_tx,
         Arc::clone(&output_schema),
@@ -1668,11 +1674,6 @@ async fn output_single_parquet_file_parallelized(
         parallel_options,
         Arc::clone(&pool),
     );
-
-    let writer = launch_serialization_task
-        .join_unwind()
-        .await
-        .map_err(|e| DataFusionError::ExecutionJoin(Box::new(e)))??;
 
     let file_metadata = concatenate_parallel_row_groups(
         writer,
@@ -1682,6 +1683,11 @@ async fn output_single_parquet_file_parallelized(
         pool,
     )
     .await?;
+
+    launch_serialization_task
+        .join_unwind()
+        .await
+        .map_err(|e| DataFusionError::ExecutionJoin(Box::new(e)))??;
 
     Ok(file_metadata)
 }
