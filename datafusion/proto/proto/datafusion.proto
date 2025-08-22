@@ -729,6 +729,7 @@ message PhysicalPlanNode {
     JsonScanExecNode json_scan = 31;
     CooperativeExecNode cooperative = 32;
     GenerateSeriesNode generate_series = 33;
+    MemoryScanExecNode memory_scan = 34;
   }
 }
 

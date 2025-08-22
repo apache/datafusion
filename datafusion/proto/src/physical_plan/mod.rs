@@ -28,7 +28,8 @@ use crate::physical_plan::from_proto::{
 };
 use crate::physical_plan::to_proto::{
     serialize_file_scan_config, serialize_maybe_filter, serialize_physical_aggr_expr,
-    serialize_physical_window_expr,
+    serialize_physical_sort_exprs, serialize_physical_window_expr,
+    serialize_record_batches,
 };
 use crate::protobuf::physical_aggregate_expr_node::AggregateFunction;
 use crate::protobuf::physical_expr_node::ExprType;
@@ -2411,7 +2412,34 @@ impl protobuf::PhysicalPlanNode {
             }
         }
 
-        if let Some(scan_conf) = data_source.as_any().downcast_ref::<MemorySourceConfig>() {
+        if let Some(source_conf) =
+            data_source.as_any().downcast_ref::<MemorySourceConfig>()
+        {
+            let proto_partitions = source_conf
+                .partitions()
+                .iter()
+                .map(|p| serialize_record_batches(p))
+                .collect::<Result<Vec<_>>>()?;
+            let proto_schema: protobuf::Schema =
+                source_conf.original_schema().as_ref().try_into()?;
+            let proto_projection = source_conf
+                .projection()
+                .as_ref()
+                .map_or_else(Vec::new, |v| {
+                    v.iter().map(|x| *x as u32).collect::<Vec<u32>>()
+                });
+            let proto_sort_information = source_conf
+                .sort_information()
+                .iter()
+                .map(|ordering| {
+                    let sort_exprs =
+                        serialize_physical_sort_exprs(ordering.clone(), extension_codec)?;
+                    Ok::<_, DataFusionError>(protobuf::PhysicalSortExprNodeCollection {
+                        physical_sort_expr_nodes: sort_exprs,
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            todo!()
         }
 
         Ok(None)
