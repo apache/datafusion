@@ -26,7 +26,7 @@ pub(super) const PI_UPPER_F64: f64 = std::f64::consts::PI.next_up();
 // Next f32 value below -π (lower bound)
 pub(super) const NEGATIVE_PI_LOWER_F32: f32 = (-std::f32::consts::PI).next_down();
 
-// Next f64 value below -π (lower bound)  
+// Next f64 value below -π (lower bound)
 pub(super) const NEGATIVE_PI_LOWER_F64: f64 = (-std::f64::consts::PI).next_down();
 
 // Next f32 value above π/2 (upper bound)
@@ -36,7 +36,9 @@ pub(super) const FRAC_PI_2_UPPER_F32: f32 = std::f32::consts::FRAC_PI_2.next_up(
 pub(super) const FRAC_PI_2_UPPER_F64: f64 = std::f64::consts::FRAC_PI_2.next_up();
 
 // Next f32 value below -π/2 (lower bound)
-pub(super) const NEGATIVE_FRAC_PI_2_LOWER_F32: f32 = (-std::f32::consts::FRAC_PI_2).next_down();
+pub(super) const NEGATIVE_FRAC_PI_2_LOWER_F32: f32 =
+    (-std::f32::consts::FRAC_PI_2).next_down();
 
 // Next f64 value below -π/2 (lower bound)
-pub(super) const NEGATIVE_FRAC_PI_2_LOWER_F64: f64 = (-std::f64::consts::FRAC_PI_2).next_down();
+pub(super) const NEGATIVE_FRAC_PI_2_LOWER_F64: f64 =
+    (-std::f64::consts::FRAC_PI_2).next_down();
