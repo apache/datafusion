@@ -55,9 +55,19 @@ use datafusion_physical_plan::{
     sorts::sort::SortExec,
     ExecutionPlan,
 };
+use datafusion_physical_plan::{
+    execution_plan::Boundedness,
+    memory::{LazyBatchGenerator, LazyMemoryExec},
+};
 
 use futures::StreamExt;
 use object_store::{memory::InMemory, ObjectStore};
+use parking_lot::RwLock;
+use std::{
+    any::Any,
+    fmt::{Display, Formatter},
+    time::Duration,
+};
 use util::{format_plan_for_test, OptimizationTest, TestNode, TestScanBuilder};
 
 mod util;
@@ -1510,6 +1520,173 @@ STORED AS PARQUET;
         "{explain}"
     );
     // Pushdown pruned most rows
+}
+
+/// Ensure dynamic filter predicates are deterministic even when HashJoin
+/// build-side partitions finish in different orders.
+///
+/// This test runs the same join twice with reversed delays on the build side
+/// partitions, forcing them to complete out of order. The resulting dynamic
+/// filter predicates must be identical across runs.
+#[tokio::test]
+async fn test_hashjoin_dynamic_filter_pushdown_out_of_order() {
+    use datafusion_common::JoinType;
+    use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
+
+    // Build and execute a plan with the given delays for the build side
+    // partitions, returning the formatted plan string.
+    async fn run_with_delays(delays: [u64; 2]) -> String {
+        // Generator that waits for a specific duration before yielding its batch
+        #[derive(Debug)]
+        struct DelayedBatchGenerator {
+            batch: Option<RecordBatch>,
+            delay: Duration,
+        }
+
+        impl Display for DelayedBatchGenerator {
+            fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+                write!(f, "DelayedBatchGenerator")
+            }
+        }
+
+        impl LazyBatchGenerator for DelayedBatchGenerator {
+            fn as_any(&self) -> &dyn Any {
+                self
+            }
+
+            fn generate_next_batch(
+                &mut self,
+            ) -> datafusion_common::Result<Option<RecordBatch>> {
+                if let Some(batch) = self.batch.take() {
+                    std::thread::sleep(self.delay);
+                    Ok(Some(batch))
+                } else {
+                    Ok(None)
+                }
+            }
+
+            fn boundedness(&self) -> Boundedness {
+                Boundedness::Bounded
+            }
+        }
+
+        // Build side with two partitions and configurable delays
+        let build_schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Utf8, false),
+            Field::new("b", DataType::Utf8, false),
+        ]));
+        let build_batches = [
+            record_batch!(("a", Utf8, ["aa"]), ("b", Utf8, ["ba"])).unwrap(),
+            record_batch!(("a", Utf8, ["ab"]), ("b", Utf8, ["bb"])).unwrap(),
+        ];
+        let generators: Vec<_> = build_batches
+            .into_iter()
+            .zip(delays)
+            .map(|(batch, d)| {
+                Arc::new(RwLock::new(DelayedBatchGenerator {
+                    batch: Some(batch),
+                    delay: Duration::from_millis(d),
+                })) as Arc<RwLock<dyn LazyBatchGenerator>>
+            })
+            .collect();
+        let build_exec = Arc::new(
+            LazyMemoryExec::try_new(Arc::clone(&build_schema), generators).unwrap(),
+        ) as Arc<dyn ExecutionPlan>;
+        let build_hash_exprs = vec![
+            col("a", &build_schema).unwrap(),
+            col("b", &build_schema).unwrap(),
+        ];
+        let build_part = Arc::new(
+            RepartitionExec::try_new(build_exec, Partitioning::Hash(build_hash_exprs, 2))
+                .unwrap(),
+        );
+
+        // Probe side with more values and filter pushdown support
+        let probe_batches = vec![record_batch!(
+            ("a", Utf8, ["aa", "ab", "ac", "ad"]),
+            ("b", Utf8, ["ba", "bb", "bc", "bd"]),
+            ("c", Float64, [1.0, 2.0, 3.0, 4.0])
+        )
+        .unwrap()];
+        let probe_schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Utf8, false),
+            Field::new("b", DataType::Utf8, false),
+            Field::new("c", DataType::Float64, false),
+        ]));
+        let probe_scan = TestScanBuilder::new(Arc::clone(&probe_schema))
+            .with_support(true)
+            .with_batches(probe_batches)
+            .build();
+        let probe_hash_exprs = vec![
+            col("a", &probe_schema).unwrap(),
+            col("b", &probe_schema).unwrap(),
+        ];
+        let probe_part = Arc::new(
+            RepartitionExec::try_new(probe_scan, Partitioning::Hash(probe_hash_exprs, 2))
+                .unwrap(),
+        );
+
+        // Create the HashJoinExec
+        let on = vec![
+            (
+                col("a", &build_schema).unwrap(),
+                col("a", &probe_schema).unwrap(),
+            ),
+            (
+                col("b", &build_schema).unwrap(),
+                col("b", &probe_schema).unwrap(),
+            ),
+        ];
+        let join = Arc::new(
+            HashJoinExec::try_new(
+                build_part,
+                probe_part,
+                on,
+                None,
+                &JoinType::Inner,
+                None,
+                PartitionMode::Partitioned,
+                datafusion_common::NullEquality::NullEqualsNothing,
+            )
+            .unwrap(),
+        ) as Arc<dyn ExecutionPlan>;
+
+        // Enable dynamic filter pushdown
+        let mut config = ConfigOptions::default();
+        config.execution.parquet.pushdown_filters = true;
+        config.optimizer.enable_dynamic_filter_pushdown = true;
+        let plan = FilterPushdown::new_post_optimization()
+            .optimize(join, &config)
+            .unwrap();
+
+        // Execute to materialize the dynamic filter
+        let session_ctx = SessionContext::new_with_config(SessionConfig::new());
+        session_ctx.register_object_store(
+            ObjectStoreUrl::parse("test://").unwrap().as_ref(),
+            Arc::new(InMemory::new()),
+        );
+        let task_ctx = session_ctx.state().task_ctx();
+        collect(Arc::clone(&plan), task_ctx).await.unwrap();
+
+        format_plan_for_test(&plan)
+    }
+
+    // Run once with partition0 slow and once with partition1 slow to ensure
+    // completion order does not affect the resulting predicate.
+    let first = run_with_delays([50, 0]).await;
+    let second = run_with_delays([0, 50]).await;
+
+    fn extract_predicate(plan: &str) -> &str {
+        plan.lines()
+            .find(|l| l.contains("DynamicFilterPhysicalExpr"))
+            .expect("dynamic filter not found")
+    }
+
+    assert_eq!(
+        extract_predicate(&first),
+        extract_predicate(&second),
+        "dynamic filter predicate should be deterministic",
+    );
 }
 
 /// Schema:

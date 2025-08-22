@@ -92,7 +92,6 @@ use datafusion_physical_expr_common::datum::compare_op_for_nested;
 use ahash::RandomState;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use futures::{ready, Stream, StreamExt, TryStreamExt};
-use itertools::Itertools;
 use parking_lot::Mutex;
 
 /// Hard-coded seed to ensure hash values from the hash join differ from `RepartitionExec`, avoiding collisions.
@@ -112,34 +111,6 @@ struct ColumnBounds {
 impl ColumnBounds {
     fn new(min: ScalarValue, max: ScalarValue) -> Self {
         Self { min, max }
-    }
-}
-
-/// Represents the bounds for all join key columns from a single partition.
-/// This contains the min/max values computed from one partition's build-side data.
-#[derive(Debug, Clone)]
-struct PartitionBounds {
-    /// Partition identifier for debugging and determinism (not strictly necessary)
-    partition: usize,
-    /// Min/max bounds for each join key column in this partition.
-    /// Index corresponds to the join key expression index.
-    column_bounds: Vec<ColumnBounds>,
-}
-
-impl PartitionBounds {
-    fn new(partition: usize, column_bounds: Vec<ColumnBounds>) -> Self {
-        Self {
-            partition,
-            column_bounds,
-        }
-    }
-
-    fn len(&self) -> usize {
-        self.column_bounds.len()
-    }
-
-    fn get_column_bounds(&self, index: usize) -> Option<&ColumnBounds> {
-        self.column_bounds.get(index)
     }
 }
 
@@ -182,8 +153,9 @@ struct SharedBoundsAccumulator {
 /// State protected by SharedBoundsAccumulator's mutex
 struct SharedBoundsState {
     /// Bounds from completed partitions.
-    /// Each element represents the column bounds computed by one partition.
-    bounds: Vec<PartitionBounds>,
+    /// Each index corresponds to a partition and contains the column bounds
+    /// computed by that partition, if any.
+    bounds: Vec<Option<Vec<ColumnBounds>>>,
     /// Number of partitions that have reported completion.
     completed_partitions: usize,
 }
@@ -235,7 +207,7 @@ impl SharedBoundsAccumulator {
         };
         Self {
             inner: Mutex::new(SharedBoundsState {
-                bounds: Vec::with_capacity(expected_calls),
+                bounds: vec![None; expected_calls],
                 completed_partitions: 0,
             }),
             total_partitions: expected_calls,
@@ -255,21 +227,21 @@ impl SharedBoundsAccumulator {
     ///  (col0 >= p1_min0 AND col0 <= p1_max0 AND col1 >= p1_min1 AND col1 <= p1_max1))
     fn create_filter_from_partition_bounds(
         &self,
-        bounds: &[PartitionBounds],
+        bounds: &[Option<Vec<ColumnBounds>>],
     ) -> Result<Arc<dyn PhysicalExpr>> {
-        if bounds.is_empty() {
+        if bounds.iter().all(|b| b.is_none()) {
             return Ok(lit(true));
         }
 
         // Create a predicate for each partition
-        let mut partition_predicates = Vec::with_capacity(bounds.len());
+        let mut partition_predicates = Vec::new();
 
-        for partition_bounds in bounds.iter().sorted_by_key(|b| b.partition) {
+        for column_bounds in bounds.iter().filter_map(|b| b.as_ref()) {
             // Create range predicates for each join key in this partition
-            let mut column_predicates = Vec::with_capacity(partition_bounds.len());
+            let mut column_predicates = Vec::with_capacity(column_bounds.len());
 
             for (col_idx, right_expr) in self.on_right.iter().enumerate() {
-                if let Some(column_bounds) = partition_bounds.get_column_bounds(col_idx) {
+                if let Some(column_bounds) = column_bounds.get(col_idx) {
                     // Create predicate: col >= min AND col <= max
                     let min_expr = Arc::new(BinaryExpr::new(
                         Arc::clone(right_expr),
@@ -333,8 +305,7 @@ impl SharedBoundsAccumulator {
 
         // Store bounds in the accumulator - this runs once per partition
         if let Some(bounds) = partition_bounds {
-            // Only push actual bounds if they exist
-            inner.bounds.push(PartitionBounds::new(partition, bounds));
+            inner.bounds[partition] = Some(bounds);
         }
 
         // Increment the completion counter
@@ -346,7 +317,7 @@ impl SharedBoundsAccumulator {
         // Critical synchronization point: Only update the filter when ALL partitions are complete
         // Troubleshooting: If you see "completed > total_partitions", check partition
         // count calculation in new_from_partition_mode() - it may not match actual execution calls
-        if completed == total_partitions && !inner.bounds.is_empty() {
+        if completed == total_partitions && inner.bounds.iter().any(|b| b.is_some()) {
             let filter_expr = self.create_filter_from_partition_bounds(&inner.bounds)?;
             self.dynamic_filter.update(filter_expr)?;
         }
