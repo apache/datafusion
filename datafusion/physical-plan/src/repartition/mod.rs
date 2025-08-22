@@ -758,6 +758,10 @@ impl ExecutionPlan for RepartitionExec {
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
         if let Some(partition) = partition {
             let partition_count = self.partitioning().partition_count();
+            if partition_count == 0 {
+                return Ok(Statistics::new_unknown(&self.schema()));
+            }
+
             if partition >= partition_count {
                 return internal_err!(
                     "RepartitionExec invalid partition {} (expected less than {})",

@@ -797,7 +797,7 @@ mod test {
             repartition.clone(),
             Arc::new(TaskContext::default()),
         )?;
-        assert_eq!(3, partitions.len());
+        assert_eq!(partitions.len(), 3);
 
         // Collect row counts from each partition
         let mut partition_row_counts = Vec::new();
@@ -815,6 +815,32 @@ mod test {
     }
 
     #[tokio::test]
+    async fn test_statistic_by_partition_of_repartition_invalid_partition() -> Result<()>
+    {
+        let scan = create_scan_exec_with_statistics(None, Some(2)).await;
+
+        let repartition = Arc::new(RepartitionExec::try_new(
+            scan.clone(),
+            Partitioning::RoundRobinBatch(2),
+        )?);
+
+        let result = repartition.partition_statistics(Some(2));
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("RepartitionExec invalid partition 2 (expected less than 2)"));
+
+        let partitions = execute_stream_partitioned(
+            repartition.clone(),
+            Arc::new(TaskContext::default()),
+        )?;
+        assert_eq!(partitions.len(), 2);
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_statistic_by_partition_of_repartition_zero_partitions() -> Result<()> {
         let scan = create_scan_exec_with_statistics(None, Some(2)).await;
         let scan_schema = scan.schema();
@@ -825,20 +851,15 @@ mod test {
             Partitioning::RoundRobinBatch(0),
         )?);
 
-        // This should return an error because there are 0 partitions
-        let result = repartition.partition_statistics(Some(0));
-        assert!(result.is_err());
-        let error = result.unwrap_err();
-        assert!(error
-            .to_string()
-            .contains("RepartitionExec invalid partition 0 (expected less than 0)"));
+        let result = repartition.partition_statistics(Some(0))?;
+        assert_eq!(result, Statistics::new_unknown(&scan_schema));
 
         // Verify that the result has exactly 0 partitions
         let partitions = execute_stream_partitioned(
             repartition.clone(),
             Arc::new(TaskContext::default()),
         )?;
-        assert_eq!(0, partitions.len());
+        assert_eq!(partitions.len(), 0);
 
         Ok(())
     }
