@@ -59,6 +59,36 @@ assert_eq!(casted.data_type(), target_field.data_type());
 The new `score` field is filled with `NULL` and `id` is promoted to a nullable
 `Int64`, demonstrating how nested casting can reconcile schema differences.
 
+## Adapting a RecordBatch
+
+```rust
+use std::sync::Arc;
+use arrow::{array::Int32Array, datatypes::{DataType, Field, Schema}, record_batch::RecordBatch};
+use datafusion_datasource::schema_adapter::DefaultSchemaAdapterFactory;
+
+// RecordBatch with `id: Int32`
+let source_schema = Schema::new(vec![Field::new("id", DataType::Int32, true)]);
+let batch = RecordBatch::try_new(
+    Arc::new(source_schema.clone()),
+    vec![Arc::new(Int32Array::from(vec![1, 2])) as _],
+).unwrap();
+
+// Target schema expects `id: Int64` and an extra `name: Utf8` column
+let target_schema = Schema::new(vec![
+    Field::new("id", DataType::Int64, true),
+    Field::new("name", DataType::Utf8, true),
+]);
+
+let adapter = DefaultSchemaAdapterFactory::from_schema(Arc::new(target_schema));
+let (mapper, _) = adapter.map_schema(&source_schema).unwrap();
+let adapted_batch = mapper.map_batch(batch).unwrap();
+assert_eq!(adapted_batch.schema().fields().len(), 2);
+```
+
+When `mapper.map_batch` runs, the adapter calls `cast_column` for any field whose
+type differs between source and target schemas. In this example, `id` is cast from
+`Int32` to `Int64` and the missing `name` column is filled with `NULL` values.
+
 ## Pitfalls and performance
 
 - **Field name mismatches**: only matching field names are cast. Extra source
