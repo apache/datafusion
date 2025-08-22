@@ -469,7 +469,50 @@ impl FieldMetadata {
     }
 
     /// Merges two optional `FieldMetadata` instances, overwriting any existing
-    /// keys in `m` with keys from `n` if present
+    /// keys in `m` with keys from `n` if present.
+    ///
+    /// This function is commonly used in alias operations, particularly for literals
+    /// with metadata. When creating an alias expression, the metadata from the original
+    /// expression (such as a literal) is combined with any metadata specified on the alias.
+    ///
+    /// # Arguments
+    ///
+    /// * `m` - The first metadata (typically from the original expression like a literal)
+    /// * `n` - The second metadata (typically from the alias definition)
+    ///
+    /// # Merge Strategy
+    ///
+    /// - If both metadata instances exist, they are merged with `n` taking precedence
+    /// - Keys from `n` will overwrite keys from `m` if they have the same name
+    /// - If only one metadata instance exists, it is returned unchanged
+    /// - If neither exists, `None` is returned
+    ///
+    /// # Example usage
+    /// ```rust
+    /// use datafusion_expr::expr::FieldMetadata;
+    /// use std::collections::BTreeMap;
+    ///
+    /// // Create metadata for a literal expression
+    /// let literal_metadata = Some(FieldMetadata::from(BTreeMap::from([
+    ///     ("source".to_string(), "constant".to_string()),
+    ///     ("type".to_string(), "int".to_string()),
+    /// ])));
+    ///
+    /// // Create metadata for an alias
+    /// let alias_metadata = Some(FieldMetadata::from(BTreeMap::from([
+    ///     ("description".to_string(), "answer".to_string()),
+    ///     ("source".to_string(), "user".to_string()), // This will override literal's "source"
+    /// ])));
+    ///
+    /// // Merge the metadata
+    /// let merged = FieldMetadata::merge_options(
+    ///     literal_metadata.as_ref(),
+    ///     alias_metadata.as_ref(),
+    /// );
+    ///
+    /// // Result contains: {"source": "user", "type": "int", "description": "answer"}
+    /// assert!(merged.is_some());
+    /// ```
     pub fn merge_options(
         m: Option<&FieldMetadata>,
         n: Option<&FieldMetadata>,
