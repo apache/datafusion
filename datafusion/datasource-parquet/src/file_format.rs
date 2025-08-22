@@ -87,7 +87,9 @@ use parquet::basic::Type;
 
 use datafusion_execution::cache::cache_manager::FileMetadataCache;
 use parquet::errors::ParquetError;
-use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader, RowGroupMetaData};
+use parquet::file::metadata::{
+    PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader, RowGroupMetaData,
+};
 use parquet::file::properties::{WriterProperties, WriterPropertiesBuilder};
 use parquet::file::writer::SerializedFileWriter;
 use parquet::format::FileMetaData;
@@ -1075,7 +1077,7 @@ pub async fn fetch_parquet_metadata<F: MetadataFetch>(
 
     if cache_metadata && file_metadata_cache.is_some() {
         // Need to retrieve the entire metadata for the caching to be effective.
-        reader = reader.with_page_indexes(true);
+        reader = reader.with_page_index_policy(PageIndexPolicy::Optional);
     }
 
     let metadata = Arc::new(
