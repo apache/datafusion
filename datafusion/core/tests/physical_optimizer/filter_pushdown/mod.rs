@@ -17,6 +17,7 @@
 
 use std::sync::{Arc, LazyLock};
 
+use arrow::record_batch::RecordBatch;
 use arrow::{
     array::record_batch,
     datatypes::{DataType, Field, Schema, SchemaRef},
