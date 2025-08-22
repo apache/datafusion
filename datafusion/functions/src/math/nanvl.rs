@@ -45,7 +45,7 @@ Returns the second argument otherwise."#,
         description = "Numeric expression to return if the first expression is _NaN_. Can be a constant, column, or function, and any combination of arithmetic operators."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct NanvlFunc {
     signature: Signature,
 }

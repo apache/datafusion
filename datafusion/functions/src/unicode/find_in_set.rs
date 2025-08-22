@@ -53,7 +53,7 @@ use datafusion_macros::user_doc;
         description = "A string list is a string composed of substrings separated by , characters."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct FindInSetFunc {
     signature: Signature,
 }
@@ -349,6 +349,7 @@ mod tests {
     use crate::utils::test::test_function;
     use arrow::array::{Array, Int32Array, StringArray};
     use arrow::datatypes::{DataType::Int32, Field};
+    use datafusion_common::config::ConfigOptions;
     use datafusion_common::{Result, ScalarValue};
     use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
     use std::sync::Arc;
@@ -483,6 +484,7 @@ mod tests {
                     arg_fields,
                     number_rows: cardinality,
                     return_field: Field::new("f", return_type, true).into(),
+                    config_options: Arc::new(ConfigOptions::default()),
                 });
                 assert!(result.is_ok());
 

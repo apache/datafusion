@@ -35,14 +35,18 @@ use datafusion_common::encryption::FileDecryptionProperties;
 
 use datafusion_common::{exec_err, DataFusionError, Result};
 use datafusion_datasource::PartitionedFile;
-use datafusion_physical_expr::schema_rewriter::PhysicalExprAdapterFactory;
 use datafusion_physical_expr::simplifier::PhysicalExprSimplifier;
+use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion_physical_expr_common::physical_expr::{
     is_dynamic_physical_expr, PhysicalExpr,
 };
 use datafusion_physical_plan::metrics::{Count, ExecutionPlanMetricsSet, MetricBuilder};
 use datafusion_pruning::{build_pruning_predicate, FilePruner, PruningPredicate};
 
+#[cfg(feature = "parquet_encryption")]
+use datafusion_common::config::EncryptionFactoryOptions;
+#[cfg(feature = "parquet_encryption")]
+use datafusion_execution::parquet_encryption::EncryptionFactory;
 use futures::{StreamExt, TryStreamExt};
 use itertools::Itertools;
 use log::debug;
@@ -96,13 +100,18 @@ pub(super) struct ParquetOpener {
     pub file_decryption_properties: Option<Arc<FileDecryptionProperties>>,
     /// Rewrite expressions in the context of the file schema
     pub(crate) expr_adapter_factory: Option<Arc<dyn PhysicalExprAdapterFactory>>,
+    /// Optional factory to create file decryption properties dynamically
+    #[cfg(feature = "parquet_encryption")]
+    pub encryption_factory:
+        Option<(Arc<dyn EncryptionFactory>, EncryptionFactoryOptions)>,
 }
 
 impl FileOpener for ParquetOpener {
     fn open(&self, file_meta: FileMeta, file: PartitionedFile) -> Result<FileOpenFuture> {
         let file_range = file_meta.range.clone();
         let extensions = file_meta.extensions.clone();
-        let file_name = file_meta.location().to_string();
+        let file_location = file_meta.location();
+        let file_name = file_location.to_string();
         let file_metrics =
             ParquetFileMetrics::new(self.partition_index, &file_name, &self.metrics);
 
@@ -141,7 +150,8 @@ impl FileOpener for ParquetOpener {
         let mut predicate_file_schema = Arc::clone(&self.logical_file_schema);
 
         let mut enable_page_index = self.enable_page_index;
-        let file_decryption_properties = self.file_decryption_properties.clone();
+        let file_decryption_properties =
+            self.get_file_decryption_properties(file_location)?;
 
         // For now, page index does not work with encrypted files. See:
         // https://github.com/apache/arrow-rs/issues/7629
@@ -227,11 +237,11 @@ impl FileOpener for ParquetOpener {
                 )?;
             }
 
-            if coerce_int96.is_some() {
+            if let Some(ref coerce) = coerce_int96 {
                 if let Some(merged) = coerce_int96_to_resolution(
                     reader_metadata.parquet_schema(),
                     &physical_file_schema,
-                    &(coerce_int96.unwrap()),
+                    coerce,
                 ) {
                     physical_file_schema = Arc::new(merged);
                     options = options.with_schema(Arc::clone(&physical_file_schema));
@@ -399,15 +409,91 @@ impl FileOpener for ParquetOpener {
                 .with_row_groups(row_group_indexes)
                 .build()?;
 
-            let adapted = stream
-                .map_err(|e| ArrowError::ExternalError(Box::new(e)))
-                .map(move |maybe_batch| {
-                    maybe_batch
-                        .and_then(|b| schema_mapping.map_batch(b).map_err(Into::into))
-                });
+            // Create a stateful stream that can check pruning after each batch
+            let adapted = {
+                use futures::stream;
+                let schema_mapping = Some(schema_mapping);
+                let file_pruner = file_pruner;
+                let stream = stream.map_err(|e| ArrowError::ExternalError(Box::new(e)));
+                let files_ranges_pruned_statistics =
+                    file_metrics.files_ranges_pruned_statistics.clone();
+
+                stream::try_unfold(
+                    (
+                        stream,
+                        schema_mapping,
+                        file_pruner,
+                        files_ranges_pruned_statistics,
+                    ),
+                    move |(
+                        mut stream,
+                        schema_mapping_opt,
+                        mut file_pruner,
+                        files_ranges_pruned_statistics,
+                    )| async move {
+                        match stream.try_next().await? {
+                            Some(batch) => {
+                                let schema_mapping = schema_mapping_opt.as_ref().unwrap();
+                                let mapped_batch = schema_mapping.map_batch(batch)?;
+
+                                // Check if we can prune the file now
+                                if let Some(ref mut pruner) = file_pruner {
+                                    if pruner.should_prune()? {
+                                        // File can now be pruned based on updated dynamic filters
+                                        files_ranges_pruned_statistics.add(1);
+                                        // Terminate the stream early
+                                        return Ok(None);
+                                    }
+                                }
+
+                                Ok(Some((
+                                    mapped_batch,
+                                    (
+                                        stream,
+                                        schema_mapping_opt,
+                                        file_pruner,
+                                        files_ranges_pruned_statistics,
+                                    ),
+                                )))
+                            }
+                            None => Ok(None),
+                        }
+                    },
+                )
+            };
 
             Ok(adapted.boxed())
         }))
+    }
+}
+
+#[cfg(feature = "parquet_encryption")]
+impl ParquetOpener {
+    fn get_file_decryption_properties(
+        &self,
+        file_location: &object_store::path::Path,
+    ) -> Result<Option<Arc<FileDecryptionProperties>>> {
+        match &self.file_decryption_properties {
+            Some(file_decryption_properties) => {
+                Ok(Some(Arc::clone(file_decryption_properties)))
+            }
+            None => match &self.encryption_factory {
+                Some((encryption_factory, encryption_config)) => Ok(encryption_factory
+                    .get_file_decryption_properties(encryption_config, file_location)?
+                    .map(Arc::new)),
+                None => Ok(None),
+            },
+        }
+    }
+}
+
+#[cfg(not(feature = "parquet_encryption"))]
+impl ParquetOpener {
+    fn get_file_decryption_properties(
+        &self,
+        _file_location: &object_store::path::Path,
+    ) -> Result<Option<Arc<FileDecryptionProperties>>> {
+        Ok(self.file_decryption_properties.clone())
     }
 }
 
@@ -545,9 +631,9 @@ mod test {
     };
     use datafusion_expr::{col, lit};
     use datafusion_physical_expr::{
-        expressions::DynamicFilterPhysicalExpr, planner::logical2physical,
-        schema_rewriter::DefaultPhysicalExprAdapterFactory, PhysicalExpr,
+        expressions::DynamicFilterPhysicalExpr, planner::logical2physical, PhysicalExpr,
     };
+    use datafusion_physical_expr_adapter::DefaultPhysicalExprAdapterFactory;
     use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
     use futures::{Stream, StreamExt};
     use object_store::{memory::InMemory, path::Path, ObjectMeta, ObjectStore};
@@ -672,6 +758,8 @@ mod test {
                 coerce_int96: None,
                 file_decryption_properties: None,
                 expr_adapter_factory: Some(Arc::new(DefaultPhysicalExprAdapterFactory)),
+                #[cfg(feature = "parquet_encryption")]
+                encryption_factory: None,
             }
         };
 
@@ -758,6 +846,8 @@ mod test {
                 coerce_int96: None,
                 file_decryption_properties: None,
                 expr_adapter_factory: Some(Arc::new(DefaultPhysicalExprAdapterFactory)),
+                #[cfg(feature = "parquet_encryption")]
+                encryption_factory: None,
             }
         };
 
@@ -860,6 +950,8 @@ mod test {
                 coerce_int96: None,
                 file_decryption_properties: None,
                 expr_adapter_factory: Some(Arc::new(DefaultPhysicalExprAdapterFactory)),
+                #[cfg(feature = "parquet_encryption")]
+                encryption_factory: None,
             }
         };
         let make_meta = || FileMeta {
@@ -972,6 +1064,8 @@ mod test {
                 coerce_int96: None,
                 file_decryption_properties: None,
                 expr_adapter_factory: Some(Arc::new(DefaultPhysicalExprAdapterFactory)),
+                #[cfg(feature = "parquet_encryption")]
+                encryption_factory: None,
             }
         };
 
@@ -1085,6 +1179,8 @@ mod test {
                 coerce_int96: None,
                 file_decryption_properties: None,
                 expr_adapter_factory: Some(Arc::new(DefaultPhysicalExprAdapterFactory)),
+                #[cfg(feature = "parquet_encryption")]
+                encryption_factory: None,
             }
         };
 
@@ -1265,6 +1361,8 @@ mod test {
             coerce_int96: None,
             file_decryption_properties: None,
             expr_adapter_factory: None,
+            #[cfg(feature = "parquet_encryption")]
+            encryption_factory: None,
         };
 
         let predicate = logical2physical(&col("a").eq(lit(1u64)), &table_schema);

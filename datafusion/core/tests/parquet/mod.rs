@@ -43,6 +43,7 @@ use std::sync::Arc;
 use tempfile::NamedTempFile;
 
 mod custom_reader;
+#[cfg(feature = "parquet_encryption")]
 mod encryption;
 mod external_access_plan;
 mod file_statistics;
@@ -109,11 +110,11 @@ struct ContextWithParquet {
 
 /// The output of running one of the test cases
 struct TestOutput {
-    /// The input string
+    /// The input query SQL
     sql: String,
     /// Execution metrics for the Parquet Scan
     parquet_metrics: MetricsSet,
-    /// number of rows in results
+    /// number of actual rows in results
     result_rows: usize,
     /// the contents of the input, as a string
     pretty_input: String,

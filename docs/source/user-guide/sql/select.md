@@ -35,6 +35,7 @@ DataFusion supports the following syntax for queries:
 [ [WHERE](#where-clause) condition ] <br/>
 [ [GROUP BY](#group-by-clause) grouping_element [, ...] ] <br/>
 [ [HAVING](#having-clause) condition] <br/>
+[ [QUALIFY](#qualify-clause) condition] <br/>
 [ [UNION](#union-clause) [ ALL | select ] <br/>
 [ [ORDER BY](#order-by-clause) expression [ ASC | DESC ][, ...] ] <br/>
 [ [LIMIT](#limit-clause) count ] <br/>
@@ -259,6 +260,14 @@ Example:
 
 ```sql
 SELECT a, b, MAX(c) FROM table GROUP BY a, b HAVING MAX(c) > 10
+```
+
+## QUALIFY clause
+
+Example:
+
+```sql
+SELECT ROW_NUMBER() OVER (PARTITION BY region) AS rk FROM table QUALIFY rk > 1;
 ```
 
 ## UNION clause

@@ -814,6 +814,8 @@ pub fn can_hash(data_type: &DataType) -> bool {
         DataType::Float16 => true,
         DataType::Float32 => true,
         DataType::Float64 => true,
+        DataType::Decimal32(_, _) => true,
+        DataType::Decimal64(_, _) => true,
         DataType::Decimal128(_, _) => true,
         DataType::Decimal256(_, _) => true,
         DataType::Timestamp(_, _) => true,

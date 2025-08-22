@@ -24,6 +24,7 @@ pub mod conversion;
 pub mod csv;
 pub mod datetime;
 pub mod error_utils;
+pub mod functions_nested_utils;
 pub mod generator;
 pub mod hash;
 pub mod json;

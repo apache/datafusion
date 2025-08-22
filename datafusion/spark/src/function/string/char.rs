@@ -15,15 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow::array::ArrayRef;
+use arrow::array::GenericStringBuilder;
+use arrow::datatypes::DataType;
+use arrow::datatypes::DataType::Int64;
+use arrow::datatypes::DataType::Utf8;
 use std::{any::Any, sync::Arc};
-
-use arrow::{
-    array::{ArrayRef, StringArray},
-    datatypes::{
-        DataType,
-        DataType::{Int64, Utf8},
-    },
-};
 
 use datafusion_common::{cast::as_int64_array, exec_err, Result, ScalarValue};
 use datafusion_expr::{
@@ -32,18 +29,18 @@ use datafusion_expr::{
 
 /// Spark-compatible `char` expression
 /// <https://spark.apache.org/docs/latest/api/sql/index.html#char>
-#[derive(Debug)]
-pub struct SparkChar {
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub struct CharFunc {
     signature: Signature,
 }
 
-impl Default for SparkChar {
+impl Default for CharFunc {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl SparkChar {
+impl CharFunc {
     pub fn new() -> Self {
         Self {
             signature: Signature::uniform(1, vec![Int64], Volatility::Immutable),
@@ -51,7 +48,7 @@ impl SparkChar {
     }
 }
 
-impl ScalarUDFImpl for SparkChar {
+impl ScalarUDFImpl for CharFunc {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -106,25 +103,30 @@ fn spark_chr(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 fn chr(args: &[ArrayRef]) -> Result<ArrayRef> {
     let integer_array = as_int64_array(&args[0])?;
 
-    // first map is the iterator, second is for the `Option<_>`
-    let result = integer_array
-        .iter()
-        .map(|integer: Option<i64>| {
-            integer
-                .map(|integer| {
-                    if integer < 0 {
-                        return Ok("".to_string()); // Return empty string for negative integers
-                    }
+    let mut builder = GenericStringBuilder::<i32>::with_capacity(
+        integer_array.len(),
+        integer_array.len(),
+    );
+
+    for integer_opt in integer_array {
+        match integer_opt {
+            Some(integer) => {
+                if integer < 0 {
+                    builder.append_value(""); // empty string for negative numbers.
+                } else {
                     match core::char::from_u32((integer % 256) as u32) {
-                        Some(ch) => Ok(ch.to_string()),
+                        Some(ch) => builder.append_value(ch.to_string()),
                         None => {
-                            exec_err!("requested character not compatible for encoding.")
+                            return exec_err!(
+                                "requested character not compatible for encoding."
+                            )
                         }
                     }
-                })
-                .transpose()
-        })
-        .collect::<Result<StringArray>>()?;
+                }
+            }
+            None => builder.append_null(),
+        }
+    }
 
-    Ok(Arc::new(result) as ArrayRef)
+    Ok(Arc::new(builder.finish()) as ArrayRef)
 }
