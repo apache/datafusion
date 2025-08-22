@@ -207,11 +207,15 @@ pub fn validate_struct_compatibility(
 
 #[cfg(test)]
 mod tests {
+
     use super::*;
     use arrow::{
-        array::{Int32Array, Int64Array, StringArray, StringBuilder},
+        array::{
+            Int32Array, Int32Builder, Int64Array, ListArray, MapArray, MapBuilder,
+            StringArray, StringBuilder,
+        },
         buffer::NullBuffer,
-        datatypes::{DataType, Field},
+        datatypes::{DataType, Field, Int32Type},
     };
     /// Macro to extract and downcast a column from a StructArray
     macro_rules! get_column_as {
@@ -486,9 +490,6 @@ mod tests {
 
     #[test]
     fn test_cast_struct_with_array_and_map_fields() {
-        use arrow::array::{Int32Builder, ListArray, MapArray, MapBuilder};
-        use arrow::datatypes::Int32Type;
-
         // Array field with second row null
         let arr_array = Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
             Some(vec![Some(1), Some(2)]),
