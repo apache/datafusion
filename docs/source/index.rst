@@ -131,6 +131,7 @@ To get started, see
    library-user-guide/using-the-dataframe-api
    library-user-guide/building-logical-plans
    library-user-guide/catalogs
+   library-user-guide/schema_adapter
    library-user-guide/functions/index
    library-user-guide/custom-table-providers
    library-user-guide/table-constraints
