@@ -304,6 +304,25 @@ impl SharedBoundsAccumulator {
         let mut inner = self.inner.lock();
 
         // Store bounds in the accumulator - this runs once per partition
+        // Defensive check: ensure the partition index is within the preallocated bounds
+        debug_assert!(
+            partition < inner.bounds.len(),
+            "partition {} out of range for bounds vector (len={})",
+            partition,
+            inner.bounds.len()
+        );
+
+        if partition >= inner.bounds.len() {
+            // This indicates a mismatch between expected partition counts and actual
+            // execution. Return an internal error instead of panicking so callers can
+            // handle the failure gracefully.
+            return internal_err!(
+                "partition {} out of range for bounds vector (len={})",
+                partition,
+                inner.bounds.len()
+            );
+        }
+
         if let Some(bounds) = partition_bounds {
             inner.bounds[partition] = Some(bounds);
         }
