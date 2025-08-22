@@ -27,11 +27,10 @@ use arrow::datatypes::DataType::{
     Binary, BinaryView, FixedSizeBinary, Int64, LargeBinary,
 };
 use datafusion_common::utils::take_function_args;
-use datafusion_common::Result;
-use datafusion_common::{exec_err, internal_datafusion_err, DataFusionError};
-use datafusion_expr::function::Hint;
-use datafusion_expr::ScalarFunctionArgs;
-use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+use datafusion_common::{internal_datafusion_err, internal_err, plan_err, Result};
+use datafusion_expr::{
+    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+};
 use datafusion_functions::utils::make_scalar_function;
 use datafusion_functions::{downcast_arg, downcast_named_arg};
 
@@ -70,15 +69,16 @@ impl ScalarUDFImpl for BitmapCount {
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         match arg_types.first() {
             Some(Binary | BinaryView | FixedSizeBinary(_) | LargeBinary) => Ok(Int64),
-            _ => Err(DataFusionError::Internal(format!(
-                "{} should only be called with a binary",
-                self.name(),
-            ))),
+            Some(data_type) => plan_err!(
+                "bitmap_count expects Binary/BinaryView/FixedSizeBinary/LargeBinary as argument, got {:?}", 
+                data_type
+            ),
+            None => internal_err!("bitmap_count does not support zero arguments"),
         }
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        make_scalar_function(bitmap_count_inner, vec![Hint::AcceptsSingular])(&args.args)
+        make_scalar_function(bitmap_count_inner, vec![])(&args.args)
     }
 }
 
@@ -103,7 +103,9 @@ pub fn bitmap_count_inner(arg: &[ArrayRef]) -> Result<ArrayRef> {
         FixedSizeBinary(_size) => {
             downcast_and_count_ones!(input_array, FixedSizeBinaryArray)
         }
-        array_type => exec_err!("`bitmap_count` does not support type '{array_type:?}'."),
+        data_type => {
+            internal_err!("bitmap_count does not support {:?}", data_type)
+        }
     };
 
     Ok(Arc::new(res?))
@@ -111,7 +113,7 @@ pub fn bitmap_count_inner(arg: &[ArrayRef]) -> Result<ArrayRef> {
 
 #[cfg(test)]
 mod tests {
-    use crate::function::misc::bitmap_count::BitmapCount;
+    use crate::function::bitmap::bitmap_count::BitmapCount;
     use crate::function::utils::test::test_scalar_function;
     use arrow::array::{Array, Int64Array};
     use arrow::datatypes::DataType::Int64;
