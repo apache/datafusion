@@ -95,6 +95,10 @@ type differs between source and target schemas. In this example, `id` is cast fr
   fields are dropped and missing target fields are filled with `NULL`.
 - **Non-struct sources**: attempting to cast a non-struct array to a struct
   results in an error.
+- **Complex type limitations**: `cast_column` only supports `Struct` arrays and
+  returns an error for other complex types like `List` or `Map`. Future support
+  may extend [`cast_column`](../../../datafusion/common/src/nested_struct.rs) to
+  handle these nested types.
 - **Nested cost**: each level of nesting requires building new arrays. Deep or
   wide structs can increase memory use and CPU time, so avoid unnecessary
   casting in hot paths.
