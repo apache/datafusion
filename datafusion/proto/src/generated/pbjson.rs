@@ -16985,6 +16985,9 @@ impl serde::Serialize for PhysicalPlanNode {
                 physical_plan_node::PhysicalPlanType::GenerateSeries(v) => {
                     struct_ser.serialize_field("generateSeries", v)?;
                 }
+                physical_plan_node::PhysicalPlanType::MemoryScan(v) => {
+                    struct_ser.serialize_field("memoryScan", v)?;
+                }
             }
         }
         struct_ser.end()
@@ -17046,6 +17049,8 @@ impl<'de> serde::Deserialize<'de> for PhysicalPlanNode {
             "cooperative",
             "generate_series",
             "generateSeries",
+            "memory_scan",
+            "memoryScan",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -17082,6 +17087,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalPlanNode {
             JsonScan,
             Cooperative,
             GenerateSeries,
+            MemoryScan,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -17135,6 +17141,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalPlanNode {
                             "jsonScan" | "json_scan" => Ok(GeneratedField::JsonScan),
                             "cooperative" => Ok(GeneratedField::Cooperative),
                             "generateSeries" | "generate_series" => Ok(GeneratedField::GenerateSeries),
+                            "memoryScan" | "memory_scan" => Ok(GeneratedField::MemoryScan),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -17379,6 +17386,13 @@ impl<'de> serde::Deserialize<'de> for PhysicalPlanNode {
                                 return Err(serde::de::Error::duplicate_field("generateSeries"));
                             }
                             physical_plan_type__ = map_.next_value::<::std::option::Option<_>>()?.map(physical_plan_node::PhysicalPlanType::GenerateSeries)
+;
+                        }
+                        GeneratedField::MemoryScan => {
+                            if physical_plan_type__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("memoryScan"));
+                            }
+                            physical_plan_type__ = map_.next_value::<::std::option::Option<_>>()?.map(physical_plan_node::PhysicalPlanType::MemoryScan)
 ;
                         }
                     }
