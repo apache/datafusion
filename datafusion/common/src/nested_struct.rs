@@ -211,8 +211,8 @@ mod tests {
     use super::*;
     use arrow::{
         array::{
-            Int32Array, Int32Builder, Int64Array, ListArray, MapArray, MapBuilder,
-            StringArray, StringBuilder,
+            BinaryArray, Int32Array, Int32Builder, Int64Array, ListArray, MapArray,
+            MapBuilder, StringArray, StringBuilder,
         },
         buffer::NullBuffer,
         datatypes::{DataType, Field, Int32Type},
@@ -290,6 +290,28 @@ mod tests {
         assert!(error_msg.contains("Cannot cast column of type"));
         assert!(error_msg.contains("to struct type"));
         assert!(error_msg.contains("Source must be a struct"));
+    }
+
+    #[test]
+    fn test_cast_struct_incompatible_child_type() {
+        let a_array = Arc::new(BinaryArray::from(vec![
+            Some(b"a".as_ref()),
+            Some(b"b".as_ref()),
+        ])) as ArrayRef;
+        let source_struct = StructArray::from(vec![(
+            Arc::new(Field::new("a", DataType::Binary, true)),
+            a_array,
+        )]);
+        let source_col = Arc::new(source_struct) as ArrayRef;
+
+        let target_field = Field::new(
+            "s",
+            Struct(vec![Arc::new(Field::new("a", DataType::Int32, true))].into()),
+            true,
+        );
+
+        let result = cast_column(&source_col, &target_field);
+        assert!(result.is_err());
     }
 
     #[test]
