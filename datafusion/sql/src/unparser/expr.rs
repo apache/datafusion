@@ -183,6 +183,8 @@ impl Unparser<'_> {
                     operand,
                     conditions,
                     else_result,
+                    case_token: AttachedToken::empty(),
+                    end_token: AttachedToken::empty(),
                 })
             }
             Expr::Cast(Cast { expr, data_type }) => {
@@ -281,7 +283,7 @@ impl Unparser<'_> {
                 negated: *negated,
                 expr: Box::new(self.expr_to_sql_inner(expr)?),
                 pattern: Box::new(self.expr_to_sql_inner(pattern)?),
-                escape_char: escape_char.map(|c| c.to_string()),
+                escape_char: escape_char.map(|c| SingleQuotedString(c.to_string())),
                 any: false,
             }),
             Expr::Like(Like {
@@ -296,7 +298,8 @@ impl Unparser<'_> {
                         negated: *negated,
                         expr: Box::new(self.expr_to_sql_inner(expr)?),
                         pattern: Box::new(self.expr_to_sql_inner(pattern)?),
-                        escape_char: escape_char.map(|c| c.to_string()),
+                        escape_char: escape_char
+                            .map(|c| SingleQuotedString(c.to_string())),
                         any: false,
                     })
                 } else {
@@ -304,7 +307,8 @@ impl Unparser<'_> {
                         negated: *negated,
                         expr: Box::new(self.expr_to_sql_inner(expr)?),
                         pattern: Box::new(self.expr_to_sql_inner(pattern)?),
-                        escape_char: escape_char.map(|c| c.to_string()),
+                        escape_char: escape_char
+                            .map(|c| SingleQuotedString(c.to_string())),
                         any: false,
                     })
                 }

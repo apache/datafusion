@@ -67,10 +67,8 @@ sqllogictest = "0.28.3"
 sqlparser = { workspace = true }
 tempfile = { workspace = true }
 testcontainers = { workspace = true, optional = true }
-testcontainers-modules = { workspace = true, features = [
-    "postgres",
-], optional = true }
-thiserror = "2.0.12"
+testcontainers-modules = { workspace = true, features = ["postgres"], optional = true }
+thiserror = "2.0.16"
 tokio = { workspace = true }
 tokio-postgres = { version = "0.7.12", optional = true }
 
