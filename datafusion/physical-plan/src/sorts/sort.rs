@@ -739,6 +739,16 @@ impl ExternalSorter {
             return self.sort_batch_stream(batch, metrics, reservation, true);
         }
 
+        let mut expected_usage = 0;
+        for batch in &self.in_mem_batches {
+            expected_usage += get_reserved_byte_for_record_batch(&batch, self.cursor_batch_ratio);
+        }
+        let old = self.reservation.size();
+        let res = self.reservation.try_resize(expected_usage);
+        if let Err(e) = res {
+            // TODO(ding-young) handle this error for sort-tpch Q5
+        }
+        self.reservation.try_resize(old)?;
         let streams = std::mem::take(&mut self.in_mem_batches)
             .into_iter()
             .map(|batch| {
