@@ -231,7 +231,7 @@ pub fn datafusion_test_data() -> String {
 /// assert!(std::path::PathBuf::from(csvdata).exists());
 /// ```
 pub fn arrow_test_data() -> String {
-    match get_data_dir("ARROW_TEST_DATA", "../../testing/data") {
+    match get_data_dir("ARROW_TEST_DATA", "../../datafusion/core/tests/data") {
         Ok(pb) => pb.display().to_string(),
         Err(err) => panic!("failed to get arrow data dir: {err}"),
     }
