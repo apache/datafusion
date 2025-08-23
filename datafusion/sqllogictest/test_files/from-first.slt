@@ -39,3 +39,17 @@ FROM (FROM range(2))
 ----
 0
 1
+
+query I
+FROM range(2)
+SELECT 1
+----
+1
+1
+
+query I
+FROM range(2) as r
+SELECT r.value
+----
+0
+1
