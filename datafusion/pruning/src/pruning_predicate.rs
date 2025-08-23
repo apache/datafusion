@@ -5130,7 +5130,12 @@ mod tests {
     ) -> Arc<dyn PhysicalExpr> {
         let expr = logical2physical(expr, schema);
         let unhandled_hook = Arc::new(ConstantUnhandledPredicateHook::default()) as _;
-        build_predicate_expression(&expr, &Arc::new(schema.clone()), required_columns, &unhandled_hook)
+        build_predicate_expression(
+            &expr,
+            &Arc::new(schema.clone()),
+            required_columns,
+            &unhandled_hook,
+        )
     }
 
     #[test]
