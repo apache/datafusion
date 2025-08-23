@@ -160,7 +160,7 @@ impl ProcessProbeBatchState {
     }
 }
 
-/// [`Stream`] for [`HashJoinExec`] that does the actual join.
+/// [`Stream`] for [`super::HashJoinExec`] that does the actual join.
 ///
 /// This stream:
 ///
