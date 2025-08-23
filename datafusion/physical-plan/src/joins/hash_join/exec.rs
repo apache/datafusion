@@ -2413,8 +2413,6 @@ mod tests {
     #[apply(batch_sizes)]
     #[tokio::test]
     async fn join_left_semi_with_filter(batch_size: usize) -> Result<()> {
-        use arrow_schema::Schema;
-
         let task_ctx = prepare_task_ctx(batch_size);
         let left = build_semi_anti_left_table();
         let right = build_semi_anti_right_table();
