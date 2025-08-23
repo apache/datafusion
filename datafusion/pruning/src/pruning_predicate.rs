@@ -457,7 +457,7 @@ impl PruningPredicate {
     /// details.
     pub fn try_new(expr: Arc<dyn PhysicalExpr>, schema: SchemaRef) -> Result<Self> {
         // Get a (simpler) snapshot of the physical expr here to use with `PruningPredicate`
-        // which does not handle dynamic exprs  in general
+        // which does not handle dynamic exprs in general
         let expr = snapshot_physical_expr(expr)?;
         let unhandled_hook = Arc::new(ConstantUnhandledPredicateHook::default()) as _;
 
@@ -520,9 +520,9 @@ impl PruningPredicate {
                     // If `contained` returns false, that means the column is
                     // not any of the values so we can prune the container
                     Guarantee::In => builder.combine_array(&results),
-                    // `NotIn` means the values in the column must must not be
+                    // `NotIn` means the values in the column must not be
                     // any of the values in the set for the predicate to
-                    // evaluate to true. If contained returns true, it means the
+                    // evaluate to true. If `contained` returns true, it means the
                     // column is only in the set of values so we can prune the
                     // container
                     Guarantee::NotIn => {
@@ -876,7 +876,7 @@ impl From<Vec<(phys_expr::Column, StatisticsType, Field)>> for RequiredColumns {
 
 /// Build a RecordBatch from a list of statistics, creating arrays,
 /// with one row for each PruningStatistics and columns specified in
-/// in the required_columns parameter.
+/// the required_columns parameter.
 ///
 /// For example, if the requested columns are
 /// ```text
@@ -951,7 +951,7 @@ struct PruningExpressionBuilder<'a> {
     column_expr: Arc<dyn PhysicalExpr>,
     op: Operator,
     scalar_expr: Arc<dyn PhysicalExpr>,
-    field: Field,
+    field: &'a Field,
     required_columns: &'a mut RequiredColumns,
 }
 
@@ -960,7 +960,7 @@ impl<'a> PruningExpressionBuilder<'a> {
         left: &'a Arc<dyn PhysicalExpr>,
         right: &'a Arc<dyn PhysicalExpr>,
         op: Operator,
-        schema: &SchemaRef,
+        schema: &'a SchemaRef,
         required_columns: &'a mut RequiredColumns,
     ) -> Result<Self> {
         // find column name; input could be a more complicated expression
@@ -978,7 +978,6 @@ impl<'a> PruningExpressionBuilder<'a> {
                 }
             };
 
-        // TODO FIXME
         let df_schema = DFSchema::try_from(Arc::clone(schema))?;
         let (column_expr, correct_operator, scalar_expr) = rewrite_expr_to_prunable(
             column_expr,
@@ -988,7 +987,7 @@ impl<'a> PruningExpressionBuilder<'a> {
         )?;
         let column = columns.iter().next().unwrap().clone();
         let field = match schema.column_with_name(column.name()) {
-            Some((_, f)) => f.clone(),
+            Some((_, f)) => f,
             _ => {
                 return plan_err!("Field not found in schema");
             }
@@ -1014,12 +1013,12 @@ impl<'a> PruningExpressionBuilder<'a> {
 
     fn min_column_expr(&mut self) -> Result<Arc<dyn PhysicalExpr>> {
         self.required_columns
-            .min_column_expr(&self.column, &self.column_expr, &self.field)
+            .min_column_expr(&self.column, &self.column_expr, self.field)
     }
 
     fn max_column_expr(&mut self) -> Result<Arc<dyn PhysicalExpr>> {
         self.required_columns
-            .max_column_expr(&self.column, &self.column_expr, &self.field)
+            .max_column_expr(&self.column, &self.column_expr, self.field)
     }
 
     /// This function is to simply retune the `null_count` physical expression no matter what the
