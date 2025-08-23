@@ -4565,6 +4565,30 @@ fn test_no_functions_registered() {
 }
 
 #[test]
+fn test_no_substring_registered() {
+    // substring requires an expression planner
+    let sql = "SELECT SUBSTRING(foo, bar, baz) FROM person";
+    let err = logical_plan(sql).expect_err("query should have failed");
+
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @"This feature is not implemented: Substring could not be planned by registered expr planner. Hint: enable the `unicode_expressions"
+    );
+}
+
+#[test]
+fn test_no_substring_registered_alt_syntax() {
+    // Alternate syntax for substring
+    let sql = "SELECT SUBSTRING(foo FROM bar) FROM person";
+    let err = logical_plan(sql).expect_err("query should have failed");
+
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @"This feature is not implemented: Substring could not be planned by registered expr planner. Hint: enable the `unicode_expressions"
+    );
+}
+
+#[test]
 fn test_custom_type_plan() -> Result<()> {
     let sql = "SELECT DATETIME '2001-01-01 18:00:00'";
 

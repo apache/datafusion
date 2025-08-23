@@ -255,7 +255,14 @@ pub fn arrow_test_data() -> String {
 #[cfg(feature = "parquet")]
 pub fn parquet_test_data() -> String {
     match get_data_dir("PARQUET_TEST_DATA", "../../parquet-testing/data") {
-        Ok(pb) => pb.display().to_string(),
+        Ok(pb) => {
+            let mut path = pb.display().to_string();
+            if cfg!(target_os = "windows") {
+                // Replace backslashes (Windows paths; avoids some test issues).
+                path = path.replace("\\", "/");
+            }
+            path
+        }
         Err(err) => panic!("failed to get parquet data dir: {err}"),
     }
 }
