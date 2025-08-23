@@ -7392,31 +7392,33 @@ FROM (VALUES ('a'), ('d'), ('c'), ('a')) t(a_varchar);
 
 # distinct average
 statement ok
-create table distinct_avg (a int, b int) as values
-  (null, null),
-  (1, 1),
-  (2, 2),
-  (3, 3),
-  (4, 4),
-  (5, 5),
-  (5, 5),
-  (5, 5),
-  (5, 5),
-  (5, 5),
-  (5, 5)
+create table distinct_avg (a int, b double) as values
+  (3, null),
+  (2, null),
+  (5, 100.5),
+  (5, 1.0),
+  (5, 44.112),
+  (null, 1.0),
+  (5, 100.5),
+  (1, 4.09),
+  (5, 100.5),
+  (5, 100.5),
+  (4, null),
+  (null, null)
 ;
 
 # Need two columns to ensure single_distinct_to_group_by rule doesn't kick in, so we know our actual avg(distinct) code is being tested
-query RTRTR
+query RTRTRR
 select
     avg(distinct a),
     arrow_typeof(avg(distinct a)),
     avg(distinct b),
     arrow_typeof(avg(distinct b)),
-    avg(a)
+    avg(a),
+	avg(b)
 from distinct_avg;
 ----
-3 Float64 3 Float64 4
+3 Float64 37.4255 Float64 4 56.52525
 
 query RR rowsort
 select
@@ -7425,19 +7427,18 @@ select
 from distinct_avg
 group by b;
 ----
-1 1
-2 2
-3 3
-4 4
-5 5
-NULL NULL
+1 4.09
+3 NULL
+5 1
+5 100.5
+5 44.112
 
 query RR
 select
     avg(distinct a),
     avg(distinct b)
 from distinct_avg
-where a is null;
+where a is null and b is null;
 ----
 NULL NULL
 
