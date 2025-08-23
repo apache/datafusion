@@ -409,12 +409,58 @@ impl FileOpener for ParquetOpener {
                 .with_row_groups(row_group_indexes)
                 .build()?;
 
-            let adapted = stream
-                .map_err(|e| ArrowError::ExternalError(Box::new(e)))
-                .map(move |maybe_batch| {
-                    maybe_batch
-                        .and_then(|b| schema_mapping.map_batch(b).map_err(Into::into))
-                });
+            // Create a stateful stream that can check pruning after each batch
+            let adapted = {
+                use futures::stream;
+                let schema_mapping = Some(schema_mapping);
+                let file_pruner = file_pruner;
+                let stream = stream.map_err(|e| ArrowError::ExternalError(Box::new(e)));
+                let files_ranges_pruned_statistics =
+                    file_metrics.files_ranges_pruned_statistics.clone();
+
+                stream::try_unfold(
+                    (
+                        stream,
+                        schema_mapping,
+                        file_pruner,
+                        files_ranges_pruned_statistics,
+                    ),
+                    move |(
+                        mut stream,
+                        schema_mapping_opt,
+                        mut file_pruner,
+                        files_ranges_pruned_statistics,
+                    )| async move {
+                        match stream.try_next().await? {
+                            Some(batch) => {
+                                let schema_mapping = schema_mapping_opt.as_ref().unwrap();
+                                let mapped_batch = schema_mapping.map_batch(batch)?;
+
+                                // Check if we can prune the file now
+                                if let Some(ref mut pruner) = file_pruner {
+                                    if pruner.should_prune()? {
+                                        // File can now be pruned based on updated dynamic filters
+                                        files_ranges_pruned_statistics.add(1);
+                                        // Terminate the stream early
+                                        return Ok(None);
+                                    }
+                                }
+
+                                Ok(Some((
+                                    mapped_batch,
+                                    (
+                                        stream,
+                                        schema_mapping_opt,
+                                        file_pruner,
+                                        files_ranges_pruned_statistics,
+                                    ),
+                                )))
+                            }
+                            None => Ok(None),
+                        }
+                    },
+                )
+            };
 
             Ok(adapted.boxed())
         }))

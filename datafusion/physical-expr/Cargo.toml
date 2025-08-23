@@ -50,6 +50,7 @@ hashbrown = { workspace = true }
 indexmap = { workspace = true }
 itertools = { workspace = true, features = ["use_std"] }
 log = { workspace = true }
+parking_lot = { workspace = true }
 paste = "^1.0"
 petgraph = "0.8.2"
 

@@ -1225,6 +1225,9 @@ pub fn only_or_err<T>(slice: &[T]) -> Result<&T> {
 }
 
 /// merge inputs schema into a single schema.
+///
+/// This function merges schemas from multiple logical plan inputs using [`DFSchema::merge`].
+/// Refer to that documentation for details on precedence and metadata handling.
 pub fn merge_schema(inputs: &[&LogicalPlan]) -> DFSchema {
     if inputs.len() == 1 {
         inputs[0].schema().as_ref().clone()
