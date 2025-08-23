@@ -175,7 +175,7 @@ impl AggregateUDFImpl for Avg {
             // Copied from datafusion_functions_aggregate::sum::Sum::state_fields
             // since the accumulator uses DistinctSumAccumulator internally.
             Ok(vec![Field::new_list(
-                format_state_name(args.name, "sum distinct"),
+                format_state_name(args.name, "avg distinct"),
                 Field::new_list_field(args.return_type().clone(), true),
                 false,
             )
