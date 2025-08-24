@@ -755,6 +755,16 @@ By default <code class="docutils literal notranslate"><span class="pre">ALL</spa
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">t</span><span class="p">.</span><span class="n">a</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="k">table</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">t</span>
 </pre></div>
 </div>
+<p>The <code class="docutils literal notranslate"><span class="pre">FROM</span></code> clause can also come before the <code class="docutils literal notranslate"><span class="pre">SELECT</span></code> clause.
+Example:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">FROM</span><span class="w"> </span><span class="k">table</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">t</span>
+<span class="k">SELECT</span><span class="w"> </span><span class="n">t</span><span class="p">.</span><span class="n">a</span>
+</pre></div>
+</div>
+<p>If the <code class="docutils literal notranslate"><span class="pre">SELECT</span></code> clause is omitted, the <code class="docutils literal notranslate"><span class="pre">FROM</span></code> clause will return all columns from the table.</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">FROM</span><span class="w"> </span><span class="k">table</span>
+</pre></div>
+</div>
 </section>
 <section id="where-clause">
 <h2>WHERE clause<a class="headerlink" href="#where-clause" title="Link to this heading">¶</a></h2>
