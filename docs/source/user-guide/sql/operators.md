@@ -784,3 +784,17 @@ DataFusion currently supports the following pipe operators:
 | 4     |
 +-------+
 ```
+
+(pipe_aggregate)=
+
+### AGGREGATE
+
+```sql
+> select * from range(0,3)
+|> aggregate sum(value) AS total;
++-------+
+| total |
++-------+
+| 3     |
++-------+
+```
