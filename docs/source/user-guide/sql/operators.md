@@ -632,6 +632,7 @@ DataFusion currently supports the following pipe operators:
 - [EXTEND](#pipe_extend)
 - [AS](#pipe_as)
 - [UNION](#pipe_union)
+- [INTERSECT](#pipe_intersect)
 
 (pipe_where)=
 
@@ -746,5 +747,21 @@ DataFusion currently supports the following pipe operators:
 | 3     |
 | 4     |
 | 5     |
++-------+
+```
+
+(pipe_intersect)=
+
+### INTERSECT
+
+```sql
+> select * from range(0,100)
+|> INTERSECT DISTINCT (
+  select 3
+);
++-------+
+| value |
++-------+
+| 3     |
 +-------+
 ```
