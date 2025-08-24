@@ -16,6 +16,7 @@
 // under the License.
 
 //! Utilities for shared bounds. Used in dynamic filter pushdown in Hash Joins.
+// TODO: include the link to the Dynamic Filter blog post.
 
 use std::fmt;
 use std::sync::Arc;

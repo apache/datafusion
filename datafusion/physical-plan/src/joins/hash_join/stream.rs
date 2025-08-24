@@ -16,6 +16,9 @@
 // under the License.
 
 //! Stream implementation for Hash Join
+//!
+//! This module implements [`HashJoinStream`], the streaming engine for
+//! [`super::HashJoinExec`]. See comments in [`HashJoinStream`] for more details.
 
 use std::sync::Arc;
 use std::task::Poll;
@@ -164,10 +167,11 @@ impl ProcessProbeBatchState {
 ///
 /// This stream:
 ///
-/// 1. Reads the entire left input (build) and constructs a hash table
-///
-/// 2. Streams [RecordBatch]es as they arrive from the right input (probe) and joins
-///    them with the contents of the hash table
+/// - Collecting the build side (left input) into a [`JoinHashMap`]
+/// - Iterating over the probe side (right input) in streaming fashion
+/// - Looking up matches against the hash table and applying join filters
+/// - Producing joined [`RecordBatch`]es incrementally
+/// - Emitting unmatched rows for outer/semi/anti joins in the final stage
 pub(super) struct HashJoinStream {
     /// Partition identifier for debugging and determinism
     partition: usize,
