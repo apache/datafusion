@@ -80,3 +80,15 @@ FROM test
 1 1.1 2.1
 2 2.2 4.2
 3 3.3 6.3
+
+
+# AS pipe
+query I
+SELECT *
+FROM test
+|> as test_pipe
+|> select test_pipe.a
+----
+1
+2
+3
